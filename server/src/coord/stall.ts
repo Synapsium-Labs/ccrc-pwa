@@ -153,8 +153,14 @@ export function stallDelivery(to: StallRecipient, arming: StallArming): 'send' |
 /** A rung's delivery: a wave-2 arm is shadow until `stall-watch-w2-live` is touched, whatever its recipient's markers
  *  say (planning departure `w2-arms-ship-dark` (D-3605)); otherwise `stallDelivery`. `mailDisabled` is not a delivery: it is
  *  the verdict filter's hold. */
-export function stallNotifyDelivery(arm: StallArm, to: StallRecipient, arming: StallArming): 'send' | 'shadow' {
-  return STALL_ARM_WAVE[arm] === 2 && arming.w2Live !== true ? 'shadow' : stallDelivery(to, arming);
+export function stallNotifyDelivery(arm: StallArm, to: StallRecipient, arming: StallArming, rung: 1 | 2 | 3 = 1): 'send' | 'shadow' {
+  return stallRungWave(arm, rung) === 2 && arming.w2Live !== true ? 'shadow' : stallDelivery(to, arming);
+}
+
+/** The wave whose arming a rung answers to: `coord-ball`'s mail rungs (2 and 3) are wave 2, its operator push (rung 1)
+ *  stays wave 1; every other arm reads `STALL_ARM_WAVE`. */
+export function stallRungWave(arm: StallArm, rung: 1 | 2 | 3): 1 | 2 {
+  return arm === 'coord-ball' && rung >= 2 ? 2 : STALL_ARM_WAVE[arm];
 }
 
 // ── observation details ──────────────────────────────────────────────────────────────────────────────────────
@@ -619,6 +625,7 @@ export type StallNotify =
   | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string }
   | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 3; readonly key: number; readonly to: 'operator'; readonly because: StallR3Cause }
   | { readonly act: 'notify'; readonly arm: 'limit-cap' | 'dialog-cap' | 'coord-ball'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'coord-ball'; readonly rung: 2 | 3; readonly key: number; readonly to: 'worker' }
   | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string; readonly because: StallW2Cause }
   | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'operator'; readonly because: StallW2Cause }
   | { readonly act: 'notify'; readonly arm: 'coord-deaf' | 'mail-stuck' | 'marker-unreadable' | 'coord-blocked'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
@@ -825,7 +832,7 @@ function rungDueAt(rungAt: number, liveSince: number, gap: number): number {
  *  (`stallDelivery` treats the two alike), so the shadow accounting reads the same answer either way. */
 const STALL_RUNG_RECIPIENTS: Record<StallArm, readonly StallRecipient[]> = {
   quiet: ['worker', 'coordinator', 'operator'],
-  'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
+  'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator', 'worker', 'worker'],
   'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'], 'coord-blocked': ['operator', 'operator'],
   'orphan-d': ['worker', 'operator'],
   restarted: ['worker', 'coordinator'],
@@ -857,7 +864,7 @@ export function stallArmHasRung(arm: StallArm, rung: 1 | 2 | 3): boolean {
 function rungDoneAt(input: Pick<StallInput, 'notices' | 'arming'>, arm: StallArm, rung: 1 | 2 | 3, key: number): number | null {
   const rows = input.notices.filter((n) => n.arm === arm && n.rung === rung && n.key === key);
   const liveRow = rows.some((n) => n.mode === 'live');
-  const shadowStands = rows.some((n) => n.mode === 'shadow') && stallNotifyDelivery(arm, rungRecipient(arm, rung), input.arming) === 'shadow';
+  const shadowStands = rows.some((n) => n.mode === 'shadow') && stallNotifyDelivery(arm, rungRecipient(arm, rung), input.arming, rung) === 'shadow';
   if (!liveRow && !shadowStands) return null;
   const live = rows.filter((n) => n.mode === 'live');
   const timed = live.length > 0 ? live : rows;
@@ -916,7 +923,7 @@ export function stallMailDisabledHold(v: StallVerdict, arming: StallArming): Sta
   if (v.act === 'measure-coordinator') return stallNotifyDelivery('quiet', 'coordinator', arming) === 'send' ? holdVerdict('mail-disabled') : v;
   if (v.act !== 'notify') return v;
   if (v.to === 'operator') return v;
-  return stallNotifyDelivery(v.arm, v.to, arming) === 'send' ? holdVerdict('mail-disabled') : v;
+  return stallNotifyDelivery(v.arm, v.to, arming, v.rung) === 'send' ? holdVerdict('mail-disabled') : v;
 }
 
 /** The dead arm is due once its first-seen time is DEAD_GRACE_MS old and no row records it on this episode. */
@@ -2089,6 +2096,52 @@ export function stallCoordBlockedStep(input: StallCoordBlockedInput, now: number
   return { verdict: stallMailDisabledHold(r.verdict, input.session.arming), episode: r.episode };
 }
 
+// ── coord-ball's mail rungs (design 2026-11-09 §8.3 items 1 and 2) ────────────────────────────────────────────
+
+/** An idle coordinator that claims open runs and holds the ball is mailed after this long (rung 2). */
+export const COORD_BALL_MAIL_MS = 20 * 60_000;
+/** Rung 3, the one repeat, falls due this long after rung 2 when the session is still idle with no turn since. */
+export const COORD_BALL_MAIL_AGAIN_MS = 30 * 60_000;
+
+/** The arm's input: the coordinator's session facts, every non-terminal run it claims (review runs included), the
+ *  lane's facts (an open blocking item, a live block row, the newest `wait:` mail it sent) and the newest per-run
+ *  ball-to-coordinator time across its claimed runs. */
+export interface StallCoordBallInput {
+  readonly session: StallSessionInput; readonly runs: readonly StallRunRow[]; readonly blockingItem: boolean;
+  readonly liveBlock: boolean; readonly waitSentAt: number | null; readonly ballSince: number | null;
+}
+
+function stallCoordBallMailInner(input: StallCoordBallInput, now: number): StallVerdict {
+  const si = input.session;
+  const live = stallSessionLive(si);
+  if (live === null || live.word !== 'idle') return VERDICT_NONE;
+  if (si.deliveries.some((d) => d.toId === si.sessionId && d.state === 'queued')) return VERDICT_NONE;
+  if (input.runs.length === 0 || input.ballSince === null) return VERDICT_NONE;
+  const ballSince = input.ballSince;
+  if (now - ballSince < COORD_BALL_MAIL_MS) return VERDICT_NONE;
+  if (input.runs.some((r) => r.state === 'dispatched' || r.state === 'working' || r.state === 'merging' || r.kind === 'review')) return VERDICT_NONE;
+  if (input.blockingItem || input.liveBlock || si.coordinationPaused) return VERDICT_NONE;
+  if (input.waitSentAt !== null && input.waitSentAt > ballSince) return VERDICT_NONE;
+  const done2 = rungDoneAt(si, 'coord-ball', 2, ballSince);
+  if (done2 === null) return { act: 'notify', arm: 'coord-ball', rung: 2, key: ballSince, to: 'worker' };
+  if (rungDoneAt(si, 'coord-ball', 3, ballSince) !== null) return VERDICT_NONE;
+  if (now - done2 >= COORD_BALL_MAIL_AGAIN_MS && live.since <= done2) return { act: 'notify', arm: 'coord-ball', rung: 3, key: ballSince, to: 'worker' };
+  return VERDICT_NONE;
+}
+
+/** The coordinator-ball mail rung's decider: rung 2 mails the idle coordinator, rung 3 once more; never a third. */
+export function stallCoordBallMailStep(input: StallCoordBallInput, now: number): StallVerdict {
+  return stallMailDisabledHold(stallCoordBallMailInner(input, now), input.session.arming);
+}
+
+/** The notice the rung mails. The subject reads as the watch's own notice (`stall:coord-ball:<key>`). */
+export function stallCoordBallMail(n: { readonly key: number }): StallNoticeText {
+  return {
+    subject: `stall:coord-ball:${stallInt(n.key)}`,
+    body: 'You have open runs and nothing waits on the operator. Continue per coordinator clause 21; re-read `runs list` and `goals show`.',
+  };
+}
+
 /** The arm's push. Sanitised ids, integers, kinds and server-formatted UTC only: never a subject or a body. */
 export function stallCoordBlockedPushText(input: StallCoordBlockedInput, n: StallNotify, now: number): { readonly title: string; readonly body: string } {
   if (n.arm !== 'coord-blocked') throw new RangeError(`stallCoordBlockedPushText: ${n.arm} is not coord-blocked`);
@@ -2285,6 +2338,7 @@ function stallFailedReportMail(input: StallSessionInput, err: string, because: '
 
 export function stallSessionMail(input: StallSessionInput, n: StallNotify, now: number): StallNoticeText {
   if (n.to === 'worker') {
+    if (n.arm === 'coord-ball') return stallCoordBallMail(n);
     if (n.arm === 'orphan-d') return stallOrphanDMail(input);
     if (n.arm === 'orphan-e') return stallOrphanEMail(input, now);
     if (n.arm === 'restarted') return stallRestartedMail(input);

@@ -360,6 +360,13 @@ describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark (D-3
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', FULL) === 'shadow')).toEqual(WAVE2_ARMS);
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', { ...FULL, w2Live: true }) === 'shadow')).toEqual([]);
   });
+  it('coord-ball: the mail rungs (2 and 3) are wave 2 and shadow until w2Live; rung 1 keeps wave 1', () => {
+    const arming = { disabled: false, live: true, escalate: true };
+    expect(stallNotifyDelivery('coord-ball', 'worker', arming, 2)).toBe('shadow');
+    expect(stallNotifyDelivery('coord-ball', 'worker', arming, 3)).toBe('shadow');
+    expect(stallNotifyDelivery('coord-ball', 'worker', { ...arming, w2Live: true }, 2)).toBe('send');
+    expect(stallNotifyDelivery('coord-ball', 'operator', arming, 1)).toBe('send');
+  });
   it.each([
     ['quiet', 'worker', { disabled: false, live: true, escalate: false }, 'send'],
     ['quiet', 'worker', { disabled: false, live: false, escalate: false, w2Live: true }, 'shadow'],
@@ -384,7 +391,7 @@ describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark (D-3
 describe('wave 2: rungRecipient is one total per-arm table (planning departure rung-recipient-per-arm (D-3632))', () => {
   const TABLE: Record<StallArm, readonly StallRecipient[]> = {
     quiet: ['worker', 'coordinator', 'operator'],
-    'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
+    'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator', 'worker', 'worker'],
     'orphan-d': ['worker', 'operator'], restarted: ['worker', 'coordinator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
     frozen: ['coordinator'], dead: ['coordinator'],
     'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],

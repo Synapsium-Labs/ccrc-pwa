@@ -6961,7 +6961,7 @@ export class FleetWatcher {
   private applyStall(store: WatcherCoordPort, input: StallInput, n: StallNotify, now: number): void {
     const primary = input.subject.primary;
     const worker = primary.sessionId;
-    if (stallNotifyDelivery(n.arm, n.to, input.arming) === 'shadow') {
+    if (stallNotifyDelivery(n.arm, n.to, input.arming, n.rung) === 'shadow') {
       const obs = store.recordStallObservation(primary.id, stallDetail('shadow', n.arm, n.rung, n.key), now);
       if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${n.arm} r${n.rung} run ${primary.id} ${worker}`);
       return;
@@ -7032,7 +7032,7 @@ export class FleetWatcher {
     }
     if (v.act !== 'notify') return;
     const run = si.run;
-    if (stallNotifyDelivery(v.arm, v.to, si.arming) === 'shadow') {
+    if (stallNotifyDelivery(v.arm, v.to, si.arming, v.rung) === 'shadow') {
       if (run === null) {
         this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less) key ${v.key}`);
         return;
