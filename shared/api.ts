@@ -16,6 +16,7 @@ import type { ReadFailure } from './agent-protocol.js';
 import type { PerfHealth } from './perf.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
+import type { ProjectLinkingWire } from './linking.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { LandingWrite } from './landingLine.js';
 
@@ -2281,6 +2282,8 @@ export interface ProjectRow {
   pool?: ProjectPoolWire;
   placement?: ProjectPlacement;
   repo?: ProjectRepoWire;
+  /** The project's Linear team key, visibility override and measured reading (D-8147); absent: an older server; it follows the absence rule above. */
+  linking?: ProjectLinkingWire;
 }
 
 /**
