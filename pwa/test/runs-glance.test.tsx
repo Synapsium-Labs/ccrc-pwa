@@ -81,7 +81,7 @@ describe('the runs ledger at a glance (D-6170)', () => {
       run({ id: 3, state: 'failed', closedAt: Date.now() - 3_000 }),
     ]);
     await screen.findByTitle(/run 2/);
-    expect(rows(c)).toHaveLength(3);
+    expect(rows(c)).toHaveLength(4);
     expect(screen.getByRole('button', { name: 'Abandon run 1' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Abandon run 2' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Abandon run 3' })).toBeNull();
@@ -93,7 +93,7 @@ describe('the runs ledger at a glance (D-6170)', () => {
       run({ id: 5, state: 'failed', closedAt: null }),
     ]);
     await screen.findByTitle(/run 4/);
-    expect(rows(c)).toHaveLength(3);
+    expect(rows(c)).toHaveLength(4);
     expect(screen.getByRole('button', { name: 'Abandon run 1' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Abandon run 4' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Abandon run 5' })).toBeNull();

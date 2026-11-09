@@ -627,7 +627,7 @@ describe('the abandon control mounts on every stuck run row (Task 12, spec §4.3
 
     const abandon = screen.getByRole('button', { name: /abandon run 3/i });
     expect(abandon).toHaveClass('run-abandon');
-    const open = screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i });
+    const open = screen.getAllByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })[0]!;
     expect(open).toHaveClass('run-open');
     // Siblings under the same <li>, never one nested in the other.
     expect(open.parentElement).toBe(abandon.parentElement);

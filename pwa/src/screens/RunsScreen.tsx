@@ -522,7 +522,7 @@ function RunsBoard({
       <CoordBanner store={store} onlyWhilePaused />
 
       {/* The Stuck band (§8.2 item 4): one head per reason, right under the paused banner, so no healthy work sits above it.
-          A stuck run is listed here and nowhere else on the board. Task 14 wires the group control. */}
+          The band is a second view of the stuck runs, not a move (§8.2.2): they stay in their programme's rows and counts. Task 14 wires the group control. */}
       {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget} />}
 
       {/* D-6911: every open work run whose review cap waits on the operator. It sits below where the Stuck band goes (Task 13)
@@ -563,7 +563,7 @@ function RunsBoard({
         <>
           {/* With finished runs only, the board still says nothing is open (§8.2), above the Finished fold. */}
           {active.length === 0 && <EmptyState data-state="ok">{NO_RUNS_OPEN}</EmptyState>}
-          {runsByProgram(active.filter((r) => !isStuckRun(r))).map(({ program, runs: list }) => {
+          {runsByProgram(active).map(({ program, runs: list }) => {
             // The program's OWN wave is the furthest one any of its rows has
             // reached, never `list[0]`'s own — `runsByProgram` orders each
             // group urgency-first, so the head row can be an older wave

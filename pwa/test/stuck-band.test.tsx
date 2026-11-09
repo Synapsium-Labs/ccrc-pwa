@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { RunStuck, RunSummary, StuckCause, StuckReason } from '../../shared/api';
 import { RunsScreen } from './runs-board';
+import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 const H = 3_600_000;
@@ -209,11 +210,24 @@ describe('the rows', () => {
     expect(within(sheet).getByText('A later wave moved on 9 days ago · Nothing closes this on its own')).toBeInTheDocument();
   });
 
-  it('a stuck run is listed in the band and nowhere else on the board', async () => {
+  it('a stuck run is listed in the band and also stays in its programme group (the band is a second view)', async () => {
     const c = await board([stuckRun(1, 'overtaken', null, 9 * D), run(2, { state: 'working', sessionId: 's', workspace: 'w' })]);
     fireEvent.click(toggle('Overtaken'));
-    expect(c.querySelectorAll('li.run-row')).toHaveLength(2);
-    expect(c.querySelectorAll('.runs-group li.run-row')).toHaveLength(1);
+    expect(c.querySelectorAll('li.run-row')).toHaveLength(3);
+    expect(c.querySelectorAll('.runs-group li.run-row')).toHaveLength(2);
+  });
+
+  it('an owner-gone stuck run keeps its Resume door in its programme group (the band is a second view)', async () => {
+    const store = makeStore();
+    const dead = fleetSession({ id: 'project-a-coordinator', project: 'project-a', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+    act(() => {
+      store.setState({ runs: [stuckRun(7, 'owner-gone', 'coordinator-archived', 49 * D)], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open',
+        sessions: [dead] });
+    });
+    const { container } = render(<RunsScreen store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(container.querySelector('.runs-group')!.querySelector('li.run-row')).not.toBeNull();
+    expect(within(container.querySelector('.runs-group') as HTMLElement).getByRole('button', { name: 'Resume run 7' })).toBeInTheDocument();
   });
 
   it('stuck never counts in a badge', async () => {
