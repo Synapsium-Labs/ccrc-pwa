@@ -37,6 +37,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { askKey } from '../src/askkey.js';
 import { okAsk, okAsks } from './coordReadHelpers.js';
 import { doorInsOf } from './questionDoorIns.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -151,7 +152,10 @@ function fixture(opts: {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const io: FleetIO = opts.overIo ? opts.overIo(localIO) : localIO;
   const deps = { ...testDeps(home, runner), push: opts.push as never, coord, io };
-  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
+  // D-8140 (C17 item 3): every case's watcher is quiet before its case ends. Its ticks start a delegation pass nothing else awaits,
+  // and one left running reads the next case's `Date.now` jump inside a phase and logs its slow line into that case's spy (CI run
+  // 42673038502, F9: `cut=0`, so not the pass F9's own `closeDelegation()` had closed).
+  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 10_000));
   return {
     coord, home, reg, w,
     tick: () => w.tick(),
