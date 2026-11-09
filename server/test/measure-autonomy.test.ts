@@ -7,7 +7,11 @@ import { cpSync, existsSync, readFileSync, readdirSync, statSync, utimesSync, wr
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMailNudge } from '../src/coord/envelope.js';
-import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX, MAIL_ENVELOPE_FENCE } from '../../shared/api.js';
+import { stallCoordBlockedPushText, stallDetail } from '../src/coord/stall.js';
+import type { StallCoordBlockedInput, StallNotify } from '../src/coord/stall.js';
+import {
+  IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX, MAIL_ENVELOPE_FENCE, ASK_OPERATOR_PRINCIPAL, RUN_TRANSITIONS,
+} from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -42,6 +46,20 @@ const listing = (dir: string): string[] => readdirSync(dir, { recursive: true, w
     return `${p}:${statSync(p).mtimeMs}:${statSync(p).size}`;
   }).sort();
 
+/** The title `stallCoordBlockedPushText` writes at a rung, for workspace `ws`. */
+function blockedTitle(rung: 1 | 2): string {
+  const input = {
+    session: {
+      sessionId: 'demo-coord', role: 'coordinator', run: null, worker: { present: false }, mark: { ok: false },
+      liveStartedAt: null, markUnreadableSince: null, mail: [], deliveries: [], notices: [],
+      arming: { disabled: false, live: true, escalate: true }, coordinationPaused: false,
+    },
+    child: { kind: 'unlisted' }, runs: [], episode: null,
+  } as unknown as StallCoordBlockedInput;
+  const n = { mode: 'live', arm: 'coord-blocked', rung, key: 1, at: 0 } as StallNotify;
+  return stallCoordBlockedPushText(input, n, Date.now()).title;
+}
+
 describe('measure-autonomy transcripts', () => {
   it('its second spellings are bound to shared/api.ts’s', () => {
     const src = readFileSync(SCRIPT, 'utf8');
@@ -49,6 +67,29 @@ describe('measure-autonomy transcripts', () => {
     expect(src).toContain(RESUME_PROMPT_PREFIX);
     expect(src).toContain(`MAIL_NUDGE_HEAD = '${renderMailNudge('x').slice(0, 29)}'`);
     expect(src).toContain(`MAIL_FENCE = '${MAIL_ENVELOPE_FENCE}'`);
+    expect(src).toContain(`OPERATOR_PRINCIPAL = '${ASK_OPERATOR_PRINCIPAL}'`);
+    // the shadow detail head `stallDetail` writes, up to the rung
+    const detailHead = stallDetail('shadow', 'coord-blocked', 1, 0).split(':').slice(0, 2).join(':') + ':';
+    expect(src).toContain(`'${detailHead}%'`);
+    // the title's rung-1 spelling and its rung-2 suffix, as `stallCoordBlockedPushText` writes them
+    expect(src).toContain(`BLOCKED_TITLE = '${blockedTitle(1).split(' ›')[0]!.replace('⚠', '\\u26a0')}'`);
+    expect(blockedTitle(2).startsWith(blockedTitle(1).split(' ›')[0]!)).toBe(true);
+    expect(src).toContain(`BLOCKED_TITLE + ' (escalated)%'`);
+    expect(blockedTitle(2)).toContain(' (escalated)');
+    expect(blockedTitle(1)).toContain(' ›');
+    expect(src).toContain(`BLOCKED_TITLE + ' \\u203a%'`);
+    // the states `RUN_TRANSITIONS` leaves no edge out of
+    const terminal = Object.entries(RUN_TRANSITIONS).filter(([, to]) => to.length === 0).map(([k]) => k).sort();
+    const m = /RUN_TERMINAL = \(([^)]*)\)/.exec(src);
+    expect(m, 'RUN_TERMINAL').not.toBeNull();
+    expect(m![1]!.split(',').map((x) => x.trim().replace(/'/g, '')).filter(Boolean).sort()).toEqual(terminal);
+    // `server/src/idlenudge.ts`'s turn-end system rows
+    const nudge = readFileSync(path.join(ROOT, 'server', 'src', 'idlenudge.ts'), 'utf8');
+    const t = /TURN_END_SUBTYPES: readonly string\[\] = \[([^\]]*)\]/.exec(nudge);
+    const u = /^TURN_END_SUBTYPES = \(([^)]*)\)/m.exec(src);
+    expect(t && u, 'TURN_END_SUBTYPES').toBeTruthy();
+    const names = (x: string): string[] => x.split(',').map((y) => y.trim().replace(/'/g, '')).filter(Boolean).sort();
+    expect(names(u![1]!)).toEqual(names(t![1]!));
   });
 
   it('counts a coordinator and not a worker', () => {
@@ -194,7 +235,7 @@ function fixtureDb(): string {
   ev.run(alphaRun, T('2026-11-03T08:00:00Z'), 'closing', 'done', 'coordinator');
   ev.run(betaRun, T('2026-11-04T05:00:00Z'), 'closing', 'done', 'coordinator');
   ev.run(alphaRun, T('2026-11-03T06:00:00Z'), 'dispatched', 'dispatched', 'watcher');
-  db.prepare('UPDATE run_events SET detail = ? WHERE runId = ? AND at = ?').run('stall-shadow:coord-blocked:1:5', alphaRun, T('2026-11-03T06:00:00Z'));
+  db.prepare('UPDATE run_events SET detail = ? WHERE runId = ? AND at = ?').run(stallDetail('shadow', 'coord-blocked', 1, 5), alphaRun, T('2026-11-03T06:00:00Z'));
   const item = db.prepare(
     "INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, neededBy, state, raisedAt) " +
     "VALUES (?, NULL, 'coord', 'decision', 't', 'w', '[]', 'soon', 'open', ?)");
@@ -214,9 +255,9 @@ function fixtureDb(): string {
   ask.run(T('2026-11-02T19:00:00Z'), 'parent-1', alphaRun, 'stale', null, null, T('2026-11-02T19:10:00Z'), null);
   const feed = db.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body) VALUES ('e', ?, ?, 'run', ?, ?, 'b')");
   let seq = 0;
-  const blocked = (iso: string, session: string, title = '⚠ coordinator blocked › ws'): void => { feed.run(++seq, T(iso), session, title); };
+  const blocked = (iso: string, session: string, title = blockedTitle(1)): void => { feed.run(++seq, T(iso), session, title); };
   blocked('2026-11-03T10:05:00Z', 'c1');
-  blocked('2026-11-03T10:50:00Z', 'c1', '⚠ coordinator blocked (escalated) › ws');   // the same session-hour
+  blocked('2026-11-03T10:50:00Z', 'c1', blockedTitle(2));   // the same session-hour
   blocked('2026-11-03T11:10:00Z', 'c1');
   blocked('2026-11-03T10:30:00Z', 'c2');
   blocked('2026-11-10T09:00:00Z', 'c1');                                             // the next week
