@@ -323,7 +323,7 @@ const REFUSED_WHY = BOX_SETTING_REFUSAL_WORDS[0];
 describe('Box settings card: what the library calls a fold (characterization, two nodes)', () => {
   it('C3: two fleet-role nodes with every family folded hold 2 + 2 x 12 groups (D-8121 added Browser tools, D-8122 Memory gate, D-8123 Limit rescue, D-8125 Coordination)', () => {
     renderCard([fleet(ok(v2doc())), { ...fleet(ok(v2doc()), 'second'), nodeId: OTHER_ID }]);
-    expect(screen.getAllByRole('group')).toHaveLength(2 + 2 * 11);
+    expect(screen.getAllByRole('group')).toHaveLength(2 + 2 * 12);
   });
 });
 
@@ -470,7 +470,7 @@ describe('Box settings card: a server-role node (D21)', () => {
     for (const role of ['fleet', 'both', null] as Array<NodeRole | null>) {
       cleanup();
       const { container } = renderCard([{ ...fleet(ok(v2doc())), role }]);
-      expect(container.querySelectorAll('.box-settings-family'), String(role)).toHaveLength(11);
+      expect(container.querySelectorAll('.box-settings-family'), String(role)).toHaveLength(12);
       // D-8122: CCRC_WAKE_HEADROOM_MIN_GIB is the one shown key a fleet node does not read (the server's wake gate does),
       // so on a fleet-only node its row, and only its row, says so; the role column decides that, never the key.
       const notUsed = [...container.querySelectorAll('.box-settings-row')]
@@ -555,7 +555,7 @@ describe('Box settings card: version 2 on the console (5.3, 5.4)', () => {
     const row = rowOf(block('fleet'), 'CCRC_ZZ_NEW');
     expect(row).toHaveTextContent(BOX_SETTING_SOURCE_TEXT.file);
     expect(row.textContent).not.toContain('7');
-    expect(summaries(block('fleet'))).toHaveLength(12);
+    expect(summaries(block('fleet'))).toHaveLength(13);
   });
 
   it('A1: the card holds no act, with summaries present', () => {
