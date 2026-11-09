@@ -1,6 +1,6 @@
 # The Overlord: one coordinator above every coordinator, that the operator talks to
 
-**Spec** · 2026-11-09 · Status: Draft, rev 2 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
+**Spec** · 2026-11-09 · Status: Draft, rev 3 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
 the Overlord programme's coordinator · Issue: #2491 · Related: `docs/superpowers/specs/2026-11-09-coordinator-autonomy-default-design.md` (D-8126, PR #2487,
 not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 `docs/superpowers/specs/2026-10-17-coordinator-first-routing-design.md` and its round 2,
@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R8 (the operator's) and the author's calls C1 to C46, so the operator can approve or overturn each one by number.
+R11 (the operator's) and the author's calls C1 to C47, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -21,9 +21,12 @@ what is truly the operator's.
 
 **What is decided.** The operator ruled the ticket's six open questions on 2026-11-09 (R1 to R6, §2), and ruled the
 same day that there is one and only one Overlord (R7), which must live a very long time without memory loss (R8).
+After rev 2 the operator ruled that the Overlord is the console's home (R9), that it may read everything (R10), and that
+it oversees every project at once and never moves between them (R11).
 This spec turns each ruling into a design:
 - **One Overlord.** Exactly one exists, for the whole fleet, and the server enforces it. It is one lasting identity,
-  not a role that sessions take turns at, and nothing can create a second one (§3.1).
+  not a role that sessions take turns at, and nothing can create a second one (§3.1). It oversees every project at
+  once and reads everything ccrc holds, every project's history included (R10, R11, C47).
 - **A long life.** One Overlord, many generations. The server renews its context from canonical state before it grows
   long, re-anchors it on every start, proves it remembers with canaries and probes, and audits it daily from outside
   (§3.3).
@@ -36,7 +39,8 @@ This spec turns each ruling into a design:
   (§9).
 - **Questions.** Questions reach the Overlord before they reach the operator: one more tier on top of coordinator-first
   routing (§6).
-- **Surface.** The surface is a new Overlord place in the console (§4).
+- **Surface.** The Overlord is the console's home: the first screen it opens, with a button in the top menu that
+  leads back to it from anywhere (R9, §4).
 - **Spawning.** The Overlord spawns coordinators through the operator's own doors, with six named extras (§8).
 - **Audit.** Every act lands in one audit log. Each row is marked reversible, compensable or irreversible, and that
   mark comes from the act's kind and never from the Overlord's own say-so (§10).
@@ -110,6 +114,9 @@ The rulings are settled; this spec only turns them into design.
 | R6 | **Audit.** A log of everything it relayed, decided and started. Not every item can be reversed, so the log marks which items can be overturned and which cannot | One table, `overlord_acts`, written in the same transaction as the act. Reversibility is derived from the act's kind. Overturns go through the one correction door (§10) |
 | R7 | **One and only one Overlord** (the operator, 2026-11-09, after rev 1) | One identity for the whole fleet, enforced by the server. A second can never be started, designated, spawned or nested. Replacing its session is a handover of the same Overlord, never a second one (§3.1) |
 | R8 | **Live a very long time** (the operator, 2026-11-09, after rev 1): no memory loss or the other known problems of long-running sessions; use every context, compaction and history technique ccrc has, and research more | One Overlord, many generations: the server renews its context from canonical state before it grows long, re-anchors it on every start, proves it remembers with canaries and probes, and audits it daily from outside (§3.3) |
+| R9 | **The Overlord is the home screen** (the operator, 2026-11-09, after rev 2, answering Q1), with a button in the top menu to navigate to it | The console opens on the Overlord. Its door is first in the top menu of both desk skins and on the phone bar, and the wordmark leads to it. The Fleet keeps its own place (§4, C8) |
+| R10 | **It can read everything and anything** (the operator, 2026-11-09, after rev 2, answering Q2) | Every read the operator's console has, plus every project's history in full, through Overlord read doors. The history store's "across projects: never" stays true for every other session. Credential stores stay closed (C47) |
+| R11 | **It oversees every project at once** (the operator, 2026-11-09, after rev 2): it never moves from one project to another; it is omniscient within the operator's ccrc environment | There is no move between projects. Its session always runs in the dedicated `overlord` project, which is only where its pane lives. Replacing a lost session is a rebind inside that project (§3.1, C2) |
 
 ## 3. What the Overlord is
 
@@ -149,10 +156,14 @@ same Overlord comes back, never a new one beside it. The server enforces this, n
   its first step checks `GET /api/overlord/board`, which answers 403 to anyone else.
 - **No Overlord that is also something else.** The designated session claims no runs (C4), cannot be dispatched as a
   child, and cannot be designated while it claims a run or carries a `.child` marker (`overlord-not-root`).
-- **Moving it is a handover, never a second Overlord.** If its session must change (a lost workspace, a move to another
-  project), the operator's **Move the Overlord** door rewrites the one row in one transaction. The old session's powers
-  end in the same write that grants the new one's, and the new session starts by reading the same server state. Restart
-  (C23) keeps the same session id, so most recoveries need no move at all.
+- **It never moves between projects (R11).** It oversees every project at once and reads all of them (C3, C47). Its
+  session runs in the dedicated `overlord` project, which is only where its pane lives, never a limit on what it sees,
+  so there is nothing to move it to.
+- **Replacing a lost session is a rebind, never a second Overlord.** A restart (C23) keeps the same session id, so
+  almost every recovery needs nothing. Only if the session itself is gone (a lost workspace) does the operator's
+  **Rebind the Overlord** door point the one row at a replacement session, in one transaction: the old session's powers
+  end in the same write that grants the new one's, and the new session starts by reading the same server state. The
+  door refuses a session outside the `overlord` project (`overlord-wrong-project`).
 - **What the operator sees.** The console shows the one Overlord everywhere: one place, one chat, one log. There is no
   list of Overlords and no picker.
 
@@ -168,14 +179,33 @@ same Overlord comes back, never a new one beside it. The server enforces this, n
   session's uuid on every `/clear` and compaction (`_sync_uuid`), and a binding to the uuid would end the Overlord's
   powers at its first compaction. Each call proves freshness the usual way, by the registry's current uuid (C27).
   - Its one writer is a session-gated operator door with a step-up: `POST /api/overlord/designate` (create, refused
-    `overlord-exists` when the row exists), `POST /api/overlord/move` (the handover in §3.1), and `DELETE` to retire
+    `overlord-exists` when the row exists), `POST /api/overlord/rebind` (the recovery in §3.1), and `DELETE` to retire
     the Overlord entirely. Retiring keeps its requests, log, grants and model, so the next start is the same Overlord
     with the same memory.
   - "Start the Overlord" in the console composes the existing session-create door, then designates the new session.
-    The operator picks the project. The default suggestion is a dedicated `overlord` project made by the add-project
-    door, because the Overlord's own repository is nearly empty: its state is on the server.
-- **C3. It spans the whole fleet.** It reads and routes across every project the server measures, not only its own.
-  Mail and the Overlord doors already cross projects (the D-5530 cross-project ruling).
+    It always runs in the dedicated `overlord` project, which the start makes through the add-project door when it does
+    not exist yet. The project is nearly empty, because the Overlord's state is on the server, and it is never a scope:
+    the Overlord oversees every project (R11).
+- **C3. It spans the whole fleet.** It reads and routes across every project the server measures at once (R11). It has
+  no home project to see from: the `overlord` project only holds its pane. Mail and the Overlord doors already cross
+  projects (the D-5530 cross-project ruling).
+- **C47. It reads everything (R10).** Its read scope is every read the operator's console has, plus every project's
+  history in full.
+  - **The console's reads.** Overlord read doors mirror what the signed-in console reads: the sessions and their panes,
+    runs, items, asks, approvals, mail bodies, programme ledgers and goals, the digest, documents and the Settings
+    state. Each is the existing reader behind the Overlord's attribution check. No second reader is written.
+  - **Every project's history.** `ccrc history`'s read verbs (search, describe, expand) over every project, every
+    provenance: the operator's prompts and the sessions' replies and tool output alike. `decideScope` in
+    `ccd/history/lib.mjs` gains one scope, `overlord`, which only a new read-only agent op on the fleet box may pass,
+    reached only through the server's `GET /api/overlord/history`. A session's own `ccrc history` still refuses a
+    cross-project read: the history store's "across projects: never" stays true for every session but the Overlord.
+    Output passes the history store's own output belt.
+  - **Reads are not acts.** A read changes nothing, needs no grant and writes no audit row. Reading goes through the
+    Overlord's subagents (C44), which carry its attribution.
+  - **Credential stores stay closed** (the author's reading of "everything", which the operator can overturn): account
+    secrets, sign-in scratch, the operator's secret slots and the box token. They hold keys, not knowledge of the work,
+    and reading them is account management, which the SAFETY rules keep the operator's for every session. Secrets a
+    session once printed into its transcript reach the Overlord only masked, by the history store's belt.
 - **C4. It claims no runs.** The Overlord is not any programme's coordinator. That avoids `claimant-is-a-worker` and
   the one-level bracket rule, and it keeps one coordinator per programme (clause 8). It reaches coordinators through its
   own doors and mail.
@@ -296,7 +326,7 @@ from the server's canonical state, never from a summary of a summary, and proves
   Overlord arm, and it fills the gap that a session claiming no runs gets an empty roster card. The order is stable
   first and live last, so the cached prefix stays stable and the live state sits at the end of the context, where
   recall is strongest:
-  1. **Constitution:** what it is, R1 to R8 in one line each, the anti-goals, the brakes and their state, and the
+  1. **Constitution:** what it is, R1 to R11 in one line each, the anti-goals, the brakes and their state, and the
      rules version.
   2. **Authority:** the live grants.
   3. **Live state:** the open requests ranked by recency, importance and age; each programme in one line; the
@@ -364,7 +394,7 @@ from the server's canonical state, never from a summary of a summary, and proves
 
 | Layer | Holds | Lives in | Reaches the session |
 |---|---|---|---|
-| Constitution | What it is, R1 to R8, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
+| Constitution | What it is, R1 to R11, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
 | Working | Open requests, programmes, notes, recent acts | `overlord_requests`, `overlord_notes`, `overlord_acts` | the card, ranked and capped |
 | Episodic | Every act, request and conversation since the first day | `overlord_acts`, `ccrc history` (its family recall follows the session across clears) | on demand, through subagents |
 | Semantic | The operator model | `operator-model.db` (§9) | the operator brief on the card, and `GET /api/overlord/model` |
@@ -411,7 +441,7 @@ an account, nor take theirs.
 
 - **C45. It runs Fable, because the operator selected it.**
   - **The operator's choice, on the designation.** The designation row gains `model` (`fable` or `opus`). Only the
-    operator's session-gated doors write it: designate, move, and a Settings row. This is the D-6790 rule kept whole:
+    operator's session-gated doors write it: designate, rebind, and a Settings row. This is the D-6790 rule kept whole:
     Fable runs only when the operator selects it, and every box-token write that names `fable` is still refused
     (`409 fable-operator-only`). The Overlord cannot pick its own model, and no other session can borrow the choice.
   - **A class, never a version.** It asks for the class `fable`. The class follows its family's newest model through
@@ -437,7 +467,7 @@ an account, nor take theirs.
     auto-advance spec's D19). That side effect is harmless here only because the accounts are the Overlord's alone
     (C46).
 - **C46. A pool of accounts of its own, exclusive both ways.**
-  - **Its side.** The Overlord lives in its own project (C2's default, `overlord`), and the operator tags that project
+  - **Its side.** The Overlord lives in its own project (`overlord`, C2), and the operator tags that project
     with a pool that only the Overlord's project uses (written here as `<overlord-pool>`; real pool names are the
     operator's data and stay out of this repository). `ccd` already keeps a tagged project in its pool: placement,
     the auto-swap and every manual verb (the pools spec's ruling 6). The Overlord never crosses out of its pool.
@@ -465,11 +495,19 @@ an account, nor take theirs.
 
 ## 4. Where the operator talks to it
 
-R4 puts the surface inside the console. The console gains one place.
+R4 puts the surface inside the console, and R9 makes it the console's home.
 
-- **C8. An Overlord place, first in the navigation** (`PLACES` in `pwa/src/lib/places.ts`), on the phone bar and the
-  desk bar. The Fleet screen stays the console's home (Q1 asks whether the operator would rather the Overlord *be* the
-  home). The place has three parts:
+- **C8. The Overlord is the home, and the first door in the top menu** (R9).
+  - **It opens first.** The console's root opens the Overlord place. The Fleet screen keeps its own route and its
+    phone-bar place, one tap away.
+  - **A top-menu button.** The Overlord is first in `PLACES` (`pwa/src/lib/places.ts`), the one list every navigation
+    reads, so its door appears first on Instrument's top bar, Refined's desk bar and the phone bar with no second edit.
+    The wordmark, "the way home" (`TopBar`), now leads to it, and a "Go to the Overlord" command joins the registry.
+  - **One decider picks the home.** An L1 `homePlace` answers the Overlord while one is designated and its kill switch
+    is off, and the Fleet otherwise. The console never opens on an Overlord that cannot answer.
+  - **The phone bar gains a seventh door.** A new door can overflow a bar in ways only the whole browser suite sees,
+    so W1 runs it in full.
+- **The place has three parts:**
   - **Chat.** The Overlord session's own conversation, drawn by the existing chat column (`ChatList`, `Composer`) on its
     session id. Typing to the Overlord is typing to that session, exactly as today.
     Renewals (§3.3) do not break the conversation for the operator: the chat shows a quiet "generation n" divider and
@@ -912,7 +950,7 @@ flowchart LR
   subgraph Sources
     S1["Rulings in coord.db<br/>item answers, ask and approval<br/>answers, digest corrections,<br/>overturns, goal changes"]
     S2["The Overlord chat<br/>what the operator tells it"]
-    S3["Operator prompts to every session<br/>ccrc history, provenance operator"]
+    S3["Every project's history<br/>ccrc history, every provenance"]
     S4["Recorded rulings in docs<br/>specs' Agreed sections, ledgers"]
     S5["Corrections on the About you screen"]
   end
@@ -928,8 +966,8 @@ flowchart LR
   M --> R["About you screen<br/>review, correct, retire"]
   M --> U["Overlord decisions<br/>entries cited on each act"]
 ```
-*Figure 7. Five feeds, one store. Rulings come through one server-side union reader. The operator's prompts to other
-sessions come through `ccrc history`'s read verbs on the fleet box. The chat and the operator's own corrections feed
+*Figure 7. Five feeds, one store. Rulings come through one server-side union reader. Every project's history comes
+through `ccrc history`'s read verbs on the fleet box, under the Overlord's own scope. The chat and the operator's own corrections feed
 it directly.*
 
 - **Rulings** (S1) come through `GET /api/overlord/feed?after=<cursor>`. This is one union reader over the existing
@@ -939,17 +977,12 @@ it directly.*
   they do (Later).
 - **The chat** (S2): when the operator states a preference, a rule or a correction, the Overlord records it at once as a
   `stated` entry. "Remember …" and "forget …" are plain requests to it.
-- **Prompts to every session** (S3). R2 says "everything", but the history store's own ruling says "across projects:
-  never" (`2026-10-05-ccrc-history-lossless-dag-design.md`). `decideScope` in `ccd/history/lib.mjs` refuses a
-  cross-project read as `cross-project`. The two rulings conflict, so **this feed waits on the operator (Q2)**. The
-  recommended arm keeps the history ruling intact for every session:
-  - A new read-only agent op on the fleet box, `history-operator-prompts`, returns only rows of provenance `operator`
-    since a cursor, redacted by the history store's own output belt. It returns no model, tool or harness text.
-  - It is reached only through the server's `GET /api/overlord/feed`, for the Overlord alone. No session gains a
-    cross-project history read, the Overlord included: the Overlord reads the operator's words, never another
-    project's work.
-  - Every entry it yields is `overlord-only` (§9.4), and the operator can switch any project off as a source.
-  - Until Q2 is answered, S3 is off, and the store is fed from S1, S2, S4 and S5.
+- **Every project's history** (S3). The operator answered Q2: it can read everything (R10). The feed reads the history
+  of every project through the Overlord's history door (C47), every provenance. The distillation learns most from the
+  operator's own words, and reads the sessions' replies and tool output for what the operator accepted, corrected or
+  overturned.
+  - Every entry it yields from another project is `overlord-only` by default (§9.4), and the operator can switch any
+    project off as a source.
 - **Recorded rulings in documents** (S4): the specs' "Agreed" sections and the programme ledgers, where the operator's
   rulings are quoted with dates.
 - **Distillation runs daily**, as a background Sonnet subagent of the Overlord. It runs under the Overlord's own
@@ -987,7 +1020,7 @@ it directly.*
 3. **No secrets.** Every statement and quote passes the egress mask (`accounts/mask.ts`) on the way in. A statement the
    mask changes is refused, not stored masked, because a secret has no place in a preference.
 4. **It never leaves ccrc.** Entries marked `overlord-only` are never quoted outside the Overlord's chat with the
-   operator. Entries derived from S3 (other projects' prompts) are `overlord-only` by default. The skill forbids quoting
+   operator. Entries derived from S3 (other projects' history) are `overlord-only` by default. The skill forbids quoting
    any entry into a pull request, an issue, a commit, a tracker or a document. That rule is the skill's (C35): before
    any text leaves for a public place, the Overlord runs the fleet's existing local private-name scan, which reads the
    operator's own list on the fleet box. The server does not run the scan, because the scan's unpublished names live
@@ -1077,6 +1110,8 @@ This section lists the build surface by bounded context, so each piece has one o
 | `operator-model.db` and its store | new context, **Operator Model** | L3 | its own file and migrations. Its reason to be a context of its own is privacy: one store, one reader, one deny path |
 | Hibernate and idle-sleep eligibility skip the designated Overlord | C4 Workspace Lifecycle | L1 | one rung in each lane's eligibility, reading the designation |
 | `overlordKickoff` template, `overlord` sender | C5 | L0 and L1 | `coord/kickoff.ts` beside the two existing templates |
+| Overlord read doors, `GET /api/overlord/history`, the `overlord` history scope | C5, K (history) | L4 doors over the existing readers; L1 `decideScope` gains one scope | no second reader; the scope is passed only by the new read-only agent op (C47) |
+| `homePlace`, the Overlord first in `PLACES` | C5 | PWA L1 | the one places list and the wordmark's door (C8) |
 | `overlordModelFor`, the designation's `model` | C5 | L1 and L3 | the renewal lane asks it; the limits read's per-class serviceability is its input (C45) |
 | The exclusive account edge | C1 Fleet Registry & Accounts | L1 (`_pool_ok`, `pools.ts`), L3 (`pool_edges`) | one clause in the pool rule, one column, the `pool-exclusive` capability word (C46) |
 | Start placement policy moved out of the PWA | C1 Fleet Registry & Accounts | L1 | `startProgramPlacement` gets one shared home for the sheet and the start door |
@@ -1150,12 +1185,12 @@ this spec and can be overturned by number.
 |---|---|---|---|---|
 | C1 | What the Overlord is | a server agent loop, a session | A session: it reuses the chat, history, compaction and swaps, and the server stays free of judgement | Proposed |
 | C2 | Who names it, and what it binds | self-declared, designated | Designated by the operator's door, bound to the session id so a compaction keeps it. The count is R7's: one, enforced by a singleton row | Proposed |
-| C3 | Scope | one project, the fleet | The fleet: the operator talks only to it | Proposed |
+| C3 | Scope | one project, the fleet | The fleet, every project at once (R11); its own project only holds its pane | Proposed |
 | C4 | Does it claim runs | yes, no | No: one coordinator per programme, and no nested-coordinator rule is bent | Proposed |
 | C5 | Where its state lives | its context, the server | The server: it survives compaction and replacement | Proposed |
 | C6 | Model | Opus, Fable | Fable at high effort, because the operator selected it (C45); subagents never Fable | Proposed |
 | C7 | Brakes | its own, the operator's | All of the operator's, plus a kill switch of its own | Proposed |
-| C8 | Surface | the Fleet home, a new place, a floating panel | A new place, first in the navigation (Q1 asks about making it the home) | Proposed |
+| C8 | Surface | a new place, the home | The home (R9): first door in every navigation, the wordmark leads to it, one decider falls back to the Fleet when no Overlord can answer | Proposed |
 | C9 | Request tracking | in its context, a table | A table: requests outlive compaction and the operator can see them | Proposed |
 | C10 | The board | many reads, one composed read | One read composed from the existing readers, deciding nothing | Proposed |
 | C11 | A busy owner | take the work away, keep it with the owner | Keep it, unless it splits cleanly and the owner agrees | Proposed |
@@ -1194,6 +1229,7 @@ this spec and can be overturned by number.
 | C44 | Context hygiene | ad hoc, rules | Reads through subagents, one model per generation, compact reads | Proposed |
 | C45 | How its model is chosen and kept | the session, the operator once, the operator plus the server | The operator's choice on the designation; the server applies it at each renewal, falls back to Opus at Fable's cap and returns after | Proposed |
 | C46 | Its accounts | shared, a tagged pool, a tagged pool with exclusive accounts | A pool of its own, with an `exclusive` edge so no other session lands on its accounts; enforced on both boxes before it can be set | Proposed |
+| C47 | What it may read | operator prompts only, everything | Everything the console reads plus every project's full history (R10); credential stores stay closed | Proposed |
 
 ## 14. Build order
 
@@ -1204,10 +1240,10 @@ depends only on the waves before it.
 flowchart LR
   P0["Prerequisites<br/>D-8126 merged and built<br/>(calls record, goals read,<br/>decision procedure)<br/>D-8125 merged"] --> W0
   W0["W0 Longevity spike<br/>verify Claude Code knobs:<br/>PreCompact instructions,<br/>compact window, idle compaction,<br/>clear in place with a card,<br/>a model change at renewal"] --> W1
-  W1["W1 Designate and talk<br/>exclusive account edge,<br/>designation with its model,<br/>skill v1, Overlord place with chat,<br/>board read, kill switch,<br/>card, notes, renewal, canaries"] --> W2
+  W1["W1 Designate and talk<br/>exclusive account edge,<br/>designation with its model,<br/>skill v1, Overlord home and chat,<br/>board read, kill switch,<br/>card, notes, renewal, canaries"] --> W2
   W2["W2 Route and follow up<br/>requests table, relay door,<br/>overlord mail role,<br/>follow-up arm, audit log"] --> W3
   W3["W3 Answer first<br/>Overlord hold tier for items<br/>and asks, answer and<br/>escalate doors, act catalogue,<br/>authority decider, grants door,<br/>probes, outside audit"] --> W4
-  W4["W4 Learn<br/>operator-model.db, feed read,<br/>distillation, About you,<br/>privacy controls"] --> W5
+  W4["W4 Learn<br/>operator-model.db, history door,<br/>feed read,<br/>distillation, About you,<br/>privacy controls"] --> W5
   W5["W5 Start and revive<br/>start, revive and retire doors,<br/>live-programme cap"] --> W6
   W6["W6 Propose and report<br/>grant proposals from<br/>the operator model,<br/>digest section"]
 ```
@@ -1255,7 +1291,7 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 | The Overlord answers wrongly with confidence | Coordinators build the wrong thing | Calls are overturnable and cheap to overturn (D-8126 prefers reversible options). M4 watches overturns. W3 ships in shadow first |
 | The Overlord becomes the bottleneck | Questions wait on it instead of the operator | Short holds, fall-through, M3, and short turns (C22 to C24) |
 | The operator model drifts or overfits | Answers reflect a stale or wrong picture | Stated outranks inferred. Learned-this-week review, overturns that correct, retention, M7 |
-| Private content leaks into a public repo | A public, unerasable revision (GitHub keeps edits) | Section 9.4 rules 4 and 7, the private-name scan on every outbound text, and `overlord-only` by default for other-project prompts |
+| Private content leaks into a public repo | A public, unerasable revision (GitHub keeps edits) | Section 9.4 rules 4 and 7, the private-name scan on every outbound text, and `overlord-only` by default for everything learned from another project. Reading everything (R10) widens what the Overlord could quote, not where it may quote it |
 | A forged Overlord | A session acts with Overlord powers | Same exposure as a forged coordinator today, plus logged, overturnable acts. Irreversible grants are refused until §7.4's identity exists |
 | Context load on one session | The Overlord loses the thread across many programmes | The board and the requests table are its memory. Reading goes to subagents. Compaction loses nothing (C5) |
 | Too many coordinators | Window spend and box load rise | The live-programme cap (C28) and the fleet's own admission |
@@ -1269,21 +1305,15 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - R1 to R6, the operator's rulings of 2026-11-09 on the six open questions of #2491 (§2).
 - R7, the operator's ruling of 2026-11-09: there is one and only one Overlord (§3.1).
 - R8, the operator's direction of 2026-11-09: it lives a very long time without memory loss (§3.3).
+- R9, R10 and R11, the operator's rulings of 2026-11-09 after rev 2: the Overlord is the home screen with a top-menu
+  button; it can read everything; it oversees every project at once and never moves between them (§2).
 - The operator's direction of 2026-11-09, after rev 1: Fable, and an account pool of its own. C45 and C46 turn it into
   design (§3.4), and wait on approval with the other calls.
 
 ### Waiting on you
 
-- **Q1. Where the Overlord lives in the console.** It is now a new place, first in the navigation, with the Fleet
-  screen staying the home (C8). Or should the Overlord *be* the home: the first screen the console opens, with the
-  fleet one tap away? The answer changes the navigation work in W1 and what a phone shows on launch.
-- **Q2. May the Overlord read your prompts in other projects?** "Everything about the operator" (R2) includes them,
-  but the history store's ruling is "across projects: never". The recommended arm (§9.2, S3) adds one narrow read for
-  the Overlord alone: your own typed prompts, redacted, from every project, never the sessions' replies or tool output,
-  every entry kept `overlord-only`, and any project switchable off. No session gains a cross-project read. The other
-  arms are ccrc projects only, or no prompts at all (rulings and the Overlord chat only). The answer sets the size of
-  W4 and its privacy review.
-- **Approve this spec** with calls C1 to C46, or name the calls to change.
+- **Approve this spec** with calls C1 to C47, or name the calls to change. C47 is where your "everything" stops: it
+  keeps the credential stores closed.
 - **Which accounts form the Overlord's pool.** You tag them in Settings once W1's exclusive edge is live; at least two
   are recommended (C46). Nothing in this spec names them.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions, and D-8125 (PR #2490). This programme's wave 1
