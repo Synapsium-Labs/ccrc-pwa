@@ -254,3 +254,69 @@ describe('the top of the board', () => {
     expect(c.querySelector('[data-testid="stuck-band"]')).toBeNull();
   });
 });
+
+describe('Waiting on its coordinator (Task 15, A14, A29, R2)', () => {
+  const waiting = (id: number, ago: number, over: Partial<RunSummary> = {}): RunSummary =>
+    run(id, { state: 'awaiting-review', waitsOn: 'coordinator', lastMoveAt: NOW - ago, ...over });
+  const waitBand = (c: HTMLElement): HTMLElement | null => c.querySelector('[data-testid="waiting-band"]');
+
+  it('awaiting-review with waitsOn coordinator and lastMoveAt over a day joins the band', async () => {
+    const c = await board([waiting(1, 25 * H)]);
+    expect(waitBand(c)).not.toBeNull();
+    expect(within(waitBand(c)!).getByRole('button', { name: /^Waiting on its coordinator/ })).toBeInTheDocument();
+  });
+
+  it('a run at 23 h does not', async () => {
+    expect(waitBand(await board([waiting(1, 23 * H)]))).toBeNull();
+  });
+
+  it('a run waiting on someone else, or in another state, does not', async () => {
+    const c = await board([waiting(1, 3 * D, { waitsOn: 'reviewer' }), waiting(2, 3 * D, { state: 'working', sessionId: 's', workspace: 'w' })]);
+    expect(waitBand(c)).toBeNull();
+  });
+
+  it('one folded row: the count on it, the runs behind a tap', async () => {
+    const c = await board([waiting(1, 2 * D), waiting(2, 3 * D)]);
+    const band = waitBand(c)!;
+    const head = within(band).getByRole('button', { name: /^Waiting on its coordinator/ });
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    expect(head.textContent).toMatch(/· 2/);
+    expect(band.querySelectorAll('li')).toHaveLength(0);
+    fireEvent.click(head);
+    expect(band.querySelectorAll('li')).toHaveLength(2);
+  });
+
+  it('Open the coordinator sits on its rows when the claimant has a session, and no Abandon there', async () => {
+    const store = makeStore();
+    const coord = fleetSession({ id: 'project-a-coordinator', project: 'project-a' });
+    act(() => { store.setState({ runs: [waiting(1, 2 * D)], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open', sessions: [coord] }); });
+    const { container } = render(<RunsScreen store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
+    await act(async () => { await Promise.resolve(); });
+    const band = waitBand(container)!;
+    fireEvent.click(within(band).getByRole('button', { name: /^Waiting on its coordinator/ }));
+    expect(within(band).getByRole('link', { name: 'Open the coordinator' })).toHaveAttribute('href', '/s/project-a-coordinator');
+    expect(within(band).queryByRole('button', { name: /Abandon/ })).toBeNull();
+  });
+
+  it('no Open the coordinator when the claimant has no session', async () => {
+    const c = await board([waiting(1, 2 * D)]);
+    fireEvent.click(within(waitBand(c)!).getByRole('button', { name: /^Waiting on its coordinator/ }));
+    expect(within(waitBand(c)!).queryByRole('link', { name: 'Open the coordinator' })).toBeNull();
+  });
+
+  it('Waits behind a stuck run links to blockedBy', async () => {
+    const c = await board([waiting(1, 2 * D, { blockedBy: 44 })]);
+    fireEvent.click(within(waitBand(c)!).getByRole('button', { name: /^Waiting on its coordinator/ }));
+    expect(within(waitBand(c)!).getByRole('link', { name: 'Waits behind a stuck run.' })).toHaveAttribute('href', '/runs/44');
+  });
+
+  it('a stuck run never joins Waiting on its coordinator (R2)', async () => {
+    const stuck = waiting(1, 5 * D, { stuck: { reason: 'owner-gone', cause: 'coordinator-archived', since: NOW - 5 * D, closes: null } });
+    const c = await board([stuck, waiting(2, 2 * D)]);
+    fireEvent.click(within(waitBand(c)!).getByRole('button', { name: /^Waiting on its coordinator/ }));
+    expect(waitBand(c)!.querySelectorAll('li')).toHaveLength(1);
+    expect(waitBand(c)!.textContent).not.toMatch(/run 1\b/);
+    expect(c.querySelectorAll('[data-testid="stuck-band"]')).toHaveLength(1);
+    expect(waitBand(await board([stuck]))).toBeNull();
+  });
+});

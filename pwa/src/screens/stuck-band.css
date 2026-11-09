@@ -2,7 +2,7 @@
    `refined.css`. Every head and every control keeps the tap floor, text wraps, nothing is ellipsised. A head's group control
    sits on its own line on a narrow column and at the right from medium (`runs` is the board's container). Nothing here has a
    glow, an animation or a shadow: a stuck run is a record, not a living pane. */
-.stuck-band { display: grid; gap: var(--sp-1); margin-block: var(--sp-2); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
+.stuck-band, .waiting-band { display: grid; gap: var(--sp-1); margin-block: var(--sp-2); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
 .stuck-band .stuck-band-title { margin: 0; font: var(--weight-medium) var(--fs-sm) / 1.4 var(--family-mono); color: var(--ink-primary); }
 .stuck-band .stuck-band-note { margin: 0; font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .stuck-group { display: grid; gap: var(--sp-1); min-width: 0; }
@@ -43,3 +43,7 @@
   flex: 1 0 100%; min-width: 0; font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere;
 }
 .run-row .run-marker { font-size: var(--fs-2xs); color: var(--ink-secondary); }
+/* Waiting on its coordinator: one folded row; its rows reuse the stuck row's grid with the link and the wait line under the name. */
+.run-row.run-waiting { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-1); }
+.run-row .run-waiting-line { font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere; min-height: var(--tap-min); display: inline-flex; align-items: center; }
+.run-row .run-coordinator { font-size: var(--fs-2xs); color: var(--ink-secondary); min-height: var(--tap-min); display: inline-flex; align-items: center; }

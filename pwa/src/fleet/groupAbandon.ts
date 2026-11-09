@@ -2,6 +2,7 @@
 // the words of the group act, apart from the sheet that drives them. The PWA calls the existing abandon route once per run, one
 // at a time: before each call it asks where the run stands, and every run the operator confirmed ends in exactly one of six
 // results (A41). No new route (A12).
+// L4 composition: it drives the abandon route through the fetch adapter and reads the single sheet's error sentence.
 import type { RunSummary, StuckReason } from '../../../shared/api';
 import { ApiError, isRegistryUnmeasurable } from '../lib/api';
 import { abandonErrorText, type AbandonAnswer } from './AbandonSheet';

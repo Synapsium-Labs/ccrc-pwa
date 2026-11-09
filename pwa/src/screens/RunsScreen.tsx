@@ -51,7 +51,7 @@ import '../fleet/fleet.css';
 const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
-import { StuckBand, isStuckRun } from './StuckBand';
+import { StuckBand, WaitingBand, isStuckRun } from './StuckBand';
 import { stuckLine } from '../fleet/stuckWords';
 import { RunDetailScreen } from './RunDetailScreen';
 import { useMeasuredColumn } from './runColumn';
@@ -525,6 +525,10 @@ function RunsBoard({
           The band is a second view of the stuck runs, not a move (§8.2.2): they stay in their programme's rows and counts. The group control opens the group sheet (Task 14). */}
       {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget}
         presence={(r) => coordinatorPresence(r.claimedBy, coordinatorOf(r, sessionById), fleetFrameSeen)} onGroupDone={() => { void loadCold(); }} />}
+
+      {/* Waiting on its coordinator (§8.2 item 6): one folded row below Stuck; a stuck run is in the Stuck band alone (R2). */}
+      {!finding && !noSignalYet && <WaitingBand runs={active} nowMs={now} openId={openId}
+        coordinatorOpenable={(r) => coordinatorOf(r, sessionById) !== null} />}
 
       {/* D-6911: every open work run whose review cap waits on the operator. It sits below where the Stuck band goes (Task 13)
           until review caps join `/waiting` (Task 24); renders nothing when no run waits. */}

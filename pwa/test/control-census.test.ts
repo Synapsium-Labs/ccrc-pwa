@@ -284,6 +284,8 @@ const CONTROLS: Record<string, string> = {
   'screens/StuckBand.tsx <button> run-abandon': 'TOKEN. The abandon door, on a stuck row alone (the runs rebuild, D-8074).',
   'screens/StuckBand.tsx <button> run-open': 'TOKEN. A stuck row\'s open door: `.run-row .run-open` declares the floor.',
   'screens/StuckBand.tsx <button> stuck-head-toggle': 'TOKEN. A Stuck head\'s fold toggle (D-8074): `.stuck-head .stuck-head-toggle` declares the floor.',
+  'screens/StuckBand.tsx <a> run-waiting-line': 'TOKEN. The "Waits behind a stuck run." link on a Waiting row (D-8074): `.run-row .run-waiting-line` declares the floor.',
+  'screens/StuckBand.tsx <a> run-coordinator': 'TOKEN. A Waiting row\'s Open the coordinator link (D-8074): `.run-row .run-coordinator` declares the floor.',
   'screens/StuckBand.tsx <button> stuck-head-group': 'TOKEN. A Stuck head\'s group control (D-8074): `.stuck-head .stuck-head-group` declares the floor.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',
   'screens/RunRow.tsx <button> run-resume': 'TOKEN. The resume door.',

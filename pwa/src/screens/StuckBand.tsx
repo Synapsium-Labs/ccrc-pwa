@@ -14,12 +14,13 @@ import type { RunSummary, StuckReason } from '../../../shared/api';
 import { GroupAbandonSheet } from '../fleet/GroupAbandonSheet';
 import { groupStanding } from '../fleet/groupAbandon';
 import type { CoordinatorPresence } from '../fleet/presence';
-import { RUN_GLYPH, isRunClosed, runRowName, runState, runStateWord } from '../fleet/runWords';
+import { RUN_GLYPH, isRunClosed, runRowName, runState, runStateWord, runWaitLine } from '../fleet/runWords';
 import {
   STUCK_HEAD_ORDER, STUCK_HEADING, groupControlWords, heldBack, heldBackLine, oldestAge, runMarker, stuckLine,
 } from '../fleet/stuckWords';
 import { navigate } from '../lib/router';
-import { runPath } from '../lib/routes';
+import { runPath, sessionPath } from '../lib/routes';
+import { inAppClick } from '../fleet/settingsText';
 import { pageStorage, readKey, writeKey } from '../lib/storage';
 import './stuck-band.css';
 
@@ -136,5 +137,69 @@ export function StuckBand({ runs, nowMs, openId = null, onAbandon, presence = ()
       </section>
       {sheet}
     </>
+  );
+}
+
+/** The band after Stuck (D-8074; spec §8.2 item 6, A14, A29; wave B4 Task 15): open runs that finished their reviews and wait on
+ *  their coordinator for over a day. A run with a stuck verdict is never here (R2): it shows in the Stuck band alone. */
+const WAITING_OPEN_KEY = 'ccrc-runs-waiting-open';
+const WAITING_AFTER_MS = 86_400_000;
+
+export const isWaitingOnCoordinator = (r: RunSummary, nowMs: number): boolean =>
+  !isRunClosed(r) && r.stuck == null && runState(r) === 'awaiting-review' && r.waitsOn === 'coordinator'
+  && r.lastMoveAt != null && nowMs - r.lastMoveAt > WAITING_AFTER_MS;
+
+function oldestWaiting(list: readonly RunSummary[], nowMs: number): string {
+  const h = Math.floor((nowMs - Math.min(...list.map((r) => r.lastMoveAt!))) / 3_600_000);
+  return h >= 48 ? `${Math.floor(h / 24)} days` : `${h} h`;
+}
+
+export function WaitingBand({ runs, nowMs, openId = null, coordinatorOpenable = () => false }: {
+  runs: readonly RunSummary[];
+  nowMs: number;
+  openId?: number | null;
+  /** Whether the run's claimant has a session to open. */
+  coordinatorOpenable?: (run: RunSummary) => boolean;
+}): ReactNode {
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return readKey(WAITING_OPEN_KEY, pageStorage) === '1'; } catch { return false; }
+  });
+  const list = runs.filter((r) => isWaitingOnCoordinator(r, nowMs)).sort((a, b) => a.lastMoveAt! - b.lastMoveAt! || a.id - b.id);
+  if (list.length === 0) return null;
+  const toggle = (): void => { setOpen(!open); writeKey(WAITING_OPEN_KEY, open ? '0' : '1'); };
+  return (
+    <section className="waiting-band" aria-label={`Waiting on its coordinator, ${list.length}`} data-testid="waiting-band">
+      <div className="stuck-head">
+        <button type="button" className="stuck-head-toggle" aria-expanded={open} aria-controls="waiting-body" onClick={toggle}>
+          <span className="stuck-head-name">Waiting on its coordinator</span>
+          <span className="stuck-head-count">· {list.length}</span>
+          <span className="stuck-head-oldest">· oldest {oldestWaiting(list, nowMs)}</span>
+        </button>
+      </div>
+      {open && (
+        <ul className="runs-list stuck-rows" id="waiting-body">
+          {list.map((run) => {
+            const line = runWaitLine(run, nowMs);
+            return (
+              <li key={run.id} className="run-row run-waiting" title={`run ${run.id}`}>
+                <button type="button" className="run-open" aria-current={run.id === openId ? 'true' : undefined} onClick={() => navigate(runPath(run.id))}>
+                  <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[runState(run)]}</span>
+                  <span className="run-state">{runStateWord(run)}</span>
+                  <span className="run-name">{runRowName(run)}</span>
+                </button>
+                {run.blockedBy != null
+                  ? <a className="run-waiting-line" href={runPath(run.blockedBy)} onClick={inAppClick(runPath(run.blockedBy))}>Waits behind a stuck run.</a>
+                  : line !== null && <span className="run-waiting-line">{line}</span>}
+                {coordinatorOpenable(run) && run.claimedBy !== null && (
+                  <a className="run-coordinator" href={sessionPath(run.claimedBy)} onClick={inAppClick(sessionPath(run.claimedBy))}>
+                    Open the coordinator
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

@@ -108,7 +108,7 @@ async function openBoard(width: number, skin: string, theme: string): Promise<Op
 
 /** Open every Stuck head (they fold by default), and wait for the rows. */
 async function openHeads(page: Page): Promise<void> {
-  const toggles = page.locator('.stuck-head-toggle');
+  const toggles = page.locator('[data-testid="stuck-band"] .stuck-head-toggle');
   for (let i = 0, n = await toggles.count(); i < n; i++) {
     if ((await toggles.nth(i).getAttribute('aria-expanded')) !== 'true') await toggles.nth(i).click();
   }
@@ -551,13 +551,13 @@ for (const width of MATRIX.widths) {
               const bar = document.querySelector<HTMLElement>('.shell-phone-nav');
               const barTop = bar !== null && getComputedStyle(bar).display !== 'none' ? bar.getBoundingClientRect().top : null;
               const visible = barTop ?? innerHeight;
-              const heads = [...document.querySelectorAll<HTMLElement>('.stuck-head')];
+              const heads = [...document.querySelectorAll<HTMLElement>('[data-testid="stuck-band"] .stuck-head')];
               const last = heads[heads.length - 1]!.getBoundingClientRect();
               const first = document.querySelector<HTMLElement>('.stuck-band')!.getBoundingClientRect();
               const under = (el: Element): number => el.getBoundingClientRect().height;
               return {
                 tap, visible, barTop, headCount: heads.length, lastBottom: last.bottom, bandTop: first.top,
-                folded: [...document.querySelectorAll('.stuck-head-toggle')].every((b) => b.getAttribute('aria-expanded') === 'false'),
+                folded: [...document.querySelectorAll('[data-testid="stuck-band"] .stuck-head-toggle')].every((b) => b.getAttribute('aria-expanded') === 'false'),
                 rows: document.querySelectorAll('li.run-stuck').length,
                 short: [...document.querySelectorAll('.stuck-band button, .runs-column a')].filter((el) => under(el) < tap - 1).map((el) => el.className || el.tagName),
                 page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
