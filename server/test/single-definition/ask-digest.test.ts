@@ -823,9 +823,8 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     const moved = src.replace(`${line}\n`, '  local rc=0 json="" g="" c="" cs="" cf="" ts=""\n')
       .replace('\n_hook_history_steer_recall_off() {\n', `\n_hook_history_steer_recall_off() {\n${line}\n`);
     expect(where(uuidCopies(moved)), 'the tail copy in the recall-off function').toEqual([UUID_PLACES[0], { fn: '_hook_history_steer_recall_off', below: true }]);
-    const base = src.replace(`${line}\n`, '');
-    const at = base.lastIndexOf('\n', base.indexOf(ANCHOR)) + 1;
-    const above = `${base.slice(0, at)}_x() {\n${line}\n}\n${base.slice(at)}`;
+    const above = src.replace(`${line}\n`, '').replace(/\n_ct_read\(\) \{[^\n]*\n/, (head) => `${head}${line}\n`);
+    expect(where(uuidCopies(above)).map(({ fn }) => fn), 'the tail copy moved into a shipped function above the anchor').toEqual(['_ct_read', '_hook_history_card']);
     expect(where(uuidCopies(above)), 'a copy above the anchor').not.toEqual(UUID_PLACES);
     for (const spelled of ['  local x="" uuid_re=\'u\'', '  uuid_re=\'u\'', '  declare uuid_re="u"', '  local -r uuid_re=\'u\'']) {
       const other = src.replace('\n_hook_history_steer_read() {\n', `\n_hook_history_steer_read() {\n${spelled}\n`);
@@ -871,8 +870,9 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     const src = readFileSync(HOOK_SH, 'utf8');
     const third = src.replace('\n_hook_history_steer_read() {\n', `\n_hook_history_steer_read() {\n  local o2="$HOME/${root}/${dir}/$id"\n`);
     expect(where(offCopies(third, root, dir)), 'a third copy').not.toEqual(OFF_PLACES);
-    const elsewhere = src.replace('\n_hook_history_steer_recall_off() {\n', '\n_hook_history_steer_recall_off2() {\n');
-    expect(where(offCopies(elsewhere, root, dir)), 'the tail copy in another function').not.toEqual(OFF_PLACES);
+    const tail = offCopies(src, root, dir)[1]!.l;
+    const elsewhere = src.replace(`${tail}\n`, '').replace('\n_hook_history_steer_read() {\n', `\n_hook_history_steer_read() {\n${tail}\n`);
+    expect(where(offCopies(elsewhere, root, dir)), 'the tail copy in another function').toEqual([OFF_PLACES[0], { fn: '_hook_history_steer_read', below: true }]);
   });
 
   it("SCOPE_MARKER_MAX_AGE_MS is the hook's COMPACT_CARD_MAX_AGE in ms: the window a consumption's marker is read within is the one the reader serves within (ruling RC3)", async () => {
