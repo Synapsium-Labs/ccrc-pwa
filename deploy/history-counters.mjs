@@ -1091,7 +1091,7 @@ function spikeStmts(db) {
     // any epoch row of a cc session, confirmed or not: derive's epochOfUuid answers the confirmed one, and a span whose epoch is
     // unconfirmed (derive's `waiting`) still belongs to a session
     anyEpoch: db.prepare(`SELECT e.session_pk AS session_pk, s.ccrc_id AS ccrc_id
-      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? ORDER BY e.session_pk LIMIT 1`),
+      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? ORDER BY e.session_pk`),
     printed: db.prepare('SELECT 1 AS hit FROM steer_receipts WHERE (ccrc_id = ? OR cc_session_uuid = ?) AND ts_ms >= ? AND ts_ms < ? LIMIT 1'),
     copyRows: db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.provenance AS provenance,
         e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms, e.model AS model, e.blob_id AS blob_id,
@@ -1514,8 +1514,10 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
     // figure unmeasured, never dropped
     let ep = epochOfUuid(db, b.cc_uuid);
     if (ep === null) {
-      const any = s.anyEpoch.get(b.cc_uuid);
-      ep = any === undefined ? null : { session_pk: rootOf(s, Number(any.session_pk)), ccrc_id: any.ccrc_id };
+      // every candidate row's root: two different roots holding one cc session leave the span's membership undecidable
+      const rows = s.anyEpoch.all(b.cc_uuid);
+      const rootsOf = new Set(rows.map((r) => rootOf(s, Number(r.session_pk))));
+      ep = rootsOf.size === 1 ? { session_pk: [...rootsOf][0], ccrc_id: rows[0].ccrc_id } : null;
     }
     if (ep === null) {
       unattributed += 1;

@@ -188,7 +188,7 @@ function addReply(p: Planted, key: string, model: string, ts: number): void {
 }
 
 /** Removes rows from a planted store, as a store that lost them would stand (one statement, then closed). */
-function remove(p: Planted, sql: string, ...args: number[]): void {
+function remove(p: Planted, sql: string, ...args: Array<number | string>): void {
   const db = store.openWriter(p.dbFile);
   try {
     db.prepare(sql).run(...args);
@@ -622,6 +622,19 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
         for (const b of ['anthropic', 'other']) expect(side[b].cutShapes.why, b).toContain('span-unattributed');
       }
       expect(A(r).summaryUnclosed.state).toBe('unmeasured');
+    });
+
+    it('spike counts a span two sessions claim as unattributed, not placed on the lower one', () => {
+      const p = plant({ sessions: [
+        { id: 'cohort', confirmed: false, spans: [S('a')] },
+        { id: 'rival', confirmed: false, spans: [] },
+      ] });
+      // both unconfirmed epoch rows now name the cohort session's transcript uuid: two roots hold it
+      remove(p, 'UPDATE epochs SET cc_session_uuid = ? WHERE session_pk = 2', ccUuidOf(1));
+      const r = spike(p);
+      expect(A(r).run.unattributed).toBe(1);
+      expect(A(r).population.spans).toBe(0);
+      expect(A(r).cutShapes.why).toContain('span-unattributed');
     });
 
     it('spike reads a headroom figure over no spans as unmeasured, never 0 of 0', () => {
