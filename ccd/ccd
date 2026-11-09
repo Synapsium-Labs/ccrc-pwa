@@ -9170,6 +9170,7 @@ forget
 list
 menu
 pick
+pr-admin-merge
 pr-landing
 pr-open
 pr-state
@@ -12407,6 +12408,104 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   _gh_rows_ok "$opened" \
     || die "the PR was opened, but gh answered something that is not a list of PRs"
   printf '%s\n' "$opened"
+}
+
+# ── the admin-merge door (D-8124) ───────────────────────────────────────────────────────────────────────────────────
+# `ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>` is the ONE place an admin merge is made. The session
+# hook keeps refusing a raw `gh pr merge --admin` and every `gh api` merge in every session; this verb runs `gh` itself
+# as a subprocess, which no hook sees, so it performs every check the operator's ruling names before the merge and
+# refuses with a typed reason otherwise. This part is the gate before any GitHub call: argv, the box setting, and who
+# is asking. The verb is a SESSION verb, run from a coordinator's own Bash; no server argv builder names it.
+#
+# THE SHAPE OF A HOLD THAT NAMES A PROGRAMME WAVE, held equal to the hook's `CCRC_HOLD_WAVE_RE` by the single-definition
+# pin `ccd AM_HOLD_WAVE_RE is session-hook.sh CCRC_HOLD_WAVE_RE, byte for byte` (server/test/single-definition/
+# vocabularies.test.ts). A caller whose hold matches is a worker (a self-claimed run's hold or a reclaim heir), refused as
+# the hook's worker merge deny refuses it. The bound is the hook's `CCRC_HOLD_MAX`, with its off-by-one argument: a hold
+# read back 128 long may have been cut, so only a value of at most 127 is judged.
+AM_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
+AM_HOLD_MAX=127
+AM_WHO='?'; AM_WHY=""; AM_REPO=""; AM_PR=""; AM_HEAD=""
+_am_refuse() {   # <caller> <reason> <detail> -> one REFUSED line on stdout, one journal line, exit 2
+  local who="$1" reason="$2" detail="${3//[[:cntrl:]]/ }"
+  printf 'REFUSED %s: %s\n' "$reason" "$detail"
+  echo "$(date '+%F %T') admin-merge-refused $who: $AM_REPO#$AM_PR head=$AM_HEAD reason=$reason" >> "$REG/swap.log" 2>/dev/null || true
+  exit 2
+}
+_am_setting() {   # -> rc 0 = auto; rc 1 = off (AM_WHY); rc 2 = unread, which reads as off (AM_WHY). Never an unbounded read.
+  local lib out
+  AM_WHY=""
+  lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"
+  [[ -f "$lib" ]] || lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"
+  # A SUBSHELL, as `_browser_mcp_box` reads it: the library sets ccrc's own names, which stay out of ccd.
+  # shellcheck disable=SC1090  # the library's path is chosen at run time: beside this ccd, else ~/.local/libexec/ccrc
+  out=$( if ! { . "$lib" 2>/dev/null && declare -F _ccrc_knob _lnd_ok _lnd_says >/dev/null 2>&1; }; then printf 'noreader'; exit 0; fi
+         if ! _ccrc_knob CCRC_ADMIN_MERGE auto; then printf 'unread %s' "$KNOB_WHY"; exit 0; fi
+         if _lnd_ok CCRC_ADMIN_MERGE "$KNOB"; then printf 'value %s' "$KNOB"
+         else printf 'unread CCRC_ADMIN_MERGE must be %s' "$(_lnd_says CCRC_ADMIN_MERGE)"; fi )
+  case "$out" in
+    'value auto') return 0 ;;
+    'value off')  AM_WHY="CCRC_ADMIN_MERGE is off"; return 1 ;;
+    unread\ *)    AM_WHY="${out#unread } (read as off)"; return 2 ;;
+    *)            AM_WHY="the settings reader (ccrc-settings.sh) is missing or broken (read as off)"; return 2 ;;
+  esac
+}
+_am_who() {   # -> sets AM_WHO (the session id the pane names, or ?) and AM_WHY (why none, else empty); rc 1 = unnamed
+  local tname id
+  AM_WHO='?'; AM_WHY=""
+  [[ -n "${TMUX_PANE:-}" ]] || { AM_WHY="no tmux pane"; return 1; }
+  # The exact pane, bounded, as the session hook asks it: never an argument, never an untargeted tmux answer.
+  tname=$(_plat_timeout 2 tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null) || tname=""
+  [[ "$tname" == cc-?* ]] || { AM_WHY="tmux names no ccrc session for this pane"; return 1; }
+  id="${tname#cc-}"
+  [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || { AM_WHY="the pane's session name is not a session id"; return 1; }
+  [[ -f "$REG/$id.uuid" ]] || { AM_WHY="no registry row for $id"; return 1; }
+  AM_WHO="$id"
+}
+_am_caller() {   # the caller is a coordinator: named by the pane, no child marker, no hold naming a programme wave
+  local id hf h
+  _am_who || _am_refuse '?' caller-unknown "$AM_WHY"
+  id="$AM_WHO"
+  [[ ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] \
+    || _am_refuse "$id" not-coordinator "$id carries the child marker"
+  hf="$REG/$id.hold"
+  if [[ -e "$hf" || -L "$hf" ]]; then
+    h=$(head -c $(( AM_HOLD_MAX + 1 )) -- "$hf" 2>/dev/null) \
+      || _am_refuse "$id" not-coordinator "$id's hold cannot be read"
+    h="${h%%$'\n'*}"
+    if (( ${#h} <= AM_HOLD_MAX )) && [[ "$h" =~ $AM_HOLD_WAVE_RE ]]; then
+      _am_refuse "$id" not-coordinator "$id's hold reads $h"
+    fi
+  fi
+}
+cmd_pr_admin_merge() {   # ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>
+  # Fixed arity, no getopt loop and no "$@" passthrough, as `cmd_pr_open` has: pflag is last-wins, so a passthrough would
+  # let a caller override -R, the head pin or the merge flags the door sets itself.
+  [[ $# -eq 6 && $1 == --repo && $3 == --pr && $5 == --head ]] \
+    || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>"
+  local repo=$2 pr=$4 head=$6 owner name
+  [[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --repo)"
+  owner="${repo%%/*}"; name="${repo#*/}"
+  [[ $owner != -* && $owner != .* && $name != -* && $name != .* ]] \
+    || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --repo)"
+  [[ $pr =~ ^[1-9][0-9]{0,8}$ ]] || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --pr)"
+  [[ $head =~ ^[0-9a-f]{40}$ ]]  || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --head)"
+  AM_REPO="$repo"; AM_PR="$pr"; AM_HEAD="$head"
+
+  # The caller's name is read first and only to LABEL the journal; whether it may ask is judged after the setting.
+  _am_who || true
+  local src=0
+  _am_setting || src=$?
+  case "$src" in
+    0) ;;
+    1) _am_refuse "$AM_WHO" setting-off "$AM_WHY" ;;
+    *) _am_refuse "$AM_WHO" setting-unread "$AM_WHY" ;;
+  esac
+  _am_caller
+
+  # The GitHub reads and the merge follow (the next change). Until they are built the door cannot prove a thing, so it
+  # refuses after the one read that names the repository: a gate that stops short is closed, never open.
+  _plat_timeout 20 gh api "repos/$repo" >/dev/null 2>&1 || true
+  _am_refuse "$AM_WHO" unreadable "the repository read is not built yet"
 }
 
 # ── reap guards ────────────────────────────────────────────────────
@@ -47116,6 +47215,7 @@ case "${1:-}" in
   project-add) shift; cmd_project_add "$@" ;;
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
+  pr-admin-merge) shift; cmd_pr_admin_merge "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   pr-landing) shift; cmd_pr_landing "$@" ;;
   pr-train-prove) shift; cmd_pr_train_prove "$@" ;;
@@ -47124,6 +47224,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
