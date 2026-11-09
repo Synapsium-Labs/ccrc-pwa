@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../../shared/api.js';
-import { ALL, BASH, ccrcRoot, codeLines, here, holdersOf, prose, rel, stallCode, stallCodeText } from './helpers.js';
+import { ALL, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
 // D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). APPENDED, for the reason the blocks above
@@ -776,12 +776,62 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     expect(lists('[0-9a-f]'), 'a range is not rewritten: it stays a range, which the reader scan refuses').toBe('[0-9a-f]');
   });
 
+  /** Each code line of the hook with the function it sits in ('' outside every function) and whether it is below
+   *  `# @anchor compact-arm-emit-call`, so a census can say WHERE a copy stands, not only how many there are. */
+  const ANCHOR = '# @anchor compact-arm-emit-call';
+  const placed = (src: string): { l: string; fn: string; below: boolean }[] => {
+    let fn = '';
+    let below = false;
+    return src.split('\n').flatMap((l) => {
+      const head = /^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{/.exec(l);
+      if (head) fn = head[1]!;
+      const row = isBashComment(l) ? [] : [{ l, fn, below }];
+      if (l.includes(ANCHOR)) below = true;
+      if (l === '}') fn = '';
+      return row;
+    });
+  };
+  // W3-1 (D-8131 history-steer-recall-off-tail-copy, O9 (a); coordinator ruling of 2026-11-09): the hook spells the UUID
+  // grammar twice, the reader's above the anchor and ONE tail copy below it, in `_hook_history_pre`, whose local the
+  // recall-off tail copy reads by bash's dynamic scope. Any third copy, or a copy in any other place, reds.
+  const UUID_PLACES = [{ fn: '_hook_history_card', below: false }, { fn: '_hook_history_pre', below: true }];
+  const uuidCopies = (src: string): { l: string; fn: string; below: boolean }[] =>
+    placed(src).filter((x) => /(?<![A-Za-z0-9_$])uuid_re=/.test(x.l));
+  // The recall-off path: the card's gate above the anchor and the tail copy below it, each `$HOME/<root>/<dir>/$id`.
+  const OFF_PLACES = [{ fn: '_hook_history_card', below: false }, { fn: '_hook_history_steer_recall_off', below: true }];
+  const offCopies = (src: string, root: string, dir: string): { l: string; fn: string; below: boolean }[] =>
+    placed(src).filter((x) => x.l.includes(`${root}/${dir}/`));
+  const where = (rows: readonly { fn: string; below: boolean }[]): { fn: string; below: boolean }[] =>
+    rows.map(({ fn, below }) => ({ fn, below }));
+
   it('the reader\'s UUID grammar is lib\'s UUID_RE (the lists, normalised), so the hook and the CLI accept one family of generations and session ids', async () => {
     const l = await lib();
-    const lines = codeLines(HOOK_SH).filter((x) => /^\s*local uuid_re='/.test(x));
-    expect(lines, 'uuid_re is assigned once, in the reader').toHaveLength(1);
-    const re = /local uuid_re='([^']*)'/.exec(lines[0]!)![1]!;
-    expect(new RegExp(lists(re)).source).toBe((l['UUID_RE'] as RegExp).source);
+    const copies = uuidCopies(readFileSync(HOOK_SH, 'utf8'));
+    expect(where(copies), 'uuid_re is assigned twice: in the reader above the anchor, and once in the W3 tail').toEqual(UUID_PLACES);
+    for (const c of copies) {
+      const re = /uuid_re='([^']*)'/.exec(c.l)?.[1];
+      expect(re, `${c.fn}'s uuid_re is one single-quoted literal`).toBeDefined();
+      expect(new RegExp(lists(re!)).source, `${c.fn}'s uuid_re`).toBe((l['UUID_RE'] as RegExp).source);
+    }
+  });
+
+  it('CONTROL: a third uuid_re, or the tail\'s copy in another function or above the anchor, reds the census', () => {
+    const src = readFileSync(HOOK_SH, 'utf8');
+    const line = uuidCopies(src)[1]!.l;
+    const third = src.replace('\n_hook_history_steer_read() {\n', `\n_hook_history_steer_read() {\n${line}\n`);
+    expect(where(uuidCopies(third)), 'a third copy').not.toEqual(UUID_PLACES);
+    const moved = src.replace(`${line}\n`, '  local rc=0 json="" g="" c="" cs="" cf="" ts=""\n')
+      .replace('\n_hook_history_steer_recall_off() {\n', `\n_hook_history_steer_recall_off() {\n${line}\n`);
+    expect(where(uuidCopies(moved)), 'the tail copy in the recall-off function').toEqual([UUID_PLACES[0], { fn: '_hook_history_steer_recall_off', below: true }]);
+    const base = src.replace(`${line}\n`, '');
+    const at = base.lastIndexOf('\n', base.indexOf(ANCHOR)) + 1;
+    const above = `${base.slice(0, at)}_x() {\n${line}\n}\n${base.slice(at)}`;
+    expect(where(uuidCopies(above)), 'a copy above the anchor').not.toEqual(UUID_PLACES);
+    for (const spelled of ['  local x="" uuid_re=\'u\'', '  uuid_re=\'u\'', '  declare uuid_re="u"', '  local -r uuid_re=\'u\'']) {
+      const other = src.replace('\n_hook_history_steer_read() {\n', `\n_hook_history_steer_read() {\n${spelled}\n`);
+      expect(where(uuidCopies(other)), `another spelling: ${spelled.trim()}`).not.toEqual(UUID_PLACES);
+    }
+    expect(placed('a() {\n  x\n}\ny\n# @anchor compact-arm-emit-call\nz\n').map(({ fn, below }) => `${fn}:${String(below)}`), 'the placer: a closing brace is its function\'s, a comment line is dropped').toEqual(['a:false', 'a:false', 'a:false', ':false', ':true', ':true']);
   });
 
   it('`History: ` is spelled on one hook code line, the grammar\'s', () => {
@@ -809,7 +859,20 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
       expect(assigned(code, name), name).toEqual([`$HOME/${root}/${String(dir)}`]);
       expect(code.filter((x) => x.includes(`${root}/${String(dir)}`)), `${root}/${String(dir)} spelled twice`).toHaveLength(1);
     }
-    expect(code.filter((x) => x.includes(`${root}/${String(l['RECALL_OFF_DIR'])}/`)), 'the recall-off path, once').toHaveLength(1);
+    const off = offCopies(readFileSync(HOOK_SH, 'utf8'), root, String(l['RECALL_OFF_DIR']));
+    expect(where(off), 'the recall-off path: the card\'s gate and the tail copy (D-8131), nowhere else').toEqual(OFF_PLACES);
+    for (const c of off) expect(c.l, `${c.fn}'s recall-off path`).toContain(`"$HOME/${root}/${String(l['RECALL_OFF_DIR'])}/$id"`);
+  });
+
+  it('CONTROL: a third recall-off path, or the tail\'s in another function, reds the census', async () => {
+    const l = await lib();
+    const root = String(l['HISTORY_ROOT_REL']);
+    const dir = String(l['RECALL_OFF_DIR']);
+    const src = readFileSync(HOOK_SH, 'utf8');
+    const third = src.replace('\n_hook_history_steer_read() {\n', `\n_hook_history_steer_read() {\n  local o2="$HOME/${root}/${dir}/$id"\n`);
+    expect(where(offCopies(third, root, dir)), 'a third copy').not.toEqual(OFF_PLACES);
+    const elsewhere = src.replace('\n_hook_history_steer_recall_off() {\n', '\n_hook_history_steer_recall_off2() {\n');
+    expect(where(offCopies(elsewhere, root, dir)), 'the tail copy in another function').not.toEqual(OFF_PLACES);
   });
 
   it("SCOPE_MARKER_MAX_AGE_MS is the hook's COMPACT_CARD_MAX_AGE in ms: the window a consumption's marker is read within is the one the reader serves within (ruling RC3)", async () => {

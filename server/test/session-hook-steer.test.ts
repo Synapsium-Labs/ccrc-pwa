@@ -673,6 +673,21 @@ describe('parity: the hook\'s copies equal lib\'s (D-8130 history-steer-hook-cop
     const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(code.includes('history-steer-live'), 'a lane marker is read: spell its words and pin them against BACKENDS').toBe(false);
   });
+  it('the recall-off tail copy reads its caller\'s uuid_re: one call, from _hook_history_pre, after that local (an empty pattern would match any generation)', () => {
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l));
+    const calls = code.map((l, i) => [i, l] as const).filter(([, l]) => /(?<![A-Za-z0-9_])_hook_history_steer_recall_off(?![A-Za-z0-9_(])/.test(l));
+    expect(calls, 'one call').toHaveLength(1);
+    const pre = code.indexOf('_hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent on every refusal; 0 on every path');
+    const end = code.indexOf('}', pre);
+    const local = code.findIndex((l, i) => i > pre && /^\s*local uuid_re='/.test(l));
+    expect(pre, '_hook_history_pre is defined').toBeGreaterThan(0);
+    expect(local, 'its first line is the uuid_re local').toBe(pre + 1);
+    expect(calls[0]![0], 'the call sits inside _hook_history_pre, after the local').toBeGreaterThan(local);
+    expect(calls[0]![0]).toBeLessThan(end);
+    const body = src.slice(src.indexOf('\n_hook_history_steer_recall_off() {'), src.indexOf('\n}\n', src.indexOf('\n_hook_history_steer_recall_off() {')));
+    expect(body.replaceAll('$uuid_re', '').includes('uuid_re'), 'the copy declares, assigns or unsets no uuid_re of its own').toBe(false);
+    expect(body.includes('$uuid_re'), 'and reads the caller\'s').toBe(true);
+  });
   it('gate 6\'s `{` test is spelled (first-line equality implies it, so only the source can pin it)', () => {
     const at = src.indexOf('\n_hook_history_steer_read() {');
     const body = src.slice(at, src.indexOf('\n}\n', at));

@@ -6113,9 +6113,8 @@ HISTORY_STEER_GENERIC=$'ccrc history archive entry. At the very END of your <sum
 # through PreCompact and asserts one verdict. Legitimately different from the card's: it sits below the anchor. rc 0 =
 # WITHHOLD (this session's recall is off, or cannot be told), rc 1 = nothing withheld. A steer file can stand where the
 # card's record does not (card/<id> refused), so the `.gen` record is read here exactly as the card reads it: absent is
-# `unreadable` (withhold) whenever a recall-off file exists.
+# `unreadable` (withhold) whenever a recall-off file exists. `uuid_re` is its one caller's local, `_hook_history_pre`'s.
 _hook_history_steer_recall_off() {
-  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$'
   local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" x="" o="" ws=$' \t\n\v\f\r'
   if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
     gen="$CCRC_SESSION_GENERATION" via=session

@@ -1510,6 +1510,8 @@ jobs:
           test/history-derive.test.ts
           test/history-skill.test.ts
           test/history-card.test.ts
+          test/history-steer.test.ts
+          test/history-counters.test.ts
           test/history-replay.test.ts
           test/history-rss-preload.test.ts
           EOF

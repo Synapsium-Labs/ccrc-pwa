@@ -1,7 +1,7 @@
 {
   "file": "ccd/session-hook.sh",
-  "maxDelta": 121,
+  "maxDelta": 120,
   "d": "D-8135",
-  "reason": "ccrc history W3-1, the steering spike (spec 2026-10-05 section 7.2): the tail's factored functions and their calls (the scope verdict and the spool append), the recall-off tail copy, _hook_history_pre with its gates and its receipt, and the HISTORY_STEER_* names; measured +121 net code lines against the merge-base (2638 to 2759); kept in the hook because the hook loads no library (spec section 5.2), and the tail rule puts every W3 edit in this file's tail",
+  "reason": "ccrc history W3-1, the steering spike (spec 2026-10-05 section 7.2): the tail's factored functions and their calls (the scope verdict and the spool append), the recall-off tail copy, _hook_history_pre with its gates and its receipt, and the HISTORY_STEER_* names; measured +120 net code lines against the merge-base (2638 to 2758), after the tail's second uuid_re folded onto _hook_history_pre's; kept in the hook because the hook loads no library (spec section 5.2), and the tail rule puts every W3 edit in this file's tail",
   "added": "2026-11-09"
 }
