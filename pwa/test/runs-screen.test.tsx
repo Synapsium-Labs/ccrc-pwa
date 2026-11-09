@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testi
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { serverBinding, withBindingFrames } from './runBindingFixture';
-import { RunsScreen, foundRows } from './runs-board';
+import { RunsScreen, STUCK_NOW, foundRows, stuckOpen } from './runs-board';
 import { RunsAdvancedScreen } from '../src/screens/RunsAdvancedScreen';
 import { MailScreen } from '../src/screens/MailScreen';
 import type { FindReader } from '../src/screens/useRunList';
@@ -618,10 +618,11 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
 // stays green because nothing else renders `RunsScreen` with a run and looks
 // for it. This pins the row control on a REAL row, in the file that already
 // owns every other row-level assertion (`.run-open`, the tally, the glyph).
-describe('the abandon control mounts on every open run row (Task 12, spec §4.3, D-287 (was D-B4-14))', () => {
+describe('the abandon control mounts on every stuck run row (Task 12, spec §4.3, D-287 (was D-B4-14); D-8074, Task 13)', () => {
   it('renders .run-abandon as a sibling of .run-open, not nested inside it', () => {
+    stuckOpen();
     const store = makeStore();
-    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    act(() => { store.setState({ runs: [r({ stuck: STUCK_NOW })], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
     const abandon = screen.getByRole('button', { name: /abandon run 3/i });
@@ -1354,10 +1355,10 @@ describe('the resume door on the run board', () => {
     // door IS on the open row of the same program, in the same render.
     const btn = screen.getByRole('button', { name: /resume run 4/i });
     expect(rowOf(btn).title).toBe('run 4 · open-cove');
-    // D-6170 (G5 (a)): Abandon is drawn on open rows only — the terminal row
-    // offers none, the open row of the same program keeps it.
+    // D-6170 (G5 (a)) and D-8074 (Task 13): Abandon is drawn on stuck rows only, so neither the terminal row nor the
+    // healthy open row of the same program offers one.
     expect(screen.queryByRole('button', { name: /abandon run 3/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /abandon run 4/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /abandon run 4/i })).toBeNull();
   });
 
   it('hides it on an all-terminal program while the claimant is only UNKNOWN — the widened term does not weaken the first', async () => {

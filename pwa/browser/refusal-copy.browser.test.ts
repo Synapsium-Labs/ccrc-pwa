@@ -34,6 +34,8 @@ const NOW = 1_792_362_479;
 const WORKER = 'project-a-one';
 const COORD = 'project-a-coord';
 const RUN_ID = 3;
+/** The ordinary run beside it: Abandon sits on stuck rows alone (the runs rebuild, D-8074, Task 13), so Resume is acted on here. */
+const RESUME_ID = 4;
 
 const session = (id: string, ws: string, extra: object = {}): object => ({
   id, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workdir: `/w/project-a/${ws}`, workspace: ws, name: ws,
@@ -59,6 +61,12 @@ const RUN = {
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
             briefQueued: true, clearError: null, coordKickoffPendingSince: null },
   childReclaim: null,
+  stuck: { reason: 'owner-gone', cause: 'coordinator-gone', since: NOW * 1000 - 2 * 86_400_000, closes: null },
+};
+
+const RUN2 = {
+  ...RUN, id: RESUME_ID, program: 'programme-b', programTitle: 'Programme B', sessionId: null, workspace: null, branch: null,
+  state: 'planned', dispatchedAt: null, stuck: undefined,
 };
 
 const SESSIONS = [
@@ -70,14 +78,14 @@ const FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [], projected: null, roster: [] },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
-    '/api/runs': { runs: [RUN] },
+    '/api/runs': { runs: [RUN, RUN2] },
     '/api/claims': [],
     '/api/coord/caps': { caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 } },
     [`/api/sessions/${WORKER}/pr`]: { pr: MERGED_PR, draft: null, facts: null },
   },
   fleetFrames: [
     { type: 'fleet', sessions: SESSIONS },
-    { type: 'runs', runs: [RUN] },
+    { type: 'runs', runs: [RUN, RUN2] },
     { type: 'coord', coord: { pause: 'clear' } },
   ],
 };
@@ -121,7 +129,7 @@ async function boot(view: AppView, route: string): Promise<{ page: Page; errors:
           ok: false, error: 'run-open', runs: [{ id: RUN_ID, program: RUN.program, wave: RUN.wave, waveOf: RUN.waveOf }],
         }) });
     }
-    if (path === `/api/runs/${RUN_ID}/abandon` || path === `/api/runs/${RUN_ID}/reclaim` || path === '/api/coord/pause') {
+    if (path === `/api/runs/${RUN_ID}/abandon` || path === `/api/runs/${RESUME_ID}/reclaim` || path === '/api/coord/pause') {
       return r.fulfill({ status: 502, contentType: 'application/json', body: REFUSAL });
     }
     return r.fallback();
@@ -192,6 +200,7 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
 
         // AbandonSheet and ResumeSheet, off the run row.
         await page.goto(`${server!.origin}/runs`);
+        await page.locator('.stuck-head-toggle').first().click();
         await page.getByRole('button', { name: `Abandon run ${RUN_ID}` }).click();
         await page.locator('.sheet-footer').getByRole('button', { name: `Abandon run ${RUN_ID}`, exact: true }).click();
         await page.locator('.sheet-body .abandon-error').waitFor();
@@ -201,9 +210,9 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
         await page.keyboard.press('Escape');
         await page.locator('.sheet-body').waitFor({ state: 'detached' });
 
-        await page.getByRole('button', { name: `Resume run ${RUN_ID}` }).click();
+        await page.getByRole('button', { name: `Resume run ${RESUME_ID}` }).click();
         await page.getByRole('button', { name: 'That id cannot be revived' }).click();
-        await page.getByLabel(`Hand run ${RUN_ID} to this session id`).fill('project-a-two');
+        await page.getByLabel(`Hand run ${RESUME_ID} to this session id`).fill('project-a-two');
         await page.getByRole('button', { name: 'Reclaim' }).click();
         await page.locator('.sheet-body .abandon-error').waitFor();
         expectDrawn(await measure(page, '.sheet-body', '.abandon-error'), RECLAIM_COPY['registry-unmeasurable'], `resume, ${named(view)}`);
@@ -218,7 +227,7 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
 
         expect(posts).toEqual([
           `/api/sessions/${WORKER}/archive`, `/api/sessions/${WORKER}/archive`,
-          `/api/runs/${RUN_ID}/abandon`, `/api/runs/${RUN_ID}/reclaim`, '/api/coord/pause',
+          `/api/runs/${RUN_ID}/abandon`, `/api/runs/${RESUME_ID}/reclaim`, '/api/coord/pause',
         ]);
         expect(errors).toEqual([]);
       } finally {

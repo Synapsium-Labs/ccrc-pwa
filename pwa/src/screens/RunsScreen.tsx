@@ -51,6 +51,8 @@ import '../fleet/fleet.css';
 const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
+import { StuckBand, isStuckRun } from './StuckBand';
+import { stuckLine } from '../fleet/stuckWords';
 import { RunDetailScreen } from './RunDetailScreen';
 import { useMeasuredColumn } from './runColumn';
 import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
@@ -436,7 +438,6 @@ function RunsBoard({
       frameSeen={fleetFrameSeen}
       // Unknown, not empty, until the frame answers: a Finished row offers no Resume while an open wave may exist.
       programHasOpenRun={noSignalYet || programsOpen.has(run.program)}
-      onAbandon={setAbandonTarget}
       onResume={setResumeTarget}
       current={run.id === openId}
     />
@@ -520,6 +521,10 @@ function RunsBoard({
       {/* The paused banner (§8.2 item 3): only while coordination is paused. The switch itself lives under Advanced. */}
       <CoordBanner store={store} onlyWhilePaused />
 
+      {/* The Stuck band (§8.2 item 4): one head per reason, right under the paused banner, so no healthy work sits above it.
+          A stuck run is listed here and nowhere else on the board. Task 14 wires the group control. */}
+      {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget} />}
+
       {/* D-6911: every open work run whose review cap waits on the operator. It sits below where the Stuck band goes (Task 13)
           until review caps join `/waiting` (Task 24); renders nothing when no run waits. */}
       <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
@@ -558,7 +563,7 @@ function RunsBoard({
         <>
           {/* With finished runs only, the board still says nothing is open (§8.2), above the Finished fold. */}
           {active.length === 0 && <EmptyState data-state="ok">{NO_RUNS_OPEN}</EmptyState>}
-          {runsByProgram(active).map(({ program, runs: list }) => {
+          {runsByProgram(active.filter((r) => !isStuckRun(r))).map(({ program, runs: list }) => {
             // The program's OWN wave is the furthest one any of its rows has
             // reached, never `list[0]`'s own — `runsByProgram` orders each
             // group urgency-first, so the head row can be an older wave
@@ -601,7 +606,8 @@ function RunsBoard({
           own vanish-diff (above) also fires for the same close, and both
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `find`, never merged). */}
-      <AbandonSheet run={abandonTarget} workspaceChild={abandonChildOf(abandonSession)} coordinatorPresence={abandonPresence}
+      <AbandonSheet run={abandonTarget} contextLine={abandonTarget !== null && isStuckRun(abandonTarget) ? stuckLine(abandonTarget, now) : undefined}
+        workspaceChild={abandonChildOf(abandonSession)} coordinatorPresence={abandonPresence}
         onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
       {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
           abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of

@@ -53,7 +53,7 @@ describe('the run row reads no spend (A10)', () => {
     for (const r of [run(), run({ sessionId: null, state: 'planned' })]) {
       render(
         <ul><RunRow run={r} nowMs={Date.now()} session={null} coordSession={null} frameSeen={false}
-          programHasOpenRun={true} onAbandon={() => {}} onResume={() => {}} /></ul>);
+          programHasOpenRun={true} onResume={() => {}} /></ul>);
       expect(screen.queryByTestId('run-spend')).toBeNull();
       cleanup();
     }

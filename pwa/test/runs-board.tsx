@@ -2,7 +2,7 @@
 // Finished reads `GET /api/runs/find` now; most board tests still describe their archive as a `loadRuns` loader, so this
 // wrapper answers `find` from that loader: closed runs only, in close order, with the loader's `nextBefore` as the cursor.
 import type { ComponentProps, ReactNode } from 'react';
-import type { RunHit, RunSummary } from '../../shared/api';
+import { STUCK_REASONS, type RunHit, type RunStuck, type RunSummary } from '../../shared/api';
 import { isRunClosed, runClosedAt } from '../src/fleet/runWords';
 import { RunsScreen as RealRunsScreen } from '../src/screens/RunsScreen';
 import type { FindReader } from '../src/screens/useRunList';
@@ -38,3 +38,11 @@ export function RunsScreen({ loadRuns, loadCaps: _loadCaps, ...props }: BoardTes
 /** A `find` answer holding exactly these rows and no next page. */
 export const foundRows = (rows: readonly RunSummary[]): Awaited<ReturnType<FindReader>> =>
   ({ ok: true, exact: null, runs: rows as unknown as RunHit[], reviewsOf: [], next: null });
+
+/** A stuck verdict, for a test that needs a run in the Stuck band (D-8074, Task 13): Abandon sits on stuck rows alone. */
+export const STUCK_NOW: RunStuck = { reason: 'owner-gone', cause: 'coordinator-gone', since: Date.now() - 2 * 86_400_000, closes: null };
+
+/** Open every head of the Stuck band for this viewer, so a stuck row is on screen without a tap (heads fold by default). */
+export function stuckOpen(): void {
+  try { window.localStorage.setItem('ccrc-runs-stuck-open', JSON.stringify(STUCK_REASONS)); } catch { /* no storage here */ }
+}

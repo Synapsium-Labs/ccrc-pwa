@@ -1,0 +1,45 @@
+/* The Stuck band (`StuckBand`, D-8074; spec 2026-11-04 §8.2.1). Skin tokens only; no `.run` rule lives in `instrument.css` or
+   `refined.css`. Every head and every control keeps the tap floor, text wraps, nothing is ellipsised. A head's group control
+   sits on its own line on a narrow column and at the right from medium (`runs` is the board's container). Nothing here has a
+   glow, an animation or a shadow: a stuck run is a record, not a living pane. */
+.stuck-band { display: grid; gap: var(--sp-1); margin-block: var(--sp-2); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
+.stuck-band .stuck-band-title { margin: 0; font: var(--weight-medium) var(--fs-sm) / 1.4 var(--family-mono); color: var(--ink-primary); }
+.stuck-band .stuck-band-note { margin: 0; font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.stuck-group { display: grid; gap: var(--sp-1); min-width: 0; }
+.stuck-head {
+  display: grid; grid-template-columns: minmax(0, 1fr); column-gap: var(--sp-2);
+  background: var(--bg-surface); color: var(--ink-primary);
+  border-radius: var(--r-md); padding: 0 var(--sp-3);
+  font: var(--weight-medium) var(--fs-xs) / 1.6 var(--family-mono);
+}
+.stuck-head .stuck-head-toggle {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-2);
+  min-height: var(--tap-min); padding: 0; background: none; border: 0; cursor: pointer;
+  text-align: left; color: inherit; font: inherit; align-content: center;
+}
+.stuck-head .stuck-head-count, .stuck-head .stuck-head-oldest { color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
+.stuck-head .stuck-head-group {
+  justify-self: start; min-height: var(--tap-min); padding: 0 var(--sp-2);
+  background: none; border: 1px solid var(--edge-subtle); border-radius: var(--r-sm);
+  color: var(--ink-primary); font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono); cursor: pointer;
+}
+.stuck-head .stuck-head-group:disabled { color: var(--ink-tertiary); cursor: default; }
+.stuck-head .stuck-held {
+  margin: 0; padding-bottom: var(--sp-1); font-size: var(--fs-2xs); font-weight: var(--weight-regular);
+  color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+@container runs (min-width: 640px) {
+  .stuck-head { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .stuck-head .stuck-head-group { justify-self: end; }
+  .stuck-head .stuck-held { grid-column: 1 / -1; }
+}
+/* A stuck row: the first line holds the lamp, the word and the name, with Abandon at the right end of it; the context line and
+   the one marker follow inside the same door, so a tap anywhere but Abandon opens the run. */
+.run-row.run-stuck { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: var(--sp-2); }
+.run-row.run-stuck .run-open { grid-column: 1; grid-row: 1; padding-block: var(--sp-1); }
+.run-row.run-stuck .run-abandon { grid-column: 2; grid-row: 1; align-self: start; }
+.run-row .run-stuck-word { color: var(--status-attention-text); }
+.run-row .run-stuck-line {
+  flex: 1 0 100%; min-width: 0; font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+.run-row .run-marker { font-size: var(--fs-2xs); color: var(--ink-secondary); }
