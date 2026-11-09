@@ -1,11 +1,12 @@
 # Program: native-docs-reader
 
-Spec: `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md` (approved 2026-10-01)
-Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`; W8a `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`; W5 Export `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`; W5h-b `docs/superpowers/plans/2026-11-03-native-docs-reader-w5h-b-measured-values.md`; first-load compression `docs/superpowers/plans/2026-11-03-native-docs-reader-first-load-compression.md`; phone header `docs/superpowers/plans/2026-11-03-native-docs-reader-phone-header.md`; reader lab `docs/superpowers/plans/2026-11-03-native-docs-reader-reader-lab.md` (design `docs/superpowers/specs/2026-11-03-reader-lab-design.md`)
+Spec: `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md` (approved 2026-10-01); completion envelope `docs/superpowers/specs/2026-11-07-native-docs-reader-completion-design.md` (coordinator calls under autonomy, 2026-11-07).
+Completion plan: `docs/superpowers/plans/2026-11-07-native-docs-reader-completion.md` (Tasks 1–18, A → B1 → B2 → C1 → C2 → D → E → F → separate operator cutover). W5b leaf plan: `docs/superpowers/plans/2026-11-05-native-docs-reader-w5b-parity.md`, #2350.
+Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`; W8a `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`; W5 Export `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`; W5h-b `docs/superpowers/plans/2026-11-03-native-docs-reader-w5h-b-measured-values.md`; first-load compression `docs/superpowers/plans/2026-11-03-native-docs-reader-first-load-compression.md`; phone header `docs/superpowers/plans/2026-11-03-native-docs-reader-phone-header.md`; reader lab `docs/superpowers/plans/2026-11-03-native-docs-reader-reader-lab.md` (design `docs/superpowers/specs/2026-11-03-reader-lab-design.md`); library 1.1 take-up `docs/superpowers/plans/2026-11-05-native-docs-reader-library-1-1-take-up.md`
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-canyon`   Workspace: a fresh child per wave
 
 **What this program is.** ccrc gains its own session-gated Docs reader for each install's own project docs:
-specs, plans, product-design and conventions. It replaces the operator's standalone, tailnet-only docs server
+specs, plans, product-design and conventions, plus vision and promise in the approved W5b delivery. It replaces the operator's standalone, tailnet-only docs server
 with nothing outside ccrc's auth. The content stays in each user's own repositories and is never bundled.
 The fleet box reads docs through four narrow ccd verbs (W1). The server adapts them behind a capability
 (W2) and serves session-gated routes (W3). The PWA renders docs, images and sandboxed mockups (W4-W6). W7
@@ -13,7 +14,7 @@ documents and releases it.
 
 ## Waves
 
-The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> W5 in parallel.
+Historical base ordering (§7.7): W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> W5 in parallel. **Current remaining ordering (2026-11-07): A take-up/Settings → B1/B2 W5b → C1/C2 W6 → D W8b and reader/lab residue → E W7 carry/docs/review → F release/install/device evidence; operator retirement is separate.** The completion spec/plan supersede old W7-before-W8 and next-brief instructions below; completed waves remain audit history.
 Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, then Export, then W5b (RD23). W5h runs as two runs, W5h-a and W5h-b, and Export waits for W5h-a and Share, not for W5h-b (coordinator, 2026-10-15).
 
 | # | scope | PRs | state |
@@ -25,14 +26,63 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12). Split into two runs (operator, 2026-10-13). Part 2 splits again, into Share and Export (operator, 2026-10-15) | #627 (part 1; superseded #402) | **part 1 (the Docs screen):** **merged** 2026-10-19 (`9b18fb0cd`) through #627, which landed run 413's work (#402, block 4917 to 4932) reconciled with `main` and through the merge gate (R2 and R1 pass, spec §7.8); #402 closed as superseded. Run 413 was ended on 2026-11-03: the console offered no way to abandon that one run, so the coordinator closed it as an abandon at the operator's request. It shipped with its current bounds and carries the crafted-input freeze (operator, 2026-10-15). **Part 2, Share:** planned after part 1's review, dispatched after part 1 merges, in parallel with W5h. Plan `docs/superpowers/plans/2026-11-02-native-docs-reader-w5-part2-share.md` (written and approved by the operator 2026-11-02). Dispatched 2026-11-02 as run 1350 (block 7767 to 7779; 7767 to 7774 defined, 7775 to 7779 unused). **Merged** 2026-11-03 (`5d48c8157`) through #2145, at head `1ff85fcb4`, after review runs 1356 and 1358 and one fix round; run 1350 closed done. **Part 2, Export:** dispatched after W5h-a and Share merge; it does not wait for W5h-b. Run 1368 opened 2026-11-03 (planned) to keep the programme active. Plan `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md` (13 tasks; written and reviewed 2026-11-03, approved by the operator the same day with every recommendation). Merged in #2188 (`a3c319d44`); dispatched 2026-11-03 as run 1368 (block 7879 to 7894; 7879 to 7891 defined, 7892 to 7894 unused). **Merged** 2026-11-04 (`b55e96a75`) through #2237, at head `67636f01b`, after review runs 1401, 1405 and 1406 and two fix rounds; run 1368 closed done |
 | 5h-a | highlighting off the main thread, the worker path: a separate highlight worker for chat, Docs pages, text leaves and Export; the store; the main-thread check of the worker's HTML; the measurement page; the new constants at provisional starting values. Part 1's bounds stay in force beside it (see Decisions, 2026-10-15) | — | after W5 part 1 merges, in parallel with Share and before Export. Its spec amendment goes first. Once it is deployed, the operator opens the measurement page once on the phone. Plan `docs/superpowers/plans/2026-11-02-native-docs-reader-w5h-a-highlight-worker.md` (written and approved by the operator 2026-11-02). Dispatched 2026-11-02 as run 1319 (block 7751 to 7766; 7751 to 7763 defined, 7764 to 7766 unused). **Merged** 2026-11-03 (`408d93806`) through #2161, at head `dcf2b9ecb`, after review runs 1364 and 1366 and one fix round; run 1319 closed done |
 | 5h-b | the measured values, then, in a commit of its own, all of part 1's main-thread highlight bounds retire: the word, line and whitespace bounds, the per-grammar block caps for typescript/javascript and rust, and the scan and markdown page budgets, with their mutation rows re-pointed. The xml strip and the 64 KiB and 512 KiB caps stay | — | after the operator's phone measurement. Export and W7 do not wait for it; W8 does (amended 2026-10-15; W5h). R19 was measured on the operator's phone on 2026-11-03 and the retirement gate passes. Plan `docs/superpowers/plans/2026-11-03-native-docs-reader-w5h-b-measured-values.md` (5 tasks; written and reviewed 2026-11-03, approved by the operator on 2026-11-03 with every recommendation). Dispatched on 2026-11-04, after Export merged, as run 1412 (block 7927 to 7933; 7927 to 7929 defined, 7930 to 7933 unused). **Merged** 2026-11-04 (`1533c17a1`) through #2257, at head `9c5f78b4f`, after review runs 1432, 1433 and 1434 and two fix rounds; run 1412 closed done |
-| 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (rich-docs spec 2026-10-12) | — | after W5 (operator, 2026-10-13) |
-| 6 | mockups | — | after W5 |
-| 7 | docs and release | — | after W6 |
+| 5b | parity: six sections/history service (B1), then version pages/history loader (B2) | #2350 (plan) | approved item 50: Q1 a, Q2 a, two runs. Rev 3 records the answers; plan unmerged at drafting. After A; first rollout containing B1 is server-first even in a later bundled tag |
+| 6 | mockups, asset reservations and static mockup Export | — | completion C1 Tasks 5–7 then C2 Tasks 8–10, after B2 |
+| 7 | finite carry closure, docs, whole-programme review; release and deployed evidence | — | completion E Tasks 15–16 after D, F Task 17; operator retirement Task 18 remains separately gated |
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last. **W8a is live:** the operator's phone check on 2026-11-03 opened a spec in the reader. Its follow-ups are in Decisions, 2026-11-03 (late): the first-load compression (approved by the operator on 2026-11-03; run 1400, block 7903 to 7905 all unused; **merged** 2026-11-04, `ffa9f0ab2`, through #2247), Mermaid drawn on open (ruled; needs a library change), a compact phone header (the operator picked option 1 now and option 2 with the library release; plan approved 2026-11-04, run 1436, block 7953 to 7959), and a reader lab page (the operator: build it, as a wave of its own) |
 | RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
-| 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0 and adopts Mermaid drawn after `ready`, the bar-off frame with progress and commands, and the phone header's option 2; E17 is measured on a phone with the reader lab | — | planned as run 1532; waits on the operator's signed v1.1.0 tag (console item 42); its plan is written next |
+| 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan) | planned as run 1532; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Task 9 now writes Settings access and Task 10 closes. Before dispatch: amendment review, complete exact-tip checks and plan merge |
 
 ## Decisions & deviations
+- **2026-11-09: R7 brief closure 17090 accepted; CI then found the missing plan definition.**
+  - Same reviewer as 17088, resumed with explicit `model: opus`, `effort: high`, `subagent_type: general-purpose`; reported actual `claude-opus-5-5`, numeric 15 separately. All five findings closed, no new Critical or Important. Coverage remains narrow: no live-claims/allocator/registry/CI check, source gate/checker not executed, Find inventory reused its parsing rules. This is not a second independent approval or product validation.
+  - Exact R7 run 42708641856 failed `test/deviation-refs.test.ts`'s real-tree floor assertion in server 5/12: tracked D-8143 in this programme ledger exceeded the plans' definition-derived high-water 8142 (actual floor 8193, expected 8192). This is a real documentation defect, not a flake. The same already-issued D-8143 definition is now entered in the adoption plan's `## Deviations found`; its Global Constraints and Task 10 reconcile the existing entry rather than deferring it. No new number, allocator call, test edit or guard weakening.
+  - The plan's three replacements preserve every Find line and all 40 mutation rows. Only the checker's pinned plan hash changes; its source/matching logic and 38-path scope stay identical. Brief/artifact hashes below are refreshed. New exact-head CI and focused closure still gate entry landing; R7's passed checks are not inherited. Claim 3862 release still occurs after entry landing and before dispatch. Run 1532 remains planned/undispatched.
+- **2026-11-09: focused A-brief review 17088; five corrections before dispatch.**
+  - Fresh reviewer invocation retained `model: opus`, `effort: high`, `subagent_type: general-purpose`; reported actual `claude-opus-5-5`, numeric 15 separately. Zero Critical, two Important, three Minor. The earlier plan/source/phone/routing checks passed within its stated limits; no new broad plan or product review is claimed. Focused closure of these corrections is still owed.
+  - I-1: claim 3862 is the coordinator's five-document entry claim and includes the take-up plan Task 10 must edit. It is not an implementation-path claim. Release 3862 after entry landing and before dispatch, verify it ended, and require the worker to claim the take-up plan with its other edit paths. None of Task 8's three specs is in 3862; fresh claims on all three remain mandatory. The coordinator later claims only disjoint programme documents before further ledger edits; no live shared-plan claim is retained over the worker.
+  - I-2: the source gate now compares the pinned post-C16 tree to actual BASE on the 38 explicit File Structure paths in the artifact, expanding every shorthand/spec path, including the four new paths and the run-only markup census. It runs `git diff --no-ext-diff --quiet <pin> <BASE> -- <these paths>`; a nonzero exit stops for rebrief. The plan, programme ledger and broad byte-identical roots are not pin-to-BASE inputs. Worker byte-identical restrictions apply to its own BASE-to-HEAD changes, so unrelated main drift is not mistaken for worker edits.
+  - M-1: Task 10 now uses the same correctness, spec/boundaries and reproduction/evidence lens names as dispatch and independent review, retaining coverage of pin/draw, truth/interaction/layout, Settings, tests/mutations/censuses/spec/privacy. M-2: the checker asserts the exact revised plan SHA256 before its hard-coded line inventory; every Find remains on its prior line, and all 40 mutation rows are unchanged. M-3: programme-ledger ownership explicitly excludes the worker's SDD progress ledger.
+  - Existing issued block 8143–8146 and D-8143 definition remain unchanged; no allocation, run transition, implementation, product test or deployed-acceptance claim. Current brief and artifact below supersede R6's versions. New exact-head checks, review-state census, focused closure and protected plan landing still gate A.
+- **2026-11-09 (2026-11-09 21:53 UTC): post-C16 entry closure and reviewed-plan receipt; A is not dispatched.**
+  - Source main remains `8b0fab68f1de802f3952b8ec24f2ee93f76a8574`: #2497 is independently proved merged at that commit, with head `43dfc2a51311f7e587636677998258491668429e`. Claims 3842, 3843, 3854 and 3855 are absent from the live claim list. This supersedes the earlier C16 waiting gate, not its preserved source/behavior constraints. Claim 3862 remains live for the five entry documents; no live A implementation-path overlap was measured. Recheck at dispatch and each shared-file task.
+  - #2346 R5 is `2a635691ddc3f602fca04894ee34c2d8af4ee272`; #2350 R4 remains `440c29f08f70ec6cdd952854208a698c3377e32d`. On these exact heads, all four required checks were completed/success at 21:41 UTC. This later ledger-only amendment requires its own exact-head checks; prior green is not transferred. Review-state census is remeasured before protected enqueue. No enqueue, merge or implementation is claimed here.
+  - Delivery 17071 closed all five substantive plan defects with no Critical/Important finding and two Minors. R5 fixes those Minors and the independently detected Task 8 source quotation. Delivery 17075 retains the actual reviewer invocation fields `model: opus`, `effort: high`, `subagent_type: general-purpose`, from the peer coordinator's tool call. The actual reviewer reported `claude-opus-5-5`; numeric effort 15 remains a separate observation, not an inferred mapping. This proves high was configured, not the absence of a later internal override. The R2/R3/R4 reads were fresh agents; the narrow R5 check resumed R4, not another independent approval.
+  - Delivery 17076 reports zero Critical/Important/Minor findings in the two-line R5 delta and released focus contract at library commit `50cef012aa671974473d19c2acd77f900e9d03af`: boolean/default-true insertion focus, no ready refocus, synchronous explicit command focus. It also found update() remounts with the original focus choice, without resampling. Current bridge never calls update(); Task 13's final pre-mount sample covers that usage, and a future update caller must revisit it. The peer read mount.ts/index.ts, not the frame side or published-tarball equivalence. These limits remain. Actual-base brief review below is separately owed; implementation's independent panel is not replaced.
+  - Coordinator source verification at `8b0fab68f1de802f3952b8ec24f2ee93f76a8574` found every explicit Tasks 3–8 Find: 83 directives, 82 baseline, one Task 4 intermediate call deliberately deferred until Task 3, zero misses; browser click/wait adjacency also checked. This excludes prose-only instructions and is not test execution. The exact script is retained below, SHA256 `997c103d3280bd5b487b33a1a7d9e2c84b84e96b17d540b0daf3110130a1d0f5`, so a child is not dependent on coordinator scratch. Source-byte identity and Find checks are remeasured at actual dispatch BASE.
+  - Registry 1.1.0 integrity/tarball and the published non-prerelease v1.1.0 release were reread; Task 2 still verifies package attestation/signatures. Both original phone blocks and approved choices remain unchanged. Their combined result is does-not-hold, so production remains on request. No signing, old phone run, full-suite, install or deployed-acceptance claim is repeated.
+  - Existing run 1532 remains planned, no worker. Its late issued block is 8143–8146; the known definition below is recorded in the same allocation/publication act before dispatch. No replacement run or guessed number. The final actual-base brief review, exact-head checks and protected plan landing still gate A. Eventual child BASE may add the landed plan/ledger commits only if owned implementation bytes equal this source pin; any owned-source drift stops for a rebrief.
+  - **D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request.** Issued for existing run 1532; unused reserve 8144, 8145, 8146 (bare numbers). Task 10 reconciles this definition into the adoption plan and defines only reserve actually used.
+- **2026-11-09: delivery started under the operator's eight-hour autonomy mandate (coordinator entry work, not implementation).**
+  - The instruction was received and entry work measured at 19:38 UTC; the intended window ends 2026-11-10 at 03:38 UTC. No scheduler or polling loop is implied. Dispatch ends the coordinator turn; mail wakes it.
+  - Fresh main at entry is `ec07e0bdfc32f39af243c76543722c2c3c513556`; the previously inspected `ef96c7bc8251ba01335a32275fd1ab8d964b8309` still pinned the library at 1.0.0. Run 1532 remains planned with no worker. Planning/publication is not implementation.
+  - #2346 at `5fdb6bb115f75e43e8b6d302c5ae5aa209ac80fd` and #2350 at `1717960ea14bab9cd6518f93cc5ea90aeb8c64bd` remain open. Each exact-head check census had 34 successes, nine skips and one failed non-required shadow advisory; GitHub reviews were empty. The advisory reports shadow/proof-not-built. This is not a claim that all checks pass, or permission to bypass review, required checks or the queue.
+  - Item 50 was confirmed after the published amendment was verified; its answer is already recorded. No repeated confirmation or operator tick is owed.
+  - **Desktop dependency changed:** #2480 is independently proved merged as `43cb80fcd9829dbd7f447e2748a904d71e179d29` (head `0bad2785eb6e5f8fe38090d81b5076cd2f2da4f5`, 2026-11-09). Delivery 16929 and the exact merged task note `docs/superpowers/plans/2026-11-07-desk-nav/b.md` supersede the earlier Part B waiting order. Adoption preserves HeadRow fitting, truth selectors, tap floors and compact behavior outside its new ready host-bar arm; it owns ReaderBarContext, readerChromeFor and headLayoutFor's third answer. Recheck reader-tool fitting, browser baselines and the 530px container threshold rather than reinstating old desktop markup.
+  - **Live overlap:** C16/run 1705, #2497 at `43dfc2a51311f7e587636677998258491668429e`, remains open and claim 3842 holds adoption-shared header/style/browser/census paths. Coordination mail 17020 orders adoption's shared-header edits after C16 merges and its claims end; no co-edit permission is assumed. Recheck the actual merged C16 source before re-anchoring Find blocks. The coordinator continues uncontested plan/brief review meanwhile.
+  - Claim 3862 holds the five reader design/plan/ledger documents for this entry amendment. Two independent read-only plan reviews were requested as Opus/high, each required to report actual identity; both reported a different actual runtime model. Their concrete findings inform the amendment but neither satisfies the actual-Opus review gate. The standard browser paths were unavailable; an existing cached Chromium is now being checked. No visual figure proof is claimed by this entry receipt.
+  - Delivery 17022 was fetched and acknowledged: the desktop coordinator agrees adoption follows C16 and will supply merge/release evidence. Its source note confirms the new L1 policy owner, full-head refusal/coarse-pointer rules, font/width re-probes and dense controls. The two newly reported focus/name-cut carries are recorded open in the completion receipt; neither is silently waived.
+- **2026-11-07: finish the remaining delivery in this programme (operator autonomy mandate; coordinator design/planning calls).**
+  - The completion spec and Tasks 1–18 above bound delivery through installed evidence, not merely library publication. No remaining implementation has been dispatched by this planning act; run 1532 is still planned without a worker. Inspected remote main `ebd95592b307912beda71a14662b21acf179b612` still pins 1.0.0. Re-measure main/claims at each dispatch.
+  - Item 42 (release), item 48 (take-up recommendations) and item 53 (both phone blocks) are done; item 50 has the actual Q1 a/Q2 a/two-run answer and its recording is now written in W5b rev 3. Confirm that item only after the amendment is published, not by inventing a new operator tick. The relay in delivery 16473 independently reports both plans approved; it adds no missing Q choice and authorises no merge bypass.
+  - Take-up rev 3 adds executable Task 9 for Reader lab and Measure highlighting after five unchanged Settings sections; close is Task 10. Both original phone blocks remain byte-identical. Remove unsupported claims that auto/1.0.0 proves after-ready/1.1.0 scheduling; production stays on request. No redundant historical phone run is owed.
+  - Coordinator calls: serial C/D to avoid shared-file collisions; conservative historical-asset class-cap reservations instead of falsely treating tip sizes as historical sizes; bounded pure diff with 20,000 lines/input, 2,000,000 shared work units (comparisons, frontier advances and copied trace cells), and 512 output marks. The lower output cap permits an independent output-guard mutation before the work budget is exhausted. Each normative departure receives an issued definition at its implementation run-open; no number is invented here. C1 explicitly amends the base asset-budget sentence.
+  - A read-only builder check was requested as Opus/high but reported actual `gpt-6.1-sol`. It is advisory, not satisfaction of a required actual-model review gate. It found the historical asset-size ambiguity; the reservation rule resolves it. No source/test execution or implementation review is claimed by this documentation act.
+  - The carry receipt must classify every completion-spec §7 group, with source/ref/owner/test/disposition. Unknown is not closed; an existing accepted/deferred ruling needs owner and trigger, a blocking defect stops release. Private security status is verified before any safe public disposition. Library C114 remains library-owner maintenance, not an invented consumer-release dependency.
+  - Native delivery verified and standalone retired are separate end states. F requires release/full-suite/install/browser/device evidence; Task 18 remains operator-only and the programme stays open until its mandatory retirement promise is resolved.
+  - **Historical peer dependency, superseded by the 2026-11-09 entry above:** desktop Part B was originally ordered after take-up/W5b, but #2480 has now merged ahead of them. Re-anchor adoption on the merged header and later C16; still send the requesting coordinator receipts after A and W5b implementation merges. Never report those merges before they occur.
+- **2026-11-06: second phone block received, take-up Q1-Q3 approved, library 1.1.0 publication verified (operator evidence and decision, coordinator verification).**
+  - **Both phone blocks are retained verbatim** in the take-up plan's “Phone evidence received (2026-11-06)” section. Both name Blink 156 on Android and library `0079625cc30a` (1.0.0), not 1.1.0's `6bcf14892e48`. Block 1's all-six Mermaid gap is 217 ms (does not hold); block 2's is 192 ms (holds). Worst single figure is 150 ms in both. Under the now-approved Q1, every supplied block must hold, so record `E17-READING does-not-hold`, `E17-BLOCKS 2`, **arm B with a block**, drawing on tap. No averaging, replacement of the failed block, budget waiver or claim of implemented scheduling.
+  - **E18 remains bounded:** seven walls and teardown hold in both blocks; the CSP iframe channel is not measured, the library half says 0 of 1 attempted, and `store.set` and a same-source-only listener are not exercised. Block 2's busy-frame gap is 2992 ms and watchdog delay 2516 ms; this is diagnostic shared-thread evidence and gates nothing. The door reports 48 counted, 0 ignored, with the console session cookie as expected.
+  - **Actual approvals, not inferred from the lab:** item 48 is `checking`, with the answer “Approve with every recommendation (Q1-Q3 as recommended)”. Q1: after-ready only when every supplied Mermaid block holds, on request otherwise. Q2: the frame's own Aa only. Q3: Share, Export and View on GitHub in the title's details panel, no extra menu. The plan records the answers. Items 53 (phone evidence received) and 42 (publication verified) are also `checking`, after the operator's own ticks; these three may be confirmed after this record is published. Item 50 separately records “Approve with every recommendation (Q1 a, Q2 a, Q3 two runs)”, also `checking`: keep the ref in a version page's URL beside `at`, preserve that version in its document links, and execute W5b in two runs. The actual W5b answers must still be written into its plan in #2350 before that item is confirmed and the plan lands. No tick is impersonated.
+  - **Release verified:** signed `v1.1.0` at `50cef012aa671974473d19c2acd77f900e9d03af`; run `42245203228`, attempt 2, is completed/success, including post-verify. npm exposes version `1.1.0`, `latest` `1.1.0`, integrity `sha512-r2YCt15tGxOYKK1ONyZ/TzvpMdcC3bmUJvifmTdtrCPHxy8DG5nc65ImUi9RpPf+M82784HwMt52kdnkYcpqUg==`. The GitHub release is published, not draft or prerelease: https://github.com/Synapsium-Labs/docserver/releases/tag/v1.1.0 . Attempt 1 failed WebKit B8.2's reset-to-top check; one unchanged-tag failed-jobs retry passed without weakening any gate. The failure's root cause remains unproven.
+  - **Before run 1532 dispatch:** amend the plan's executable steps for visible Settings rows for Reader lab and Measure highlighting, read exact-tip CI and merge the approved plan. No PWA implementation has been dispatched and library publication alone upgrades no consumer.
+- **2026-11-06: the operator's first phone lab block received; E18 holds within the instrument's coverage, E17 Mermaid does not hold (operator evidence, coordinator receipt; the later entry above supersedes its item states and block count).**
+  - The complete block is recorded in the library 1.1 take-up plan's “Phone evidence received (2026-11-06)” section. Engine: Blink 156 on Android; library build `0079625cc30a` (1.0.0), not the forthcoming 1.1.0 build `6bcf14892e48`.
+  - **E18:** seven of seven walls and the teardown signal hold. The cookie control carried the cookie and none of five frame requests did. Coverage remains bounded: the CSP iframe channel is not measured, the library half reports 0 of 1 attempted, and `store.set` and a same-source-only listener were not exercised. Door: 48 counted, 0 ignored; the console's session cookie was sent as expected.
+  - **E17:** the all-six mount's 217 ms gap exceeds the approved 200 ms budget; the worst single figure is 150 ms. Record `E17-READING does-not-hold`, `E17-BLOCKS 1`. Under the take-up plan's proposed Q1, this selects **arm B with a block**, keeping Mermaid on tap. The busy-frame shared-thread result (2994 ms gap; watchdog 2520 ms late) is diagnostic and gates nothing. The lab's “one figure per task” recommendation does not prove the reader implements that scheduling, and does not waive the failed all-six measurement.
+  - **The access correction:** item 47 was withdrawn and replaced by item 53. The page is reached through phone-bar Search → `reader lab` → “Go to Settings › Reader lab”, or `/settings/reader-lab`, not a Settings index row. Visible rows for Reader lab and Measure highlighting are owed in the take-up wave; its executable plan still needs that scoped amendment before dispatch.
+  - **No implied approvals:** this receipt supplies the measurement only. Library release item 42 and plan decisions 48 and 50 remain open. Item 53 is still `open` on the console, not `checking`; confirmation requires the operator's tick, which the coordinator does not impersonate. The measurement need not be repeated to supply this evidence.
 - **2026-11-05 (evening): RL-b accepted and merged; the take-up run opened (coordinator).**
   - **Review run 1524, round 1 (19 agents), at `f90737362`.** Three findings were ruled blocking and fixed in one round. Seven minors were fixed in the same round.
     - F1: a lab mount whose Mermaid scan was dropped still read `ready`, so the figure lines and csp-27's library half could hold with nothing drawn. Ruled D-8030: under `lab-draw` only, the bridge reports a dropped scan through an optional seam, and the lab reads that mount "not measured". The text says "ready", never "drawn". A failure inside the frame stays carried until the library ships a drawn signal.
@@ -581,20 +631,164 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
   - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (library 1.1 take-up), after the operator's v1.1.0 tag
+## Current next-wave brief — A, library 1.1 take-up and Settings access
 
-- **Run:** 1532 (wave 17), opened at `planned` on 2026-11-05, before RL-b's run closed.
-- **Gate:** the operator signs and pushes the library's v1.1.0 tag on `50cef012a` and approves its npm release (console item 42). Before writing the brief, the coordinator checks the published package and the GitHub release.
-- **Plan (written next, then reviewed):**
-  - ccrc pins the library at 1.1.0;
-  - it mounts with Mermaid drawn after `ready` and the Mermaid build handed over;
-  - inside the frame, the bar is off, with the library's progress reports and the host's commands, the outline among them;
-  - the phone header's option 2;
-  - the adapter's key count grows by three;
-  - E17 is measured on a phone with the reader lab, whose busy-frame and Mermaid lines (D-8031, D-8033) the operator reads.
-- **Not in it:** W8a's residue stays with W8b. The RL-a, RL-b and header residue above goes to whichever wave next edits those files.
+**Entry status:** R7's five findings closed; the subsequent CI high-water correction awaits exact-head CI and focused closure. No dispatch. Protected plan landing, fresh exact-head/claim/source checks and claim 3862 release are mandatory. Open B1 before A closes; first rollout containing B1 is server-first. F owns deployed acceptance; retirement is operator-only.
 
-## Next-wave brief (Export), after W5h-a and Share merged
+### A — released library take-up and Settings access
+
+Run 1532, native-docs-reader wave 17. Execute only Tasks 1–10 of `docs/superpowers/plans/2026-11-05-native-docs-reader-library-1-1-take-up.md`, with completion Task 2 and its design. Read `docs/superpowers/programs/native-docs-reader.md` current A brief and its issued definition. No W5b, W6, history/diff or focus-repair implementation in A.
+
+#### Base and scope
+Source pin `8b0fab68f1de802f3952b8ec24f2ee93f76a8574` is C16 #2497 merged; C16 claims ended. Preserve #2480 desktop fitting. Plans/ledger land first. Before dispatch release coordinator claim 3862, recheck all A paths and Task 8 specs; worker claims the take-up plan too. Record child HEAD as BASE. The checker gates pin→BASE on its 38 explicit File Structure paths, not broad roots/plan/ledger; drift stops for rebrief. Recheck claims each shared-file task.
+
+Plan Files/byte-identical constraints apply to worker BASE→HEAD. No extra edit without scoped leave; markup census is run-only. Claim before subagent edits. Coordinator owns the programme ledger, not the worker SDD progress ledger. Scratch is session-temp.
+
+Task 1: all T1 predicates. Extract ledger “A Find-check artifact” Python to session temp, SHA256 `879266d892d51fa0eb5a67ad27cdfefa6375a52a036e9cda002650ee3ab46f98`; run `python3 -I <script> <plan> HEAD <fresh-receipt.json>` at repo root. It asserts exact plan SHA256 before its line inventory and source gate. Expected SOURCE-BASE-OK then FINDS-OK: 83 directives, 82 baseline, one Task 4 interim Find deferred until Task 3. Miss → stop-and-ask. Before edits, fresh post-C16 PHH-FIGURE / T10-FIGURES worst BASE through ccrc test; no historical geometry substitution.
+
+CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome (worker rechecks).
+
+#### Released dependency and approved decisions
+Exact `@synapsium-labs/docserver@1.1.0`, v1.1.0 at `50cef012aa671974473d19c2acd77f900e9d03af`, release run 42245203228 attempt 2 success. Registry/release re-read. Integrity `sha512-r2YCt15tGxOYKK1ONyZ/TzvpMdcC3bmUJvifmTdtrCPHxy8DG5nc65ImUi9RpPf+M82784HwMt52kdnkYcpqUg==`. Task 1/2 recheck registry/lock/tarball attestation/signatures; difference stops. No signing/publication repeat.
+
+Item 48 approved Q1–Q3: after-ready only if every supplied Mermaid block holds; otherwise on-request. Frame Aa only. Share/Export/View on GitHub in title details, no extra menu. Both original blocks follow verbatim. Record E17-READING does-not-hold; E17-BLOCKS 2; arm B with a block. Never average/replace the failure or treat auto/1.0.0 as after-ready/1.1.0 evidence. E18 coverage limits remain; no repeated historical phone request.
+
+#### Issued departure and routing
+Issued block 8143–8146. D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request. Three reserve numbers 8144, 8145, 8146 remain unused; never mint mid-wave. Task 10 reconciles the plan's definition and any reserve actually used, with unused numbers written bare. Existing run; no replacement/reopen.
+
+Shape: dependent implementation chain. Route class opus, effort high, subagent sonnet, workflow off, compact 40, browser on. Native sonnet/high implementers; only Task 8 mechanical docs may use sonnet/medium. Per-task reviewers: opus/high for 4/5/6/7/9; sonnet/high for 2/3; sonnet/medium for 8. Task 10 internal held-out pass: three opus/high lenses (correctness; spec/boundaries; reproduction/evidence), critical/important findings each receive three independent sonnet/high refuters and majority adjudication, minors one advisory refuter. Explicit model/effort; no inheritance/Fable. Retain actual model/configuration; missing/mismatched reads are unverified. No worker Workflow. Subagent prompts forbid mail, pattern kills, gh writes, token argv and approval-prompting shell forms.
+
+#### Acceptance and return
+Follow plan red/green, independent sequential mutations and saved-copy/hash restore. Heavy suites/typecheck/browser/mutations through foreground ccrc test, timeout ≥600000 ms; bounded mutation time/process caps. Timeout/compile failure is not assertion-red. Task 9: two diagnostics after five sections, Array.from before map, shared row/copy owner, independent normal/modifier clicks, both skins, markup census and whole browser suite.
+
+Preserve desktop fitting, truthful selectors and coarse-pointer floors. Phone-born host-bar persists on widening; desk-born frame retains its bar on narrowing. At 412×915: title ≤61 px, console ≤48 px, tap floor 44; tablet/desktop deltas ≤1 px from fresh BASE. Keep three Mermaid paths and lab auto/ready instrument. A does not fix the lazy-mount focus carry; D Task 13 owns it. Do not call mount.update().
+
+Task 10: ONE PR, full-file privacy scan rc0/zero and mail before push/wave-done. Exact-tip fast CI; skipped browser is not execution. Return tip/PR, BASE+end figures, task/mutation evidence, deviations, actual review/configuration and failures/limits; stop changing/pushing pending ruling. Separate independent review/queue. No release/rollout/retirement. Commit on the workspace branch, never a separate feature branch.
+
+Commit last line: Co-Authored-By: Claude Code <noreply@anthropic.com>
+PR last line: 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+#### Original phone blocks
+
+```text
+reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 1 attempted)
+  no-popup-top-nav   holds
+  no-self-navigate   holds (attempt seen: second load)
+  bridge-strays      holds (8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         shared thread (longest gap 2994 ms in a 3000 ms spin; watchdog timer 2520 ms late; shared-thread evidence: gap and timer)
+  mermaid            does not hold (longest gap 217 ms, all six together; worst single: figure 4, 150 ms)
+    gaps ms          none 17 ready · trivial 100 ready · f1 133 ready · f2 133 ready · f3 133 ready · f4 150 ready · f5 142 ready · f6 125 ready · all 217 ready
+draw on open: needs one figure per task here; every single figure fits the budget
+door: 48 counted, 0 ignored; session cookie sent
+```
+
+```text
+reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 1 attempted)
+  no-popup-top-nav   holds
+  no-self-navigate   holds (attempt seen: second load)
+  bridge-strays      holds (8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         shared thread (longest gap 2992 ms in a 3000 ms spin; watchdog timer 2516 ms late; shared-thread evidence: gap and timer)
+  mermaid            holds (ready; longest gap 192 ms, all six together; worst single: figure 5, 150 ms)
+    gaps ms          none 17 ready · trivial 108 ready · f1 133 ready · f2 125 ready · f3 133 ready · f4 133 ready · f5 150 ready · f6 125 ready · all 192 ready
+draw on open: fits the budget here, though the frame shares the thread
+door: 48 counted, 0 ignored; session cookie sent
+```
+
+### A Find-check artifact
+
+Copy only this Python fence to session temp, preserving its final newline. Script SHA256 `879266d892d51fa0eb5a67ad27cdfefa6375a52a036e9cda002650ee3ab46f98`. It asserts adoption-plan SHA256 `996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330` before using the line mappings. Run from repository root with the plan path, actual BASE and a new receipt path. It compares the explicit 38-path File Structure scope below, not broad byte-identical roots, plan or programme ledger. It deliberately defers Task 4's intermediate call until Task 3. A plan revision requires a fresh inventory and pinned hash, not silent reuse. Only read-only git commands and a new receipt write; no product execution.
+
+```python
+"""Check the adoption plan's explicit Find inventory against an immutable git base.
+No edits, live/product calls, or commands beyond read-only git show/diff.
+"""
+from pathlib import Path
+import subprocess, re, json, sys, hashlib, datetime
+plan=Path(sys.argv[1]); base=sys.argv[2]; output=Path(sys.argv[3])
+assert not output.exists(), 'Use a fresh receipt path.'
+expected_plan_sha256='996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330'
+assert hashlib.sha256(plan.read_bytes()).hexdigest()==expected_plan_sha256, 'Plan bytes changed: re-inventory; do not reuse these line mappings.'
+source_pin='8b0fab68f1de802f3952b8ec24f2ee93f76a8574'
+# Exactly the File Structure paths, expanding shorthand and the three specs.
+# Includes all four new paths and the run-only markup census. Excludes the plan,
+# programme ledger and broad byte-identical roots; those constrain BASE..HEAD.
+source_paths=['pwa/package.json', 'pwa/package-lock.json', 'pwa/test/reader-pin.test.ts', 'pwa/src/docs/reader/policy.ts', 'pwa/test/reader-policy.test.ts', 'pwa/test/reader-commands.test-d.ts', 'pwa/src/docs/reader/bridge.ts', 'pwa/test/reader-bridge.test.ts', 'pwa/test/reader-lab-bridge.test.ts', 'pwa/test/reader-lab-window.test.ts', 'pwa/src/readerLab/run.ts', 'pwa/src/docs/readerBar.ts', 'pwa/src/docs/ReaderFrame.tsx', 'pwa/src/screens/DocsScreen.tsx', 'pwa/test/reader-frame.test.tsx', 'pwa/src/docs/docsHeadWords.ts', 'pwa/src/docs/DocsHead.tsx', 'pwa/src/docs/docsText.ts', 'pwa/src/docs/docs.css', 'pwa/design/audit.mjs', 'pwa/test/docs-one-bar.test.tsx', 'pwa/test/docs-compact-head.test.tsx', 'pwa/test/docs-desk-head.test.tsx', 'pwa/test/docs-compact-css.test.ts', 'pwa/test/tap-targets.test.tsx', 'pwa/test/control-census.test.ts', 'pwa/browser/docs-compact-head.browser.test.ts', 'pwa/browser/reader-frame.browser.test.ts', 'docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md', 'docs/superpowers/specs/2026-10-01-native-docs-reader-design.md', 'docs/superpowers/specs/2026-11-03-reader-lab-design.md', 'pwa/src/screens/settings/SettingsIndex.tsx', 'pwa/src/fleet/settingsText.ts', 'pwa/test/settings-frame.test.tsx', 'pwa/test/settings-screen.test.tsx', 'pwa/test/command-layer.test.tsx', 'pwa/test/command-registry.test.ts', 'pwa/test/markup-census.test.ts']
+source_gate=subprocess.run(['git','diff','--no-ext-diff','--quiet',source_pin,base,'--',*source_paths],capture_output=True,text=True)
+assert source_gate.returncode==0, 'Source drift or unmeasurable diff: stop and rebrief; rc='+str(source_gate.returncode)
+print('SOURCE-BASE-OK',len(source_paths),'explicit paths; pin',source_pin,'base',base)
+lines=plan.read_text().splitlines(True)
+ranges=[(310,310,'pwa/test/reader-bridge.test.ts'),(323,430,'pwa/src/docs/reader/policy.ts'),(431,673,'pwa/src/docs/reader/bridge.ts'),(674,674,'pwa/src/readerLab/run.ts'),(807,943,'pwa/src/docs/ReaderFrame.tsx'),(944,980,'pwa/src/screens/DocsScreen.tsx'),(1036,1036,'pwa/test/docs-compact-head.test.tsx'),(1064,1064,'pwa/test/docs-desk-head.test.tsx'),(1097,1097,'pwa/test/tap-targets.test.tsx'),(1098,1098,'pwa/test/control-census.test.ts'),(1107,1107,'pwa/src/docs/docsText.ts'),(1128,1154,'pwa/src/docs/DocsHead.tsx'),(1155,1155,'pwa/src/docs/docsHeadWords.ts'),(1182,1349,'pwa/src/docs/DocsHead.tsx'),(1350,1393,'pwa/src/docs/docs.css'),(1394,1394,'pwa/design/audit.mjs'),(1405,1405,'pwa/src/docs/docs.css'),(1498,1501,'pwa/browser/reader-frame.browser.test.ts'),(1533,1594,'docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md'),(1596,1607,'docs/superpowers/specs/2026-10-01-native-docs-reader-design.md'),(1609,1619,'docs/superpowers/specs/2026-11-03-reader-lab-design.md')]
+cache={}; rows=[]; ignored=[]
+for idx,line in enumerate(lines):
+ n=idx+1
+ if not 300<=n<1620: continue
+ positions=list(re.finditer(r'\bFind\b',line))
+ for k,m in enumerate(positions):
+  tail=line[m.end():positions[k+1].start() if k+1<len(positions) else len(line)].rstrip('\n')
+  if ':' not in tail:
+   ignored.append({'line':n,'reason':'not a Find directive'});continue
+  prefix,suffix=tail.split(':',1); suffix=suffix.lstrip()
+  if n==618:
+   rows.append({'line':n,'phase':'after-task-3','baselineExcluded':True,'reason':'Task 4 Step 0 checks this after Task 3, as the plan explicitly says.'});continue
+  file='pwa/test/reader-bridge.test.ts' if n==476 else next((p for lo,hi,p in ranges if lo<=n<=hi),None)
+  assert file is not None,(n,'unmapped Find')
+  if suffix.startswith('`'):
+   ends=list(re.finditer(r'`(?=(?: — Replace|; Replace| inside the loop|\)| followed by|$))',suffix[1:]))
+   assert ends,(n,'unparsed inline Find')
+   text=suffix[1:1+ends[0].start()]
+  elif 'the line starting `' in suffix:
+   text=suffix.split('the line starting `',1)[1].split('`',1)[0]
+  else:
+   assert not suffix,(n,'unexpected Find suffix',suffix)
+   j=idx+1
+   while not lines[j].strip():j+=1
+   first=lines[j].strip()
+   if first.startswith('`') and not first.startswith('```'):
+    assert first.endswith('`'),(n,'unclosed following inline Find')
+    text=first[1:-1]
+   else:
+    assert lines[j].startswith('```'),(n,'no following Find fence')
+    j+=1; block=[]
+    while not lines[j].startswith('```'):block.append(lines[j]);j+=1
+    text=''.join(block).removesuffix('\n')  # Fence terminator newline is not part of a quoted substring.
+  assert text,(n,'empty Find')
+  if file not in cache: cache[file]=subprocess.check_output(['git','show',base+':'+file],text=True)
+  count=cache[file].count(text)
+  row={'line':n,'ordinal':k+1,'file':file,'text':text,'matches':count,'sha256':hashlib.sha256(text.encode()).hexdigest()}
+  rows.append(row)
+  if count!=1:print('FIND-MISS',n,file,'count',count,repr(text[:240]))
+# Also pin the prose-described browser adjacency, not just its click line.
+browser=cache['pwa/browser/reader-frame.browser.test.ts']
+click="    await frame.locator('.fig-render-btn').click();"
+assert browser.count(click)==1
+at=browser.index(click); next_line=browser[at:].splitlines()[1]
+assert 'waitForFunction' in next_line, next_line
+failures=[r for r in rows if not r.get('baselineExcluded') and r['matches']!=1]
+result={'measuredAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'planSha256':hashlib.sha256(plan.read_bytes()).hexdigest(),'base':base,'sourcePin':source_pin,'sourceGatePaths':source_paths,'sourceGateRc':source_gate.returncode,'rows':rows,'ignoredMentions':ignored,'sourceSha256':{p:hashlib.sha256(t.encode()).hexdigest() for p,t in cache.items()},'browserClickFollowingLine':next_line,'coverage':'Every explicit Find directive in Tasks 3-8, including both same-line Finds; Task 4 interim Find is deliberately deferred. Prose-only implementation instructions are not represented as literal Find blocks.','state':'failed' if failures else 'verified'}
+output.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
+print('FINDS-OK' if not failures else 'FINDS-FAILED',len(rows),'directives;',len(rows)-1,'baseline;',1,'interim;',len(failures),'misses')
+raise SystemExit(bool(failures))
+```
+
+## Historical briefs below — retained audit, not current dispatch instructions
+
+These Export/W5h/Share/part-1 briefs describe completed waves. The current A–F completion line above supersedes their next/after wording. Do not redispatch a completed run from them.
+
+## Historical Export brief — completed in #2237
 
 The operator approved the plan on 2026-11-03 with every recommendation (Q1 A, one run). Run 1368 dispatches once the plan is on `main`.
 - **Plan:** `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`, Tasks 1 to 13, in order. It reads W5h-a's store by `peek` and, for each drawn copy, `copySkip` (D-7762). It holds the `publish` slot (D-7755), and treats a fallback body's `publish(null)` as a body with no highlighting to wait for (D-7763). It adds Export's clause through Share's seam.
@@ -608,7 +802,7 @@ The operator approved the plan on 2026-11-03 with every recommendation (Q1 A, on
   - a `docs-scans` describe that copies `pwa/src` carries `{ timeout: 30_000 }` (#2192; the plan's own clause already does).
 - **Parallel work:** no other Docs wave runs beside Export. Its census and scan files are shared with other programmes; each edit is one entry or an appended describe.
 
-## Next-wave brief (W5h-a and Share), after W5 part 1 merges (done: both merged 2026-11-03)
+## Historical W5h-a and Share brief — both merged 2026-11-03
 
 W8a is accepted (2026-11-01, #2061). W8b follows W5b, and starts from the W8a residue in Carried constraints.
 
