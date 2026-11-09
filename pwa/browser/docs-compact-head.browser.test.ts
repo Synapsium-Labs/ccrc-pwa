@@ -754,8 +754,11 @@ describe('the desk head (desk-nav Part B)', () => {
     }
   }, 120_000);
 
-  it.each([INSTRUMENT, REFINED])('the modified draft, %s, under a mouse, 900 to 1480 px in 20 px steps: a wider window never shows less of the name (fix round 2, item 1)', async (skin) => {
-    const app = await openRow({ width: 900, height: 800, skin, pointer: 'fine' }, DRAFT_DEEP, 'main');
+  // Under a coarse pointer too (Task C16, D-8139): there the icons are a tap wide (review 1704 F3) and GitHub's may-differ
+  // note draws its words (review 1697 F5), so the row gives way at other widths, never less of the name at a wider one.
+  it.each([INSTRUMENT, REFINED].flatMap((skin) => (['a mouse', 'a coarse pointer'] as const).map((pointer) => [skin, pointer] as const)))('the modified draft, %s, under %s, 900 to 1480 px in 20 px steps: a wider window never shows less of the name (fix round 2, item 1)', async (skin, pointer) => {
+    const view: View = pointer === 'a mouse' ? { width: 900, height: 800, skin, pointer: 'fine' } : { width: 900, height: 800, skin, touch: true };
+    const app = await openRow(view, DRAFT_DEEP, 'main');
     try {
       const seen: [number, number, string][] = [];
       for (const w of SWEEP) {
@@ -763,7 +766,7 @@ describe('the desk head (desk-nav Part B)', () => {
         const r = await rowState(app.page);
         seen.push([w, Math.round(r.seen * 10) / 10, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`]);
       }
-      console.log(`PHH-FIGURE ${skin} sweep draft-name ${JSON.stringify(seen)}`);
+      console.log(`PHH-FIGURE ${skin} ${pointer === 'a mouse' ? 'fine' : 'coarse'} sweep draft-name ${JSON.stringify(seen)}`);
       for (let i = 1; i < seen.length; i++) {
         expect(seen[i]![1], `the name at ${seen[i]![0]} against ${seen[i - 1]![0]}`).toBeGreaterThanOrEqual(seen[i - 1]![1] - 0.5);
       }

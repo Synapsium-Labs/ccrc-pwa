@@ -19,12 +19,12 @@ import { COMMIT_B, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, 
 import { labelInName, shownText } from './labelInName';
 
 /** matchMedia at `width`: a min-width or max-width query answered as an engine at that width answers it. */
-function atWidth(width: number): void {
+function atWidth(width: number, pointer: { readonly coarse?: boolean } = {}): void {
   vi.stubGlobal('matchMedia', (q: string) => {
     const min = /min-width:\s*([\d.]+)px/.exec(q);
     const max = /max-width:\s*([\d.]+)px/.exec(q);
-    const matches = (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1]))
-      && (min !== null || max !== null);
+    const matches = q === '(pointer: coarse)' ? pointer.coarse === true
+      : (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1])) && (min !== null || max !== null);
     return {
       matches, media: q, onchange: null,
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
@@ -203,6 +203,25 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     const described = gh.getAttribute('aria-describedby');
     expect(described).toBe(note.id);
     expect(document.getElementById(described ?? '')).toBe(note);
+  });
+
+  // Review 1697 F5 (Task C16, D-8139): a touch user has no hover, so a `title` never shows; under a coarse pointer the
+  // note draws its words, as the head did before the marker, and the link is still described by them.
+  it.each([
+    ['a local ref ahead of origin', '/docs/demo/specs/a.md?ref=lane-a', aheadTree()],
+    ['a modified draft', '/docs/demo/specs/a.md?ref=main', DRAFT_TREE],
+  ])("on %s under a coarse pointer, GitHub's may-differ note shows its words, not a bare marker (review 1697 F5)", async (_what, url, tree) => {
+    atWidth(1280, { coarse: true });
+    open(url, fakeLoaders({ tree: okTree(tree) }));
+    const gh = await within(await waitFor(() => row())).findByRole('link', { name: DOCS_HEAD_TEXT.github });
+    const note = await waitFor(() => {
+      const n = row().querySelector<HTMLElement>('.docs-action-note');
+      if (n === null) throw new Error('no note');
+      return n;
+    });
+    expect(shownText(note), 'its words are drawn').toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+    expect(note.textContent, 'no marker').not.toContain('≠');
+    expect(gh.getAttribute('aria-describedby')).toBe(note.id);
   });
 
   it.each([

@@ -352,6 +352,9 @@ export function freshnessChip(
  *  holds the other, that DocsHead.tsx alone spells it under pwa/src). */
 export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
 
+/** A touch screen's pointer: no hover, so a `title` is never seen (review 1697 F5). */
+const COARSE_POINTER_QUERY = '(pointer: coarse)';
+
 /** Which header a page draws. */
 export type HeadLayout = 'full' | 'compact';
 
@@ -534,11 +537,13 @@ function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'fil
  *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation.
  *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub". There the note is a
  *  marker (`≠`) that takes no room from the crumbs (fix round 1, F1): its words are its `title`, a screen reader's
- *  text inside it, and the link's accessible description. */
+ *  text inside it, and the link's accessible description. Under a coarse pointer, which has no hover to show a
+ *  `title`, the row's note draws its words instead (review 1697 F5; Task C16, D-8139). */
 function GithubAction(p: {
   readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly row?: boolean;
 }): ReactNode {
   const noteId = useId();
+  const coarse = useMediaQuery(COARSE_POINTER_QUERY);
   const link = githubBlobUrl(p.tree.github, p.tree.ref, p.target);
   const row = p.row === true;
   if (!link.ok) {
@@ -555,13 +560,13 @@ function GithubAction(p: {
       >
         {row ? <RowFace icon="folder-code" words={DOCS_HEAD_TEXT.githubShort} /> : DOCS_HEAD_TEXT.github}
       </a>
-      {noted && (row
+      {noted && (row && !coarse
         ? (
           <span id={noteId} className="docs-action-note" title={DOCS_HEAD_TEXT.githubMayDiffer}>
             <span aria-hidden="true">≠</span><span className="sr-only">{DOCS_HEAD_TEXT.githubMayDiffer}</span>
           </span>
         )
-        : <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>)}
+        : <span id={row ? noteId : undefined} className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>)}
     </>
   );
 }

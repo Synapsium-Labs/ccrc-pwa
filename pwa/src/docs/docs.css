@@ -201,6 +201,15 @@
 .docs-full .docs-actions { flex: 0 1 auto; min-width: 0; margin-inline-start: auto; flex-wrap: wrap; }
 .docs-full .docs-actions > * { flex: none; }
 .docs-full .docs-actions > .docs-action-note { flex: none; }
+/* Under a coarse pointer, which has no hover to show a `title`, the note draws its words (`GithubAction`, review 1697
+   F5). They take no room from the page's name: kept out of the actions' own width (`contain: inline-size`), they
+   follow the icons (`order`) on the actions' line when the row has `22ch` to spare there, and otherwise take a line of
+   their own under the icons, inside the actions, where they wrap rather than be cut. So the row is taller on a touch
+   screen while the words stand under the icons, and the stage widths are the icons' alone. */
+@media (pointer: coarse) {
+  .docs-full .docs-actions:has(> .docs-action-note) { flex-grow: 1; justify-content: flex-end; }
+  .docs-full .docs-actions > .docs-action-note { order: 1; flex: 1 1 22ch; min-width: 0; contain: inline-size; text-align: end; }
+}
 /* GitHub's refusal, the one long sentence among the actions, gives way before the page's name does (review 1704 F2):
    `contain: inline-size` keeps its words out of the actions' own width, so the row breaks its line on a floor of
    `12ch` and not on the whole sentence, and the actions then grow into what the crumbs leave. The sentence ends in an
