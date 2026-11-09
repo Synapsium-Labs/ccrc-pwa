@@ -724,7 +724,9 @@ export function NewSessionSheet({
               never a hand-typed list, so a class or effort rung this build
               adds or drops shows up here for free. Leaving all three unset
               sends no `route` key at all — "Automatic" (unset), the coordinator
-              row an ordinary start has always landed on. */}
+              row an ordinary start has always landed on. A field picked here
+              is laid OVER that row (D-8142): choosing Class never costs the
+              session its effort, subagent or workflow defaults. */}
           <div className="route-row">
             <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
               <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
