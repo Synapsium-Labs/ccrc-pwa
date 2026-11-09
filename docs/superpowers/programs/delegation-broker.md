@@ -48,7 +48,7 @@ never links work by a name, a path, a time or a working directory.
 | 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120, #1162, #1558 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done`; follow-up 9 #1162 merged 2026-10-23 as `0c439bb7d`, run 816 closed `done`; follow-up 10 #1558 merged 2026-10-27 as `66fd18299` (head `2155e5625`), run 968 still open; the seven-day soak was waived by the operator on 2026-10-28, not passed |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | #1614, #1627, #1619, #2191 | **merged**: PR1 #1614 on 2026-10-31 as `3ce530dad` and PR2 #1627 on 2026-10-31 as `c555df234` (both landed by another session at the operator's go; runs 584 and 1021 still open); PR4 #1619 on 2026-11-03 as `27cd78962` from `c9eaf82fc`, after reviews 1365 and 1367, run 1020 closed `done`; PR3 #2191 on 2026-11-03 as `30b270d19` from `ef3b85d46`, after reviews 1384, 1390 and 1397, run 1007 closed `done`; the two-day gate was waived by the operator on 2026-10-28, not passed |
 | 5v | visibility (scope decision 2026-11-02) | honest helper and workspace visibility in the PWA; no automatic end or reopening | pwa, through the server box | 4 | #2254 | **merged** 2026-11-04 as `1d5b09e01` at exact head `e0792867f` (run 1421, four review rounds; the fourth by the operator's lift of the cap); run 1421 closed `done` |
-| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357, #2397, #2396, #2419, #2422, #2420, #2426 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). The plan's Task 0, the corpus, #2397 on 2026-11-07 as `e53d64928` at `a4ee0565d` (run 1577, reviews 1591, 1605 and 1607; split out of PR7 by D-8053). PR7 #2396 on 2026-11-07 as `67121c031` at `7c4c3190c` (run 1569, reviews 1587, 1604 and 1609), first in v0.0.1020, shadow. PR10 #2419 on 2026-11-07 as `0ba6431c6` at `bd01a4171` (run 1613, reviews 1615, 1623 and 1624), the PWA's keep, attach and "not delegated" controls. PR10b #2422 on 2026-11-07 as `a80986312` at `b12b0c4fd` (run 1625, reviews 1626, 1628 and 1629), PR10's review leftovers. PR7b #2420 on 2026-11-07 as `b018bd2b1` at `ad726423c` (run 1612, reviews 1622, 1627 and 1630), review 1609's findings on PR7. PR7c #2426 on 2026-11-07 as `9873acc49` at `e06d4ebda` (run 1631, reviews 1634, 1640 and 1644), review 1630's liveness finding, first in v0.0.1025. Every PR of wave 5 but promotion (5b) has landed |
+| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357, #2397, #2396, #2419, #2422, #2420, #2426, #2452, #2481 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). The plan's Task 0, the corpus, #2397 on 2026-11-07 as `e53d64928` at `a4ee0565d` (run 1577, reviews 1591, 1605 and 1607; split out of PR7 by D-8053). PR7 #2396 on 2026-11-07 as `67121c031` at `7c4c3190c` (run 1569, reviews 1587, 1604 and 1609), first in v0.0.1020, shadow. PR10 #2419 on 2026-11-07 as `0ba6431c6` at `bd01a4171` (run 1613, reviews 1615, 1623 and 1624), the PWA's keep, attach and "not delegated" controls. PR10b #2422 on 2026-11-07 as `a80986312` at `b12b0c4fd` (run 1625, reviews 1626, 1628 and 1629), PR10's review leftovers. PR7b #2420 on 2026-11-07 as `b018bd2b1` at `ad726423c` (run 1612, reviews 1622, 1627 and 1630), review 1609's findings on PR7. PR7c #2426 on 2026-11-07 as `9873acc49` at `e06d4ebda` (run 1631, reviews 1634, 1640 and 1644), review 1630's liveness finding, first in v0.0.1025. PR8b #2452 on 2026-11-08 as `3750e99ba` at `e278bc4b5` (run 1645, reviews 1659, 1665, 1669 and 1683), the adoption switch and its door, first in v0.0.1043. PR8c #2481 on 2026-11-09 as `fe4c74c8e` at `ccc0c48c6` (run 1688, reviews 1693, 1699, 1703, 1709 and 1717), the switch's Settings card, first in v0.0.1050. Every PR of wave 5 but promotion (5b) has landed |
 | 5b | 4 Adopt (promotion) | promotion through `ws-add --base` (the plan's PR9a and PR9b) | server | 5 | — | split out of wave 5 by the operator on 2026-11-04 (D-7940); dispatched once the rest of wave 5 has landed and been used, when the operator says so |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | dropped by the operator on 2026-10-26 (D-7002) |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | dropped by the operator on 2026-10-26 (D-7002) |
@@ -2106,13 +2106,14 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     inside what would have been a suspended window. Rules 5 to 7 and the marker still bind.
   - With 16 or more candidates and persistently non-definite audits, the carrier reads and the audits alternate, so
     those answers are never consumed (a delay only).
-- **2026-11-07 — Items 71 and 72.** Item 71 asks for the server box at v0.0.1023 or later, the first release with
-  PR7b. It carries PR7, PR10 and PR10b too, so the one move covers items 66, 68 and 70. Item 72 is the separate item
-  promised with item 66: adoption can be switched on once the server box runs v0.0.1023 or later. It names what to
-  check first: the fleet box's `ccd caps` lists `lease-audit-v1`, and the shadow `adoption.wouldAdopt` counts and log
-  lines name worktrees that hold real work. Then the operator creates `$REG/delegation-adopt` by hand (O5-7 (a),
-  D-7846). It may be switched on before or after PR7c lands. The server box's floor stays v0.0.966. PR7c (run 1631) is
-  the open run of wave 5; PR9 (promotion, wave 5b) waits for the operator.
+- **2026-11-07 — Items 71 and 72.** Item 71 asks for the server box at v0.0.1023 or later, the first release with PR7b.
+  It carries PR7, PR10 and PR10b too, so the one move covers items 66, 68 and 70. Item 72 is the separate item promised
+  with item 66: adoption can be switched on once the server box runs v0.0.1023 or later. It names what to check first:
+  the fleet box's `ccd caps` lists `lease-audit-v1`, and the shadow `adoption.wouldAdopt` counts and log lines name
+  worktrees that hold real work. Then the operator creates `$REG/delegation-adopt` by hand (O5-7 (a), D-7846). Since
+  D-8112 (2026-11-08) that act is a confirmed tap in Settings › Automation instead (item 132). It may be switched on
+  before or after PR7c lands. The server box's floor stays v0.0.966. PR7c (run 1631) is the open run of wave 5; PR9
+  (promotion, wave 5b) waits for the operator.
 - **2026-11-07 — PR7c landed (a slow audit no longer stalls the adoption lane).** #2426 merged as `9873acc49` at
   `e06d4ebda` after three review rounds (reviews 1634, 1640 and 1644), first in v0.0.1025. It closes review 1630's
   liveness finding on PR7b. An ask is marked before its audit's await. Two cuts inside that ask's own await, with no
@@ -2142,13 +2143,120 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     of a cut pass's writes is two short (a kept-once ask's drop, and the rebuilt held-audit map); the rejection arm is
     unreachable today; the mixed-latency bound is 3K + 1, tighter than the argued 4K + 1.
   - Two concurrent read-only audits of one tree, when a lease is asked again while a cut pass's audit is still out.
-- **2026-11-07 — Items 78 and 79; run 1645 holds wave 5b.** Item 78 asks for the server box at v0.0.1025 or later,
-  the first release with PR7c, server box only. Item 79 replaces item 72 (withdrawn) now that PR7c has landed: adoption
-  can be switched on once the server box runs v0.0.1025 or later, after the same two checks (the fleet box's `ccd caps`
-  lists `lease-audit-v1`, and the shadow `adoption.wouldAdopt` counts and log lines name worktrees that hold real
-  work). Then the operator creates `$REG/delegation-adopt` by hand (O5-7 (a), D-7846). The server box's floor stays
-  v0.0.966. Run 1631 closed `done`. Run 1645 was opened, planned and not dispatched, so the programme stays open for
-  promotion (PR9, wave 5b), which waits until adoption has been switched on and used, and for the operator's word.
+- **2026-11-07 — Items 78 and 79; run 1645 holds wave 5b.** Item 78 asks for the server box at v0.0.1025 or later, the
+  first release with PR7c, server box only. Item 79 replaces item 72 (withdrawn) now that PR7c has landed: adoption can
+  be switched on once the server box runs v0.0.1025 or later, after the same two checks (the fleet box's `ccd caps`
+  lists `lease-audit-v1`, and the shadow `adoption.wouldAdopt` counts and log lines name worktrees that hold real work).
+  Then the operator creates `$REG/delegation-adopt` by hand (O5-7 (a), D-7846). Since D-8112 (2026-11-08) that act is a
+  confirmed tap in Settings › Automation instead (item 132). The server box's floor stays v0.0.966. Run 1631 closed
+  `done`. Run 1645 was opened, planned and not dispatched, so the programme stays open for promotion (PR9, wave 5b),
+  which waits until adoption has been switched on and used, and for the operator's word.
+- **2026-11-07 — The operator asks for a console switch; PR8b opened (D-8112 to D-8114).** After ticking items 78 and
+  79, the operator asked: "is there no UI in ccrc that lets me handle this? I don't want to be doing this via config
+  files". No console path existed. The marker had no writer in the tree (O5-7 (a), D-7846), and `adoption.wouldAdopt`
+  lived only in fleet health's JSON and the server log. Item 78 was confirmed: both boxes measured at v0.0.1026, and
+  the fleet box's `ccd caps` listed `lease-audit-v1`. Item 79 was returned, because the switch file was absent on both
+  boxes, and later withdrawn. Run 1645, opened to hold wave 5b, was dispatched instead for PR8b under three rulings:
+  - one writer for the marker, behind a session-gated operator door (D-8112);
+  - a door that refuses `on` when the checks the operator used to make by hand would fail (D-8113);
+  - the list of worktrees adoption would keep, served to a Settings card (D-8114).
+
+  O5-7 (a)'s gate is unchanged: it is still the operator's own deliberate act, after reading what adoption would do.
+  Only its medium changed.
+- **2026-11-08 — The split (ask 330).** `consolidation-path-guard.test.ts` (D-5855) refuses a diff that touches `pwa/`
+  beside `shared/switches.ts`, which D-8112 edits. That guard is another programme's rule, so it stands. PR8b ships
+  D-8112, D-8113 and D-8114's server half. PR8c ships the card, from the worker's saved patch, in a new run opened
+  after PR8b merged. Ask 335 moved `DELEGATION_ADOPT_CAPS` to PR8c, with the card that reads it.
+- **2026-11-08 — PR8b landed (the adoption switch and its door).** #2452 merged as `3750e99ba` at `e278bc4b5` after four
+  review rounds (reviews 1659, 1665, 1669 and 1683), first in v0.0.1043. The fourth round ran because the operator
+  lifted the review cap (item 101). PR8b adds the verb `ccd delegation-adopt --state on|off`, the marker's one writer,
+  and `GET`/`POST /api/coord/delegation-adopt`, which are session-gated with no box token. Deploy class both, fleet box
+  first.
+  - Round 1 (review 1659) found two important gaps:
+    - The door now refuses `on` with `sign-in-unarmed` unless sign-in is armed and the caller holds a session, the
+      collect-lane door's rule (F2, in D-8113). `off` stays open.
+    - The list's changed-files figure now comes only from the decider's definite predicate, defined once (F1).
+
+    It also confirmed that a top-level session is stopped by convention only, as for `ws-lease-mark`, while the
+    sign-in arm holds the door (F3).
+  - Round 2 (review 1665): the verb joined the installed direct entry's protected list and the body's direct-entry
+    guard, as `ws-lease-mark` did. A case-folded spelling under an inherited `nocasematch` now matches no verb (N1). The
+    wire reader for `refused.on` was carried to PR8c (N6), and the list carries no path (N10).
+  - Round 3 (review 1669): main had moved and the PR conflicted in the auth gate's counts, so the worker merged main
+    once. The switches-history guard's own row was bounded to the guard's grammar (C1), and a row for non-shell files
+    was added for the marker (A2).
+  - Round 4 (review 1683) found nothing that needed a ruling.
+  - A hand step is in the README and D-8113. Before rolling the fleet box below the release that ships the verb
+    (v0.0.1043), switch adoption off at the door. Otherwise, remove the marker by hand there afterwards.
+- **2026-11-09 — PR8c landed (the adoption switch's Settings card).** #2481 merged as `fe4c74c8e` at `ccc0c48c6` after
+  five review rounds (reviews 1693, 1699, 1703, 1709 and 1717), first in v0.0.1050. Settings › Automation gains
+  "Worktrees left behind", beside the pane-scope sweep's card. It shows the switch, the lane's mode and counts, whether
+  the two capabilities read, and the worktrees the last pass would keep. Keep them asks for confirmation on a sheet;
+  Do not keep goes out at once. Deploy class server.
+  - Round 1 (review 1693):
+    - The card reads the list through `keeps`' one reader, and a list that reader refuses is dropped and never costs
+      the switch (F1).
+    - The sheet names the counts line's figure (F8).
+  - Round 2 (review 1699):
+    - In a real browser, focus did not return to the card after a confirmed write (R2-1).
+    - The sheet names a figure only after a shadow pass (R2-4).
+  - Round 3 (review 1703):
+    - An answer inside the sheet's exit, about 320 ms, still left focus on the page. The coordinator ruled one
+      mechanism: one focus request per confirmed write, which fires at most once, on the settle, and never after the
+      confirm's bound.
+    - When the last pass could not read whether keeping was on, the sheet says it cannot tell how many (F4). Round 4
+      widened that sentence (finding 4, below).
+  - Round 4 (review 1709) ran because the operator lifted the cap (item 122). It found two important problems:
+    - A second Enter, Space or click while the sheet was leaving sent the same `{on: true}` two or three times. The
+      card now ignores a confirm unless its sheet is open for that choice.
+    - A rejected write whose re-read changed the reading left focus on the page. The refocus now picks only what the
+      same commit leaves in the card.
+
+    It also widened round 3's sentence to "the last pass could not read everything it needs", true whether the lane's
+    circuit breaker or the marker could not be read (finding 4).
+  - Round 5 (review 1717) ran on the operator's word (item 126). It read only round 4's changes and the paths that arm
+    adoption, and found every round-4 finding closed:
+    - In Chromium, one confirm sent one request in 72 of 72 runs.
+    - A rejected write never left focus on the page, in 64 of 64 runs.
+  - Each review measured that no tap, key press or focus move reaches the door's POST without the sheet's confirm.
+  - The merge queue's first group was dropped on a test runner's teardown error, in a file the PR does not touch, with
+    every test passing. The second group landed.
+  - No deviation number was taken. D-8114 was amended in place for review 1693 F1 and F8, review 1699 R2-4, review 1703
+    F4 and review 1709 finding 4. The head commit's `Ledger-Edit` line sits outside git's trailer block, so the ledger
+    guard, in warn mode on pull requests, read no trailer. This entry records that amendment. The note `pr8c.md`,
+    beside the plan, has the mutation tables.
+- **2026-11-09 — Carried from PR8b's and PR8c's reviews, to the Rider.**
+  - The other forbidden ccd verbs (`ws-rm`, `ws-reap`, `roll`) are not on the installed direct entry's protected list.
+    The `nocasematch` hole that review 1665 N1 closed for `delegation-adopt` stays open for them.
+  - Who acted on a switch door when the verb may have run is not attributed (review 1669 A5). Every switch door keeps
+    the pane-scope stop's shape, so a fix belongs to all of them at once.
+  - The A2 row's walk skips any entry named `__pycache__`, by name rather than by ignore state (review 1683 R2).
+  - The card relays the server's ccd failure text verbatim, as its precedents do (review 1693 F9).
+  - On and off can both be in flight while the marker reads unmeasurable (review 1693 R1).
+  - Cancel, Escape or the scrim leaves focus on the page. The card's fieldset `disabled` blurs the opener in the
+    commit that opens the sheet (review 1703, which corrects review 1699's attribution to the shared sheet). The
+    precedent switch cards may share it. No write follows.
+  - A failed poll re-renders the Settings page once a minute, because the provider's memo depends on `landed` (review
+    1709).
+  - The sheet watch's observer reads the previous commit's reading and `lineUp` in a window under 5 ms. This happens
+    when the sheet's removal and a poll that changes the reading share one render. Focus can then fall to the page, or
+    a request that should have been dropped can focus the checked radio. No write can follow (review 1717 F1).
+  - The two browser rows for round 4's double confirm do not check that their presses landed inside the sheet's exit,
+    so the guard's mutant could pass on a loaded shard. No row reopens the sheet during the exit (review 1717 F2).
+  - After Do not keep is answered, a later poll may read on. Focus then stays on Do not keep, and Space sends
+    `{on: false}` at once. This is by design, since it only disarms (review 1717 C2).
+  - Not from a review: item 122 showed that the console's Lift cap door appears only after a review run's open has been
+    refused at the cap. A coordinator that asks for the lift first sends the operator to a door that is not there yet,
+    and item 122 needed a refused open before the lift could be made.
+- **2026-11-09 — Items 131 and 132; run 1721 holds wave 5b.** Item 132 replaces item 79:
+  1. Move the server box to v0.0.1050 or later. Both boxes measured at v0.0.1045, where the fleet box already lists
+     the verb and `lease-audit-v1`.
+  2. Then switch adoption on in Settings › Automation. The switch refuses while sign-in is dark.
+
+  Item 131 asks whether the card's counts line should also stop naming a figure when the last pass could not read
+  everything, as the sheet does (review 1717 C3). Any change would be a follow-up. Runs 1645 and 1688 closed `done`.
+  Run 1721 was opened, planned and not dispatched, so the programme stays open for promotion (PR9, wave 5b). Promotion
+  waits until adoption has been switched on and used, and for the operator's word.
 
 ## Carried constraints
 
