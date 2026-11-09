@@ -1,4 +1,4 @@
-// D-8125: a cap its coordinator lifted, on the run board's band and the run page's Review cap fact, at phone, laptop and wide
+// D-8125: a cap its coordinator lifted, on the run page's Review cap fact (the board's Waiting on you band does not list it), at phone, laptop and wide
 // widths (375, 1024, 1440), in a real Chrome over the production build. jsdom cannot lay a line out, so what wraps is measured
 // here: no sideways page scroll, the row and the fact inside their boxes, and the reason whole (not truncated, not clipped).
 // Names are neutral.
@@ -67,26 +67,20 @@ afterAll(async () => {
 for (const width of [375, 1024, 1440]) {
   for (const skin of [REFINED, INSTRUMENT]) {
     describe(`a coordinator-lifted cap, ${skin} at ${width}px`, () => {
-      it('the band row wraps inside its box and says the whole reason, with no Lift cap button', async () => {
+      it('the board draws no Waiting on you row for it (not an action), and nothing overflows', async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin, theme: 'light', width }, FIXTURE);
         try {
           await page.goto(`${server!.origin}/runs`);
-          const row = page.locator('.review-cap-band-row').first();
-          await row.waitFor({ timeout: 20_000 });
-          const m = await row.evaluate((el) => {
-            const r = el.getBoundingClientRect();
-            return {
-              text: el.textContent, overflow: el.scrollWidth - el.clientWidth, left: r.left, right: r.right, vw: innerWidth,
-              buttons: el.querySelectorAll('button').length,
-              page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-            };
-          });
-          expect(m.text).toBe(`Run 1701: ${LINE} · 4 of 6 rounds`);
-          expect(m.buttons, 'no operator control on a handled ask').toBe(0);
+          // The board is up when the run's programme card is drawn; the band would sit above it.
+          await page.locator('.programme-cards').first().waitFor({ timeout: 20_000 });
+          const m = await page.evaluate(() => ({
+            rows: document.querySelectorAll('.review-cap-band-row').length,
+            lifts: [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Lift cap').length,
+            page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          }));
+          expect(m.rows, 'a coordinator lift is not an operator action: no band row').toBe(0);
+          expect(m.lifts, 'no Lift cap button').toBe(0);
           expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
-          expect(m.overflow, 'the row fits its box').toBeLessThanOrEqual(1);
-          expect(m.left).toBeGreaterThanOrEqual(-1);
-          expect(m.right).toBeLessThanOrEqual(m.vw + 1);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();
