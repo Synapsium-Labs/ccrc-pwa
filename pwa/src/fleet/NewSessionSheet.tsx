@@ -619,7 +619,7 @@ export function NewSessionSheet({
         </>
       ) : adding ? (
         // The inline add (see the head of this file): the way back to the list, then the form. The account stays chosen.
-        <div className="grid gap-2">
+        <div className={NAME_FIELD_CLASS.stack}>
           {/* Held while an add runs: its answer belongs to this form, and the list behind it would offer the same add. */}
           <button type="button" className="acct-change" disabled={addingProject} onClick={() => setAdding(false)}>
             <span aria-hidden="true">‹</span> {PROJECT_ADD_TEXT.back}
