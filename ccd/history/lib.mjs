@@ -6497,9 +6497,10 @@ export function escapeArchive(s) {
 
 /** One quoted gist, or null when it is omitted. The order is fixed: the whole gist is redacted, the redacted text is tested
  *  for a directive shape, then cut at `max` chars, and only then escaped, so a registered value is gone before the cut and
- *  the cut never lands inside an entity. */
+ *  the cut never lands inside an entity. U+0000 is dropped first of all (W3-1 Task 1C, gate 6): the hook's bounded read of a
+ *  steer file refuses a NUL byte, so a NUL the quote carried would cost the print; every later step sees what can print. */
 export function quoteGist(gist, pairIdx, max = PREV_GIST_MAX) {
-  const redacted = redactField(String(gist), pairIdx);
+  const redacted = redactField(String(gist).replaceAll('\u0000', ''), pairIdx);
   if (directiveFlag(redacted)) return null;
   return `<ccrc-archive-quote trust="untrusted">${escapeArchive(capText(redacted, max).text)}</ccrc-archive-quote>`;
 }

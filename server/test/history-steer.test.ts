@@ -104,6 +104,19 @@ describe('the steer template and its composer (spec 7.1; W3 Task 1A)', () => {
     expect(quoteGist('x'.repeat(298) + '&&&&', EMPTY_IDX))
       .toBe(`<ccrc-archive-quote trust="untrusted">${'x'.repeat(298)}&amp;&amp;</ccrc-archive-quote>`);
   });
+  it('a previous gist holding NUL characters composes a file with no NUL byte; the cut sees the gist without them (W3-1 Task 1C, gate 6)', () => {
+    // one NUL inside, one at the cut point (position 299 of 300): dropped first, so the cut keeps 300 real characters
+    const gist = `${'a'.repeat(299)}\u0000bcd \u0000end`;
+    expect(quoteGist(gist, EMPTY_IDX)).toBe(`<ccrc-archive-quote trust="untrusted">${'a'.repeat(299)}b</ccrc-archive-quote>`);
+    const inside = composeSteerFile({ ...base, prev: { ...okPrev, gist: 'one\u0000two' } });
+    expect(inside.text).toContain('<ccrc-archive-quote trust="untrusted">onetwo</ccrc-archive-quote>');
+    for (const g of [gist, 'one\u0000two', '\u0000']) {
+      const f = composeSteerFile({ ...base, prev: { ...okPrev, gist: g } });
+      expect(Buffer.from(`${f.text}\n`, 'utf8').includes(0), 'a NUL byte in the file').toBe(false);
+    }
+    // a gist of NULs only is empty after the drop: still a quote of nothing, never a NUL
+    expect(quoteGist('\u0000\u0000', EMPTY_IDX)).toBe('<ccrc-archive-quote trust="untrusted"></ccrc-archive-quote>');
+  });
   it('nodeRangeText spells a range as the tree verb does (history-steer-range-text)', () => {
     expect(nodeRangeText(Date.UTC(2026, 9, 29, 7, 5), Date.UTC(2026, 9, 29, 9, 40))).toBe('2026-10-29T07:05Z..2026-10-29T09:40Z');
     expect(nodeRangeText(null, Date.UTC(2026, 9, 29, 9, 40))).toBe('unknown..2026-10-29T09:40Z');
