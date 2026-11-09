@@ -2121,7 +2121,10 @@ function stallCoordBallMailInner(input: StallCoordBallInput, now: number): Stall
   if (now - ballSince < COORD_BALL_MAIL_MS) return VERDICT_NONE;
   if (input.runs.some((r) => r.state === 'dispatched' || r.state === 'working' || r.state === 'merging' || r.kind === 'review')) return VERDICT_NONE;
   if (input.blockingItem || input.liveBlock || si.coordinationPaused) return VERDICT_NONE;
-  if (input.waitSentAt !== null && input.waitSentAt > ballSince) return VERDICT_NONE;
+  // The coordinator's own `wait:` mail is itself the newest exchange on its run (`ballToCoordinator` gives the ball to the
+  // coordinator on it), so `ballSince` is never earlier than it: a wait at or after the ball holds, only a later exchange
+  // or re-activation (a ball time past the wait) lets the rung run.
+  if (input.waitSentAt !== null && input.waitSentAt >= ballSince) return VERDICT_NONE;
   // A coordinator is a session without a run: its rungs are the watch's own mail to it, found by the exact subject
   // `stallCoordBallMail` gives each rung (`stallSelfMail`), never `rungDoneAt` over notices a run-less session lacks.
   const sent2 = stallSelfMail(si, stallCoordBallMail({ key: ballSince, rung: 2 }).subject);

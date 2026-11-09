@@ -74,6 +74,7 @@ describe('stallCoordBallMailStep: rung 2', () => {
     ['an open blocking item', { blockingItem: true }],
     ['a live block row', { liveBlock: true }],
     ['a wait: mail after the ball', { waitSentAt: BALL + MIN }],
+    ['a wait: mail that is the ball itself', { waitSentAt: BALL }],
     ['coordination paused', { paused: true }],
     ['a held mail', { deliveries: [delivery({ state: 'queued', deliveredAt: null, ackedAt: null })] }],
     ['no claimed run', { runs: [] }],

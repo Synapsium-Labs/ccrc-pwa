@@ -1904,7 +1904,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(operatorMail(coord).filter((m) => m.subject.startsWith(STALL_CHECK_PREFIX))).toHaveLength(1);   // the control: the sweep judged
   });
 
-  it('every mail read starts BACKLOG_HORIZON_MS back, at all three call sites (worker, coordinator, registry row)', async () => {
+  it('every mail read starts BACKLOG_HORIZON_MS back, at every call site (worker, coordinator, the coord-ball per-run read, registry row)', async () => {
     // A registry row's read can show no effect of its lower bound (its self-mail always follows the restart the
     // verdict bounds), so this row reads the argument each site hands the store.
     const { h, coord, w } = await rig();
@@ -1919,6 +1919,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(spy.mock.calls).toEqual([
       [WORKER, [runId], D_AT - BACKLOG_HORIZON_MS],
       [COORD, [], D_AT - BACKLOG_HORIZON_MS],
+      [WORKER, [runId], D_AT - BACKLOG_HORIZON_MS],       // the coord-ball rung's per-run read (judgeCoordBall)
       [ORPHAN, [], D_AT - BACKLOG_HORIZON_MS],
     ]);
   });
@@ -2645,6 +2646,14 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     await sweepThrough(w, sessions, LIVE, tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
     expect(ballMail(coord)).toEqual([]);
     expect(lines(warn, `ccrc-server: stall-watch shadow coord-ball r2 ${COORD} (run-less) key ${T0}`)).toBe(1);
+  });
+
+  it('a wait: mail the coordinator sent holds it: the wait is the newest exchange, so the ball time equals it', async () => {
+    const { coord, w, runId } = await setup();
+    at(T0 + 60_000);
+    coord.insertMail({ fromId: COORD, fromUuid: COORD_UUID, toId: WORKER, runId, kind: 'status', subject: 'wait: on the operator', body: 'b', artifacts: [] });
+    await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT + 60_000, RUNG_AT + 60_000 + 2 * STALL_SWEEP_MS);
+    expect(ballMail(coord)).toEqual([]);
   });
 
   it('a blocking item on the run\'s programme holds it', async () => {
