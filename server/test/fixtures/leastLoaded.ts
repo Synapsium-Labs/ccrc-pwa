@@ -506,6 +506,27 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       why: 'the NEWEST spawn on the lane decides, across rows: a later rc 0 on another row of the lane clears the skip',
     },
     {
+      name: 'spawn-stale-login-refusal-expires',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21600 - 300, rc: 2 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'a refusal older than the age bound is no verdict: the skip stops the spawn that would clear it, so it must expire',
+    },
+    {
+      name: 'spawn-stale-blocked-refusal-expires',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21600 - 300, rc: 5 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'rc 5 expires exactly as rc 2 does',
+    },
+    {
+      name: 'spawn-refusal-inside-the-age-bound-still-skips',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21600 + 300, rc: 2 }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'a refusal just inside the age bound still counts',
+    },
+    {
       name: 'spawn-newer-other-failure-is-not-a-skip',
       files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
       spawns: [

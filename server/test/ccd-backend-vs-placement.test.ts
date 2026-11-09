@@ -351,23 +351,33 @@ describe('_ws_lane_cannot_spawn', () => {
     if (spawn !== null) writeFileSync(path.join(reg, `${id}.spawn`), spawn);
   };
   const clear = (): void => { rmSync(reg, { recursive: true, force: true }); };
+  const T = Math.floor(Date.now() / 1000);
   const cannot = (w: string): string => yn('_ws_lane_cannot_spawn', w);
 
   it('is true for the newest rc 2 or rc 5 and false once a later spawn reads otherwise', () => {
     clear();
-    row('one', 'an', '100 2');
+    row('one', 'an', `${T - 300} 2`);
     expect(cannot('an')).toBe('yes');
-    row('two', 'an', '200 5');
+    row('two', 'an', `${T - 200} 5`);
     expect(cannot('an')).toBe('yes');
-    row('three', 'an', '300 0');
+    row('three', 'an', `${T - 100} 0`);
     expect(cannot('an')).toBe('no');
     expect(cannot('cx')).toBe('no');
   });
 
+  it('a refusal older than the age bound is no verdict, and one inside it still is', () => {
+    clear();
+    const t = Math.floor(Date.now() / 1000);
+    row('one', 'an', `${t - 21600 - 300} 2`);
+    expect(cannot('an')).toBe('no');
+    row('two', 'an', `${t - 21600 + 300} 5`);
+    expect(cannot('an')).toBe('yes');
+  });
+
   it('an equal epoch is not a verdict when either record reads otherwise', () => {
     clear();
-    row('one', 'an', '100 2');
-    row('two', 'an', '100 0');
+    row('one', 'an', `${T - 300} 2`);
+    row('two', 'an', `${T - 300} 0`);
     expect(cannot('an')).toBe('no');
   });
 
@@ -375,12 +385,12 @@ describe('_ws_lane_cannot_spawn', () => {
     clear();
     expect(cannot('an')).toBe('no');
     row('one', 'an', 'garbage');
-    row('two', 'an', '100');
-    row('three', 'an', '100 2 extra');
+    row('two', 'an', `${T - 300}`);
+    row('three', 'an', `${T - 300} 2 extra`);
     expect(cannot('an')).toBe('no');
-    row('has.dot', 'an', '100 2');
+    row('has.dot', 'an', `${T - 300} 2`);
     expect(cannot('an')).toBe('no');
-    writeFileSync(path.join(home, 'elsewhere'), '100 2');
+    writeFileSync(path.join(home, 'elsewhere'), `${T - 300} 2`);
     writeFileSync(path.join(reg, 'four.wrapper'), 'an');
     symlinkSync(path.join(home, 'elsewhere'), path.join(reg, 'four.spawn'));
     expect(cannot('an')).toBe('no');
@@ -389,7 +399,7 @@ describe('_ws_lane_cannot_spawn', () => {
   it('a row without a wrapper file belongs to no lane', () => {
     clear();
     mkdirSync(reg, { recursive: true });
-    writeFileSync(path.join(reg, 'orphan.spawn'), '100 2');
+    writeFileSync(path.join(reg, 'orphan.spawn'), `${T - 300} 2`);
     expect(cannot('an')).toBe('no');
   });
 });

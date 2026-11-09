@@ -7125,6 +7125,7 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
+_WS_SPAWN_REFUSAL_TTL_S=21600   # 6h: how long a rc 2 / rc 5 spawn record keeps a lane out of placement (twin: SPAWN_REFUSAL_TTL_S)
 _ws_lane_cannot_spawn() {   # wrapper -> 0 iff the NEWEST spawn on any row of this lane recorded rc 2 (login) or rc 5 (blocked)
   # F9: `projectHome` (server/src/limits.ts, `readSpawnBlockedLanes`) is the twin, and `projected-home.test.ts` drives both
   # over one seeded registry. A row is `$REG/<id>.wrapper` with `$REG/<id>.spawn` = `<epoch> <rc>` (`_spawn` writes it
@@ -7133,7 +7134,12 @@ _ws_lane_cannot_spawn() {   # wrapper -> 0 iff the NEWEST spawn on any row of th
   # ABSENCE PERMITS: a record that is missing, a symlink, unreadable or not exactly `<digits> <digits>` names no verdict, so
   # it never skips a lane. Two lines per row are read with `_file_read_to` and no `$( )`: placement runs per `ws-add`
   # and the registry holds hundreds of rows. A leading dot (a private family) and a dotted id are not rows.
-  local w="$1" f id wr sp best_at=-1 best_bad=0 at rc bad
+  # A REFUSAL EXPIRES (wave A7 review): the skip is what stops new spawns landing on the lane, so a lane that has since
+  # recovered (a sign-in clears its authdead marker, never this record; a pane block was specific to one project) would
+  # never be tried again and never overwrite the record. A rc 2 or rc 5 record older than `_WS_SPAWN_REFUSAL_TTL_S` is
+  # therefore no verdict, exactly like an unparseable one; `SPAWN_REFUSAL_TTL_S` in server/src/limits.ts is the twin.
+  local w="$1" f id wr sp best_at=-1 best_bad=0 at rc bad now
+  _now_s_to now
   for f in "$REG"/*.spawn; do
     [[ -f "$f" && ! -L "$f" ]] || continue
     id="${f##*/}"; id="${id%.spawn}"
@@ -7145,6 +7151,7 @@ _ws_lane_cannot_spawn() {   # wrapper -> 0 iff the NEWEST spawn on any row of th
     [[ "$sp" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+)[[:space:]]*$ ]] || continue
     at=$((10#${BASH_REMATCH[1]})); rc=$((10#${BASH_REMATCH[2]}))
     bad=0; (( rc == 2 || rc == 5 )) && bad=1
+    (( bad == 1 && now - at > _WS_SPAWN_REFUSAL_TTL_S )) && continue
     if (( at > best_at )); then best_at=$at; best_bad=$bad
     elif (( at == best_at && bad == 0 )); then best_bad=0
     fi

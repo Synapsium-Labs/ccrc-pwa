@@ -115,19 +115,23 @@ const authDeadMarkerOk = (raw: string): boolean => {
  *  `<epoch> <rc>`. The same grammar as ccd's `_ws_lane_cannot_spawn`: exactly two unsigned integers, anything else is
  *  no verdict. */
 const SPAWN_RECORD_RE = /^\s*(\d+)\s+(\d+)\s*$/;
-const SPAWN_REFUSED_RC = new Set([2, 5]);   // `spawnVerdict`'s `login` and `blocked`
+const SPAWN_REFUSED_RC = new Set([2, 5]);
+/** How long a rc 2 / rc 5 record keeps a lane out of placement: the skip itself stops the later spawn that would clear
+ *  it, and a sign-in never touches the record, so the verdict must expire. ccd's `_WS_SPAWN_REFUSAL_TTL_S` is the
+ *  twin; an older refusal is no verdict, like an unparseable record. */
+export const SPAWN_REFUSAL_TTL_S = 21600;   // `spawnVerdict`'s `login` and `blocked`
 
 /** The lanes whose NEWEST recorded spawn needs a sign-in (rc 2) or is blocked (rc 5): mirrors ccd's
  *  `_ws_lane_cannot_spawn`. Newest is by the epoch INSIDE the record, across every row of the lane, so a later rc 0
  *  spawn on any of its rows clears the skip; an equal epoch clears it too when either record reads otherwise, so a tie
  *  is not a verdict. ABSENCE PERMITS: a record that is missing, a symlink, unreadable or off the grammar names no
- *  verdict. `registryNames` is the listing the caller already holds.
+ *  verdict. A refusal older than `SPAWN_REFUSAL_TTL_S` is no verdict either. `registryNames` is the listing the caller already holds.
  *
  *  THE COMMON FLEET COSTS ONE READ PER ROW AND NO MORE: only a record that itself reads rc 2 or 5 can make a lane
  *  unable to spawn, and only a record at or after the oldest such one can undo it, so the wrapper files (and the
  *  symlink checks bash makes) are read for those rows alone. */
 export async function readSpawnBlockedLanes(
-  io: FleetIO, cfg: CcrcConfig, registryNames: readonly string[],
+  io: FleetIO, cfg: CcrcConfig, registryNames: readonly string[], now = Math.floor(Date.now() / 1000),
 ): Promise<ReadonlySet<string>> {
   const ids = registryNames.filter((n) => n.endsWith('.spawn') && !n.startsWith('.'))
     .map((n) => n.slice(0, -'.spawn'.length)).filter((id) => id !== '' && !id.includes('.'));
@@ -135,7 +139,8 @@ export async function readSpawnBlockedLanes(
     const raw = await io.readFile(path.join(cfg.registryDir, `${id}.spawn`)).catch(() => null);
     const m = raw === null ? null : SPAWN_RECORD_RE.exec(raw);
     return m === null ? null : { id, at: Number(m[1]), rc: Number(m[2]) };
-  })).filter((r): r is { id: string; at: number; rc: number } => r !== null);
+  })).filter((r): r is { id: string; at: number; rc: number } => r !== null)
+    .filter((r) => !SPAWN_REFUSED_RC.has(r.rc) || now - r.at <= SPAWN_REFUSAL_TTL_S);
   const refused = rows.filter((r) => SPAWN_REFUSED_RC.has(r.rc));
   if (refused.length === 0) return new Set();
   const floor = Math.min(...refused.map((r) => r.at));
@@ -558,7 +563,7 @@ export async function readLimits(
       return content !== null && authDeadMarkerOk(content) ? wrapper : null;
     }))).filter((w): w is string => w !== null),
   );
-  const spawnBlockedLanes = await readSpawnBlockedLanes(io, cfg, regNames);
+  const spawnBlockedLanes = await readSpawnBlockedLanes(io, cfg, regNames, now);
   const out: Record<string, AccountLimits> = {};
   // D-6436 (desktop polish C4): the files are read through the one bounded pool, not one round trip after another;
   // the loop below still settles them in listing order. A read that rejects is handed to its own row's `catch`,
