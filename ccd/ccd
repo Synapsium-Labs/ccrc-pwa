@@ -9212,6 +9212,7 @@ project-add
 project-pool
 reclaim-pause
 route
+skill-ensure
 start
 stop
 supervise
@@ -10617,6 +10618,50 @@ cmd_project_add() {   # ccd project-add --name <n> (--url <github-url> | --empty
   if [[ -e "$dest" || -L "$dest" ]]; then rm -rf -- "$tmp"; die "project exists: $name"; fi
   _plat_mv_notdir "$tmp" "$dest" || { rm -rf -- "$tmp"; die "could not move $tmp to $dest"; }
   echo "added $name"
+}
+
+cmd_skill_ensure() {   # ccd skill-ensure --wrapper <id> — put the coordinator and the worker skill into ONE account's home
+  # D-8126 (wave A7, F10): the server's self-heal for a dispatch that measured the worker's skill ABSENT (row 38). It runs the
+  # two installers the deploy already ships, `$REG/install-coordinator-skill.sh` then `$REG/install-worker-skill.sh`, each
+  # with `--homes <that one dir>`, so the roster-wide default of those scripts is never taken: no other home is read,
+  # written or backed up. EXACT ARITY, `cmd_project_pool`'s rule: `--wrapper <id>` and nothing else is the usage line (exit
+  # 1), which is also the half that holds on a box with no agent whitelist (`REQUIRED_VERB_FLAG` is the other half).
+  # THE ID IS REFUSED BEFORE ANYTHING IS TOUCHED, at exit 2 with an empty stdout: the roster's id class first (no path
+  # character can reach `_ccrc_cfg_dir`'s arms or a directory name), then the roster FILE (`_wrapper_rostered_now`, not the
+  # startup snapshot: a removal that landed since this ccd began is a refusal, and an unreadable roster is one too).
+  # THE ANSWER IS ONE JSON LINE, `{"wrapper","result","detail"}`, at exit 0 for all three results: `installed` when either
+  # skill differed from its source before the run (the installers print nothing when they converge, so ccd measures that
+  # itself with the installers' own `diff -r -q` test), `converged` when both already matched, `failed` when an installer
+  # refused or the account's config dir is not on this box (an ordinary state: the installers skip it silently, which would
+  # read as `converged`). `detail` carries the installers' own words. CCRC_SKILL_SRC is unset for the children: it names ONE
+  # source and the two skills have two.
+  local usage="usage: ccd skill-ensure --wrapper <id>"
+  [[ $# -eq 2 && $1 == --wrapper ]] || die "$usage"
+  local w="$2" rc=0 dir name src dest err before result=converged detail="" failed=0
+  [[ "$w" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { echo "ccd: bad wrapper id: $w" >&2; exit 2; }
+  _wrapper_rostered_now "$w" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) echo "ccd: unknown-account: $w (no roster entry claims it)" >&2; exit 2 ;;
+    *) echo "ccd: could not re-read $CCRC_ACCOUNTS_SH, so skill-ensure cannot prove account '$w' exists" >&2; exit 2 ;;
+  esac
+  dir="$(_ccrc_cfg_dir "$w")"
+  [[ -n "$dir" ]] || { echo "ccd: no config dir for account '$w' in this ccd's roster" >&2; exit 2; }
+  _json_str probe >/dev/null || die "python3 is unavailable, so skill-ensure cannot encode its answer"
+  if [[ ! -d "$dir" ]]; then
+    failed=1; detail="the config dir of $w is not on this box"
+  else
+    for name in coordinator worker; do
+      src="$REG/$name-skill"; dest="$dir/skills/ccrc-$name"; before=0
+      [[ -d "$dest" ]] && diff -r -q "$src" "$dest" >/dev/null 2>&1 && before=1
+      err="$(env -u CCRC_SKILL_SRC bash "$REG/install-$name-skill.sh" --homes "$dir" 2>&1 >/dev/null)" || {
+        failed=1; detail+="${detail:+; }$name: ${err:-the installer failed without a message}"; continue; }
+      (( before )) || result=installed
+    done
+  fi
+  (( failed )) && result=failed
+  [[ -n "$detail" ]] || detail="coordinator and worker skills are in $w's home"
+  printf '{"wrapper":%s,"result":%s,"detail":%s}\n' "$(_json_str "$w")" "$(_json_str "$result")" "$(_json_str "${detail:0:600}")"
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
@@ -47568,6 +47613,7 @@ case "${1:-}" in
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
   project-add) shift; cmd_project_add "$@" ;;
+  skill-ensure) shift; cmd_skill_ensure "$@" ;;
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-admin-merge) shift; cmd_pr_admin_merge "$@" ;;
@@ -47579,6 +47625,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|skill-ensure|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

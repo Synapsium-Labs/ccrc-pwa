@@ -101,6 +101,11 @@ export type DelegationAdoptNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG
  *  `g26-project-add-without-name.ts` is the other side. */
 export type ProjectAddNeedsName = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['project-add'], '--name'>>;
 
+/** The skill self-install (D-8126). Deleting this ENROLMENT turns `['skill-ensure','--wrapper']` into a bare `['skill-ensure']`
+ *  with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g29-skill-ensure-without-wrapper.ts` is the other side. */
+export type SkillEnsureNeedsWrapper = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['skill-ensure'], '--wrapper'>>;
+
 /** The pane-scope stop's switch (D-7902). Deleting this ENROLMENT turns `['pane-scope-stop','--state']` into a bare
  *  `['pane-scope-stop']` with every subset test still green; asserted here, losing it stops this project compiling.
  *  `g27-pane-scope-stop-without-state.ts` is the other side. */

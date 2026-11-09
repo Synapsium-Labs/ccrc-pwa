@@ -213,6 +213,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the project create verb granted without --name',
     codes: ['TS2322'],
   },
+  // THE SKILL SELF-INSTALL (D-8126), g26's shape: enrolled on `--wrapper`, its whole argument surface, so the narrowed grant is
+  // a compile error.
+  'g29-skill-ensure-without-wrapper.ts': {
+    what: 'the skill self-install verb granted without --wrapper',
+    codes: ['TS2322'],
+  },
   // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
   'g27-pane-scope-stop-without-state.ts': {
     what: 'the pane-scope stop switch verb granted without --state',
@@ -537,6 +543,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['project-add', '--empty', '--name']]))).toThrow(/only grantable with '--name'/);
     expect(() => auditExecWhitelist(withCcd([['project-add', '--name']]))).not.toThrow();
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'project-add'), 'one project-add grant, on --name').toEqual([['project-add', '--name']]);
+  });
+
+  // THE SKILL SELF-INSTALL (D-8126): `skill-ensure` is enrolled for its ARGUMENT SURFACE, so the audit refuses the bare verb,
+  // the wrong flag and the flag out of place, over a CONSTRUCTED table.
+  it('throws on a skill-ensure with no --wrapper, the wrong flag, or the flag out of place (D-8126)', () => {
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure']]))).toThrow(/only grantable with '--wrapper'/);
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure', '--all']]))).toThrow(/only grantable with '--wrapper'/);
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure', 'claude-a', '--wrapper']]))).toThrow(/only grantable with '--wrapper'/);
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure', '--wrapper']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'skill-ensure'), 'one skill-ensure grant, on --wrapper').toEqual([['skill-ensure', '--wrapper']]);
   });
 
   // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).

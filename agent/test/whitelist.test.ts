@@ -354,6 +354,16 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['project-add', 'demo'])).toBe(false);
   });
 
+  // THE SKILL SELF-INSTALL (D-8126): one account named first, and nothing after it but the id.
+  it('grants skill-ensure ONLY with --wrapper, in both directions', () => {
+    expect(isExecAllowed('ccd', ['skill-ensure', '--wrapper', 'claude-a'])).toBe(true);
+    expect(isExecAllowed('ccd', ['skill-ensure'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure', 'claude-a'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure', 'claude-a', '--wrapper'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure-x', '--wrapper', 'claude-a'])).toBe(false);
+  });
+
   it('grants project-pool ONLY with --project, in both directions', () => {
     // The flag is not a confirmation token here, it is the verb's whole
     // argument surface — and prefix matching leaves everything after it

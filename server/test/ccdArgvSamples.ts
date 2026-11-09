@@ -129,6 +129,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   projectPoolClear: ['demo'],
   projectAddClone: ['demo', 'https://github.com/o/r.git'],
   projectAddEmpty: ['demo'],
+  skillEnsure: ['claude-a'],   // D-8126, one roster id
   // Routing slice 1: the record's one writer besides ccd. The sample carries
   // a real field=value so `whitelist-subset.test.ts`'s layer 2 proves the flagged shape is reachable under
   // the granted `['route','--session']` prefix.

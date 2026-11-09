@@ -73,6 +73,13 @@ const treeHex = (hex: string): string => {
  *  remote), and never otherwise. */
 const rescueFlag = (rescue: boolean): string[] => (rescue ? ['--rescue'] : []);
 
+/** A roster account id as `ccd skill-ensure` takes it: the roster's id class, `shared/roster.ts`'s ID_RE. Anything else is a
+ *  programming error (the id comes from a worker's registry row or the roster), and fails toward not sending. */
+const accountIdArg = (id: string): string => {
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error('an account id is a lowercase letter, then lowercase letters, digits or hyphens, at most 32 characters');
+  return id;
+};
+
 /** A loose entry's name as the census prints it: even-length lowercase hex, never empty. Anything else is a programming
  *  error (the census is the only source), and fails toward not sending. */
 const looseHex = (hex: string): string => {
@@ -832,6 +839,10 @@ export const CCD_ARGV = {
    *  both; the url is its own token after `--url`, so a value cannot be read as a flag. */
   projectAddClone: (name: string, url: string) => argv(['project-add', '--name', name, '--url', url]),
   projectAddEmpty: (name: string) => argv(['project-add', '--name', name, '--empty']),
+  /** The self-install of the coordinator and worker skills into ONE account's home (D-8126, wave A7). `--wrapper` LEADS, where
+   *  the agent's gated grant (`REQUIRED_VERB_FLAG`) expects it, and the id is the roster's id class (`accountIdArg`), so a
+   *  path character or a flag-shaped word fails toward not sending; ccd re-checks the class and the roster itself. */
+  skillEnsure: (wrapper: string) => argv(['skill-ensure', '--wrapper', accountIdArg(wrapper)]),
 
   /** The routing record's writer (routing spec 2026-09-14 §5.3). ONE field per
    *  argv: the route that will call it (slice 4's picker, the wave N≥2 dispatch)
@@ -1504,6 +1515,7 @@ export const CCD_CAN = {
   delegationAdopt: verbRow('delegation-adopt'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
+  skillEnsure: verbRow('skill-ensure'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),

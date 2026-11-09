@@ -3870,7 +3870,7 @@ general remote-shell:
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
-  `coord-pause`, `reclaim-pause`, `scope-sweep-busy` and `delegation-adopt` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
+  `coord-pause`, `reclaim-pause`, `scope-sweep-busy` and `delegation-adopt` need `--state`, `project-pool` needs `--project`, `project-add` needs `--name` and `skill-ensure` needs `--wrapper`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
   `ws-rename`'s flag guards a different hazard: the verb destroys nothing, but it is the first whose argv the server builds
@@ -3883,7 +3883,7 @@ general remote-shell:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
   (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`, `delegation-adopt`,
-  `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
+  `project-pool`, `project-add`, `skill-ensure`, `route`, `win-size`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
   `FORBIDDEN_COMMANDS` (`gh`, `git`, the shells and interpreters, `ssh`,
@@ -7541,6 +7541,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or `git init` an empty one on `main` with no commit; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
+| `skill-ensure --wrapper <id>` | put the coordinator and the worker skill into ONE rostered account's config dir by running the two deployed installers (`install-coordinator-skill.sh`, `install-worker-skill.sh`) with `--homes` that one directory, and print one JSON line `{"wrapper","result","detail"}` where `result` is `installed` (either skill differed), `converged` (both already matched) or `failed` (an installer refused, or the account's config dir is not on this box); an id outside the roster's id class or not in the roster file exits 2 with nothing written; the server's self-heal for a dispatch that measured the skill absent (D-8126) |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |

@@ -365,6 +365,7 @@ export const REQUIRED_VERB_FLAG = {
   'scope-sweep-busy': '--state',
   'delegation-adopt': '--state',
   'project-add': '--name',
+  'skill-ensure': '--wrapper',
   'pane-scope-stop': '--state',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
@@ -704,6 +705,12 @@ export const EXEC_WHITELIST = {
     // re-proves the name and the url (two exact github.com shapes) on the box; the clone is the agent's only way to a
     // `git clone`, since `git` is a forbidden exec command.
     ['project-add', '--name'],
+    // SELF-INSTALL OF THE SKILLS (D-8126, wave A7): `skill-ensure --wrapper <id>` runs the two skill installers the deploy ships
+    // against ONE rostered account's config dir and prints one JSON line; the server calls it where a dispatch measured the
+    // worker skill absent. Granted on `--wrapper` and ENROLLED in `REQUIRED_VERB_FLAG` above for `project-add`'s reason: the
+    // flag is the verb's whole argument surface, and a bare grant would admit every positional form it might grow. ccd
+    // re-proves the id class and the roster on the box and refuses anything else at exit 2 before it writes a byte.
+    ['skill-ensure', '--wrapper'],
   ],
 } as const satisfies ExecWhitelist;
 
