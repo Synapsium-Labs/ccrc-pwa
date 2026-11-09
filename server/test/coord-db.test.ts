@@ -708,9 +708,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[50] (run_close_settings and run_close_refusals, D-8077)
     // and MIGRATIONS[51] (project_linking, D-8147)
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
-    // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078).
-    expect(COORD_SCHEMA_VERSION).toBe(54);
-    expect(MIGRATIONS.length).toBe(54);
+    // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
+    // and MIGRATIONS[54] (coordinator_calls, D-8126).
+    expect(COORD_SCHEMA_VERSION).toBe(55);
+    expect(MIGRATIONS.length).toBe(55);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -790,8 +791,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[50] (run_close_settings and run_close_refusals, D-8077)
     // and MIGRATIONS[51] (project_linking, D-8147)
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
-    // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(54);
+    // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
+    // and MIGRATIONS[54] (coordinator_calls, D-8126); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(55);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
