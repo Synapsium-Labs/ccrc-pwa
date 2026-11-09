@@ -641,6 +641,76 @@ describe('POST /api/programmes/:slug/spec (plan PL3, Review Focus 5)', () => {
   });
 });
 
+describe('the definition of done on the pin and the modification (D-8126)', () => {
+  const SPEC = 'docs/superpowers/specs/2026-10-31-x-design.md';
+  it('a pin with doneWhen stores it, and a re-pin without one keeps it', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'ok', doneWhen: [' First. ', 'Second.'] });
+    expect(res.statusCode).toBe(200);
+    expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['First.', 'Second.']);
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'again' });
+    expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['First.', 'Second.']);
+  });
+
+  it('a pin with a 13-item list is bad-done-when and the pin is unchanged', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'first', doneWhen: ['a'] });
+    const res = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'second', doneWhen: Array.from({ length: 13 }, () => 'x') });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-done-when' });
+    expect(r.coord.goalsFor('prog-a')).toMatchObject({ inShort: 'first', doneWhen: ['a'] });
+  });
+
+  it('a modification with doneWhen and a ruling replaces the list and records the modification', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'ok', doneWhen: ['old'] });
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed what done means.', ruling: 'D-8126', doneWhen: ['new one', 'new two'] });
+    expect(res.statusCode).toBe(200);
+    const g = r.coord.goalsFor('prog-a');
+    expect(g.doneWhen).toEqual(['new one', 'new two']);
+    expect(g.modifications).toEqual([expect.objectContaining({ text: 'Changed what done means.', ruling: 'D-8126' })]);
+  });
+
+  it('a modification with doneWhen and an itemId is accepted', async () => {
+    const r = await rig();
+    const mine = await raise(r);
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', itemId: mine, doneWhen: ['z'] });
+    expect(res.statusCode).toBe(200);
+    expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['z']);
+  });
+
+  it('a modification with doneWhen and neither ruling nor itemId is done-when-needs-ruling and writes neither', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', doneWhen: ['z'] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'done-when-needs-ruling' });
+    const g = r.coord.goalsFor('prog-a');
+    expect(g.doneWhen ?? null).toBeNull();
+    expect(g.modifications).toEqual([]);
+  });
+
+  it('a modification with a malformed doneWhen is bad-done-when and writes nothing', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', ruling: 'D-8126', doneWhen: [] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'bad-done-when' });
+    expect(r.coord.goalsFor('prog-a').modifications).toEqual([]);
+  });
+
+  it("a worker's pair is not-your-programme before anything is written", async () => {
+    const r = await rig();
+    const pin = await post(r, '/api/programmes/prog-a/spec', { ...as('lane-b'), specPath: SPEC, inShort: 'ok', doneWhen: ['a'] });
+    expect(pin.statusCode).toBe(403);
+    expect(pin.json()).toMatchObject({ error: 'not-your-programme' });
+    const mod = await post(r, '/api/programmes/prog-a/modifications', { ...as('lane-b'), text: 'x', ruling: 'D-8126', doneWhen: ['a'] });
+    expect(mod.statusCode).toBe(403);
+    expect(mod.json()).toMatchObject({ error: 'not-your-programme' });
+    const g = r.coord.goalsFor('prog-a');
+    expect(g.doneWhen ?? null).toBeNull();
+    expect(g.modifications).toEqual([]);
+  });
+});
+
 describe('modifications (plan PL3)', () => {
   it('records a modification, pending until merged, then marks it merged once', async () => {
     const r = await rig();

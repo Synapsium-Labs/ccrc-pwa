@@ -169,6 +169,9 @@ export const LEDGER_ROUTE_REFUSALS = {
   // The raise route (desktop-polish PL10, D-7952; spec D28): an item whose text links a document through an artifact page or a
   // document server outside the console (`outsideDocLink`, shared/ledgers.ts). A document link is its repository path.
   outsideDocLink: 'outside-doc-link',
+  // The definition of done (D-8126): a list that is not 1 to 12 strings of 1 to 2,000 characters (`bad-done-when`), and a
+  // modification that carries a list with neither a `ruling` nor an `itemId` to stand on (`done-when-needs-ruling`).
+  badDoneWhen: 'bad-done-when', doneWhenNeedsRuling: 'done-when-needs-ruling',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -400,6 +403,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The end-request route (D-8076): CHOSEN, not measured. 403 for a session that is no party to the run (the family of
   // `not-owner`); 409 for a request already open and for one repeated inside the 24 hours (the family of `duplicate`).
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
+  // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
+  // to stand on; either is theirs to fix, as `bad-in-short`.
+  [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

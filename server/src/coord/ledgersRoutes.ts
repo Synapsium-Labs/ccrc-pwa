@@ -29,7 +29,8 @@ import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusa
 import {
   ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  actAbandons, earlierTickBlocks, isCloseRefusedAction, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
+  nextItemState, outsideDocLink, secretAnswer, secretTailOf,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -429,9 +430,15 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     }
     const inShort = text(b['inShort'], IN_SHORT_MAX);
     if (inShort === null) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badInShort, { detail: `inShort is 1 to ${IN_SHORT_MAX} characters` });
+    let doneWhen: string[] | null = null;
+    if (b['doneWhen'] !== undefined && b['doneWhen'] !== null) {
+      const dw = doneWhenOf(b['doneWhen']);
+      if (!dw.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badDoneWhen, { detail: dw.detail });
+      doneWhen = dw.doneWhen;
+    }
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
-    coord.setSpecPin(slug, specPath, inShort, deps.now(), null);   // A2-3 passes the route's doneWhen
+    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen);
     changed();
     return reply.code(200).send({ ok: true });
   });
@@ -461,6 +468,15 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       pr = posInt(b['pr']);
       if (pr === null) return bad(reply, 'pr is a positive integer when given');
     }
+    let doneWhen: string[] | null = null;
+    if (b['doneWhen'] !== undefined && b['doneWhen'] !== null) {
+      const dw = doneWhenOf(b['doneWhen']);
+      if (!dw.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badDoneWhen, { detail: dw.detail });
+      if (ruling === null && itemId === null) {
+        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'a new definition of done needs a ruling or an itemId to stand on' });
+      }
+      doneWhen = dw.doneWhen;
+    }
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     if (itemId !== null) {
@@ -468,7 +484,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
       if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
-    const id = coord.addModification(slug, { text: modText, ruling, itemId, pr }, deps.now());
+    const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now());
     changed();
     return reply.code(200).send({ ok: true, id });
   });

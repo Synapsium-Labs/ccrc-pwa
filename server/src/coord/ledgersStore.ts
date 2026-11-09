@@ -347,11 +347,18 @@ export function setDoneWhen(db: DatabaseSync, program: string, doneWhen: readonl
 
 /** Records one change since approval; `mergedAt` stays NULL until `markModificationsMerged`. Returns the id. */
 export function addModification(
-  db: DatabaseSync, program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null }, now: number,
+  db: DatabaseSync, program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null },
+  now: number,
 ): number {
-  const res = db.prepare('INSERT INTO programme_modifications (program, at, text, ruling, itemId, pr) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(program, now, m.text, m.ruling, m.itemId, m.pr);
-  return Number(res.lastInsertRowid);
+  const insert = (): number => {
+    const res = db.prepare('INSERT INTO programme_modifications (program, at, text, ruling, itemId, pr) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(program, now, m.text, m.ruling, m.itemId, m.pr);
+    return Number(res.lastInsertRowid);
+  };
+  if (m.doneWhen === undefined || m.doneWhen === null) return insert();
+  const doneWhen = m.doneWhen;
+  // D-8126: the row and the new list are one act; `setDoneWhen` is the list's writer.
+  return tx(db, () => { const id = insert(); setDoneWhen(db, program, doneWhen, now); return id; });
 }
 
 /** The spec PR merged: marks this programme's still-pending modifications of that PR, once (a marked one keeps its first
