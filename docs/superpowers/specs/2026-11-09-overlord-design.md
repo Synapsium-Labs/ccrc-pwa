@@ -1,6 +1,6 @@
 # The Overlord: one coordinator above every coordinator, that the operator talks to
 
-**Spec** · 2026-11-09 · Status: Draft, rev 3 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
+**Spec** · 2026-11-09 · Status: Draft, rev 4 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
 the Overlord programme's coordinator · Issue: #2491 · Related: `docs/superpowers/specs/2026-11-09-coordinator-autonomy-default-design.md` (D-8126, PR #2487,
 not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 `docs/superpowers/specs/2026-10-17-coordinator-first-routing-design.md` and its round 2,
@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R11 (the operator's) and the author's calls C1 to C47, so the operator can approve or overturn each one by number.
+R12 (the operator's) and the author's calls C1 to C48, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -22,7 +22,8 @@ what is truly the operator's.
 **What is decided.** The operator ruled the ticket's six open questions on 2026-11-09 (R1 to R6, §2), and ruled the
 same day that there is one and only one Overlord (R7), which must live a very long time without memory loss (R8).
 After rev 2 the operator ruled that the Overlord is the console's home (R9), that it may read everything (R10), and that
-it oversees every project at once and never moves between them (R11).
+it oversees every project at once and never moves between them (R11). Like the operator, it does brain work, never
+execution: every piece of execution goes down the chain to a coordinator (R12).
 This spec turns each ruling into a design:
 - **One Overlord.** Exactly one exists, for the whole fleet, and the server enforces it. It is one lasting identity,
   not a role that sessions take turns at, and nothing can create a second one (§3.1). It oversees every project at
@@ -32,6 +33,9 @@ This spec turns each ruling into a design:
   (§3.3).
 - **Its model and its accounts.** It runs Fable, the newest of the family, because the operator selected it (C45). It
   runs on a pool of accounts of its own, which no other session may use and which it never leaves (C46, §3.4).
+- **Brain work only.** It understands, decides, routes, answers and follows up. It never executes: no edits, commits,
+  pull requests, test runs or dispatches. Execution always goes to a coordinator, which handles it as it sees fit
+  (R12, §3.5).
 - **Authority.** Authority starts as D-8126's operator-only list, unchanged. It is relaxed one named act at a time
   through operator grants that the server enforces (§7).
 - **Knowledge.** Knowledge of the operator is a private store on the server box. It is fed from rulings, from the
@@ -117,6 +121,7 @@ The rulings are settled; this spec only turns them into design.
 | R9 | **The Overlord is the home screen** (the operator, 2026-11-09, after rev 2, answering Q1), with a button in the top menu to navigate to it | The console opens on the Overlord. Its door is first in the top menu of both desk skins and on the phone bar, and the wordmark leads to it. The Fleet keeps its own place (§4, C8) |
 | R10 | **It can read everything and anything** (the operator, 2026-11-09, after rev 2, answering Q2) | Every read the operator's console has, plus every project's history in full, through Overlord read doors. The history store's "across projects: never" stays true for every other session. Credential stores stay closed (C47) |
 | R11 | **It oversees every project at once** (the operator, 2026-11-09, after rev 2): it never moves from one project to another; it is omniscient within the operator's ccrc environment | There is no move between projects. Its session always runs in the dedicated `overlord` project, which is only where its pane lives. Replacing a lost session is a rebind inside that project (§3.1, C2) |
+| R12 | **Brain work, not execution** (the operator, 2026-11-09, after rev 3): much like the operator, it is focused on brain work; execution is always handed down the chain to coordinators, who deal with it as they deem necessary | It never edits, commits, opens a pull request, runs a build or a test, opens a run or dispatches a worker. It hands work down as an outcome, never as a method, and does not second-guess how a coordinator executes. A skill clause, a server refusal and an accident guard hold the line (§3.5, C48) |
 
 ## 3. What the Overlord is
 
@@ -326,7 +331,7 @@ from the server's canonical state, never from a summary of a summary, and proves
   Overlord arm, and it fills the gap that a session claiming no runs gets an empty roster card. The order is stable
   first and live last, so the cached prefix stays stable and the live state sits at the end of the context, where
   recall is strongest:
-  1. **Constitution:** what it is, R1 to R11 in one line each, the anti-goals, the brakes and their state, and the
+  1. **Constitution:** what it is, R1 to R12 in one line each, the anti-goals, the brakes and their state, and the
      rules version.
   2. **Authority:** the live grants.
   3. **Live state:** the open requests ranked by recency, importance and age; each programme in one line; the
@@ -394,7 +399,7 @@ from the server's canonical state, never from a summary of a summary, and proves
 
 | Layer | Holds | Lives in | Reaches the session |
 |---|---|---|---|
-| Constitution | What it is, R1 to R11, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
+| Constitution | What it is, R1 to R12, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
 | Working | Open requests, programmes, notes, recent acts | `overlord_requests`, `overlord_notes`, `overlord_acts` | the card, ranked and capped |
 | Episodic | Every act, request and conversation since the first day | `overlord_acts`, `ccrc history` (its family recall follows the session across clears) | on demand, through subagents |
 | Semantic | The operator model | `operator-model.db` (§9) | the operator brief on the card, and `GET /api/overlord/model` |
@@ -492,6 +497,42 @@ an account, nor take theirs.
     and an operator item says which accounts are at their ceilings and when the first resets. No coordinator waits.
   - **The coordinators it starts never use its accounts.** They are placed by their own projects' pools (C32), and the
     exclusive edge keeps them off the Overlord's pool even when their project is untagged.
+
+### 3.5 Brain work, never execution (R12)
+
+The operator, 2026-11-09, after rev 3: the Overlord, much like the operator, is focused on brain work, not execution.
+Execution is always handed down the chain to coordinators, and they deal with it as they deem necessary.
+
+- **C48. It thinks; coordinators execute.**
+  - **Brain work is the Overlord's.** Understanding what the operator wants and why, deciding, prioritising, routing,
+    answering operator-bound questions, following up, judging outcomes against goals, and learning the operator. Reading
+    is brain work too (C47): it reads to decide, through subagents that read and summarise and never implement.
+  - **Execution is never the Overlord's.** Anything that changes a repository or runs the work: editing a file, a
+    commit, a branch, a pull request, a build, a test, a script, reproducing a bug, measuring something by running it,
+    opening a run, dispatching a worker or a reviewer, reviewing a diff. All of it goes down the chain: to the
+    coordinator that owns the work, or to a new coordinator it starts (E4).
+  - **No task is too small to hand down.** A one-line fix goes to a coordinator like a wave does. There is no
+    "quicker to do it myself" exception: the operator works this way, and so does the Overlord.
+  - **It hands down outcomes, never methods.** A relay says what is wanted and why, what done looks like, the
+    constraints and the priority. It carries no plan, task list or approach. The coordinator decides how, by its own
+    skill and D-8126's decision procedure, "as it deems necessary".
+  - **It does not second-guess execution.** It judges results against goals, not how the coordinator got there. When a
+    coordinator's way of working breaks a goal or one of the operator's rules, the Overlord raises that with the
+    coordinator as a call, or brings it to the operator. It never takes the work back.
+  - **Its own memory is not execution.** Notes, requests, the operator model and act rows are written through its server
+    doors (C37). They are how it thinks across generations, and they touch no repository.
+- **How the line is held.**
+  - **The skill.** A pinned clause (§11.3, clause 12) and anti-goal A9.
+  - **The server.** It already claims no runs (C4), so the dispatch doors refuse it as they refuse any non-claimant. The
+    run-open door gains one refusal, `overlord-not-a-coordinator`, when `claimedBy` names the designated session, so it
+    can never become a coordinator by opening a run.
+  - **An accident guard.** Its session is spawned with one more deny set, `OVERLORD_DENY_RULES` in `shared/api.ts`
+    beside `ACCOUNT_DENY_RULES`: the file-editing tools, and the repository write verbs (`git commit`, `git push`,
+    `gh pr create`, `gh pr merge`). Like every deny rule on this fleet, it stops an accident, not a determined shell
+    (`bash -c` with an assembled string runs past it). The plan picks the carrier: the spawn's settings file for the
+    `overlord` project, or the session hook's deny arm reading the designation. Every denial is counted (M12).
+  - **A side benefit.** Brain work keeps its context lean: no diffs, no test output, no build logs. That is most of
+    what C44 asks for, by construction.
 
 ## 4. Where the operator talks to it
 
@@ -615,7 +656,8 @@ operator's own request authorises starting it.*
   two fenced parts:
   - **The operator said.** The verbatim quote. A coordinator treats this part as an operator steer, exactly as it treats
     an item answer today.
-  - **The Overlord adds.** Context, the programme mapping and a recommendation. This part is a call, not a ruling: the
+  - **The Overlord adds.** The outcome wanted and why, what done looks like, the constraints, the priority and the
+    programme mapping, never a plan or a method (C48). This part is a call, not a ruling: the
     coordinator weighs it, may push back by mail, and never cites it as an operator ruling (D-8126 A7).
 
 ### 5.4 Follow-up
@@ -874,6 +916,8 @@ coordinator does not have today.
 - accounts, secrets and sign-ins;
 - every `ccd` verb on the SAFETY list;
 - merges by any route other than clause 15's (the Overlord lands nothing itself: coordinators land their own PRs);
+- any execution (R12, C48): editing files, commits, branches, pull requests, builds, tests, opening runs, and
+  dispatching workers or reviewers;
 - repository settings;
 - any act in §7.1 whose class has no live grant.
 
@@ -1112,6 +1156,7 @@ This section lists the build surface by bounded context, so each piece has one o
 | `overlordKickoff` template, `overlord` sender | C5 | L0 and L1 | `coord/kickoff.ts` beside the two existing templates |
 | Overlord read doors, `GET /api/overlord/history`, the `overlord` history scope | C5, K (history) | L4 doors over the existing readers; L1 `decideScope` gains one scope | no second reader; the scope is passed only by the new read-only agent op (C47) |
 | `homePlace`, the Overlord first in `PLACES` | C5 | PWA L1 | the one places list and the wordmark's door (C8) |
+| `OVERLORD_DENY_RULES`, the `overlord-not-a-coordinator` refusal | K (shared), C5 | L0, L1 | beside `ACCOUNT_DENY_RULES`; one refusal in the run-open decider (C48) |
 | `overlordModelFor`, the designation's `model` | C5 | L1 and L3 | the renewal lane asks it; the limits read's per-class serviceability is its input (C45) |
 | The exclusive account edge | C1 Fleet Registry & Accounts | L1 (`_pool_ok`, `pools.ts`), L3 (`pool_edges`) | one clause in the pool rule, one column, the `pool-exclusive` capability word (C46) |
 | Start placement policy moved out of the PWA | C1 Fleet Registry & Accounts | L1 | `startProgramPlacement` gets one shared home for the sheet and the start door |
@@ -1144,6 +1189,8 @@ references for the procedures (`routing.md`, `answering.md`, `starting.md`, `ope
 9. Never quote the operator model outside the chat with the operator.
 10. Obey every brake.
 11. The SAFETY rules bind you as any session.
+12. Do brain work only. Hand every piece of execution down to a coordinator, however small, as an outcome and never as
+    a method, and let the coordinator decide how.
 
 ### 11.4 The coordinator skill
 
@@ -1174,6 +1221,7 @@ Success means fewer operator touches, faster answers, and no new stall.
 | M9 | Outside audit scores, and agreement with the golden set | stable or rising; golden agreement at least 90% | `overlord_audits` |
 | M10 | Context at renewal, and compactions per generation | under the ceiling; at most one compaction | `renew` act rows, the compactions journal |
 | M11 | Generations on the designated model, and minutes stranded with no servable account | Fable for at least 90% of generations; stranded minutes watched | `renew` act rows, the pools journal |
+| M12 | Execution attempts the guard denied, and relays that carried a method instead of an outcome | zero; each one is a skill defect, fixed in the skill | the hook's deny log, the outside audit's sample (C42) |
 | M7 | Inferred entries the operator retired or corrected, per week | watched. A high rate means the distillation over-reaches | `entry_events` |
 
 ## 13. Decisions (the author's calls)
@@ -1230,6 +1278,7 @@ this spec and can be overturned by number.
 | C45 | How its model is chosen and kept | the session, the operator once, the operator plus the server | The operator's choice on the designation; the server applies it at each renewal, falls back to Opus at Fable's cap and returns after | Proposed |
 | C46 | Its accounts | shared, a tagged pool, a tagged pool with exclusive accounts | A pool of its own, with an `exclusive` edge so no other session lands on its accounts; enforced on both boxes before it can be set | Proposed |
 | C47 | What it may read | operator prompts only, everything | Everything the console reads plus every project's full history (R10); credential stores stay closed | Proposed |
+| C48 | What it does itself | some small execution, none | None: brain work only (R12); every piece of execution goes to a coordinator as an outcome; skill clause, run-open refusal and a deny set hold the line | Proposed |
 
 ## 14. Build order
 
@@ -1283,6 +1332,8 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - **A6. Never let the operator model leave ccrc.**
 - **A7. Never become the stall.** A hold it cannot serve falls through to the operator.
 - **A8. Never make another Overlord,** or act as one outside the designated session (R7).
+- **A9. Never execute** (R12). No edit, commit, pull request, build, test, run or dispatch of its own, and no plan
+  pushed onto a coordinator in place of an outcome.
 
 ## 16. Risks
 
@@ -1296,6 +1347,7 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 | Context load on one session | The Overlord loses the thread across many programmes | The board and the requests table are its memory. Reading goes to subagents. Compaction loses nothing (C5) |
 | Too many coordinators | Window spend and box load rise | The live-programme cap (C28) and the fleet's own admission |
 | Fable's weekly cap or window weight | The Overlord's accounts run out sooner than on Opus | The accounts are its own (C46), so the cost lands nowhere else. Reading goes to cheaper subagents (C44). Opus takes over at the cap and Fable returns after (C45). M11 watches it |
+| The Overlord drifts into execution | It grows a context full of diffs and logs, and coordinators lose ownership | The skill clause, A9, the run-open refusal, the deny set, M12 and the outside audit's sample (C48) |
 | The Overlord's pool is exhausted | No account can serve it | Holds fall through to the operator (C23), an operator item names the reset, and two or more accounts are recommended (C46) |
 
 ## Where things stand
@@ -1307,12 +1359,14 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - R8, the operator's direction of 2026-11-09: it lives a very long time without memory loss (§3.3).
 - R9, R10 and R11, the operator's rulings of 2026-11-09 after rev 2: the Overlord is the home screen with a top-menu
   button; it can read everything; it oversees every project at once and never moves between them (§2).
+- R12, the operator's ruling of 2026-11-09 after rev 3: brain work only; execution always goes down the chain to
+  coordinators (§3.5).
 - The operator's direction of 2026-11-09, after rev 1: Fable, and an account pool of its own. C45 and C46 turn it into
   design (§3.4), and wait on approval with the other calls.
 
 ### Waiting on you
 
-- **Approve this spec** with calls C1 to C47, or name the calls to change. C47 is where your "everything" stops: it
+- **Approve this spec** with calls C1 to C48, or name the calls to change. C47 is where your "everything" stops: it
   keeps the credential stores closed.
 - **Which accounts form the Overlord's pool.** You tag them in Settings once W1's exclusive edge is live; at least two
   are recommended (C46). Nothing in this spec names them.
