@@ -7,7 +7,7 @@ import {
   ITEM_KINDS, ITEM_STATES, OPEN_ITEM_STATES, ITEM_TRANSITIONS, nextItemState,
   orderItems, waitingCount, programmeWaitsOn, WAITS_ON_WORDS, isSlotSlug, isSpecPath,
   CLEARED_WINDOW_MS, SOON_LABEL_MAX, ITEM_TITLE_MAX, ITEM_TEXT_MAX, ITEM_STEPS_MAX,
-  ITEM_OPTIONS_MAX, ANSWER_MAX, recommendationOf, earlierTickBlocks,
+  ITEM_OPTIONS_MAX, ANSWER_MAX, recommendationOf, earlierTickBlocks, doneWhenOf, DONE_WHEN_MAX_ITEMS, DONE_WHEN_ITEM_MAX,
   type ItemAct, type ItemActor, type ItemState, type ItemView, type NeededBy, type WaitsOn,
 } from '../../shared/ledgers.js';
 import { OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, type RunKind, type RunState } from '../../shared/api.js';
@@ -266,5 +266,28 @@ describe('earlierTickBlocks', () => {
         expect(earlierTickBlocks({ state, recipient: 'coord-old', coordinator: 'coord-a', recipientPresence }), `${state} displaced ${recipientPresence}`).toBe(!leftBehind);
       }
     }
+  });
+});
+
+describe('doneWhenOf (D-8126)', () => {
+  it('refuses an empty list, empty or blank items, too many items, a long item and non-arrays', () => {
+    const tooMany = Array.from({ length: DONE_WHEN_MAX_ITEMS + 1 }, () => 'a');
+    for (const raw of [[], [''], ['  '], tooMany, ['a'.repeat(DONE_WHEN_ITEM_MAX + 1)], 'one', [1], null, undefined]) {
+      const r = doneWhenOf(raw);
+      expect(r.ok, JSON.stringify(raw)).toBe(false);
+      if (!r.ok) {
+        expect(r.detail).toContain(String(DONE_WHEN_MAX_ITEMS));
+        expect(r.detail).toContain(String(DONE_WHEN_ITEM_MAX));
+      }
+    }
+  });
+  it('trims each item', () => {
+    expect(doneWhenOf([' a ', 'b'])).toEqual({ ok: true, doneWhen: ['a', 'b'] });
+  });
+  it('accepts exactly 12 items of 2,000 characters', () => {
+    const raw = Array.from({ length: 12 }, () => 'x'.repeat(2000));
+    const r = doneWhenOf(raw);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.doneWhen).toEqual(raw);
   });
 });
