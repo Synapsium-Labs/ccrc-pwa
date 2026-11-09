@@ -711,7 +711,9 @@ for (const width of MATRIX.widths) {
               const card = box('.programme-card');
               const linkBoxes = [...line.querySelectorAll('a')].map((a) => a.getBoundingClientRect());
               const column = box('.runs-column');
+              const fin = document.querySelector<HTMLElement>('[data-fold="finished"]');
               return {
+                finishedTop: fin === null ? -1 : fin.getBoundingClientRect().top + window.scrollY,
                 tap, text: line.textContent, bandBottom: band.bottom, closedTop: closed.top, closedBottom: closed.bottom, cardTop: card.top,
                 short: linkBoxes.filter((b) => b.height < tap - 1).length, links: linkBoxes.length,
                 outside: linkBoxes.filter((b) => b.left < column.left - 1 || b.right > column.right + 1).length,
@@ -719,6 +721,10 @@ for (const width of MATRIX.widths) {
               };
             });
             console.info(`first programme card top at ${width} ${skin} ${theme}: ${Math.round(m.cardTop)}px (spec inferred 742px)`);
+            console.info(`Finished fold top at ${width} ${skin} ${theme}: ${Math.round(m.finishedTop)}px (spec 17: phone 390 under 2000, Refined 1280 under 1400)`);
+            expect(m.finishedTop, 'the Finished fold is drawn').toBeGreaterThan(0);
+            if (width === 390) expect(m.finishedTop, 'Finished starts under y=2000 on a phone').toBeLessThan(2000);
+            if (width === 1280 && skin === REFINED) expect(m.finishedTop, 'Finished starts under y=1400 at Refined 1280').toBeLessThan(1400);
             expect(m.text).toBe('Closed today: 5 by you · 2 by ccrc · 60 by coordinators');
             expect(m.links).toBe(3);
             expect(m.short, 'every count at the tap floor').toBe(0);
