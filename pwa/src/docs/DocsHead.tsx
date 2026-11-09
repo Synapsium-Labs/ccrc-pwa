@@ -398,7 +398,9 @@ function exportWords(state: Exclude<ExportState, { s: 'absent' }>): string {
  *  `…` button, which shows them all. The last crumb is the page itself. `unfold`: every crumb at any width, with no `…`
  *  button (the compact head's panel, phone-header refinement (c)). `fold`: the last two behind `…` at a desk width too,
  *  when the desk row has no room for every crumb (desk-nav Part B, fix round 2: `HeadRow`). `--docs-crumbs-n` is the
- *  number of crumbs drawn, the `…` button counted, which docs.css's desk row reads for the crumbs' floor. */
+ *  number of crumbs drawn, the `…` button counted, which docs.css's desk row reads for the crumbs' floor. A list the user
+ *  unfolded with `…` is marked `data-unfolded`, and docs.css's desk row wraps it rather than clip its start (review 1704
+ *  F1), as the compact head's panel does. */
 function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: boolean; readonly fold?: boolean }): ReactNode {
   const desktop = useMediaQuery(DESK_QUERY);
   const [whole, setWhole] = useState(false);
@@ -406,7 +408,7 @@ function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: bo
   const shown = folded ? p.crumbs.slice(-2) : p.crumbs;
   const drawn = { '--docs-crumbs-n': shown.length + (folded ? 1 : 0) } as CSSProperties;
   return (
-    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs} style={drawn}>
+    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs} style={drawn} data-unfolded={whole ? '' : undefined}>
       <ol>
         {folded && (
           <li>

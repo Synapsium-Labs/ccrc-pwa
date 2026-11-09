@@ -842,6 +842,55 @@ describe('the desk head (desk-nav Part B)', () => {
     }
   }, 120_000);
 
+  // Review 1704 F1 (Task C16, D-8139): a deep path the user unfolds with `…` wraps rather than clip its start, as the
+  // compact head's panel does. Five directories are nine crumbs and seven are eleven; their floors (about 563 and 687 px)
+  // are wider than the row at 600 (584 px) and at 900 (544 in Instrument, 564 in Refined), where one line clipped "Docs"
+  // to nothing. Every crumb is then a tap wide and wholly inside the crumbs, and the first Tab stop after back, "Docs",
+  // is seen.
+  const deepPath = (dirs: number): string => [...Array.from({ length: dirs }, (_, i) => `dir-${String.fromCharCode(97 + i)}`), NAME].join('/');
+  const DEEPER_CASES = [INSTRUMENT, REFINED].flatMap((skin) => ([5, 7] as const).flatMap((dirs) =>
+    ([[600, 960], [900, 800]] as const).map(([w, h]) => [skin, dirs, w, h] as const)));
+
+  it.each(DEEPER_CASES)('%s, %i directories, %i x %i under a mouse: the unfolded crumbs wrap, every crumb whole and the first Tab stop seen (review 1704 F1)', async (skin, dirs, width, height) => {
+    const path = deepPath(dirs);
+    const tree = treeOk({ entries: [entry(SECTION, path, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
+    const app = await openView({ width, height, skin, pointer: 'fine' }, tree, path);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${path}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-full .docs-export')?.getAttribute('aria-label') === 'Export (plain view)', undefined, { timeout: 90_000 });
+      await app.page.locator('.docs-full .docs-crumbs-more').click();
+      const r = await rowState(app.page);
+      const rows = await app.page.evaluate(() => {
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        return [...document.querySelectorAll('.docs-full .docs-crumbs li')].map((li) => {
+          const b = li.getBoundingClientRect();
+          return { text: li.textContent ?? '', inside: b.left >= nav.left - 0.5 && b.right <= nav.right + 0.5 && b.top >= nav.top - 0.5 && b.bottom <= nav.bottom + 0.5 };
+        });
+      });
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} unfolded-${dirs} ${JSON.stringify({ crumbs: r.crumbs.map((c) => Math.round(c.w)), rowH: r.rowH, actionsOnLine: r.actionsOnLine })}`);
+      expect(r.crumbs.length, 'every crumb is drawn').toBe(dirs + 4);
+      for (const c of r.crumbs) {
+        expect(c.w, `${c.text} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+        expect(c.inside, `${c.text} is wholly inside the crumbs`).toBe(true);
+      }
+      for (const li of rows) expect(li.inside, `${li.text}'s item, separator included, is inside the crumbs`).toBe(true);
+      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+      await app.page.locator('.docs-full .docs-back').focus();
+      await app.page.keyboard.press('Tab');
+      const first = await app.page.evaluate(() => {
+        const a = document.activeElement as HTMLElement;
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        const b = a.getBoundingClientRect();
+        return { text: a.textContent ?? '', seen: Math.max(0, Math.min(b.right, nav.right) - Math.max(b.left, nav.left)), w: b.width };
+      });
+      expect(first.text, 'the first Tab stop after back').toBe(DOCS_HEAD_TEXT.index);
+      expect(first.seen, 'it is seen whole').toBeGreaterThanOrEqual(first.w - 0.5);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
   it.each([
     [1280, 800],
     [915, 412],
