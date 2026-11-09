@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { AM_GH_STUB, AM_PROT_NONE, HEAD_A, HEAD_B, amCaller, amCheckRun, amFixture, amProt, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
+import { AM_GH_STUB, AM_PROT_NONE, HEAD_A, HEAD_B, MERGE_OID, amCaller, amCheckRun, amFixture, amProt, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-am-'); });
@@ -152,7 +152,7 @@ describe('the gate before GitHub', () => {
   it('is dispatched and named in the usage line, and the gate\'s gh calls never carry --admin', () => {
     amFixture(h); amCaller(h, 'demo-quiet-basin');
     amRun(h, GOOD);
-    for (const c of h.ghCalls()) expect(c).not.toMatch(/--admin/);
+    for (const c of h.ghCalls().filter((x) => !x.startsWith('pr merge'))) expect(c).not.toMatch(/--admin/);
     const src = ccdSource();
     expect(src).toMatch(/^ {2}pr-admin-merge\) shift; cmd_pr_admin_merge "\$@" ;;$/m);
     expect(src).toMatch(/\|pr-open\|pr-admin-merge\|pr-state\|/);
@@ -179,6 +179,12 @@ describe('the reads', () => {
     expect(r.stdout.trim().split('\n'), 'exactly one line on stdout').toHaveLength(1);
     expect(h.ghCalls().some((c) => c.startsWith('pr merge')), 'no merge is ever attempted').toBe(false);
     return r.stdout.trim();
+  };
+  /** The door's answer for a run that is not asserted to refuse: the rung under test passed when it is MERGED or refused for another reason. */
+  const notRefusedAs = (reason: string, argv: string = ARGV): void => {
+    const out = amRun(h, argv).stdout.trim();
+    expect(out).toMatch(new RegExp(`^(MERGED |REFUSED (?!${reason}:))`));
+    fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });   // a passing run merged: later \`refused()\` calls start clean
   };
   const journaled = (reason: string): void => {
     expect(swapLog(h).at(-1)).toMatch(new RegExp(` admin-merge-refused demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} reason=${reason}$`));
@@ -295,9 +301,9 @@ describe('the reads', () => {
     expect(refused(), 'a deleted account is its own identity').toBe('REFUSED changes-requested: reviewDecision=CHANGES_REQUESTED reviews=11,15');
     journaled('changes-requested');
     amFixture(h, { reviews: [{ id: 11, state: 'CHANGES_REQUESTED', user: { id: 7 } }, { id: 13, state: 'APPROVED', user: { id: 7 } }] });
-    expect(refused(), 'an approval by the same reviewer replaces the request: this rung passes').toMatch(/^REFUSED (?!changes-requested)/);
+    notRefusedAs('changes-requested');   // an approval by the same reviewer replaces the request: this rung passes
     amFixture(h, { reviews: [{ id: 11, state: 'CHANGES_REQUESTED', user: { id: 7 } }, { id: 13, state: 'DISMISSED', user: { id: 7 } }] });
-    expect(refused(), 'a dismissal clears it too').toMatch(/^REFUSED (?!changes-requested)/);
+    notRefusedAs('changes-requested');   // a dismissal clears it too
   });
 
   it('checks-not-green names each required check that is not success: pending, skipped, neutral, missing, red', () => {
@@ -331,7 +337,7 @@ describe('the reads', () => {
     expect(refused()).toBe('REFUSED checks-not-green: build=missing');
     // the pinned App's own run is what counts (this rung passes)
     amFixture(h, { rules, runs: { total_count: 1, check_runs: [amCheckRun('build', 'completed', 'success', 42)] } });
-    expect(refused()).toMatch(/^REFUSED (?!checks-not-green)/);
+    notRefusedAs('checks-not-green');
     // a pinned name wins over the same name unpinned in the classic list
     amFixture(h, { rules, protection: amProt(200, { required_status_checks: { contexts: ['build'] } }, 'OK'),
       runs: { total_count: 1, check_runs: [amCheckRun('build', 'completed', 'success', 7)] } });
@@ -340,7 +346,7 @@ describe('the reads', () => {
 
   it('a commit status satisfies an unpinned required context', () => {
     amFixture(h, { runs: { total_count: 0, check_runs: [] }, statuses: { state: 'success', statuses: [{ context: 'build', state: 'success' }] } });
-    expect(refused()).toMatch(/^REFUSED (?!checks-not-green)/);
+    notRefusedAs('checks-not-green');
     amFixture(h, { runs: { total_count: 0, check_runs: [] }, statuses: { state: 'failure', statuses: [{ context: 'build', state: 'failure' }] } });
     expect(refused()).toBe('REFUSED checks-not-green: build=red');
     amFixture(h, { runs: { total_count: 0, check_runs: [] }, statuses: { state: 'pending', statuses: [{ context: 'build', state: 'pending' }] } });
@@ -349,15 +355,17 @@ describe('the reads', () => {
 
   it('an empty required set is green: the check runs and statuses are not read', () => {
     amFixture(h, { rules: [], required: [] });
-    refused();
-    expect(calls()).toEqual(READS.slice(0, 6));
+    amRun(h, ARGV);
+    expect(calls().slice(0, 6)).toEqual(READS.slice(0, 6));
+    expect(calls().some((c) => c.includes('/check-runs') || c.includes('/status'))).toBe(false);
   });
 
-  it('all rungs green: every read is made once, in the order of the contract, and no merge is made', () => {
+  it('all rungs green: every read is made once, in the order of the contract, before the one merge', () => {
     amFixture(h);
-    refused();
-    expect(calls()).toEqual(READS);
-    for (const c of h.ghCalls()) expect(c).not.toMatch(/--admin/);
+    amRun(h, ARGV);
+    expect(calls().slice(0, READS.length)).toEqual(READS);
+    expect(calls().slice(READS.length).map((c) => c.split(' ').slice(0, 2).join(' '))).toEqual(['pr view', 'pr merge', 'pr view']);
+    for (const c of h.ghCalls().filter((x) => !x.startsWith('pr merge'))) expect(c).not.toMatch(/--admin/);
   });
 
   it('refuses rebase-only and an empty method set', () => {
@@ -376,10 +384,11 @@ describe('the reads', () => {
 
   it('merge is dropped under linear history, from a rule too, leaving squash', () => {
     amFixture(h, { rules: [{ type: 'required_linear_history' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } }] });
-    refused();
-    expect(calls()).toEqual(READS);   // squash is allowed: the reads all pass and the method is not a refusal
+    amRun(h, ARGV);
+    expect(calls().slice(0, READS.length)).toEqual(READS);   // squash is allowed: the reads all pass and the method is not a refusal
     amFixture(h, { rules: [{ type: 'required_linear_history' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } }],
       repo: { permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: false } });
+    fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
     expect(refused()).toBe('REFUSED method-none: no merge method is allowed on main of owner-a/repo-a');
   });
 
@@ -397,10 +406,10 @@ describe('the reads', () => {
     ];
     for (const [key, what, answers] of cases) {
       for (const a of answers) {
-        amFixture(h, { [key]: a } as never);
-        const out = refused();
         // `[{"id":1,"state":"APPROVED"}]` has no user: a deleted account, which is VALID; it is not part of this table
         if (key === 'reviews' && a === '[{"id":1,"state":"APPROVED"}]') continue;
+        amFixture(h, { [key]: a } as never);
+        const out = refused();
         expect(out, `${key}: ${JSON.stringify(a)}`).toBe(`REFUSED unreadable: ${what}`);
       }
     }
@@ -412,5 +421,133 @@ describe('the reads', () => {
       required: ['build'], runs: { total_count: 1, check_runs: [{ ...amCheckRun('build', 'completed', 'failure'), output: { title: 'secret-title' } }] } });
     refused();
     expect(fs.readFileSync(reg('swap.log'), 'utf8')).not.toMatch(/secret-/);
+  });
+});
+
+describe('the merge', () => {
+  const ARGV = GOOD;
+  const merges = (): string[] => h.ghCalls().filter((c) => c.startsWith('pr merge'));
+  const lastJournal = (): string => swapLog(h).at(-1) ?? '';
+  beforeEach(() => { amCaller(h, 'demo-quiet-basin'); });
+
+  it('merges with --merge when a merge commit is allowed, pinned to the head, and answers MERGED', () => {
+    amFixture(h);
+    const r = amRun(h, ARGV);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe(`MERGED owner-a/repo-a#42 head=${HEAD_A} method=merge merge=${MERGE_OID} checks=build:success`);
+    expect(r.stdout.trim().split('\n'), 'exactly one line on stdout').toHaveLength(1);
+    expect(merges()).toEqual([`pr merge 42 -R owner-a/repo-a --admin --merge --match-head-commit ${HEAD_A}`]);
+    expect(lastJournal()).toMatch(new RegExp(`admin-merge demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} method=merge checks=build:success result=merged merge=${MERGE_OID}$`));
+  });
+
+  it('answers checks=none-required and journals it when the repository requires no checks', () => {
+    amFixture(h, { rules: [], required: [] });
+    const r = amRun(h, ARGV);
+    expect(r.stdout.trim()).toBe(`MERGED owner-a/repo-a#42 head=${HEAD_A} method=merge merge=${MERGE_OID} checks=none-required`);
+    expect(lastJournal()).toMatch(/ checks=none-required result=merged /);
+  });
+
+  it('merges with --squash only when the method set holds squash and no merge', () => {
+    amFixture(h, { repo: { permissions: { admin: true }, allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true } });
+    const r = amRun(h, ARGV);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toMatch(/ method=squash /);
+    expect(merges()).toEqual([`pr merge 42 -R owner-a/repo-a --admin --squash --match-head-commit ${HEAD_A}`]);
+    expect(lastJournal()).toMatch(/ method=squash /);
+  });
+
+  it('drops merge under linear history (a rule or classic protection)', () => {
+    const rules = [{ type: 'required_linear_history' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } }];
+    amFixture(h, { rules });
+    expect(amRun(h, ARGV).code).toBe(0);
+    expect(merges()).toEqual([`pr merge 42 -R owner-a/repo-a --admin --squash --match-head-commit ${HEAD_A}`]);
+    fs.rmSync(path.join(h.home, 'gh-calls'));
+    amFixture(h, { protection: amProt(200, { required_linear_history: { enabled: true }, required_status_checks: { contexts: ['build'] } }, 'OK'), rules: [] });
+    expect(amRun(h, ARGV).code).toBe(0);
+    expect(merges()).toEqual([`pr merge 42 -R owner-a/repo-a --admin --squash --match-head-commit ${HEAD_A}`]);
+  });
+
+  it('refuses when the head moved between the checks and the merge', () => {
+    amFixture(h, { fresh: { state: 'OPEN', isDraft: false, headRefOid: HEAD_B, reviewDecision: '' } });
+    const r = amRun(h, ARGV);
+    expect([r.code, r.stdout.trim()]).toEqual([2, `REFUSED head-moved: the PR head moved to ${HEAD_B} since the checks`]);
+    expect(merges()).toEqual([]);
+    expect(lastJournal()).toMatch(new RegExp(` admin-merge-refused demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} reason=head-moved$`));
+  });
+
+  it('the fresh read refuses a draft, a closed PR and a changes-requested decision that appeared after the reads', () => {
+    for (const [fresh, line] of [
+      [{ state: 'OPEN', isDraft: true, headRefOid: HEAD_A, reviewDecision: '' }, 'REFUSED draft: the PR is a draft'],
+      [{ state: 'CLOSED', isDraft: false, headRefOid: HEAD_A, reviewDecision: '' }, 'REFUSED not-open: the PR is CLOSED'],
+      [{ state: 'OPEN', isDraft: false, headRefOid: HEAD_A, reviewDecision: 'CHANGES_REQUESTED' }, 'REFUSED changes-requested: reviewDecision=CHANGES_REQUESTED'],
+      [{ state: 'OPEN', isDraft: false, headRefOid: 'nope', reviewDecision: '' }, 'REFUSED unreadable: the PR read'],
+    ] as const) {
+      amFixture(h, { fresh });
+      const r = amRun(h, ARGV);
+      expect([r.code, r.stdout.trim()]).toEqual([2, line]);
+    }
+    expect(merges()).toEqual([]);
+  });
+
+  it('a refused merge is github-refused, journaled, never retried', () => {
+    amFixture(h, { mergeFail: 'GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\nsecond line\n' });
+    const r = amRun(h, ARGV);
+    expect([r.code, r.stdout.trim()]).toEqual([2, 'REFUSED github-refused: GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)']);
+    expect(merges(), 'exactly one pr merge call, with no other method tried').toHaveLength(1);
+    expect(lastJournal()).toMatch(new RegExp(` admin-merge-refused demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} reason=github-refused$`));
+    expect(h.ghCalls().at(-1)).toMatch(/^pr merge /);
+  });
+
+  it('a refusal\'s text is cut to its first line, control characters dropped, at most 200 bytes', () => {
+    amFixture(h, { mergeFail: `bad\u0007\u001b[31m ${'x'.repeat(400)}\nmore\n` });
+    const out = amRun(h, ARGV).stdout.trim();
+    expect(out).toMatch(/^REFUSED github-refused: bad\[31m x+$/);
+    expect(out.length - 'REFUSED github-refused: '.length).toBeLessThanOrEqual(200);
+    expect(out).not.toMatch(/[\u0000-\u001f]/);
+  });
+
+  it('passes --match-head-commit <sha> to gh, and reads GitHub\'s refusal as github-refused', () => {
+    amFixture(h, { mergeFail: 'Head branch is out of date' });
+    const r = amRun(h, ARGV);
+    expect(merges()).toEqual([`pr merge 42 -R owner-a/repo-a --admin --merge --match-head-commit ${HEAD_A}`]);
+    expect(r.stdout.trim()).toBe('REFUSED github-refused: Head branch is out of date');
+  });
+
+  it('a gh merge that exits non-zero with no stderr is still github-refused', () => {
+    amFixture(h, { mergeFail: '' });
+    expect(amRun(h, ARGV).stdout.trim()).toBe('REFUSED github-refused: gh pr merge failed (rc 1)');
+    expect(merges()).toHaveLength(1);
+  });
+
+  it('a merge gh answered whose read-back is not MERGED at the head is unproven, not merged, and not retried', () => {
+    const detail = /^REFUSED unproven: gh answered the merge but the read-back does not show MERGED at a{40} \(method=merge\); not retried$/;
+    for (const readback of [
+      { state: 'OPEN', headRefOid: HEAD_A, mergeCommit: null },
+      { state: 'MERGED', headRefOid: HEAD_B, mergeCommit: { oid: MERGE_OID } },
+      { state: 'MERGED', headRefOid: HEAD_A, mergeCommit: null },
+      { state: 'MERGED', headRefOid: HEAD_A, mergeCommit: { oid: 'not-an-oid' } },
+      '', '[]', null,
+    ]) {
+      fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+      amFixture(h, { readback });
+      const r = amRun(h, ARGV);
+      expect(r.code, JSON.stringify(readback)).toBe(2);
+      expect(r.stdout.trim(), JSON.stringify(readback)).toMatch(detail);
+      expect(merges(), 'never a second merge call').toHaveLength(1);
+      expect(lastJournal()).toMatch(new RegExp(` admin-merge-refused demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} reason=unproven$`));
+    }
+  });
+
+  it('the door\'s argv never carries --admin, and the only --admin it sends is on its one gh pr merge', () => {
+    amFixture(h);
+    amRun(h, ARGV);
+    for (const c of h.ghCalls().filter((x) => !x.startsWith('pr merge'))) expect(c).not.toMatch(/--admin/);
+    expect(merges().every((c) => c.split(' ').filter((w) => w === '--admin').length === 1)).toBe(true);
+    const src = ccdSource();
+    const body = src.slice(src.indexOf('_am_act() {'), src.indexOf('# ── reap guards'));
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code.match(/--admin/g) ?? [], 'the verb\'s code spells --admin exactly once').toHaveLength(1);
+    const head = src.slice(src.indexOf('cmd_pr_admin_merge() {'), src.indexOf('_am_act() {')).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(head.match(/--admin/g) ?? []).toHaveLength(0);
   });
 });

@@ -9,6 +9,7 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
 export const HEAD_A = 'a'.repeat(40);
 export const HEAD_B = 'b'.repeat(40);
+export const MERGE_OID = 'c'.repeat(40);
 
 /** `gh` logs its argv to `$HOME/gh-calls` and answers each read from `$HOME/am/routes`: one `pattern|file` line per
  *  route, the pattern a shell glob over the argv joined by spaces, the file under `$HOME/am/`. The first matching route
@@ -18,6 +19,8 @@ export const AM_GH_STUB = `
 gh() {
   printf '%s\\n' "$*" >> "$HOME/gh-calls"
   local line pat file
+  # \`pr merge\` fails with the stderr held in \`$HOME/am/merge-fail\` when that file exists (a refusal GitHub wrote).
+  if [[ "$1 $2" == "pr merge" && -f "$HOME/am/merge-fail" ]]; then cat "$HOME/am/merge-fail" >&2; return 1; fi
   [[ -f "$HOME/am/routes" ]] || return 1
   while IFS= read -r line; do
     pat="\${line%%|*}"; file="\${line#*|}"
@@ -49,6 +52,12 @@ export interface AmOver {
   repo?: unknown;
   /** `gh pr view 42 …` */
   pr?: unknown;
+  /** the fresh `gh pr view 42 --json headRefOid,reviewDecision,state,isDraft` just before the merge; default: \`pr\`'s answer */
+  fresh?: unknown;
+  /** the read-back after the merge (\`--json state,headRefOid,mergeCommit\`); default: MERGED at HEAD_A with MERGE_OID */
+  readback?: unknown;
+  /** the stderr \`gh pr merge\` prints when it fails (rc 1); absent: the merge succeeds with no output */
+  mergeFail?: string;
   /** the base's rules, pages concatenated as `gh --paginate` prints them; default: one required_status_checks rule over `required` */
   rules?: unknown;
   /** the required contexts of the default rules document (a string, or an {context, integration_id} object) */
@@ -90,9 +99,17 @@ export function amFixture(h: PrHarness, over: AmOver = {}): void {
   route('api repos/owner-a/repo-a', 'repo.json', pick(over.repo, {
     permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: false,
   }));
-  route('pr view 42 *', 'pr.json', pick(over.pr, {
+  const pr = pick(over.pr, {
     number: 42, state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '',
+  });
+  route('pr view 42 -R owner-a/repo-a --json state,isDraft,headRefOid,baseRefName,reviewDecision', 'pr.json', pr);
+  route('pr view 42 -R owner-a/repo-a --json headRefOid,reviewDecision,state,isDraft', 'fresh.json', pick(over.fresh, pr));
+  route('pr view 42 -R owner-a/repo-a --json state,headRefOid,mergeCommit', 'readback.json', pick(over.readback, {
+    state: 'MERGED', headRefOid: HEAD_A, mergeCommit: { oid: MERGE_OID },
   }));
+  route('pr merge 42 *', 'merge.out', '');
+  fs.rmSync(path.join(h.home, 'am', 'merge-fail'), { force: true });
+  if (over.mergeFail !== undefined) put(h, 'merge-fail', over.mergeFail);
   route('api --paginate repos/owner-a/repo-a/rules/branches/main', 'rules.json', pick(over.rules, [{
     type: 'required_status_checks', parameters: { required_status_checks: required.map((r) => (typeof r === 'string' ? { context: r } : r)) },
   }]));

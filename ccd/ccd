@@ -12593,6 +12593,20 @@ _AM_METHOD_JQ='
   | if index("merge") != null then "merge" elif index("squash") != null then "squash"
     elif index("rebase") != null then "rebase-only" else "method-none" end'
 
+# The fresh read just before the merge: state, draft, head and decision, typed before they are read out as four words.
+_AM_FRESH_JQ='
+  if (.state | IN("OPEN", "CLOSED", "MERGED")) and (.isDraft | type) == "boolean"
+     and (.headRefOid | type) == "string" and (.headRefOid | test("\\A[0-9a-f]{40}\\z"))
+     and ((.reviewDecision == null) or ((.reviewDecision | type) == "string" and (.reviewDecision | test("\\A[A-Z_]*\\z"))))
+  then "ok \(.state) \(.isDraft) \(.headRefOid) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)"
+  else "unreadable" end'
+# The read-back: the merge commit id, only when the PR is MERGED at the bound head ($sha); otherwise nothing.
+# shellcheck disable=SC2016  # $sha is a jq variable (--arg), not shell
+_AM_BACK_JQ='
+  if .state == "MERGED" and .headRefOid == $sha and (.mergeCommit | type) == "object"
+     and (.mergeCommit.oid | type) == "string" and (.mergeCommit.oid | test("\\A[0-9a-f]{40}\\z"))
+  then .mergeCommit.oid else "" end'
+
 _am_unreadable() { _am_refuse "$AM_WHO" unreadable "$1"; }
 _am_read() {   # <what> <jq shape> <gh args...> -> AM_OUT = the answer, exactly the shape named, else unreadable naming <what>
   local what="$1" shape="$2" rc=0
@@ -12720,9 +12734,45 @@ cmd_pr_admin_merge() {   # ccd pr-admin-merge --repo <owner/repo> --pr <n> --hea
 
   _am_reads
 
-  # The merge and its read-back follow (the next change). Until they are built the door cannot prove a thing, so it
-  # refuses after every check has passed: a gate that stops short is closed, never open.
-  _am_refuse "$AM_WHO" unproven "the merge is not built yet (method=$AM_METHOD checks=$AM_CHECKS)"
+  _am_act
+}
+# THE ONE WRITE. After the reads, one fresh read of the PR (a push, a draft toggle, a review or a close since the first
+# read is caught here), then the single `gh pr merge … --admin --match-head-commit <sha>`: GitHub itself refuses a merge
+# whose head is not <sha>, so a push between this read and the write cannot slip in. Never a second merge call, on any
+# path; a merge gh answered but the read-back cannot prove is `unproven`, reported and not retried. The flag that makes
+# this an admin merge is spelled exactly once in this verb, on that one call.
+_am_act() {   # -> MERGED line (rc 0), or a REFUSED line (exit 2); uses AM_METHOD and AM_CHECKS from `_am_reads`
+  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead dec rc=0 err oid
+  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json headRefOid,reviewDecision,state,isDraft
+  v=$(jq -r "$_AM_FRESH_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
+  [[ "$v" == 'ok '* ]] || _am_unreadable "the PR read"
+  read -r _ state draft phead dec <<<"$v"
+  [[ "$phead" == "$sha" ]]       || _am_refuse "$AM_WHO" head-moved "the PR head moved to $phead since the checks"
+  [[ "$state" == OPEN ]]         || _am_refuse "$AM_WHO" not-open "the PR is $state"
+  [[ "$draft" == false ]]        || _am_refuse "$AM_WHO" draft "the PR is a draft"
+  [[ "$dec" != CHANGES_REQUESTED ]] || _am_refuse "$AM_WHO" changes-requested "reviewDecision=CHANGES_REQUESTED"
+
+  err=$(_plat_timeout "$AM_GH_TIMEOUT" gh pr merge "$pr" -R "$repo" --admin "--$AM_METHOD" --match-head-commit "$sha" 2>&1 >/dev/null) || rc=$?
+  if (( rc == 124 )); then
+    # A timeout proves nothing either way: GitHub may have merged. Reported, never retried.
+    _am_refuse "$AM_WHO" unproven "the merge call timed out; GitHub may have merged (method=$AM_METHOD); not retried"
+  elif (( rc != 0 )); then
+    err=${err%%$'\n'*}
+    err=$(printf '%s' "$err" | LC_ALL=C tr -d '[:cntrl:]' | head -c 200)
+    _am_refuse "$AM_WHO" github-refused "${err:-gh pr merge failed (rc $rc)}"
+  fi
+
+  # The read-back: the PR must read MERGED at the bound head with a merge commit id. Anything else is unproven.
+  rc=0
+  AM_OUT=$(_plat_timeout "$AM_GH_TIMEOUT" gh pr view "$pr" -R "$repo" --json state,headRefOid,mergeCommit 2>/dev/null) || rc=$?
+  oid=""
+  if (( rc == 0 )) && jq -se "$_AM_ONE_OBJ" <<<"$AM_OUT" >/dev/null 2>&1; then
+    oid=$(jq -r --arg sha "$sha" "$_AM_BACK_JQ" <<<"$AM_OUT" 2>/dev/null) || oid=""
+  fi
+  [[ "$oid" =~ ^[0-9a-f]{40}$ ]] \
+    || _am_refuse "$AM_WHO" unproven "gh answered the merge but the read-back does not show MERGED at $sha (method=$AM_METHOD); not retried"
+  echo "$(date '+%F %T') admin-merge $AM_WHO: $repo#$pr head=$sha method=$AM_METHOD checks=$AM_CHECKS result=merged merge=$oid" >> "$REG/swap.log" 2>/dev/null || true
+  printf 'MERGED %s#%s head=%s method=%s merge=%s checks=%s\n' "$repo" "$pr" "$sha" "$AM_METHOD" "$oid" "$AM_CHECKS"
 }
 
 # ── reap guards ────────────────────────────────────────────────────
