@@ -6,7 +6,7 @@
 //
 // Linux-only (O24): the sweep's timer never installs on the Darwin arm, and
 // the shim needs util-linux `flock`.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -985,25 +985,34 @@ describe('the between-scans pass takes a file only after a non-skip verdict, and
 });
 
 describe('one lstat-kind predicate answers both callers (the recallOffKind merge, W3-1 Task 1B Step 5)', () => {
-  const dir = mkTmp('ccrc-hist-sweep-kind-');
-  const d = path.join(dir, 'd');
-  const file = path.join(dir, 'f');
-  const link = path.join(dir, 'l');
-  const fifo = path.join(dir, 'p');
-  fs.mkdirSync(d);
-  fs.writeFileSync(file, 'x');
-  fs.symlinkSync(d, link);   // a link to a DIRECTORY: a predicate that follows links answers 'dir'
-  expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
-  const rows: Array<[string, string, string]> = [   // [name, path, card.mjs's word (lstatKind)] ; sweep.mjs's word is the same but for 'other' -> 'special'
-    ['a directory', d, 'dir'],
-    ['a file', file, 'file'],
-    ['a link', link, 'link'],
-    ['a FIFO', fifo, 'other'],
-    ['an absent path', path.join(dir, 'nope'), 'absent'],
-    ['an unmeasurable one (a path below a file: ENOTDIR)', path.join(file, 'below'), 'unmeasured'],
+  let dir = '';
+  let d = '';
+  let file = '';
+  let link = '';
+  let fifo = '';
+  beforeAll(() => {
+    dir = mkTmp('ccrc-hist-sweep-kind-');
+    d = path.join(dir, 'd');
+    file = path.join(dir, 'f');
+    link = path.join(dir, 'l');
+    fifo = path.join(dir, 'p');
+    fs.mkdirSync(d);
+    fs.writeFileSync(file, 'x');
+    fs.symlinkSync(d, link);   // a link to a DIRECTORY: a predicate that follows links answers 'dir'
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+  });
+  // [name, path, card.mjs's word (lstatKind)] ; sweep.mjs's word is the same but for 'other' -> 'special'. Paths are thunks: the dir exists only after beforeAll.
+  const rows: Array<[string, () => string, string]> = [
+    ['a directory', () => d, 'dir'],
+    ['a file', () => file, 'file'],
+    ['a link', () => link, 'link'],
+    ['a FIFO', () => fifo, 'other'],
+    ['an absent path', () => path.join(dir, 'nope'), 'absent'],
+    ['an unmeasurable one (a path below a file: ENOTDIR)', () => path.join(file, 'below'), 'unmeasured'],
   ];
-  for (const [name, p, kind] of rows) {
+  for (const [name, pathOf, kind] of rows) {
     it(`${name}: card.mjs's lstatKind answers ${kind}, sweep.mjs's recallOffKind ${kind === 'other' ? 'special' : kind}`, () => {
+      const p = pathOf();
       expect(lstatKind(p)).toBe(kind);
       expect(recallOffKind(p)).toBe(kind === 'other' ? 'special' : kind);
     });
