@@ -19760,7 +19760,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1 box
+  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1 box narrow=""
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -19779,29 +19779,29 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # only `cmd_swap`'s act-time rescue gate reads the word.
   HARD_BLOCK_VIA=""; HARD_BLOCK_NO=""; HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
   HARD_BLOCK_EV=""   # D-6180: the limit evidence behind a carried-in or draft "no"
-  # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
-  # Both paths into this function are already below `_auto_swap_check`'s own
-  # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
-  # sites are inside `_auto_swap_check` too. So on a narrow pane the tick has
-  # returned before this line is reached, and the cost lands on WIDE panes — the
-  # steady state — as a second `list-panes` + `awk` pair per session per tick.
-  # Kept anyway: this is a guard site in its own right, and a future caller that
-  # does not come through that tick must not inherit a verdict off an unmeasured
-  # pane. rc 1 is "not hard blocked", which is what "no verdict" has to look
-  # like to a boolean caller.
-  _pane_measurable "$id" || { HARD_BLOCK_NO=unmeasurable; return 1; }   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
-  # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
-  # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
-  _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=pane; return 1; }; HARD_BLOCK_VIA=pane; return 0; }
-  # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
-  # arm below the transcript deliberately: a banner Claude Code is rendering on
-  # screen right now is the same condition `_pane_hard_blocked` answers, merely
-  # spelled the way this year's build spells it. Putting it here means it shares
-  # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
-  # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
-  # both still reports the older, more specific detector.
-  _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=banner; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
-  grep -q "esc to interrupt" <<<"$pane" && { HARD_BLOCK_NO=running; return 1; }
+  # A NARROW PANE STILL GETS THE TRANSCRIPT RUNG (D-8123). Under READER_MIN_COLS a wrapped phrase reads as idle (§6.3), so
+  # both PANE rungs and the `esc to interrupt` test below are skipped: nothing on screen is trusted. The transcript is not
+  # wrapped by the terminal, so its newest real row is as good a verdict as on a wide pane, and a limit-blocked session on
+  # a narrow pane is no longer left for ever. Everything after the pane rungs runs as on a wide pane: the stale-press
+  # grace, the cached transcript scan and the box read's `draft` stand-down (a wrapped draft the box read misses is
+  # disclosed in the plan's risk table). When the transcript says nothing the answer is `unmeasurable`, as it always was:
+  # rc 1 is "no verdict", and `_swap_rescue_act_gate` proceeds on it rather than cancel a rescue on a negative nobody
+  # measured. A caller that does not come through the tick (the act gate, `_tick_strand_undecidable`) inherits the same.
+  _pane_measurable "$id" || narrow=1   # unmeasurable -> the pane rungs below are skipped, never read (§6.3)
+  if [[ -z "$narrow" ]]; then
+    # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
+    # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
+    _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=pane; return 1; }; HARD_BLOCK_VIA=pane; return 0; }
+    # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
+    # arm below the transcript deliberately: a banner Claude Code is rendering on
+    # screen right now is the same condition `_pane_hard_blocked` answers, merely
+    # spelled the way this year's build spells it. Putting it here means it shares
+    # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
+    # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
+    # both still reports the older, more specific detector.
+    _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=banner; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
+    grep -q "esc to interrupt" <<<"$pane" && { HARD_BLOCK_NO=running; return 1; }
+  fi
   _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && { HARD_BLOCK_NO=stalepress; return 1; }
   _reg_get_to scan "$id" tscan   # D-4963: a builtin read, no subshell (tick-diet spec §6.4)
@@ -19814,7 +19814,9 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     _limit_dated "$id" transcript "$born"; lrc=$?; (( lrc == 0 )) && verdict=1   # rc 3, carried in, caches as 0 like any no (D-3526)
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
-  [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; (( lrc == 3 )) && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=carried-in; }; return 1; }   # D-6180: a fresh scan names a carried-in row
+  # D-6180: a fresh scan names a carried-in row. On a narrow pane a silent transcript is `unmeasurable`, not `negative`:
+  # nothing on screen was read, so "not blocked" is not a measured answer (D-8123).
+  [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; [[ -n "$narrow" ]] && HARD_BLOCK_NO=unmeasurable; (( lrc == 3 )) && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=carried-in; }; return 1; }
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
@@ -20235,9 +20237,18 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # whose only call sites are below — is skipped here, so without the note a
   # wedged session on a narrow pane is neither rescued nor marked, and nothing
   # anywhere says why. `_pane_narrow_note` carries the floor; see its header.
-  _pane_measurable "$id" || {
-    _standdown_evidence "$id" || _standdown_probe "$id" "" "$(_transcript_path "$id" 2>/dev/null)" "$(_pane_born "$id")"   # D-6180: at most once per TRANSCRIPT_ARM_INTERVAL
-    _pane_narrow_note "$id" swap "$STANDDOWN_EV"; return 0; }
+  #
+  # A NARROW PANE IS ASKED FOR ITS TRANSCRIPT FIRST (D-8123). `_session_hard_blocked` skips the pane rungs on a pane it
+  # cannot read and answers from the transcript alone. A positive verdict falls through to the rescue path below, which
+  # never reaches the affinity arm (a hard-blocked row always returns before it), so a narrow pane is rescued and never
+  # relocated for cosmetic reasons. A negative one stands down exactly as before, with the narrow note, and a draft the
+  # box read sees says `draft` too.
+  if ! _pane_measurable "$id"; then
+    _session_hard_blocked "$id" "" || {   # no pane text: the function reads none of it on a narrow pane, so no capture is paid here
+      [[ "${HARD_BLOCK_NO:-}" == draft && -n "${HARD_BLOCK_EV:-}" ]] && _standdown_note "$id" draft "$HARD_BLOCK_EV" ""
+      _standdown_evidence "$id" || _standdown_probe "$id" "" "$(_transcript_path "$id" 2>/dev/null)" "$(_pane_born "$id")"   # D-6180: at most once per TRANSCRIPT_ARM_INTERVAL
+      _pane_narrow_note "$id" swap "$STANDDOWN_EV"; return 0; }
+  fi
   # A TICK THAT CANNOT MEASURE THIS ROW'S CURRENT ACCOUNT DECIDES NOTHING
   # (C1, D-1992). `_reg_get` folds ABSENT, UNREADABLE and EMPTY into one `""`,
   # and EVERY decision below consumes this value: `_pool_ok "$wrapper"`, the
