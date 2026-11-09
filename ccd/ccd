@@ -31016,7 +31016,7 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
 #
 # The target is the normal rescue's (`_rescue_target`, rule 3's skip lists applied) restricted to accounts with MEASURED room
 # (`CCD_RESCUE_MEASURED_ONLY=1`: an account whose usage is unknown is never counted as room). An undecidable class window
-# retries once without the class gate, as the tick does. At most WATCHDOG_PER_PASS (3) forced rescues leave one pass, the rest
+# retries once without the class gate, as the tick does. At most WATCHDOG_PER_PASS (3) forced rescues and in-place resumes together leave one pass, the rest
 # wait for the next (the 2026-08-14 herd), and a pass that has used WATCHDOG_BUDGET_S stops (the unit's start timeout is 50 s).
 #
 # With no account that has measured room it moves nothing: it writes `$REG/<id>.limitwait` (the Waiting on you item's
@@ -31027,15 +31027,18 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
 # THE OPERATOR'S CHOICE. `choice=wait` on an open record (Task 10's `ccd limit-wait`) means "wait until the limit resets":
 # the watchdog then moves nothing. When the record's reset has passed (or is unknown) and the session's OWN account has
 # measured room, `_watchdog_resume_here` restarts the session in place on that account (stop and ensure, in a transient unit,
-# the cause `limit-resume`), because Claude Code does not always continue by itself.
+# the cause `limit-resume`), because Claude Code does not always continue by itself. A resume counts against the same
+# WATCHDOG_PER_PASS as a forced rescue (WD_FORCED): every session waiting on one account becomes eligible at the one
+# moment its first fresh reading after the reset arrives, and an uncapped door would restart them all together (the
+# 2026-08-14 herd). The ones over the cap keep their open record and go in the next pass.
 #
 # NO KEYS, EVER. Nothing in this region reads or writes the input box or sends a key: the rate-limit menu is never typed
 # into (an Enter or a digit there can pick "Switch to usage credits"). The rescue's one act is `ccd swap`, which ends the
 # session and resumes it on another account; the in-place restart is `_svc_stop`, a pane kill and `cmd_ensure`.
 # `ccd-limit-no-keys.test.ts` cuts these bodies out of this file and refuses a key sender in any of them.
-WATCHDOG_PER_PASS=3     # forced rescues one pass may dispatch
+WATCHDOG_PER_PASS=3     # forced rescues and in-place resumes one pass may dispatch
 WATCHDOG_BUDGET_S=40    # seconds a pass works before it stops
-WD_FORCED=0             # forced rescues dispatched so far by this pass
+WD_FORCED=0             # forced rescues and resumes dispatched so far by this pass
 WD_SINCE="" WD_SIGN="" WD_FLAGS=""   # `_wd_record_read`'s answer
 
 _wd_record_read() {   # id now -> WD_SINCE WD_SIGN WD_FLAGS from `$REG/<id>.limitsign`; rc 0 a good record | 1 absent, torn, or dated ahead of now
@@ -31217,6 +31220,7 @@ _watchdog_resume_here() {   # id -> rc 0 the session was restarted in place | 1 
   if [[ "$reset" =~ ^[0-9]+$ ]]; then (( now >= 10#$reset )) || return 1; fi
   score=$(_limit_score "$w")
   [[ "$score" =~ ^[0-9]+$ ]] && (( 10#$score < SWAP_CEILING )) || return 1
+  (( WD_FORCED < WATCHDOG_PER_PASS )) || return 1   # eligible, but this pass has moved its share: next pass
   _reg_get_to prev "$id" lastswap || prev=""
   _end_record "$id" limit-resume
   _reg_set "$id" lastswap "$now"
@@ -31233,6 +31237,7 @@ _watchdog_resume_here() {   # id -> rc 0 the session was restarted in place | 1 
   fi
   _limitwait_close "$id" resume
   rm -f -- "$REG/$id.limitsign"
+  WD_FORCED=$(( WD_FORCED + 1 ))
   return 0
 }
 

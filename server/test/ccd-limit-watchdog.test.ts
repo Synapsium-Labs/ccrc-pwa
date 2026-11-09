@@ -517,6 +517,33 @@ describe('Wait until reset: the operator\'s choice is honoured, then the session
     expect(field(ID, 'limitwait')).toMatch(/^state=closed .* end=clear until=\d+$/);
   });
 
+  it('four waiting sessions on one account resume three in a pass, the fourth the next pass (no herd at the reset)', () => {
+    for (const id of IDS) {
+      seed(id);
+      h.sh(`_reg_set ${id} limitwait "state=open since=${T0 - 400} reset=${T0 - 60} account=claude sign=banner choice=wait at=${T0 - 300}"`);
+    }
+    limits('claude', 10, 10); limits('claude-a', 5, 5);
+    pass(BANNER, T0);
+    expect(detached()).toHaveLength(3);
+    expect(lines('watchdog-resume')).toHaveLength(3);
+    const open = IDS.filter((id) => /^state=open /.test(field(id, 'limitwait') ?? ''));
+    expect(open).toHaveLength(1);
+    pass(BANNER, T0 + 60);
+    expect(detached()).toHaveLength(4);
+    expect(new Set(detached().map((l) => l.match(/_watchdog_resume_run (\S+)/)?.[1])).size).toBe(4);
+    expect(IDS.filter((id) => /^state=open /.test(field(id, 'limitwait') ?? ''))).toEqual([]);
+  });
+
+  it('a resume that could not start does not use the pass\'s budget', () => {
+    for (const id of IDS) {
+      seed(id);
+      h.sh(`_reg_set ${id} limitwait "state=open since=${T0 - 400} reset=${T0 - 60} account=claude sign=banner choice=wait at=${T0 - 300}"`);
+    }
+    limits('claude', 10, 10);
+    pass(BANNER, T0, '_svc_run_detached() { return 1; };');
+    expect(lines('dispatch FAILED')).toHaveLength(4);
+  });
+
   it('a failed unit start puts lastswap back and leaves the wait open', () => {
     seed(); limits('claude', 10, 10); waitRecord(String(T0 - 60)); h.sh(`_reg_set ${ID} lastswap 55`);
     pass(BANNER, T0, '_svc_run_detached() { return 1; };');
