@@ -59,6 +59,13 @@ at the desk. The spec measured Instrument at 382. "Round 0" is the first wave-do
 | 1280 x 800 Refined, touch | — | 322 | 322 | 92 |
 | 915 x 412 Refined, touch | 398 | 298 | 342 | 136 (the line wraps) |
 
+**Why the line wraps at 600 (fix round 2, item 3).** The via sentence keeps its `12ch` basis. At about 600 px a
+committed leaf's facts fit one line only if the via shrinks to nothing: review 1697 measured it 6.2 px wide there (3.0
+for a draft at 768), a bare cut with no room for the 7.2 px ellipsis, and no basis that leaves an ellipsis keeps one
+line at those two points. The coordinator ruled that a legible fragment of the via with an ellipsis, plus a second line,
+wins over one line that hides it silently. So the 600 px rows above take a second dense line (head 104 under a mouse,
+136 under touch), as does 915 x 412 under touch, and a draft at 768 does too. No code changed for this.
+
 `DESK_TITLE_MAX` stays 320 (fix round 1's ruling, F9), the next 10 px step above this tree's 310. The frame's own bar
 still puts the title 101 px into the frame at a desk. A touch laptop's title measures 322 at 1280 x 800, which the
 brief asserts for a mouse only.
