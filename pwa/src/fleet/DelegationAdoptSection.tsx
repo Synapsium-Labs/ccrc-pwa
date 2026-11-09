@@ -38,6 +38,8 @@ import type { DelegationAdoptPoll } from './useDelegationAdoptView';
 
 const T = DELEGATION_ADOPT_TEXT;
 const RADIO_NAME = 'settings-delegation-adopt';
+/** Each choice's refusal line, in the order the card draws them: one leaf, drawn per choice (the markup census). */
+const REFUSAL_LINES = [['on', T.on], ['off', T.off]] as const;
 
 export function DelegationAdoptSection({ poll }: { poll: DelegationAdoptPoll }): ReactNode {
   const { view, failure } = poll;
@@ -214,16 +216,15 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
           { value: 'on', label: T.on, note: T.onNote, disabled: refused.on !== null, describedBy: refused.on === null ? undefined : onId },
         ]}
       />
-      {refused.on !== null && (
-        <p id={onId} ref={(el) => { refusalRefs.current.on = el; }} tabIndex={-1} className={SETTINGS_AMBER_NOTE}>
-          {delegationAdoptRefusedLine(T.on, refused.on)}
-        </p>
-      )}
-      {refused.off !== null && (
-        <p id={offId} ref={(el) => { refusalRefs.current.off = el; }} tabIndex={-1} className={SETTINGS_AMBER_NOTE}>
-          {delegationAdoptRefusedLine(T.off, refused.off)}
-        </p>
-      )}
+      {REFUSAL_LINES.map(([choice, label]) => {
+        const word = refused[choice];
+        return word === null ? null : (
+          <p key={choice} id={choice === 'on' ? onId : offId} ref={(el) => { refusalRefs.current[choice] = el; }} tabIndex={-1}
+            className={SETTINGS_AMBER_NOTE}>
+            {delegationAdoptRefusedLine(label, word)}
+          </p>
+        );
+      })}
       {(asked !== null || line.line !== null) && (
         <div ref={statusRef} tabIndex={-1}>
           {asked !== null && <p className="settings-note" role="status">{T.asked}</p>}
