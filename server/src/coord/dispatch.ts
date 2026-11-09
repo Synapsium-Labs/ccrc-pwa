@@ -784,10 +784,26 @@ export async function installAbsentSkill(
   if (!out.ok || out.skillState !== 'absent' || out.skillWrapper === null) return out;
   if (!ccdCan(deps.fleetState, 'skillEnsure')) return out;
   let result: SkillInstall = 'failed';
+  // `skill-ensure` installs the coordinator and worker skills only, never the reviewer skill that a `review` run
+  // measures (`skillDirFor`). A review run (or one that cannot be read) answers `failed` without running the verb,
+  // so a converged worker skill is never reported as the reviewer skill's install.
+  const read = deps.coord.run(out.id);
+  const kindOk = read.ok && read.run !== null && read.run.kind === 'work';
+  if (!kindOk) {
+    deps.coord.recordRunEvent(out.id, 'coordinator', `skill-install:${result}`);
+    return { ...out, skillInstall: result };
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const overdue = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), deps.skillEnsureDeadlineMs ?? SKILL_ENSURE_DEADLINE_MS); });
-    const res = await Promise.race([deps.runCcd(CCD_ARGV.skillEnsure(out.skillWrapper)), overdue]);
+    const wrapper = out.skillWrapper;
+    const verb = (async () => {
+      const ensured = await deps.runCcd(CCD_ARGV.skillEnsure(wrapper));
+      // A verb the runner did not run answers `failed`, like an overdue one.
+      if (ensured.ran === false) return null;
+      return ensured;
+    })();
+    const res = await Promise.race([verb, overdue]);
     if (res !== null && res.ok) {
       const line = res.stdout.trim().split('\n').filter((l) => l.trim() !== '').pop() ?? '';
       try {

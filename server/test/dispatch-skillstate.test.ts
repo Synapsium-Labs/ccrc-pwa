@@ -44,6 +44,8 @@ const seedRow = (home: string, id: string): void => {
 };
 
 interface Cfg {
+  /** Dispatch a review run (it measures the reviewer skill) instead of a work run. */
+  review?: boolean;
   /** Plant a real SKILL.md in the wrapper's config dir. */
   installed: boolean;
   /** Force the SKILL.md read to fail (the remote-fleet shape: a dropped round trip). */
@@ -62,11 +64,18 @@ const harness = async (cfg: Cfg) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
 
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const opened = coord.openRun({
+  let opened = coord.openRun({
     program: 'program-leverage', title: 'F2', project: PROJECT,
     wave: 1, waveOf: 8, claimedBy: 'ccrc-pwa-coordinator',
   });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  if (cfg.review === true) {
+    opened = coord.openRun({
+      program: 'program-leverage', title: 'F2 review', project: PROJECT,
+      wave: 1, waveOf: 8, claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: opened.id,
+    });
+    if (!('id' in opened)) throw new Error(`fixture review openRun refused: ${JSON.stringify(opened)}`);
+  }
 
   const calls: CcdArgv[] = [];
   const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
@@ -238,6 +247,21 @@ describe('a dispatch that measures the skill absent installs it (D-8126, row 38)
     const d = h.details();
     expect(d.indexOf('skill-preflight:absent')).toBeGreaterThanOrEqual(0);
     expect(d.indexOf('skill-install:installed')).toBeGreaterThan(d.indexOf('skill-preflight:absent'));
+  });
+
+  it('a review run never runs the verb and answers failed, though the worker skill is present', async () => {
+    // The review run measures the reviewer skill; `skill-ensure` installs only the worker and coordinator skills.
+    const h = await harness({ installed: true, review: true });
+    const out = await h.dispatchAndHeal();
+    expect(out).toMatchObject({ ok: true, skillState: 'absent', skillInstall: 'failed' });
+    expect(ensureCalls(h)).toEqual([]);
+    expect(h.details()).toContain('skill-install:failed');
+  });
+
+  it('a verb the runner did not run answers failed', async () => {
+    const h = await harness({ installed: false,
+      ensure: () => ({ ran: false, ok: false, stdout: '', stderr: '', killed: false, signal: null } as unknown as CcdResult) });
+    expect(await h.dispatchAndHeal()).toMatchObject({ ok: true, skillInstall: 'failed' });
   });
 
   it('a failing verb answers failed, and the dispatch still succeeds', async () => {
