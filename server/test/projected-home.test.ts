@@ -115,6 +115,20 @@ const seedAuthDead = (wrappers: string[]): void => {
   }
 };
 
+/** The case's registry rows' `<id>.wrapper` and `<id>.spawn`, in the one directory both sides read. Every earlier
+ *  seed is swept first, so a case without `spawns` sees none. */
+const seedSpawns = (rows: LeastLoadedCase['spawns']): void => {
+  const dir = path.join(home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of fs.readdirSync(dir)) {
+    if (name.endsWith('.spawn') || name.endsWith('.wrapper')) fs.rmSync(path.join(dir, name));
+  }
+  for (const r of rows ?? []) {
+    fs.writeFileSync(path.join(dir, `${r.id}.wrapper`), r.wrapper);
+    fs.writeFileSync(path.join(dir, `${r.id}.spawn`), 'raw' in r ? r.raw : `${r.at} ${r.rc}`);
+  }
+};
+
 /** A present-but-malformed `<w>-authdead` — arbitrary raw content, not the
  *  well-formed `"<epoch> <reason>"` `seedAuthDead` writes. Called AFTER
  *  `seedAuthDead` in the runner below, deliberately: `seedAuthDead` sweeps
@@ -231,6 +245,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);
       seedAuthDeadMalformed(c.authDeadMalformed ?? {});
+      seedSpawns(c.spawns);
       seedSweep(c.sweep);
       if (c.project?.tag != null) seedPoolTag(c.project.name, c.project.tag);
       const cfg = loadConfig({ CCRC_HOME: home });

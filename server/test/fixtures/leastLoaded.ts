@@ -68,6 +68,12 @@ export interface LeastLoadedCase {
    *  can carry its own malformed content; omitted/empty means no lane gets a
    *  malformed marker. */
   authDeadMalformed?: Record<string, string>;
+  /** Registry rows' spawn records (`<id>.wrapper` and `<id>.spawn` in the registry directory), the one fact A7-3's
+   *  skip reads: a lane whose NEWEST spawn recorded rc 2 (`login`) or 5 (`blocked`) takes no new work until a later
+   *  spawn on it reads otherwise. `at` is an epoch the case builds from `now`; `rc` is written as ccd writes it
+   *  (`<epoch> <rc>`), and `raw` replaces the whole file for the unreadable shapes (absence permits, so such a row
+   *  is no skip on either side). Omitted/empty means no spawn is recorded anywhere. */
+  spawns?: Array<{ id: string; wrapper: string } & ({ at: number; rc: number } | { raw: string })>;
   /** Routing slice 3. The class the placement is for, DERIVED from `ModelClass`
    *  rather than respelled. Absent means `default` — and so does an explicit
    *  `'default'`, which one case below passes on purpose: the two spellings must
@@ -472,6 +478,69 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       why: 'class `default` is the no-class walk byte for byte: neither the seven-day '
         + 'ceiling nor the Fable share ceiling is consulted, and the minimum wins exactly '
         + 'as it does with no class at all',
+    },
+    // A7-3 (F9): a lane whose newest spawn needs a sign-in or is blocked takes no new work. The skip is the
+    // condemned lane's own shape: out of scoring and out of the preferred fallback, never out of the last tier.
+    {
+      name: 'spawn-login-lane-skipped',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2 }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'the cheapest lane\'s newest spawn needed a sign-in (rc 2), so the cheapest lane that can spawn wins',
+    },
+    {
+      name: 'spawn-blocked-lane-skipped',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 5 }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'rc 5 (blocked) skips the lane exactly as rc 2 does',
+    },
+    {
+      name: 'spawn-later-ready-spawn-makes-the-lane-placeable-again',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [
+        { id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 60, rc: 0 },
+      ],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'the NEWEST spawn on the lane decides, across rows: a later rc 0 on another row of the lane clears the skip',
+    },
+    {
+      name: 'spawn-newer-other-failure-is-not-a-skip',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [
+        { id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 5 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 60, rc: 3 },
+      ],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'only rc 2 and rc 5 skip: a newest spawn that vanished (rc 3) reads otherwise, so the lane is placeable',
+    },
+    {
+      name: 'spawn-another-lane\'s-failure-is-not-this-lane\'s',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-b', at: now - 600, rc: 2 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'the record counts for the wrapper its row names and no other',
+    },
+    {
+      name: 'spawn-every-lane-unable-still-places',
+      files: {},
+      spawns: [
+        { id: 'row-one', wrapper: 'claude', at: now - 600, rc: 5 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 600, rc: 2 },
+        { id: 'row-three', wrapper: 'claude-b', at: now - 600, rc: 2 },
+        { id: 'row-four', wrapper: 'claude-d', at: now - 600, rc: 5 },
+      ],
+      expect: { wrapper: 'claude', score: 0 },
+      why: 'no destination at all is worse than a bad one: when every lane cannot spawn the last tier names the first '
+        + 'in roster order, on both sides',
+    },
+    {
+      name: 'spawn-unreadable-record-is-not-a-skip',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', raw: 'garbage' }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'absence permits: a spawn record that does not parse is no verdict on the lane',
     },
   ];
 }

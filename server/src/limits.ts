@@ -66,6 +66,12 @@ export interface AccountLimits {
    *  be. That difference is why `projectHome` spends it on SCORING only, and why
    *  ccd's `_account_ok` never sees it at all. */
   authDead: boolean;
+  /** The lane's NEWEST recorded spawn (`<id>.spawn` among the registry rows whose `<id>.wrapper` names it) read rc 2
+   *  (`login`) or rc 5 (`blocked`), and no later spawn on it has read otherwise (`readSpawnBlockedLanes`). Emitted ONLY
+   *  when true, and absent means placeable: the fact is a MEASUREMENT of a failed spawn, never a reason to refuse. Like
+   *  `authDead` it leaves SCORING and the preferred fallback and never leaves `live`; ccd's `_ws_lane_cannot_spawn`
+   *  is the twin, and `projected-home.test.ts` drives both over one seeded registry. */
+  spawnBlocked?: true;
 }
 
 const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
@@ -104,6 +110,52 @@ const authDeadMarkerOk = (raw: string): boolean => {
   const first = sp === -1 ? trimmed : trimmed.slice(0, sp);
   return /^[0-9]+$/.test(first);
 };
+
+/** The spawn records that name a lane (A7-3): a registry row's `<id>.wrapper` and `<id>.spawn`, which is
+ *  `<epoch> <rc>`. The same grammar as ccd's `_ws_lane_cannot_spawn`: exactly two unsigned integers, anything else is
+ *  no verdict. */
+const SPAWN_RECORD_RE = /^\s*(\d+)\s+(\d+)\s*$/;
+const SPAWN_REFUSED_RC = new Set([2, 5]);   // `spawnVerdict`'s `login` and `blocked`
+
+/** The lanes whose NEWEST recorded spawn needs a sign-in (rc 2) or is blocked (rc 5): mirrors ccd's
+ *  `_ws_lane_cannot_spawn`. Newest is by the epoch INSIDE the record, across every row of the lane, so a later rc 0
+ *  spawn on any of its rows clears the skip; an equal epoch clears it too when either record reads otherwise, so a tie
+ *  is not a verdict. ABSENCE PERMITS: a record that is missing, a symlink, unreadable or off the grammar names no
+ *  verdict. `registryNames` is the listing the caller already holds.
+ *
+ *  THE COMMON FLEET COSTS ONE READ PER ROW AND NO MORE: only a record that itself reads rc 2 or 5 can make a lane
+ *  unable to spawn, and only a record at or after the oldest such one can undo it, so the wrapper files (and the
+ *  symlink checks bash makes) are read for those rows alone. */
+export async function readSpawnBlockedLanes(
+  io: FleetIO, cfg: CcrcConfig, registryNames: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const ids = registryNames.filter((n) => n.endsWith('.spawn') && !n.startsWith('.'))
+    .map((n) => n.slice(0, -'.spawn'.length)).filter((id) => id !== '' && !id.includes('.'));
+  const rows = (await mapBounded(ids, LIMITS_READ_CONCURRENCY, async (id) => {
+    const raw = await io.readFile(path.join(cfg.registryDir, `${id}.spawn`)).catch(() => null);
+    const m = raw === null ? null : SPAWN_RECORD_RE.exec(raw);
+    return m === null ? null : { id, at: Number(m[1]), rc: Number(m[2]) };
+  })).filter((r): r is { id: string; at: number; rc: number } => r !== null);
+  const refused = rows.filter((r) => SPAWN_REFUSED_RC.has(r.rc));
+  if (refused.length === 0) return new Set();
+  const floor = Math.min(...refused.map((r) => r.at));
+  const regular = async (file: string): Promise<boolean> => {
+    const k = await io.lstatMeasured(file);
+    return k.ok && k.kind === 'regular';
+  };
+  const lane = new Map<string, { at: number; bad: boolean }>();
+  await mapBounded(rows.filter((r) => r.at >= floor), LIMITS_READ_CONCURRENCY, async (r) => {
+    const wf = path.join(cfg.registryDir, `${r.id}.wrapper`);
+    if (!(await regular(path.join(cfg.registryDir, `${r.id}.spawn`))) || !(await regular(wf))) return;
+    const wrapper = (await io.readFile(wf).catch(() => null))?.replace(/\0/g, '').replace(/\n+$/, '');
+    if (wrapper === undefined || wrapper === null || wrapper === '') return;
+    const bad = SPAWN_REFUSED_RC.has(r.rc);
+    const had = lane.get(wrapper);
+    if (had === undefined || r.at > had.at) lane.set(wrapper, { at: r.at, bad });
+    else if (r.at === had.at && !bad) lane.set(wrapper, { at: had.at, bad: false });
+  });
+  return new Set([...lane].filter(([, v]) => v.bad).map(([w]) => w));
+}
 
 /** An account's pressure, or `null` when NOTHING has measured it — the
  *  distinction the whole placement rule turns on (see `projectHome`). Absent
@@ -357,7 +409,10 @@ export function projectHome(
   //
   // ABSENCE PERMITS: `!== true`, so an older `readLimits` (or an older agent
   // payload) that omits the field reads as NOT condemned, never as condemned.
-  const notCondemned = (a: { id: string }): boolean => limits[a.id]?.authDead !== true;
+  // A7-3: a lane whose newest spawn needs a sign-in or is blocked (`spawnBlocked`) is one more reason for the same
+  // last tier, exactly as ccd's `_ws_least_loaded` folds `_ws_lane_cannot_spawn` into its `condemned` variable.
+  const notCondemned = (a: { id: string }): boolean =>
+    limits[a.id]?.authDead !== true && limits[a.id]?.spawnBlocked !== true;
   const scored = scorable
     .filter(notCondemned)
     .map((a) => ({ wrapper: a.id, score: measured(limits[a.id]) }))
@@ -503,6 +558,7 @@ export async function readLimits(
       return content !== null && authDeadMarkerOk(content) ? wrapper : null;
     }))).filter((w): w is string => w !== null),
   );
+  const spawnBlockedLanes = await readSpawnBlockedLanes(io, cfg, regNames);
   const out: Record<string, AccountLimits> = {};
   // D-6436 (desktop polish C4): the files are read through the one bounded pool, not one round trip after another;
   // the loop below still settles them in listing order. A read that rejects is handed to its own row's `catch`,
@@ -561,11 +617,13 @@ export async function readLimits(
       const fiveWindowMinutes = numOrNull(raw.fiveWindowMinutes);
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
                        ...(fiveWindowMinutes === null ? {} : { fiveWindowMinutes }),
-                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
+                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                        sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
+                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
     }
   }
   // A lane can be markered off before it ever writes telemetry (fresh
@@ -592,12 +650,13 @@ export async function readLimits(
   // the fleet — the exact self-reinforcing hole `disabled` exists to close, and
   // an auth-dead lane falls into it identically. `inRoster` is doing the same
   // job for both: the registry also holds dotless markers that name no account.
-  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes])) {
+  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes, ...spawnBlockedLanes])) {
     if (wrapper in out) continue;
     if (!inRoster(cfg.roster, wrapper)) continue;
     out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                      sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                     disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
+                     disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
+                     ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
   }
   return out;
 }

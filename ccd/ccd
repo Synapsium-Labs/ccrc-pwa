@@ -7125,6 +7125,33 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
+_ws_lane_cannot_spawn() {   # wrapper -> 0 iff the NEWEST spawn on any row of this lane recorded rc 2 (login) or rc 5 (blocked)
+  # F9: `projectHome` (server/src/limits.ts, `readSpawnBlockedLanes`) is the twin, and `projected-home.test.ts` drives both
+  # over one seeded registry. A row is `$REG/<id>.wrapper` with `$REG/<id>.spawn` = `<epoch> <rc>` (`_spawn` writes it
+  # always). NEWEST is by the epoch inside the record, across every row of the lane, so a later rc 0 spawn on ANY of its
+  # rows clears the skip, and an equal epoch clears it too when either says otherwise: ties are not a verdict.
+  # ABSENCE PERMITS: a record that is missing, a symlink, unreadable or not exactly `<digits> <digits>` names no verdict, so
+  # it never skips a lane. Two lines per row are read with `_file_read_to` and no `$( )`: placement runs per `ws-add`
+  # and the registry holds hundreds of rows. A leading dot (a private family) and a dotted id are not rows.
+  local w="$1" f id wr sp best_at=-1 best_bad=0 at rc bad
+  for f in "$REG"/*.spawn; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    id="${f##*/}"; id="${id%.spawn}"
+    [[ -n "$id" && "$id" != *.* ]] || continue
+    [[ -f "$REG/$id.wrapper" && ! -L "$REG/$id.wrapper" ]] || continue
+    _file_read_to wr "$REG/$id.wrapper" || continue
+    [[ "$wr" == "$w" ]] || continue
+    _file_read_to sp "$f" || continue
+    [[ "$sp" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+)[[:space:]]*$ ]] || continue
+    at=$((10#${BASH_REMATCH[1]})); rc=$((10#${BASH_REMATCH[2]}))
+    bad=0; (( rc == 2 || rc == 5 )) && bad=1
+    if (( at > best_at )); then best_at=$at; best_bad=$bad
+    elif (( at == best_at && bad == 0 )); then best_bad=0
+    fi
+  done
+  (( best_at >= 0 && best_bad == 1 ))
+}
+
 _ws_least_loaded() {   # [project] [class] -> the home-able account with the most headroom, or "" if none is placeable
   # UNKNOWN IS NOT ZERO. This used to read `[[ -z "$sc" ]] && sc=0`, so an
   # account _limit_score knows nothing about — no ~/.cc-limits/<w>.json at all —
@@ -7345,7 +7372,12 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
     # the other wrong answer: it empties the fallback on an all-condemned fleet,
     # this function answers "", and `cmd_ws_add` dies with no destination for a
     # reason no operator asked for. The pair of variables is what satisfies both.
-    if _authdead "$w"; then
+    # A LANE WHOSE NEWEST SPAWN NEEDS A SIGN-IN OR IS BLOCKED (A7-3, F9) TAKES THE CONDEMNED LANE'S PLACE: out of scoring and
+    # out of the preferred fallback, never out of the last tier. Fresh work sent back to a lane that just failed to spawn
+    # would fail the same way, so it waits behind every lane that can; and with no lane that can, the first of them in
+    # roster order still takes it, because a spawn record is a MEASUREMENT and no destination at all is the worse answer.
+    # One variable on purpose: a lane both condemned and unable to spawn is one more reason for the same last tier.
+    if _authdead "$w" || _ws_lane_cannot_spawn "$w"; then
       [[ -z "$condemned" ]] && condemned="$w"
       continue
     fi

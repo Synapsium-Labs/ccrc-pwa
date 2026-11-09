@@ -150,6 +150,7 @@ _ws_private_family	C4
 _ws_slug_free	C4
 _ws_slug_residue	C4
 _ws_slug_new	C4
+_ws_lane_cannot_spawn	C1
 _ws_least_loaded	C1
 _ws_disk_free_gb	C4
 _ws_pool_read	C1
