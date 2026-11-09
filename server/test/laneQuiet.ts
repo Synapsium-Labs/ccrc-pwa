@@ -61,3 +61,29 @@ export const drainWatcher = async (w: FleetWatcher): Promise<void> => {
 
 /** `tick()`, then everything `drainWatcher` covers settled. */
 export const drainTick = async (w: FleetWatcher): Promise<void> => { await w.tick(); await drainWatcher(w); };
+
+/** What `quietWatcher` waits for. `lanes: false` is for a file whose cases hold a `LANE_SCHEDULE` row's run that never
+ *  settles ON PURPOSE (a single-flight or overlap characterization): waiting on the rows would wait forever, so only
+ *  what `settled()` covers (the server-caps beat, the inventory run, its dispatch run) is awaited, and the delegation
+ *  lane closed. A row held that way never settles, so it never writes. */
+export interface QuietOptions { readonly lanes?: boolean }
+
+/** D-8140 (C17 item 1): the watcher stopped and QUIET, awaited. Its cadence is stopped, everything `drainWatcher`
+ *  covers has settled (with `lanes: false`, what `settled()` covers), and the delegation lane is closed with its sweeps awaited
+ *  (`closeDelegation`, D-7878), which neither `settled()` nor any `LANE_SCHEDULE` row covers, and which is the most
+ *  common late writer (its compaction line). Terminal: a watcher quieted here is not ticked again. */
+export const quietWatcher = async (w: FleetWatcher, o: QuietOptions = {}): Promise<void> => {
+  w.stop();
+  if (o.lanes !== false) await drainWatcher(w); else await w.settled();
+  await w.closeDelegation();
+};
+
+/** D-8140 (C17 item 1): call from inside a test (a rig builder does) for every watcher the test builds. When the test
+ *  ends, `quietWatcher` runs as part of it, so a writer `tick()` fired (the server-caps beat, the inventory run, a
+ *  delegation pass) warns inside the test, never after the file has finished, where vitest's console rpc may already
+ *  be closing ("EnvironmentTeardownError: Closing rpc while onUserConsoleLog was pending" on a shard whose tests all
+ *  passed). A watcher built in `beforeAll` is quieted in `afterAll` with `quietWatcher` instead. Returns `w`. */
+export const quietAtTestEnd = (w: FleetWatcher, o: QuietOptions = {}): FleetWatcher => {
+  onTestFinished(() => quietWatcher(w, o));
+  return w;
+};

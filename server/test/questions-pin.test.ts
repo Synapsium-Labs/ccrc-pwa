@@ -25,6 +25,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { PushPayload } from '../src/push.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import { doorInsOf } from './questionDoorIns.js';
 
 const T0 = 1_786_000_000_000;
@@ -96,7 +97,7 @@ function fixture(o: { io?: (base: FleetIO) => FleetIO } = {}) {
     ...testDeps(home, runner), coord, notifyLog, io: o.io ? o.io(localIO) : localIO,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
-  const watcher = (): FleetWatcher => new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
+  const watcher = (): FleetWatcher => quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 10_000));
   const writeHook = (ask: unknown, state = 'waiting'): void => {
     writeFileSync(path.join(reg, `${CHILD}.hookstate.json`), JSON.stringify({
       v: 1, state, sessionId: `u-${CHILD}`, pid: 1, updatedAt: Date.now(), ask, subagents: [],

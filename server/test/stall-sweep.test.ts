@@ -33,6 +33,7 @@ import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession, typ
 import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import { callsIn, inlinedSourceOf, parsedFile, symbolOf } from './scan/symbols.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
@@ -188,7 +189,7 @@ const harness = (): Harness => {
 
 const primedWatcher = async (h: Harness, coord: CoordStore, over: Partial<Deps> = {}): Promise<FleetWatcher> => {
   const deps: Deps = { ...testDeps(h.home, h.run), coord, ...over };
-  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(h.home, 'state-cache.json')));
   await w.tick();
   return w;
 };
@@ -272,7 +273,7 @@ describe('sweepStalls: gating', () => {
   it('does nothing before the watcher is primed, and judges once it is', async () => {
     const h = harness();
     const coord = store(h.home);
-    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000, path.join(h.home, 'state-cache.json')));
     seedRegistry(h.home, WORKER);
     seedLiveState(h.home);
     const runId = seedRun(coord, { program: 'demo-program' });
@@ -326,7 +327,7 @@ describe('sweepStalls: gating', () => {
   it('does nothing, and warns nothing, without a coordination store', async () => {
     const h = harness();
     const reads: string[] = [];
-    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io: countingIO(reads) }), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io: countingIO(reads) }), new Bus(), 2000, path.join(h.home, 'state-cache.json')));
     await w.tick();
     seedRegistry(h.home, WORKER);
     seedLiveState(h.home);

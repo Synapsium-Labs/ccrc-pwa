@@ -28,6 +28,7 @@ import { readSessionRecord } from '../src/registry.js';
 import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import type { HibernateActPort } from '../src/sleepLane.js';
@@ -307,7 +308,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     // agent's whitelist before it is recorded, and the sweep's catch would swallow that — so any ccd call at all,
     // granted or not, lands in `calls` here.
     const deps = { ...testDeps(home, run), runCcd: ccdRunner(run, cfg), cfg, coord, viewers: new Viewers() };
-    const w = new FleetWatcher(deps as never, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps as never, new Bus(), 10_000));
     (w as unknown as { sleepStartedAt: number }).sleepStartedAt = startedAt;
     const tick = async () => {
       const r = await readSessionRecord(deps.io, cfg, WID);

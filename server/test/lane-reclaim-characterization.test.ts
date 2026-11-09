@@ -22,6 +22,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { loadConfig } from '../src/config.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import { collectRig } from './collectLaneFixture.js';
 
 const NOW = 1_785_300_000_000;
@@ -46,7 +47,7 @@ function rig() {
   const cfg = loadConfig({ CCRC_HOME: home } as never);
   const t = { mono: 5_000 };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const w = new FleetWatcher({ ...testDeps(home), cfg, coord, monotonicMs: () => t.mono } as never, new Bus(), 10_000);
+  const w = quietAtTestEnd(new FleetWatcher({ ...testDeps(home), cfg, coord, monotonicMs: () => t.mono } as never, new Bus(), 10_000), { lanes: false });
   return { w, t, coord };
 }
 type Rig = ReturnType<typeof rig>;

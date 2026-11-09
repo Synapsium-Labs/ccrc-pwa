@@ -20,6 +20,7 @@ import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 const NOW = 1_785_300_000_000;
 const HOUR = 3_600_000;
@@ -54,7 +55,9 @@ function rig(h: Hooks = {}) {
     },
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const w = new FleetWatcher({ ...testDeps(home), monotonicMs, cfg, io, coord } as never, new Bus(), 10_000);
+  // D-8140: quieted when the test ends, so the delegation pass a tick started never logs after the file has finished.
+  // `lanes: false`: the flight cases hold a lane run that never settles on purpose, so only the delegation lane is closed.
+  const w = quietAtTestEnd(new FleetWatcher({ ...testDeps(home), monotonicMs, cfg, io, coord } as never, new Bus(), 10_000), { lanes: false });
   return { home, cfg, coord, w, registryListings };
 }
 type Rig = ReturnType<typeof rig>;
