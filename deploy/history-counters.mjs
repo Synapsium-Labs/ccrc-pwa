@@ -949,8 +949,8 @@ export const REDISCOVERY = Object.freeze({
 // stratify and this file's own folds, so counts add and no summary is ever added to another. A node report is data: a
 // row or an answer off the shapes count writes is refused, never folded or coerced: a row's turns and recall_calls (a
 // non-negative integer on a measured row, null on an unmeasured one) and each counter's measured value (its spec's
-// `answer`), and a row's ab_state (one of AB_STATES) with its unrealised (exactly ab_state !== AB_OK): stratify keys on
-// `unrealised` alone, and ab_state is checked as a word of the vocabulary and as the pair's other half. Also checked, because
+// `answer`), and a row's ab_state (one of AB_STATES) with its unrealised (exactly ab_state !== AB_OK): of that pair,
+// stratify keys on `unrealised` alone, and ab_state is checked as a word of the vocabulary and as the pair's other half. Also checked, because
 // combine sums or sorts them: each node report's `excluded.unmeasured.count` (a non-negative integer) and the entries of its
 // `dropped.changed` and `dropped.unrealised.*` lists (strings). NOT checked, named: a row's store_id against its node
 // report's, its ts_ms, family, boundary_uuid, ccrc_id and generation, and any extra field; and echo_hits' unreadable keys, which are free names (lib exports no vocabulary of
@@ -985,7 +985,8 @@ function combineRow(w, measures) {
  *  no counter report (counters-shape); definitions other than v1 (counters-def-mismatch); a COMBINE_SAME field other than
  *  the first node's (node-mismatch); a counter other than this one (script-mismatch); a store twice (store-duplicate);
  *  a row, an answer or a list off its shape (counters-shape): a row's ab_state, unrealised, turns and recall_calls, and each
- *  counter's measured value against its spec's `answer`. The record's stores no node report covers are named in
+ *  counter's measured value against its spec's `answer`, a node report's `excluded.unmeasured.count` and its dropped lists'
+ *  entries. The record's stores no node report covers are named in
  *  nodes_missing, never refused: the comparison says it is over fewer nodes than the record assigned (U2). measures and
  *  ownSha256 are injectable for tests. */
 export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 = scriptSha256() } = {}) {
