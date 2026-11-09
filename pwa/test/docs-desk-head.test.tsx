@@ -114,30 +114,62 @@ describe("the row's stage probe (review 1704 F7, F9)", () => {
     expect(probes(), 'no change, no probe').toBe(before + 1);
   });
 
-  it('a font face that finishes loading while another still loads re-probes the row (F7)', async () => {
-    atWidth(1280);
-    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
-    let loaded!: () => void;
-    const face = { status: 'loading', loaded: new Promise<void>((r) => { loaded = r; }) };
+  /** A stand-in font set holding `faces` (more can be pushed later), its `loading` listener kept. The event it is fired
+   *  with carries what Chromium's carries: an empty `fontfaces` (review 1722 F1). */
+  function standInFonts(faces: { status: string; loaded: Promise<void> }[]): { fireLoading: () => void } {
     let onLoading: ((e: { fontfaces: readonly unknown[] }) => void) | null = null;
-    let late!: () => void;
-    const lateFace = { status: 'loading', loaded: new Promise<void>((r) => { late = r; }) };
     const fonts = {
-      forEach: (f: (x: unknown) => void) => { f(face); },
+      forEach: (f: (x: unknown) => void) => { for (const face of faces) f(face); },
       addEventListener: (type: string, fn: never) => { if (type === 'loading') onLoading = fn; },
       removeEventListener: () => {},
     };
     Object.defineProperty(document, 'fonts', { value: fonts, configurable: true });
+    return { fireLoading: () => onLoading!({ fontfaces: [] }) };
+  }
+  function lateFace(status: string): { face: { status: string; loaded: Promise<void> }; load: () => void } {
+    let load!: () => void;
+    return { face: { status, loaded: new Promise<void>((r) => { load = r; }) }, load };
+  }
+
+  it('a face still unloaded at mount re-probes the row when it loads: a CSS face turns loading only at first layout (F7, review 1722 F1)', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    const ui = lateFace('unloaded');
+    const done = lateFace('loaded');
+    standInFonts([ui.face, done.face]);
     try {
       const probes = countProbes();
       open('/docs/demo/specs/a.md', fakeLoaders());
       await settled();
       const before = probes();
-      loaded();
-      await waitFor(() => expect(probes(), 'the face loaded at mount').toBe(before + 1));
-      onLoading!({ fontfaces: [lateFace] });
-      late();
+      ui.load();
+      await waitFor(() => expect(probes(), 'the face unloaded at mount').toBe(before + 1));
+    } finally {
+      Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
+  it('a loading event that names no face scans the set again, and a face is watched once (F7, review 1722 F1)', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    const ui = lateFace('loading');
+    const mono = lateFace('loading');
+    const faces = [ui.face];
+    const set = standInFonts(faces);
+    try {
+      const probes = countProbes();
+      open('/docs/demo/specs/a.md', fakeLoaders());
+      await settled();
+      const before = probes();
+      faces.push(mono.face);
+      set.fireLoading();
+      set.fireLoading();
+      ui.load();
+      await waitFor(() => expect(probes(), 'the face watched at mount').toBe(before + 1));
+      mono.load();
       await waitFor(() => expect(probes(), 'a face that starts loading later').toBe(before + 2));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(probes(), 'no face probes twice').toBe(before + 2);
     } finally {
       Reflect.deleteProperty(document, 'fonts');
     }

@@ -833,11 +833,14 @@ function rowFits(row: HTMLElement): boolean {
  *  `clientWidth` misses a change under a pixel; review 1704 F9), its contents change outside the crumbs (an action's
  *  words, a navigation, the tree arriving) or a font face finishes loading. Each face is watched on its own (review 1704
  *  F7): the set's `loadingdone` waits for every face, so a UI font that swaps in while the mono font still loads would
- *  change the crumbs' geometry with no probe. Each try renders synchronously (`flushSync`) from the observer's callback,
- *  so a stage that does not fit is not painted after any of these, and starting from 0 every time makes the stage a
- *  function of the width and the words alone, so a wider row never stands further on than a narrower one. A face that
- *  loads between the browser's paint and its promise settling can still show one frame at the old stage. Changes inside
- *  the crumbs are the fold's own and are not watched. With no ResizeObserver (jsdom) the row stays at 0. */
+ *  change the crumbs' geometry with no probe. At mount every face not yet loaded is watched through its `loaded`
+ *  promise, `unloaded` ones too, since a CSS face turns `loading` only at the first layout; each `loading` event scans
+ *  the set again, since Chromium's event names no face (its `fontfaces` is empty); and no face is watched twice (review
+ *  1722 F1). Each try renders synchronously (`flushSync`) from the observer's callback, so a stage that does not fit is
+ *  not painted after any of these, and starting from 0 every time makes the stage a function of the width and the words
+ *  alone, so a wider row never stands further on than a narrower one. A face that loads between the browser's paint and
+ *  its promise settling can still show one frame at the old stage. Changes inside the crumbs are the fold's own and are
+ *  not watched. With no ResizeObserver (jsdom) the row stays at 0. */
 function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
   const [stage, setStage] = useState<RowStage>(0);
   useLayoutEffect(() => {
@@ -863,11 +866,14 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
     resized.observe(row);
     changed.observe(row, { childList: true, subtree: true, characterData: true });
     let live = true;
+    const watched = new WeakSet<FontFace>();
     const watch = (face: FontFace): void => {
-      if (face.status === 'loading') void face.loaded.then(() => { if (live) probe(); }, () => undefined);
+      if ((face.status !== 'unloaded' && face.status !== 'loading') || watched.has(face)) return;
+      watched.add(face);
+      void face.loaded.then(() => { if (live) probe(); }, () => undefined);
     };
-    const onLoading = (e: Event): void => { for (const face of (e as FontFaceSetLoadEvent).fontfaces ?? []) watch(face); };
     const fonts = typeof document === 'undefined' ? undefined : document.fonts;
+    const onLoading = (): void => { fonts?.forEach?.(watch); };
     fonts?.forEach?.(watch);
     fonts?.addEventListener?.('loading', onLoading);
     fonts?.addEventListener?.('loadingdone', probe);
