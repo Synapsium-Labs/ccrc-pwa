@@ -31236,7 +31236,11 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   age=$(( now - since ))
   (( age >= n * 60 )) || return 0
   _reg_get_to last "$id" lastswap || last=""
-  if [[ "$last" =~ ^[0-9]+$ ]] && (( 10#$last >= since )); then return 0; fi   # a swap followed the sign's start: the normal path did its job
+  # THE CLOCK RESTARTS AT THE LAST MOVE. A swap that followed the sign's start (the normal path's, or this watchdog's own)
+  # gets N minutes to land and clear the sign; the episode is forced only when the sign is still up N minutes after the later
+  # of its start and that move. A landing that is blocked at once (a stale low reading chose the room) or a dispatch that
+  # failed after `lastswap` was stamped keeps the sign continuous, and `since` alone would leave the session unwatched.
+  if [[ "$last" =~ ^[0-9]+$ ]] && (( 10#$last > since )) && (( now - 10#$last < n * 60 )); then return 0; fi
   (( WD_FORCED < WATCHDOG_PER_PASS )) || return 0
   # THE HOLDS THE RULINGS DO NOT NAME.
   _reg_get_to bts "$id" swapblocked || bts=""; bts="${bts%% *}"

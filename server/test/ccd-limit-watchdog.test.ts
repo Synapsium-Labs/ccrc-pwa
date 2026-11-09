@@ -141,13 +141,42 @@ describe('the banner rung: five minutes with no swap forces the rescue', () => {
     expect(dispatches()).toEqual([]);                 // 10 s into the new episode, 300 s after the first sight
   });
 
-  it('a swap after the sign began: no act (the normal path did its job)', () => {
+  it('a swap after the sign began: no act until the sign has outlived that swap by N minutes', () => {
     seed(); fleet();
     pass(BANNER, T0);
     h.sh(`_reg_set ${ID} lastswap ${T0 + 100}`);
-    pass(BANNER, T0 + 400);
+    pass(BANNER, T0 + 399);                           // 299 s after the swap: the normal path is still given its time
     expect(dispatches()).toEqual([]);
     expect(lines('watchdog-rescue')).toEqual([]);
+    pass(BANNER, T0 + 400);                           // a full N minutes after the swap and still on a limit
+    expect(lines('watchdog-rescue')).toHaveLength(1);
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('the watchdog\'s own move restarts the clock: a landing still on a limit is forced again N minutes later', () => {
+    seed(); fleet();
+    pass(BANNER, T0);
+    pass(BANNER, T0 + 300);                           // the first forced move; lastswap = T0 + 300
+    expect(dispatches()).toHaveLength(1);
+    expect(field(ID, 'lastswap')).toBe(String(T0 + 300));
+    pass(BANNER, T0 + 360);                           // the sign never cleared (the landing hit a limit at once)
+    pass(BANNER, T0 + 599);
+    expect(dispatches()).toHaveLength(1);             // inside N minutes of its own move: quiet
+    pass(BANNER, T0 + 600);
+    expect(lines('watchdog-rescue')).toHaveLength(2);
+    expect(dispatches()).toHaveLength(2);
+    expect(field(ID, 'lastswap')).toBe(String(T0 + 600));
+  });
+
+  it('a move whose dispatch failed after the stamp is retried N minutes after it, not never', () => {
+    seed(); fleet();
+    pass(BANNER, T0);
+    pass(BANNER, T0 + 300, '_dispatch_swap() { echo "dispatch $1 -> $2 $3 (failed)" >> "$HOME/ccd-calls"; return 1; };');
+    expect(field(ID, 'lastswap')).toBe(String(T0 + 300));   // left stamped by the failure
+    pass(BANNER, T0 + 599);
+    expect(dispatches()).toHaveLength(1);
+    pass(BANNER, T0 + 600);
+    expect(dispatches()).toHaveLength(2);
   });
 
   it('no lastswap at all is no hold either', () => {

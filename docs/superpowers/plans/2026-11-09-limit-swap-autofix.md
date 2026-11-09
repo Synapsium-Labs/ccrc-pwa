@@ -461,7 +461,7 @@ cmd_limit_watchdog() {   # (no args) — one pass over every live session; alway
 #   _watchdog_sign_to sign id  -> sign = pane|banner|menu|transcript|account|"" (carried-in rows excluded)
 #   no sign: rm `$REG/<id>.limitsign`; close an open limitwait (Task 10)
 #   sign:    keep `$REG/<id>.limitsign` = "<since> <sign>" (since is the first pass that saw any sign)
-#   now - since >= N*60 AND (no lastswap OR lastswap < since):
+#   now - since >= N*60 AND (no lastswap OR lastswap <= since OR now - lastswap >= N*60):   # the clock restarts at the last move
 #     sign == account AND the pane shows `esc to interrupt`: log `watchdog-hold <id>: running` once, act next pass
 #     target with MEASURED room: CCD_RESCUE_MEASURED_ONLY=1 _rescue_target id wrapper home 1 hrc
 #       (rc 5: one retry with CCD_CLASS_GATE_OFF=1, as Task 4)
@@ -499,7 +499,8 @@ it('a banner for 5 minutes with no swap: watchdog-rescue past the cooldown and a
   expect(dispatches()).toEqual([expect.stringMatching(/ watchdog$/)]);
 });
 it('the sign clears between passes: the clock restarts', () => {});
-it('a swap after the sign began: no act (the normal path did its job)', () => {});
+it('a swap after the sign began: no act until the sign has outlived that swap by N minutes', () => {});
+it('the watchdog\'s own move restarts the clock: a landing still on a limit is forced again N minutes later', () => {});
 it('account-only sign while mid-turn: watchdog-hold running, no dispatch', () => {});
 it('an account reading 99 older than SWAP_FRESH is no sign', () => {});
 it('no account has measured room: watchdog-noroom once, a strand, a limitwait record, no dispatch', () => {});
@@ -599,7 +600,7 @@ it('choice=wait and the reset passed with room on its own account: watchdog-resu
 | False limit from the wider read | A banner-shaped line in the conversation triggers a rescue. | The whole-pane read is used only while the menu is up, and only for the specific current-banner pattern. The broad pattern stays on `tail -8`. | Task 6 "banner-shaped line … no menu, is not a block" |
 | Draft loss | The watchdog override, or a narrow pane whose box read misses a wrapped draft, ends a session with typed text. The conversation carries over and the draft is lost. | Ruled for the watchdog after N minutes. The narrow pane keeps the `draft` stand-down when the box read sees one. | Task 9 act gate "draft -> proceeds"; Task 5 "narrow pane with a draft stands down" |
 | Lost turn | A forced move while the session is working. | The account-only sign waits for the turn to end. Every other sign means the session is not working. | Task 9 "account-only sign while mid-turn" |
-| Double act | The watchdog and a supervisor tick decide the same second. | The dispatch claim, and the watchdog acts only when no swap followed the sign's start. | Task 8; Task 9 "a swap after the sign began" |
+| Double act | The watchdog and a supervisor tick decide the same second. | The dispatch claim, and the watchdog acts only when no swap moved the session in the last N minutes. | Task 8; Task 9 "a swap after the sign began" |
 | Wake latency | A wake move's carry takes longer than an ensure's caller waits. | The move runs in its own transient unit and the ensure returns at once. A caller sees the session come up on the new account a little later. | Task 1 first case (detached, no `supervised-start`) |
 
 ## Known limits
