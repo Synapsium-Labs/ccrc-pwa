@@ -9404,6 +9404,7 @@ EOF
   echo pr-state-pr-v1   # `ccd pr-state --project <p> --pr <n>`: one PR by number; sent only behind this word
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
   echo refusal-v1   # #560: `_lc_refuse` prints `ccd-refusal: <act> <word>` on stderr before its die; the server reads it first and keeps its prose matchers as the fallback
+  echo limit-watchdog   # D-8123: the fleet limit watchdog's one pass, run by ccd-limit-watchdog.timer; never sent by the server
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
 }
 
@@ -24642,6 +24643,7 @@ _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home 
   case "${CCD_SWAP_ARM:-}" in
     affinity) printf 'swap-auto-home' ;;
     rescue)   printf 'swap-auto-rescue' ;;
+    watchdog) printf 'swap-auto-rescue' ;;   # D-8123: the fleet watchdog's forced move is a rescue; the existing word, so no server contract changes
     wake)     printf 'swap-auto' ;;   # D-8123: the wake move is named by its arm but takes the generic word; a new cause word would be a server contract
     *)        printf 'swap-auto' ;;
   esac
@@ -24674,6 +24676,7 @@ _resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). 
     swap-auto-rescue) what="an automatic account swap off a blocked account" ;;
     swap-auto)        what="an automatic account swap" ;;
     swap-manual)      what="an account swap asked for by hand" ;;
+    limit-resume)     what="a restart on the same account after its usage limit reset" ;;   # D-8123: `_watchdog_resume_here`
     *)                what="a supervisor revival whose cause could not be read" ;;
   esac
   head="${RESUME_PROMPT%%"$RESUME_CAUSE_GENERIC"*}"; tail="${RESUME_PROMPT#*"$RESUME_CAUSE_GENERIC"}"
@@ -30482,6 +30485,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
         fi ;;
       rescue)
         _swap_rescue_act_gate "$id" "$cur" || return 0 ;;
+      watchdog) _swap_watchdog_act_gate "$id" "$cur" || return 0 ;;   # D-8123: the fleet watchdog's forced rescue re-asks its own sign at the act
       wake) ;;   # D-8123: nothing is running to back off from or to re-queue, so no act gate; the carry's own pre-flights still apply
     esac
     if ! _route_degrade_at_move "$id" "${CCD_SWAP_DFROM:-}" "${CCD_SWAP_DTO:-}"; then
@@ -30983,6 +30987,333 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
     return 1
   fi
   WAKE_MOVE_TARGET="$target"
+  return 0
+}
+
+# ── THE FLEET LIMIT WATCHDOG (D-8123, operator ruling 4) ────────────────────────────────────────────────────────────────
+# `ccd limit-watchdog` is ONE pass over every live session, run once a minute by `ccd-limit-watchdog.timer` and NOT by a
+# supervisor tick: a supervisor that is itself wedged, or one still on a pre-fix inode, cannot silence the backstop for its
+# own sessions. The 2026-11-08 swap study found a coordinator that sat on a limit for 42 s and then needed a hand swap;
+# every cause of that kind (a stand-down hold, a cached verdict, a draft, a class window nobody can decide) ends the same
+# way, a session on a usage limit that nothing moves. This is the net under all of them.
+#
+# A SIGN is the first rung that holds, in order (`_watchdog_sign_to`): the pane's last eight rows (`_pane_hard_blocked`),
+# the current banner over the whole visible pane while the rate-limit menu is up (`_pane_limit_banner`), the menu itself
+# (`_pane_limit_menu`), the transcript's newest real row (`_limit_dated`, UNCACHED: `.tscan` is neither read nor written), and
+# the session's account at SWAP_CEILING or more on a reading younger than SWAP_FRESH. A banner a swap carried in from before
+# this process is no sign (`_pane_carried_in`, `_limit_dated` rc 3). `$REG/<id>.limitsign` = `<since> <sign>[ <flag>…]` holds
+# the first pass that saw any sign; a pass with none removes it. The flags (`held`, `blocked`, `waiting`, `noroom`,
+# `undecided`) are the words already said once this episode, so one episode never writes one line per minute.
+#
+# It acts when the sign has stood for N minutes (`CCRC_LIMIT_WATCHDOG_MIN`, default 5, 0 off) and no swap was stamped after
+# it began (`lastswap` older than `since`): the normal path did its job otherwise. It then passes the holds the rulings name
+# (SWAP_COOLDOWN, a draft in the input box, a fresh stale-press) and keeps the ones they do not: a RUNNING turn on an
+# account-only sign (a session at 98 can still be working, and a stop loses the turn; a banner, menu or transcript sign
+# cannot be mid-turn), a swap the box just refused (`swapblocked`, the storm SWAPBLOCK_COOLDOWN exists for) and an open
+# near or chain rescue wait on the same account (the herd and do-not-bounce policy, which is bounded). Each hold is said once.
+#
+# The target is the normal rescue's (`_rescue_target`, rule 3's skip lists applied) restricted to accounts with MEASURED room
+# (`CCD_RESCUE_MEASURED_ONLY=1`: an account whose usage is unknown is never counted as room). An undecidable class window
+# retries once without the class gate, as the tick does. At most WATCHDOG_PER_PASS (3) forced rescues leave one pass, the rest
+# wait for the next (the 2026-08-14 herd), and a pass that has used WATCHDOG_BUDGET_S stops (the unit's start timeout is 50 s).
+#
+# With no account that has measured room it moves nothing: it writes `$REG/<id>.limitwait` (the Waiting on you item's
+# source, one writer: `_limitwait_open`/`_limitwait_close`) and, for a pane, banner, menu or transcript sign, strands the
+# session. An account-only sign is not stranded: the session is not blocked, and the supervisor tick would clear the marker
+# within seconds and the next pass set it again.
+#
+# THE OPERATOR'S CHOICE. `choice=wait` on an open record (Task 10's `ccd limit-wait`) means "wait until the limit resets":
+# the watchdog then moves nothing. When the record's reset has passed (or is unknown) and the session's OWN account has
+# measured room, `_watchdog_resume_here` restarts the session in place on that account (stop and ensure, in a transient unit,
+# the cause `limit-resume`), because Claude Code does not always continue by itself.
+#
+# NO KEYS, EVER. Nothing in this region reads or writes the input box or sends a key: the rate-limit menu is never typed
+# into (an Enter or a digit there can pick "Switch to usage credits"). The rescue's one act is `ccd swap`, which ends the
+# session and resumes it on another account; the in-place restart is `_svc_stop`, a pane kill and `cmd_ensure`.
+# `ccd-limit-no-keys.test.ts` cuts these bodies out of this file and refuses a key sender in any of them.
+WATCHDOG_PER_PASS=3     # forced rescues one pass may dispatch
+WATCHDOG_BUDGET_S=40    # seconds a pass works before it stops
+WD_FORCED=0             # forced rescues dispatched so far by this pass
+WD_SINCE="" WD_SIGN="" WD_FLAGS=""   # `_wd_record_read`'s answer
+
+_wd_record_read() {   # id now -> WD_SINCE WD_SIGN WD_FLAGS from `$REG/<id>.limitsign`; rc 0 a good record | 1 absent, torn, or dated ahead of now
+  local rec="" re='^([0-9]{1,12}) (pane|banner|menu|transcript|account)(( [a-z]+)*)$'
+  WD_SINCE="" WD_SIGN="" WD_FLAGS=""
+  _reg_get_to rec "$1" limitsign || return 1
+  [[ "$rec" =~ $re ]] || return 1   # a torn or hand-edited field is matched, never evaluated
+  local since="${BASH_REMATCH[1]}" sign="${BASH_REMATCH[2]}" flags="${BASH_REMATCH[3]}"   # before the next `=~` replaces them
+  [[ "$2" =~ ^[0-9]+$ ]] && (( 10#$since <= 10#$2 )) || return 1
+  WD_SINCE=$(( 10#$since )); WD_SIGN="$sign"; WD_FLAGS="$flags"
+  return 0
+}
+
+_wd_flag_has() { [[ " $1 " == *" $2 "* ]]; }   # flags word -> 0 iff the episode already carries the word
+
+_wd_flag_once() {   # id word -> rc 0 the word was NOT yet said this episode (now recorded: the caller says it) | 1 already said
+  _wd_flag_has "$WD_FLAGS" "$2" && return 1
+  _reg_set "$1" limitsign "$WD_SINCE $WD_SIGN$WD_FLAGS $2" || return 1
+  WD_FLAGS="$WD_FLAGS $2"
+  return 0
+}
+
+_watchdog_clear() {   # id — no sign: the episode is over. Its record goes and an open limitwait closes `clear`. Always 0.
+  local f="$REG/$1.limitsign"
+  [[ -e "$f" || -L "$f" ]] && rm -f -- "$f"
+  [[ -e "$REG/$1.limitwait" ]] && _limitwait_close "$1" clear
+  return 0
+}
+
+_limitwait_open() {   # id wrapper sign -> the one writer of `$REG/<id>.limitwait` (D-8123); rc 0 | 1 could not record
+  # `state=open since=<epoch> reset=<epoch|-> account=<wrapper> sign=<sign>[ choice=wait at=<epoch>]`. The reset is the
+  # transcript row's own (`HARD_BLOCK_RESET`, set by this pass's sign rung), else the account's `fiveResetAt` or
+  # `sevenResetAt` for the window at the ceiling (the later when both are), else `-`; a reset that is not ahead of now is `-`.
+  # An open record for the same account stands as it is (its `since` and any choice are the operator's to keep); one for
+  # another account is closed `swap` first.
+  local id="$1" w="$2" sign="$3" rec="" reset="-" now r5 r7 f5 f7 best=""
+  _reg_get_to rec "$id" limitwait || rec=""
+  if [[ "$(_rw_field "$rec" state)" == open ]]; then
+    [[ "$(_rw_field "$rec" account)" == "$w" ]] && return 0
+    _limitwait_close "$id" swap
+  fi
+  _now_s_to now
+  if [[ "${HARD_BLOCK_RESET:-}" =~ ^[0-9]+$ ]]; then best="$HARD_BLOCK_RESET"
+  else
+    _limit_field_to f5 "$w" five 0; _limit_field_to f7 "$w" seven 0
+    r5=$(_limit_json_num "$LIMITS_DIR/$w.json" fiveResetAt 2>/dev/null); r7=$(_limit_json_num "$LIMITS_DIR/$w.json" sevenResetAt 2>/dev/null)
+    if [[ "$f5" =~ ^[0-9]+$ && "$r5" =~ ^[0-9]+$ ]] && (( 10#$f5 >= SWAP_CEILING )); then best="$r5"; fi
+    if [[ "$f7" =~ ^[0-9]+$ && "$r7" =~ ^[0-9]+$ ]] && (( 10#$f7 >= SWAP_CEILING )); then
+      if [[ -z "$best" ]] || (( 10#$r7 > 10#$best )); then best="$r7"; fi
+    fi
+  fi
+  [[ "$best" =~ ^[0-9]+$ ]] && (( 10#$best > now )) && reset=$(( 10#$best ))
+  _reg_set "$id" limitwait "state=open since=$now reset=$reset account=$w sign=$sign" || return 1
+  return 0
+}
+
+_limitwait_close() {   # id end-word — close an open record: `state=closed` with ` end=<word> until=<epoch>` appended. A no-op unless one is open. Always 0.
+  local id="$1" end="$2" rec="" now
+  _reg_get_to rec "$id" limitwait || return 0
+  [[ "$(_rw_field "$rec" state)" == open ]] || return 0
+  _now_s_to now
+  _reg_set "$id" limitwait "${rec/state=open/state=closed} end=$end until=$now" || return 0
+  return 0
+}
+
+_watchdog_sign_to() {   # var id -> var = pane|banner|menu|transcript|account, or "" when the session shows no limit sign (rc 0 always)
+  # The rungs and their order are the section header's. Sets `HARD_BLOCK_RESET/TYPE/ROW` as the dated reads do, for the limitwait's
+  # reset (cleared first, so a value from the previous session in this pass is never read). Never writes `.tscan`.
+  local id="$2" tail cap born w five seven s="" narrow=""
+  HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
+  _pane_measurable "$id" || narrow=1   # a narrow pane's text is never read, as `_session_hard_blocked` keeps it
+  if [[ -z "$narrow" ]]; then
+    tail=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+    if _pane_hard_blocked "$tail" && ! _pane_carried_in "$id" pane "$tail"; then s=pane
+    else
+      _pane_limit_capture_to cap "$id" "$tail"
+      if _pane_limit_banner "$cap" && ! _pane_carried_in "$id" banner "$cap"; then s=banner
+      elif _pane_limit_menu "$cap"; then s=menu
+      fi
+    fi
+  fi
+  if [[ -z "$s" ]]; then
+    born=$(_pane_born "$id")
+    _limit_dated "$id" transcript "$born" && s=transcript
+  fi
+  if [[ -z "$s" ]] && _reg_read_to w "$id" wrapper && [[ -n "$w" ]]; then
+    _limit_field_to five "$w" five "$SWAP_FRESH"; _limit_field_to seven "$w" seven "$SWAP_FRESH"
+    if [[ "$five" =~ ^[0-9]+$ ]] && (( 10#$five >= SWAP_CEILING )); then s=account
+    elif [[ "$seven" =~ ^[0-9]+$ ]] && (( 10#$seven >= SWAP_CEILING )); then s=account
+    fi
+  fi
+  printf -v "$1" '%s' "$s"
+  return 0
+}
+
+_wd_running() {   # id -> rc 0 iff the pane shows a turn running, or cannot be read well enough to say it is not (an account-only sign waits)
+  local id="$1" tail
+  _pane_measurable "$id" || return 0
+  tail=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+  [[ -n "$tail" ]] || return 0
+  grep -q "esc to interrupt" <<<"$tail"
+}
+
+_swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelled or backed off (logged, `lastswap` restored, nothing stopped)
+  # Re-asks the decision's own question at the act, after the dispatch's jitter: no sign any more -> `watchdog-cancel`; output
+  # since the decision, or a turn running under an account-only sign -> `rescue-backoff`. A DRAFT OR A STALE-PRESS DOES NOT
+  # BACK OFF (ruled): the watchdog is the net for exactly the session those holds keep on a limit. Never reads or writes the input box.
+  local id="$1" sign="" word=""
+  _watchdog_sign_to sign "$id"
+  if [[ -z "$sign" ]]; then
+    echo "$(date '+%F %T') watchdog-cancel $id: no limit sign" >> "$REG/swap.log"
+    _swap_lastswap_restore "$id"
+    return 1
+  fi
+  [[ "$sign" == account ]] && _wd_running "$id" && word=running
+  [[ -z "$word" ]] && _swap_output_since "${CCD_SWAP_TX:-}" "${CCD_SWAP_TX_BYTES:-}" && word="output since decision"
+  [[ -n "$word" ]] || return 0
+  echo "$(date '+%F %T') rescue-backoff $id: $word" >> "$REG/swap.log"
+  _swap_lastswap_restore "$id"
+  return 1
+}
+
+_watchdog_resume_run() {   # id — the transient unit's body: the stop-and-ensure a swap does, on the SAME account. Types nothing.
+  local id="$1"
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # the operator's own /model and /effort reach the record first (§5.7)
+  _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects the old pane
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
+  sleep 1   # let claude flush its final transcript entries
+  _reg_set "$id" supervised "$(date +%s)"
+  cmd_ensure "$id"
+}
+
+_watchdog_resume_here() {   # id -> rc 0 the session was restarted in place | 1 still waiting (or nothing to resume)
+  # The operator chose "Wait until reset" (`choice=wait` on an open limitwait). Past the record's reset, or at once when the
+  # reset is unknown (`-`), and once the session's OWN account has MEASURED room (both windows it applies, under the ceiling,
+  # `_limit_score`), the conversation is restarted in place: `_end_record id limit-resume`, then `_watchdog_resume_run` in
+  # its own transient unit. Claude Code's own continuation is not guaranteed to fire at the reset, and the banner can
+  # still be on the pane. `lastswap` is stamped as the wake move does (a restart is a move to the supervisor's cooldown,
+  # and a banner the old process wrote is then carried in, not a block) and put back when the unit cannot start.
+  local id="$1" w="" lw="" reset prev="" now score
+  _reg_get_to lw "$id" limitwait || return 1
+  [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait ]] || return 1
+  _reg_read_to w "$id" wrapper && [[ -n "$w" ]] || return 1
+  [[ "$(_rw_field "$lw" account)" == "$w" ]] || return 1   # a record about another account says nothing about this one
+  _now_s_to now
+  reset="$(_rw_field "$lw" reset)"
+  if [[ "$reset" =~ ^[0-9]+$ ]]; then (( now >= 10#$reset )) || return 1; fi
+  score=$(_limit_score "$w")
+  [[ "$score" =~ ^[0-9]+$ ]] && (( 10#$score < SWAP_CEILING )) || return 1
+  _reg_get_to prev "$id" lastswap || prev=""
+  _end_record "$id" limit-resume
+  _reg_set "$id" lastswap "$now"
+  echo "$(date '+%F %T') watchdog-resume $id: $w after reset" >> "$REG/swap.log"
+  # THE UNIT SOURCES THE BODY, NOT `~/.local/bin/ccd`: that path is the installed Python launcher (ccd-entry.py), and sourcing
+  # it would define nothing. `${BASH_SOURCE[0]}` in a function is the file that defines it, the body this process runs.
+  local body="${BASH_SOURCE[0]}" qb qi
+  [[ "$body" == /* ]] || body="$PWD/$body"
+  printf -v qb '%q' "$body"; printf -v qi '%q' "$id"
+  if ! _svc_run_detached bash -c "source $qb && _watchdog_resume_run $qi >>'$REG/swap.log' 2>&1"; then
+    echo "$(date '+%F %T') dispatch FAILED for $id -> $w (resume)" >> "$REG/swap.log"
+    if [[ "$prev" =~ ^[0-9]+$ ]]; then _reg_set "$id" lastswap "$prev"; else rm -f -- "$REG/$id.lastswap"; fi
+    return 1
+  fi
+  _limitwait_close "$id" resume
+  rm -f -- "$REG/$id.limitsign"
+  return 0
+}
+
+_watchdog_hold() {   # id word text -> say `watchdog-hold <id>: <text>` once per episode (the flag `word`). Always 0.
+  _wd_flag_once "$1" "$2" && echo "$(date '+%F %T') watchdog-hold $1: $3" >> "$REG/swap.log"
+  return 0
+}
+
+_watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everything else is a record and at most one log line. Always 0.
+  local id="$1" now="$2" n="$3" sign="" wrapper="" home="" hrc project="" last="" bts="" rw="" target="" trc dfrom="" dto="" tx="" txb="" lw="" m age since
+  if [[ -e "$REG/$id.hibernated" || -e "$REG/$id.stopped" ]]; then _watchdog_clear "$id"; return 0; fi
+  _session_probe "$id"
+  case "$PROBE_VERDICT" in
+    live) ;;
+    gone) _watchdog_clear "$id"; return 0 ;;   # no process, no sign; a swap in flight is a new process
+    *)    return 0 ;;                          # nobody can say: nothing is read, nothing is cleared, nothing is stopped
+  esac
+  _reg_read_to wrapper "$id" wrapper && [[ -n "$wrapper" ]] || return 0
+  _watchdog_sign_to sign "$id"
+  if [[ -z "$sign" ]]; then _watchdog_clear "$id"; return 0; fi
+  # THE EPISODE'S RECORD: `since` is the first pass that saw any sign; a different sign keeps it.
+  if _wd_record_read "$id" "$now"; then
+    since="$WD_SINCE"
+    [[ "$WD_SIGN" == "$sign" ]] || { _reg_set "$id" limitsign "$since $sign$WD_FLAGS" || return 0; WD_SIGN="$sign"; }
+  else
+    since="$now"; WD_SINCE="$now"; WD_SIGN="$sign"; WD_FLAGS=""
+    _reg_set "$id" limitsign "$since $sign" || return 0
+  fi
+  # THE OPERATOR WAITS. Nothing is moved; the session restarts in place once its own account has room again.
+  _reg_get_to lw "$id" limitwait || lw=""
+  if [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait ]]; then
+    _watchdog_resume_here "$id" || :
+    return 0
+  fi
+  age=$(( now - since ))
+  (( age >= n * 60 )) || return 0
+  _reg_get_to last "$id" lastswap || last=""
+  if [[ "$last" =~ ^[0-9]+$ ]] && (( 10#$last >= since )); then return 0; fi   # a swap followed the sign's start: the normal path did its job
+  (( WD_FORCED < WATCHDOG_PER_PASS )) || return 0
+  # THE HOLDS THE RULINGS DO NOT NAME.
+  _reg_get_to bts "$id" swapblocked || bts=""; bts="${bts%% *}"
+  if [[ "$bts" =~ ^[0-9]+$ ]] && (( now - 10#$bts < SWAPBLOCK_COOLDOWN )); then
+    _watchdog_hold "$id" blocked "a swap was refused $(( now - 10#$bts ))s ago (swapblocked); the watchdog waits out SWAPBLOCK_COOLDOWN"
+    return 0
+  fi
+  _reg_get_to rw "$id" rescuewait || rw=""
+  if [[ "$(_rw_field "$rw" state)" == open && "$(_rw_field "$rw" wrapper)" == "$wrapper" ]]; then
+    case "$(_rw_field "$rw" kind)" in
+      near|chain) _watchdog_hold "$id" waiting "rescue wait ($(_rw_field "$rw" kind)) is open on $wrapper; the rescue policy's bounded wait runs first"; return 0 ;;
+    esac
+  fi
+  if [[ "$sign" == account ]] && _wd_running "$id"; then
+    if _pane_measurable "$id"; then _watchdog_hold "$id" held running
+    else _watchdog_hold "$id" held "the pane is too narrow to tell whether a turn is running"; fi
+    return 0
+  fi
+  # THE TARGET: measured room only, the normal rescue's skip lists, the class gate dropped once when the window is undecidable.
+  _home_measured_to home "$id"; hrc=$?
+  if [[ "$hrc" -eq 2 ]]; then home=""; else hrc=0; fi
+  target=$(CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
+  if [[ "$trc" -eq 5 ]]; then
+    target=$(CCD_CLASS_GATE_OFF=1 CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
+    if [[ "$trc" -eq 0 && -n "$target" ]]; then
+      echo "$(date '+%F %T') class-gate-dropped $id: class window undecidable; rescuing without the class gate" >> "$REG/swap.log"
+    fi
+  fi
+  if [[ "$trc" -eq 6 ]]; then
+    dfrom=$(_route_peek "$id" class); dto=$(_class_below "$dfrom")
+    trc=0
+  fi
+  m=$(( age / 60 ))
+  if (( trc >= 2 )); then
+    _wd_flag_once "$id" undecided && echo "$(date '+%F %T') watchdog-undecidable $id: rc$trc" >> "$REG/swap.log"
+    return 0
+  fi
+  if (( trc == 1 )) || [[ -z "$target" || "$target" == "$wrapper" ]]; then
+    # NOWHERE TO GO. The operator is told through the record, once per episode in the log.
+    _wd_flag_once "$id" noroom && echo "$(date '+%F %T') watchdog-noroom $id: $wrapper sign=$sign for=${m}m and no account has measured room" >> "$REG/swap.log"
+    _limitwait_open "$id" "$wrapper" "$sign" || :
+    if [[ "$sign" != account && ! -e "$REG/$id.stranded" ]]; then
+      _reg_get_to project "$id" project || project=""
+      _strand_mark "$id" "$wrapper" "$project" "limit sign $sign for $m min and no account has measured room"
+    fi
+    return 0
+  fi
+  _strand_clear "$id"
+  _reg_set "$id" lastswap "$now"
+  echo "$(date '+%F %T') watchdog-rescue $id: $wrapper -> $target [home=$home] sign=$sign for=${age}s" >> "$REG/swap.log"
+  tx=$(_transcript_path "$id" 2>/dev/null) && [[ -f "$tx" ]] && txb=$(_plat_size "$tx" 2>/dev/null) || { tx=""; txb=""; }
+  [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"
+  [[ -e "$REG/$id.standdownaff" ]] && rm -f -- "$REG/$id.standdownaff"
+  _dispatch_swap "$id" "$target" watchdog "$last" "$now" "$dfrom" "$dto" "$tx" "$txb" && WD_FORCED=$(( WD_FORCED + 1 ))
+  return 0
+}
+
+cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits 0 unless the registry is unreadable
+  [[ $# -eq 0 ]] || die "usage: ccd limit-watchdog"
+  local n="" f id now t0=$SECONDS
+  [[ -d "$REG" && -r "$REG" ]] || { echo "ccd: limit-watchdog: the registry $REG is unreadable" >&2; return 1; }
+  _limit_rescue_knob_to n CCRC_LIMIT_WATCHDOG_MIN 5
+  [[ "$n" =~ ^[0-9]+$ ]] || n=5
+  n=$(( 10#$n ))
+  (( n > 0 )) || return 0   # 0 is off: nothing is read or written
+  _now_s_to now
+  WD_FORCED=0
+  shopt -s nullglob
+  for f in "$REG"/*.uuid; do
+    id="${f##*/}"; id="${id%.uuid}"
+    [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue   # an id is quoted into the dispatch's unit command
+    if (( SECONDS - t0 >= WATCHDOG_BUDGET_S )); then
+      echo "$(date '+%F %T') watchdog-budget: the pass used its ${WATCHDOG_BUDGET_S}s and stopped before $id" >> "$REG/swap.log"
+      break
+    fi
+    _watchdog_one "$id" "$now" "$n"
+  done
   return 0
 }
 
@@ -46629,6 +46960,7 @@ case "${1:-}" in
   pane-scope-stop) shift; cmd_pane_scope_stop "$@" ;;
   scope-sweep-busy) shift; cmd_scope_sweep_busy "$@" ;;
   delegation-adopt) shift; cmd_delegation_adopt "$@" ;;
+  limit-watchdog) shift; cmd_limit_watchdog "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -46643,6 +46975,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

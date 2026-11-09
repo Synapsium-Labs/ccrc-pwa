@@ -4565,6 +4565,7 @@ export const RESTART_CAUSE_WORDS = {
   'swap-auto-rescue': 'swapped off a blocked account',
   'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
   'swap-manual': 'swapped by hand',
+  'limit-resume': 'restarted after a limit reset',   // D-8123: the fleet watchdog's in-place restart once an awaited reset passed
   unknown: 'cause unknown',
 } as const;
 export type RestartCause = keyof typeof RESTART_CAUSE_WORDS;

@@ -18723,6 +18723,11 @@ _inst_units() {
     # server box runs none — there is no pane scope on it to sweep.
     _inst_atomic "$tree/deploy/systemd/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-scope-sweep.timer" "$dir/ccd-scope-sweep.timer" 644
+    # The fleet limit watchdog's pair (D-8123), role-gated for its own reason rather than by imitation: it forces a rescue
+    # for the sessions on this box that sit on a usage limit, and a server box runs none. It is a verb of `ccd` itself
+    # (`ccd limit-watchdog`), so no bin of its own is placed.
+    _inst_atomic "$tree/deploy/systemd/ccd-limit-watchdog.service" "$dir/ccd-limit-watchdog.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-limit-watchdog.timer" "$dir/ccd-limit-watchdog.timer" 644
     # The conflict radar's pair (landing-order spec stage 3), role-gated for its own reason rather than by imitation:
     # it measures the PRs and workspace branches of projects checked out on the fleet box, and a server box holds
     # none. Gated `!= server`, so `fleet` and `both` take it.
@@ -19208,6 +19213,10 @@ _inst_enable() {
   # DEGRADE-rather-than-die idiom: collecting dead scopes is housekeeping — and
   # shadowed until the operator arms it — not the guardrail `ccd-cap-scopes.timer` is.
   [ "$INST_ROLE" = server ] || _inst_enable_timer scope-sweep ccd-scope-sweep.timer
+  # Same gate as its unit files (a server box runs no sessions to rescue), and the same DEGRADE-rather-than-die idiom:
+  # the watchdog is the backstop under the rescue, not the guardrail `ccd-cap-scopes.timer` is, and doctor's `services`
+  # check names a stopped timer. No restart: a oneshot holds no code.
+  [ "$INST_ROLE" = server ] || _inst_enable_timer limit-watchdog ccd-limit-watchdog.timer
   # Same gate as its unit files (a server box checks out no project to measure), and the same DEGRADE-rather-than-die
   # idiom: a radar is a reading, not the guardrail `ccd-cap-scopes.timer` is, and it measures nothing until the
   # operator opts a project in with a conf under ~/.ccrc/landing/.
@@ -28411,6 +28420,7 @@ _uninst_units() {
       ccd-tmp-sweep.timer ccd-tmp-sweep.service \
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
+      ccd-limit-watchdog.timer ccd-limit-watchdog.service \
       ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
       ccd-carry-dedupe.timer ccd-carry-dedupe.service \
       ccd-account-health.timer ccd-account-health.service \
@@ -28442,6 +28452,7 @@ _uninst_units() {
     "$dir/ccd-tmp-sweep.service" "$dir/ccd-tmp-sweep.timer" \
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
+    "$dir/ccd-limit-watchdog.service" "$dir/ccd-limit-watchdog.timer" \
     "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
     "$dir/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \

@@ -1159,6 +1159,9 @@ export const UNIT_FILES: Array<[string, string]> = [
   // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
   ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
   ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
+  // D-8123: the fleet limit watchdog's pair, ROLE-GATED `!= server` - a server box runs no session to rescue.
+  ['ccd-limit-watchdog.service', 'deploy/systemd/ccd-limit-watchdog.service'],
+  ['ccd-limit-watchdog.timer', 'deploy/systemd/ccd-limit-watchdog.timer'],
   // The read-only conflict radar (landing order wave 3b): ROLE-GATED `!= server` - a server box checks out no project to measure.
   ['ccd-land-probe.service', 'deploy/systemd/ccd-land-probe.service'],
   ['ccd-land-probe.timer', 'deploy/systemd/ccd-land-probe.timer'],

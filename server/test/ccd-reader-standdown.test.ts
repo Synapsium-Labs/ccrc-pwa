@@ -355,6 +355,12 @@ const POPULATION: Record<string, GuardSpec> = {
     count: 1,
     guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
   },
+  // THE FLEET WATCHDOG'S RUNNING-TURN CHECK (D-8123): an unmeasurable pane answers "running" (rc 0), so an account-only sign
+  // waits; it types nothing, and `ccd-limit-watchdog.test.ts` pins the narrow-pane hold.
+  _wd_running: {
+    count: 1,
+    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
+  },
   _accept_first_run_prompts: {
     count: 3,
     guard: /!\s*_pane_measurable\s+"\$\{1#cc-\}"\s*&&.*\breturn\b/,

@@ -1,0 +1,14 @@
+[Unit]
+Description=Force a rescue for any session that has shown a usage-limit sign for minutes with no swap, or record that no account has room (D-8123)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd limit-watchdog
+# The deadline for one pass. The verb stops its own work at 40 s (WATCHDOG_BUDGET_S), so a
+# pass that outlives this is wedged on a tmux call, not slow: it is killed and the next tick
+# starts clean. Every record it writes lands by rename, so a killed pass leaves the last one.
+TimeoutStartSec=50
+# bash over the session registry, one pane capture and a few small reads per live session.
+# Capped for ccd-cap-scopes' own reason: a net under the rescue must never be what OOMs the
+# fleet host.
+MemoryMax=256M
+Nice=10
