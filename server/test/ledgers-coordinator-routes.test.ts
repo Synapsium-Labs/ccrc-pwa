@@ -704,3 +704,12 @@ describe('modifications (plan PL3)', () => {
     expect(r.coord.goalsFor('prog-a').modifications).toEqual([]);
   });
 });
+
+describe('parseRaise still refuses an action (D-8076, spec 10)', () => {
+  it('a body that carries action and heldUntil raises an ordinary item: neither column is written', async () => {
+    const r = await rig();
+    const id = await raise(r, { action: { verb: 'end-run', runId: r.runA, stuckReason: null }, heldUntil: Date.now() + 999_999 });
+    expect(r.coord.itemById(id)).toMatchObject({ action: null, heldUntil: null });
+    expect(r.coord.itemHistory(id).map((e) => e.actor)).toEqual(['coordinator']);
+  });
+});

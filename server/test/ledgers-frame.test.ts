@@ -105,6 +105,21 @@ describe('the waiting frame (plan PL4)', () => {
     expect(third.waiting.items.map((i) => [i.id, i.state])).toEqual([[id, 'checking']]);
   });
 
+  it('shows a held item within one emit of its hold ending, and not before (D-8076)', async () => {
+    const r = await rig();
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0);
+    r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: 'Held', why: 'w', how: [], options: null,
+      neededBy: 'soon', soonLabel: null, secretSlot: null, action: { verb: 'end-run', runId: r.runA, stuckReason: null }, heldUntil: NOW0 + 180_000 }, NOW0, 'ccrc');
+    const sock = connect(r.port);
+    expect((await sock.waitingFrame(1)).waiting.items).toEqual([]);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0 + 179_999);
+    r.bus.emit('waiting');
+    expect((await sock.waitingFrame(2)).waiting.items).toEqual([]);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0 + 180_000);
+    r.bus.emit('waiting');
+    expect((await sock.waitingFrame(3)).waiting.items.map((i) => i.title)).toEqual(['Held']);
+  });
+
   it('is sent to every connected socket on one emit', async () => {
     const r = await rig();
     const a = connect(r.port);

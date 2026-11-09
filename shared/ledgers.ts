@@ -10,7 +10,7 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 
@@ -32,13 +32,15 @@ export type NeededBy = 'blocking' | 'soon' | 'later';
 const NEEDED_BY_MAP: Record<NeededBy, true> = { blocking: true, soon: true, later: true };
 export const NEEDED_BY_LEVELS = Object.keys(NEEDED_BY_MAP) as readonly NeededBy[];
 
-export type ItemAct = 'tick' | 'confirm' | 'return' | 'withdraw' | 'dismiss';
-export type ItemActor = 'operator' | 'coordinator';
+/** `act`, `decline` and `settle` are the moves of an item that carries an `ItemAction` (spec 2026-11-04 §10, A18). */
+export type ItemAct = 'tick' | 'confirm' | 'return' | 'withdraw' | 'dismiss' | 'act' | 'decline' | 'settle';
+/** `ccrc` is the server itself: it raises an end request on a worker's behalf and settles an item when the run is handled. */
+export type ItemActor = 'operator' | 'coordinator' | 'ccrc';
 const ITEM_ACT_MAP: Record<ItemAct, true> = {
-  tick: true, confirm: true, return: true, withdraw: true, dismiss: true,
+  tick: true, confirm: true, return: true, withdraw: true, dismiss: true, act: true, decline: true, settle: true,
 };
 export const ITEM_ACTS = Object.keys(ITEM_ACT_MAP) as readonly ItemAct[];
-const ITEM_ACTOR_MAP: Record<ItemActor, true> = { operator: true, coordinator: true };
+const ITEM_ACTOR_MAP: Record<ItemActor, true> = { operator: true, coordinator: true, ccrc: true };
 export const ITEM_ACTORS = Object.keys(ITEM_ACTOR_MAP) as readonly ItemActor[];
 
 /** Spec Figure 2. The operator moves an item only by ticking it, or by dismissing it while its
@@ -51,7 +53,27 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
   return: { actor: 'coordinator', from: ['checking'], to: 'open' },
   withdraw: { actor: 'coordinator', from: ['open', 'checking'], to: 'withdrawn' },
   dismiss: { actor: 'operator', from: ['open', 'checking'], to: 'dismissed' },
+  // Spec §10: none of the three takes `programme-live`, because `nextItemState` asks that of `dismiss` alone.
+  act: { actor: 'operator', from: ['open'], to: 'done' },
+  decline: { actor: 'operator', from: ['open'], to: 'dismissed' },
+  settle: { actor: 'ccrc', from: ['open', 'checking'], to: 'done' },
 };
+
+/** The typed action an item carries, written by the server alone (`raiseItem`; `parseRaise` never reads one). Today only
+ *  `end-run`: the operator's `act` abandons the run and `decline` keeps it. `stuckReason` is the reason the run was stuck
+ *  under when the request was raised, so a later request can tell a changed reason from a repeat. */
+export type ItemAction = { verb: 'end-run'; runId: number; stuckReason: StuckReason | null };
+/** Reads a stored action column; null when it is not an `ItemAction`. The one reader of the column's JSON. */
+export function parseItemAction(text: string): ItemAction | null {
+  let v: unknown;
+  try { v = JSON.parse(text); } catch { return null; }
+  if (typeof v !== 'object' || v === null) return null;
+  const o = v as Record<string, unknown>;
+  if (o['verb'] !== 'end-run' || typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
+  const reason = o['stuckReason'];
+  if (reason !== null && !isStuckReason(reason)) return null;
+  return { verb: 'end-run', runId: o['runId'], stuckReason: reason };
+}
 
 /** The states an item still waits in: the states some row of `ITEM_TRANSITIONS` leaves, in `ITEM_STATES` order
  *  (today `open` and `checking`). Derived from the table, so a state the table can still move an item out of

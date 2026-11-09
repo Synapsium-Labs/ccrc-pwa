@@ -11,8 +11,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { MailDeliveryState } from '../../../shared/api.js';
 import {
-  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState, recommendationOf,
-  type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
+  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState, parseItemAction, recommendationOf,
+  type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
 
@@ -23,6 +23,10 @@ export interface ItemRow {
   state: ItemState; answer: string | null; note: string | null; raisedAt: number; tickedAt: number | null; closedAt: number | null;
   /** A decide item's recommended option and why (plan PL9); NULL for every other kind and for an item raised before it. */
   recommended: number | null; recommendedWhy: string | null;
+  /** The typed action the server wrote for the item (spec §10), NULL for every ordinary item. */
+  action: ItemAction | null;
+  /** Before this time `itemsFor` leaves the item out (the coordinator-first hold, A21); NULL when it is not held. */
+  heldUntil: number | null;
 }
 /** One move of one item. `act` is an `ItemAct` or `raise`, `block`, `unblock`. */
 export interface ItemEventRow {
@@ -39,13 +43,15 @@ export interface RaiseItemInput {
   program: string; runId: number | null; raisedBy: string; kind: ItemKind; title: string; why: string;
   how: string[]; options: string[] | null; neededBy: NeededBy; soonLabel: string | null; secretSlot: string | null;
   recommended?: number | null; recommendedWhy?: string | null;
+  /** Written by a server caller alone: `parseRaise` carries neither, so a coordinator cannot attach an action (spec §10). */
+  action?: ItemAction | null; heldUntil?: number | null;
 }
 /** The table's row before the JSON columns are parsed. */
-type ItemRowRaw = Omit<ItemRow, 'how' | 'options'> & { how: string; options: string | null };
+type ItemRowRaw = Omit<ItemRow, 'how' | 'options' | 'action'> & { how: string; options: string | null; action: string | null };
 
 const ITEM_COLS =
   'id, program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, secretSlot, state, answer, note, ' +
-  'raisedAt, tickedAt, closedAt, recommended, recommendedWhy';
+  'raisedAt, tickedAt, closedAt, recommended, recommendedWhy, action, heldUntil';
 
 /** The row's JSON `string[]` columns are written by `raiseItem` alone, from a typed array, so a value that does not
  *  parse as one is a corrupt file, not a distinction to fold: it throws, naming the item, rather than reading as an
@@ -62,7 +68,15 @@ function itemRowOf(r: ItemRowRaw): ItemRow {
     neededBy: r.neededBy, soonLabel: r.soonLabel, secretSlot: r.secretSlot, state: r.state,
     answer: r.answer, note: r.note, raisedAt: r.raisedAt, tickedAt: r.tickedAt, closedAt: r.closedAt,
     recommended: r.recommended, recommendedWhy: r.recommendedWhy,
+    action: r.action === null ? null : actionOf(r.id, r.action), heldUntil: r.heldUntil,
   };
+}
+
+/** The `action` column, parsed. A value that is not an `ItemAction` is a corrupt file and throws, naming the item. */
+function actionOf(id: number, text: string): ItemAction {
+  const a = parseItemAction(text);
+  if (a === null) throw new Error(`operator item ${id}: action is not an item action`);
+  return a;
 }
 
 /** One `operator_item_events` row. Callers hold the transaction. */
@@ -74,8 +88,9 @@ function writeItemEvent(db: DatabaseSync, itemId: number, at: number, act: ItemE
  *  must be in L0's vocabulary (the route has already bounded the text; this stops an out-of-vocabulary word reaching a
  *  column no SQL check guards) and throw otherwise. So does a decide item without a recommendation the one reader
  *  (`recommendationOf`) can read (plan PL9): no caller can store a decide row the view would show without one. Returns the
- *  new id. */
-export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number): number {
+ *  new id. `actor` is who the `raise` event names: the coordinator for its own item, `ccrc` for one the server wrote on
+ *  another session's behalf (A18). */
+export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator'): number {
   if (!ITEM_KINDS.includes(input.kind)) throw new RangeError(`raiseItem: kind ${String(input.kind)} is not an item kind`);
   if (!NEEDED_BY_LEVELS.includes(input.neededBy)) throw new RangeError(`raiseItem: neededBy ${String(input.neededBy)} is not a level`);
   if (input.kind === 'decide' && recommendationOf(input) === null) {
@@ -84,12 +99,13 @@ export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number):
   return tx(db, () => {
     const res = db.prepare(
       'INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, ' +
-      "secretSlot, state, raisedAt, recommended, recommendedWhy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
+      "secretSlot, state, raisedAt, recommended, recommendedWhy, action, heldUntil) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
     ).run(input.program, input.runId, input.raisedBy, input.kind, input.title, input.why, JSON.stringify(input.how),
       input.options === null ? null : JSON.stringify(input.options), input.neededBy, input.soonLabel, input.secretSlot, now,
-      input.recommended ?? null, input.recommendedWhy ?? null);
+      input.recommended ?? null, input.recommendedWhy ?? null,
+      input.action === undefined || input.action === null ? null : JSON.stringify(input.action), input.heldUntil ?? null);
     const id = Number(res.lastInsertRowid);
-    writeItemEvent(db, id, now, 'raise', 'coordinator', null);
+    writeItemEvent(db, id, now, 'raise', actor, null);
     return id;
   });
 }
@@ -99,7 +115,8 @@ export function itemById(db: DatabaseSync, id: number): ItemRow | null {
   return r === undefined ? null : itemRowOf(r);
 }
 
-/** The items still waiting (`open`, `checking`; oldest first) and the ones cleared inside the Recently-cleared window
+/** The items still waiting (`open`, `checking`; oldest first; an item whose `heldUntil` is in the future is left out: the one
+ *  filter of the hold, A21, so every reader of this function agrees) and the ones cleared inside the Recently-cleared window
  *  (`done` with `closedAt` no older than `CLEARED_WINDOW_MS`, newest first). `program === null` means every programme.
  *  Withdrawn and dismissed items appear in neither list. */
 export function itemsFor(db: DatabaseSync, program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } {
@@ -107,8 +124,8 @@ export function itemsFor(db: DatabaseSync, program: string | null, now: number):
   const args = (extra: (string | number)[]): (string | number)[] => (program === null ? extra : [...extra, program]);
   const openStates = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');
   const open = db.prepare(
-    `SELECT ${ITEM_COLS} FROM operator_items WHERE state IN (${openStates})${scope} ORDER BY raisedAt, id`,
-  ).all(...args([])) as unknown as ItemRowRaw[];
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE state IN (${openStates}) AND (heldUntil IS NULL OR heldUntil <= ?)${scope} ORDER BY raisedAt, id`,
+  ).all(...args([now])) as unknown as ItemRowRaw[];
   const cleared = db.prepare(
     `SELECT ${ITEM_COLS} FROM operator_items WHERE state = 'done' AND closedAt >= ?${scope} ORDER BY closedAt DESC, id DESC`,
   ).all(...args([now - CLEARED_WINDOW_MS])) as unknown as ItemRowRaw[];

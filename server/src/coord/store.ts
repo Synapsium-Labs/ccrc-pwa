@@ -10426,7 +10426,7 @@ export class CoordStore {
   // decided by `nextItemState` and written by that module's `moveItemInTx`, the only writer of `operator_items.state`.
 
   /** The coordinator raises an item (open, with its `raise` event). Returns the new id. */
-  raiseItem(input: RaiseItemInput, now: number): number { return ledgers.raiseItem(this.db, input, now); }
+  raiseItem(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator'): number { return ledgers.raiseItem(this.db, input, now, actor); }
   itemById(id: number): ItemRow | null { return ledgers.itemById(this.db, id); }
   /** The items still waiting and those cleared inside the 7-day window; `program === null` means every programme. */
   itemsFor(program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } { return ledgers.itemsFor(this.db, program, now); }

@@ -2378,6 +2378,22 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX review_cap_lifts_by_run ON review_cap_lifts(workRunId, id);
   `,
+  // ── 49: user_version 48 -> 49 ─────────────────────────────────────────────
+  // An item that asks carries its own control (D-8076; spec 2026-11-04 §10, A18 to A21): `operator_items.action` is the
+  // typed action the server wrote for it (JSON, `{verb:'end-run', runId, stuckReason}` today) and `operator_items.heldUntil`
+  // is the time before which `itemsFor` leaves it out, the coordinator-first hold. Their ONE writer is `raiseItem`
+  // (`ledgersStore.ts`), from a server caller; `parseRaise` never carries either, so a coordinator cannot attach an action
+  // to an ordinary item. Both read NULL for every item raised before this entry.
+  //
+  // TWO NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 49` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), and its `SELECT` names columns, never `*`, so it never reads them. Every earlier entry is
+  // frozen. RE-MEASURE the slot before the PR and before merge (it must print 48 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE operator_items ADD COLUMN action TEXT;
+  ALTER TABLE operator_items ADD COLUMN heldUntil INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
