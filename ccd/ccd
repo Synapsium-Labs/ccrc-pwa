@@ -20799,7 +20799,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # test and read, no fork; `-f` first, so a FIFO here cannot block the tick.
   local woke=""
   [[ -f "$REG/$id.woke" ]] && { IFS= read -r woke < "$REG/$id.woke"; } 2>/dev/null
-  [[ "$woke" =~ ^[0-9]+$ && $(( now - woke )) -lt "$SWAP_COOLDOWN" ]] && { _standdown_note "$id" woke; return 0; }
+  # THE HOLD YIELDS AT THE CEILING (D-8123). A woken row whose own account is no longer `_avail` (at SWAP_CEILING)
+  # is not a cosmetic relocation: staying means the banner inside the minute, and the move is the one the wake
+  # meant. The gates that follow (`_swap_idle_gate`, `_affinity_cur_serves`, the box read, the slot) still apply.
+  [[ "$woke" =~ ^[0-9]+$ && $(( now - woke )) -lt "$SWAP_COOLDOWN" ]] && _avail "$wrapper" && { _standdown_note "$id" woke; return 0; }
   # Otherwise (returning home, or leaving at the rate ceiling): relocate only at a clean turn
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).
