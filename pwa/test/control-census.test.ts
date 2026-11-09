@@ -24,7 +24,7 @@
 // itself, which reach the 44px floor the spec calls an acceptance criterion,
 // and how?
 //
-// FOUR ANSWERS, AND EVERY ONE IS CHECKED, not merely stated:
+// FIVE ANSWERS, AND EVERY ONE IS CHECKED, not merely stated:
 //
 //   TOKEN     the control's own rule declares `min-*: var(--tap-min)`.
 //             Verified against both packages' stylesheets.
@@ -35,6 +35,10 @@
 //             that does not exist or has stopped declaring the floor.
 //   OVERLAY   an invisible `::before` reaches the floor while the visible box
 //             stays small. The named pseudo-rule must mention `--tap-min`.
+//   DENSE     the floor in its own rule, and a rule the entry NAMES sets it
+//             to `--docs-line-h` on the desk Docs head's dense line: 28px
+//             under a fine pointer, the floor under a coarse one. The rule,
+//             the token's two values and the own floor are each checked.
 //   UNDER     measured below the floor, deliberately unchanged. The entry
 //             carries the measurement. Checked in the NEGATIVE: the moment
 //             such a control gains the token this reds and asks for it to be
@@ -73,6 +77,8 @@
 //   | the header bell gains a floor, entry still UNDER     | 1 red  |
 //   | an UNDER entry for a computed class drops its cite   | 1 red  |
 //   | `.metachip` gains the floor, entry still UNDER        | 2 red  |
+//   | the desk line's rule sets `--tap-min` (DENSE, C16)  | 1 red  |
+//   | `--docs-line-h`'s fine-pointer value moves          | 1 red  |
 //
 // The fifth and sixth are what make the registry evidence rather than claims:
 // an entry cannot say TOKEN about a rule that has stopped declaring the floor,
@@ -467,8 +473,11 @@ const CONTROLS: Record<string, string> = {
   // tap-targets.test.tsx pins each rule and its rendered class); the exemption is a link in running text.
   'docs/DocsHead.tsx <button> docs-back': 'TOKEN. The Docs header\'s up-one-level chevron.',
   'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
-  'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",
-  'docs/DocsHead.tsx <button> docs-copy': 'TOKEN. Copy commit, on the truth line.',
+  // The desk head's truth line (desk-nav Part B, D-8101) draws these two at `--docs-line-h`: 28 px under a fine pointer,
+  // the tap floor under a coarse one. Their own rules carry `--tap-min` everywhere else (review 1697 F9(d); D-8139).
+  'docs/DocsHead.tsx <button> docs-fresh':
+    "DENSE .docs-full > .docs-truth .docs-fresh. The freshness chip at the truth line's end, which fetches from origin.",
+  'docs/DocsHead.tsx <button> docs-copy': 'DENSE .docs-full > .docs-truth .docs-copy. Copy commit, on the truth line.',
   'docs/DocsHead.tsx <button> docs-more':
     "TOKEN. Page details, the compact row's last button (the phone-header plan of 2026-11-03), which opens the panel "
     + 'holding the crumbs, the truth line and the link actions.',
@@ -614,6 +623,26 @@ describe('hand-drawn controls', () => {
     ).toBe(7);
   });
 
+
+  it('verifies every DENSE claim: the cited rule sets `--docs-line-h`, which is the floor but under a fine pointer', () => {
+    // Review 1697 F9(d) (Task C16, D-8139). The desk Docs head's truth line sets its chip and copy commit to
+    // `--docs-line-h`: the tap floor under a coarse pointer, 28 px under a fine one (WCAG 2.5.8's 24 px and up). Their
+    // own rules carry `--tap-min`, which they keep everywhere else, so TOKEN told half of it. DENSE names the desk
+    // line's rule; this checks that the rule sets the token, that the token is the floor but inside
+    // `@media (pointer: fine)`, and that the class's own rule still carries the floor.
+    const cited = Object.entries(CONTROLS)
+      .filter(([, v]) => v.startsWith('DENSE'))
+      .map(([k, v]) => [k, /^DENSE (.+?)\.(?:\s|$)/.exec(v)?.[1] ?? ''] as const);
+    expect(cited.map(([k]) => k).sort(), 'the DENSE arm').toEqual(['docs/DocsHead.tsx <button> docs-copy', 'docs/DocsHead.tsx <button> docs-fresh']);
+    const lineRule = (sel: string): boolean => RULES.some((r) => r.sel.split(',').map((x) => x.trim()).includes(sel)
+      && /min-height:\s*var\(--docs-line-h\)/.test(r.body));
+    const broken = cited.filter(([k, sel]) => sel === '' || !lineRule(sel) || !classHasFloor(classOfKey(k))).map(([k]) => k);
+    expect(broken, 'a DENSE entry whose rule does not set --docs-line-h, or whose class lost its own floor').toEqual([]);
+    const tokens = readFileSync(path.join(PKG, 'ui', 'src', 'styles', 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const defs = [...tokens.matchAll(/--docs-line-h\s*:\s*([^;]+);/g)].map((m) => m[1]!.trim());
+    expect(defs, 'the line height: the floor, and 28px under a fine pointer').toEqual(['var(--tap-min)', '28px']);
+    expect(tokens, 'the 28px is inside @media (pointer: fine)').toMatch(/@media \(pointer: fine\)\s*\{\s*:root\s*\{\s*--docs-line-h:\s*28px;/);
+  });
 
   it('verifies every VARIANT claim against the design system itself', () => {
     // The anchors wearing `buttonVariants()` get their floor from @ccrc/ui's
