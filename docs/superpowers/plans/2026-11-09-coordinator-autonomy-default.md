@@ -780,7 +780,10 @@ deploy; `stall-watch-w2-live` makes the rung send.
   it sent after `ballSince`; coordination paused. Then rung 2 keyed on `ballSince` if not done; rung 3 when rung 2 was
   done `COORD_BALL_MAIL_AGAIN_MS` ago and the session is still idle with no turn since; never a third mail. Through
   `stallMailDisabledHold`.
-- `stallCoordBallMail(n): { subject; body }` — subject `stall:coord-ball:<key>` (so `stallMailClass` reads it as the
+- `stallCoordBallMail(n: { key; rung: 2 | 3 }): { subject; body }` — subject `stall:coord-ball:<key>:r<rung>`, one per rung (a
+  coordinator is run-less: the decider finds each rung's sent mail by its exact subject through `stallSelfMail`, not by
+  `rungDoneAt` over notices, and the store's run-less dedupe keys on the subject, so rungs 2 and 3 must differ; a shadow
+  rung records no mail, so it is returned again each sweep, harmlessly; `stallMailClass` reads it as the
   watch's own notice), body "You have open runs and nothing waits on the operator. Continue per coordinator clause 21;
   re-read `runs list` and `goals show`." (§8.3).
 

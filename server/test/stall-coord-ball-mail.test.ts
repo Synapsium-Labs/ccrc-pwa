@@ -7,7 +7,7 @@ import {
   stallMailClass, stallNotifyDelivery, stallRungWave, stallSessionMail,
 } from '../src/coord/stall.js';
 import type {
-  StallArming, StallCoordBallInput, StallDeliveryRow, StallNotice, StallNotify, StallRunRow, StallSessionInput, StallVerdict, StallWorker, TurnMark,
+  StallArming, StallCoordBallInput, StallDeliveryRow, StallMailRow, StallNotify, StallRunRow, StallSessionInput, StallVerdict, StallWorker, TurnMark,
 } from '../src/coord/stall.js';
 
 const H = 3_600_000;
@@ -39,19 +39,19 @@ function run(over: Partial<StallRunRow> = {}): StallRunRow {
 function delivery(over: Partial<StallDeliveryRow> = {}): StallDeliveryRow {
   return { id: 1, mailId: 1, toId: COORD, state: 'acked', deliveredAt: BALL, ackedAt: BALL, lastGate: null, gateSince: null, replayCount: 0, ...over };
 }
-function notice(mode: 'live' | 'shadow', rung: 1 | 2 | 3, key: number, at: number): StallNotice {
-  return { mode, arm: 'coord-ball', rung, key, at };
+function sent(rung: 2 | 3, key: number, at: number): StallMailRow {
+  return { id: at, at, runId: null, fromId: 'operator', toId: COORD, kind: 'status', subject: stallCoordBallMail({ key, rung }).subject };
 }
 interface Over {
-  word?: string; since?: number; notices?: readonly StallNotice[]; deliveries?: readonly StallDeliveryRow[]; arming?: StallArming;
+  word?: string; since?: number; mail?: readonly StallMailRow[]; deliveries?: readonly StallDeliveryRow[]; arming?: StallArming;
   paused?: boolean; runs?: readonly StallRunRow[]; blockingItem?: boolean; liveBlock?: boolean; waitSentAt?: number | null;
   ballSince?: number | null;
 }
 function input(over: Over = {}): StallCoordBallInput {
   const session: StallSessionInput = {
     sessionId: COORD, role: 'coordinator', run: null, worker: live(over.word ?? 'idle', over.since ?? BALL),
-    mark: { ok: true, ...MARK }, liveStartedAt: NOW - 30 * H, markUnreadableSince: null, mail: [],
-    deliveries: over.deliveries ?? [], notices: over.notices ?? [], arming: over.arming ?? W2, coordinationPaused: over.paused ?? false,
+    mark: { ok: true, ...MARK }, liveStartedAt: NOW - 30 * H, markUnreadableSince: null, mail: over.mail ?? [],
+    deliveries: over.deliveries ?? [], notices: [], arming: over.arming ?? W2, coordinationPaused: over.paused ?? false,
   };
   return {
     session, runs: over.runs ?? [run()], blockingItem: over.blockingItem ?? false, liveBlock: over.liveBlock ?? false,
@@ -96,21 +96,21 @@ describe('stallCoordBallMailStep: rung 2', () => {
 });
 
 describe('stallCoordBallMailStep: rung 3 and never a third', () => {
-  const done2 = (ago: number): StallNotice[] => [notice('live', 2, BALL, NOW - ago)];
+  const done2 = (ago: number): StallMailRow[] => [sent(2, BALL, NOW - ago)];
   it('rung 2 done 29 minutes ago is none, 30 minutes ago is rung 3', () => {
     const since = NOW - 40 * MIN;
-    expect(stallCoordBallMailStep(input({ notices: done2(COORD_BALL_MAIL_AGAIN_MS - MIN), since }), NOW)).toEqual(NONE);
-    expect(stallCoordBallMailStep(input({ notices: done2(COORD_BALL_MAIL_AGAIN_MS), since }), NOW)).toEqual(rung(3));
+    expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS - MIN), since }), NOW)).toEqual(NONE);
+    expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS), since }), NOW)).toEqual(rung(3));
   });
   it('a turn since rung 2 (the idle stamp is newer) is none', () => {
-    expect(stallCoordBallMailStep(input({ notices: done2(COORD_BALL_MAIL_AGAIN_MS), since: NOW - 5 * MIN }), NOW)).toEqual(NONE);
+    expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS), since: NOW - 5 * MIN }), NOW)).toEqual(NONE);
   });
   it('rung 3 done is none', () => {
-    const notices = [...done2(COORD_BALL_MAIL_AGAIN_MS + 20 * MIN), notice('live', 3, BALL, NOW - 20 * MIN)];
-    expect(stallCoordBallMailStep(input({ notices, since: NOW - H }), NOW)).toEqual(NONE);
+    const mail = [...done2(COORD_BALL_MAIL_AGAIN_MS + 20 * MIN), sent(3, BALL, NOW - 20 * MIN)];
+    expect(stallCoordBallMailStep(input({ mail, since: NOW - H }), NOW)).toEqual(NONE);
   });
   it('a row on another key does not count as done', () => {
-    expect(stallCoordBallMailStep(input({ notices: [notice('live', 2, BALL - H, NOW - MIN)] }), NOW)).toEqual(rung(2));
+    expect(stallCoordBallMailStep(input({ mail: [sent(2, BALL - H, NOW - MIN)] }), NOW)).toEqual(rung(2));
   });
 });
 
@@ -131,17 +131,24 @@ describe('the rung is wave 2: dark until stall-watch-w2-live', () => {
     expect(stallNotifyDelivery('coord-ball', 'operator', DARK, 1)).toBe(stallNotifyDelivery('coord-ball', 'operator', { ...DARK, w2Live: true }, 1));
     expect(stallNotifyDelivery('coord-ball', 'operator', { ...DARK, escalate: false }, 1)).toBe('shadow');
   });
-  it('a shadow row stands as done while dark and not once live', () => {
-    const shadow = [notice('shadow', 2, BALL, NOW - MIN)];
-    expect(stallCoordBallMailStep(input({ arming: DARK, notices: shadow, since: NOW - 40 * MIN }), NOW)).toEqual(NONE);
-    expect(stallCoordBallMailStep(input({ arming: W2, notices: shadow }), NOW)).toEqual(rung(2));
+  it('a run-less shadow rung records no mail, so it is never done: rung 2 is returned again, harmlessly', () => {
+    expect(stallCoordBallMailStep(input({ arming: DARK }), NOW)).toEqual(rung(2));
+    expect(stallCoordBallMailStep(input({ arming: DARK, since: NOW - 40 * MIN }), NOW)).toEqual(rung(2));
+  });
+  it('a sent rung-2 mail is done, and rung 3 is reachable because its subject differs from rung 2', () => {
+    const mail = [sent(2, BALL, NOW - COORD_BALL_MAIL_AGAIN_MS)];
+    expect(stallCoordBallMailStep(input({ arming: W2, mail, since: NOW - H }), NOW)).toEqual(rung(3));
+    expect(stallCoordBallMailStep(input({ arming: W2, mail: [...mail, sent(3, BALL, NOW - MIN)], since: NOW - H }), NOW)).toEqual(NONE);
+  });
+  it('the two rungs never share a subject', () => {
+    expect(stallCoordBallMail({ key: BALL, rung: 2 }).subject).not.toBe(stallCoordBallMail({ key: BALL, rung: 3 }).subject);
   });
 });
 
 describe('the notice', () => {
   it('reads as the watch\'s own notice and says what to do', () => {
-    const t = stallCoordBallMail({ key: BALL });
-    expect(t.subject).toBe(`stall:coord-ball:${BALL}`);
+    const t = stallCoordBallMail({ key: BALL, rung: 2 });
+    expect(t.subject).toBe(`stall:coord-ball:${BALL}:r2`);
     expect(t.body).toBe('You have open runs and nothing waits on the operator. Continue per coordinator clause 21; re-read `runs list` and `goals show`.');
     expect(stallSessionMail(input().session, rung(2), NOW)).toEqual(t);
   });
@@ -149,7 +156,7 @@ describe('the notice', () => {
     expect(COORD_BALL_CAP_MS).toBe(30 * H);
   });
   it('stallMailClass reads the subject as the watch\'s own notice', () => {
-    const t = stallCoordBallMail({ key: BALL });
+    const t = stallCoordBallMail({ key: BALL, rung: 3 });
     expect(stallMailClass({ fromId: 'operator', runId: null, subject: t.subject, mailId: 1 })).toBe('report');
   });
 });

@@ -2122,9 +2122,12 @@ function stallCoordBallMailInner(input: StallCoordBallInput, now: number): Stall
   if (input.runs.some((r) => r.state === 'dispatched' || r.state === 'working' || r.state === 'merging' || r.kind === 'review')) return VERDICT_NONE;
   if (input.blockingItem || input.liveBlock || si.coordinationPaused) return VERDICT_NONE;
   if (input.waitSentAt !== null && input.waitSentAt > ballSince) return VERDICT_NONE;
-  const done2 = rungDoneAt(si, 'coord-ball', 2, ballSince);
-  if (done2 === null) return { act: 'notify', arm: 'coord-ball', rung: 2, key: ballSince, to: 'worker' };
-  if (rungDoneAt(si, 'coord-ball', 3, ballSince) !== null) return VERDICT_NONE;
+  // A coordinator is a session without a run: its rungs are the watch's own mail to it, found by the exact subject
+  // `stallCoordBallMail` gives each rung (`stallSelfMail`), never `rungDoneAt` over notices a run-less session lacks.
+  const sent2 = stallSelfMail(si, stallCoordBallMail({ key: ballSince, rung: 2 }).subject);
+  if (sent2 === null) return { act: 'notify', arm: 'coord-ball', rung: 2, key: ballSince, to: 'worker' };
+  if (stallSelfMail(si, stallCoordBallMail({ key: ballSince, rung: 3 }).subject) !== null) return VERDICT_NONE;
+  const done2 = sent2.at;
   if (now - done2 >= COORD_BALL_MAIL_AGAIN_MS && live.since <= done2) return { act: 'notify', arm: 'coord-ball', rung: 3, key: ballSince, to: 'worker' };
   return VERDICT_NONE;
 }
@@ -2134,10 +2137,12 @@ export function stallCoordBallMailStep(input: StallCoordBallInput, now: number):
   return stallMailDisabledHold(stallCoordBallMailInner(input, now), input.session.arming);
 }
 
-/** The notice the rung mails. The subject reads as the watch's own notice (`stall:coord-ball:<key>`). */
-export function stallCoordBallMail(n: { readonly key: number }): StallNoticeText {
+/** The notice the rung mails. The subject reads as the watch's own notice (`stall:coord-ball:<key>:r<rung>`) and
+ *  differs per rung: the run-less dedupe and `stallCoordBallMailInner`'s done test both key on the exact subject, so
+ *  rung 3 must not share rung 2's. */
+export function stallCoordBallMail(n: { readonly key: number; readonly rung: 2 | 3 }): StallNoticeText {
   return {
-    subject: `stall:coord-ball:${stallInt(n.key)}`,
+    subject: `stall:coord-ball:${stallInt(n.key)}:r${n.rung}`,
     body: 'You have open runs and nothing waits on the operator. Continue per coordinator clause 21; re-read `runs list` and `goals show`.',
   };
 }
@@ -2338,7 +2343,7 @@ function stallFailedReportMail(input: StallSessionInput, err: string, because: '
 
 export function stallSessionMail(input: StallSessionInput, n: StallNotify, now: number): StallNoticeText {
   if (n.to === 'worker') {
-    if (n.arm === 'coord-ball') return stallCoordBallMail(n);
+    if (n.arm === 'coord-ball') return stallCoordBallMail({ key: n.key, rung: n.rung });
     if (n.arm === 'orphan-d') return stallOrphanDMail(input);
     if (n.arm === 'orphan-e') return stallOrphanEMail(input, now);
     if (n.arm === 'restarted') return stallRestartedMail(input);
