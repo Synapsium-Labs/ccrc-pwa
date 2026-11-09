@@ -109,6 +109,29 @@ describe('the gate before GitHub', () => {
     expect(h.ghCalls()[0]).toBe('api repos/owner-a/repo-a');
   });
 
+  it('a padded or CRLF hold naming a wave is a worker hold: the door trims as the hook does', () => {
+    amFixture(h); amCaller(h, 'demo-quiet-basin');
+    for (const raw of [' program:x wave:2\n', 'program:x wave:2 \n', 'program:x wave:2\r\n', '\nprogram:x wave:2\n',
+      '\n\n  program:x wave:2/5 run:3 \t\r\n\n', 'program:x wave:2', `program:x wave:2${' '.repeat(200)}`]) {
+      fs.writeFileSync(reg('demo-quiet-basin.hold'), raw);
+      const r = amRun(h, GOOD);
+      expect(r.code, JSON.stringify(raw)).toBe(2);
+      expect(r.stdout, JSON.stringify(raw)).toMatch(/^REFUSED not-coordinator: demo-quiet-basin's hold reads program:x wave:2/);
+    }
+    expect(h.ghCalls()).toEqual([]);
+  });
+
+  it('padding does not turn a non-wave hold into a worker hold, and a hold that is not a regular file is refused', () => {
+    amFixture(h); amCaller(h, 'demo-quiet-basin');
+    for (const raw of ['\n waiting on the review \r\n', 'program:x wave:2 and more\n', 'program:x\nwave:2\n', '\n \n']) {
+      fs.writeFileSync(reg('demo-quiet-basin.hold'), raw);
+      expect(amRun(h, GOOD).stdout, JSON.stringify(raw)).not.toMatch(/not-coordinator/);
+    }
+    fs.rmSync(reg('demo-quiet-basin.hold'));
+    fs.mkdirSync(reg('demo-quiet-basin.hold'));
+    expect(amRun(h, GOOD).stdout).toMatch(/^REFUSED not-coordinator: demo-quiet-basin's hold cannot be read/);
+  });
+
   it('a hold longer than the hook\'s bound is not judged, as the hook does not judge it', () => {
     amFixture(h); amCaller(h, 'demo-quiet-basin', { hold: `program:${'x'.repeat(130)} wave:2` });
     expect(amRun(h, GOOD).stdout).not.toMatch(/not-coordinator/);

@@ -12424,6 +12424,7 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
 # read back 128 long may have been cut, so only a value of at most 127 is judged.
 AM_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
 AM_HOLD_MAX=127
+AM_HOLD_READ=128   # the hook's CCRC_ID_MAX: what `_ct_read` reads of a hold, so AM_HOLD_MAX is its off-by-one
 AM_WHO='?'; AM_WHY=""; AM_REPO=""; AM_PR=""; AM_HEAD=""
 _am_refuse() {   # <caller> <reason> <detail> -> one REFUSED line on stdout, one journal line, exit 2
   local who="$1" reason="$2" detail="${3//[[:cntrl:]]/ }"
@@ -12471,9 +12472,16 @@ _am_caller() {   # the caller is a coordinator: named by the pane, no child mark
     || _am_refuse "$id" not-coordinator "$id carries the child marker"
   hf="$REG/$id.hold"
   if [[ -e "$hf" || -L "$hf" ]]; then
-    h=$(head -c $(( AM_HOLD_MAX + 1 )) -- "$hf" 2>/dev/null) \
-      || _am_refuse "$id" not-coordinator "$id's hold cannot be read"
-    h="${h%%$'\n'*}"
+    # READ THE HOLD THE WAY THE HOOK DOES (`_ct_read`): at most AM_HOLD_READ characters, newlines and all (`-N` ignores
+    # the delimiter), then trimmed of leading and trailing whitespace (CR and LF included), and only then the length
+    # bound and the shape. A first-line read that trimmed nothing let ` program:x wave:2`, `program:x wave:2 ` and a
+    # CRLF or leading-newline hold past the one guard an over-cap command has, while the hook calls each a worker's.
+    # Where `_ct_read` answers "unmeasurable" (not a regular readable file) the hook judges nothing; the door, which
+    # is the only guard there, refuses instead: doubt reads as a worker.
+    [[ -f "$hf" && -r "$hf" ]] || _am_refuse "$id" not-coordinator "$id's hold cannot be read"
+    h=""
+    IFS= read -r -N "$AM_HOLD_READ" h 2>/dev/null < "$hf" || true
+    h="${h#"${h%%[![:space:]]*}"}"; h="${h%"${h##*[![:space:]]}"}"
     if (( ${#h} <= AM_HOLD_MAX )) && [[ "$h" =~ $AM_HOLD_WAVE_RE ]]; then
       _am_refuse "$id" not-coordinator "$id's hold reads $h"
     fi
