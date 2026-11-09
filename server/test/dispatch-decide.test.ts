@@ -298,13 +298,37 @@ describe('decideDispatch, the bind step', () => {
     expect(outcomeOf(decideDispatch(bind({ after: { listed: false } as unknown as RegistryRead, res: { ok: false, stderr: 'boom', cutShort: true } }))))
       .toEqual({ ok: false, kind: 'registry-unmeasurable', stderr: 'boom' });
   });
-  it('two candidates after a clean ws-add are ambiguous, with no event; none after a failed one is fleetFailed WITH one', () => {
+  it('two candidates after a clean ws-add are ambiguous, with no dispatch-refused event; none after a failed one is fleetFailed WITH one', () => {
     const two = decideDispatch(bind({ after: listed([rec('n1'), rec('n2')]) }));
-    expect(two).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 } });
+    expect(two).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 },
+      orphanEvent: 'dispatch-orphaned:ambiguous-dispatch' });
     const none = decideDispatch(bind({ after: listed([rec('old')]), res: { ok: false, stderr: 'no', cutShort: false } }));
     expect(none).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'fleetFailed', stderr: 'no' }, event: 'dispatch-refused:fleetFailed candidates=' });
     const failedTwo = decideDispatch(bind({ after: listed([rec('n1'), rec('n2')]), res: { ok: false, stderr: 'no', cutShort: true } }));
     expect(failedTwo).toMatchObject({ event: 'dispatch-refused:ambiguous-dispatch candidates=n1,n2' });
+  });
+  it('an orphaned spawn is named on the decision: an unlistable AFTER read, with and without ccd\'s stderr (D-8126)', () => {
+    const unlisted = { listed: false } as unknown as RegistryRead;
+    expect(decideDispatch(bind({ after: unlisted })))
+      .toMatchObject({ kind: 'refused', orphanEvent: 'dispatch-orphaned:registry-unmeasurable' });
+    expect(decideDispatch(bind({ after: unlisted, res: { ok: false, stderr: 'boom', cutShort: true } })))
+      .toMatchObject({ kind: 'refused', orphanEvent: 'dispatch-orphaned:registry-unmeasurable' });
+  });
+  it('two candidates carry the orphan event whether ccd failed or not; the dispatch-refused event is kept beside it (D-8126)', () => {
+    const after = listed([rec('n1'), rec('n2')]);
+    expect(decideDispatch(bind({ after }))).toMatchObject({ orphanEvent: 'dispatch-orphaned:ambiguous-dispatch' });
+    expect(decideDispatch(bind({ after }))).not.toHaveProperty('event');
+    expect(decideDispatch(bind({ after, res: { ok: false, stderr: 'no', cutShort: true } })))
+      .toMatchObject({ event: 'dispatch-refused:ambiguous-dispatch candidates=n1,n2', orphanEvent: 'dispatch-orphaned:ambiguous-dispatch' });
+  });
+  it('zero candidates with ccd failed is fleetFailed with no orphan event (D-8126)', () => {
+    const d = decideDispatch(bind({ after: listed([rec('old')]), res: { ok: false, stderr: 'no', cutShort: false } }));
+    expect(d).toMatchObject({ outcome: { kind: 'fleetFailed' } });
+    expect(d).not.toHaveProperty('orphanEvent');
+  });
+  it('decideBefore\'s registry-unmeasurable is before any spawn and carries no orphan event (D-8126)', () => {
+    const d = decideDispatch({ step: 'before', read: { listed: false } });
+    expect(d).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'registry-unmeasurable' } });
   });
   it('a named spawn binds only <project>-<slug>; a stranger is never bound in its place', () => {
     const stranger = bind({ childSlug: 'mine', after: listed([rec('demo-other')]) });

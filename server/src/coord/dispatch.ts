@@ -374,6 +374,8 @@ function stopped(coord: CoordStore, id: number, d: DispatchStop): DispatchHalt {
   switch (d.kind) {
     case 'refused':
       if (d.event !== undefined) coord.recordRunEvent(id, 'coordinator', d.event);
+      // Last, so it is the run's newest row: the dead-dispatch pass reads the newest `dispatch-orphaned:` row (D-8126).
+      if (d.orphanEvent !== undefined) coord.recordRunEvent(id, 'coordinator', d.orphanEvent);
       return d.outcome;
     case 'stale':
       return d.outcome;

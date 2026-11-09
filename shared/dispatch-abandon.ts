@@ -53,6 +53,11 @@ export const DISPATCH_ABANDON_EVENT = 'dispatch-abandoned:never-came-back';
  *  from a dispatch's own. Followed by `session=<id> started=<ms>`. */
 export const DISPATCH_BIND_EVENT = 'dispatch-bound:returned-child';
 
+/** D-8126: the `run_events.detail` prefix a dispatch journals when its `ws-add` ran and the AFTER read could not name
+ *  the one new workspace (`registry-unmeasurable`, `ambiguous-dispatch`): a spawn may exist that no run owns. Followed by
+ *  the refusal's name. The dead-dispatch pass reads it as "do not wait out the bound". */
+export const DISPATCH_ORPHANED_EVENT = 'dispatch-orphaned:';
+
 /** The mail's subject: one kebab word, the server's other mail subjects' shape. */
 export const DISPATCH_ABANDON_SUBJECT = 'dispatch-abandoned';
 

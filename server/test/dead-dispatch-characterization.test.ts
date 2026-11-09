@@ -108,13 +108,15 @@ describe("characterization: decideBind's after-spawn refusals (D-8126)", () => {
     after: listed([rec('old'), rec('new')]), res: { ok: true }, ...over });
 
   it('an unlistable AFTER read is registry-unmeasurable, with ccd\'s stderr only when ccd failed, and no event', () => {
-    expect(decideDispatch(bind({ after: unlisted }))).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'registry-unmeasurable' } });
+    expect(decideDispatch(bind({ after: unlisted }))).toMatchObject({ kind: 'refused', outcome: { ok: false, kind: 'registry-unmeasurable' } });
+    expect(decideDispatch(bind({ after: unlisted }))).not.toHaveProperty('event');
     expect(decideDispatch(bind({ after: unlisted, res: { ok: false, stderr: 'boom', cutShort: true } })))
       .toMatchObject({ kind: 'refused', outcome: { kind: 'registry-unmeasurable', stderr: 'boom' } });
   });
   it('two candidates are ambiguous-dispatch; the dispatch-refused event rides only when ccd failed', () => {
     const after = listed([rec('n1'), rec('n2')]);
-    expect(decideDispatch(bind({ after }))).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 } });
+    expect(decideDispatch(bind({ after }))).toMatchObject({ kind: 'refused', outcome: { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 } });
+    expect(decideDispatch(bind({ after }))).not.toHaveProperty('event');
     expect(decideDispatch(bind({ after, res: { ok: false, stderr: 'no', cutShort: true } })))
       .toMatchObject({ event: 'dispatch-refused:ambiguous-dispatch candidates=n1,n2' });
   });

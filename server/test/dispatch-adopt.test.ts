@@ -319,6 +319,9 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
                                       { id: 'demo-still-cove', held: null }] });
     expect(await h.dispatch()).toEqual(
       { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 });
+    // D-8126: the dispatch-refused row, then the orphan row LAST (the run's newest).
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail).filter((d) => d?.startsWith('dispatch-')))
+      .toEqual(['dispatch-refused:ambiguous-dispatch candidates=demo-quiet-basin,demo-still-cove', 'dispatch-orphaned:ambiguous-dispatch']);
   });
 
   it('ONE candidate that ALREADY CARRIES A HOLD refuses — that is a live worker', async () => {
@@ -368,6 +371,7 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     // two read alike.
     const h = await harness({ ccd: { ok: true, stderr: '' }, afterListed: false });
     expect(await h.dispatch()).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('dispatch-orphaned:registry-unmeasurable');
   });
 });
 

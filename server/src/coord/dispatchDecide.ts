@@ -8,6 +8,7 @@ import { measuredIdentity, type RegistryRead, type SessionRecord } from '../regi
 import type { MeasuredRead } from '../io.js';
 import type { HookStateRead } from '../hookstate.js';
 import type { cutShort } from '../lifecycle.js';
+import { DISPATCH_ORPHANED_EVENT } from '../../../shared/dispatch-abandon.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReasonVerdict, type HoldReasonVerdict } from './rundefs.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import type { RunReadResult, RunRow } from './store.js';
@@ -52,15 +53,23 @@ type RefusedWire = Extract<DispatchHalt, { kind: 'refused' }>;
 
 export type DispatchDecision<P> =
   | { kind: 'go'; plan: P }
-  | { kind: 'refused'; outcome: DispatchHalt; event?: string }
+  | { kind: 'refused'; outcome: DispatchHalt; event?: string; orphanEvent?: string }
   | { kind: 'stale'; outcome: RefusedWire };
 
 /** The decision that ends the dispatch: everything but `go`. */
 export type DispatchStop = Exclude<DispatchDecision<never>, { kind: 'go' }>;
 
 const go = <P>(plan: P): DispatchDecision<P> => ({ kind: 'go', plan });
-const refused = (outcome: DispatchHalt, event?: string): DispatchDecision<never> =>
-  event === undefined ? { kind: 'refused', outcome } : { kind: 'refused', outcome, event };
+const refused = (outcome: DispatchHalt, event?: string, orphanEvent?: string): DispatchDecision<never> => ({
+  kind: 'refused', outcome,
+  ...(event === undefined ? {} : { event }),
+  ...(orphanEvent === undefined ? {} : { orphanEvent }),
+});
+
+/** D-8126: the `run_events.detail` a refusal journals when the `ws-add` ran and may have left a spawn the dispatch
+ *  could not bind (`DISPATCH_ORPHANED_EVENT` + the refusal's name). Only `decideBind` makes one: `decideBefore` refuses
+ *  before any spawn. */
+const orphaned = (kind: 'registry-unmeasurable' | 'ambiguous-dispatch'): string => `${DISPATCH_ORPHANED_EVENT}${kind}`;
 
 /** What `capsMeasured` reads: the caps, the usage and, when the concurrency cap is reached, its numbers. */
 export interface CapsReading {
@@ -278,7 +287,8 @@ function decideBind(f: BindFacts): DispatchDecision<BindPlan> {
       afterRead.records.some((r) => r.project === project && measuredIdentity(r) === null) ||
       [...afterRead.refused].some((x) => !beforeIds.has(x))) {
     // ccd's own words ride along when ccd ALSO failed. Present-or-absent, never `''`.
-    return refused({ ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) });
+    return refused({ ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) }, undefined,
+      orphaned('registry-unmeasurable'));
   }
   // A NAMED spawn has one acceptable identity, `<project>-<slug>` (ccd's id grammar): any other new row is a
   // stranger (an operator's racing `ws-add`) and is never bound in its place.
@@ -293,9 +303,11 @@ function decideBind(f: BindFacts): DispatchDecision<BindPlan> {
       // ccd failed AND left nothing new: no ambiguity to report, only a failure. `ambiguous-dispatch` means "the
       // ws-add worked and we cannot read the diff", which is a different sentence.
       if (candidates.length === 0) return refused({ ok: false, kind: 'fleetFailed', stderr: res.stderr }, event);
-      return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, event);
+      return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, event,
+        orphaned('ambiguous-dispatch'));
     }
-    return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length });
+    return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, undefined,
+      orphaned('ambiguous-dispatch'));
   }
   const winner = candidates[0]!;
   // §1.5: `!res.ok` no longer short-circuits before the diff. ADOPTION NEEDS POSITIVE EVIDENCE THAT THIS CANDIDATE
