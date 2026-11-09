@@ -13,6 +13,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'nod
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
+import { NotifyLog } from '../src/notifylog.js';
 import type { Runner } from '../src/exec.js';
 import type { Deps } from '../src/server.js';
 import { FleetWatcher, STALL_SWEEP_MS, type StallTick } from '../src/watch.js';
@@ -2587,6 +2588,56 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
     const states = (coord.db.prepare('SELECT state FROM mail_deliveries WHERE toId = ?').all(COORD) as unknown as { state: string }[]).map((r) => r.state);
     expect(states).toEqual(['queued']);
     expect(h.calls.filter((a) => a[0] === 'send-keys')).toEqual([]);
+  });
+});
+
+describe('sweepStalls: the R7 count on a coord-blocked episode (D-8126)', () => {
+  const COORD_PID = 4343;
+  const BUSY_AT = IDLE_AT + 10 * 60_000;
+  const MAIL_AT = BUSY_AT + 5 * 60_000;
+  const SWEEP_AT = MAIL_AT + COORD_BLOCKED_HELD_MS + 5 * 60_000;
+  const tickWith = (): StallTick => ({
+    panePids: new Map<string, number | null>([[WORKER, PID], [COORD, COORD_PID]]), records: [regRow(WORKER), regRow(COORD, COORD_UUID)], refused: new Set(),
+  });
+  const setup = async (word: string, pinned: boolean): Promise<{ coord: CoordStore; w: FleetWatcher }> => {
+    const log = new NotifyLog(path.join(mkTmp('ccrc-r7-ring-'), 'notify.json'));
+    await log.load();
+    const r = await rig({ notifyLog: log } as Partial<Deps>);
+    seedRegistry(r.h.home, COORD, COORD_UUID);
+    seedRun(r.coord, { program: 'demo-program' });
+    writeFileSync(path.join(r.h.home, '.claude', 'sessions', `${COORD_PID}.json`), JSON.stringify({
+      pid: COORD_PID, sessionId: COORD_UUID, cwd: '/w/demo', name: null, nameSource: null,
+      status: word, statusUpdatedAt: BUSY_AT, version: '2.1.284', startedAt: STARTED_AT,
+    }));
+    seedTurnMark(r.h.home, COORD, { sessionId: COORD_UUID });
+    if (pinned) r.coord.setSpecPin('demo-program', 'docs/superpowers/specs/demo.md', 'in short', BUSY_AT, null);
+    const lv = r.coord.setStallSettings({ level: 'alert' }, Date.now(), r.coord.stallSettings());
+    if (lv.kind !== 'written') throw new Error('fixture write refused');
+    at(MAIL_AT);
+    const m = r.coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'question', subject: 'q', body: 'b', artifacts: [] });
+    r.coord.queueDelivery(m.id, COORD, 'envelope');
+    return { coord: r.coord, w: r.w };
+  };
+  const sessions = (dialog: boolean) => [fleetRow(WORKER), fleetRow(COORD, { dialogPending: dialog })];
+  const rows = (coord: CoordStore): { title: string; sessionId: string }[] =>
+    coord.db.prepare("SELECT title, sessionId FROM feed_events WHERE title = 'r7-breach'").all() as { title: string; sessionId: string }[];
+
+  it('a pending dialog on a pinned programme writes one row, and a second sweep writes none', async () => {
+    const { coord, w } = await setup('busy', true);
+    await sweepThrough(w, sessions(true), [], tickWith(), SWEEP_AT, SWEEP_AT);
+    expect(rows(coord)).toEqual([{ title: 'r7-breach', sessionId: COORD }]);
+    await sweepThrough(w, sessions(true), [], tickWith(), SWEEP_AT + 60_000, SWEEP_AT + 60_000);
+    expect(rows(coord)).toHaveLength(1);
+  });
+  it('a live waiting word with no pending dialog writes none', async () => {
+    const { coord, w } = await setup('waiting', true);
+    await sweepThrough(w, sessions(false), [], tickWith(), SWEEP_AT, SWEEP_AT);
+    expect(rows(coord)).toEqual([]);
+  });
+  it('an unpinned programme writes none', async () => {
+    const { coord, w } = await setup('busy', false);
+    await sweepThrough(w, sessions(true), [], tickWith(), SWEEP_AT, SWEEP_AT);
+    expect(rows(coord)).toEqual([]);
   });
 });
 

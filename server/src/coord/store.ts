@@ -10500,6 +10500,8 @@ export class CoordStore {
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
   newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
   pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+  /** Whether the programme has a Goals (spec) pin: R7's test for a pinned programme. */
+  isPinned(program: string): boolean { return ledgers.isPinned(this.db, program); }
   /** Whether the programme holds an open item raised at the `blocking` level (work has stopped on it). */
   programmeHasBlockingItem(program: string): boolean { return ledgers.programmeHasBlockingItem(this.db, program); }
 

@@ -395,6 +395,11 @@ export function pinnedProgrammes(db: DatabaseSync): string[] {
   return (db.prepare('SELECT slug FROM programs WHERE specPath IS NOT NULL ORDER BY slug').all() as { slug: string }[]).map((r) => r.slug);
 }
 
+/** Whether the programme has a spec pin (the Goals pin R7 keys on). */
+export function isPinned(db: DatabaseSync, program: string): boolean {
+  return db.prepare('SELECT 1 AS x FROM programs WHERE slug = ? AND specPath IS NOT NULL LIMIT 1').get(program) !== undefined;
+}
+
 /** Whether the programme holds an item that is still waiting (`open`, `checking`) at the `blocking` level. */
 export function programmeHasBlockingItem(db: DatabaseSync, program: string): boolean {
   const openStates = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');

@@ -140,12 +140,12 @@ import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, STALL_WAIT_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
-  stallCoordBlockedPushText, stallCoordBlockedStep, stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallCoordBlockedPushText, stallCoordBlockedStep, stallR7Breach, stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallCoordBallFrom, stallCoordBallMailStep, stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
-  type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
+  type StallCoordBlockedInput, type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
 import {
@@ -6788,7 +6788,25 @@ export class FleetWatcher {
     const step = stallCoordBlockedStep(blocked, now);
     if (step.episode === null) this.stallCoordEpisodes.delete(id); else this.stallCoordEpisodes.set(id, step.episode);
     this.applyStallSession(store, si, project, step.verdict, now, (n) => stallCoordBlockedPushText(blocked, n, now));
+    this.countR7Breach(store, blocked, step.episode, project);
     this.judgeCoordBall(store, si, project, now);
+  }
+
+  /** R7's count (design 2026-11-09 §10, M2): an open coord-blocked episode held by a pending dialog on a pinned programme
+   *  writes ONE `r7-breach` feed row, keyed on the episode's start through `hasNotice`'s once-only key. Record-only, never a
+   *  push: the coord-blocked push is unchanged and keeps reporting. */
+  private countR7Breach(store: WatcherCoordPort, blocked: StallCoordBlockedInput, episode: StallCoordEpisode | null, project: string): void {
+    if (episode === null) return;
+    const pinned = blocked.runs.some((r) => store.isPinned(r.program));
+    if (!stallR7Breach(blocked, pinned)) return;
+    const id = blocked.session.sessionId;
+    const key = `r7-breach:${Math.trunc(episode.since)}`;
+    if (store.hasNotice('coord', id, key)) return;
+    this.pushOne({
+      kind: 'coord', sessionId: id, project, title: 'r7-breach',
+      body: 'a coordinator holds mail behind an open dialog on a pinned programme',
+      recordAlways: true, recordOnly: true, dedupeKey: key,
+    }, this.activeProjects);
   }
 
   /** The coord-ball mail rung for one coordinator (design 2026-11-09 §8.3 item 1): the lane measures, `stallCoordBallMailStep`

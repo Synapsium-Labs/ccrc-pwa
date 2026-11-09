@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   COORD_BLOCKED_HELD_MS, COORD_BLOCKED_OLD_MS, COORD_BLOCKED_STRETCH_MS, MAIL_STUCK_MS, STALL_ARMS, rungRecipient,
-  stallCoordBlockedPushText, stallCoordBlockedStep, stallCoordBusySince, stallCoordGate, stallNotifyDelivery, stallPushRoute,
+  stallCoordBlockedPushText, stallCoordBlockedStep, stallCoordBusySince, stallCoordGate, stallNotifyDelivery, stallPushRoute, stallR7Breach,
 } from '../src/coord/stall.js';
 import type {
   StallArming, StallCoordBlockedInput, StallCoordEpisode, StallDeliveryRow, StallMailRow, StallNotify, StallRunRow,
@@ -349,5 +349,24 @@ describe('coord-blocked: the push text names the gate reason in operator words',
     const t = stallCoordBlockedPushText(input({ mail: [mailRow(501, MAIL_AT, 'bad id; rm', 'question')] }), n(), NOW);
     expect(t.body).not.toContain('bad id; rm');
     expect(t.body).toContain('(unprintable)');
+  });
+});
+
+describe('coord-blocked: the R7 count (stallR7Breach)', () => {
+  const dialog = (word = 'busy'): StallWorker => liveAt(word, STRETCH_AT, { dialogPending: true });
+  it('a pending dialog holding mail on a pinned programme is a breach', () => {
+    expect(stallR7Breach(input({ worker: dialog() }), true)).toBe(true);
+  });
+  it('an unpinned programme is none', () => {
+    expect(stallR7Breach(input({ worker: dialog() }), false)).toBe(false);
+  });
+  it('a live waiting word with no pending dialog is none: the gate must come through dialogPending', () => {
+    expect(stallR7Breach(input({ worker: liveAt('waiting', STRETCH_AT) }), true)).toBe(false);
+  });
+  it('no held mail is none: the episode is the count\'s unit', () => {
+    expect(stallR7Breach(input({ worker: dialog(), deliveries: [] }), true)).toBe(false);
+  });
+  it('the push itself is unchanged by the count', () => {
+    expect(verdict(input({ worker: dialog() }))).toEqual(fire(MAIL_AT));
   });
 });

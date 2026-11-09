@@ -2096,6 +2096,16 @@ export function stallCoordBlockedStep(input: StallCoordBlockedInput, now: number
   return { verdict: stallMailDisabledHold(r.verdict, input.session.arming), episode: r.episode };
 }
 
+/** Whether the episode counts as an R7 breach (design 2026-11-09 R7, measure M2): a coordinator with mail held behind a
+ *  PENDING DIALOG (the gate reads `waiting` through `dialogPending`, never through the live word alone) whose claimed
+ *  programme is pinned. The push of `stallCoordBlockedStep` is unchanged; this only says the lane counts it. */
+export function stallR7Breach(input: StallCoordBlockedInput, pinned: boolean): boolean {
+  const si = input.session;
+  if (!pinned || si.role !== 'coordinator' || input.runs.length === 0) return false;
+  if (si.worker.present !== true || !si.worker.dialogPending) return false;
+  return stallCoordHeld(si).length > 0 && stallCoordGate(si) === 'waiting';
+}
+
 // ── coord-ball's mail rungs (design 2026-11-09 §8.3 items 1 and 2) ────────────────────────────────────────────
 
 /** An idle coordinator that claims open runs and holds the ball is mailed after this long (rung 2). */
