@@ -66,6 +66,47 @@ export function blockExpiresAt(wake: CallWake, at: number): number {
 export const isLiveBlock = (row: CallRow, now: number): boolean =>
   row.class === 'block' && row.wokenAt === null && row.expiresAt !== null && row.expiresAt > now;
 
+/** What `blockWakeDue` answers: tell the coordinator, end the block quietly, or wait. */
+export const BLOCK_WAKE_VERDICTS = ['wake-mail', 'wake-quiet', 'none'] as const;
+export type BlockWakeVerdict = (typeof BLOCK_WAKE_VERDICTS)[number];
+/** The two kebab words of a measured fact that is not yet the condition (`disk` not `ok`, `memory` not `clear`). */
+export const BLOCK_WAKE_FACT_WORDS = ['not-ok', 'not-clear'] as const;
+/** Whether a quoted kebab token is one of the wake words, the wake conditions included (the source-scan pin admits them through this, never NOT_CODES). */
+export const isBlockWakeKebab = (tok: string): boolean =>
+  (BLOCK_WAKE_VERDICTS as readonly string[]).includes(tok) || (BLOCK_WAKE_FACT_WORDS as readonly string[]).includes(tok)
+  || (CALL_WAKES as readonly string[]).includes(tok);
+
+/** The facts a block's wake is judged on (the caller measures them; `unknown` is a fact that could not be read). */
+export interface BlockWakeFacts {
+  now: number;
+  disk: 'ok' | (typeof BLOCK_WAKE_FACT_WORDS)[0] | 'unknown';
+  memory: 'clear' | (typeof BLOCK_WAKE_FACT_WORDS)[1] | 'unknown';
+  /** The running server's build stamp, or null when it has none. */
+  build: string | null;
+  /** The coordinator ran a turn after the row was made. */
+  turnSince: boolean;
+}
+
+/**
+ * P7: whether a parked thread's wake is due, judged on the lane facts that already watch its condition (spec §8.2).
+ * `wake-mail` tells the coordinator; `wake-quiet` ends the block without a mail (the resumed session is the wake itself);
+ * `none` waits. Doubt waits for the lapse: an `unknown` fact, a null build on either side, a `capacity` wake (wave A8)
+ * and a wake word that no longer reads are all `none`. A woken row, a non-block and a condition row past its expiry
+ * (it lapsed, and the coord-ball rung may fire again) are never woken.
+ */
+export function blockWakeDue(row: CallRow, f: BlockWakeFacts): BlockWakeVerdict {
+  if (row.class !== 'block' || row.wokenAt !== null || row.wakeOn === null) return 'none';
+  if (row.wakeOn.startsWith('time:')) return f.now >= Number(row.wakeOn.slice(5)) ? 'wake-mail' : 'none';
+  if (row.expiresAt === null || row.expiresAt <= f.now) return 'none';
+  switch (row.wakeOn) {
+    case 'disk': return f.disk === 'ok' ? 'wake-mail' : 'none';
+    case 'memory': return f.memory === 'clear' ? 'wake-mail' : 'none';
+    case 'update': return f.build !== null && row.build !== null && f.build !== row.build ? 'wake-mail' : 'none';
+    case 'account-room': return f.turnSince ? 'wake-quiet' : 'none';
+    default: return 'none';
+  }
+}
+
 /** A big call the operator has yet to see: not Seen, not overturned, inside the Seen window. */
 export const callIsForOperator = (row: CallRow, now: number): boolean =>
   row.class === 'big' && row.seenAt === null && row.overturnedAt === null && row.at > now - CALL_SEEN_WINDOW_MS;

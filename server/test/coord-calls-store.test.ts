@@ -110,6 +110,22 @@ describe('insertCall and the readers', () => {
   });
 });
 
+describe('blocksToWake', () => {
+  it('reads unwoken condition blocks inside their lapse and every unwoken time block, one coordinator, blocks only', () => {
+    const s = store();
+    const cond = s.insertCall('p', 'c1', block(), null, NOW);
+    const timed = s.insertCall('p', 'c1', block({ wakeOn: `time:${NOW + 1000}` }), null, NOW);
+    const woken = s.insertCall('p', 'c1', block(), null, NOW);
+    s.insertCall('p', 'c2', block(), null, NOW);
+    s.insertCall('p', 'c1', big(), null, NOW);
+    expect(s.markBlockWoken(woken, NOW + 1)).toBe(true);
+    expect(s.blocksToWake('c1', NOW + 10).map((r) => r.id)).toEqual([cond, timed]);
+    // The time block lapsed at its time and is still a wake to send; the condition block's own lapse removes it.
+    expect(s.blocksToWake('c1', NOW + 5000).map((r) => r.id)).toEqual([cond, timed]);
+    expect(s.blocksToWake('c1', NOW + BLOCK_CONDITION_TTL_MS).map((r) => r.id)).toEqual([timed]);
+  });
+});
+
 describe('the writers', () => {
   it('markCallSeen: seen, then already; a routine row is not-big; an unknown id is unknown', () => {
     const s = store();

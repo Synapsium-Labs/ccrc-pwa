@@ -28,6 +28,7 @@ import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
 import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
 import { isAutoRollKebab } from '../src/coord/rollTarget.js';
 import { isWakeGateKebab } from '../src/coord/wakeBudget.js';
+import { isBlockWakeKebab } from '../src/coord/coordCalls.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -1101,8 +1102,12 @@ describe('the rejection table is total, in both directions', () => {
         // (`'coord-lift-off'`, `'cap-not-reached'`). Admitted through the exported guard, derived from `REVIEW_ROUNDS_REFUSALS`,
         // never NOT_CODES.
         || isReviewRoundsRefusal(tok)
-        || isWakeGateKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal or wake-gate word`).toBe(true);
+        || isWakeGateKebab(tok)
+        // THE BLOCK WAKE (D-8126): `coord/coordCalls.ts` names `blockWakeDue`'s three answers and the two words of a fact that has
+        // not reached its condition as literals. They decide a parked thread's wake in the coordinator pass, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from `BLOCK_WAKE_VERDICTS`, `BLOCK_WAKE_FACT_WORDS` and `CALL_WAKES`.
+        || isBlockWakeKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, block-wake word or wake-gate word`).toBe(true);
     }
   });
 });

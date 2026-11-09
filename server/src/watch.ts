@@ -67,6 +67,7 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, isApprovalNudgeMail, isAskNudgeMail,
   survivorOf,
 } from './coord/rundefs.js';
+import { blockWakeDue, type CallRow } from './coord/coordCalls.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
@@ -6750,10 +6751,11 @@ export class FleetWatcher {
     const refused = tick.refused.has(id);
     let lr: StallLive | null = null;
     let mark: TurnMarkRead = STALL_MARK_UNREAD;
+    let ident: StallUuid = { ok: false };
     if (refused) {
       this.stallMarkUnreadableSince.delete(id);
     } else {
-      const ident = this.stallUuid(tick, id);
+      ident = this.stallUuid(tick, id);
       lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
       // A `ballOnly` coordinator keeps no marker clock: the clock belongs to the arms it does not run.
       if (c.ballOnly !== true) {
@@ -6773,6 +6775,7 @@ export class FleetWatcher {
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
+    await this.wakeBlocks(store, id, mark, c.ballOnly === true && !refused ? () => this.stallMarkRead(id, ident, lr) : null, now);
     if (c.ballOnly === true) {
       this.judgeCoordBall(store, si, project, now);
       return;
@@ -6790,6 +6793,52 @@ export class FleetWatcher {
     this.applyStallSession(store, si, project, step.verdict, now, (n) => stallCoordBlockedPushText(blocked, n, now));
     this.countR7Breach(store, blocked, step.episode, project);
     this.judgeCoordBall(store, si, project, now);
+  }
+
+  /** Block wakes (design 2026-11-09 §8.2, P7): a parked thread's wake request is judged on the lanes that already watch its
+   *  condition. The lane measures the facts (the disk alarm's last block, the memory gate's last reading, the running build,
+   *  the coordinator's own turn marker), `blockWakeDue` decides, and this applies it: `markBlockWoken` is the compare-and-set
+   *  (two passes send one mail), and a `wake-mail` queues one system mail from the operator to the coordinator. A fact that
+   *  was not measured is `unknown` and waits for the lapse. `readMark` is the marker read for a coordinator the pass keeps no
+   *  marker clock for, taken only when an `account-room` block is waiting. */
+  private async wakeBlocks(
+    store: WatcherCoordPort, id: string, mark: TurnMarkRead, readMark: (() => Promise<TurnMarkRead>) | null, now: number,
+  ): Promise<void> {
+    let rows: CallRow[];
+    try {
+      rows = store.blocksToWake(id, now);
+    } catch (err) {
+      console.warn(`ccrc-server: block wakes of ${id} unreadable (${err instanceof Error ? err.message : String(err)}) — held this sweep`);
+      return;
+    }
+    if (rows.length === 0) return;
+    const diskLevel = this.diskAlarm.block()?.level ?? 'unmeasured';
+    const memLevel = this.pressureLane.memoryReading().level;
+    let turnMark: TurnMarkRead = mark;
+    if (!turnMark.ok && readMark !== null && rows.some((r) => r.wakeOn === 'account-room')) {
+      try { turnMark = await readMark(); } catch { /* unread: no turn is claimed */ }
+    }
+    const lastTurn = turnMark.ok ? Math.max(turnMark.turnAt ?? 0, turnMark.stopAt ?? 0) : 0;
+    for (const row of rows) {
+      const due = blockWakeDue(row, {
+        now,
+        disk: diskLevel === 'unmeasured' ? 'unknown' : diskLevel === 'ok' ? 'ok' : 'not-ok',
+        memory: memLevel === 'unmeasured' ? 'unknown' : memLevel === 'ok' ? 'clear' : 'not-clear',
+        build: this.deps.build?.version ?? null,
+        turnSince: lastTurn > row.at,
+      });
+      if (due === 'none') continue;
+      try {
+        if (!store.markBlockWoken(row.id, now) || due === 'wake-quiet') continue;
+        const what = row.wakeOn?.startsWith('time:') === true ? 'the time you set' : `the ${row.wakeOn ?? 'condition'} you named`;
+        queueSystemMail(store, null, {
+          fromId: 'operator', toId: id, runId: null, kind: 'status', subject: `wake: call ${row.id} (${row.wakeOn ?? ''})`,
+          body: `The thread you parked is ready to pick up: ${row.chosen}\n\nIt waited on ${what}, and that has come. Continue it now.`,
+        });
+      } catch (err) {
+        console.warn(`ccrc-server: block wake of call ${row.id} failed (${err instanceof Error ? err.message : String(err)}) — the coord-ball rung covers a lost wake`);
+      }
+    }
   }
 
   /** R7's count (design 2026-11-09 §10, M2): an open coord-blocked episode held by a pending dialog on a pinned programme

@@ -2719,4 +2719,112 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     await sweepThrough(w, sessions, [...W2_LIVE, COORDINATOR_PAUSE_MARKER], tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
     expect(ballMail(coord)).toEqual([]);
   });
+  // Block wakes (plan Task A6-5): a parked thread's wake request is judged on the lanes that already watch its condition.
+  describe('block wakes', () => {
+    type Probe = { diskAlarm: { block: () => unknown }; pressureLane: { memoryReading: () => unknown }; deps: { build: unknown } };
+    const probe = (w: FleetWatcher): Probe => w as unknown as Probe;
+    const park = (coord: CoordStore, wakeOn: string, at0: number, build: string | null = 'b1'): number =>
+      coord.insertCall('demo-program', COORD, {
+        class: 'block', runId: null, question: null, options: null, chosen: 'waiting on the box', why: 'w', reversible: true,
+        wakeOn: wakeOn as never,
+      }, build, at0);
+    const wakeMail = (coord: CoordStore): MailRow[] => operatorMail(coord).filter((m) => m.subject.startsWith('wake: call '));
+    const wokenAt = (coord: CoordStore, id: number): number | null => coord.callById(id)!.wokenAt;
+    const SWEEP_T = T0 + 5 * 60_000;
+
+    it('time: nothing before its time; at it, one mail, and a later sweep sends no more', async () => {
+      const { coord, w } = await setup();
+      const when = SWEEP_T + 2 * STALL_SWEEP_MS;
+      const id = park(coord, `time:${when}`, T0 + 1000);
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, when - 1);
+      expect(wakeMail(coord)).toEqual([]);
+      expect(wokenAt(coord, id)).toBeNull();
+      await sweepThrough(w, sessions, LIVE, tickWith(), when, when);
+      const sent = wakeMail(coord);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.toId).toBe(COORD);
+      expect(sent[0]!.subject).toBe(`wake: call ${id} (time:${when})`);
+      expect(mailBody(coord, sent[0]!.id)).toContain('waiting on the box');
+      await sweepThrough(w, sessions, LIVE, tickWith(), when + STALL_SWEEP_MS, when + 3 * STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toHaveLength(1);
+    });
+
+    it('disk: waits while the alarm is not ok or unmeasured, mails once it reads ok', async () => {
+      const { coord, w } = await setup();
+      const id = park(coord, 'disk', T0 + 1000);
+      const level = vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'critical' });
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      level.mockReturnValue(null);
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toEqual([]);
+      level.mockReturnValue({ level: 'ok' });
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + 2 * STALL_SWEEP_MS, SWEEP_T + 2 * STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toHaveLength(1);
+      expect(wokenAt(coord, id)).not.toBeNull();
+    });
+
+    it('memory: mails when the gate reads ok, not on warn', async () => {
+      const { coord, w } = await setup();
+      park(coord, 'memory', T0 + 1000);
+      const reading = vi.spyOn(probe(w).pressureLane, 'memoryReading').mockReturnValue({ level: 'warn', headroomBytes: null });
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      expect(wakeMail(coord)).toEqual([]);
+      reading.mockReturnValue({ level: 'ok', headroomBytes: null });
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toHaveLength(1);
+    });
+
+    it('update: mails when the running build differs from the row\'s, not before', async () => {
+      const { coord, w } = await setup();
+      park(coord, 'update', T0 + 1000, 'build-a');
+      probe(w).deps.build = { version: 'build-a' };
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      expect(wakeMail(coord)).toEqual([]);
+      probe(w).deps.build = { version: 'build-b' };
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toHaveLength(1);
+    });
+
+    it('account-room: a turn since the row wakes it quietly, with no mail; no turn since waits', async () => {
+      const { h, coord, w } = await setup();
+      const early = park(coord, 'account-room', T0 + 10 * 60_000);
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      expect(wokenAt(coord, early)).toBeNull();
+      seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, stopAt: T0 + 12 * 60_000, at: T0 + 12 * 60_000, turnAt: T0 + 11 * 60_000 });
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + 10 * 60_000, SWEEP_T + 10 * 60_000);
+      expect(wokenAt(coord, early)).not.toBeNull();
+      expect(wakeMail(coord)).toEqual([]);
+    });
+
+    it('a woken block is no longer live, so the coord-ball rung may fire again (F5)', async () => {
+      const { coord, w } = await setup();
+      park(coord, 'disk', T0 + 1000);
+      vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'critical' });
+      await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
+      expect(ballMail(coord)).toEqual([]);                  // the live block holds the rung
+      vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'ok' });
+      await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT + 3 * STALL_SWEEP_MS, RUNG_AT + 4 * STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toHaveLength(1);
+      expect(coord.liveBlocksOf(COORD, RUNG_AT + 4 * STALL_SWEEP_MS)).toEqual([]);
+      expect(ballMail(coord)).toHaveLength(1);
+    });
+
+    it('an expired condition row is not mailed, and is never marked woken by the lane', async () => {
+      const { coord, w } = await setup();
+      const id = park(coord, 'disk', T0 - 25 * 3_600_000);  // recorded 25 hours before: lapsed at +24 h
+      vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'ok' });
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      expect(wakeMail(coord)).toEqual([]);
+      expect(wokenAt(coord, id)).toBeNull();
+    });
+
+    it('two passes send one mail: the compare-and-set loses the second', async () => {
+      const { coord, w } = await setup();
+      const id = park(coord, 'disk', T0 + 1000);
+      vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'ok' });
+      expect(coord.markBlockWoken(id, SWEEP_T - 1)).toBe(true);    // another pass got there first
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      expect(wakeMail(coord)).toEqual([]);
+    });
+  });
 });

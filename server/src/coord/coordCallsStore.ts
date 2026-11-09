@@ -105,6 +105,16 @@ export function liveBlocksOf(db: DatabaseSync, madeBy: string, now: number): Cal
   ).all(madeBy, now) as unknown as CallRowRaw[]).map(callRowOf).filter((r) => isLiveBlock(r, now));
 }
 
+/** The blocks the wake lanes judge for `madeBy` (P7): every unwoken block whose condition has not lapsed, and every unwoken
+ *  `time:` block however long ago its time passed (it lapses AT its time, and the wake is what it waits for). A lapsed
+ *  condition block is not read: it is no longer a wake, and `coord-ball` may fire for the coordinator again. */
+export function blocksToWake(db: DatabaseSync, madeBy: string, now: number): CallRow[] {
+  return (db.prepare(
+    `SELECT ${CALL_COLS} FROM coordinator_calls WHERE madeBy = ? AND class = 'block' AND wokenAt IS NULL ` +
+    "AND (wakeOn LIKE 'time:%' OR expiresAt > ?) ORDER BY at, id",
+  ).all(madeBy, now) as unknown as CallRowRaw[]).map(callRowOf);
+}
+
 /** The operator's Seen. THE ONLY WRITER of `seenAt`. */
 export function markCallSeen(db: DatabaseSync, id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' {
   const row = callById(db, id);

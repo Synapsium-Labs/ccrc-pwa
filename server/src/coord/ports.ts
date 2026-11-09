@@ -57,7 +57,7 @@ export interface FleetWatcherView {
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
   | 'absorbParkEscalation' | 'activeClaims' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
-  | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
+  | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blocksToWake' | 'bumpReplayCount'
   | 'cancelDeliveriesTo' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
   | 'childStaleActivity' | 'claimDigestDay' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
@@ -73,7 +73,7 @@ export type WatcherCoordMember =
   | 'journalGenerations' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'liveBlocksOf'
-  | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows'
+  | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markBlockWoken'
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markUnreachable' | 'maxMailDeliveryId'
   | 'maxRunEventId' | 'mergingRuns' | 'node' | 'nodeByLabel' | 'nodes' | 'noteDispatchRefusal' | 'noteGate'
