@@ -210,7 +210,8 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
         await page.keyboard.press('Escape');
         await page.locator('.sheet-body').waitFor({ state: 'detached' });
 
-        // CoordBanner's Pause.
+        // CoordBanner's Pause: the switch lives under Advanced (the runs rebuild, Task 12a, D-8074), one tap from the board's foot.
+        await page.getByRole('link', { name: 'Advanced' }).click();
         await page.locator('.coord-banner').getByRole('button', { name: 'Pause' }).click();
         await page.locator('.coord-banner .coord-error').waitFor();
         expectDrawn(await measure(page, '.coord-banner', '.coord-error'), API_SENTENCE, `coordinator banner, ${named(view)}`);

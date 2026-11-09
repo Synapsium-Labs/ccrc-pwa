@@ -8,7 +8,7 @@
 // A caller that gives a `fallback` reads the unpaged archive instead and sorts it by `closedAt`.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunFindQuery, RunHit, RunSummary } from '../../../shared/api';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, ApiTimeout } from '../lib/api';
 import { refusalText } from '../lib/refusalWords';
 import { isRunClosed, runClosedAt } from '../fleet/runWords';
 
@@ -59,6 +59,8 @@ export interface RunList {
   /** The rows held, or null for no answer yet. A failed re-read keeps them. */
   readonly rows: RunSummary[] | null;
   readonly state: RunListState;
+  /** Whether the read that left `state` at `error` ran out of time (C1's `ApiTimeout`): the board words it "Could not load runs." */
+  readonly timedOut: boolean;
   readonly reload: () => Promise<void>;
   readonly loadOlder: () => Promise<RunListOlder>;
   readonly hasOlder: boolean;
@@ -73,6 +75,7 @@ export function useRunList(
   const key = JSON.stringify(query);
   const [rows, setRows] = useState<RunSummary[] | null>(null);
   const [state, setState] = useState<RunListState>('loading');
+  const [timedOut, setTimedOut] = useState(false);
   const [next, setNext] = useState<{ beforeAt: number; beforeId: number } | null>(null);
   const issued = useRef(0);
   const asking = useRef<Promise<RunListOlder> | null>(null);
@@ -107,8 +110,10 @@ export function useRunList(
       setRows(merged);
       setNext(reach);
       setState('ok');
+      setTimedOut(false);
     } catch (err) {
       if (mine !== issued.current) return;
+      setTimedOut(err instanceof ApiTimeout);
       if (isOlderServerAnswer(err) && fallbackRef.current !== undefined) {
         try {
           const all = await fallbackRef.current();
@@ -167,5 +172,5 @@ export function useRunList(
     if (prev !== null && [...prev].some((id) => !ids.has(id))) void reload();
   }, [live, seen, reload]);
 
-  return { rows, state, reload, loadOlder, hasOlder: next !== null };
+  return { rows, state, timedOut: state === 'error' && timedOut, reload, loadOlder, hasOlder: next !== null };
 }

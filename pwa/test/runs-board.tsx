@@ -26,8 +26,12 @@ export function findFromArchive(counted: Archive): FindReader {
   };
 }
 
-export function RunsScreen(props: ComponentProps<typeof RealRunsScreen>): ReactNode {
-  const loadFinished = props.loadFinished ?? (props.loadRuns === undefined ? undefined : findFromArchive(props.loadRuns));
+/** The board's props plus the two readers tests still describe their world with: the archive as `loadRuns`, and the caps
+ *  dial's read, which moved to Advanced (Task 12a, D-8074) and is dropped here. */
+export type BoardTestProps = ComponentProps<typeof RealRunsScreen> & { loadRuns?: Archive; loadCaps?: unknown };
+
+export function RunsScreen({ loadRuns, loadCaps: _loadCaps, ...props }: BoardTestProps): ReactNode {
+  const loadFinished = props.loadFinished ?? (loadRuns === undefined ? undefined : findFromArchive(loadRuns));
   return <RealRunsScreen {...props} {...(loadFinished === undefined ? {} : { loadFinished })} />;
 }
 

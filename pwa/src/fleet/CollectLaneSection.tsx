@@ -39,6 +39,7 @@ import {
   ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS, SETTINGS_WHEN, UNCONFIRMED_TEXT, inAppClick,
   optionNote, useResultLine,
 } from './settingsText';
+import { runsAdvancedPath } from '../lib/routes';
 import { useFleetStore } from '../stores/fleet';
 import { CHILD_RECLAIM_MARKER_GLYPH, childReclaimMarker } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
@@ -282,8 +283,8 @@ export function PauseAllCleanup({
         <div className="settings-card-foot">
           <a
             className={GHOST_ANCHOR}
-            href="/runs"
-            onClick={inAppClick('/runs')}
+            href={runsAdvancedPath()}
+            onClick={inAppClick(runsAdvancedPath())}
           >
             {COLLECT_PAUSE_TEXT.resume}
           </a>

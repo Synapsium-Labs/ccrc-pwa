@@ -1,5 +1,5 @@
-// Child-reclamation wave 6, fix round 1 (review 335 F11; spec §5.9): the board's
-// archive read has ONE source for a finished row's reclaim chip, and since this
+// Child-reclamation wave 6, fix round 1 (review 335 F11; spec §5.9): the archive hook's
+// read (`useColdRuns`; the board left it in Task 12a, D-8074) has ONE source for a finished row's reclaim chip, and since this
 // wave a reclaim puts two reads in flight a tick or two apart (the vanish read
 // of wave 5, and the coord frame's second trigger). When the older read
 // resolves last it must not overwrite the newer one: the row would show the
@@ -9,9 +9,8 @@
 //
 // Every read here is a deferred the test settles by hand, in the order it names.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
-import type { ChildReclaimStatus, CoordCapsView, CoordStatus, RunSummary } from '../../shared/api';
-import { RunsScreen, foundRows } from './runs-board';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import type { ChildReclaimStatus, CoordStatus, RunSummary } from '../../shared/api';
 import { useColdRuns } from '../src/screens/useColdRuns';
 import { ApiTimeout } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -37,7 +36,6 @@ const finished = (word: ChildReclaimStatus['word']): RunSummary =>
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
-const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
 
 const T = 1_758_500_000_000;
 const coordAt = (doneAt: number): CoordStatus =>
@@ -49,6 +47,7 @@ interface Read { resolve(rows: RunSummary[]): Promise<void>; reject(): Promise<v
 /** A board whose first read (the mount read) has landed with the row PENDING, and
  *  whose next two reads are in flight: `older` was fired by the first change of
  *  the newest reclaim end, `newer` by the second. Neither has answered. */
+let hook: { current: ReturnType<typeof useColdRuns> };
 const boardWithTwoReadsInFlight = async () => {
   const store = makeStore();
   act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [], fleetFrameSeen: true,
@@ -60,22 +59,20 @@ const boardWithTwoReadsInFlight = async () => {
       reject: async () => { await act(async () => { rej(new Error('network')); }); },
     });
   }));
-  // Finished reads `find` (Task 11); these reads are the paged arm's, whose whole rows carry the chip onto the Finished row.
-  render(<RunsScreen store={store} loadRuns={loadRuns} loadFinished={async () => foundRows([finished('pending')])} loadCaps={NO_CAPS} />);
+  hook = renderHook(() => useColdRuns(store, loadRuns)).result;
   await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(1));
   await reads[0]!.resolve([finished('pending')]);
-  await screen.findByRole('group', { name: /finished/i });
+  await waitFor(() => expect(hook.current.cold).not.toBeNull());
   act(() => { store.setState({ coord: coordAt(T + 1) }); });
   await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
   act(() => { store.setState({ coord: coordAt(T + 2) }); });
   await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(3));
   return { older: reads[1]!, newer: reads[2]! };
 };
-const chipWord = (): string | null =>
-  document.querySelector('.run-child-reclaim')?.getAttribute('data-child-reclaim') ?? null;
-const errorShown = (): boolean => document.querySelector('[data-state="error"]') !== null;
+const chipWord = (): string | null => hook.current.cold?.[0]?.childReclaim?.word ?? null;
+const errorShown = (): boolean => hook.current.state === 'error';
 
-describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () => {
+describe('useColdRuns: the archive read is a high-water mark (spec §5.9)', () => {
   it('the NEWER read lands first with the row reclaimed, the stale one last with it pending: reclaimed stays', async () => {
     const { older, newer } = await boardWithTwoReadsInFlight();
     expect(chipWord(), 'before either read lands').toBe('pending');
@@ -96,10 +93,10 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
   it('a stale REJECTION arriving after the newer success does not show the error state', async () => {
     const { older, newer } = await boardWithTwoReadsInFlight();
     await newer.resolve([]);                                   // an answered, empty archive
-    expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
+    expect(hook.current.state).toBe('ok');
     await older.reject();
     expect(errorShown(), 'a read older than the applied one set the error state').toBe(false);
-    expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
+    expect(hook.current.state).toBe('ok');
   });
 
   it('an OLDER rejection arriving first does not stop the newer success from landing', async () => {
@@ -107,7 +104,7 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     await older.reject();
     await newer.resolve([]);
     expect(errorShown()).toBe(false);
-    expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
+    expect(hook.current.state).toBe('ok');
   });
 
   it('the chosen reading: a rejection advances nothing, so an older success after a newer failure still lands', async () => {
@@ -123,10 +120,11 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
 
   // Desktop-polish Task C14, D-8110, review 1606 F2: re-homed from runs-arrival after #2478 removed the not-loaded line.
   // Read the hook's two failure signals directly: an older success applies its rows but clears neither state nor timedOut.
+  // D-8074 removed the paged arm (Task 12a); the guard holds on the one read that remains, so these run unpaged.
   it.each([
     { kind: 'timeout', error: new ApiTimeout('/api/runs', 8_000), timedOut: true },
     { kind: 'network', error: new Error('read failed'), timedOut: false },
-  ])('a newer $kind failure holds both failure signals after an older paged success', async ({ error, timedOut }) => {
+  ])('a newer $kind failure holds both failure signals after an older success', async ({ error, timedOut }) => {
     const store = makeStore();
     const reads: { resolve(rows: RunSummary[]): Promise<void>; reject(error: Error): Promise<void> }[] = [];
     const loadRuns = vi.fn(() => new Promise<{ runs: RunSummary[] }>((resolve, reject) => {
@@ -135,7 +133,7 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
         reject: async (error) => { await act(async () => { reject(error); }); },
       });
     }));
-    const { result } = renderHook(() => useColdRuns(store, loadRuns, { page: 2, rereadOnTransitions: false }));
+    const { result } = renderHook(() => useColdRuns(store, loadRuns, { rereadOnTransitions: false }));
     await waitFor(() => expect(reads).toHaveLength(1));
     act(() => { void result.current.reload(); });
     expect(reads).toHaveLength(2);
@@ -146,7 +144,6 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     const rows = [finished('reclaimed')];
     await reads[0]!.resolve(rows);
     expect(result.current.cold).toEqual(rows);
-    expect(store.getState().runPages?.runs).toEqual(rows);
     expect(result.current.state).toBe('error');
     expect(result.current.timedOut).toBe(timedOut);
     expect(result.current.reading).toBe(false);
@@ -167,7 +164,7 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     const loadRuns = vi.fn(() => new Promise<{ runs: RunSummary[] }>((_resolve, reject) => {
       reads.push({ reject: async (error) => { await act(async () => { reject(error); }); } });
     }));
-    const { result } = renderHook(() => useColdRuns(store, loadRuns, { page: 2, rereadOnTransitions: false }));
+    const { result } = renderHook(() => useColdRuns(store, loadRuns, { rereadOnTransitions: false }));
     await waitFor(() => expect(reads).toHaveLength(1));
     act(() => { void result.current.reload(); });
     expect(reads).toHaveLength(2);
@@ -188,7 +185,7 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     // the board on "Loading…" for good.
     const store = makeStore();
     const loadRuns = vi.fn(async () => null as unknown as { runs: RunSummary[] });
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
-    await waitFor(() => expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('error'));
+    const view = renderHook(() => useColdRuns(store, loadRuns));
+    await waitFor(() => expect(view.result.current.state).toBe('error'));
   });
 });

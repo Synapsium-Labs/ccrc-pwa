@@ -690,11 +690,11 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
       expect(pause).toHaveBeenCalledWith('on');
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(within(pauseCard()).getAllByRole('button').map((b) => b.textContent)).toEqual([COLLECT_PAUSE_TEXT.pausing]);
-      // Paused: no control at all, and the one resume door is the link to Runs.
+      // Paused: no control at all, and the one resume door is the link to Advanced, where the switch lives.
       seen(store, coord({ reclaim: 'set' }));
       expect(within(pauseCard()).queryByRole('button')).toBeNull();
       const link = within(pauseCard()).getByRole('link', { name: COLLECT_PAUSE_TEXT.resume });
-      expect(link).toHaveAttribute('href', '/runs');
+      expect(link).toHaveAttribute('href', '/runs/advanced');
       // The resume door stands alone, so it is a control with the tap floor, not prose: the design system's ghost
       // button on an anchor in the card's foot (TextLink's contract keeps a bare link for words inside a sentence).
       for (const c of buttonVariants({ variant: 'ghost' }).split(/\s+/).filter(Boolean)) expect(link).toHaveClass(c);

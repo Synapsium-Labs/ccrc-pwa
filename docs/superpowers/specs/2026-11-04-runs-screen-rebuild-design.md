@@ -384,7 +384,7 @@ The table is author's call A4. First match wins. Any uncertain reading means no 
 | 2 | `start-never-landed` | Planned; `dispatchStartedAt` set; `dispatchedAt` null; over 1 hour | Start never finished | "Started 8 days ago and never landed" | 2 | 1085: E1r, under R1. 1257: no row |
 | 3 | `review-of-closed` | Planned review whose target run is closed, or, from B7, has a later review that reached `working` or `done`; over 1 hour | Review of finished work | One line per cause (below) | 12 | E1r |
 | 4 | `overtaken` | Planned work; a later wave of the programme has left planned; over 24 hours | Overtaken by later waves | "A later wave moved on 28 days ago" | 7 | No row of its own (A11). E1 reaches one only when nothing past planned is open: 730 is skipped today for recent activity alone |
-| 5 | `never-started` | Planned work, and either over 7 days old with nothing else open in the programme, or, from B7, every open run of the programme is planned and it has been quiet (R4) for 48 hours | Never started | "Opened 23 days ago and never started" | 2 | E1 |
+| 5 | `never-started` | Planned work, and either over 7 days old with nothing else open in the programme (an open run that is itself stuck does not count as open: R1, 2026-11-08), or, from B7, every open run of the programme is planned and it has been quiet (R4) for 48 hours | Never started | "Opened 23 days ago and never started" | 2 | E1 |
 | | **Total** | | | | **28** | 18 by a lane, 10 by a person |
 
 **What "gone" reads (A56).** A person is gone when `measureClaimant` answers `dead` and neither of two rulings says otherwise, checked in this order:
@@ -549,7 +549,7 @@ Top to bottom:
 3. **Paused banner.** `CoordBanner`, only while coordination is paused.
 4. **Stuck band.** One head per reason with live runs, in the fixed order of §8.2.1, oldest first within a reason. Its place above the programmes is the operator's answer to Q1. Only the header, the search box and the paused banner sit above it, and no healthy work does (check 12).
 5. **Closed today line.** "Closed today: 3 by you · 2 by ccrc · 60 by coordinators". Each count opens All runs with that filter. It appears once any close has landed that day. A zero count is left out, so before any lane closes it reads "Closed today: 5 by you · 60 by coordinators" (o6). "Today" is the operator's local day (A32). This is the ruled spec's quiet line, now in one place, below the band (check 12). Below it, and only while one exists, the board's information line names a run no act can move: "1 run is in a state this server cannot read.", linking to its run page, or, for a run already closing or one it could not read, §12.2's line for that case (§12.2, A62). It is information, not an item, so it carries no marker and no count.
-6. **Waiting on its coordinator band.** One folded row (A14), selected as §7 says.
+6. **Waiting on its coordinator band.** One folded row (A14), selected as §7 says. A run with a stuck verdict is never in it: it shows in the Stuck band alone (R2, 2026-11-08).
 7. **Programmes.** Cards, needs you first, then by last move.
 8. **Quiet programmes** fold: no run opened or closed in 7 days. 6 of 17 now, 8 at 15:12 [M].
 9. **Finished** fold (§8.2.3).

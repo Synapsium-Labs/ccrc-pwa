@@ -18,6 +18,7 @@ import { ToastHost } from '@ccrc/ui';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { RunsScreen } from './runs-board';
+import { RunsAdvancedScreen } from '../src/screens/RunsAdvancedScreen';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -306,10 +307,13 @@ describe('the reclaim row', () => {
     expect(document.querySelector('.child-reclaim-error')).not.toBeNull();
   });
 
-  it('mounts on /runs, after the pause banner, and nowhere else', () => {
+  it('mounts on Advanced, after the pause switch, and nowhere else: not on the board, not on the fleet', () => {
     const store = makeStore();
     seen(store, coord());
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    const board = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    expect(board.container.querySelector('.child-reclaim-banner')).toBeNull();
+    cleanup();
+    const { container } = render(<RunsAdvancedScreen store={store} read={async () => ({ ok: true, exact: null, runs: [], reviewsOf: [], next: null })} loadCaps={NO_CAPS} />);
     const order = [...container.querySelectorAll('.coord-banner, .child-reclaim-banner')];
     expect(order).toEqual([container.querySelector('.coord-banner'), container.querySelector('.child-reclaim-banner')]);
     cleanup();
@@ -418,7 +422,7 @@ describe('the collapsed kept line', () => {
   });
 
   // D-5527 / operator ruling 2026-10-18: a reclaim target leads with its programme and wave when the board holds its
-  // run (RunsScreen hands the banner its live and finished runs), keeping `run #N` as the secondary key.
+  // run (Advanced hands the banner the live frame and All runs' hits), keeping `run #N` as the secondary key.
   it('a target whose run the board holds leads with the programme and wave, then "run #N · id"', () => {
     const store = makeStore();
     const one = kept();

@@ -8,7 +8,7 @@
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
-  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type RunsPageAnswer, type SessionRun } from '../../../shared/api';
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
 import { formatAge, formatElapsed } from './formatReset';
 import { closeWords } from './closeWords';
 import type { CoordinatorPresence } from './presence';
@@ -1037,52 +1037,6 @@ export const childOfRunLabel = (
   }
   return null;
 };
-
-/** The run archive's pages as the pure deciders below read and write them (console speed S2): every row loaded so far,
- *  ids ascending, and the `before` that asks the next older page (`null`: none remain). The fleet store's `RunPages`
- *  adds the read's time and satisfies this. */
-export interface RunPagesView { runs: RunSummary[]; nextBefore: number | null }
-
-const byId = (a: RunSummary, b: RunSummary): number => a.id - b.id;
-
-/** A RE-READ of the archive's first page, folded into the pages already held (console speed S2). The answer is every
- *  active run plus the newest closed runs; `nextBefore` is the lowest closed id on that page (never a pinned extra),
- *  so every row with an id at or above it, and every active run, is covered by the answer and REPLACED by it.
- *  A stored CLOSED row below it is an older page the operator already loaded and is KEPT, as is the stored
- *  `nextBefore` when it reaches further down: a re-read never throws a loaded page away. A stored active row the
- *  answer no longer carries has closed or left, so it is dropped, wherever its id sits. One that sat BELOW the page
- *  (inside the older region) has its fresh closed copy on no page held, so the result's `nextBefore` is raised to just
- *  above the highest such id: the next "Show older" asks for it again, and no row is lost silently. With no
- *  `nextBefore` in the answer nothing older remains (every closed run is on the page), so no stored row survives
- *  below it. PURE. */
-export function mergeFirstRunPage(stored: RunPagesView | null, answer: RunsPageAnswer): RunPagesView {
-  const boundary = answer.nextBefore;
-  if (boundary === undefined) return { runs: [...answer.runs].sort(byId), nextBefore: null };
-  const inAnswer = new Set(answer.runs.map((r) => r.id));
-  const below = (stored?.runs ?? []).filter((r) => r.id < boundary && !inAnswer.has(r.id));
-  const kept = below.filter((r) => isRunClosed(r));
-  const gone = below.filter((r) => !isRunClosed(r)).map((r) => r.id);
-  const reach = kept.length === 0 || stored === null ? boundary : stored.nextBefore === null ? null : Math.min(stored.nextBefore, boundary);
-  const refetch = gone.length === 0 ? null : Math.max(...gone) + 1;
-  const nextBefore = refetch === null ? reach : reach === null ? refetch : Math.max(reach, refetch);
-  return { runs: [...answer.runs, ...kept].sort(byId), nextBefore };
-}
-
-/** An OLDER page (`loadOlder`) appended to the pages held (console speed S2). A page answers only the question the
- *  held view still asks: `before` is the `nextBefore` the page was asked with, and when the held `nextBefore` is no
- *  longer that (a re-read landed while the page was in flight and moved it, as it does to refetch a run that closed
- *  inside the loaded region) the held view comes back UNCHANGED, the same object, for the caller to see. Otherwise the
- *  held side is the fresher for everything it already knows: every held row stays as it is, and the answer adds only
- *  CLOSED rows below `before` (an active row in an older page's answer is a copy from when it was read, and a re-read
- *  has the live one). A closed row the answer carries replaces a held copy of the same id. The next `before` is the
- *  answer's (`null` when it carries none). PURE. */
-export function appendOlderRunPage<V extends RunPagesView>(stored: V, answer: RunsPageAnswer, before: number): RunPagesView | V {
-  if (stored.nextBefore !== before) return stored;
-  const added = answer.runs.filter((r) => isRunClosed(r) && r.id < before);
-  const fresh = new Set(added.map((r) => r.id));
-  const held = stored.runs.filter((r) => !fresh.has(r.id));
-  return { runs: [...held, ...added].sort(byId), nextBefore: answer.nextBefore ?? null };
-}
 
 /** The one reader of `RunSummary.coordinatorGone` (spec 9.1, A46, A60): the server's verdict decides, true and false alike,
  *  and only an absent field (an older server) falls back to what the board sees of the coordinator. */

@@ -432,6 +432,59 @@ for (const width of MATRIX.widths) {
   }
 }
 
+// The top of the board and the switches under Advanced (Task 12a, D-8074): the start door sits in the header's actions slot, the
+// board draws none of the three switches, and Advanced draws them whole, inside the window, at every width.
+for (const width of MATRIX.widths) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      describe(`the top of the board and the switches, ${skin} ${theme} at ${width}px`, () => {
+        it('puts Start a program in the header at the tap floor, holds no switch, and Advanced draws the switches inside the window', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            const board = await page.evaluate(() => {
+              const probe = document.createElement('div');
+              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+              document.body.appendChild(probe);
+              const tap = probe.getBoundingClientRect().height;
+              probe.remove();
+              const door = document.querySelector<HTMLElement>('.program-start-door');
+              const r = door?.getBoundingClientRect() ?? null;
+              const h1 = document.querySelector('h1');
+              const head = h1?.parentElement ?? null;
+              return {
+                tap, vw: innerWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                door: r === null ? null : { h: r.height, right: r.right, left: r.left },
+                inHead: head !== null && door !== null && head.contains(door),
+                caps: document.querySelector('.caps-control') !== null,
+                reclaim: document.querySelector('.child-reclaim-banner') !== null,
+              };
+            });
+            expect(board.door, 'the start door is drawn').not.toBeNull();
+            expect(board.inHead, 'in the header, beside the title').toBe(true);
+            expect(board.door!.h, 'at the tap floor').toBeGreaterThanOrEqual(board.tap - 1);
+            expect(board.door!.right).toBeLessThanOrEqual(board.vw);
+            expect(board.door!.left).toBeGreaterThanOrEqual(0);
+            expect(board.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            expect(board.caps || board.reclaim, 'no switch on the board').toBe(false);
+            await page.getByRole('link', { name: 'Advanced' }).click();
+            await page.locator('.caps-control').waitFor({ timeout: 20_000 });
+            const adv = await page.evaluate(() => {
+              const box = document.querySelector('.caps-control')!.getBoundingClientRect();
+              return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, right: box.right, left: box.left, vw: innerWidth };
+            });
+            expect(adv.page, 'no sideways page scroll on Advanced').toBeLessThanOrEqual(0);
+            expect(adv.right).toBeLessThanOrEqual(adv.vw);
+            expect(adv.left).toBeGreaterThanOrEqual(0);
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}
+
 describe('Advanced in a broad column opens a run beside its list', () => {
   it('a row sets ?open=<id> and the run draws in the pane (Instrument, 1920)', async () => {
     const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme: 'dark', width: 1920 }, ADVANCED_FIXTURE);

@@ -5,6 +5,8 @@ import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { serverBinding, withBindingFrames } from './runBindingFixture';
 import { RunsScreen, foundRows } from './runs-board';
+import { RunsAdvancedScreen } from '../src/screens/RunsAdvancedScreen';
+import { MailScreen } from '../src/screens/MailScreen';
 import type { FindReader } from '../src/screens/useRunList';
 import { navigate } from '../src/lib/router';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, boundOpenRun, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
@@ -112,15 +114,13 @@ describe('programWave — the group header’s own derived fact (fix round 1, ta
 });
 
 describe('the run board', () => {
-  it('renders the live frame’s active runs immediately — the cold read is issued too, but the active half never waits on it', () => {
+  it('renders the live frame’s active runs immediately — Finished is read too, but the active half never waits on it', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    const load = vi.fn().mockResolvedValue({ runs: [] });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
-    // The cold read is now UNCONDITIONAL (finding 1) — it is the only
-    // possible source of the Finished half — but the active row born from
-    // the live frame renders synchronously, before that promise has any
-    // chance to settle.
+    const load = vi.fn().mockResolvedValue(foundRows([]));
+    render(<RunsScreen store={store} loadFinished={load} />);
+    // Finished's read is UNCONDITIONAL (finding 1) — it is the only possible source of the Finished half — but the active
+    // row born from the live frame renders synchronously, before that promise has any chance to settle.
     expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
     expect(load).toHaveBeenCalledTimes(1);
   });
@@ -136,13 +136,13 @@ describe('the run board', () => {
     // "setInterval was never called" spy is a false positive on the REAL
     // component — this drives fake time forward with
     // `advanceTimersByTimeAsync` (which also flushes the promise microtask
-    // queue between ticks) and counts `loadRuns` calls directly instead.
+    // queue between ticks) and counts Finished's reads directly instead.
     vi.useFakeTimers();
     try {
       const store = makeStore();
       act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-      const load = vi.fn().mockResolvedValue({ runs: [] });
-      render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
+      const load = vi.fn().mockResolvedValue(foundRows([]));
+      render(<RunsScreen store={store} loadFinished={load} />);
       await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
       expect(load).toHaveBeenCalledTimes(1);
     } finally {
@@ -150,12 +150,16 @@ describe('the run board', () => {
     }
   });
 
-  it('cold-starts from GET /api/runs when no frame has landed', async () => {
-    // The deep-link case, and the older-server case: /ws/fleet may never send
-    // a runs frame at all, and a blank board would be a lie about the program.
+  it('lists open runs from the frame alone: with no frame, an open run in the archive read is not drawn, and the board says Loading… (Task 12a)', async () => {
+    // The deep-link case, and the older-server case: /ws/fleet may never send a runs frame at all. A blank board would be
+    // a lie about the program, and so would an open run read from the archive, which only the frame may list.
     const store = makeStore();
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r()] })} />);
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
+    const spy = vi.spyOn(api, 'runs');
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTitle(/ · clear-cove$/)).toBeNull();
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('resolves loadCold and populates Finished under React StrictMode — the aliveRef guard must RE-ARM, not just latch false once (I1, regression, measured)', async () => {
@@ -169,6 +173,7 @@ describe('the run board', () => {
     // life — the board hangs on "Loading…" forever. This is measured: it
     // fails against the pre-fix `useRef(true)` + bodyless-cleanup shape.
     const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
     const finishedRun = r({ id: 9, wave: 1, state: 'done', closedAt: Date.now() });
     render(
       <StrictMode>
@@ -328,12 +333,10 @@ describe('the run board', () => {
     expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
   });
 
-  it('a run that closes stops being active the instant the live frame says so — never resurrected by a stale cold snapshot (finding 3, failure A)', async () => {
+  it('a run that closes stops being active the instant the live frame says so — never resurrected by a stale snapshot (finding 3, failure A)', async () => {
     const store = makeStore();
     render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r({ id: 7 })] })} />);
-    // The cold read lands: run 7, active.
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    // The live frame then lands, agreeing run 7 is active…
+    // The live frame lands, run 7 active…
     act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
     expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
     // …then run 7 closes: the active-only frame broadcasts an HONEST `[]`.
@@ -352,21 +355,13 @@ describe('the run board', () => {
     // call, the way the real `?closed=1` route would once the close has
     // actually landed server-side.
     const store = makeStore();
-    let calls = 0;
-    const loadRuns = vi.fn(async () => {
-      calls += 1;
-      return calls === 1
-        ? { runs: [r({ id: 7 })] }
-        : { runs: [r({ id: 7, state: 'done', closedAt: Date.now() })] };
-    });
-    // Finished reads `find` (Task 11): it answers the same way, empty before the close and with the closed run after it.
+    // Finished reads `find` (Task 11): it answers empty before the close and with the closed run after it.
     let found = 0;
-    const loadFinished = async (): ReturnType<FindReader> => {
+    const loadFinished = vi.fn(async (): ReturnType<FindReader> => {
       found += 1;
       return foundRows(found === 1 ? [] : [r({ id: 7, state: 'done', closedAt: Date.now() })]);
-    };
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={loadRuns} loadFinished={loadFinished} />);
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
+    });
+    render(<RunsScreen store={store} loadFinished={loadFinished} />);
     act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
     expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
     // The run closes: the live active-only frame drops it — this is the
@@ -374,7 +369,7 @@ describe('the run board', () => {
     act(() => { store.setState({ runs: [] }); });
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
     expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    expect(loadRuns).toHaveBeenCalledTimes(2);
+    expect(loadFinished).toHaveBeenCalledTimes(2);
   });
 
   it('the Finished group survives a new active run landing — it never re-reads from `live` (finding 3, failure B)', async () => {
@@ -459,7 +454,9 @@ describe('the run board', () => {
     // the loading render (finding 19: "loading" and "confirmed empty" are no
     // longer the same state) — `findByText` waits for the real answer, which
     // is what a live app would show.
-    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('runs-back');
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
   });
@@ -514,45 +511,103 @@ describe('the run board', () => {
 // way. A merge conflict or a "clean up RunsScreen" pass could drop the
 // `<CoordBanner store={store} />` line and every existing test would stay
 // green while the pause readout silently stopped shipping.
-describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
-  it('renders .coord-banner once a coord frame has landed, ordered after .offline-banner', () => {
-    const store = makeStore();
-    act(() => {
-      store.setState({
-        conn: 'down', // also exercises the offline banner, so both can be ordered
-        coord: { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] },
-        coordFrameSeen: true,
-      });
-    });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
+  const COORD = (pause: 'clear' | 'set' | 'unmeasurable') =>
+    ({ pause, mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }) as const;
 
+  it('the paused banner shows only while coordination is paused, ordered after .offline-banner', () => {
+    const store = makeStore();
+    act(() => { store.setState({ conn: 'down', coord: COORD('set'), coordFrameSeen: true }); });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     const banner = container.querySelector('.coord-banner');
     const offline = container.querySelector('.offline-banner');
     expect(banner).not.toBeNull();
     expect(offline).not.toBeNull();
-
-    // Brief, Step 5: "above the groups and below the Reconnecting… banner" —
-    // DOM order (not merely presence) is what that sentence actually asks
-    // for, so this checks order, not just membership.
-    const order = [...container.querySelectorAll('.offline-banner, .coord-banner')];
-    expect(order).toEqual([offline, banner]);
+    // DOM order, not merely presence: below the Reconnecting… banner.
+    expect([...container.querySelectorAll('.offline-banner, .coord-banner')]).toEqual([offline, banner]);
   });
 
-  // Wave 6: the caps dial ships by ONE mounted line too, and for exactly the
-  // reason the paragraph above this describe gives — `caps-control.test.tsx`
-  // pins its behaviour and would stay green if the line were dropped.
-  it('renders .caps-control after .coord-banner once its own read lands', async () => {
+  it('the pause toggle lives under Advanced: a board that is not paused draws no coordination banner at all', () => {
     const store = makeStore();
-    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })}
-      loadCaps={async () => ({ caps: { maxConcurrentWorkers: 3 },
-                               usage: { running: 1 } })} />);
-    // The control's read is its own, not the store's — so this waits for it
-    // rather than asserting into a tree that has not resolved.
-    await waitFor(() => expect(container.querySelector('.caps-control')).not.toBeNull());
-    const order = [...container.querySelectorAll('.coord-banner, .caps-control')];
-    expect(order).toEqual([container.querySelector('.coord-banner'),
-                           container.querySelector('.caps-control')]);
+    act(() => { store.setState({ coord: COORD('clear'), coordFrameSeen: true, runs: [], runsFrameSeen: true }); });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(container.querySelector('.coord-banner')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+  });
+
+  it('CapsControl and ChildReclaimBanner render on Advanced and not on the board', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: COORD('clear'), coordFrameSeen: true, runs: [], runsFrameSeen: true }); });
+    const caps = vi.fn(async (): Promise<CoordCapsView> => ({ caps: { maxConcurrentWorkers: 3 }, usage: { running: 1 } }));
+    const board = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={caps} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(board.container.querySelector('.caps-control')).toBeNull();
+    expect(board.container.querySelector('.child-reclaim-banner')).toBeNull();
+    expect(caps, 'the board never asks for the caps').not.toHaveBeenCalled();
+    cleanup();
+    const adv = render(<RunsAdvancedScreen store={store} read={async () => foundRows([])} loadCaps={caps} />);
+    await waitFor(() => expect(adv.container.querySelector('.caps-control')).not.toBeNull());
+    expect(adv.container.querySelector('.child-reclaim-banner')).not.toBeNull();
+    // The pause switch is there, paused or not, and ordered ahead of the caps.
+    const order = [...adv.container.querySelectorAll('.coord-banner, .child-reclaim-banner, .caps-control')].map((el) => (el.matches('.coord-banner') ? 'coord-banner' : el.matches('.child-reclaim-banner') ? 'child-reclaim-banner' : 'caps-control'));
+    expect(order).toEqual(['coord-banner', 'child-reclaim-banner', 'caps-control']);
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+  });
+
+  it('the foot link still reaches them from the board, with no group act first', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const foot = screen.getByRole('link', { name: 'Advanced' });
+    expect(foot).toHaveAttribute('href', '/runs/advanced');
+    fireEvent.click(foot);
+    expect(location.pathname).toBe('/runs/advanced');
+  });
+
+  it('Start a programme sits in the header’s actions slot', () => {
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    const door = screen.getByRole('button', { name: /start a program/i });
+    expect(door).toHaveClass('program-start-door');
+    const heading = screen.getByRole('heading', { level: 1 });
+    // The scaffold's header holds the title and the actions: the door shares the heading's header, not the body.
+    const head = heading.closest('header') ?? heading.parentElement!;
+    expect(head.contains(door)).toBe(true);
+  });
+
+  it('only the header, the search box and the paused banner sit above the list', () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: COORD('set'), coordFrameSeen: true, conn: 'open', runs: [r()], runsFrameSeen: true }); });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const group = container.querySelector('.runs-group')!;
+    const before = [...container.querySelectorAll('*')]
+      .filter((el) => (el.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 && !el.contains(group));
+    // Of the board's own controls, only the search box and the paused banner come ahead of the first programme.
+    expect(before.some((el) => el.matches('.rf-box'))).toBe(true);
+    expect(before.some((el) => el.matches('.coord-banner'))).toBe(true);
+    expect(before.some((el) => el.matches('.caps-control, .child-reclaim-banner, .review-cap-band'))).toBe(false);
+  });
+
+  it('the Inbox and Mail still read the unpaged archive', async () => {
+    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [r({ id: 1, state: 'done', closedAt: 1 })] }));
+    const store = makeStore();
+    store.setState({ refreshFeed: async () => 'ok' as const });
+    render(<MailScreen store={store} loadRuns={loadRuns} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(loadRuns).toHaveBeenCalledTimes(1);
+    expect(loadRuns).toHaveBeenCalledWith();   // no limit, no before: the whole archive, as before
+  });
+
+  it('ReviewCapBand sits below where the band goes: after the paused banner and the search box, before the programmes', () => {
+    const store = makeStore();
+    act(() => {
+      store.setState({ coord: COORD('set'), coordFrameSeen: true, runs: [r({ reviewCap: { rounds: 3, cap: 3, askedAt: 1, liftedAt: null } })], runsFrameSeen: true });
+    });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const nodes = [...container.querySelectorAll('.rf-box, .coord-banner, .review-cap-band, .runs-group')];
+    const names = nodes.map((n) => (n.matches('.rf-box') ? 'find' : n.matches('.coord-banner') ? 'paused' : n.matches('.review-cap-band') ? 'cap' : 'group'));
+    expect(names.indexOf('cap')).toBeGreaterThan(names.indexOf('paused'));
+    expect(names.indexOf('cap')).toBeGreaterThan(names.indexOf('find'));
+    expect(names.indexOf('cap')).toBeLessThan(names.indexOf('group'));
   });
 });
 
@@ -589,7 +644,9 @@ describe('the abandon control mounts on every open run row (Task 12, spec §4.3,
 // (spec §4.4: "one door, rendered at zero runs too").
 describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
   it('renders even at zero runs — one door, always there', async () => {
-    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
   });
@@ -638,9 +695,11 @@ describe('the run board tells the start sheet which projects already have a run 
     expect(screen.queryByRole('button', { name: /^start build9-demo/i })).toBeNull();
   });
 
-  it('names a project whose ACTIVE run only the COLD read found — the no-frame fallback path', async () => {
+  it('names a project whose ACTIVE run the frame holds', async () => {
     mockDoors();
-    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'working' })] })} />);
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ state: 'working' })], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
 
     await openAndPick();
 
@@ -650,7 +709,9 @@ describe('the run board tells the start sheet which projects already have a run 
 
   it('does NOT name a project whose only run is CLOSED — the list is `active`, already filtered', async () => {
     mockDoors();
-    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'done' })] })} />);
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ state: 'done' })], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
 
     await openAndPick();
 
@@ -1726,52 +1787,6 @@ describe('childReclaimRefreshDue — a vanish, never a poll (wave 5)', () => {
   });
 });
 
-describe('the board re-reads the archive when a finished child leaves the fleet (wave 5)', () => {
-  const pendingRow = (): RunSummary =>
-    r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim: { word: 'pending', sentence: null, at: null } });
-
-  it('re-reads once when the pending child’s session vanishes from the fleet frame', async () => {
-    const store = makeStore();
-    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [sess()], fleetFrameSeen: true }); });
-    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [pendingRow()] }));
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
-    await screen.findByRole('group', { name: /finished/i });
-    expect(loadRuns).toHaveBeenCalledTimes(1);
-    act(() => { store.setState({ sessions: [] }); });
-    await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
-  });
-
-  it('reads once per vanish: the read that lands, a later frame and the passage of time are not reasons to read again', async () => {
-    const store = makeStore();
-    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [sess()], fleetFrameSeen: true }); });
-    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [pendingRow()] }));
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
-    await screen.findByRole('group', { name: /finished/i });
-    act(() => { store.setState({ sessions: [] }); });
-    await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
-    // The row still reads pending and its session is still gone, so a trigger
-    // that compared a frame with itself, or kept the old baseline, would read again.
-    act(() => { store.setState({ sessions: [] }); });               // a later frame, the same ids
-    await act(async () => { await new Promise((res) => setTimeout(res, 60)); });
-    expect(loadRuns).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not re-read when an unrelated session vanishes, or when the row already reads reclaimed', async () => {
-    const store = makeStore();
-    act(() => { store.setState({ runs: [], runsFrameSeen: true,
-      sessions: [sess(), sess({ id: 'ccrc-pwa-keen-dune' })], fleetFrameSeen: true }); });
-    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [
-      r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim: { word: 'reclaimed', sentence: null, at: null } }),
-    ] }));
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
-    await screen.findByRole('group', { name: /finished/i });
-    act(() => { store.setState({ sessions: [sess()] }); });          // an unrelated session left
-    act(() => { store.setState({ sessions: [] }); });               // this row's left, but it is settled
-    await act(async () => { await Promise.resolve(); });
-    expect(loadRuns).toHaveBeenCalledTimes(1);
-  });
-});
-
 // — the board's own three doors, and two rows nothing rendered —
 describe('the board’s doors', () => {
   it('Back goes to the fleet', () => {
@@ -1808,8 +1823,8 @@ describe('the board’s doors', () => {
                                   status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
       });
     });
-    const load = vi.fn().mockResolvedValue({ runs: [] });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
+    const load = vi.fn().mockResolvedValue(foundRows([]));
+    render(<RunsScreen store={store} loadFinished={load} />);
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole('button', { name: 'Resume run 3' }));

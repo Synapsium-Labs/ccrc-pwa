@@ -6,7 +6,11 @@
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, EmptyState, PageScaffold } from '@ccrc/ui';
-import type { RunFindQuery, RunSummary } from '../../../shared/api';
+import type { CoordCapsView, RunFindQuery, RunSummary } from '../../../shared/api';
+import { api } from '../lib/api';
+import { CapsControl } from '../fleet/CapsControl';
+import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
+import { CoordBanner } from '../fleet/CoordBanner';
 import { navigate, useLocation } from '../lib/router';
 import {
   RUNS_FILTERS, RUNS_OPEN_QUERY, runPath, runsAdvancedPath, runsClosedSinceOf, runsFilterOf, runsOpenOf, type RunsFilter,
@@ -18,6 +22,10 @@ import { ResultRow } from './RunFind';
 import { useColumnName } from './runColumn';
 import { readFind, useRunList, type FindReader } from './useRunList';
 import './run-detail.css';
+
+/** The caps dial's default reader, module-scope so its identity is stable across renders: the control's own effect does not
+ *  re-fire on every parent re-render. */
+const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
 
 /** The screen's words (§8.6, o13). */
 export const ADVANCED_WORDS = {
@@ -57,7 +65,12 @@ function withOpen(base: string, id: number): string {
   return `${base}${base.includes('?') ? '&' : '?'}${RUNS_OPEN_QUERY}=${id}`;
 }
 
-export function RunsAdvancedScreen({ store = useFleetStore, read = readFind }: { store?: FleetStore; read?: FindReader }): ReactNode {
+export function RunsAdvancedScreen({ store = useFleetStore, read = readFind, loadCaps = loadCapsDefault }: {
+  store?: FleetStore;
+  read?: FindReader;
+  /** The caps dial's own read, injected so a test can hold it. */
+  loadCaps?: () => Promise<CoordCapsView>;
+}): ReactNode {
   const ref = useRef<HTMLDivElement>(null);
   const column = useColumnName(ref);
   const { search } = useLocation();
@@ -117,6 +130,17 @@ export function RunsAdvancedScreen({ store = useFleetStore, read = readFind }: {
     );
   }
 
+  // The switches (§8.6 item 1, Task 12a): the coordination pause, the two coordination caps and the child-reclaim switch with its
+  // attention list. They left the board, whose foot links here at every width. A closed run named by a reclaim target is found
+  // among the hits All runs holds, and an open one in the live frame.
+  const switches = (
+    <section className="ra-section ra-switches" aria-label="Switches">
+      <CoordBanner store={store} />
+      <ChildReclaimBanner store={store} runs={[...live, ...(list.rows ?? [])]} />
+      <CapsControl coordCaps={loadCaps} />
+    </section>
+  );
+
   const allRuns = (
     <section className="ra-section" aria-label={ADVANCED_WORDS.allRuns}>
       <h2 className="ra-head">{ADVANCED_WORDS.allRuns}</h2>
@@ -137,10 +161,10 @@ export function RunsAdvancedScreen({ store = useFleetStore, read = readFind }: {
         <WayStrip to="/runs" label={ADVANCED_WORDS.back} />
         {column === 'broad' ? (
           <div className="runs-split">
-            <div className="runs-list-pane">{allRuns}</div>
+            <div className="runs-list-pane">{switches}{allRuns}</div>
             <RunPane openId={openId} store={store} />
           </div>
-        ) : allRuns}
+        ) : <>{switches}{allRuns}</>}
       </PageScaffold>
     </div>
   );

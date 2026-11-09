@@ -1,4 +1,4 @@
-// The caps dial on the runs board, in a real Chrome over the production build, at every width. jsdom lays nothing
+// The caps dial under Advanced (it left the board in the runs rebuild, Task 12a, D-8074), in a real Chrome over the production build, at every width. jsdom lays nothing
 // out, so `test/caps-control.test.tsx` holds the behaviour and this file holds what only an engine can say: with the
 // daily brake retired (D-7068) the dial is ONE field, its input, its usage reading and its save
 // stay whole inside the viewport and inside the row at phone, laptop and wide widths, and nothing overflows sideways.
@@ -67,7 +67,7 @@ describe('the caps dial lays out at every width with one field', () => {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/runs');
+        await page.goto(server!.origin + '/runs/advanced');
         await page.waitForSelector('.caps-control', { timeout: 20_000 });
         const m = await page.evaluate((): Measured => {
           const box = (el: Element | null): Box => {
