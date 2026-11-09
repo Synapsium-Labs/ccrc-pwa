@@ -78,6 +78,71 @@ afterEach(() => {
   history.replaceState(null, '', '/');
 });
 
+// The row's stage probe (`useRowStage`, review 1704 F7 and F9; Task C16, D-8139). jsdom lays nothing out, so a probe
+// is counted by its one read of the crumbs' box (`rowFits` reads it once and, finding no box, keeps stage 0), and the
+// observers and the font set are stood in for.
+describe("the row's stage probe (review 1704 F7, F9)", () => {
+  type Resized = (entries: { readonly contentRect: { readonly width: number } }[]) => void;
+  let resized: Resized | null = null;
+  class FakeResizeObserver {
+    constructor(cb: Resized) { resized = cb; }
+    observe(): void {}
+    disconnect(): void {}
+  }
+  /** Probes so far: reads of the crumbs' box. */
+  function countProbes(): () => number {
+    const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect');
+    return () => spy.mock.contexts.filter((el) => (el as Element).classList.contains('docs-crumbs')).length;
+  }
+  async function settled(): Promise<void> {
+    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.export })).toBeEnabled());
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('a row that changes width by less than a pixel is probed again: the guard reads contentRect, not clientWidth (F9)', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    const probes = countProbes();
+    open('/docs/demo/specs/a.md', fakeLoaders());
+    await settled();
+    resized!([{ contentRect: { width: 900.25 } }]);
+    const before = probes();
+    resized!([{ contentRect: { width: 900.75 } }]);
+    expect(probes(), 'a 0.5 px change probes').toBe(before + 1);
+    resized!([{ contentRect: { width: 900.75 } }]);
+    expect(probes(), 'no change, no probe').toBe(before + 1);
+  });
+
+  it('a font face that finishes loading while another still loads re-probes the row (F7)', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    let loaded!: () => void;
+    const face = { status: 'loading', loaded: new Promise<void>((r) => { loaded = r; }) };
+    let onLoading: ((e: { fontfaces: readonly unknown[] }) => void) | null = null;
+    let late!: () => void;
+    const lateFace = { status: 'loading', loaded: new Promise<void>((r) => { late = r; }) };
+    const fonts = {
+      forEach: (f: (x: unknown) => void) => { f(face); },
+      addEventListener: (type: string, fn: never) => { if (type === 'loading') onLoading = fn; },
+      removeEventListener: () => {},
+    };
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true });
+    try {
+      const probes = countProbes();
+      open('/docs/demo/specs/a.md', fakeLoaders());
+      await settled();
+      const before = probes();
+      loaded();
+      await waitFor(() => expect(probes(), 'the face loaded at mount').toBe(before + 1));
+      onLoading!({ fontfaces: [lateFace] });
+      late();
+      await waitFor(() => expect(probes(), 'a face that starts loading later').toBe(before + 2));
+    } finally {
+      Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+});
+
 describe('which head a desk page draws (desk-nav Part B)', () => {
   it('a leaf draws the compact row under 600 px and the full head at 600 and wider; headLayoutFor keeps its two arguments', () => {
     const leaf = pageAt('/docs/demo/specs/a.md');

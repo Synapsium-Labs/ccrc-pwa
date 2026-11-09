@@ -852,11 +852,15 @@ function rowFits(row: HTMLElement): boolean {
 }
 
 /** The stage the row at `ref` stands at: the first of 0, 1 and 2 that fits (`rowFits`), re-measured from 0 whenever the
- *  row's width changes, its contents change outside the crumbs (an action's words, a navigation, the tree arriving) or
- *  a font loads. Each try renders synchronously (`flushSync`) from the observer's callback, so a stage that does not fit
- *  is never painted, and starting from 0 every time makes the stage a function of the width and the words alone, so a
- *  wider row never stands further on than a narrower one. Changes inside the crumbs are the fold's own and are not
- *  watched. With no ResizeObserver (jsdom) the row stays at 0. */
+ *  row's width changes (to the subpixel: the observer's `contentRect`, since `rowFits` decides at 0.01 px and an integer
+ *  `clientWidth` misses a change under a pixel; review 1704 F9), its contents change outside the crumbs (an action's
+ *  words, a navigation, the tree arriving) or a font face finishes loading. Each face is watched on its own (review 1704
+ *  F7): the set's `loadingdone` waits for every face, so a UI font that swaps in while the mono font still loads would
+ *  change the crumbs' geometry with no probe. Each try renders synchronously (`flushSync`) from the observer's callback,
+ *  so a stage that does not fit is not painted after any of these, and starting from 0 every time makes the stage a
+ *  function of the width and the words alone, so a wider row never stands further on than a narrower one. A face that
+ *  loads between the browser's paint and its promise settling can still show one frame at the old stage. Changes inside
+ *  the crumbs are the fold's own and are not watched. With no ResizeObserver (jsdom) the row stays at 0. */
 function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
   const [stage, setStage] = useState<RowStage>(0);
   useLayoutEffect(() => {
@@ -869,9 +873,10 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
       }
     };
     let width = -1;
-    const resized = new ResizeObserver(() => {
-      if (row.clientWidth === width) return;
-      width = row.clientWidth;
+    const resized = new ResizeObserver((entries) => {
+      const w = entries.at(-1)?.contentRect.width ?? row.getBoundingClientRect().width;
+      if (w === width) return;
+      width = w;
       probe();
     });
     const changed = new MutationObserver((records) => {
@@ -880,11 +885,20 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
     });
     resized.observe(row);
     changed.observe(row, { childList: true, subtree: true, characterData: true });
+    let live = true;
+    const watch = (face: FontFace): void => {
+      if (face.status === 'loading') void face.loaded.then(() => { if (live) probe(); }, () => undefined);
+    };
+    const onLoading = (e: Event): void => { for (const face of (e as FontFaceSetLoadEvent).fontfaces ?? []) watch(face); };
     const fonts = typeof document === 'undefined' ? undefined : document.fonts;
+    fonts?.forEach?.(watch);
+    fonts?.addEventListener?.('loading', onLoading);
     fonts?.addEventListener?.('loadingdone', probe);
     return () => {
+      live = false;
       resized.disconnect();
       changed.disconnect();
+      fonts?.removeEventListener?.('loading', onLoading);
       fonts?.removeEventListener?.('loadingdone', probe);
     };
   }, [ref]);
