@@ -12439,7 +12439,9 @@ _am_setting() {   # -> rc 0 = auto; rc 1 = off (AM_WHY); rc 2 = unread, which re
   # A SUBSHELL, as `_browser_mcp_box` reads it: the library sets ccrc's own names, which stay out of ccd.
   # shellcheck disable=SC1090  # the library's path is chosen at run time: beside this ccd, else ~/.local/libexec/ccrc
   out=$( if ! { . "$lib" 2>/dev/null && declare -F _ccrc_knob _lnd_ok _lnd_says >/dev/null 2>&1; }; then printf 'noreader'; exit 0; fi
-         if ! _ccrc_knob CCRC_ADMIN_MERGE auto; then printf 'unread %s' "$KNOB_WHY"; exit 0; fi
+         # `file`: the operator's fleet-wide switch is read from the box file alone, as the console reads it; a caller's
+         # environment (CCRC_ADMIN_MERGE=auto in front of the verb) never overrides an `off` written there.
+         if ! _ccrc_knob CCRC_ADMIN_MERGE auto file; then printf 'unread %s' "$KNOB_WHY"; exit 0; fi
          if _lnd_ok CCRC_ADMIN_MERGE "$KNOB"; then printf 'value %s' "$KNOB"
          else printf 'unread CCRC_ADMIN_MERGE must be %s' "$(_lnd_says CCRC_ADMIN_MERGE)"; fi )
   case "$out" in

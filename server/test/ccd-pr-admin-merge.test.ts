@@ -39,6 +39,13 @@ describe('the gate before GitHub', () => {
     expect(h.ghCalls()).toEqual([]);
   });
 
+  it('an environment CCRC_ADMIN_MERGE=auto does not override the box file\'s off: the switch is the operator\'s', () => {
+    amFixture(h); amCaller(h, 'demo-quiet-basin'); boxEnv(h, 'CCRC_ADMIN_MERGE=off\n');
+    const r = h.run(`${AM_GH_STUB} export TMUX_PANE=%1; export CCRC_ADMIN_MERGE=auto; cmd_pr_admin_merge ${GOOD}`);
+    expect([r.code, r.stdout.trim()]).toEqual([2, 'REFUSED setting-off: CCRC_ADMIN_MERGE is off']);
+    expect(h.ghCalls()).toEqual([]);
+  });
+
   it('a refused value or a missing reader reads as off: setting-unread, no gh call', () => {
     amFixture(h); amCaller(h, 'demo-quiet-basin'); boxEnv(h, 'CCRC_ADMIN_MERGE=on\n');
     const r = amRun(h, GOOD);
