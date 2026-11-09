@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '../src/lib/apiError';
 import {
   PROJECT_ADD_HINT, PROJECT_ADD_REFUSAL_TEXT, cloneFailureOf, formVerdict, prefillName, projectAddOutcomeUnknown,
-  projectAddRefusalText, projectAddedText, type ProjectAddForm,
+  projectAddRefusalText, projectAddedText, projectOfferText, projectSearchOffer, type ProjectAddForm,
 } from '../src/fleet/projectAddWords';
 import { PROJECT_NAME_MAX } from '../../shared/projectAdd';
 import { PROJECT_ADD_REFUSALS } from '../../shared/refusal';
@@ -214,11 +214,77 @@ describe('projectAddedText', () => {
     expect(said).toMatch(/workspaces once it has a GitHub remote/);
   });
 
-  it('on a fleet with no sessions yet, where no card shows it, says how to start one in it', () => {
-    expect(projectAddedText('repo', 'github', { firstRun: true })).toBe('Added project repo. Tap Start a session to work in it.');
-    const empty = projectAddedText('project-a', 'empty', { firstRun: true });
-    expect(empty.startsWith('Added project project-a. Tap Start a session to work in it.')).toBe(true);
-    expect(empty).toMatch(/workspaces once it has a GitHub remote/);
-    expect(projectAddedText('repo', 'github', { firstRun: false })).toBe('Added project repo');
+});
+
+describe('projectSearchOffer', () => {
+  const names = [{ name: 'alpha' }, { name: 'ccrc-pwa' }, { name: 'repo' }];
+
+  it('a blank search offers nothing', () => {
+    expect(projectSearchOffer('', names)).toBeNull();
+    expect(projectSearchOffer('   ', names)).toBeNull();
+  });
+
+  it.each([
+    ['example/new-thing'],
+    ['https://github.com/example/new-thing'],
+    ['github.com/example/new-thing.git'],
+    ['git@github.com:example/new-thing.git'],
+    ['  example/new-thing  '],
+  ])('%s reads as a repository to clone, as its own name', (q) => {
+    const offer = projectSearchOffer(q, names);
+    expect(offer).toMatchObject({ kind: 'clone', name: 'new-thing', repo: { owner: 'example', repo: 'new-thing' } });
+  });
+
+  it('a repository whose project is already here shows that project instead', () => {
+    expect(projectSearchOffer('example/repo', names)).toEqual({ kind: 'existing', name: 'repo' });
+    expect(projectSearchOffer('example/Repo', names)).toEqual({ kind: 'existing', name: 'repo' });
+  });
+
+  it('the repository a project was measured to be decides, whatever the project is called', () => {
+    const rows = [
+      { name: 'api-work', repo: { state: 'named', slug: 'acme/api' } as const },
+      { name: 'api', repo: { state: 'named', slug: 'other/api' } as const },
+      { name: 'web', repo: { state: 'unmeasured' } as const },
+    ];
+    // Cloned under another name: that project, not a second clone.
+    expect(projectSearchOffer('https://github.com/ACME/api', rows)).toEqual({ kind: 'existing', name: 'api-work' });
+    // A namesake measured to be another repository: a clone under the owner's name too, or none when that is taken.
+    expect(projectSearchOffer('third/api', rows)).toMatchObject({ kind: 'clone', name: 'third-api', repo: { owner: 'third', repo: 'api' } });
+    expect(projectSearchOffer('third/api', [...rows, { name: 'Third-API' }])).toMatchObject({ kind: 'clone', name: null });
+    // A namesake nobody measured is taken for this repository.
+    expect(projectSearchOffer('acme/web', rows)).toEqual({ kind: 'existing', name: 'web' });
+  });
+
+  it('a repository whose name cannot be a project\'s is offered with no name, for the form to ask', () => {
+    expect(projectSearchOffer('example/.github', names)).toMatchObject({ kind: 'clone', name: null });
+  });
+
+  it('a new name nothing matches offers an empty project of that name', () => {
+    expect(projectSearchOffer('fresh-idea', names)).toEqual({ kind: 'empty', name: 'fresh-idea' });
+  });
+
+  it('a search that matches a project by name, or is not a name a project may take, offers nothing', () => {
+    expect(projectSearchOffer('ccrc', names)).toBeNull();
+    expect(projectSearchOffer('ALPHA', names)).toBeNull();
+    expect(projectSearchOffer('not a name', names)).toBeNull();
+    expect(projectSearchOffer('-dash', names)).toBeNull();
+    expect(projectSearchOffer('thing.git', names)).toBeNull();
+    expect(projectSearchOffer('https://gitlab.com/example/thing', names)).toBeNull();
+  });
+});
+
+describe('projectOfferText', () => {
+  it('a clone names the repository and the project it makes', () => {
+    const offer = projectSearchOffer('example/new-thing', [])!;
+    expect(offer.kind).toBe('clone');
+    expect(projectOfferText(offer as Exclude<typeof offer, { kind: 'existing' }>))
+      .toEqual({ title: 'Clone example/new-thing', detail: 'From GitHub, as project new-thing' });
+  });
+
+  it('a clone with no name says one is needed, and an empty project says what it makes', () => {
+    expect(projectOfferText({ kind: 'clone', repo: { owner: 'example', repo: '.github', url: '' }, name: null }).detail)
+      .toMatch(/under a name you give it/);
+    expect(projectOfferText({ kind: 'empty', name: 'fresh-idea' }))
+      .toEqual({ title: 'Create empty project fresh-idea', detail: 'A new git repository on the fleet box' });
   });
 });

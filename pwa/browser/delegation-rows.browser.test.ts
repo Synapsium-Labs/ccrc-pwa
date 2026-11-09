@@ -192,16 +192,16 @@ const scrollToEnd = (): void => {
     if ((y === 'auto' || y === 'scroll') && el.scrollHeight > el.clientHeight + 1) el.scrollTop = el.scrollHeight;
   }
 };
-/** At that resting place, every button drawn whole in view from the fleet list's first card to the Add project row:
- *  a tap at its centre reaches it, and its box meets no floating button (Refined's `+ New`, Instrument's round `+`). The
- *  measured set is the fleet list's buttons (the cards' controls and toggles, then the fleet foot's toggle, the list's
- *  own last row) and the Add project row, which follows the list outside it (review 1624 F8). The page's last row of
- *  controls must be among them, and so must the Add project row: the screen's own bottom padding (`.fleet`'s) is the band
- *  that keeps that last row clear, so a screen that stops reserving it is seen here (review 1626 F6, measured: cut alone
- *  it reds at 390). The list's end padding sits above the Add project row, so this check does not measure it. Only a phone's width mounts a floating button; at 1280 and 1920 neither skin does (`fabs` is 0), so there the
- *  overlap half of the check is empty by design and the tap half still runs. */
+/** At that resting place, every button drawn whole in view in the fleet list: a tap at its centre reaches it, and its
+ *  box meets no floating button (Refined's `+ New`, Instrument's round `+`). The measured set is the fleet list's buttons
+ *  (the cards' controls and toggles, then the fleet foot's toggle, the list's own last row). The page's last row of
+ *  controls must be among them: the list's end padding and the screen's own bottom padding (`.fleet`'s) are the band that
+ *  keeps that last row clear, so a screen that stops reserving it is seen here (review 1626 F6). The New project door
+ *  that once followed the list (review 1624 F8) heads it now (add-project spec 2026-11-04 §2, as redrawn), so nothing
+ *  outside the list is measured. Only a phone's width mounts a floating button; at 1280 and 1920 neither skin does
+ *  (`fabs` is 0), so there the overlap half of the check is empty by design and the tap half still runs. */
 const measureResting = (): {
-  lastShown: boolean; addShown: boolean; fabs: number;
+  lastShown: boolean; fabs: number;
   buttons: { name: string; control: boolean; reached: boolean; underFab: string | null }[];
 } => {
   const list = document.querySelector<HTMLElement>('.fleet-list')!;
@@ -217,14 +217,13 @@ const measureResting = (): {
   const last = [...list.querySelectorAll<HTMLElement>('.proj-card .proj-work-controls')].filter((c) => c.querySelector('button') !== null).at(-1);
   const fabs = [...document.querySelectorAll<HTMLElement>('.ref-fab, .fab')].map((f) => f.getBoundingClientRect())
     .filter((f) => f.width > 0 && f.height > 0);
-  const add = document.querySelector<HTMLElement>('.fleet-add-project-row');
-  const shown = [...list.querySelectorAll<HTMLElement>('button'), ...(add === null ? [] : [add])].filter((b) => {
+  const shown = [...list.querySelectorAll<HTMLElement>('button')].filter((b) => {
     const r = b.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && r.top >= view.top - 0.5 && r.bottom <= view.bottom + 0.5;
   });
   return {
     lastShown: last !== undefined && [...last.querySelectorAll<HTMLElement>('button')].every((b) => shown.includes(b)),
-    addShown: add !== null && shown.includes(add), fabs: fabs.length,
+    fabs: fabs.length,
     buttons: shown.map((b) => {
       const r = b.getBoundingClientRect();
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -444,7 +443,6 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           const resting = await page.evaluate(measureResting);
           expect(resting.lastShown, 'the last row of controls is drawn whole at the end of the list').toBe(true);
           expect(resting.buttons.some((c) => c.control), 'the last row of controls is measured').toBe(true);
-          expect(resting.addShown, 'the Add project row is drawn whole at the end of the page, and measured').toBe(true);
           expect(resting.fabs, 'a floating button at a phone\'s width only').toBe(width === 390 ? 1 : 0);
           for (const c of resting.buttons) {
             expect(c.underFab, `${c.name}: clear of the floating button at the end of the list`).toBeNull();
