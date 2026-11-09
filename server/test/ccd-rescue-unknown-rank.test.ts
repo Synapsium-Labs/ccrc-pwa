@@ -12,7 +12,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, plantPoolEpoch, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-rescue-unknown-rank-'); });
@@ -60,6 +61,70 @@ describe('a forced rescue ranks an unmeasured home after measured room', () => {
   it('kept: forced, home measured at 20: returns home before the loop', () => {
     seed('claude-a', 'claude'); limits('claude-a', 100, 100); limits('claude', 20, 20); limits('claude-b', 5, 5);
     expect(target('claude-a', 'claude', '1')).toBe('claude rc=0');
+  });
+});
+
+// The fall-through must not cost a home the loop never walks (verifier findings on Task 3). The candidate loop only
+// reads `_pool_for` accounts that pass `_pool_ok`, so a CROSSED home (the arm skips `_pool_ok` for it) and a home a
+// hand-set `<id>.pool` list leaves out are invisible to it: on a forced call an otherwise-recovered unmeasured home
+// is kept as a rank-100 fallback and returned when the loop finds nothing, instead of turning into a strand.
+describe('a forced rescue keeps an unmeasured home the loop never walks as its fallback', () => {
+  const reg = (f: string): string => path.join(h.home, '.cc-sessions', f);
+  const tagPool = (project: string, pool: string): void => {
+    fs.mkdirSync(reg('pools'), { recursive: true });
+    fs.writeFileSync(path.join(reg('pools'), project), pool);
+  };
+  beforeEach(() => {
+    seedAccountsSh(h.home, POOLED_TEST_ROSTER);   // claude, claude-a -> pool-a; claude-b -> pool-b; claude-d, gpt untagged
+    plantPoolEpoch(h.home, POOL_BY_ID);
+  });
+
+  it('forced, crossed home unmeasured, every in-pool candidate at the ceiling: still the crossed home', () => {
+    seed('claude-a', 'claude-b'); tagPool('project-a', 'pool-a');
+    h.sh(`_reg_set ${ID} crosspool "1700000000 pool-a claude-b"`);
+    limits('claude-a', 100, 100); limits('claude', 100, 100); limits('claude-d', 100, 100);   // claude-b: no file
+    expect(target('claude-a', 'claude-b', '1')).toBe('claude-b rc=0');
+  });
+
+  it('forced, crossed home unmeasured, a measured in-pool account has room: the measured account wins', () => {
+    seed('claude-a', 'claude-b'); tagPool('project-a', 'pool-a');
+    h.sh(`_reg_set ${ID} crosspool "1700000000 pool-a claude-b"`);
+    limits('claude-a', 100, 100); limits('claude', 30, 30); limits('claude-d', 100, 100);
+    expect(target('claude-a', 'claude-b', '1')).toBe('claude rc=0');
+  });
+
+  it('forced, hand-set pool list that leaves home out, home unmeasured, listed accounts at the ceiling: still home', () => {
+    seed('claude-a', 'claude');
+    fs.writeFileSync(reg(`${ID}.pool`), 'claude-a claude-b claude-d\n');
+    limits('claude-a', 100, 100); limits('claude-b', 100, 100); limits('claude-d', 100, 100);   // claude: no file
+    expect(target('claude-a', 'claude', '1')).toBe('claude rc=0');
+  });
+
+  it('forced, hand-set pool list that leaves home out, a listed account has room: that account wins', () => {
+    seed('claude-a', 'claude');
+    fs.writeFileSync(reg(`${ID}.pool`), 'claude-a claude-b claude-d\n');
+    limits('claude-a', 100, 100); limits('claude-b', 100, 100); limits('claude-d', 40, 40);
+    expect(target('claude-a', 'claude', '1')).toBe('claude-d rc=0');
+  });
+
+  it('a wake move (measured room only) still refuses the unmeasured home as a fallback', () => {
+    seed('claude-a', 'claude');
+    fs.writeFileSync(reg(`${ID}.pool`), 'claude-a claude-b claude-d\n');
+    limits('claude-a', 100, 100); limits('claude-b', 100, 100); limits('claude-d', 100, 100);
+    const out = h.sh(`out=$(CCD_RESCUE_MEASURED_ONLY=1 _swap_target ${ID} claude-a claude 1 0); echo "$out rc=$?"`,
+      { FAKE_NOW: String(T0), TMUX: '' }).trim();
+    expect(out).toBe('rc=1');
+  });
+});
+
+describe('the unforced call is unchanged for a wrong-pool current account', () => {
+  it('retag relocation: session on a wrong-pool account, home unmeasured, measured room elsewhere: home (one move)', () => {
+    const reg = (f: string): string => path.join(h.home, '.cc-sessions', f);
+    seedAccountsSh(h.home, POOLED_TEST_ROSTER); plantPoolEpoch(h.home, POOL_BY_ID);
+    fs.mkdirSync(reg('pools'), { recursive: true });
+    fs.writeFileSync(path.join(reg('pools'), 'project-a'), 'pool-a');
+    seed('claude-b', 'claude'); limits('claude-b', 10, 10); limits('claude-a', 30, 30);   // claude: no file
+    expect(target('claude-b', 'claude', '')).toBe('claude rc=0');
   });
 });
 

@@ -19196,7 +19196,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # blocked wrapper, so home is never the blocked lane, and a forced call
   # that finds home recovered must go straight there instead of falling
   # through to the pool loop and picking some third lane.
-  local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc; local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=()
+  local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc hfb=""; local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=()
   # THE CLASS DIMENSION (routing spec §5.4). Read PURE — `_route_peek` writes no
   # note and no floor marker; a decision function that may return before acting
   # must not leave a trail (slice 1, fix round 2). `default` and no record are
@@ -19325,7 +19325,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home" \
       && { [[ "${CCD_RESCUE_MEASURED_ONLY:-}" != 1 ]] || [[ -n "$(_limit_score "$home")" ]]; } \
-      && { [[ -z "$force" ]] || [[ -n "$(_limit_score "$home")" ]]; }; then   # D-8123: a wake move wants MEASURED room only, and a FORCED rescue ranks an unmeasured home in the loop below (after every measured account with room), never ahead of it; the unforced affinity return home is unchanged
+      && { [[ -z "${4:-}" ]] || [[ -n "$(_limit_score "$home")" ]] || { hfb="$home"; false; }; }; then   # D-8123: a wake move wants MEASURED room only, and a rescue the CALLER forced (`${4:-}`, NOT the `force=pool` a wrong-pool current account sets above, which is a retag relocation and keeps its one-move affinity return) ranks an unmeasured home after every measured account with room, never ahead of it; the unforced affinity return home is unchanged. `hfb` keeps an otherwise-recovered unmeasured home as the rank-100 fallback the loop below returns when it finds nothing: the loop only walks `_pool_for` candidates that pass `_pool_ok`, so it would never rediscover a crossed home or a hand-set pool list that leaves home out
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
       # UNMEASURED REFUSES ONLY AN UNFORCED CALL, and only on THIS arm (ruling
@@ -19580,6 +19580,10 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       fi
     done
     [[ -n "$best$obest" ]] && break                                              # found at this class
+    # D-8123: the fallback home (see `hfb` in the home-recovered arm) is returned when pass 1 found nothing measured or
+    # unmeasured to rank, so a forced rescue never turns "home was eligible" into a strand. It answers only if home can
+    # serve the intended class, exactly as the arm it fell out of would have asked.
+    if [[ -n "$hfb" && "$pass" -eq 1 ]]; then _class_gate "$hfb" "$cls" && { echo "$hfb"; return 0; }; fi
     [[ -z "$cls" ]] && break                                                     # no class: nothing more to try
     [[ "$unmeas" -gt 0 ]] && return 5                                            # a lane nobody measured: nobody decides
     [[ "$unserv" -eq 0 || "$pass" -eq 2 ]] && break                              # nothing to degrade from, or already degraded once
