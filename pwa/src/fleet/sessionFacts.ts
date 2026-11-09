@@ -230,7 +230,9 @@ export function coordinatorRole(session: FleetSession): boolean {
 export const COORDINATOR_WORD = 'coordinator';
 
 /** THE role fact: the card's (D-8142) and the header's one object, so the word and its title have one home. */
-const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: 'this session is its project\'s coordinator' };
+/** The role's hover title, written once: the card's role cell and the header's role detail both read it. */
+export const COORDINATOR_ROLE_TITLE = 'this session is its project\'s coordinator';
+const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE };
 
 /** The width the card's role cell takes on the context line: the word and its middot separator (D-8142). A branch
  *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */

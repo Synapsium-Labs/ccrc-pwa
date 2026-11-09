@@ -21446,6 +21446,9 @@ _route_seed_default() {   # id wrapper [k=v...] — the coordinator row for an O
   local -a seed=()
   shift 2
   for kv in "$@"; do named+="${kv%%=*} "; done
+  # A haiku class takes no effort level (the pair `_route_argv_check` and `cmd_route` refuse), so an argv that names
+  # `class=haiku` and no effort must not have the row's effort laid under it: effort stays unset, the absent-equivalent.
+  [[ "$(_route_argv_class "$@")" == haiku ]] && named+="effort "
   # shellcheck disable=SC2086
   for pair in $ROUTE_COORDINATOR_ROW; do
     f="${pair%%=*}"

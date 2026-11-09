@@ -300,6 +300,21 @@ describe('an operator pick lays over the coordinator row (D-8142)', () => {
     expect(routeRows()).toHaveLength(1);
   });
 
+  it('--route class=haiku at mint on ws-add seeds no effort, so the refused pair never lands and a later route --set succeeds', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route class=haiku demo`);
+    const id = 'demo-quiet-mesa';
+    expect(record(id)).toEqual(['haiku', null, 'sonnet', 'on']);
+    expect(shStatus(`cmd_route --session ${id} --set workflow=off`).status).toBe(0);
+    expect(record(id)).toEqual(['haiku', null, 'sonnet', 'off']);
+  });
+
+  it('--route class=haiku at mint on start seeds no effort, so the refused pair never lands and a later route --set succeeds', () => {
+    h.sh(`${START_SPAWNLESS} cmd_start --route class=haiku claude demo`);
+    expect(record('claude-demo')).toEqual(['haiku', null, 'sonnet', 'on']);
+    expect(shStatus('cmd_route --session claude-demo --set workflow=off').status).toBe(0);
+    expect(record('claude-demo')).toEqual(['haiku', null, 'sonnet', 'off']);
+  });
+
   it('a revival with --route effort=low on a coordinator whose record says class=sonnet effort=medium writes effort only', () => {
     h.sh(`${START_SPAWNLESS} cmd_start --route class=sonnet --route effort=medium claude demo`);
     expect(record('claude-demo')).toEqual(['sonnet', 'medium', 'sonnet', 'on']);
