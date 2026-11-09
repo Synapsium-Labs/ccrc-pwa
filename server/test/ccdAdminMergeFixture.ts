@@ -14,26 +14,33 @@ export const MERGE_OID = 'c'.repeat(40);
 /** `gh` logs its argv to `$HOME/gh-calls` and answers each read from `$HOME/am/routes`: one `pattern|file` line per
  *  route, the pattern a shell glob over the argv joined by spaces, the file under `$HOME/am/`. The first matching route
  *  prints its file; a read no route names answers nothing and rc 1. `tmux display-message` answers `cc-<id>` from
- *  `$HOME/am/tmux-session`, and rc 1 when that file is absent. */
+ *  `$HOME/am/tmux-session` (with the pane's pid, `$HOME/am/tmux-pid`, default this shell), and rc 1 when that file is
+ *  absent. `getent` answers the fixture home, so the door reads its registry there whatever `$HOME` says; `AM_STUB_HOME`
+ *  names the fixture home for the stubs when a test sets `$HOME` to something else. */
 export const AM_GH_STUB = `
 gh() {
-  printf '%s\\n' "$*" >> "$HOME/gh-calls"
-  local line pat file
-  # \`pr merge\` fails with the stderr held in \`$HOME/am/merge-fail\` when that file exists (a refusal GitHub wrote).
-  if [[ "$1 $2" == "pr merge" && -f "$HOME/am/merge-fail" ]]; then cat "$HOME/am/merge-fail" >&2; return 1; fi
-  [[ -f "$HOME/am/routes" ]] || return 1
+  local H="\${AM_STUB_HOME:-$HOME}" line pat file
+  printf '%s\\n' "$*" >> "$H/gh-calls"
+  # \`pr merge\` fails with the stderr held in \`$H/am/merge-fail\` when that file exists (a refusal GitHub wrote).
+  if [[ "$1 $2" == "pr merge" && -f "$H/am/merge-fail" ]]; then cat "$H/am/merge-fail" >&2; return 1; fi
+  [[ -f "$H/am/routes" ]] || return 1
   while IFS= read -r line; do
     pat="\${line%%|*}"; file="\${line#*|}"
     # shellcheck disable=SC2053  # the route's pattern is a glob on purpose
-    if [[ "$*" == $pat ]]; then cat "$HOME/am/$file"; return 0; fi
-  done < "$HOME/am/routes"
+    if [[ "$*" == $pat ]]; then cat "$H/am/$file"; return 0; fi
+  done < "$H/am/routes"
   return 1
 };
 tmux() {
-  printf '%s\\n' "$*" >> "$HOME/am/tmux-calls"
-  [[ "$1" == display-message && -f "$HOME/am/tmux-session" ]] || return 1
-  cat "$HOME/am/tmux-session"
+  local H="\${AM_STUB_HOME:-$HOME}"
+  printf '%s\\n' "$*" >> "$H/am/tmux-calls"
+  # The door asks the fleet's default socket by path: \`tmux -S <path> display-message …\`.
+  [[ "$1" == -S ]] && shift 2
+  [[ "$1" == display-message && -f "$H/am/tmux-session" ]] || return 1
+  # \`#{pane_pid} #S\`: the pane's process (this shell, unless a test names another) and the session name.
+  printf '%s %s\\n' "$(cat "$H/am/tmux-pid" 2>/dev/null || echo $$)" "$(cat "$H/am/tmux-session")"
 };
+getent() { printf 'fleet:x:%s:1::%s:/bin/bash\\n' "$2" "\${AM_STUB_HOME:-$HOME}"; };
 timeout() { case "$1" in -*) return 125 ;; esac; shift; "$@"; };
 `;
 
@@ -68,6 +75,8 @@ export interface AmOver {
   protection?: string | null;
   /** `pulls/42/reviews`, one page; default none */
   reviews?: unknown;
+  /** `compare/main...<head>`, read only under strict up-to-date; default: the head is 0 commits behind */
+  compare?: unknown;
   /** `check_runs` of the head; default: one successful run per required context */
   runs?: unknown;
   /** `statuses` of the head; default none */
@@ -115,6 +124,7 @@ export function amFixture(h: PrHarness, over: AmOver = {}): void {
   }]));
   route('api graphql *', 'mq.json', pick(over.mq, { data: { repository: { mergeQueue: null } } }));
   if (over.protection !== null) amRoute(h, 'api -i repos/owner-a/repo-a/branches/main/protection', 'protection.txt', over.protection ?? AM_PROT_NONE);
+  route(`api repos/owner-a/repo-a/compare/main...${HEAD_A}?per_page=1`, 'compare.json', pick(over.compare, { status: 'ahead', ahead_by: 1, behind_by: 0 }));
   route('api --paginate repos/owner-a/repo-a/pulls/42/reviews', 'reviews.json', pick(over.reviews, []));
   route(`api --paginate repos/owner-a/repo-a/commits/${HEAD_A}/check-runs?filter=latest`, 'runs.json',
     pick(over.runs, { total_count: names.length, check_runs: names.map((n) => amCheckRun(n)) }));

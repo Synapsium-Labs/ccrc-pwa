@@ -143,6 +143,69 @@ describe('the gate before GitHub', () => {
     expect(swapLog(h).at(-1)).toMatch(/ admin-merge-refused demo-quiet-basin: owner-a\/repo-a#42 head=[0-9a-f]{40} reason=setting-off$/);
   });
 
+  describe('the caller is derived from the process, not from the environment the command sets', () => {
+    const tmuxCalls = (): string[] => {
+      const f = path.join(h.home, 'am', 'tmux-calls');
+      return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean) : [];
+    };
+
+    it('asks the fleet\'s default socket by path and ignores TMUX and TMUX_TMPDIR', () => {
+      amFixture(h); amCaller(h, 'demo-quiet-basin');
+      const r = h.run(`${AM_GH_STUB} export TMUX_PANE=%1 TMUX=/tmp/fake-sock,1,0 TMUX_TMPDIR=/tmp/fake-dir; cmd_pr_admin_merge ${GOOD}`);
+      expect(r.stdout).toMatch(/^MERGED /);
+      const ask = `-S /tmp/tmux-${process.getuid?.()}/default display-message -p -t %1 #{pane_pid} #S`;
+      expect(tmuxCalls(), 'asked once to label the journal and once to judge the caller, the same way').toEqual([ask, ask]);
+    });
+
+    it('refuses a pane this command is not running in: another pane\'s id on the command line names its coordinator, not the caller', () => {
+      amFixture(h); amCaller(h, 'demo-quiet-basin');
+      const other = spawnSync('bash', ['-c', 'sleep 60 & echo $!'], { encoding: 'utf8' }).stdout.trim();   // a process that is not an ancestor
+      try {
+        fs.writeFileSync(path.join(h.home, 'am', 'tmux-pid'), other);
+        const r = amRun(h, GOOD);
+        expect([r.code, r.stdout.trim()]).toEqual([2, 'REFUSED caller-unknown: the named pane is not the one this command is running in']);
+        expect(h.ghCalls()).toEqual([]);
+        expect(swapLog(h).at(-1)).toMatch(/ admin-merge-refused \?: owner-a\/repo-a#42 head=[0-9a-f]{40} reason=caller-unknown$/);
+      } finally { try { process.kill(Number(other)); } catch { /* already gone */ } }
+    });
+
+    it('accepts a pane whose process is an ancestor further up, not only this shell', () => {
+      amFixture(h); amCaller(h, 'demo-quiet-basin');
+      fs.writeFileSync(path.join(h.home, 'am', 'tmux-pid'), String(process.pid));
+      expect(amRun(h, GOOD).stdout).toMatch(/^MERGED /);
+    });
+
+    it('refuses a pane id that is not a pane id, and a pid that is not a pid', () => {
+      amFixture(h); amCaller(h, 'demo-quiet-basin');
+      for (const pane of ['%1;x', '1', '%', '%a', '$(true)']) {
+        const r = amRun(h, GOOD, { pane });
+        expect([r.code, r.stdout.trim()], pane).toEqual([2, 'REFUSED caller-unknown: the tmux pane id is not a pane id']);
+      }
+      fs.writeFileSync(path.join(h.home, 'am', 'tmux-pid'), 'abc');
+      expect(amRun(h, GOOD).stdout.trim()).toBe('REFUSED caller-unknown: tmux names no ccrc session for this pane');
+      expect(h.ghCalls()).toEqual([]);
+    });
+
+    it('reads the registry, the journal and the setting from the account\'s home, not from $HOME', () => {
+      amFixture(h); amCaller(h, 'demo-quiet-basin'); boxEnv(h, 'CCRC_ADMIN_MERGE=off\n');
+      // a HOME of the caller's making whose ccrc.env says auto, and a registry that names a coordinator
+      const fake = path.join(h.home, 'fake-home');
+      fs.mkdirSync(path.join(fake, '.ccrc'), { recursive: true });
+      fs.writeFileSync(path.join(fake, '.ccrc', 'ccrc.env'), 'CCRC_ADMIN_MERGE=auto\n');
+      const r = h.run(`${AM_GH_STUB} export AM_STUB_HOME="$HOME" TMUX_PANE=%1; HOME='${fake}'; cmd_pr_admin_merge ${GOOD}`);
+      expect([r.code, r.stdout.trim()]).toEqual([2, 'REFUSED setting-off: CCRC_ADMIN_MERGE is off']);
+      expect(swapLog(h).at(-1)).toMatch(/ admin-merge-refused demo-quiet-basin: .* reason=setting-off$/);
+      expect(fs.existsSync(path.join(fake, '.cc-sessions'))).toBe(false);
+    });
+
+    it('refuses setting-unread when the account\'s home cannot be read', () => {
+      amFixture(h); amCaller(h, 'demo-quiet-basin');
+      const r = h.run(`${AM_GH_STUB} getent() { return 2; }; id() { [[ "$1" == -u ]] && echo 4242 || command id "$@"; }; dscl() { return 1; }; export TMUX_PANE=%1; cmd_pr_admin_merge ${GOOD}`);
+      expect([r.code, r.stdout.trim()]).toEqual([2, "REFUSED setting-unread: the account's home cannot be read (read as off)"]);
+      expect(h.ghCalls()).toEqual([]);
+    });
+  });
+
   it('journals an unnamed caller as ?', () => {
     amFixture(h);
     amRun(h, GOOD, { pane: null });
@@ -306,25 +369,36 @@ describe('the reads', () => {
     notRefusedAs('changes-requested');   // a dismissal clears it too
   });
 
-  it('checks-not-green names each required check that is not success: pending, skipped, neutral, missing, red', () => {
+  it('checks-not-green names each required check that is not passing: pending, missing, red', () => {
     amFixture(h, {
       required: ['build', 'lint', 'docs', 'e2e', 'unit'],
       runs: { total_count: 4, check_runs: [amCheckRun('build', 'in_progress', null), amCheckRun('lint', 'completed', 'skipped'),
         amCheckRun('docs', 'completed', 'neutral'), amCheckRun('unit', 'completed', 'failure')] },
     });
-    expect(refused()).toBe('REFUSED checks-not-green: build=pending, docs=neutral, e2e=missing, lint=skipped, unit=red');
+    expect(refused(), 'skipped and neutral are GitHub\'s own passing set, so they are not named').toBe('REFUSED checks-not-green: build=pending, e2e=missing, unit=red');
     expect(calls()).toEqual(READS);
     journaled('checks-not-green');
   });
 
-  it('red beats pending, and cancelled, timed_out and a null conclusion are red; a run with a success and a skipped run is skipped', () => {
+  it('a required check a path filter skipped (or that ended neutral) passes, as GitHub and the landing verdict count it, and the journal keeps the word', () => {
+    amFixture(h, {
+      required: ['build', 'lint', 'docs'],
+      runs: { total_count: 3, check_runs: [amCheckRun('build'), amCheckRun('lint', 'completed', 'skipped'), amCheckRun('docs', 'completed', 'neutral')] },
+    });
+    const r = amRun(h, ARGV);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout.trim()).toBe(`MERGED owner-a/repo-a#42 head=${HEAD_A} method=merge merge=${MERGE_OID} checks=build:success,docs:neutral,lint:skipped`);
+    expect(swapLog(h).at(-1)).toMatch(/ checks=build:success,docs:neutral,lint:skipped result=merged /);
+  });
+
+  it('red beats pending, and cancelled, timed_out and a null conclusion are red; a run with a success and a skipped run passes', () => {
     amFixture(h, {
       required: ['a', 'b', 'c', 'd'],
       runs: { total_count: 6, check_runs: [amCheckRun('a', 'completed', 'cancelled'), amCheckRun('a', 'in_progress', null),
         amCheckRun('b', 'completed', 'timed_out'), amCheckRun('c', 'completed', null),
         amCheckRun('d', 'completed', 'success'), amCheckRun('d', 'completed', 'skipped')] },
     });
-    expect(refused()).toBe('REFUSED checks-not-green: a=red, b=red, c=red, d=skipped');
+    expect(refused()).toBe('REFUSED checks-not-green: a=red, b=red, c=red');
   });
 
   it('an App-pinned required name is judged on that App\'s runs only, and a status never stands in for it', () => {
@@ -380,6 +454,71 @@ describe('the reads', () => {
       repo: { permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: true } });
     expect(refused(), 'rules are lower-cased; squash is cut by the setting, leaving only rebase').toBe('REFUSED rebase-only: only a rebase merge is allowed on main; the door does not rebase-merge');
     journaled('rebase-only');
+  });
+
+  it('refuses squash-not-only when squash and rebase are allowed but no merge commit: the door does not pick a squash', () => {
+    amFixture(h, { repo: { permissions: { admin: true }, allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true } });
+    expect(refused()).toBe('REFUSED squash-not-only: main allows a squash and a rebase but no merge commit; the door does not choose between them');
+    expect(h.ghCalls().some((c) => c.includes('--squash'))).toBe(false);
+    journaled('squash-not-only');
+  });
+
+  it('refuses unenforced-rules: a rule type the door has no read for, which --admin would get past', () => {
+    const rsc = { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } };
+    for (const [rules, named] of [
+      [[rsc, { type: 'code_scanning', parameters: {} }], 'code_scanning'],
+      [[rsc, { type: 'required_deployments', parameters: {} }, { type: 'workflows', parameters: {} }], 'required_deployments,workflows'],
+      [[rsc, { type: 'required_signatures' }], 'required_signatures'],
+      [[rsc, { type: 'pull_request', parameters: { required_review_thread_resolution: true } }], 'conversation_resolution'],
+    ] as Array<[unknown[], string]>) {
+      amFixture(h, { rules });
+      fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+      expect(refused(), named).toBe(`REFUSED unenforced-rules: main carries ${named}, which GitHub enforces at merge but not against --admin`);
+      expect(calls(), 'refused right after the protection read').toEqual(READS.slice(0, 5));
+    }
+    journaled('unenforced-rules');
+    // classic protection: signed commits and conversation resolution
+    for (const [prot, named] of [
+      [{ required_signatures: { enabled: true }, required_status_checks: { contexts: ['build'] } }, 'required_signatures'],
+      [{ required_conversation_resolution: { enabled: true }, required_status_checks: { contexts: ['build'] } }, 'conversation_resolution'],
+    ] as Array<[unknown, string]>) {
+      amFixture(h, { rules: [], protection: amProt(200, prot, 'OK') });
+      expect(refused(), named).toBe(`REFUSED unenforced-rules: main carries ${named}, which GitHub enforces at merge but not against --admin`);
+    }
+    // the same keys switched off, and a pull_request rule that does not ask for resolution, are not a refusal
+    amFixture(h, { rules: [{ type: 'pull_request', parameters: { required_review_thread_resolution: false } }],
+      protection: amProt(200, { required_signatures: { enabled: false }, required_conversation_resolution: { enabled: false }, required_status_checks: { contexts: ['build'] } }, 'OK') });
+    notRefusedAs('unenforced-rules');
+  });
+
+  it('under strict up-to-date the head must not be behind the base: a ruleset or classic protection asks the compare read', () => {
+    const COMPARE = `api repos/owner-a/repo-a/compare/main...${HEAD_A}?per_page=1`;
+    const strictRules = [{ type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'build' }] } }];
+    amFixture(h, { rules: strictRules, compare: { status: 'diverged', ahead_by: 1, behind_by: 3 } });
+    expect(refused()).toBe('REFUSED behind-base: main requires branches up to date and the head is 3 commits behind it');
+    expect(calls()).toEqual([...READS.slice(0, 5), COMPARE]);
+    journaled('behind-base');
+    amFixture(h, { rules: [], protection: amProt(200, { required_status_checks: { strict: true, contexts: ['build'] } }, 'OK'),
+      compare: { status: 'behind', ahead_by: 0, behind_by: 1 } });
+    expect(refused(), 'classic strict').toBe('REFUSED behind-base: main requires branches up to date and the head is 1 commits behind it');
+    // up to date: the read passes and the door goes on to the rest
+    amFixture(h, { rules: strictRules });
+    fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+    const r = amRun(h, ARGV);
+    expect(r.code, r.stdout).toBe(0);
+    expect(calls().slice(0, READS.length + 1)).toEqual([...READS.slice(0, 5), COMPARE, ...READS.slice(5)]);
+    // not strict: no compare read at all
+    amFixture(h);
+    fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+    fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+    amRun(h, ARGV);
+    expect(calls().some((c) => c.includes('/compare/'))).toBe(false);
+    // an unreadable compare answer under strict is unreadable, never a pass
+    for (const bad of [null, '', 'not json', '{"behind_by":"0"}', '{"behind_by":-1}', '[]']) {
+      amFixture(h, { rules: strictRules, compare: bad });
+      fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+      expect(refused(), String(bad)).toBe('REFUSED unreadable: the compare read');
+    }
   });
 
   it('merge is dropped under linear history, from a rule too, leaving squash', () => {
@@ -447,8 +586,8 @@ describe('the merge', () => {
     expect(lastJournal()).toMatch(/ checks=none-required result=merged /);
   });
 
-  it('merges with --squash only when the method set holds squash and no merge', () => {
-    amFixture(h, { repo: { permissions: { admin: true }, allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true } });
+  it('merges with --squash only when squash is the whole method set', () => {
+    amFixture(h, { repo: { permissions: { admin: true }, allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: false } });
     const r = amRun(h, ARGV);
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toMatch(/ method=squash /);
