@@ -331,13 +331,16 @@ not after.
    — `project`, `wave` and `waveOf` are the reviewed run's and are derived
    server-side; do not send them. `review-in-flight` means a review run is
    already open for that wave: close it first (`{"state":"failed"}` if the
-   reviewer died), then retry. `cap-review-rounds` means the work run has had
-   its three review rounds: do not retry the open. The server has told the operator
-   (one ask, with the last review's open findings). Decide first whether another
-   round is truly needed, by the rules in `references/wave-lifecycle.md`
-   (Extending a reached review cap): extend with
-   `"$API" runs review-rounds <work run id> --json -` and a one-line reason, or
-   rule on the findings you hold, or wait. A bare `400 bad-request` with no `detail` on
+   reviewer died), then retry. When a review round's report lands and the
+   work run has had its three review rounds, decide BEFORE opening the next:
+   by the rules in `references/wave-lifecycle.md` (Extending a reached review
+   cap), extend with `"$API" runs review-rounds <work run id> --json -` and a
+   one-line reason, or rule on the findings you hold, or wait. Extending first
+   means the open is never refused, so the operator is never asked or pushed.
+   `cap-review-rounds` on an open means you opened without deciding: do not retry
+   the open. The server has told the operator (one ask, with the last review's
+   open findings); a late extension still closes that ask, but the operator has
+   already been pushed once, so decide at the cap, not at the refusal. A bare `400 bad-request` with no `detail` on
    this open means the SERVER lane has not landed yet (this branch deploys
    server first; the plan's Task 14 says why) — wait for the next wake and
    do NOT add `project`/`wave` to satisfy it: an older server would open a

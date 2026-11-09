@@ -654,7 +654,7 @@ same, and shows as `absent`.
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 | `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick, at most twice. Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
 
-**Extending a reached review cap.** A cap is three review rounds. When the open answers `cap-review-rounds`, do not retry it: decide first whether another round is truly needed.
+**Extending a reached review cap.** A cap is three review rounds. Decide as soon as the third round's report lands, before you open a fourth: an extension at the cap means the open is never refused, so no ask is raised and the operator is not pushed. If the open answers `cap-review-rounds` anyway, do not retry it: the operator has already been asked, so decide at once whether another round is truly needed.
 
 Extend only when all of these hold:
 
@@ -669,7 +669,7 @@ Stop instead when any of these holds:
 - the open finding is a known limit or needs the operator's ruling (raise a `decide` item instead);
 - the work is past the operator's review-round cutoff, 2 rounds, 3 for security work, unless you judge that this work must go on and say why in the reason.
 
-To extend, run `"$API" runs review-rounds <work run id> --json -` (`POST /api/runs/:id/review-rounds`) with `{"byId":"<your id>","byUuid":"<your uuid>","reason":"<one line: which majors are open and real, and why they converge>"}`, the reason 16 to 300 characters. It allows three more rounds; at the next cap decide again. Every extension is recorded on the run and shown to the operator, and it closes the operator's ask for that cap.
+To extend, run `"$API" runs review-rounds <work run id> --json -` (`POST /api/runs/:id/review-rounds`) with `{"reason":"<one line: which majors are open and real, and why they converge>"}`, the reason 16 to 300 characters. Do not put `byId` or `byUuid` in the body: the client fills them from your own pane and refuses a body that names either (`bad-body`). It allows three more rounds; at the next cap decide again. Every extension is recorded on the run and shown to the operator, and it closes the operator's ask for that cap.
 
 Refusals:
 

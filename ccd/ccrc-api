@@ -119,8 +119,8 @@ declare -A ROUTES=(
   [runs.route]='POST|/api/runs/{id}/route|yes|-'
   # The coordinator's bounded cap extension (D-8125): when a work run has reached its review-round cap, the run's claiming
   # coordinator asks for REVIEW_ROUND_CAP more rounds, with a reason. The body rides `--json -` as
-  # `{"byId":…,"byUuid":…,"reason":"…"}`, the attribution pair the caller's own (`ccrc-api whoami`), as `claims.take` and
-  # `asks.answer` carry theirs. The operator's removal of the cap has no row here and never will.
+  # `{"reason":"…"}` alone: the client fills `byId`/`byUuid` from the pane (`derive_identity`) and refuses a body that names
+  # either, so the pair cannot be typed by another pane. The operator's removal of the cap has no row here and never will.
   [runs.review-rounds]='POST|/api/runs/{id}/review-rounds|yes|-'
   # `--program` joins through `runs.program`; `--to` and `--program` are
   # MUTUALLY EXCLUSIVE — exactly one, both or neither is a 400 (D-2057;
@@ -685,6 +685,24 @@ main() {
     done
     [[ -n "$rserved" ]] || refuse 'no-review-rounds-door' \
       "this box's server predates the coordinator's review-rounds door; the cap is the operator's to lift"
+  fi
+
+  # THE DOOR'S IDENTITY IS THE PANE'S, NEVER THE CALLER'S (D-8125): `byId` and `byUuid` are filled from `derive_identity` and a
+  # body that speaks for itself is refused, so a worker pane cannot type its coordinator's pair (it would read the
+  # coordinator's `<id>.uuid` off the shared registry). The test is deliberately blunt and case-insensitive: any `byid` or
+  # `byuuid` text, or any `\u` escape (which could spell either key), anywhere in the body is `bad-body`, so no padded, nested
+  # or escaped spelling survives to last-win over the spliced first keys. A body that is not a JSON object is refused too.
+  if [[ "$key" == 'runs.review-rounds' ]]; then
+    local rb="${body//[[:space:]]/}" rlow
+    [[ -n "$rb" ]] || body='{}'             # a bodyless call goes on as the identity alone; the server asks for the reason
+    rlow=$(printf '%s' "$rb" | tr '[:upper:]' '[:lower:]')
+    case "$rlow" in
+      *byid*|*byuuid*|*'\u'*)
+        refuse 'bad-body' 'the review-rounds body names no identity: byId and byUuid are this pane, filled here' ;;
+    esac
+    derive_identity
+    splice_body_field 'byUuid' "$DERIVED_UUID" 'the review-rounds body is not a JSON object; the identity cannot be added'
+    splice_body_field 'byId' "$DERIVED_ID" 'the review-rounds body is not a JSON object; the identity cannot be added'
   fi
 
   local claimant=''

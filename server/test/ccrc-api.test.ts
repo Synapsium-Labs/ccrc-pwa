@@ -235,7 +235,7 @@ describe('the closed route table', () => {
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
-      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear';
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || (args[0] === 'runs' && args[1] === 'review-rounds');
     if (paned) plantPane('demo-ws');
     await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -1526,8 +1526,12 @@ describe('runs review-rounds: the coordinator\'s cap extension refuses locally o
   const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
     fs.writeFileSync(capFile(), renderServerCaps(words, at));
   };
-  const BODY = '{"byId":"coord-a","byUuid":"u","reason":"two real majors open, down from four"}';
-  const sent = { method: 'POST', url: '/api/runs/7/review-rounds', auth: TOKEN, body: BODY };
+  const REASON = 'two real majors open, down from four';
+  const BODY = `{"reason":"${REASON}"}`;
+  const PANE = { TMUX_PANE: '%7' };
+  const sent = { method: 'POST', url: '/api/runs/7/review-rounds', auth: TOKEN,
+    body: `{"byId":"demo-ws","byUuid":"u-1234",\"reason\":\"${REASON}\"}` };
+  beforeEach(() => { plantPane('demo-ws'); });
 
   it('is a POST row on /api/runs/{id}/review-rounds that takes the id', () => {
     const row = clientRoutes().find((r) => r.key === 'runs.review-rounds');
@@ -1535,21 +1539,46 @@ describe('runs review-rounds: the coordinator\'s cap extension refuses locally o
     expect([row!.method, row!.path]).toEqual(['POST', '/api/runs/{id}/review-rounds']);
   });
 
-  it('posts the body unchanged with no cap file', async () => {
+  it('fills byId and byUuid from the pane and posts with no cap file', async () => {
     fs.rmSync(capFile(), { force: true });
-    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
     expect(seen).toEqual([sent]);
   });
 
-  it('posts the body unchanged with a current cap file listing review-rounds-v1', async () => {
+  it('fills the pane identity with a current cap file listing review-rounds-v1', async () => {
     writeCaps();
-    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
     expect(seen).toEqual([sent]);
+  });
+
+  it.each([
+    ['a typed byId', '{"byId":"coord-a","reason":"x"}'],
+    ['a typed byUuid', '{"byUuid":"u","reason":"x"}'],
+    ['a padded key', '{"byId ":"coord-a","reason":"x"}'],
+    ['a nested key', '{"reason":"x","meta":{"byId":"coord-a"}}'],
+    ['an escaped key', '{"\\u0062yId":"coord-a","reason":"x"}'],
+    ['a differently-cased key', '{"BYID":"coord-a","reason":"x"}'],
+  ])('refuses %s as bad-body and sends nothing', async (_n, body) => {
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], body, PANE);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'bad-body']);
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses a body that is not an object, sending nothing', async () => {
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], '["x"]', PANE);
+    expect((JSON.parse(r.stdout) as { error: string }).error).toBe('bad-body');
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses outside a tmux pane (no identity to derive), sending nothing', async () => {
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, { TMUX_PANE: undefined, TMUX: undefined });
+    expect((JSON.parse(r.stdout) as { error: string }).error).toBe('no-pane');
+    expect(seen).toEqual([]);
   });
 
   it('a current cap file with questions-v1 only is refused no-review-rounds-door, nothing sent', async () => {
     writeCaps(['questions-v1']);
-    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
     expect([r.status, JSON.parse(r.stdout)]).toEqual([2, { ok: false, error: 'no-review-rounds-door',
       detail: "this box's server predates the coordinator's review-rounds door; the cap is the operator's to lift" }]);
     expect(seen).toEqual([]);
@@ -1557,14 +1586,14 @@ describe('runs review-rounds: the coordinator\'s cap extension refuses locally o
 
   it('a current cap file listing no words is refused too', async () => {
     writeCaps([]);
-    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
     expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'no-review-rounds-door']);
     expect(seen).toEqual([]);
   });
 
   it('a cap file older than the lease sends (the server\'s 404 is then the answer)', async () => {
     writeCaps(['questions-v1'], nowS() - 181);
-    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
     expect(seen).toEqual([sent]);
   });
 });

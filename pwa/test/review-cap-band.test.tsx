@@ -49,11 +49,17 @@ describe('ReviewCapBand, a cap its coordinator lifted (D-8125)', () => {
   const lift: CoordLiftRecord = { at: NOW - MIN, by: 'coord-a', reason: 'two major findings, converging', rounds: 3, capBefore: 3, capAfter: 6, count: 1 };
   const handled = run(22, 'coord', 'w-22', { reviewCap: cap({ cap: 6, granted: 3, askHandledAt: NOW - MIN, coordLift: lift }) });
 
-  it('says who lifted it and why, with the rounds, and offers no Lift cap button', () => {
-    render(<ReviewCapBand runs={[handled]} nowMs={NOW} onLift={() => {}} />);
+  it('is not an action: a cap its coordinator lifted never sits under Waiting on you (the run page shows it)', () => {
+    const { container } = render(<ReviewCapBand runs={[handled]} nowMs={NOW} onLift={() => {}} />);
+    expect(container.innerHTML).toBe('');
+    expect(screen.queryByRole('group', { name: /waiting on you/i })).toBeNull();
+  });
+
+  it('beside a run that does wait, only the waiting run is listed', () => {
+    const waiting = run(23, 'coord', 'w-23', { reviewCap: cap({ rounds: 3, cap: 3 }) });
+    render(<ReviewCapBand runs={[handled, waiting]} nowMs={NOW} onLift={() => {}} />);
     const rows = within(screen.getByRole('group', { name: /waiting on you/i })).getAllByRole('listitem');
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.textContent).toBe('Run 22: Cap lifted by its coordinator: two major findings, converging · 3 of 6 rounds');
-    expect(within(rows[0]!).queryByRole('button')).toBeNull();
+    expect(rows[0]!.textContent).toContain('Run 23');
   });
 });
