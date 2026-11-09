@@ -11975,7 +11975,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12018,6 +12018,11 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  review-round cap, as specified (the run's claiming or programme coordinator, a reason, `REVIEW_ROUND_CAP` more
    *  rounds, journalled, the operator's ask closed). Added by the change that builds the door, cut after it. */
   'review-rounds-v1': true,
+  /** D-8126 (autonomy-default wave A2): this server answers `GET /api/programmes/:slug/goals` to the box token as well as to a
+   *  session (`ledgersRoutes.ts`, the same answer to both: the pin, `doneWhen` and the open items' `id, kind, title,
+   *  neededBy` and nothing more). `ccrc-api goals show` refuses `unsupported`, unsent, when a current cap file omits this
+   *  word. Added by the change that builds the dual-credential read, cut after it. */
+  'goals-read-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
