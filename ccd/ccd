@@ -19204,6 +19204,10 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # pool suites holds by construction because nothing below runs without `cls`.
   local cls src pass pcls unserv unmeas
   _route_peek_to cls "$id" class; [[ "$cls" == default ]] && cls=""   # D-4963: the out-var form, no subshell
+  # D-8123: `CCD_CLASS_GATE_OFF=1` reads as "no class". Only the rescue arm of `_auto_swap_check` sets it, once, for a
+  # hard-blocked session whose class window came back undecidable (rc 5): a stranded session is worse than one placed
+  # without a fact nobody could measure, and the landing's settle measures the new lane's serviceability itself.
+  [[ "${CCD_CLASS_GATE_OFF:-}" == 1 ]] && cls=""
   # ── POOLS (§5.5.3) ───────────────────────────────────────────────────────
   # The project's tag is read ONCE per decision and the WORD is passed down, so
   # a loop over five candidates costs one `cat`, not five. `_project_pool_state`
@@ -20608,6 +20612,20 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   if [[ "$strc" -eq 6 ]]; then
     dfrom=$(_route_peek "$id" class); dto=$(_class_below "$dfrom")
     strc=0
+  fi
+  # D-8123: A LIMIT-BLOCKED SESSION DOES NOT STRAND ON AN UNDECIDABLE CLASS WINDOW. rc 5 says no lane's per-class window
+  # could be measured; for a session that is merely idle that means stand still (below), but a session a limit banner has
+  # stopped is stuck either way, and standing still on an unmeasured figure is the strand written as a fact. One retry
+  # without the class gate (`_swap_target` reads `CCD_CLASS_GATE_OFF=1` as "no class"): with a destination the rescue
+  # takes its normal path (the dispatch's settle measures the new lane's serviceability, and composes the standing class
+  # on an unmeasured figure rather than degrade on a fabricated fact); with none the strand below stands as today.
+  if [[ "$strc" -eq 5 && -n "$hard_blocked" ]]; then
+    local ctarget crc
+    ctarget=$(CCD_CLASS_GATE_OFF=1 _rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); crc=$?
+    if [[ "$crc" -eq 0 && -n "$ctarget" ]]; then
+      echo "$(date '+%F %T') class-gate-dropped $id: class window undecidable; rescuing without the class gate" >> "$REG/swap.log"
+      target="$ctarget"; strc=0
+    fi
   fi
   if [[ "$strc" -ge 2 ]]; then
     # NOBODY CAN SAY — which is NOT "no destination exists". Stranding here

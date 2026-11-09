@@ -241,10 +241,18 @@ describe('away from home: the home-recovered gate and the cur-still-works gate',
 });
 
 describe('the tick spends rc 5 and rc 6', () => {
+  // D-8123: a hard-blocked session whose class window is undecidable retries once without the class gate
+  // (`ccd-rescue-classwindow-drop.test.ts`), so rc 5 reaches the strand only when that retry finds nobody either. The
+  // retry is the same `_rescue_target` call with `CCD_CLASS_GATE_OFF=1`; these cases make it answer "nowhere to go" so
+  // the strand's own words and the debounce stay pinned.
+  const NO_DROP = `eval "$(declare -f _rescue_target | sed '1s/^_rescue_target/_rt_real/')";
+    _rescue_target() { [[ "\${CCD_CLASS_GATE_OFF:-}" == 1 ]] && return 1; _rt_real "$@"; };`;
+  const tickNoDrop = (): string => h.sh(`${BLOCKED} ${NO_DROP} _auto_swap_check ${ID}`);
+
   it('rc 5 stands still with its OWN word: classwindow, never crosspool/project/pool', () => {
     limits('claude', 99, 99); limits('claude-a', 20, 20); seedRow('claude', 'fable'); sweep({ 'claude-a': 0.5 });
     plantNotify();
-    tick();
+    tickNoDrop();
     const log = swapLog();
     expect(log).toContain(`tick-undecidable ${ID}: classwindow`);
     expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`), 'utf8'))
@@ -258,9 +266,9 @@ describe('the tick spends rc 5 and rc 6', () => {
   it('today: a classwindow episode logs once and never again after 31 minutes', () => {
     limits('claude', 99, 99); limits('claude-a', 20, 20); seedRow('claude', 'fable'); sweep({ 'claude-a': 0.5 });
     plantNotify();
-    tick();
+    tickNoDrop();
     h.sh(`_reg_set ${ID} tickstuck "${now() - 31 * 60} classwindow"`);
-    tick();
+    tickNoDrop();
     // flipped by D-6180's re-log floor: the same field is said again, with its age
     const said = swapLog().split('\n').filter((l) => l.includes(`tick-undecidable ${ID}: classwindow`));
     expect(said).toHaveLength(2);
