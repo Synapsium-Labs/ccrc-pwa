@@ -93,7 +93,7 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
         // pl6f-r1-unrecorded-state).
         : secret.setAt === null ? { at: null, tail: '' }
           : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
-    history: events.map((e) => ({ at: e.at, act: e.act, note: e.note })),
+    history: events.map((e) => ({ at: e.at, act: e.act, note: e.note, actor: e.actor })),
   };
 }
 
@@ -679,7 +679,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
         const settled = coord.moveItem(id, 'settle', 'ccrc', { note: RUN_ALREADY_CLOSED_NOTE }, now, { programmeHasOpenRun: true });
         if (!settled.ok) return refuseRoute(reply, settled.why, { detail: `item ${id} cannot be closed from here` });
         deps.bus.emit('waiting');
-        return deps.sendClose(reply, { ok: true, id: runId, state: read.run.state as 'done' | 'failed', released: false, childReclaim: 'not-queued' });
+        // `alreadyClosed` tells the sheet nothing was abandoned here: the run closed before the operator's tap, so it must not claim
+        // an abandon nor a sibling's hold on the workspace.
+        return reply.code(200).send({ ok: true, id: runId, state: read.run.state, released: false, childReclaim: 'not-queued', alreadyClosed: true });
       }
       // Held from the check above to the move below: a withdraw or a decline in between is refused (`isActing`).
       const holds = actingItems.get(coord) ?? new Set<number>();

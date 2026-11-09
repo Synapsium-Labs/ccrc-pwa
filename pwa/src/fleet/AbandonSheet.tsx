@@ -228,6 +228,8 @@ export function abandonConsequence(
 export interface AbandonAnswer {
   readonly released: boolean;
   readonly childReclaim?: 'queued' | 'not-queued';
+  /** The act found its run already closed and only settled the item: nothing was abandoned. */
+  readonly alreadyClosed?: boolean;
 }
 
 export interface AbandonSheetProps {
@@ -324,7 +326,9 @@ export function AbandonSheet({
         // gated on `run.sessionId`: a `planned` run with no session does no fleet act, and no sibling holds a workspace that
         // was never allocated. A queued child reclaim is exclusive with a sibling's hold: the close never re-held it.
         const action = { label: 'Open record', onClick: () => navigate(runPath(run.id)) };
-        if (res.childReclaim === 'queued') {
+        if (res.alreadyClosed === true) {
+          toast(`Run ${run.id} had already closed, so nothing was abandoned.`, 'info', action);
+        } else if (res.childReclaim === 'queued') {
           toast(`Run ${run.id} abandoned. Its workspace is being reclaimed.`, 'info', action);
         } else if (!res.released && run.sessionId !== null) {
           toast(`Run ${run.id} abandoned — ${ws} is still claimed by another open run.`, 'info', action);

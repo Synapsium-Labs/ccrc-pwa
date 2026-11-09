@@ -153,7 +153,7 @@ export interface ItemView {
   /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run` today. `null` on an ordinary item, and
    *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
   action?: ItemAction | null;
-  history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
+  history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null; actor?: ItemActor }[];
 }
 
 /** A programme's pinned spec and what has changed since its approval. */

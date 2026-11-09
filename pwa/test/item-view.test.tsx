@@ -217,6 +217,16 @@ describe('the item view', () => {
     expect(within(back).getByText('Blocking')).toBeTruthy();
   });
 
+  it('a raise by ccrc is not credited to the coordinator', () => {
+    show(itemView({ history: [{ at: 1, act: 'raise', note: null, actor: 'ccrc' }] }));
+    const li = document.querySelector('.wi-history li') as HTMLElement;
+    expect(li.textContent).toContain('Raised for you, its coordinator did not answer');
+    expect(li.textContent).not.toContain('Raised by the coordinator');
+    cleanup();
+    show(itemView({ history: [{ at: 1, act: 'raise', note: null, actor: 'coordinator' }] }));
+    expect((document.querySelector('.wi-history li') as HTMLElement).textContent).toContain('Raised by the coordinator');
+  });
+
   it('shows a sent-back note as history, never as the current state', () => {
     show(itemView({
       note: 'A different line on the item.',

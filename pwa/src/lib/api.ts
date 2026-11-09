@@ -68,14 +68,15 @@ export const clipUrl = (id: string, name: string): string =>
     location.origin).href;
 
 /** The resolution of a close, as `closeAnswerOf` reads it. */
-type CloseAnswer = { released: boolean; childReclaim?: 'queued' | 'not-queued' };
+type CloseAnswer = { released: boolean; childReclaim?: 'queued' | 'not-queued'; alreadyClosed?: true };
 
 /** What a close route answers (`abandonRun`, `actItem`): `released` as before, and the child reclaim's two facts when the server
  *  sent them (F24); an older server sends neither, and an absent `released` reads TRUE. */
 async function closeAnswerOf(res: Response): Promise<CloseAnswer> {
-  const body = (await res.json().catch(() => ({}))) as { released?: unknown; childReclaim?: unknown };
+  const body = (await res.json().catch(() => ({}))) as { released?: unknown; childReclaim?: unknown; alreadyClosed?: unknown };
   return {
     released: body.released !== false,
+    ...(body.alreadyClosed === true ? { alreadyClosed: true as const } : {}),
     ...(body.childReclaim === 'queued' || body.childReclaim === 'not-queued' ? { childReclaim: body.childReclaim } : {}),
   };
 }

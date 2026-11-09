@@ -134,7 +134,8 @@ export function itemById(db: DatabaseSync, id: number): ItemRow | null {
 /** The items still waiting (`open`, `checking`; oldest first; an item whose `heldUntil` is in the future is left out: the one
  *  filter of the hold, A21, so every reader of this function agrees) and the ones cleared inside the Recently-cleared window
  *  (`done` with `closedAt` no older than `CLEARED_WINDOW_MS`, newest first). `program === null` means every programme.
- *  Withdrawn and dismissed items appear in neither list. */
+ *  Withdrawn and dismissed items appear in neither list, nor does an item its coordinator settled inside the hold (`closedAt`
+ *  before `heldUntil`): the operator was never asked, so the trail does not show it. */
 export function itemsFor(db: DatabaseSync, program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } {
   const scope = program === null ? '' : ' AND program = ?';
   const args = (extra: (string | number)[]): (string | number)[] => (program === null ? extra : [...extra, program]);
@@ -143,7 +144,7 @@ export function itemsFor(db: DatabaseSync, program: string | null, now: number):
     `SELECT ${ITEM_COLS} FROM operator_items WHERE state IN (${openStates}) AND (heldUntil IS NULL OR heldUntil <= ?)${scope} ORDER BY raisedAt, id`,
   ).all(...args([now])) as unknown as ItemRowRaw[];
   const cleared = db.prepare(
-    `SELECT ${ITEM_COLS} FROM operator_items WHERE state = 'done' AND closedAt >= ?${scope} ORDER BY closedAt DESC, id DESC`,
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE state = 'done' AND closedAt >= ? AND (heldUntil IS NULL OR closedAt >= heldUntil)${scope} ORDER BY closedAt DESC, id DESC`,
   ).all(...args([now - CLEARED_WINDOW_MS])) as unknown as ItemRowRaw[];
   return { open: open.map(itemRowOf), cleared: cleared.map(itemRowOf) };
 }

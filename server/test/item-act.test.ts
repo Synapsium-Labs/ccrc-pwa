@@ -106,7 +106,7 @@ describe('POST /api/items/:id/act', () => {
     r.coord.db.prepare("UPDATE runs SET state = 'failed' WHERE id = ?").run(r.planned);
     const res = await act(r, id);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, id: r.planned, state: 'failed' });
+    expect(res.json()).toMatchObject({ ok: true, id: r.planned, state: 'failed', alreadyClosed: true });
     const item = r.coord.itemById(id)!;
     expect(item.state).toBe('done');
     expect(r.coord.itemHistory(id).at(-1)!.note).toBe('The run had already closed.');

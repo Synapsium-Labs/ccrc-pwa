@@ -815,6 +815,12 @@ describe('the toast is the proof (F9, F24)', () => {
     expect(screen.getByText('Open record').tagName).toBe('BUTTON');
   });
 
+  it('a run that had already closed says so, and claims neither an abandon nor a sibling', async () => {
+    open(run({ id: 206, workspace: 'ws-a' }), { released: false, childReclaim: 'not-queued', alreadyClosed: true });
+    expect(await screen.findByText('Run 206 had already closed, so nothing was abandoned.')).toBeInTheDocument();
+    expect(screen.queryByText(/still claimed/)).toBeNull();
+  });
+
   it('a queued child reclaim says the workspace is being reclaimed', async () => {
     open(run({ id: 206 }), { released: true, childReclaim: 'queued' });
     expect(await screen.findByText('Run 206 abandoned. Its workspace is being reclaimed.')).toBeInTheDocument();

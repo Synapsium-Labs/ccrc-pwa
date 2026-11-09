@@ -325,6 +325,8 @@ describe('a run starting or ending handles its open end request', () => {
     const id = idOf(await ask(r, r.run, 'worker-a'));
     r.coord.advance(r.run, 'failed', 'coordinator');
     expect(r.coord.itemById(id)!.state).toBe('done');
+    // Settled inside its hold: not on the open list, and not in the Recently cleared trail either.
+    expect(r.coord.itemsFor(null, Date.now())).toEqual({ open: [], cleared: [] });
   });
 
   it("the operator's own act closes its item itself, so the abandon it asked for leaves it alone", async () => {

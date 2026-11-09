@@ -315,6 +315,10 @@ export function StoredSecretRemove({ program, slot, onRemoved, removeSecret = re
   );
 }
 
+/** The raise line of an item ccrc itself raised (a worker's or reviewer's end request that its coordinator left unanswered): the
+ *  wire's actor says so, so the line never credits the coordinator with it. */
+const RAISED_BY_CCRC = 'Raised for you, its coordinator did not answer';
+
 /** The history line of one act, in the operator's words. */
 const ACT_WORD: Readonly<Record<ItemWire['history'][number]['act'], string>> = {
   raise: 'Raised by the coordinator', block: 'Became blocking', unblock: 'No longer blocking', tick: 'You marked it done',
@@ -340,7 +344,8 @@ function History({ item, now, homeProject }: { item: ItemWire; now: number; home
     <ul className="wi-history" aria-label="History">
       {item.history.map((h, i) => (
         <li key={`${h.at}:${h.act}:${i}`}>
-          {h.act === 'return' && h.note !== null ? <Linked text={`sent back: ${h.note}`} homeProject={homeProject} /> : ACT_WORD[h.act]}
+          {h.act === 'return' && h.note !== null ? <Linked text={`sent back: ${h.note}`} homeProject={homeProject} />
+            : h.act === 'raise' && h.actor === 'ccrc' ? RAISED_BY_CCRC : ACT_WORD[h.act]}
           {` · ${ageWords(h.at, now)}`}
         </li>
       ))}
