@@ -331,7 +331,13 @@ function RunsBoard({
   // the one source's count per programme (`needsYou`, F20), the same number the Waiting door and a programme's chip print.
   const entries = waitingView === null || !fleetFrameSeen ? [] : needsYou(waitingView.items, sessions, live);
   const needsOf = (slug: string): number => needsYouCount(entries, slug);
-  const { live: liveCards, quiet: quietCards } = quietSplit(sortCards(openCards(active, programmes.answer), needsOf), now, needsOf);
+  // A card counted from the frame alone, while the read has not answered, shows at once when the frame gives it a last move.
+  // One the frame gives none (`runLastMove` is null for every run) waits for the read: it would sit in the live list and then
+  // jump into the quiet fold and re-sort when the read lands, and nothing arrives late, so nothing jumps. A failed or
+  // older-server read ends the wait and such a card falls back to the frame.
+  const readPending = programmes.state === 'loading' && programmes.answer === null;
+  const cardsShown = openCards(active, programmes.answer).filter((c) => !(readPending && c.row.lastMoveAt === null));
+  const { live: liveCards, quiet: quietCards } = quietSplit(sortCards(cardsShown, needsOf), now, needsOf);
   const finishedRows = finishedProgrammes(programmes.answer, new Set(active.map((r) => r.program)), now);
   const hasAny = active.length > 0 || finishedRows.length > 0;
   // I6 (residual): a failed Finished read is a fact about the FINISHED half specifically — the open half can be fully

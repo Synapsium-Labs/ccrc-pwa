@@ -159,9 +159,9 @@ describe('on the board', () => {
     return { store, ...view };
   };
 
-  it('a programme with a gone coordinator has a card', () => {
+  it('a programme with a gone coordinator has a card', async () => {
     board([run(1, { claimedBy: 'sess-gone' })], {}, []);
-    expect(screen.getByTestId('programme-card')).toHaveTextContent('Programme A');
+    expect(await screen.findByTestId('programme-card')).toHaveTextContent('Programme A');
   });
 
   it('the quiet fold is folded by default and holds the quiet cards', async () => {
@@ -188,8 +188,8 @@ describe('on the board', () => {
     expect(screen.getAllByTestId('programme-card')[0]).toBe(a);
   });
 
-  it('the card’s links keep the tap floor and the card carries no button', () => {
+  it('the card’s links keep the tap floor and the card carries no button', async () => {
     board([run(1)]);
-    expect(screen.getByTestId('programme-card').querySelector('button')).toBeNull();
+    expect((await screen.findByTestId('programme-card')).querySelector('button')).toBeNull();
   });
 });

@@ -113,14 +113,15 @@ describe('programWave — the group header’s own derived fact (fix round 1, ta
 });
 
 describe('the run board', () => {
-  it('renders the live frame’s open programmes immediately — the programmes are read too, but a card never waits on them', () => {
+  it('renders the live frame’s open programmes at once when the frame gives them a last move; one it gives none waits for the read, so it never jumps into the quiet fold', async () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
     const load = vi.fn().mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } });
     render(<RunsScreen store={store} loadProgrammes={load} />);
-    // The programmes read is UNCONDITIONAL — it is the only source of Finished and of a card's done count — but the card born
-    // from the live frame renders synchronously, before that promise has any chance to settle.
-    expect(screen.getByTestId('programme-card')).toHaveTextContent('Build 4: transcript surface');
+    // The programmes read is UNCONDITIONAL — it is the only source of Finished and of a card's done count. A run with no last
+    // move in the frame leaves its card unknown-recency, so it waits for the read (D-8075) rather than showing and then folding.
+    expect(screen.queryByTestId('programme-card')).toBeNull();
+    expect(await screen.findByTestId('programme-card')).toHaveTextContent('Build 4: transcript surface');
     expect(load).toHaveBeenCalledTimes(1);
   });
 
@@ -185,7 +186,7 @@ describe('the run board', () => {
     expect(screen.queryByText(/loading/i)).toBeNull();
   });
 
-  it('draws one card per programme, in a list — not a landmark per programme', () => {
+  it('draws one card per programme, in a list — not a landmark per programme', async () => {
     const store = makeStore();
     act(() => {
       store.setState({
@@ -194,7 +195,7 @@ describe('the run board', () => {
       });
     });
     render(<RunsScreen store={store} loadCaps={NO_CAPS} />);
-    expect(screen.getAllByTestId('programme-card')).toHaveLength(2);
+    expect(await screen.findAllByTestId('programme-card')).toHaveLength(2);
     expect(screen.getByRole('list', { name: 'Programmes' }).tagName).toBe('UL');
     expect(document.querySelectorAll('section[aria-label]')).toHaveLength(0);
   });
@@ -457,10 +458,11 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
     expect(head.contains(door)).toBe(true);
   });
 
-  it('only the header, the search box and the paused banner sit above the list', () => {
+  it('only the header, the search box and the paused banner sit above the list', async () => {
     const store = makeStore();
     act(() => { store.setState({ coord: COORD('set'), coordFrameSeen: true, conn: 'open', runs: [r()], runsFrameSeen: true }); });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    await screen.findByTestId('programme-card');
     const group = container.querySelector('.programme-card')!;
     const before = [...container.querySelectorAll('*')]
       .filter((el) => (el.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 && !el.contains(group));
@@ -480,12 +482,13 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
     expect(loadRuns).toHaveBeenCalledWith();   // no limit, no before: the whole archive, as before
   });
 
-  it('ReviewCapBand sits below where the band goes: after the paused banner and the search box, before the programmes', () => {
+  it('ReviewCapBand sits below where the band goes: after the paused banner and the search box, before the programmes', async () => {
     const store = makeStore();
     act(() => {
       store.setState({ coord: COORD('set'), coordFrameSeen: true, runs: [r({ reviewCap: { rounds: 3, cap: 3, askedAt: 1, liftedAt: null } })], runsFrameSeen: true });
     });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    await screen.findByTestId('programme-card');
     const nodes = [...container.querySelectorAll('.rf-box, .coord-banner, .review-cap-band, .programme-card')];
     const names = nodes.map((n) => (n.matches('.rf-box') ? 'find' : n.matches('.coord-banner') ? 'paused' : n.matches('.review-cap-band') ? 'cap' : 'group'));
     expect(names.indexOf('cap')).toBeGreaterThan(names.indexOf('paused'));
@@ -1780,7 +1783,7 @@ describe('the review cap band on the run board', () => {
     vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
     render(<RunsScreen loadCaps={NO_CAPS} store={store} />);
     const band = screen.getByRole('group', { name: /waiting on you/i });
-    const group = screen.getByTestId('programme-card');
+    const group = await screen.findByTestId('programme-card');
     expect(band.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(within(band).getByRole('button', { name: /lift cap/i }));
     expect(await screen.findByText('Lift the review cap?')).toBeInTheDocument();

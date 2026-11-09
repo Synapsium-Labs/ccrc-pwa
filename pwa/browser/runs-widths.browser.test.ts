@@ -124,7 +124,12 @@ afterAll(async () => {
 
 async function openBoard(width: number, skin: string, theme: string): Promise<OpenedApp> {
   const opened = await openApp(browser!, { skin, theme, width }, FIXTURE);
+  // The cards take their last move from GET /api/programmes: a card the live frame gives no last move waits for it, and the quiet
+  // fold is drawn only once it lands. Wait for the answer and the fold, so a count never races the read.
+  const read = opened.page.waitForResponse((r) => r.url().includes('/api/programmes'), { timeout: 20_000 });
   await opened.page.goto(`${server!.origin}/runs`);
+  await read;
+  await opened.page.locator('[data-fold="quiet"]').waitFor({ timeout: 20_000 });
   await opened.page.locator('.programme-card').first().waitFor({ timeout: 20_000 });
   return opened;
 }
