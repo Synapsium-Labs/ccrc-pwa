@@ -77,6 +77,13 @@ export function bigCallsFor(db: DatabaseSync, program: string | null, limit: num
   ).all(...args) as unknown as CallRowRaw[]).map(callRowOf);
 }
 
+/** Big calls made inside `[fromMs, toMs)`, oldest first: the digest's window read (`callDecision` names which are lines). */
+export function bigCallsIn(db: DatabaseSync, fromMs: number, toMs: number): CallRow[] {
+  return (db.prepare(
+    `SELECT ${CALL_COLS} FROM coordinator_calls WHERE class = 'big' AND at >= ? AND at < ? ORDER BY at, id`,
+  ).all(fromMs, toMs) as unknown as CallRowRaw[]).map(callRowOf);
+}
+
 /** The operator's group: the big calls still open (`callIsForOperator`), and those that left it inside the window
  *  (`callClearedAt`), each newest first. The read takes every big call and lets the two predicates decide, so the rule
  *  lives in one place. */

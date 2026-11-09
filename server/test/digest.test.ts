@@ -17,6 +17,7 @@ import {
   readDigestHour,
 } from '../src/coord/digest.js';
 import { DIGEST_HOUR_FILE, DRIFT_KINDS, type DriftFinding } from '../../shared/api.js';
+import type { NewCall } from '../src/coord/coordCalls.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -114,7 +115,7 @@ describe('buildDigest (spec §10)', () => {
       ['approval', ids.lapse, 'lapse', PARENT],
     ]);
     expect(d.lines.map((l) => l.at)).toEqual([at(1), at(3), at(5), at(7), at(9), at(10) + 60_000]);
-    expect(d.totals).toEqual({ decisions: 6, answers: 2, allows: 1, denies: 1, handOvers: 1, lapses: 1, guardForbidden: 1 });
+    expect(d.totals).toEqual({ decisions: 6, answers: 2, allows: 1, denies: 1, handOvers: 1, lapses: 1, calls: 0, guardForbidden: 1 });
     expect(d.byCoordinator).toEqual([{ coordinator: PARENT, decisions: 5 }, { coordinator: PARENT2, decisions: 1 }]);
     const allowLine = d.lines[1]!;
     expect(allowLine).toMatchObject({ tool: 'Bash', class: 'ordinary', reason: 'allow: inside the worktree', answer: null, corrected: false });
@@ -430,7 +431,7 @@ describe('the digest drift section (D-5923, spec 4.6)', () => {
   });
 
   it('the push body names drift only when non-zero', () => {
-    const totals = { decisions: 2, answers: 2, allows: 0, denies: 0, handOvers: 0, lapses: 0, guardForbidden: 0 };
+    const totals = { decisions: 2, answers: 2, allows: 0, denies: 0, handOvers: 0, lapses: 0, calls: 0, guardForbidden: 0 };
     expect(digestPushCopy(DAY, totals).body).toBe('2 answered — tap to review and correct');
     expect(digestPushCopy(DAY, totals, 0).body).toBe('2 answered — tap to review and correct');
     expect(digestPushCopy(DAY, totals, 3).body).toBe('2 answered · 3 out of step — tap to review and correct');
@@ -448,5 +449,56 @@ describe('the digest drift section (D-5923, spec 4.6)', () => {
       push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
     new FleetWatcher(deps, new Bus(), 10_000).sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
     expect(sent[0]?.body).toBe('1 answered · 1 out of step — tap to review and correct');
+  });
+});
+
+describe('big calls in the digest (D-8126, wave A3)', () => {
+  const call = (o: Partial<NewCall> = {}): NewCall => ({
+    class: 'big', runId: null, question: 'Which store?', options: ['sqlite', 'postgres'], chosen: 'sqlite',
+    why: 'one box', reversible: true, wakeOn: null, ...o,
+  });
+  const block = (): NewCall => call({ class: 'block', question: null, options: null, chosen: 'waiting on disk', why: 'full', wakeOn: 'disk' });
+  const w = digestWindow(DAY, DIGEST_HOUR_UTC);
+
+  it('a day with one big, one routine and one block call lists one line and counts one call', () => {
+    const { coord } = store();
+    const big = coord.insertCall('prog-a', PARENT, call(), null, at(5));
+    coord.insertCall('prog-a', PARENT, call({ class: 'routine' }), null, at(6));
+    coord.insertCall('prog-a', PARENT, block(), null, at(7));
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    expect(built.digest.lines).toEqual([{
+      rowKind: 'call', id: big, kind: 'big-call', at: at(5), coordinator: PARENT, childId: '', text: 'Which store?',
+      tool: null, class: null, answer: 'sqlite', reason: 'one box', corrected: false,
+    }]);
+    expect(built.digest.totals).toMatchObject({ decisions: 1, calls: 1, answers: 0 });
+    expect(built.digest.byCoordinator).toEqual([{ coordinator: PARENT, decisions: 1 }]);
+  });
+
+  it('a call outside the window is not a line, and an overturned one reads corrected', () => {
+    const { coord } = store();
+    coord.insertCall('prog-a', PARENT, call(), null, w.fromMs - 1);
+    const kept = coord.insertCall('prog-a', PARENT, call(), null, w.fromMs);
+    coord.insertCall('prog-a', PARENT, call(), null, w.toMs);
+    coord.overturnCallTx(kept, 'No.', at(40));
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    expect(built.digest.lines.map((l) => [l.id, l.corrected])).toEqual([[kept, true]]);
+  });
+
+  it('every text on a call line is masked again, whatever the row stored', () => {
+    const { coord } = store();
+    const id = coord.insertCall('prog-a', PARENT, call(), null, at(5));
+    coord.db.prepare('UPDATE coordinator_calls SET question = ?, chosen = ?, why = ? WHERE id = ?').run(BEARER, BEARER, BEARER, id);
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    expect(JSON.stringify(built.digest.lines)).not.toContain(TOKEN_HEX);
+  });
+
+  it('the push copy names "1 call made", then "N calls made", and nothing when there are none', () => {
+    const t = { decisions: 1, answers: 0, allows: 0, denies: 0, handOvers: 0, lapses: 0, calls: 1, guardForbidden: 0 };
+    expect(digestPushCopy(DAY, t).body).toBe('1 call made — tap to review and correct');
+    expect(digestPushCopy(DAY, { ...t, decisions: 3, answers: 1, calls: 2 }).body).toBe('1 answered · 2 calls made — tap to review and correct');
+    expect(digestPushCopy(DAY, { ...t, decisions: 0, calls: 0 }).body).not.toContain('call');
   });
 });

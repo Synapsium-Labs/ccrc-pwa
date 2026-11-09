@@ -25,7 +25,7 @@ const DAY_MS = 86_400_000;
 
 /** The kind of a decision, in words (never in colour alone). */
 export const DIGEST_KIND_WORD: Record<DigestLineKind, string> = {
-  answer: 'answered', allow: 'allowed', deny: 'denied', 'hand-over': 'handed over', lapse: 'lapsed',
+  answer: 'answered', allow: 'allowed', deny: 'denied', 'hand-over': 'handed over', lapse: 'lapsed', 'big-call': 'called',
 };
 
 /** The wire guard: an answer this build can render, or null. */
