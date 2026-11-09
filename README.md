@@ -8335,8 +8335,33 @@ and the caller holds a session, before anything is read; then with `fleet-caps-u
 Two hand steps. Before rolling the fleet box below the release that ships the verb, switch adoption off at the door: once the verb is
 gone the door refuses `off` too, and the lane keeps adopting while the file stands. If the door or the verb is already gone, remove
 `~/.cc-sessions/delegation-adopt` on the fleet box by hand. And a directory standing in the switch's place reads `set` while neither
-arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by hand on the fleet box. The Settings card in front of the
-door follows in a later release.
+arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by hand on the fleet box.
+
+### The switch's card: Settings › Automation › Worktrees left behind
+
+The operator reads and sets the switch in the console, not in a file (D-8114). **Settings › Automation › Worktrees left behind**,
+after Leftover processes, shows what the door's GET serves and nothing it decides itself: whether the server keeps worktrees now
+(the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
+only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
+missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
+each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
+dropped and the card says no list was served; the switch stays drawn. It polls once a minute.
+
+**Keep them** asks first: when the last pass ran in shadow, a confirmation names how many worktrees it would keep (the counts
+line's figure) and, when the list leaves some off, how many of them the card lists and how many it does not. After a pass with
+keeping on, or one that was paused, it says the card cannot tell until the next pass; after a pass that could not read everything
+it needs, it says that, and that the card cannot tell until the next pass; when no pass has counted, or the last pass counted
+nothing, it says the card cannot say how many this would keep. It always says that the session that started each agent is mailed.
+Nothing is sent before it is confirmed, one confirmation sends one write however often its button is pressed while it leaves, and
+nothing is sent when the card's latest reading refuses Keep them by then. Once a write settles (its answer, or a reading that
+shows the choice, whichever comes first; after a rejected write or an answer the card cannot read, the view its re-read
+returns), the focus returns once to the choice the card then shows, or to a line of the card's that holds text and stays on
+screen, after the confirmation has gone, unless the operator has moved it elsewhere; it never moves after the write's bound has
+given up on it, or once another reading has replaced the one the write settled on. **Do not keep** goes at once; its note says
+that worktrees already kept stay held back from the disk sweep until their hold ends. A choice the GET says would be refused is
+disabled, with the refusal in the card's own words, `sign-in-unarmed` included (turning it on needs sign-in armed and a signed-in
+operator), and a refused write says the same and re-reads. On a server without the door the card says it is not available there.
+The switch ships off, and the lane stays in shadow until the operator turns it on here.
 
 ## Contributing
 

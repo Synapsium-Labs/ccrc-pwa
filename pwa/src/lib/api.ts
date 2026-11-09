@@ -9,6 +9,7 @@ import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
+import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
@@ -920,6 +921,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  ran. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
     setScopeSweepBusy: (body: ScopeSweepBusyRequest) =>
       postJsonOr<ScopeSweepView | 'unreadable'>('/api/coord/scope-sweep', 'unreadable', body),
+    /** `GET /api/coord/delegation-adopt` (D-8114): the delegation lane's keep switch, the fleet box's two capabilities, what a
+     *  tap of each direction would be refused with, and the lane's last pass. Settings' Automation card reads it through
+     *  `useDelegationAdoptView`, whose `asDelegationAdoptView` is the wire guard. */
+    delegationAdopt: (opts?: ReadOpts) => getJson<DelegationAdoptView>('/api/coord/delegation-adopt', opts),
+    /** `POST /api/coord/delegation-adopt` (D-8114): the switch, `{on}`. The reply is the same view, read after the verb ran; a
+     *  refusal is `{ok:false, error}` in one of the door's words. `postJsonOr`, for `setCoordCaps`' reason: an answer that
+     *  could not be read may still have moved the switch. */
+    setDelegationAdopt: (body: DelegationAdoptRequest) =>
+      postJsonOr<DelegationAdoptView | 'unreadable'>('/api/coord/delegation-adopt', 'unreadable', body),
     /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>
