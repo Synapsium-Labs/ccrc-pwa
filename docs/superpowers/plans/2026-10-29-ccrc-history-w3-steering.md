@@ -1202,4 +1202,13 @@ Spec §7.7's failure table, row by row:
 
 ## Deviations found
 
-No deviation number is defined by this plan, and none is issued for this run. Its proposed departures are not "none". Each is listed by slug, unnumbered, under "Build questions and proposed departures", beside the spec errata: the rulings of 2026-11-08 take three of them and rule one out, and the rest stay unapproved. The coordinator numbers any that is approved.
+W3-1 (run 1713) defines the eight below, the departures the coordinator approved for it and numbered at dispatch, dated 2026-11-09, each by its slug under "Build questions and proposed departures". The other slugs there stay unnumbered until their PR: `history-steer-breaker-first-derivation` is W3-2's, and `history-steer-stale-receipt-window` was ruled out by O7 (a).
+
+- **D-8127 — `history-steer-module`** (2026-11-09). The steer file's IO lives in a new `ccd/history/steer.mjs`, called from `card.mjs`'s card step, not from `sweep.mjs` as §7.6 says; the decisions stay in lib.
+- **D-8128 — `history-steer-on-the-card-lifecycle`** (2026-11-09). The steer file shares the card's lifecycle: `decideCardFile` gains an `artifact` argument rather than a second decider, and each withdrawal arm unlinks both artifacts.
+- **D-8129 — `history-steer-range-text`** (2026-11-09). A slot's range is the `tree` verb's text, `isoOf(earliest)..isoOf(latest)`, at most 36 ASCII chars; lib gains `nodeRangeText` with that spelling, so the instant format has two spellings until it has one home.
+- **D-8130 — `history-steer-hook-copies`** (2026-11-09). The hook carries the template's first line, the generic variant and the lane words as constants, each parity-pinned against lib: legitimately different, because bash cannot import `lib.mjs`.
+- **D-8131 — `history-steer-recall-off-tail-copy`** (2026-11-09, taken by O9 (a)). A second spelling of the recall-off gate in the hook's tail, forced by the tail rule, recorded as legitimately different under it and held equal by a parity matrix.
+- **D-8132 — `history-steer-spike-report`** (2026-11-09, taken by O5). The spike report is `history-counters.mjs spike`, its existing owner.
+- **D-8133 — `history-steer-spike-per-leaf-figures`** (2026-11-09). The spike's headroom and `analysis_only` figures are evaluated per leaf from stored summaries with lib's own rules, never from the node-wide counters, which carry no session or time.
+- **D-8134 — `history-steer-spike-pr-scope`** (2026-11-09, taken by O10 (a)). An ordering departure from CP-61: the print, the receipt and Task 1F's parser change land in the spike PR.
