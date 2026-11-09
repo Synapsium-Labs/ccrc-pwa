@@ -21,7 +21,8 @@ import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
 import { RowMain, RowMeta } from './rowParts';
 import { EndRunControls, LiftCapControl, endRunOf, useItemActs, type ItemActs } from './ItemActs';
-import { CALLS_GROUP_WORDS, SEEN_WORD, callLine, callsOf } from './callWords';
+import { CALLS_GROUP_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callsOf } from './callWords';
+import { OverturnSheet, type OverturnSend } from './OverturnSheet';
 import { programmeSpecHref } from './ledgerLinks';
 import './ledgers.css';
 
@@ -56,6 +57,8 @@ export interface WaitingScreenProps {
   readonly onOpenSession: (id: string) => void;
   /** The operator's Seen on a big call (D-8126). Absent, the group draws its calls with no Seen control. */
   readonly onSeen?: (id: number) => void;
+  /** The one correction door (`POST /api/digest/correct`), for Overturn… on a big call (D-8126). Absent, no call carries it. */
+  readonly onOverturn?: OverturnSend;
 }
 
 /** The rail's key for the group of sessions that are in no programme (a programme slug can never be this). */
@@ -141,12 +144,14 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
 /** "Calls made for you (N)": the big calls a coordinator made on the operator's behalf, collapsed, below a programme's rows
  *  (D-8126). Never part of the blocking count or the summary: a call needs nothing from the operator but a glance. Each
  *  carries Seen, asked once; the row leaves for the cleared trail on the next frame. Nothing is drawn for none. */
-export function CallsGroup({ calls, now, onSeen }: {
-  calls: readonly CallView[]; now: number; onSeen?: (id: number) => void;
+export function CallsGroup({ calls, now, onSeen, onOverturn }: {
+  calls: readonly CallView[]; now: number; onSeen?: (id: number) => void; onOverturn?: OverturnSend;
 }): ReactNode {
   const [asked, setAsked] = useState<ReadonlySet<number>>(new Set());
+  const [overturning, setOverturning] = useState<CallView | null>(null);
   if (calls.length === 0) return null;
   return (
+    <>
     <details className="wl-calls" data-calls={calls.length}>
       <summary className="wl-calls-sum">{CALLS_GROUP_WORDS(calls.length)}</summary>
       <ul className="wl-calls-list">
@@ -157,20 +162,27 @@ export function CallsGroup({ calls, now, onSeen }: {
               <BareRow className="wl-call-seen" disabled={asked.has(c.id)}
                        onClick={() => { setAsked((prev) => new Set(prev).add(c.id)); onSeen(c.id); }}>{SEEN_WORD}</BareRow>
             )}
+            {onOverturn !== undefined && c.overturnedAt === null && (
+              <BareRow className="wl-call-overturn" onClick={() => setOverturning(c)}>{OVERTURN_WORD}</BareRow>
+            )}
           </li>
         ))}
       </ul>
     </details>
+    {overturning !== null && onOverturn !== undefined && (
+      <OverturnSheet call={overturning} send={onOverturn} onClose={() => setOverturning(null)} />
+    )}
+    </>
   );
 }
 
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, calls = [], onSeen }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, calls = [], onSeen, onOverturn }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
-  rowActs?: RowActs | null; calls?: readonly CallView[]; onSeen?: (id: number) => void;
+  rowActs?: RowActs | null; calls?: readonly CallView[]; onSeen?: (id: number) => void; onOverturn?: OverturnSend;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -188,7 +200,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
         <SpecLink href={specHref} programme={title} className="wl-gspec" />
       </div>
       <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} />
-      <CallsGroup calls={calls} now={now} {...(onSeen === undefined ? {} : { onSeen })} />
+      <CallsGroup calls={calls} now={now} {...(onSeen === undefined ? {} : { onSeen })} {...(onOverturn === undefined ? {} : { onOverturn })} />
     </section>
   );
 }
@@ -269,7 +281,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const apartBlock = callsApart.map((p) => (
     <section key={p} className="wl-group wl-calls-apart" data-program={p} aria-label={programmeTitle(p, heardRuns)}>
       <div className="wl-ghead"><h2 className="wl-gtitle">{programmeTitle(p, heardRuns)}</h2></div>
-      <CallsGroup calls={callsOf(view, p).open} now={now} {...(props.onSeen === undefined ? {} : { onSeen: props.onSeen })} />
+      <CallsGroup calls={callsOf(view, p).open} now={now} {...(props.onSeen === undefined ? {} : { onSeen: props.onSeen })}
+                  {...(props.onOverturn === undefined ? {} : { onOverturn: props.onOverturn })} />
     </section>
   ));
   const clearedCalls = noProgramme ? [] : (view.callsCleared ?? []).filter((c) => list.programme === null || c.program === list.programme);
@@ -311,6 +324,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                              hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs}
                              calls={g.program === null ? [] : callsOf(view, g.program).open}
                              {...(props.onSeen === undefined ? {} : { onSeen: props.onSeen })}
+                             {...(props.onOverturn === undefined ? {} : { onOverturn: props.onOverturn })}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
               </div>

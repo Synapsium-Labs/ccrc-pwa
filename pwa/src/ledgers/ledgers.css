@@ -104,7 +104,7 @@
 .wl-item .wl-why,
 .wl-capitem .wl-why,
 .wl-limit .wl-why { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
-.wl-item .wl-bounce, .wl-capitem .wl-bounce { font-size: var(--fs-meta); color: var(--ink-primary); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); overflow-wrap: anywhere; }
+.wl-item .wl-bounce, .wl-capitem .wl-bounce { font-size: var(--fs-meta); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); overflow-wrap: anywhere; }
 .wl-item .wl-meta,
 .wl-capitem .wl-meta,
 .wl-limit .wl-meta { display: grid; justify-items: end; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--ink-secondary); }
@@ -375,3 +375,13 @@
 .wl .wl-call { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: var(--fs-meta); min-width: 0; }
 .wl .wl-call-line { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
 .wl .wl-call-seen { width: auto; min-height: 44px; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
+
+/* The Overturn… sheet (D-8126): options weighed with the chosen one marked, a note, and a refusal in words. */
+.wl .wl-call-overturn { width: auto; min-height: 44px; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
+.wl-overturn { display: grid; gap: var(--sp-2); min-width: 0; }
+.wl-overturn-q { margin: 0; overflow-wrap: anywhere; }
+.wl-overturn-options { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+.wl-overturn-option { overflow-wrap: anywhere; }
+.wl-overturn-option[data-chosen='true'] { font-weight: 600; }
+.wl-overturn-note { width: 100%; box-sizing: border-box; min-width: 0; }
+.wl-overturn-error { margin: 0; font-size: var(--fs-meta); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); overflow-wrap: anywhere; }
