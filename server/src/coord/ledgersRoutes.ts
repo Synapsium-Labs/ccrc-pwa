@@ -340,8 +340,8 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const asker = ending !== null && item.raisedBy !== byId ? item.raisedBy : null;
     const res = asker !== null && ending !== null
       ? coord.moveItemWithMail(item.id, act, 'coordinator', {}, deps.now(), { programmeHasOpenRun: true }, (moved) => {
-        const mail = endRequestEndedMail(moved, ending.runId, 'withdrawn');
-        return insertSystemMailTx(coord, null, { fromId: 'coordinator', toId: asker, runId: null, kind: 'status', subject: mail.subject, body: mail.body });
+        const endedMail = endRequestEndedMail(moved, ending.runId, 'withdrawn');
+        return insertSystemMailTx(coord, null, { fromId: 'coordinator', toId: asker, runId: null, kind: 'status', subject: endedMail.subject, body: endedMail.body });
       })
       : coord.moveItem(item.id, act, 'coordinator', act === 'return' ? { note } : {}, deps.now(), { programmeHasOpenRun: true });
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${item.id} cannot be ${act === 'return' ? 'returned' : act === 'confirm' ? 'confirmed' : 'withdrawn'} from here` });
