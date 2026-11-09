@@ -852,6 +852,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/linear/proxy/teams',
       'GET /api/linear/proxy/users',
       'GET /api/linear/proxy/workspaces',
+      'GET /api/linking',
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /api/mail/inbox',

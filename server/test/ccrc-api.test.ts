@@ -233,11 +233,14 @@ describe('the closed route table', () => {
     [['linear', 'update', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12'],
     [['linear', 'comment', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/comments'],
     [['linear', 'link', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/links'],
+    // The linking standard's read (D-8147): the pane's own project's team key, override and measured visibility. The identity
+    // rides the query, as the Linear rows' does, so it runs in a pane.
+    [['linking', 'show'], 'GET', '/api/linking'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
-      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || (args[0] === 'runs' && args[1] === 'review-rounds');
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'runs' && args[1] === 'review-rounds');
     if (paned) plantPane('demo-ws');
     await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -461,7 +464,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
       ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
-      ['linear', 'link', 'AAA-12', '--json', '-'],
+      ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');

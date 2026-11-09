@@ -14,6 +14,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { ID_GATE_TOKEN, seedRow } from './idGateFixture.js';
 
 let home: string;
 let projectsRoot: string;
@@ -129,5 +130,56 @@ describe('GET /api/projects carries a linking cell', () => {
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
     for (const p of res.json().projects as object[]) expect(p).not.toHaveProperty('linking');
+  });
+});
+
+describe('GET /api/linking: a session reads its own project\'s row', () => {
+  const get = (a: FastifyInstance, q: string, token: string | null = ID_GATE_TOKEN) =>
+    a.inject({ method: 'GET', url: `/api/linking${q}`, headers: token === null ? {} : { 'x-ccrc-mail-token': token } });
+  const me = '?byId=project-a-calm-mesa&byUuid=u-project-a-calm-mesa';
+
+  it('answers the caller\'s own project\'s row, found through its registry record', async () => {
+    seedRow(home, 'project-a-calm-mesa', { project: 'project-a' });
+    coord!.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'device-1', 1);
+    app = await open({ coord, mailToken: ID_GATE_TOKEN });
+    const res = await get(app, me);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true, project: 'project-a', teamKey: 'KEY', override: 'private', measured: { state: 'unmeasured' }, mode: 'private',
+    });
+  });
+
+  it('refuses a missing or wrong box token', async () => {
+    seedRow(home, 'project-a-calm-mesa', { project: 'project-a' });
+    app = await open({ coord, mailToken: ID_GATE_TOKEN });
+    for (const t of [null, 'e'.repeat(64)]) {
+      const res = await get(app, me, t);
+      expect([res.statusCode, res.json().error]).toEqual([401, 'unauthenticated']);
+    }
+  });
+
+  it('refuses an attribution the registry does not hold', async () => {
+    seedRow(home, 'project-a-calm-mesa', { project: 'project-a' });
+    app = await open({ coord, mailToken: ID_GATE_TOKEN });
+    const unknown = await get(app, '?byId=project-a-no-such&byUuid=u-x');
+    expect([unknown.statusCode, unknown.json().error]).toEqual([403, 'unknown-sender']);
+    const stale = await get(app, '?byId=project-a-calm-mesa&byUuid=u-other');
+    expect([stale.statusCode, stale.json().error]).toEqual([403, 'stale-uuid']);
+    const bad = await get(app, '');
+    expect([bad.statusCode, bad.json().error]).toEqual([400, 'bad-request']);
+  });
+
+  it('reads unknown mode for a project never measured, and answers no-project when the record names none', async () => {
+    seedRow(home, 'project-a-calm-mesa', { project: 'project-a' });
+    app = await open({ coord, mailToken: ID_GATE_TOKEN });
+    const res = await get(app, me);
+    expect(res.json()).toEqual({
+      ok: true, project: 'project-a', teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown',
+    });
+    await app.close();
+    seedRow(home, 'bare-session', { project: '' });
+    app = await open({ coord, mailToken: ID_GATE_TOKEN });
+    const none = await get(app, '?byId=bare-session&byUuid=u-bare-session');
+    expect([none.statusCode, none.json().error]).toEqual([404, 'no-project']);
   });
 });

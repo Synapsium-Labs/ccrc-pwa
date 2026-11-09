@@ -87,6 +87,9 @@ const LEDGER_SRC = read('server/src/coord/ledgersRoutes.ts');
 /** The EIGHTH file that registers routes and the fifth lane source (#1444, plan task LK9): the Linear proxy's twelve,
  *  every one a box-token lane. Read like the files above, so its lanes are counted where the prose counts them. */
 const LINEAR_PROXY_SRC = read('server/src/linear/proxyRoutes.ts');
+/** The TENTH file that registers routes and the seventh lane source (D-8147): the linking standard's routes. Its one
+ *  box-token lane is the session's read, `GET /api/linking`; the operator's write beside it is session-gated and no lane. */
+const LINKING_SRC = read('server/src/linking/routes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -196,10 +199,11 @@ const UPDATE_LANES = lanesIn(UPDATE_SRC);
 const TOKEN_LANES = lanesIn(TOKEN_SRC);
 const LEDGER_LANES = lanesIn(LEDGER_SRC);
 const LINEAR_PROXY_LANES = lanesIn(LINEAR_PROXY_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES];
+const LINKING_LANES = lanesIn(LINKING_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -448,7 +452,9 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
       'POST /api/programmes/:slug/spec',
     ]);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length);
+    // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
+    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 

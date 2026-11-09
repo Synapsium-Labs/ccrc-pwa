@@ -526,6 +526,13 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'the flag, no cookie accepted, attribution checked against the registry, the URL held to github.com, resolved to the ' +
     "issue's current team, asked of the policy point and journaled before the one mutation is sent"],
 
+  // The linking standard (D-8147): a session reads its own project's Linear team key, visibility override and measured
+  // visibility, and so which linking rule applies to its pull requests.
+  ['GET /api/linking',
+    'a session reads its own project\'s linking row (Linear team key, override, measured repository visibility and the ' +
+    'mode they give) — box-token gated in its own onRequest whatever the flag, no cookie accepted, attribution checked ' +
+    "against the registry, the project the caller's own registry record names and never one the caller chooses"],
+
   ['POST /api/token/claim',
     'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +
     'sent over the agent link for the next box-token value, with no cookie jar and deliberately ' +

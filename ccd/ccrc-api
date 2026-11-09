@@ -239,6 +239,10 @@ declare -A ROUTES=(
   [linear.update]='POST|/api/linear/proxy/issues/{id}|yes|workspace'
   [linear.comment]='POST|/api/linear/proxy/issues/{id}/comments|yes|workspace'
   [linear.link]='POST|/api/linear/proxy/issues/{id}/links|yes|workspace'
+  # The linking standard (D-8147): the pane's own project's Linear team key, visibility override and measured repository
+  # visibility, and the mode they give. One read, no id and no query key: the project is the caller's registry record's, and the
+  # identity rides the query like every Linear row's (the block in `main` that appends it).
+  [linking.show]='GET|/api/linking|no|-'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -643,7 +647,7 @@ main() {
   # value can add one, because SAFE_RE refuses `&` and `=`. A body that names either (however it spells the key) is the
   # server's to refuse, after parsing, as `bad-field`; the server reads identity from the query only. A pane with no
   # identity is refused here and nothing is sent.
-  if [[ "$key" == linear.* ]]; then
+  if [[ "$key" == linear.* || "$key" == linking.show ]]; then
     derive_identity
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
