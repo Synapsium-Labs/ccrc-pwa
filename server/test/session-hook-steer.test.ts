@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { tl } from './compactCardFixtures.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { itLinux, IS_DARWIN } from './platformFixtures.js';
 import {
   STEER_FIRST_LINE, STEER_GENERIC_TEXT, STEER_FILE_MAX, BACKENDS, steerFileOf, composeSteerFile, makePairIndex, parseSpoolLine, cardLine,
@@ -74,7 +75,7 @@ interface Ran { status: number | null; stdout: string; stderr: string }
 /** One hook run: exit 0, silent stderr, and the steer directory untouched, asserted every time (PX13, the behavioural half). */
 const run = (payload: object, env: Record<string, string> = {}, opts: { timeout?: number; stderr?: 'silent' | 'any' } = {}): Ran => {
   const before = steerSig();
-  const r = spawnSync('bash', [HOOK], {
+  const r = spawnSyncGroup('bash', [HOOK], {
     input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout: opts.timeout ?? 60_000, killSignal: 'SIGKILL',
   });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
@@ -507,7 +508,7 @@ describe('PX22: a print that fails writes no receipt', () => {
     arm(); plantSpool(); plantSteer(composed());
     const payload = pre(mainTranscript());
     const before = steerSig();
-    const r = spawnSync('bash', ['-c', `bash "$0" ${redirect}; echo "rc=$?"`, HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000 });
+    const r = spawnSyncGroup('bash', ['-c', `bash "$0" ${redirect}; echo "rc=$?"`, HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(), timeout: 60_000 });
     expect(steerSig()).toBe(before);
     return { out: r.stdout, err: r.stderr };
   };
