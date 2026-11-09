@@ -267,6 +267,87 @@ describe('the other rungs', () => {
   });
 });
 
+describe('an account-only sign does not age a block (operator review)', () => {
+  it('account for 10 minutes, then a banner on a draft: the clock restarts at the banner, not at the account sign', () => {
+    seed(); fleet();
+    pass(BUSY, T0); pass(BUSY, T0 + 600);                    // a long turn on an account that reads 100: held running
+    expect(field(ID, 'limitsign')).toBe(`${T0} account held`);
+    pass(BANNER_WITH_DRAFT, T0 + 610);                       // the turn ended on the limit banner; the operator is typing
+    expect(field(ID, 'limitsign')).toBe(`${T0 + 610} banner`);   // new episode: since and the flags restart
+    expect(dispatches()).toEqual([]);
+    pass(BANNER_WITH_DRAFT, T0 + 909);
+    expect(dispatches()).toEqual([]);
+    pass(BANNER_WITH_DRAFT, T0 + 910);                       // N minutes of being blocked: the draft is overridden (ruled)
+    expect(lines('watchdog-rescue')).toEqual([expect.stringMatching(/sign=banner for=300s$/)]);
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('the other direction keeps the episode: a banner that falls back to the account sign keeps its since', () => {
+    seed(); fleet();
+    pass(BANNER, T0); pass(PROMPT, T0 + 120);
+    expect(field(ID, 'limitsign')).toBe(`${T0} account`);
+  });
+});
+
+describe('an account-only sign leaves the operator\'s hold and pin alone', () => {
+  const idle = (): void => { processStatus(); };
+
+  it('a hold file: watchdog-hold once, no dispatch, however long the account reads high', () => {
+    seed(); limits('claude', 10, 98); limits('claude-a', 5, 5); idle();
+    fs.writeFileSync(regFile(`${ID}.hold`), 'program:demo wave:2/5\n');
+    pass(PROMPT, T0); pass(PROMPT, T0 + 300); pass(PROMPT, T0 + 600);
+    expect(dispatches()).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/watchdog-hold lane-a-project-a: the session is held \(hold\)/)]);
+    expect(lines('watchdog-rescue')).toEqual([]);
+  });
+
+  it('a manual-swap pin to this account: no dispatch (the pin stands at the ceiling when its expiry brake is on)', () => {
+    seed(); limits('claude', 10, 98); limits('claude-a', 5, 5); idle();
+    fs.writeFileSync(regFile('swap-pin-expiry-off'), '');
+    h.sh(`_reg_set ${ID} swappin claude`);
+    pass(PROMPT, T0); pass(PROMPT, T0 + 300);
+    expect(dispatches()).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/pinned to claude by hand/)]);
+  });
+
+  it('a pin to another account does not hold it', () => {
+    seed(); limits('claude', 10, 98); limits('claude-a', 5, 5); idle();
+    h.sh(`_reg_set ${ID} swappin claude-b`);
+    pass(PROMPT, T0); pass(PROMPT, T0 + 300);
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('a banner sign passes a hold file, as ruled', () => {
+    seed(); fleet();
+    fs.writeFileSync(regFile(`${ID}.hold`), 'program:demo wave:2/5\n');
+    pass(BANNER, T0); pass(BANNER, T0 + 300);
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('the act gate backs off an account-only sign when a hold appeared during the jitter, and puts lastswap back', () => {
+    seed(); limits('claude', 10, 98); processStatus(); h.sh(`_reg_set ${ID} lastswap ${T0}`);
+    fs.writeFileSync(regFile(`${ID}.hold`), 'program:demo wave:2/5\n');
+    expect(gateAt(PROMPT, { CCD_SWAP_PREV: '777' })).toBe('rc=1');
+    expect(lines('rescue-backoff')).toEqual([expect.stringMatching(/rescue-backoff lane-a-project-a: the session is held \(hold\)$/)]);
+    expect(field(ID, 'lastswap')).toBe('777');
+  });
+
+  it('the act gate backs off an account-only sign on a pin; a banner sign proceeds past a hold', () => {
+    seed(); limits('claude', 10, 98); processStatus();
+    fs.writeFileSync(regFile('swap-pin-expiry-off'), '');
+    h.sh(`_reg_set ${ID} swappin claude`);
+    expect(gateAt(PROMPT)).toBe('rc=1');
+    expect(lines('rescue-backoff')).toEqual([expect.stringMatching(/pinned to claude by hand \(swappin\)$/)]);
+    fs.rmSync(regFile('swap.log'));
+    h.sh(`_reg_del ${ID} swappin 2>/dev/null || rm -f "$REG/${ID}.swappin"`);
+    fleet(); fs.writeFileSync(regFile(`${ID}.hold`), 'program:demo wave:2/5\n');
+    expect(gateAt(BANNER)).toBe('rc=0');
+  });
+});
+
+const gateAt = (pane: string, envx: Record<string, string> = {}): string =>
+  h.sh(`${STUBS(pane)} _swap_watchdog_act_gate ${ID} claude; echo "rc=$?"`, { TMUX_CREATED: String(T0 - 86400), FAKE_NOW: String(T0), ...envx });
+
 describe('the account-only sign waits for a running turn', () => {
   it('mid-turn: watchdog-hold running once, no dispatch; idle next pass: it acts', () => {
     seed(); limits('claude', 10, 99); limits('claude-a', 5, 5);

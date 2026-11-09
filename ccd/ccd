@@ -31191,8 +31191,8 @@ _wd_running() {   # id -> rc 0 iff the session is NOT at a clean turn boundary, 
 _swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelled or backed off (logged, `lastswap` restored, nothing stopped)
   # Re-asks the decision's own question at the act, after the dispatch's jitter: stopped, hibernated or no longer live, or no
   # sign any more -> `watchdog-cancel`; output since the decision, or (under an account-only sign) a session not at a clean turn
-  # boundary, `_swap_idle_gate`'s question -> `rescue-backoff`. A DRAFT OR A STALE-PRESS DOES NOT
-  # BACK OFF (ruled): the watchdog is the net for exactly the session those holds keep on a limit. Never reads or writes the input box.
+  # boundary, `_swap_idle_gate`'s question, or an operator hold or manual-swap pin (`_wd_operator_hold_to`) -> `rescue-backoff`.
+  # A DRAFT OR A STALE-PRESS DOES NOT BACK OFF (ruled): the watchdog is the net for exactly the session those holds keep on a limit. Never reads or writes the input box.
   local id="$1" sign="" word="" why=""
   # THE OPERATOR MAY HAVE STOPPED THE SESSION DURING THE JITTER. `_watchdog_one` asked at the decision; `cmd_swap` refuses
   # `.hibernated` but not `.stopped`, and its tail respawns a session (`cmd_ensure` also removes `.stopped`). A stopped
@@ -31214,7 +31214,16 @@ _swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancel
     _swap_lastswap_restore "$id"
     return 1
   fi
-  [[ "$sign" == account ]] && _wd_running "$id" && word="a turn or background work is running"
+  if [[ "$sign" == account ]]; then
+    local w="${2:-}"
+    [[ -n "$w" ]] || _reg_read_to w "$id" wrapper
+    if _wd_operator_hold_to why "$id" "$w"; then
+      echo "$(date '+%F %T') rescue-backoff $id: ${why%%;*}" >> "$REG/swap.log"
+      _swap_lastswap_restore "$id"
+      return 1
+    fi
+    _wd_running "$id" && word="a turn or background work is running"
+  fi
   [[ -z "$word" ]] && _swap_output_since "${CCD_SWAP_TX:-}" "${CCD_SWAP_TX_BYTES:-}" && word="output since decision"
   [[ -n "$word" ]] || return 0
   echo "$(date '+%F %T') rescue-backoff $id: $word" >> "$REG/swap.log"
@@ -31301,8 +31310,17 @@ _watchdog_hold() {   # id word text -> say `watchdog-hold <id>: <text>` once per
   return 0
 }
 
+_wd_operator_hold_to() {   # var id wrapper -> rc 0 iff the operator's own hold or manual-swap pin stands (var = the log text) | 1 neither
+  # The two holds the affinity arm (`_auto_swap_check`) honours before it relocates a session: `$REG/<id>.hold` (`-e` not `-f`,
+  # doubt reads as held) and `_swap_pinned`. Asked by `_watchdog_one` at the decision and by `_swap_watchdog_act_gate` at the
+  # act, for an account-only sign only.
+  if [[ -e "$REG/$2.hold" ]]; then printf -v "$1" '%s' "the session is held (hold); an account that reads high is not a stopped session, so the watchdog leaves a hold alone"; return 0; fi
+  if _swap_pinned "$2" "$3"; then printf -v "$1" '%s' "the session is pinned to $3 by hand (swappin); an account that reads high is not a stopped session, so the watchdog leaves a pin alone"; return 0; fi
+  return 1
+}
+
 _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everything else is a record and at most one log line. Always 0.
-  local id="$1" now="$2" n="$3" sign="" wrapper="" home="" hrc project="" last="" bts="" rw="" target="" trc dfrom="" dto="" tx="" txb="" lw="" m age since
+  local id="$1" now="$2" n="$3" sign="" wrapper="" home="" hrc project="" last="" bts="" rw="" target="" trc dfrom="" dto="" tx="" txb="" lw="" why="" m age since
   if [[ -e "$REG/$id.hibernated" || -e "$REG/$id.stopped" ]]; then _watchdog_clear "$id"; return 0; fi
   _session_probe "$id"
   case "$PROBE_VERDICT" in
@@ -31313,10 +31331,19 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   _reg_read_to wrapper "$id" wrapper && [[ -n "$wrapper" ]] || return 0
   _watchdog_sign_to sign "$id"
   if [[ -z "$sign" ]]; then _watchdog_clear "$id"; return 0; fi
-  # THE EPISODE'S RECORD: `since` is the first pass that saw any sign; a different sign keeps it.
+  # THE EPISODE'S RECORD: `since` is the first pass that saw any sign; a different sign keeps it, with ONE exception. An
+  # account-only sign is not a block: the session may be mid-turn on a reading of 98, with a draft being typed after it. When
+  # a pane, banner, menu or transcript sign (a session that HAS stopped on the limit) replaces it, `since` restarts at now
+  # and the flags go with the old episode, so the watchdog's overrides of a draft, a stale-press and the cooldown wait N
+  # minutes of being blocked, never N minutes of an account that merely read high.
   if _wd_record_read "$id" "$now"; then
     since="$WD_SINCE"
-    [[ "$WD_SIGN" == "$sign" ]] || { _reg_set "$id" limitsign "$since $sign$WD_FLAGS" || return 0; WD_SIGN="$sign"; }
+    if [[ "$WD_SIGN" == account && "$sign" != account ]]; then
+      since="$now"; WD_SINCE="$now"; WD_FLAGS=""; WD_SIGN="$sign"
+      _reg_set "$id" limitsign "$since $sign" || return 0
+    elif [[ "$WD_SIGN" != "$sign" ]]; then
+      _reg_set "$id" limitsign "$since $sign$WD_FLAGS" || return 0; WD_SIGN="$sign"
+    fi
   else
     since="$now"; WD_SINCE="$now"; WD_SIGN="$sign"; WD_FLAGS=""
     _reg_set "$id" limitsign "$since $sign" || return 0
@@ -31347,6 +31374,14 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
     case "$(_rw_field "$rw" kind)" in
       near|chain) _watchdog_hold "$id" waiting "rescue wait ($(_rw_field "$rw" kind)) is open on $wrapper; the rescue policy's bounded wait runs first"; return 0 ;;
     esac
+  fi
+  if [[ "$sign" == account ]] && _wd_operator_hold_to why "$id" "$wrapper"; then
+    # The affinity arm stands down for a programme hold and for a manual-swap pin (cosmetic relocation yes, rescue no), and
+    # an account-only sign is the one the arm deliberately held in those cases. The rulings let the watchdog pass the cooldown,
+    # the draft and the stale-press, never the operator's own hold or pin. A real block (pane, banner, menu, transcript) is
+    # a session that has stopped, and still passes them.
+    _watchdog_hold "$id" operator "$why"
+    return 0
   fi
   if [[ "$sign" == account ]] && _wd_running "$id"; then
     # `_swap_idle_gate`'s question, the affinity move's own: a turn, a subagent or background shell, a touch inside
