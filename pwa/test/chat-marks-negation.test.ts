@@ -143,6 +143,12 @@ describe('a sentence end reads its closers (review 1592 F5; desktop-polish Task 
     ['a line break ends an aside too', 'CI green (see the log\nthen) is it out?', [{ text: 'green', tone: 'ok' }]],
     // The cost of the spaced dash, named in Task C14's note: a question split by one reads its first half alone.
     ['a spaced dash splits a question as well', 'Is CI green — or red?', [{ text: 'green', tone: 'ok' }]],
+    // A closer needs a space before the capital (Task C16, review 1689 A3): glued to it, the sentence goes on.
+    ['a closer glued to a capital ends nothing', '#651 merged (x)Is it out?', []],
+    ['a closer, a space and a capital still ends it', '#651 merged (x) Is it out?', [{ text: 'merged', tone: 'merged' }]],
+    // The cost of the closer rule, named in the heuristic's comment (review 1689 A7): a final aside before a capital
+    // word ends the sentence, so its own "?" is not reached.
+    ['an aside before a capital word ends the question early', 'Is CI green (on main) OK?', [{ text: 'green', tone: 'ok' }]],
   ])('%s', (_name, text, statuses) => {
     expect(statusesOf(text)).toEqual(statuses);
   });
@@ -205,6 +211,9 @@ describe('a zero count joined or spaced carries no label (review 1601 F1, F2; de
     ['tests passed: 0.5% of the time', { text: 'passed', tone: 'ok' }],
     ['tests passed: none skipped', { text: 'passed', tone: 'ok' }],
     ['tests passed: 0 offline', { text: 'passed', tone: 'ok' }],
+    // A number word ends at a word end (Task C16, review 1689 A4): "ten" is not the start of "tenants".
+    ['tests passed: 0 of tenants', { text: 'passed', tone: 'ok' }],
+    ['tests failed: none of tenants', { text: 'failed', tone: 'fail' }],
   ])('%s keeps its label', (text, status) => {
     expect(statusesOf(text)).toEqual([status]);
   });
@@ -237,6 +246,9 @@ describe('the clause and sentence boundaries, one row per guard (review 1592 F7)
     ['a "?" with no space after it ends no sentence', 'CI green on a?b today.', [{ text: 'green', tone: 'ok' }]],
     ['the count after the colon is a whole word', 'tests passed: 0x of 12', [{ text: 'passed', tone: 'ok' }]],
     ['(h) spaces may stand before the clause end after a zero', 'tests failed: 0 .', []],
+    // The cost of the zero-count rule, named in the heuristic's comment (review 1689 A7): a joined token of zeros is a
+    // zero count wherever it stands, an address included.
+    ['an all-zero dotted token negates', 'Bound to 0.0.0.0 and CI green', []],
   ])('%s', (_name, text, statuses) => {
     expect(statusesOf(text)).toEqual(statuses);
   });
@@ -290,6 +302,10 @@ describe('the check is linear in the text (review 1592 F1)', () => {
     // Many labels with one "?" at the very end: every label asks where its sentence ends. A quadratic check costs about
     // sixteen times as much at 200k as at 50k; a linear one about four. The fastest of three runs each, so a pause
     // for garbage collection does not count, and the 50k run is bounded first so a quadratic one fails fast.
+    // Measured on this box (Task C16, review 1689 A9; three repeats of the two sizes, each the fastest of three):
+    // 3 to 6 ms at 50k, about 13 ms at 200k, a ratio of 2.1 to 4.1. The 50k run is dominated by fixed overhead (warm-up
+    // and the first allocations), which is why the ratio is a loose guard and sits under 8; the absolute bound is what
+    // catches a quadratic mutant (round 1 of the check took seconds, review 1592 F1).
     const fastest = (length: number): number => {
       const text = `${repeat('CI green ', length)}?`;
       let best = Infinity;
@@ -376,6 +392,16 @@ describe('a negator or "?" in another text node of the same block counts (review
     ['(c) a table body cell is one block', '| a |\n|---|\n| **No** tests failed |', []],
     ['(d) a hard break is a line break', 'No flakes\\\nCI green.', [{ text: 'green', tone: 'ok' }]],
     ['(e) link text is read for its negators', '[No](http://example.com/x) tests failed.', []],
+  ])('%s', (_name, src, statuses) => {
+    expect(pluginStatuses(src)).toEqual(statuses);
+  });
+
+  // Task C16, review 1689 A5 and A6. Masking hides letters' case no more: a capital in code or link text opens a
+  // sentence as it does in plain prose. Text in code holds no sentence end, so a "." in it ends nothing (kept, A5).
+  it.each<[string, string, { text: string; tone: string }[]]>([
+    ['(A6) a capital in code after a closer ends the sentence', '(#651 merged) `Main` is red?', [{ text: 'merged', tone: 'merged' }]],
+    ['(A6) the same capital in plain prose', '(#651 merged) Main is red?', [{ text: 'merged', tone: 'merged' }]],
+    ['(A5) a full stop in code ends no sentence', '#651 merged `step 1.` Is it out?', []],
   ])('%s', (_name, src, statuses) => {
     expect(pluginStatuses(src)).toEqual(statuses);
   });
