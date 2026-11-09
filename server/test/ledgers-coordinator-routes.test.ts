@@ -672,6 +672,17 @@ describe('the definition of done on the pin and the modification (D-8126)', () =
     expect(r.coord.goalsFor('prog-a')).toMatchObject({ inShort: 'first', doneWhen: ['a'] });
   });
 
+  it('a re-pin with a different doneWhen over a stored list is done-when-needs-ruling and writes nothing; the same list passes', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'first', doneWhen: ['A', 'B'] });
+    const cut = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'second', doneWhen: ['A'] });
+    expect(cut.statusCode).not.toBe(200);
+    expect(cut.json()).toMatchObject({ error: 'done-when-needs-ruling' });
+    expect(r.coord.goalsFor('prog-a')).toMatchObject({ inShort: 'first', doneWhen: ['A', 'B'] });
+    const same = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'third', doneWhen: ['A', 'B'] });
+    expect(same.statusCode).toBe(200);
+  });
+
   it('a modification with doneWhen and a ruling replaces the list and records the modification', async () => {
     const r = await rig();
     await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'ok', doneWhen: ['old'] });
