@@ -317,6 +317,8 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },
   { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'ok-only' },
+  // The `limit-wait` route (D-8123): reads `r.ran === false` before it reads the runner's words for ccd's `not-waiting` refusal.
+  { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 3, arm: 'explicit' },
   { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'carried' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 4, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'explicit' },

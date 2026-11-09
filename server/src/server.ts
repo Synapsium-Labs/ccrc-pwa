@@ -3991,7 +3991,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const argv = CCD_ARGV.limitWait(id);
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
     if (r.ok) return { ok: true };
-    if (r.ran !== false && /^ccd: not-waiting\b/m.test(r.stderr)) return refuseRoute(reply, 'not-waiting');
+    // The not-ran arm first (D-6840): a ccd that never ran has said nothing, so its words are not read for a refusal.
+    if (r.ran === false) return ccd502(reply, r);
+    if (/^ccd: not-waiting\b/m.test(r.stderr)) return refuseRoute(reply, 'not-waiting');
     return ccd502(reply, r);
   });
 
