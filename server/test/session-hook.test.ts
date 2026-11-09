@@ -9383,6 +9383,8 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     const fnBody = hookFnBody(src, '_hook_history_spool_append');
     expect(fnBody, '_hook_history_spool_append is not defined in the hook').not.toBeNull();
     expect(src.indexOf('\n_hook_history_spool_append() {'), 'the append function sits above the block').toBeLessThan(start);
+    expect(src.indexOf('\n_hook_history_spool_append() {'), 'the append function sits below the compact-arm emit anchor (the tail rule)')
+      .toBeGreaterThan(src.indexOf('# @anchor compact-arm-emit-call'));
     const code = s1Code(`${fnBody!}\n${src.slice(start, end)}`);
     expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$1"`);
     expect(code, 'the block no longer appends through the function').toContain('_hook_history_spool_append "$_hs"');
@@ -10741,7 +10743,14 @@ describe('history scope marker: PreCompact records whose context is compacting (
     const fnAt = src.indexOf('\n_hook_history_scope() {');
     expect(fnAt, 'no _hook_history_scope definition').toBeGreaterThan(-1);
     const fnCode = src.slice(fnAt, src.indexOf('\n}\n', fnAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    expect(`${early[0]!}\n${gate!}\n${fnCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
+    // W3-1 Task 1C: the unset arm's jq read and scope call moved into `_hook_history_scope_verdict`, so its body is scanned too.
+    const verdictAt = src.indexOf('\n_hook_history_scope_verdict() {');
+    expect(verdictAt, 'no _hook_history_scope_verdict definition').toBeGreaterThan(-1);
+    expect(verdictAt, 'the verdict function sits below the compact-arm emit anchor (the tail rule)').toBeGreaterThan(src.indexOf('# @anchor compact-arm-emit-call'));
+    expect(verdictAt, 'the verdict function sits inside the history-scope block').toBeGreaterThan(open);
+    expect(verdictAt).toBeLessThan(close);
+    const verdictCode = src.slice(verdictAt, src.indexOf('\n}\n', verdictAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(`${early[0]!}\n${gate!}\n${fnCode}\n${verdictCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
     // B1's D-4418 rule (spec §5.1): the type test is the line DIRECTLY above the write,
     // so nothing but builtins runs between the test and the `>`; the gate and the early line refuse a symlinked scope/.
     const fnLines = fnCode.split('\n');
