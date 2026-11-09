@@ -118,6 +118,25 @@ describe('the read: the card says what the lane says (D-8114)', () => {
     for (const n of ['4', '5', '6', '7', '8', '9', '10', '11']) expect(counts).toContain(n);
   });
 
+  // Item 131 (D-8114, PR8d): in mode unmeasured the counts line names no would-keep figure, as the sheet names none, and says
+  // the card cannot say how many until the next pass. Mode unmeasured is the breaker unmeasured with the marker read (set or
+  // clear) or the marker unreadable, so the row renders each. Shadow still names the figure, as its sheet does.
+  it.each<DelegationAdoptView['state']>(['clear', 'set', 'unmeasurable'])('mode unmeasured, would keep 4, marker %s: the counts line names no would-keep figure and says the next pass will tell (item 131)', (state) => {
+    owned(view({ state, adoption: health({ mode: 'unmeasured', adopted: 1, wouldAdopt: 4, waiting: 5, unchanged: 6 }) }));
+    const counts = screen.getByText(/^Last pass:/).textContent ?? '';
+    expect(counts).not.toMatch(/would keep 4/);
+    expect(counts).not.toMatch(/\b4\b/);
+    expect(counts).toMatch(/what turning this on would keep, this card cannot say how many until the next pass\./);
+    for (const n of ['kept 1', 'waiting 5', 'unchanged 6']) expect(counts).toContain(n);
+  });
+
+  it('shadow, would keep 4: the counts line still names the figure, as the sheet does (item 131)', () => {
+    owned(view({ adoption: health({ mode: 'shadow', wouldAdopt: 4 }) }));
+    const counts = screen.getByText(/^Last pass:/).textContent ?? '';
+    expect(counts).toContain('would keep 4');
+    expect(counts).not.toMatch(/until the next pass/);
+  });
+
   it('the four modes read differently from one another', () => {
     const lines = (['live', 'shadow', 'suspended', 'unmeasured'] as const).map((mode) => delegationAdoptModeLine(health({ mode })));
     expect(new Set(lines).size).toBe(4);

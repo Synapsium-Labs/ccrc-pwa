@@ -24,6 +24,11 @@ import { VERB_WRITE_TEXT, verbWriteFailure } from './verbWriteFailure';
 /** The switch's two choices, as the card's radios spell them; `POST /api/coord/delegation-adopt` takes `{on}`. */
 export type DelegationAdoptChoice = 'off' | 'on';
 
+// The would-keep figure, and that the card will not name it before the next pass: one phrase each, said by the sheet outside
+// shadow and by the counts line in mode unmeasured (item 131), so the same words are spelled once.
+const WOULD_KEEP = 'what turning this on would keep';
+const UNTIL_NEXT_PASS = 'this card cannot say how many until the next pass.';
+
 // `unmeasured` and `stale` are the neighbouring switch cards' sentences, taken from them so the same words are spelled once.
 export const DELEGATION_ADOPT_TEXT = {
   title: 'Worktrees left behind',
@@ -46,9 +51,9 @@ export const DELEGATION_ADOPT_TEXT = {
   confirmLabel: 'Keep worktrees',
   confirmCannotCount: 'No pass has counted a worktree yet, or the last pass counted nothing, so this card cannot say how many this '
     + 'would keep.',
-  confirmUntilNextPass: 'The last pass did not count what turning this on would keep, so this card cannot say how many until the '
-    + 'next pass.',
-  confirmUnreadPass: 'The last pass could not read everything it needs, so this card cannot say how many until the next pass.',
+  confirmUntilNextPass: `The last pass did not count ${WOULD_KEEP}, so ${UNTIL_NEXT_PASS}`,
+  confirmUnreadPass: `The last pass could not read everything it needs, so ${UNTIL_NEXT_PASS}`,
+  countsUnreadPass: `Of ${WOULD_KEEP}, ${UNTIL_NEXT_PASS}`,
   confirmMail: 'The session that started each agent is mailed about its worktree. A kept worktree stays held back from the '
     + 'disk sweep until its hold ends.',
   ...VERB_WRITE_TEXT,
@@ -125,11 +130,15 @@ export function delegationAdoptModeLine(adoption: DelegationAdoptionHealth | nul
   return adoption === null ? DELEGATION_ADOPT_TEXT.nothingCounted : MODE_LINE[adoption.mode];
 }
 
-/** The last pass's counts, in the operator's words, every one shown even at zero. */
+/** The last pass's counts, in the operator's words, every one shown even at zero, but for one: in mode unmeasured the line names
+ *  no would-keep figure, as the confirm sheet names none, and says the card cannot say how many until the next pass (item 131,
+ *  D-8114). Mode unmeasured is the breaker unmeasured with the marker read, or the marker unreadable; the words name neither. */
 export function delegationAdoptCountsLine(h: DelegationAdoptionHealth): string {
-  return `Last pass: kept ${h.adopted}, would keep ${h.wouldAdopt}, waiting ${h.waiting}, unchanged ${h.unchanged}, `
+  const unread = h.mode === 'unmeasured';
+  const line = `Last pass: kept ${h.adopted}, ${unread ? '' : `would keep ${h.wouldAdopt}, `}waiting ${h.waiting}, unchanged ${h.unchanged}, `
     + `not yet checked ${h.unaudited}, waiting for your choice ${h.conflicting}, not possible on the fleet box ${h.unsupported}, `
     + `in projects not read ${h.uncensused}, mails owed ${h.owed}.`;
+  return unread ? `${line} ${DELEGATION_ADOPT_TEXT.countsUnreadPass}` : line;
 }
 
 const CAP_LABEL = { verb: 'The fleet box\'s keep switch', audit: 'The fleet box\'s change check' } as const;
