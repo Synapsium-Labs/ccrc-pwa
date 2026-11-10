@@ -9,7 +9,7 @@
 // Every ccd call runs against a fixture HOME (`makeCcdHarness`), never the live one.
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Deps } from '../src/server.js';
@@ -42,6 +42,16 @@ const SENT: TestboxSyncAsked = {
   ok: true, reply: { outcome: 'sent', detail: null, frame: { t: 'tools.sync', release: 'v0.0.900', versions: TOOLS, measuredAt: '2026-10-30T12:00:00Z' } },
 };
 
+/** D-8166: `--state on` needs a passing parity record that matches the pin and the box file, so every route row that raises
+ *  the marker starts from one (the gate's own rows are in testbox-remote-gate.test.ts). */
+function seedPassingParity(home: string): void {
+  const fp = `SHA256:${'A'.repeat(43)}`;
+  const sha = 'a'.repeat(64);
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(home, '.ccrc', 'testbox-parity.json'), `${JSON.stringify({ v: 1, result: 'pass', prs: [], fixtures: [], release: 'v0.0.900', toolsKey: 'k', fingerprint: fp, boxFileSha256: sha, at: 1 })}\n`);
+  writeFileSync(path.join(home, '.ccrc', 'testbox-admin.state'), `fingerprint=${fp}\nbox_sha256=${sha}\n`);
+}
+
 const apps: FastifyInstance[] = [];
 const harnesses: CcdHarness[] = [];
 afterEach(async () => {
@@ -64,6 +74,7 @@ interface Setup { app: FastifyInstance; h: CcdHarness; argvs: string[][]; syncs:
 async function setup(o: { armed?: boolean; session?: boolean; watcher?: boolean; verbs?: string[] | null; sync?: TestboxSyncAsked; runner?: Runner } = {}): Promise<Setup> {
   const h = makeCcdHarness('ccrc-testbox-routes-');
   harnesses.push(h);
+  seedPassingParity(h.home);
   const argvs: string[][] = [];
   const base = testDeps(h.home, o.runner ?? realCcd(h, argvs));
   let syncs = 0;
