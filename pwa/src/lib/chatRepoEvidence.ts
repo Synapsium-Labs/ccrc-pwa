@@ -1,0 +1,307 @@
+// What one chat message says about GitHub repositories (desktop polish Task C21, D-8172; chat reading spec 2026-11-06 R15): the
+// evidence `refHref` reads to decide which repository a bare `#n` or commit means, or that it means none it can tell. A session
+// lives in one project but may coordinate runs whose work lands in other repositories, so the home repository is not the
+// answer for every name: where the code cannot tell, the answer is text.
+//
+// L1, Session Conversation: pure, no React, no store, no DOM. It reads the message's WHOLE raw text, code spans, link targets
+// and fenced code included, because an address in a code span is exactly where a session writes the repository it means. Its
+// scope is one chat event: an address in one message is no evidence for a name in the next (review 1758 F7). It is asked at
+// render time and memoised per message by its caller, never in the parse worker: `chatMarks.ts` stays the grammar of names and
+// imports nothing (`markdown-purity.test.ts`), and this module reads its qualified names and its one boundary from there.
+//
+// It is also the ONE reader of a repository the chat names (review 1760 F7): `readRepo` reads every spelling, and
+// `qualifiedRepo` decides a qualified name (`owner/repo#n`) after that read, with the exceptions below, for rule 1 and for the
+// evidence alike. A repository spelled where one stands but refused by the grammar, by an exception or by a host the name
+// boundary does not start is UNKNOWN: never linked, never home, and a bare name beside it stays text (reviews 1758 F1,
+// 1760 F2 and F5).
+import { parseGithubRepo, type GithubRepo } from '../../../shared/projectAdd';
+import { qualifiedNames, wordAfter, wordBefore } from './chatMarks';
+
+/** A repository a message names: `named`, one the console's grammar reads, by its key (`repoKey`) and `owner/repo` for the
+ *  address; or `unknown`, spelled where a repository stands but not one the chat can tell, by a key of its own that is never a
+ *  named one's. An unknown repository is never linked to, and is never the home one. */
+type SaidRepo =
+  | { readonly kind: 'named'; readonly key: string; readonly slug: string }
+  | { readonly kind: 'unknown'; readonly key: string };
+
+/** A commit address: the repository it names and its SHA in lower case. */
+interface SaidCommit {
+  readonly repo: SaidRepo;
+  readonly sha: string;
+}
+
+/** What one message names. `named`: every repository's key, unknown ones included. `numbers`: for a PR or issue number, each
+ *  repository the message names that number in, by key. `commits`: the commit addresses, by the first seven characters of their
+ *  SHA (every SHA the grammar reads has at least seven), each (repository, SHA) once, so a commit name asks only the distinct
+ *  addresses that can share its prefix (review 1760 F9). */
+export interface MessageRepos {
+  readonly named: ReadonlySet<string>;
+  readonly numbers: ReadonlyMap<number, ReadonlyMap<string, SaidRepo>>;
+  readonly commits: ReadonlyMap<string, ReadonlyMap<string, SaidCommit>>;
+}
+
+/** `slug` without its trailing dots (a sentence's full stop), by a backward scan: linear in the dots, where a `/\.+$/` replace
+ *  is quadratic on a long dot run (review 1758 F5). */
+function trimDots(slug: string): string {
+  let end = slug.length;
+  while (end > 0 && slug.charCodeAt(end - 1) === 0x2e) end -= 1;
+  return slug.slice(0, end);
+}
+
+/** The repository `slug` names, read by the console's one GitHub grammar (`parseGithubRepo`: the short form, an https or SSH
+ *  address, `.git` dropped) after one trim of trailing dots, or null where that grammar refuses it. Every chat address is built
+ *  from it (`chatRefs.ts#githubPage`) and every key is taken from it, so the readers agree (review 1758 F4). */
+export function readRepo(slug: string): GithubRepo | null {
+  return parseGithubRepo(trimDots(slug));
+}
+
+/** The key two spellings of one repository share: `readRepo`'s owner and name in lower case, since GitHub's own names are
+ *  case-insensitive. `null` for anything that grammar refuses. */
+export function repoKey(slug: string): string | null {
+  const gh = readRepo(slug);
+  return gh === null ? null : `${gh.owner}/${gh.repo}`.toLowerCase();
+}
+
+/** The file extensions a qualified name's repository may not end in, once `readRepo` has read it (`src/lib/x.ts#12` is a path
+ *  and a line, not a PR; reviews 1758 F3 and 1760 F3). Lower case, compared in lower case after the last dot. A list, so an
+ *  extension it does not hold still reads as a repository. */
+const FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'md', 'mdx', 'yml', 'yaml', 'json', 'sh', 'py', 'txt', 'html', 'css', 'toml', 'sql',
+  'log', 'csv', 'lock', 'go', 'rs', 'rb', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'pl', 'lua', 'vue',
+  'svelte', 'scss', 'less', 'svg', 'png', 'jpg', 'pdf', 'xml', 'ini', 'conf', 'cfg', 'env',
+]);
+
+/** Whether a read repository is refused as a qualified name's (review 1758 F3, option b): its name ends in a listed file
+ *  extension, its owner or name is all digits or one character (`1/2#3`, `24/7#1`, `abc1234/x#5`), or both are upper case only
+ *  (`TCP/IP#4`, `N/A#1`). What is left follows GitHub's own `owner/repo#n` notation without knowing that the repository exists,
+ *  so a prose pair such as `client/server#1` still reads as one and may open a real but unrelated page (spec R15). */
+function refusedAsQualified(gh: GithubRepo): boolean {
+  const dot = gh.repo.lastIndexOf('.');
+  if (dot >= 0 && FILE_EXTENSIONS.has(gh.repo.slice(dot + 1).toLowerCase())) return true;
+  const slight = (seg: string): boolean => seg.length === 1 || /^\d+$/.test(seg);
+  const upper = (seg: string): boolean => !/[a-z]/.test(seg) && /[A-Z]/.test(seg);
+  return slight(gh.owner) || slight(gh.repo) || (upper(gh.owner) && upper(gh.repo));
+}
+
+const unknown = (raw: string): SaidRepo => ({ kind: 'unknown', key: `?${raw.toLowerCase()}` });
+
+/** A repository as a message spells it (`owner/repo`, or an address `readRepo` reads): named where `readRepo` reads it, else
+ *  unknown. */
+function said(raw: string): SaidRepo {
+  const gh = readRepo(raw);
+  return gh === null ? unknown(raw) : { kind: 'named', key: `${gh.owner}/${gh.repo}`.toLowerCase(), slug: `${gh.owner}/${gh.repo}` };
+}
+
+/** A qualified name's repository (`owner/repo` of `owner/repo#n`), decided once for rule 1 and for the evidence: named where
+ *  `readRepo` reads it and no exception refuses what it read, else unknown (review 1760 F2 and F7). */
+export function qualifiedRepo(raw: string): SaidRepo {
+  const gh = readRepo(raw);
+  return gh === null || refusedAsQualified(gh) ? unknown(raw) : said(raw);
+}
+
+/** A segment where an owner or a repository stands in an address: wider than the grammar, which decides (`said`). */
+const SEG = '[\\w.-]+';
+/** Not inside a longer host name (`x.github.com`, `my-github.com`). A letter, digit or `_` directly before a host is the name
+ *  boundary's to judge (`wordBefore`), and makes an unknown repository (review 1760 F5 and F12). */
+const HOST_START = '(?<![.-])';
+/** A GitHub page: `github.com/<owner>/<repo>` with any scheme or `www.`, or the SSH form `git@github.com:<owner>/<repo>`, in any
+ *  case; then, optionally, a pull, issue or commit page. */
+const PAGE = new RegExp(
+  `${HOST_START}(?:www\\.)?github\\.com[/:](${SEG})/(${SEG})(?:/(?:(?:pull|issues)/(\\d+)|commit/([0-9a-f]{7,40})))?`,
+  'gi',
+);
+/** The REST API's repository address, and its pulls and issues. */
+const API = new RegExp(`${HOST_START}api\\.github\\.com/repos/(${SEG})/(${SEG})(?:/(?:pulls|issues)/(\\d+))?`, 'gi');
+/** The raw-file and archive hosts: they name a repository and no number. */
+const RAW = new RegExp(`${HOST_START}(?:raw\\.githubusercontent|codeload\\.github)\\.com/(${SEG})/(${SEG})`, 'gi');
+/** The path of `gh api`, with or without its leading slash, and its pulls and issues, ending at the word's end, `/`, `?` or `#`. */
+const GH_API_PATH = new RegExp(`^/?repos/(${SEG})/(${SEG})(?:/(?:pulls|issues)/(\\d+)(?=$|[/?#]))?`);
+/** `GH_REPO=o/r`, the environment `gh` reads its repository from. */
+const GH_REPO_ENV = /GH_REPO=(['"]?)([^\s'"`;&|]+)/g;
+
+/** One word of a `gh` command: its text with quotes removed, and whether any of it was quoted. */
+interface Word {
+  readonly text: string;
+  readonly quoted: boolean;
+}
+
+/** Whether the character at `at` ends a `gh` command, outside quotes (review 1760 F1): a backtick, a line break, `;`, `&`, `|`, or
+ *  prose punctuation (a comma or full stop followed by a space or the text's end). */
+function endsCommand(text: string, at: number): boolean {
+  const c = text.charAt(at);
+  if (c === '`' || c === '\n' || c === ';' || c === '&' || c === '|') return true;
+  if (c !== ',' && c !== '.') return false;
+  const next = text.charAt(at + 1);
+  return next === '' || /\s/.test(next);
+}
+
+/** The words of the `gh` command whose arguments start at `from`, and where the command ends: at `endsCommand`, at the next
+ *  unquoted `gh` word (whose start it answers, so that word is read as a command of its own), or at the text's end. Quotes group
+ *  a word and hide what is in them, so `--body "see -R o/r"` holds no flag. One forward scan. */
+function ghWords(text: string, from: number): { words: Word[]; end: number } {
+  const words: Word[] = [];
+  let cur = '';
+  let quoted = false;
+  let quote = '';
+  let start = from;
+  let i = from;
+  /** Closes the word being read; true when it is an unquoted `gh`, which starts the next command. */
+  const close = (): boolean => {
+    if (cur === '' && !quoted) return false;
+    const word = { text: cur, quoted };
+    cur = '';
+    quoted = false;
+    if (!word.quoted && word.text === 'gh') return true;
+    words.push(word);
+    return false;
+  };
+  for (; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (quote !== '') {
+      if (c === quote) quote = '';
+      else if (c === '\n') break;
+      else cur += c;
+      continue;
+    }
+    if (endsCommand(text, i)) break;
+    if (/\s/.test(c)) {
+      if (close()) return { words, end: start };
+      continue;
+    }
+    if (cur === '' && !quoted) start = i;
+    if (c === '"' || c === "'") {
+      quote = c;
+      quoted = true;
+    } else {
+      cur += c;
+    }
+  }
+  if (close()) return { words, end: start };
+  return { words, end: i };
+}
+
+/** Whether `w` is a flag (`-R`, `--repo`, `--web`): a word starting with a dash once the shell has removed its quotes. */
+const isFlag = (w: Word | undefined): boolean => w !== undefined && w.text.startsWith('-');
+
+/** The command's own words: up to the first bare word past its positionals (`gh pr|issue <verb> <n>` has three, `gh api <path>`
+ *  two), where prose or another program begins (`gh pr view 12 then cp -R o/r`). A word after a flag with no `=` is read as that
+ *  flag's value, since the chat cannot know which flags take one. */
+function ownWords(words: readonly Word[]): { own: readonly Word[]; positionals: readonly Word[] } {
+  const room = words[0]?.text === 'api' ? 2 : 3;
+  const positionals: Word[] = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const w = words[i]!;
+    const prev = words[i - 1];
+    if (isFlag(w) || (isFlag(prev) && !prev!.text.includes('='))) continue;
+    if (positionals.length === room) return { own: words.slice(0, i), positionals };
+    positionals.push(w);
+  }
+  return { own: words, positionals };
+}
+
+/** What one `gh` command says: the repository of its LAST `--repo`, `--repo=` or `-R` flag (as `gh` takes it), or of its `gh api`
+ *  path, and the number that repository is evidence for: a `gh pr|issue <verb> <n>` command's own number, or the API path's. */
+function ghCommand(words: readonly Word[]): { repo: SaidRepo; number: string | null } | null {
+  const { own, positionals } = ownWords(words);
+  const [head, verbOrPath, third] = positionals;
+  if (head?.text === 'api' && verbOrPath !== undefined) {
+    const m = GH_API_PATH.exec(verbOrPath.text);
+    if (m !== null) return { repo: said(`${m[1]!}/${m[2]!}`), number: m[3] ?? null };
+  }
+  let flag: string | null = null;
+  // A quoted argument is one word, so a flag inside it (`--body "see -R o/r"`) is never a word of its own; a word that is
+  // exactly a quoted flag (`'-R'`) reaches `gh` as that flag once the shell removes its quotes.
+  own.forEach((w, i) => {
+    if ((w.text === '--repo' || w.text === '-R') && i + 1 < own.length) flag = own[i + 1]!.text;
+    else if (w.text.startsWith('--repo=')) flag = w.text.slice('--repo='.length);
+  });
+  if (flag === null) return null;
+  const numbered = (head?.text === 'pr' || head?.text === 'issue') && third !== undefined && /^#?\d+$/.test(third.text);
+  return { repo: said(flag), number: numbered ? third.text.replace('#', '') : null };
+}
+
+/** One message's evidence, read in one forward pass of each reader over its raw text. */
+export function messageRepos(text: string): MessageRepos {
+  const named = new Set<string>();
+  const numbers = new Map<number, Map<string, SaidRepo>>();
+  const commits = new Map<string, Map<string, SaidCommit>>();
+  const atNumber = (n: string, r: SaidRepo): void => {
+    const id = Number(n);
+    const at = numbers.get(id) ?? new Map<string, SaidRepo>();
+    if (!at.has(r.key)) at.set(r.key, r);
+    numbers.set(id, at);
+  };
+  /** The repository an address names, or null when the name boundary does not start its host (`修复见github.com/…`,
+   *  `_github.com/…`): that address names an unknown repository and is evidence for nothing (review 1760 F5). */
+  const addressed = (m: RegExpMatchArray, owner: string, repo: string): SaidRepo | null => {
+    if (!wordBefore(text, m.index!)) return said(`${owner}/${repo}`);
+    named.add(unknown(`host:${m[0]}`).key);
+    return null;
+  };
+  for (const m of text.matchAll(PAGE)) {
+    const r = addressed(m, m[1]!, m[2]!);
+    if (r === null) continue;
+    named.add(r.key);
+    // A number or a SHA is evidence only where the name boundary ends it (`pull/12x` is not #12).
+    if (wordAfter(text, m.index + m[0].length)) continue;
+    if (m[3] !== undefined) atNumber(m[3], r);
+    if (m[4] !== undefined) {
+      const sha = m[4].toLowerCase();
+      const at = commits.get(sha.slice(0, 7)) ?? new Map<string, SaidCommit>();
+      at.set(`${r.key} ${sha}`, { repo: r, sha });
+      commits.set(sha.slice(0, 7), at);
+    }
+  }
+  for (const m of text.matchAll(API)) {
+    const r = addressed(m, m[1]!, m[2]!);
+    if (r === null) continue;
+    named.add(r.key);
+    if (m[3] !== undefined && !wordAfter(text, m.index + m[0].length)) atNumber(m[3], r);
+  }
+  for (const m of text.matchAll(RAW)) {
+    const r = addressed(m, m[1]!, m[2]!);
+    if (r !== null) named.add(r.key);
+  }
+  for (const m of text.matchAll(GH_REPO_ENV)) {
+    if (!wordBefore(text, m.index)) named.add(said(m[2]!).key);
+  }
+  // `gh` commands, each read from its own words to its own end, so a flag reaches only its command's number (review 1760 F1).
+  // A `gh` word starts where the name boundary starts one and a space follows it (review 1760 F6).
+  for (let at = text.indexOf('gh'); at >= 0; at = text.indexOf('gh', at)) {
+    if (wordBefore(text, at) || !/\s/.test(text.charAt(at + 2))) {
+      at += 2;
+      continue;
+    }
+    const { words, end } = ghWords(text, at + 2);
+    const command = ghCommand(words);
+    if (command !== null) {
+      named.add(command.repo.key);
+      if (command.number !== null) atNumber(command.number, command.repo);
+    }
+    at = Math.max(end, at + 2);
+  }
+  for (const q of qualifiedNames(text)) {
+    const r = qualifiedRepo(q.repo);
+    named.add(r.key);
+    atNumber(q.id, r);
+  }
+  return { named, numbers, commits };
+}
+
+/** Whether `message` names a repository other than the home one (`home`, a `repoKey`, or null when the session has none): from
+ *  the set's size, so it costs the same for every name in the message (review 1760 F8). */
+export function namesOtherThan(message: MessageRepos, home: string | null): boolean {
+  return message.named.size > (home !== null && message.named.has(home) ? 1 : 0);
+}
+
+/** The repositories `message` names for a bare PR (`kind` `pr`, its number) or commit (`commit`, its SHA), by key: the pages of
+ *  its number, or the commit addresses where one SHA is a prefix of the other. */
+export function reposFor(kind: 'pr' | 'commit', id: string, message: MessageRepos): ReadonlyMap<string, SaidRepo> {
+  if (kind === 'pr') return message.numbers.get(Number(id)) ?? new Map();
+  const sha = id.toLowerCase();
+  const out = new Map<string, SaidRepo>();
+  for (const c of message.commits.get(sha.slice(0, 7))?.values() ?? []) {
+    if ((c.sha.startsWith(sha) || sha.startsWith(c.sha)) && !out.has(c.repo.key)) out.set(c.repo.key, c.repo);
+  }
+  return out;
+}

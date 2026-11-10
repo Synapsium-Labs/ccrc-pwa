@@ -11,11 +11,14 @@
 export type MarkKind = 'pr' | 'run' | 'item' | 'doc' | 'commit';
 const MARK_KINDS: readonly MarkKind[] = ['pr', 'run', 'item', 'doc', 'commit'];
 
-/** One recognised name. `id` is the digits, the path or the SHA; `text` is the name as written (`run 1527`). */
+/** One recognised name. `id` is the digits, the path or the SHA; `text` is the name as written (`run 1527`). `repo`, the
+ *  repository as written, is on a `pr` mark only, and only when the name says it (`owner/repo#12`, desktop polish Task C21,
+ *  D-8172); a bare `#12` has none, and `chatRefs.ts` decides which repository, if any, it means. */
 export interface Mark {
   readonly kind: MarkKind;
   readonly id: string;
   readonly text: string;
+  readonly repo?: string;
 }
 
 export function isMarkKind(s: string): s is MarkKind {
@@ -50,10 +53,12 @@ export const ACTION_LEADS: readonly string[] = [
   'what to do', 'to do', 'your call', 'decision needed', 'what i need from you', 'action',
 ];
 
-/** The data attributes the plugin writes, and the only ones: a mark carries a kind and an id, never a URL. */
+/** The data attributes the plugin writes, and the only ones: a mark carries a kind, an id and, when its name says one, a
+ *  repository (Task C21), never a URL. */
 export const MARK_ATTR = {
   kind: 'data-mark-kind',
   id: 'data-mark-id',
+  repo: 'data-mark-repo',
   status: 'data-status',
   lead: 'data-lead',
   afterLead: 'data-after-lead',
@@ -95,14 +100,15 @@ export type MarkRun =
 const WORD = /[\p{L}\p{M}\p{N}_]/u;
 const isWordPoint = (cp: number | undefined): boolean => cp !== undefined && WORD.test(String.fromCodePoint(cp));
 
-/** Whether the character starting at `at` is a word character; `false` at the end. */
-function wordAfter(text: string, at: number): boolean {
+/** Whether the character starting at `at` is a word character; `false` at the end. With `wordBefore`, the one boundary of
+ *  a name: the name grammar and the message evidence reader (`chatRepoEvidence.ts`, Task C21 review 1758 F6) both ask it. */
+export function wordAfter(text: string, at: number): boolean {
   return isWordPoint(text.codePointAt(at));
 }
 
 /** Whether the character ending just before `at` is a word character, a surrogate pair read whole; `false` at the
  *  start. */
-function wordBefore(text: string, at: number): boolean {
+export function wordBefore(text: string, at: number): boolean {
   if (at <= 0) return false;
   const pair = at >= 2 && /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(text.slice(at - 2, at));
   return isWordPoint(text.codePointAt(pair ? at - 2 : at - 1));
@@ -122,6 +128,15 @@ const NOT_BEFORE_COMMIT = '#';
 // The grammar, one sticky pattern per kind, tried in this priority order at each position. A match is a name only
 // when the boundary checks in `nameAt` hold.
 const DOC = /docs\/[A-Za-z0-9._/-]*\.md/y;
+/** What may stand where a GitHub owner and a repository stand in a qualified name, as patterns: the characters of each
+ *  segment, wider than the console's one GitHub grammar (`parseGithubRepo`; this file imports nothing). Which repository a match
+ *  is, and whether it is one the chat can tell, is decided by the one reader, `chatRepoEvidence.ts#qualifiedRepo` (Task C21,
+ *  review 1760 F7): a match it refuses opens nothing and stays text. */
+const GITHUB_OWNER_PATTERN = '[A-Za-z0-9-]+';
+const GITHUB_REPO_PATTERN = '[A-Za-z0-9._-]+';
+/** A PR that names its repository (Task C21, D-8172): `owner/repo#12`. Tried only where a document path may start, so it is
+ *  never the tail of a path or a host (`x/a/b#1`, `github.com/a/b#1`); a document path is tried first. */
+const QUALIFIED_PR = new RegExp(`(${GITHUB_OWNER_PATTERN})/(${GITHUB_REPO_PATTERN})#(\\d{1,6})`, 'y');
 const PR = /#(\d{1,6})/y;
 const RUN = /(?:run|review)\s+(\d+)/iy;
 const ITEM = /item\s+(\d+)/iy;
@@ -146,6 +161,10 @@ function nameAt(text: string, at: number): { mark: Mark; end: number } | null {
     if (!wordAfter(text, end) && after !== '/' && after !== '-' && !runsOnAfterDot(text, end) && !m[0].split('/').includes('..')) {
       return { mark: { kind: 'doc', id: m[0], text: m[0] }, end };
     }
+  }
+  m = pathOk ? stickyAt(QUALIFIED_PR, text, at) : null;
+  if (m && !wordAfter(text, at + m[0].length)) {
+    return { mark: { kind: 'pr', id: m[3]!, text: m[0], repo: `${m[1]!}/${m[2]!}` }, end: at + m[0].length };
   }
   for (const [re, kind] of KEYWORDS) {
     m = stickyAt(re, text, at);
@@ -432,6 +451,18 @@ export function markRuns(text: string, context?: LabelContext): readonly MarkRun
   });
   plainUpTo(text.length);
   return runs;
+}
+
+/** The qualified PR names (`owner/repo#12`) in `text`, in order, exactly as `markRuns` would mark them: one walk, one grammar
+ *  and one boundary, so the message evidence reader (`chatRepoEvidence.ts`) counts as evidence only what is a name (review 1758
+ *  F6). Read over a whole message's raw text, code spans and link targets included. */
+export function qualifiedNames(text: string): { readonly repo: string; readonly id: string }[] {
+  const out: { repo: string; id: string }[] = [];
+  walkNames(text, (_at, name) => {
+    if (name.mark.repo !== undefined) out.push({ repo: name.mark.repo, id: name.mark.id });
+    return name.end;
+  });
+  return out;
 }
 
 /** Where `text`'s recognised names stand, in order: the names `markRuns` would mark, for text the plugin draws no marks

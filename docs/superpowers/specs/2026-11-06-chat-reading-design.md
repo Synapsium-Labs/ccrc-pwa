@@ -151,11 +151,11 @@ This section defines which names become links, where each one points, and how re
 
 | Kind | Grammar (on a text node, never in code) | Target | Route today | In this release |
 |---|---|---|---|---|
-| PR or issue | `#n`, 1 to 6 digits, GitHub's own autolink shape, not inside a word | `https://github.com/<slug>/issues/<n>` (GitHub redirects a PR there to `/pull/<n>`). `<slug>` is the session project's measured repo (`repoLabel`, `ProjectRow.repo`). | External | Yes |
+| PR or issue | `#n`, 1 to 6 digits, GitHub's own autolink shape, not inside a word; or `owner/repo#n` (R15), not after a path or a host; a qualified name whose repository ends in a listed file extension, has a segment that is all digits or one character, or has both segments upper case only is a name the chat cannot tell, so it stays text | `https://github.com/<slug>/issues/<n>` (GitHub redirects a PR there to `/pull/<n>`). `<slug>` is the repository the name means (R15): the one `owner/repo#n` says; else the one its message names for that number; else the session project's measured repo (`repoLabel`, `ProjectRow.repo`) when the message names no other repository and the session claims no open run elsewhere; else no link. | External | Yes |
 | Run | `run N`, `review N` (a review is a run), case-insensitive | `/runs?run=<n>`: a new query on the existing `runs` route. The board scrolls to the row, marks it, and says when the run is not among those loaded. Same precedent as `/accounts?lane=` (T2c, D-6329). | Query on existing | Yes |
 | Item | `item N` | `/waiting/<n>`, the one Waiting on you page's item | Exists | Yes |
 | Repository document | A path under `docs/superpowers/specs/`, `docs/superpowers/plans/`, `docs/product-design/` or `docs/conventions/` ending in `.md` | The Docs reader, through `docHref` (D28: a document link goes to the Docs reader only), in the session's project at the branch its worktree holds, as `sessionDocsHref` chooses it | Exists | Yes |
-| Commit | 7 to 40 lowercase hex characters with at least one digit and one letter, standing alone or after `@` | `https://github.com/<slug>/commit/<sha>` | External | Yes |
+| Commit | 7 to 40 lowercase hex characters with at least one digit and one letter, standing alone or after `@` | `https://github.com/<slug>/commit/<sha>`, `<slug>` chosen as for a PR (R15), from the commit addresses its message names | External | Yes |
 | Deviation | `D-N` | Its entry in the plan that defines it, in the Docs reader | Needs a session-gated `D-N` → plan path lookup (the ledger read is box-token only) and an in-page anchor | Later |
 | Mail | `mail N` | The message in the Inbox | Needs `/mail?mail=<id>`, and the id must say whether it is a mail row or a delivery (two sequences) | Later |
 | Session | A session id | `/s/<id>` (`sessionPath`) | Exists, but no grammar tells an id from a hyphenated word; recognising one needs the known ids inside the parse, which runs in a worker | Later |
@@ -164,7 +164,7 @@ This section defines which names become links, where each one points, and how re
 Avoiding mislinks of ordinary numbers:
 - **Only after a keyword.** A bare number never links; `run`, `review`, `item` or `#` must come first.
 - **Small ids must be known.** A `run N` or `item N` whose number has fewer than three digits links only when the console already holds that run or item (the runs frame, the Waiting on you store). This keeps "run 2 times" and "item 3 of the list" as text.
-- **A repository is required.** `#n` and a commit link only when the session's project has a measured repo (`state: 'named'`). Otherwise they stay text, never a link to a guess.
+- **A repository the code can tell is required (R15).** `#n` and a commit link only to the repository a qualified name says, the one repository its message names for it, or, when nothing points elsewhere, the session project's measured repo (`state: 'named'`). Otherwise they stay text, never a link to a guess.
 - **Never inside code, with one exception.** A fenced block, an existing link and an image are never touched. An inline code span is touched only when its whole text is one recognised name (R13), such as a document path or a commit SHA written in backticks; the span then links as that name and keeps its code look. Any other inline code span stays as it is.
 - **A name the renderer cannot resolve renders as plain text**, never as link-coloured text that goes nowhere.
 
@@ -174,22 +174,23 @@ Avoiding mislinks of ordinary numbers:
 flowchart LR
   f3A["Assistant text"] --> f3P["remarkChatMarks<br/>(both plugin lists)"]
   f3G["chatMarks.ts (L1)<br/>name grammar, status words,<br/>subjects, action lead-ins"] --> f3P
-  f3P --> f3H["Tree with marks:<br/>kind and id, no URL"]
+  f3P --> f3H["Tree with marks:<br/>kind, id and, on owner/repo#n,<br/>the repository as written; no URL"]
   f3H --> f3R["CHAT_COMPONENTS (L4)<br/>mark becomes link or text"]
   f3U["User text"] --> f3LK["linkify (L4)<br/>URLs, then names"]
   f3G --> f3LK
   f3LK --> f3R
-  f3X["Chat context (L4)<br/>repo slug, project, branch,<br/>known runs and items"] --> f3RH["refHref (L1)<br/>mark plus context to an address"]
+  f3X["Chat context (L4)<br/>repo slug, project, branch,<br/>known runs and items,<br/>runs elsewhere (one boolean)"] --> f3RH["refHref (L1, chatRefs.ts)<br/>mark, context and message<br/>evidence to an address"]
+  f3M["Message evidence (L1)<br/>chatRepoEvidence.ts: the repositories<br/>the whole message names"] --> f3RH
   f3R --> f3RH
   f3RH --> f3N{"In-app?"}
   f3N -- "yes" --> f3IA["inAppClick"]
   f3N -- "no" --> f3EX["openExternal"]
 ```
-*Figure 3. Recognising is context-free and runs wherever the Markdown parses, including the worker. Resolving needs the session's context and happens at render time.*
+*Figure 3. Recognising is context-free and runs wherever the Markdown parses, including the worker. Resolving needs the session's context and the message's evidence, and happens at render time.*
 
-- **`pwa/src/lib/chatMarks.ts` (L1, new).** It holds the one recogniser table: the name grammar, the status words, the subjects and the action lead-ins, each written once. It exports `markRuns(text)`, which splits plain text into text runs and marks, and `refHref(mark, ctx)`, which returns an address or `null`.
-- **`remarkChatMarks` (L1, new).** It walks mdast text nodes, skipping `inlineCode`, `code`, `link`, `linkReference` and `html` (a whole-span name in inline code is resolved at render time, R13). It replaces each mark with a node carrying `data-mark-kind` and `data-mark-id` (and a class on lead-in paragraphs and status labels). It writes no URL. It joins `CHAT_REMARK_PLUGINS` and the worker's chat-profile list, never the docs profile.
-- **Resolving happens at render time.** The worker caches its parse by text, so a parse cannot see the session's repo or the known ids. The mark carries kind and id only. `CHAT_COMPONENTS` resolves it through `refHref` with a chat context that `SessionScreen` provides, and draws a link or plain text.
+- **`pwa/src/lib/chatMarks.ts` (L1, new).** It holds the one recogniser table: the name grammar, the status words, the subjects and the action lead-ins, each written once. It exports `markRuns(text)`, which splits plain text into text runs and marks, and the one name boundary. `refHref(mark, ctx, message)`, which returns an address or `null`, lives in `pwa/src/lib/chatRefs.ts` (L1), because it asks the Docs and ledger modules that the parse worker may not load; its third argument is `messageRepos` of the whole message, from `pwa/src/lib/chatRepoEvidence.ts` (L1, R15).
+- **`remarkChatMarks` (L1, new).** It walks mdast text nodes, skipping `inlineCode`, `code`, `link`, `linkReference` and `html` (a whole-span name in inline code is resolved at render time, R13). It replaces each mark with a node carrying `data-mark-kind` and `data-mark-id`, and `data-mark-repo` on a qualified PR name (R15) (and a class on lead-in paragraphs and status labels). It writes no URL. It joins `CHAT_REMARK_PLUGINS` and the worker's chat-profile list, never the docs profile.
+- **Resolving happens at render time.** The worker caches its parse by text, so a parse cannot see the session's repo or the known ids. The mark carries its kind and id, and a qualified name (`owner/repo#n`) also the repository as written (`data-mark-repo`), all read from the name's own text; it never carries a URL. `CHAT_COMPONENTS` resolves it through `refHref` with a chat context that `SessionScreen` provides and the message's evidence that `ChatMarkdown` provides, and draws a link or plain text.
 - **`CHAT_COMPONENTS.a` stops sending every link to a new tab.** An in-app address (one starting with `/`) navigates through `inAppClick`. An external one keeps `openExternal`.
 - **`linkify` stays the one owner for user text.** It keeps its URL split, and runs `markRuns` over the text between URLs, so `#651` in the operator's own message links too. No second linkifier is added.
 - **`docHref` moves to `pwa/src/docs/docsLinks.ts`, the Docs context's link owner.** The move is unchanged, with a characterization test first. The ledgers and the chat both import it from there.
@@ -226,6 +227,7 @@ The operator approved the recommendations on 2026-11-06 in the words "Chat desig
 | R12 | Document links' ref | Default view; the session's branch | The session's branch, as `sessionDocsHref` does, so a spec written on that branch opens. The operator, 2026-11-06 | Agreed |
 | R13 | Names in inline code | Never; when the whole span is one name | When the whole span is one recognised name it links and keeps its code look; any other span never. The operator, 2026-11-06 | Agreed |
 | R14 | D-N, mail, session ids | Now; later | Later: each needs a new read or route (§4.1) | Agreed |
+| R15 | Which repository a PR or commit opens | Always the session's home repository; the repository the message means, or text | The repository the message means, or text; where the code cannot tell, text. First that applies wins: `owner/repo#n` opens that repository when the chat can tell it; a bare name opens the one repository its own message names for it and is text where the message names two, or one it cannot tell; otherwise it opens the home repository only when the message names no other repository and the session claims no open run whose repository is not the home one, and an unnamed or unknown repository counts as not home; else text. The message is the whole text of one chat event, code spans, link targets and fenced code included; an address in one event is no evidence for a name in the next. **What names a repository:** a page, pull, issue or commit address on `github.com` in any case (the SSH form too); the API, raw and archive hosts; a `gh` command's last `--repo`, `--repo=` or `-R` flag (one command ends at a backtick, a line break, `;`, `&`, `|`, the next `gh` word, a comma or full stop followed by a space, or the first bare word past its positionals; a flag inside quotes is no flag; a flag reaches only its own command's number); a `gh api` path `repos/o/r`, with or without its leading slash; `GH_REPO=o/r`; and `owner/repo#n`. **What a repository the chat cannot tell is:** an address whose owner or name the console's GitHub grammar refuses; an address whose host comes directly after a letter, digit or `_` (`修复见github.com/…`); and a qualified name whose repository ends in a listed file extension, has a segment that is all digits or one character, or has both segments upper case only (so `vercel/next.js#123` is text, and so is a bare `#123` beside it). **Not read**, so a bare name beside them is decided as if they were absent: a glued `-Ro/r`, `gh repo clone o/r`, a command continued over a backslash and a line break, prose such as `#12 in o/r` or `In o/r, #12`, and other hosts such as `gitlab.com`. **Emphasis:** under `_` or `__` a qualified name touching the delimiter is no name, as in the raw text, and under `*` it is one. **The residual:** a qualified name follows GitHub's own `owner/repo#n` notation without checking that the repository exists, so a prose pair that is not refused, such as `client/server#1` or `and/or#3`, still links, and may open a page that does not exist or a real but unrelated one. Desktop polish Task C21 (D-8172), 2026-11-10, after the operator's report of a link to the wrong repository; amended by reviews 1758 and 1760 | Agreed |
 
 ## Where things stand
 
@@ -238,6 +240,7 @@ The operator approved the recommendations on 2026-11-06 in the words "Chat desig
 - **R12:** a document path in a session opens at that session's branch (§4.1). The operator, 2026-11-06, in the same words.
 - **R13:** an inline code span whose whole text is one recognised name becomes a link (§4.1). The operator, 2026-11-06, in the same words.
 - The coordinator's calls R2 to R4, R6 to R11 and R14, as §6 states them, confirmed by the same approval.
+- **R15:** a PR or commit opens the repository the message means, or stays text (§4.1). The coordinator's ruling for desktop polish Task C21 (D-8172), 2026-11-10, after the operator's report of a link to the wrong repository, amended by its review.
 
 ### Waiting on you
 

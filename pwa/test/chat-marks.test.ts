@@ -218,7 +218,8 @@ describe('the table itself', () => {
   });
   it('names the attributes', () => {
     expect(MARK_ATTR).toEqual({
-      kind: 'data-mark-kind', id: 'data-mark-id', status: 'data-status', lead: 'data-lead', afterLead: 'data-after-lead',
+      kind: 'data-mark-kind', id: 'data-mark-id', repo: 'data-mark-repo', status: 'data-status', lead: 'data-lead',
+      afterLead: 'data-after-lead',
     });
   });
   it('isMarkKind accepts the five kinds and nothing else', () => {
