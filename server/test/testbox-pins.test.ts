@@ -325,14 +325,14 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     ...BOX_SETTINGS_V2_FIXTURES,
   ];
   // The test box connect plan (D-8166) adds readers by task: TC1 the contract and its test, TC2 the overlay's generator and
-  // test, TC3 the verb and its test, TC7 and TC8 the connect and acts tests, TC11 the agent op test (it plants the token-file env). Every later task of the plan that adds a holder appends it here, in its own commit.
+  // test, TC3 the verb and its test, TC7 and TC8 the connect and acts tests, TC11 the agent op test (it plants the token-file env), TC12 the admin routes test. Every later task of the plan that adds a holder appends it here, in its own commit.
   const TC_HOLDERS = [
     'shared/testbox-admin.ts', 'server/test/testbox-admin-contract.test.ts',
     'deploy/gen-settings-lib.mjs', 'server/test/testbox-overlay.test.ts',
     'ccd/ccrc-testbox-admin', 'server/test/testbox-admin-verb.test.ts',
     'server/test/testbox-admin-connect.test.ts', 'server/test/testbox-admin-connect-retry.test.ts', 'server/test/testbox-admin-acts.test.ts',
     'server/test/testbox-parity.test.ts', 'server/test/testbox-remote-gate.test.ts',
-    'agent/test/testbox-admin-op.test.ts',
+    'agent/test/testbox-admin-op.test.ts', 'server/test/testbox-admin-routes.test.ts',
   ];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,
