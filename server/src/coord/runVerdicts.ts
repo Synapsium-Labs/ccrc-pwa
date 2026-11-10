@@ -17,6 +17,11 @@ export interface RunVerdict {
   readonly waitsOn?: RunWaitsOn;
   readonly blockedBy: number | null;
   readonly coordinatorGone: boolean;
+  /** The run-close lane row this verdict also fits (E3, E3s or E5; `closeRowOf`), absent for every other verdict. The lane reads it
+   *  and no screen does (D-8078). */
+  readonly closeRow?: 'claimant-gone' | 'claimant-stopped' | 'name-reused';
+  /** A run whose name a later run holds (E5, or E3 and E3s with the same cause): the journal accounts for the old workspace's unpushed work (`RunStuckFacts.nameReusedClear`). */
+  readonly nameReusedClear?: boolean;
 }
 
 export interface RunVerdicts {

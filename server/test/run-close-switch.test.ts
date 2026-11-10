@@ -72,8 +72,9 @@ const rig = async (o: { names?: string[] | null; verdicts?: Record<string, Claim
 describe('the store: three states per group, default shadow', () => {
   it('a fresh database reads shadow for both groups, and only an exact on or off is anything else', async () => {
     const r = await rig();
-    expect(r.coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'shadow', claimantCrashed: 'shadow', updatedAt: 0 });
+    expect(r.coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'shadow', claimantCrashed: 'shadow', claimantGone: 'shadow', updatedAt: 0 });
     expect(r.coord.runCloseChoice('never-started')).toBe('shadow');
+    expect(r.coord.runCloseChoice('claimant-gone')).toBe('shadow');
     r.coord.setRunCloseChoice('never-started', 'on', 5);
     r.coord.setRunCloseChoice('claimant-crashed', 'off', 6);
     expect(r.coord.runCloseChoice('never-started')).toBe('on');
@@ -83,8 +84,22 @@ describe('the store: three states per group, default shadow', () => {
     expect(r.coord.runCloseChoice('never-started')).toBe('shadow');
   });
 
+  it('migration 52 adds the claimant-gone group to a database at version 51 as shadow and keeps the other two choices (D-8078)', () => {
+    const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
+    const fresh = openCoordDb(file);
+    fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
+    fresh.exec('ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 51;');
+    fresh.close();
+    const coord = new CoordStore(openCoordDb(file));
+    expect(coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'on', claimantCrashed: 'off', claimantGone: 'shadow', updatedAt: 9 });
+    coord.setRunCloseChoice('claimant-gone', 'on', 10);
+    expect(coord.runCloseChoice('claimant-gone')).toBe('on');
+    expect(coord.runCloseChoice('never-started')).toBe('on');
+    expect(coord.runCloseChoice('claimant-crashed')).toBe('off');
+  });
+
   it('SWITCHES carries a row per group, written by the one route', () => {
-    for (const k of ['run-close-never-started-choice', 'run-close-claimant-crashed-choice'] as const) {
+    for (const k of ['run-close-never-started-choice', 'run-close-claimant-crashed-choice', 'run-close-claimant-gone-choice'] as const) {
       expect(SWITCHES[k]).toMatchObject({ default: 'shadow', writer: 'POST /api/coord/run-close' });
     }
   });
@@ -105,6 +120,7 @@ describe('the lane: off, shadow and on', () => {
 
   it('off reads nothing, records nothing, keeps no clock and acts on nothing', async () => {
     const r = await rig({ choice: 'off' });
+    r.coord.setRunCloseChoice('claimant-gone', 'off', T0);   // each group is off on its own: with both off the pass reads nothing at all
     r.open('programme-a', 1);
     r.seed('never-started', 'programme-a', 80 * H);
     const out = await r.pass();
@@ -112,6 +128,21 @@ describe('the lane: off, shadow and on', () => {
     expect(r.verdicts.reading()).toEqual({ at: T0, groups: {} });
     expect(r.coord.runCloseAnchors('never-started').size).toBe(0);
     expect(r.coord.db.prepare('SELECT COUNT(*) AS n FROM feed_events').get()).toEqual({ n: 0 });
+  });
+
+  it('one group off leaves the other running: never-started off still reads the claimant-gone group, and the reverse', async () => {
+    const r = await rig({ choice: 'off' });
+    r.open('programme-a', 1);
+    r.seed('never-started', 'programme-a', 80 * H);
+    await r.pass();
+    expect(r.coord.runCloseAnchors('never-started').size).toBe(0);
+    expect(r.verdicts.reading()?.groups['never-started']).toBeUndefined();
+    expect(r.verdicts.reading()?.groups['claimant-gone']).toEqual({ would: [], named: [] });
+    r.coord.setRunCloseChoice('claimant-gone', 'off', T0);
+    r.coord.setRunCloseChoice('never-started', 'shadow', T0);
+    await r.pass();
+    expect(r.verdicts.reading()?.groups['claimant-gone']).toBeUndefined();
+    expect(r.verdicts.reading()?.groups['never-started']).toBeDefined();
   });
 
   it('a marker remains an emergency override: it arms an off group, and the act-time guard honours it', async () => {
@@ -149,8 +180,8 @@ describe('the would-close reading', () => {
     expect(g.would.map((w) => [w.runId, w.why]).sort()).toEqual([[a, 'never-started'], [b, 'never-started'], [review, 'review-of-closed']].sort());
     expect(g.named).toEqual([]);
     const view = runCloseViewOf({
-      names: [], choices: { 'never-started': 'shadow', 'claimant-crashed': 'shadow' }, updatedAt: 0, reading: r.verdicts.reading(),
-      closed7d: { 'never-started': 0, 'claimant-crashed': 0 }, refused7d: { 'never-started': 0, 'claimant-crashed': 0 }, nowMs: T0,
+      names: [], choices: { 'never-started': 'shadow', 'claimant-crashed': 'shadow', 'claimant-gone': 'shadow' }, updatedAt: 0, reading: r.verdicts.reading(),
+      closed7d: { 'never-started': 0, 'claimant-crashed': 0, 'claimant-gone': 0 }, refused7d: { 'never-started': 0, 'claimant-crashed': 0, 'claimant-gone': 0 }, nowMs: T0,
     });
     const list = view.groups.find((x) => x.group === 'never-started')!.list!;
     expect(list.would).toHaveLength(3);
@@ -186,17 +217,17 @@ describe('the would-close reading', () => {
 
 describe('the view', () => {
   const base = {
-    choices: { 'never-started': 'shadow', 'claimant-crashed': 'shadow' } as const, updatedAt: 0, reading: null,
-    closed7d: { 'never-started': 0, 'claimant-crashed': 0 }, refused7d: { 'never-started': 0, 'claimant-crashed': 0 }, nowMs: T0,
+    choices: { 'never-started': 'shadow', 'claimant-crashed': 'shadow', 'claimant-gone': 'shadow' } as const, updatedAt: 0, reading: null,
+    closed7d: { 'never-started': 0, 'claimant-crashed': 0, 'claimant-gone': 0 }, refused7d: { 'never-started': 0, 'claimant-crashed': 0, 'claimant-gone': 0 }, nowMs: T0,
   };
   const reading = { at: T0, groups: { 'never-started': { would: [{ runId: 1, program: 'p', why: 'never-started' as const, at: T0 - 1 }], named: [] } } };
 
   it('three states per group: off, shadow, on, with the list only when the group is read and not off', () => {
-    const states = (c: 'off' | 'shadow' | 'on') => runCloseViewOf({ ...base, names: [], choices: { 'never-started': c, 'claimant-crashed': c }, reading })
+    const states = (c: 'off' | 'shadow' | 'on') => runCloseViewOf({ ...base, names: [], choices: { 'never-started': c, 'claimant-crashed': c, 'claimant-gone': c }, reading })
       .groups.map((g) => [g.group, g.state, g.list === null]);
-    expect(states('shadow')).toEqual([['never-started', 'shadow', false], ['claimant-crashed', 'shadow', true]]);
-    expect(states('on')).toEqual([['never-started', 'on', false], ['claimant-crashed', 'on', true]]);
-    expect(states('off')).toEqual([['never-started', 'off', true], ['claimant-crashed', 'off', true]]);
+    expect(states('shadow')).toEqual([['never-started', 'shadow', false], ['claimant-crashed', 'shadow', true], ['claimant-gone', 'shadow', true]]);
+    expect(states('on')).toEqual([['never-started', 'on', false], ['claimant-crashed', 'on', true], ['claimant-gone', 'on', true]]);
+    expect(states('off')).toEqual([['never-started', 'off', true], ['claimant-crashed', 'off', true], ['claimant-gone', 'off', true]]);
   });
 
   it('the crash row lists what the dead-coordinator lane read, beside the never-started group, and the run-close lane never clears it', () => {
@@ -214,12 +245,12 @@ describe('the view', () => {
   it('while coordination is paused every row reads held with no list; so do a reclaim pause and an unreadable registry', () => {
     for (const names of [[COORDINATOR_PAUSE_MARKER], [RECLAIM_PAUSE_MARKER], null]) {
       const v = runCloseViewOf({ ...base, names, reading });
-      expect(v.groups.map((g) => [g.state, g.list])).toEqual([['held', null], ['held', null]]);
+      expect(v.groups.map((g) => [g.state, g.list])).toEqual([['held', null], ['held', null], ['held', null]]);
     }
   });
 
   it('a standing marker shows on whatever the row says, naming the override', () => {
-    const v = runCloseViewOf({ ...base, names: [RUNS_EXPIRE_NEVER_STARTED_MARKER], choices: { 'never-started': 'off', 'claimant-crashed': 'shadow' }, reading });
+    const v = runCloseViewOf({ ...base, names: [RUNS_EXPIRE_NEVER_STARTED_MARKER], choices: { 'never-started': 'off', 'claimant-crashed': 'shadow', 'claimant-gone': 'shadow' }, reading });
     expect(v.groups[0]).toMatchObject({ state: 'on', choice: 'off', marker: 'set' });
     expect(v.groups[1]).toMatchObject({ state: 'shadow', marker: 'clear' });
   });
@@ -230,15 +261,21 @@ describe('the view', () => {
     r.coord.db.prepare("UPDATE runs SET state = 'failed', closedAt = ?, closedBy = 'sweep', closeDetail = 'expired:never-started quiet-since=1' WHERE id = ?").run(T0 - H, id);
     const other = r.open('programme-b', 1);
     r.coord.db.prepare("UPDATE runs SET state = 'failed', closedAt = ?, closedBy = 'sweep', closeDetail = NULL WHERE id = ?").run(T0 - H, other);
-    expect(closedByGroup(r.coord.sweepClosesBetween(T0 - 7 * 24 * H, T0 + 1))).toEqual({ 'never-started': 1, 'claimant-crashed': 1 });
+    expect(closedByGroup(r.coord.sweepClosesBetween(T0 - 7 * 24 * H, T0 + 1))).toEqual({ 'never-started': 1, 'claimant-crashed': 1, 'claimant-gone': 0 });
     // A dispatch-abandon close is its own switch's: it counts under neither group.
     const dead = r.open('programme-c', 1);
     r.coord.db.prepare("UPDATE runs SET state = 'failed', closedAt = ?, closedBy = 'sweep', closeDetail = ? WHERE id = ?").run(T0 - H, DISPATCH_ABANDON_CLOSE_DETAIL, dead);
-    expect(closedByGroup(r.coord.sweepClosesBetween(T0 - 7 * 24 * H, T0 + 1))).toEqual({ 'never-started': 1, 'claimant-crashed': 1 });
+    expect(closedByGroup(r.coord.sweepClosesBetween(T0 - 7 * 24 * H, T0 + 1))).toEqual({ 'never-started': 1, 'claimant-crashed': 1, 'claimant-gone': 0 });
+    // The claimant-gone rows name themselves in their close detail, and each row counts under the group that holds it (D-8078).
+    for (const row of ['claimant-gone', 'claimant-stopped', 'name-reused']) {
+      const gone = r.open(`programme-${row}`, 1);
+      r.coord.db.prepare("UPDATE runs SET state = 'failed', closedAt = ?, closedBy = 'sweep', closeDetail = ? WHERE id = ?").run(T0 - H, `expired:${row}`, gone);
+    }
+    expect(closedByGroup(r.coord.sweepClosesBetween(T0 - 7 * 24 * H, T0 + 1))).toEqual({ 'never-started': 1, 'claimant-crashed': 1, 'claimant-gone': 3 });
     r.coord.recordRunCloseRefusal('never-started', id, 'claimant-changed', T0 - H);
     r.coord.recordRunCloseRefusal('never-started', id, 'claimant-changed', T0 - 30 * 60_000);   // the same refusal again: one row
     r.coord.recordRunCloseRefusal('claimant-crashed', other, 'x', T0 - 9 * 24 * H);               // older than 7 days
-    expect(r.coord.runCloseRefusalCounts(T0 - 7 * 24 * H)).toEqual({ 'never-started': 1, 'claimant-crashed': 0 });
+    expect(r.coord.runCloseRefusalCounts(T0 - 7 * 24 * H)).toEqual({ 'never-started': 1, 'claimant-crashed': 0, 'claimant-gone': 0 });
   });
 });
 
@@ -259,7 +296,7 @@ describe('GET and POST /api/coord/run-close', () => {
     const { app } = await setup();
     const res = await app.inject({ method: 'GET', url: '/api/coord/run-close' });
     expect(res.statusCode).toBe(200);
-    expect(res.json().groups.map((g: { group: string; state: string }) => [g.group, g.state])).toEqual([['never-started', 'shadow'], ['claimant-crashed', 'shadow']]);
+    expect(res.json().groups.map((g: { group: string; state: string }) => [g.group, g.state])).toEqual([['never-started', 'shadow'], ['claimant-crashed', 'shadow'], ['claimant-gone', 'shadow']]);
   });
 
   it('POST stores each choice for its group, answers the view, and records a change in the feed once', async () => {
@@ -286,7 +323,7 @@ describe('GET and POST /api/coord/run-close', () => {
       expect(res.statusCode, JSON.stringify(body)).toBe(400);
       expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
     }
-    expect(coord.runCloseSetting()).toMatchObject({ neverStarted: 'shadow', claimantCrashed: 'shadow', updatedAt: 0 });
+    expect(coord.runCloseSetting()).toMatchObject({ neverStarted: 'shadow', claimantCrashed: 'shadow', claimantGone: 'shadow', updatedAt: 0 });
   });
 
   it('while coordination is paused POST refuses to arm, and off and shadow still go through', async () => {
@@ -299,7 +336,7 @@ describe('GET and POST /api/coord/run-close', () => {
       expect((await post(app, { group: 'never-started', choice: 'off' })).statusCode).toBe(200);
       expect((await post(app, { group: 'never-started', choice: 'shadow' })).statusCode).toBe(200);
       const view = (await app.inject({ method: 'GET', url: '/api/coord/run-close' })).json();
-      expect(view.groups.map((g: { state: string; list: unknown }) => [g.state, g.list])).toEqual([['held', null], ['held', null]]);
+      expect(view.groups.map((g: { state: string; list: unknown }) => [g.state, g.list])).toEqual([['held', null], ['held', null], ['held', null]]);
     }
   });
 

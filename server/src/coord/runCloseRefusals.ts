@@ -17,15 +17,43 @@ import { askNotifyAt } from '../askwindow.js';
 import type { NotifyLog } from '../notifylog.js';
 import { notifyEach } from '../notice.js';
 import { askGraceSeconds } from '../askwindow.js';
-import { closeRefusedAskMail } from './ledgersMail.js';
 import { insertSystemMailTx } from './rundefsTx.js';
-import { isRunState } from '../../../shared/api.js';
+import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES, isRunState } from '../../../shared/api.js';
 import { ITEM_TITLE_MAX, closeRefusedAction, isCloseRefusedAction, itemRunName, type ItemDoors } from '../../../shared/ledgers.js';
 import type { CloseOutcome } from './close.js';
 import type { WatcherCoordPort } from './ports.js';
 import {
   REFUSAL_REASONS, refusalRoute, type LaneRun, type RefusalReason, type RunCloseRow,
 } from './runClose.js';
+
+const mailBytes = (s: string): number => Buffer.byteLength(s, 'utf8');
+/** A mail body cut to `MAIL_BODY_MAX_BYTES` on a code-point boundary. */
+function cutMailBody(body: string): string {
+  if (mailBytes(body) <= MAIL_BODY_MAX_BYTES) return body;
+  let chars = [...body];
+  while (chars.length > 0 && mailBytes(chars.join('')) > MAIL_BODY_MAX_BYTES) chars = chars.slice(0, -64);
+  return chars.join('');
+}
+
+/** The notice a living coordinator gets when ccrc would close one of its runs, refused, and holds the item for the grace
+ *  (spec 2026-11-04 §12.2, tell-and-hold). It names the item, as `endRequestAskMail` does, because the held item is on no
+ *  list the coordinator can read: without the id it cannot withdraw it. `why` is ccrc's own sentence, not session text. */
+export function closeRefusedAskMail(
+  r: { itemId: number; runId: number; runName: string; why: string; graceSeconds: number },
+): { subject: string; body: string } {
+  const head = `close refused: item ${r.itemId}: run ${r.runId}`;
+  let title = [...head];
+  while (title.length > 0 && mailBytes(title.join('')) > MAIL_SUBJECT_MAX_BYTES) title = title.slice(0, -1);
+  const body = [
+    `ccrc would close run ${r.runId} (${r.runName}) on its own, but refused: ${r.why}`,
+    `The operator sees nothing for ${r.graceSeconds} seconds. If you can handle the run, start it or close it, or withdraw the item with your identity in the body:`,
+    `"$API" items withdraw ${r.itemId} --json - <<JSON`,
+    '{"byId":"<your id>","byUuid":"<your uuid>"}',
+    'JSON',
+    'After the operator has acted, a withdraw changes nothing.',
+  ].join('\n');
+  return { subject: title.join(''), body: cutMailBody(body) };
+}
 
 /** One close an armed lane refused, with who owns the run. `lives` is true for an alive or asleep claimant and false for a gone one
  *  (or none); a claimant the pass could not measure is never routed. */

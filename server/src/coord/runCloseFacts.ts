@@ -35,3 +35,25 @@ export async function readBranchFacts(
   const unpushed = line.ahead === null ? null : line.ahead > 0;
   return { readAt, openPr, unpushed };
 }
+
+/** E5's R6 read (D-8078): is a pull request OPEN from this branch, read by the head and never by `--session` (the session now
+ *  belongs to a later run, so its own branch is another run's). One `pr-state --project` read; any open row whose head is the
+ *  branch is a yes. A project the host cannot answer, a call that failed or an answer with no line at all is `null`: unmeasured,
+ *  which refuses. */
+export async function readBranchOpenPr(
+  deps: { readonly runCcd: RunCcd; readonly fleetState?: FleetState | undefined },
+  project: string, branch: string,
+): Promise<boolean | null> {
+  if (!ccdCan(deps.fleetState, 'prStateProject')) return null;
+  let stdout: string;
+  try {
+    const res = await deps.runCcd(CCD_ARGV.prStateProject(project));
+    if (res.ran === false || !res.ok) return null;
+    stdout = res.stdout;
+  } catch {
+    return null;
+  }
+  const lines = parsePrLines(stdout).filter((l): l is CcdPrLine => isFullLine(l));
+  if (lines.length === 0) return null;
+  return lines.some((l) => l.rows.some((r) => r.state === 'OPEN' && r.headRefName === branch));
+}

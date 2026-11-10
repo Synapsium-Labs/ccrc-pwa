@@ -6,7 +6,7 @@ import type { CoordStore } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 import type { CloseOutcome, SweepCloseGuard } from './close.js';
 import { closeRefusalOf } from './archiveDoor.js';
-import { measureClaimant, type ReclaimDeps } from './reclaim.js';
+import { measureClaimantHeld, type ReclaimDeps } from './reclaim.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
@@ -186,7 +186,7 @@ export async function stillCrashed(deps: Omit<EndDeadCoordinatorDeps, 'coord'> &
   // pass's own hold does — nothing learned, the anchor standing (review 339, F4).
   const journal = await deps.journalTrust();
   if (journal.hold !== null) return { kind: 'hold', why: `${journal.hold} — the act waits, and its hour stands` };
-  const m = await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.now());
+  const m = await measureClaimantHeld({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.now());
   // The measure is the LAST await (wave 6; review 355, F7): the mirror's health and its gaps are read again after it,
   // synchronously, so a mirror gone stale or a gap recorded during its round trip is seen, and from here to the commit
   // nothing awaits — the revive window stays that round trip.

@@ -393,9 +393,9 @@ describe('the journal’s trust is READ AGAIN after the claimant’s measure (wa
     const exec = src('endDeadCoordinator.ts');
     const from = exec.indexOf('export async function stillCrashed(');
     const body = exec.slice(from, exec.indexOf('\n}\n', from));
-    const measure = body.indexOf('await measureClaimant(');
+    const measure = body.indexOf('await measureClaimantHeld(');
     expect(measure, 'the claimant’s measure').toBeGreaterThan(-1);
-    const after = body.slice(measure + 'await measureClaimant('.length);
+    const after = body.slice(measure + 'await measureClaimantHeld('.length);
     expect(after, 'no await after the measure: the revive window stays its round trip').not.toMatch(/\bawait\b/);
     expect(after.indexOf('deps.journalReread(journal.trust)'), 'the re-read, after the measure').toBeGreaterThan(-1);
     // ARCH-35: the abandon arm is `abandonRun`, and its commit is `commitAbandon`; both are read by symbol.

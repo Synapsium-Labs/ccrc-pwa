@@ -222,6 +222,32 @@ export function deadCoordinatorJournal(
   return { kind: 'quiet', started: start !== null };
 }
 
+/** THE NEWEST DELIBERATE ROW since the claimant's last successful start, read exactly as `deadCoordinatorJournal` reads it (the
+ *  same trust, order and loss rules), or null when there is none or the journal cannot be trusted. It is the one place the run-close
+ *  lane's E3s asks WHO put a coordinator down (D-8078): `dec.surface`, which ccd fills only from a caller's own flag and leaves
+ *  `none` when it acted on its own account (a swap, a supervisor, maintenance). */
+export function deadCoordinatorDeliberateRow(
+  mirrorRows: readonly DeadCoordinatorJournalRow[], trust: DeadCoordinatorJournalTrust,
+): DeadCoordinatorJournalRow | null {
+  if (trust.untrusted !== null || mirrorRows.some((r) => !GEN_DIGITS.test(r.gen))) return null;
+  const rows = [...mirrorRows].sort((a, b) => compareGenerations(a.gen, b.gen));
+  const found = newestSuccessfulSpawn(rows);
+  if (journalLossSince(found === null ? null : found.row, trust) !== null) return null;
+  for (let i = rows.length - 1; i >= (found === null ? 0 : found.index + 1); i -= 1) {
+    if (isDeliberate(rows[i]!)) return rows[i]!;
+  }
+  return null;
+}
+
+/** The surfaces that mean a PERSON asked for the stop: the PWA, or a shell (`cli`). `agent` and `ccd` are the machinery acting for
+ *  itself or for a session, and `none` means no flag was passed at all. */
+export const PERSON_STOP_SURFACES: readonly string[] = ['pwa', 'cli'];
+
+/** Did a person stop this coordinator (E3s, G2 (a))? True only for a `stop` the journal records with a person's declared surface;
+ *  a stop by a swap, a supervisor, an OOM policy or maintenance, a hibernate and every other act answers false. */
+export const deadCoordinatorStoppedByPerson = (row: DeadCoordinatorJournalRow | null): boolean =>
+  row !== null && row.act === 'stop' && row.outcome === 'done' && row.dec !== null && PERSON_STOP_SURFACES.includes(row.dec.surface);
+
 // ── a crash, and only a crash ────────────────────────────────────────────────
 
 /** One claimant's reading this pass. `crashed` is the only answer the lane counts toward the hour; every other one

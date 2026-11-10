@@ -12,23 +12,27 @@
 // ANY UNCERTAIN READING ANSWERS "NOT THIS PASS" (R2): a null anchor, an unread branch fact or an unmeasured claimant never
 // closes and never counts toward a clock.
 import {
-  DEAD_COORDINATOR_LANE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, type SwitchName,
+  DEAD_COORDINATOR_LANE_LIVE_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, type SwitchName,
 } from '../../../shared/switches.js';
 import { runBelongsTo, type ChildMarkRead } from '../../../shared/runBelongs.js';
 import { RUN_CLOSE_REFUSALS, runCloseGroupArmed, type RunCloseChoice, type RunCloseGroup } from '../../../shared/run-close.js';
 import { ITEM_DOORS, type ItemDoor, type ItemDoors } from '../../../shared/ledgers.js';
-import { DEAD_COORDINATOR_GAP_MS } from '../deadCoordinator.js';
+import { DEAD_COORDINATOR_BREAKER_WINDOW_MS, DEAD_COORDINATOR_GAP_MS } from '../deadCoordinator.js';
 import { RUN_QUIET_MS } from './drift.js';
 
-/** The rows this wave lands, by the names the plan gives them: E1, E1r and the kept crash row. */
-export const RUN_CLOSE_ROWS = ['never-started', 'review-orphaned', 'claimant-crashed'] as const;
+/** The rows the lane carries, by the names the plan gives them: E1, E1r, the kept crash row, and (D-8078) E3 (`claimant-gone`, a
+ *  coordinator removed), E3s (`claimant-stopped`, a coordinator stopped by a person) and E5 (`name-reused`, a session name a later
+ *  run now holds). */
+export const RUN_CLOSE_ROWS = [
+  'never-started', 'review-orphaned', 'claimant-crashed', 'claimant-gone', 'claimant-stopped', 'name-reused',
+] as const;
 export type RunCloseRow = (typeof RUN_CLOSE_ROWS)[number];
 
 /** The words the lane's verdicts and holds carry (a hold's word reads "Nothing closes this on its own" for as long as it
  *  lasts). They ride a feed row, the lane's outcome and a log line, never a mail rejection or a run refusal. */
 export const RUN_CLOSE_WORDS = [
   'live-session', 'unmeasured', 'coordinator-not-reached', 'warning-undelivered', 'child-marker-unreadable', 'open-pr',
-  'unpushed-commits', 'would-warn', 'would-close', 'busy-worker', 'absent-claimant', 'tell-and-hold',
+  'unpushed-commits', 'would-warn', 'would-close', 'busy-worker', 'absent-claimant', 'tell-and-hold', 'breaker-held',
 ] as const;
 /** Admitted through this guard by the mail-code scanner (`mail-routes.test.ts`), never NOT_CODES. */
 export const isRunCloseKebab = (tok: string): boolean =>
@@ -43,6 +47,9 @@ export const RUN_CLOSE_ROW_SWITCH: Readonly<Record<RunCloseRow, SwitchName>> = {
   'never-started': RUNS_EXPIRE_NEVER_STARTED_MARKER,
   'review-orphaned': RUNS_EXPIRE_NEVER_STARTED_MARKER,
   'claimant-crashed': DEAD_COORDINATOR_LANE_LIVE_MARKER,
+  'claimant-gone': RUNS_EXPIRE_COORDINATOR_GONE_MARKER,
+  'claimant-stopped': RUNS_EXPIRE_COORDINATOR_GONE_MARKER,
+  'name-reused': RUNS_EXPIRE_COORDINATOR_GONE_MARKER,
 };
 
 /** The control group each row belongs to (§12.3): E1 and E1r arm together, the crash row on its own. */
@@ -50,6 +57,9 @@ export const RUN_CLOSE_ROW_GROUP: Readonly<Record<RunCloseRow, RunCloseGroup>> =
   'never-started': 'never-started',
   'review-orphaned': 'never-started',
   'claimant-crashed': 'claimant-crashed',
+  'claimant-gone': 'claimant-gone',
+  'claimant-stopped': 'claimant-gone',
+  'name-reused': 'claimant-gone',
 };
 
 /** Is this row armed? Its own group's exact `on`, or its group's marker standing in this registry listing (the emergency
@@ -64,6 +74,10 @@ export const RUN_CLOSE_GRACE_MS: Readonly<Record<RunCloseRow, number>> = {
   'never-started': RUN_QUIET_MS,
   'review-orphaned': 3_600_000,
   'claimant-crashed': 3_600_000,
+  /** E3: the first pass plus 1 h. E3s: the first pass plus 24 h. E5: the next pass, so it has no grace (spec §7). */
+  'claimant-gone': 3_600_000,
+  'claimant-stopped': 24 * 3_600_000,
+  'name-reused': 0,
 };
 /** R7: at most this many programmes acted on a pass, and at most this many E1 warnings a pass, lane-wide. */
 export const RUN_CLOSE_PROGRAMMES_PER_PASS = 3;
@@ -98,13 +112,15 @@ export interface WarningRead {
   readonly deliveredAt: number | null;
 }
 
-/** `RunStuck['closes']` for one row (spec §7): the moment the row's own clocks run out, or null when no close is coming.
+/** `RunStuck['closes']` for one row (spec §7): the moment the row's own clocks run out, or null when no close is coming. E5 has no
+ *  anchor and no grace: its clock is the next pass, so `at` is now.
  *  A shadow E1 counts the 72 h alone. An armed E1 is no earlier than 24 h after the warning's delivery, or 24 h from now
  *  while the warning is on its way (A58); a warning 24 h undelivered gives null. The lane closes at the first pass at or
  *  after `at`, never later (`neverStartedVerdict` reads the same figures). */
 export function closesOf(
   row: LaneRowName, anchor: number | null, warning: WarningRead | null, armed: boolean, nowMs: number,
 ): { at: number; armed: boolean } | null {
+  if (row === 'name-reused') return { at: nowMs, armed };
   if (anchor === null) return null;
   const base = anchor + RUN_CLOSE_GRACE_MS[row];
   if (row !== 'never-started' || !armed) return { at: base, armed };
@@ -134,6 +150,10 @@ export interface LaneRun {
   readonly openedAt: number;
   readonly dispatchStartedAt: number | null;
   readonly lastDispatchAttemptAt: number | null;
+  /** The run's project and its own branch (D-8078): E5 reads the open-PR fact by the run's branch, never by the session, whose
+   *  branch is the later run's. Optional so a fixture that names neither stays valid. */
+  readonly project?: string;
+  readonly branch?: string | null;
 }
 
 /** A programme's E1 warning: queued at `warnedAt` to `claimant`, as delivery `deliveryId`; `deliveredAt` once the mail sweep
@@ -284,6 +304,44 @@ export function reviewOrphanedVerdict(i: ReviewOrphanedInput, nowMs: number): Ru
   if (i.anchor === null) return { kind: 'hold', word: 'unmeasured' };
   if (nowMs - i.anchor < RUN_CLOSE_GRACE_MS['review-orphaned']) return { kind: 'wait' };
   return { kind: i.armed ? 'close' : 'would-close' };
+}
+
+export interface ClaimantGoneInput {
+  readonly row: 'claimant-gone' | 'claimant-stopped' | 'name-reused';
+  /** `rowAnchor(row, …)`, or null (not this pass). E5 has none and needs none. */
+  readonly anchor: number | null;
+  readonly armed: boolean;
+}
+
+/** E3, E3s and E5 (D-8078; spec §7, §12): a run whose coordinator was removed waits the first pass plus 1 h, one whose coordinator a
+ *  person stopped the first pass plus 24 h, and one whose session name a later run holds waits for nothing (the next pass).
+ *  Activity moves none of them. A null anchor is "not this pass" (R2). */
+export function claimantGoneVerdict(i: ClaimantGoneInput, nowMs: number): RunCloseVerdict {
+  if (i.row === 'name-reused') return { kind: i.armed ? 'close' : 'would-close' };
+  if (i.anchor === null) return { kind: 'hold', word: 'unmeasured' };
+  if (nowMs - i.anchor < RUN_CLOSE_GRACE_MS[i.row]) return { kind: 'wait' };
+  return { kind: i.armed ? 'close' : 'would-close' };
+}
+
+/** A coordinator is NEWLY measured gone (the ruled W2) for this long after its stored gone time; an older one is a backlog, which is
+ *  never clustered (the backlog drains on R7's budget). A burst already seen is held durably, so this is only the first sight's test. */
+export const CLAIMANT_GONE_NEW_MS = 24 * 3_600_000;
+
+/** The per-row breaker on TRANSITIONS (D-8078, the ruled W2): two or more coordinators that went gone within
+ *  `DEAD_COORDINATOR_BREAKER_WINDOW_MS` of one another trip the row, so a burst (an OOM policy stopping every pane, a wave of
+ *  archives) is never closed on a clock but left for a person. `goneAt` is each distinct coordinator's stored "gone since" time
+ *  (`stuck.since`, which a restart moves not at all), so an old backlog, whose times are far apart, is never clustered. Returns
+ *  the coordinators the breaker holds. */
+export function claimantGoneBreaker(goneAt: ReadonlyMap<string, number>, fleetDoubt = false): ReadonlySet<string> {
+  const held = new Set<string>();
+  if (fleetDoubt) return new Set(goneAt.keys());   // a lane-wide doubt holds every coordinator in the pool
+  const entries = [...goneAt];
+  for (const [a, at] of entries) {
+    for (const [b, bt] of entries) {
+      if (a !== b && Math.abs(at - bt) <= DEAD_COORDINATOR_BREAKER_WINDOW_MS) { held.add(a); held.add(b); }
+    }
+  }
+  return held;
 }
 
 /** R7: the candidates a pass may act on, oldest activity first, at most `RUN_CLOSE_PROGRAMMES_PER_PASS` programmes. The rest

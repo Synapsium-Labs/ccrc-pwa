@@ -126,6 +126,20 @@ export async function measureClaimant(
   return verdictOfFacts(id, facts, sv);
 }
 
+/** `measureClaimant` for the crash row (the dead-coordinator lane and its act-time re-measure): a dead reading over a standing
+ *  `.substrate` stamp (the supervisor's "I could not reach tmux", D-7370) is doubt, never crashed, so the crash row is held as the
+ *  stuck verdict and the claimant-gone rows are by `claimantGone` (A56). Same one registry read as `measureClaimant`. */
+export async function measureClaimantHeld(
+  deps: Omit<ReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, id: string, nowMs: number,
+): Promise<ClaimantVerdict> {
+  const { facts, sv, record } = await claimantFacts(deps, id, nowMs);
+  const verdict = verdictOfFacts(id, facts, sv);
+  if (verdict.state === 'dead' && record?.substrate != null) {
+    return { state: 'unmeasurable', why: 'a substrate stamp stands over the gone pane, so it is doubt and not a crash (A56)' };
+  }
+  return verdict;
+}
+
 /** The ladder's fail-shut policy over one reading's facts: `measureClaimant`'s body, split out so the stuck verdict's pass
  *  (`runStuckPass.ts`) reads the registry row ONCE and takes both the verdict and the row's stamps from it (D-8071). */
 export function verdictOfFacts(id: string, facts: SessionFacts, sv: SessionVerdict | null): ClaimantVerdict {
