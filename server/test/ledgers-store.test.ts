@@ -39,7 +39,7 @@ describe('raising and reading an item (plan PL2)', () => {
       id, program: 'prog-a', runId, raisedBy: 'lane-a', kind: 'decide', title: 'Turn on the setting',
       why: 'The wave needs it.', how: ['Pick one'], options: ['yes', 'no'], neededBy: 'blocking', soonLabel: null,
       secretSlot: null, state: 'open', answer: null, note: null, raisedAt: NOW, tickedAt: null, closedAt: null,
-      recommended: 0, recommendedWhy: 'Yes keeps the wave moving.',
+      recommended: 0, recommendedWhy: 'Yes keeps the wave moving.', action: null, heldUntil: null,
     } satisfies ItemRow);
     expect(s.itemById(id + 1)).toBeNull();
   });
@@ -407,5 +407,106 @@ describe('the spec pin and the modifications (plan PL2)', () => {
     expect(s.markModificationsMerged('prog-a', 10, NOW + 99)).toBe(0);
     expect(s.db.prepare('SELECT mergedAt FROM programme_modifications WHERE pr = 10').get()).toEqual({ mergedAt: NOW + 5 });
     expect(s.markModificationsMerged('prog-a', 77, NOW + 99)).toBe(0);
+  });
+});
+
+const END_RUN = { verb: 'end-run', runId: 7, stuckReason: 'never-started' } as const;
+const raiseHeld = (s: CoordStore, heldUntil: number | null, now = NOW, actor: 'coordinator' | 'ccrc' = 'ccrc'): number =>
+  s.raiseItem({
+    program: 'prog-a', runId: null, raisedBy: 'lane-b', kind: 'do', title: 'End run: 7', why: 'It can never finish.',
+    how: ['Read why it asked.', 'Abandon the run, or keep it.'], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null,
+    action: END_RUN, heldUntil,
+  }, now, actor);
+
+describe('the item\u2019s action, hold and new moves (D-8076, spec 10)', () => {
+  it('act: the operator moves an open item to done, and it takes no programme context', () => {
+    const s = mk();
+    const id = raiseHeld(s, null);
+    const r = s.moveItem(id, 'act', 'operator', { note: 'abandon:requested' }, NOW + 1, { programmeHasOpenRun: true });
+    expect(r).toMatchObject({ ok: true, item: { state: 'done', closedAt: NOW + 1 } });
+    expect(eventsOf(s, id)).toEqual(['raise:ccrc', 'act:operator']);
+  });
+
+  it('decline: the operator moves an open item to dismissed, even while the programme has an open run', () => {
+    const s = mk();
+    const id = raiseHeld(s, null);
+    expect(s.moveItem(id, 'decline', 'operator', {}, NOW + 1, { programmeHasOpenRun: true }))
+      .toMatchObject({ ok: true, item: { state: 'dismissed', closedAt: NOW + 1 } });
+    expect(eventsOf(s, id)).toEqual(['raise:ccrc', 'decline:operator']);
+  });
+
+  it('settle: ccrc moves an open or a checking item to done, and takes no programme context', () => {
+    const s = mk();
+    const a = raiseHeld(s, null);
+    const b = raiseHeld(s, null);
+    s.moveItem(b, 'tick', 'operator', {}, NOW + 1, live);
+    expect(s.moveItem(a, 'settle', 'ccrc', { note: 'Handled by its coordinator.' }, NOW + 2, { programmeHasOpenRun: true }))
+      .toMatchObject({ ok: true, item: { state: 'done' } });
+    expect(s.moveItem(b, 'settle', 'ccrc', {}, NOW + 2, { programmeHasOpenRun: true })).toMatchObject({ ok: true, item: { state: 'done' } });
+    expect(s.itemHistory(a).at(-1)).toMatchObject({ act: 'settle', actor: 'ccrc', note: 'Handled by its coordinator.' });
+  });
+
+  it('the three moves refuse the wrong actor and a closed item', () => {
+    const s = mk();
+    const id = raiseHeld(s, null);
+    expect(s.moveItem(id, 'act', 'coordinator', {}, NOW + 1, live)).toEqual({ ok: false, why: 'wrong-actor' });
+    expect(s.moveItem(id, 'decline', 'ccrc', {}, NOW + 1, live)).toEqual({ ok: false, why: 'wrong-actor' });
+    expect(s.moveItem(id, 'settle', 'operator', {}, NOW + 1, live)).toEqual({ ok: false, why: 'wrong-actor' });
+    s.moveItem(id, 'settle', 'ccrc', {}, NOW + 2, live);
+    for (const [act, actor] of [['act', 'operator'], ['decline', 'operator'], ['settle', 'ccrc']] as const) {
+      expect(s.moveItem(id, act, actor, {}, NOW + 3, live), act).toEqual({ ok: false, why: 'not-open' });
+    }
+  });
+
+  it('raiseItem stores the action and the hold, and names its actor on the raise event', () => {
+    const s = mk();
+    const id = raiseHeld(s, NOW + 180_000, NOW, 'ccrc');
+    expect(s.itemById(id)).toMatchObject({ action: END_RUN, heldUntil: NOW + 180_000 });
+    const own = raiseHeld(s, null, NOW, 'coordinator');
+    expect(eventsOf(s, id)).toEqual(['raise:ccrc']);
+    expect(eventsOf(s, own)).toEqual(['raise:coordinator']);
+    const plain = raise(s);
+    expect(eventsOf(s, plain)).toEqual(['raise:coordinator']);
+    expect(s.itemById(plain)).toMatchObject({ action: null, heldUntil: null });
+  });
+
+  it('itemsFor leaves out an item whose heldUntil is in the future, and shows it once the hold ends', () => {
+    const s = mk();
+    const held = raiseHeld(s, NOW + 1000);
+    const free = raise(s);
+    expect(s.itemsFor('prog-a', NOW).open.map((i) => i.id)).toEqual([free]);
+    expect(s.itemsFor(null, NOW + 999).open.map((i) => i.id)).toEqual([free]);
+    expect(s.itemsFor('prog-a', NOW + 1000).open.map((i) => i.id)).toEqual([held, free]);
+  });
+
+  it('itemById stays raw: it reads a held item', () => {
+    const s = mk();
+    const id = raiseHeld(s, NOW + 1000);
+    expect(s.itemById(id)).toMatchObject({ id, state: 'open', heldUntil: NOW + 1000 });
+    expect(s.moveItem(id, 'withdraw', 'coordinator', {}, NOW + 1, live)).toMatchObject({ ok: true, item: { state: 'withdrawn' } });
+  });
+
+  it('the last ended end request is the asker\u2019s own, so two parties taking turns cannot hide it', () => {
+    const s = mk();
+    const ask = (by: string, at: number): number => s.raiseItem({
+      program: 'prog-a', runId: 1, raisedBy: by, kind: 'do', title: 'End run: 1', why: 'It can never finish.',
+      how: ['Read why it asked.', 'Abandon the run, or keep it.'], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null,
+      action: END_RUN, heldUntil: null,
+    }, at, 'ccrc');
+    const w = ask('lane-w', NOW);
+    s.moveItem(w, 'withdraw', 'coordinator', {}, NOW + 1, live);
+    const r = ask('lane-r', NOW + 2);
+    s.moveItem(r, 'withdraw', 'coordinator', {}, NOW + 3, live);
+    expect(s.lastEndedEndRequest(1, 'lane-w')).toMatchObject({ askerId: 'lane-w', at: NOW + 1 });
+    expect(s.lastEndedEndRequest(1, 'lane-r')).toMatchObject({ askerId: 'lane-r', at: NOW + 3 });
+    expect(s.lastEndedEndRequest(1, 'lane-x')).toBeNull();
+  });
+
+  it('a stored action this build does not understand reads as no action and takes no reader down', () => {
+    const s = mk();
+    const id = raise(s);
+    s.db.prepare('UPDATE operator_items SET action = ? WHERE id = ?').run('{"verb":"close-refused"}', id);
+    expect(s.itemById(id)).toMatchObject({ id, action: null });
+    expect(() => s.openEndRequestOf(1)).not.toThrow();
   });
 });

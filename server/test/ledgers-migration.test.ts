@@ -82,7 +82,9 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
       ['state', 'TEXT', 1, null, 0], ['answer', 'TEXT', 0, null, 0], ['note', 'TEXT', 0, null, 0],
       ['raisedAt', 'INTEGER', 1, null, 0], ['tickedAt', 'INTEGER', 0, null, 0], ['closedAt', 'INTEGER', 0, null, 0],
       // The recommendation a later entry adds (plan PL9; its own pin is ledgers-recommend-migration.test.ts).
-      ['recommended', 'INTEGER', 0, null, 0], ['recommendedWhy', 'TEXT', 0, null, 0]]);
+      ['recommended', 'INTEGER', 0, null, 0], ['recommendedWhy', 'TEXT', 0, null, 0],
+      // The typed action and the hold a later entry adds (D-8076, spec 2026-11-04 §10).
+      ['action', 'TEXT', 0, null, 0], ['heldUntil', 'INTEGER', 0, null, 0]]);
     expect(colsOf(db, 'operator_item_events')).toEqual([
       ['id', 'INTEGER', 0, null, 1], ['itemId', 'INTEGER', 1, null, 0], ['at', 'INTEGER', 1, null, 0],
       ['act', 'TEXT', 1, null, 0], ['actor', 'TEXT', 1, null, 0], ['note', 'TEXT', 0, null, 0]]);

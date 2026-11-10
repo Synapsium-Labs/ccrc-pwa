@@ -14,12 +14,14 @@ export function RowMeta({ pills, when }: { pills: readonly Pill[]; when: string 
   );
 }
 
-/** The middle of a question row and a usage-limit row: what it is, and why it is on the list. (An item's has a third line.) */
-export function RowMain({ what, why }: { what: string; why: string }): ReactNode {
+/** The middle of a row: what it is, and why it is on the list, with a note under them (`children`; an item's has one). `lines`
+ *  keeps the why's own line breaks. */
+export function RowMain({ what, why, lines = false, children }: { what: string; why: string; lines?: boolean; children?: ReactNode }): ReactNode {
   return (
     <span className="wl-main">
       <span className="wl-what">{what}</span>
-      <span className="wl-why">{why}</span>
+      <span className="wl-why" {...(lines ? { 'data-lines': 'true' } : {})}>{why}</span>
+      {children}
     </span>
   );
 }

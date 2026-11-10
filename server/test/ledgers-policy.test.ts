@@ -12,16 +12,19 @@ import {
 } from '../../shared/ledgers.js';
 import { OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, type RunKind, type RunState } from '../../shared/api.js';
 
-const ACTORS: readonly ItemActor[] = ['operator', 'coordinator'];
+const ACTORS: readonly ItemActor[] = ['operator', 'coordinator', 'ccrc'];
 const ACTS = Object.keys(ITEM_TRANSITIONS) as ItemAct[];
 
-// The five rows of the spec's Figure 2, spelled out independently of the table.
+// The five rows of the spec's Figure 2 and the three of spec 2026-11-04 §10 (D-8076), spelled out independently of the table.
 const EXPECTED: Record<ItemAct, { actor: ItemActor; from: readonly ItemState[]; to: ItemState }> = {
   tick: { actor: 'operator', from: ['open'], to: 'checking' },
   confirm: { actor: 'coordinator', from: ['checking'], to: 'done' },
   return: { actor: 'coordinator', from: ['checking'], to: 'open' },
   withdraw: { actor: 'coordinator', from: ['open', 'checking'], to: 'withdrawn' },
   dismiss: { actor: 'operator', from: ['open', 'checking'], to: 'dismissed' },
+  act: { actor: 'operator', from: ['open'], to: 'done' },
+  decline: { actor: 'operator', from: ['open'], to: 'dismissed' },
+  settle: { actor: 'ccrc', from: ['open', 'checking'], to: 'done' },
 };
 
 describe('vocabulary', () => {
@@ -53,7 +56,7 @@ describe('vocabulary', () => {
 });
 
 describe('the transition table', () => {
-  it('has exactly the five rows of the spec', () => {
+  it('has exactly the eight rows of the spec', () => {
     expect(ACTS.sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const act of ACTS) expect(ITEM_TRANSITIONS[act], act).toEqual(EXPECTED[act]);
   });

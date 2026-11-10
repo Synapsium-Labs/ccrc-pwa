@@ -327,7 +327,8 @@ describe('the scanner is looking at something', () => {
     // 66 since `GET`/`POST /api/coord/delegation-adopt` (D-8112, the delegation lane's adoption switch): session-gated, NOT EXEMPT,
     // no box token.
     // 67 since D-8075's `GET /api/programmes` (spec 2026-11-04 §11.6): session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(67);
+    // 68 since D-8076's `POST /api/runs/:id/end-request`: a box-token machine lane IN EXEMPT (box token and attribution, no cookie).
+    expect(scanRoutes('coord/routes.ts').length).toBe(68);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -367,7 +368,9 @@ describe('the scanner is looking at something', () => {
     // 16 since the PL6 follow-up: `GET /api/programmes/:slug/secrets` (the stored-secrets read) and `DELETE
     // /api/programmes/:slug/secrets/:slot` (the Remove door, the account gate with a step-up), the same registration,
     // session-gated and NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(16);
+    // 18 since D-8076: `POST /api/items/:id/act` and `POST /api/items/:id/decline`, the same registration, session-gated and NOT EXEMPT,
+    // no box token (the operator's Abandon run and Keep the run on an end-request item).
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(18);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
     // `/disable`, session-gated and NOT EXEMPT, no box token; each takes the account gate on the `account-v2` cap.
     // 8 since the write routes (accounts plan Task A17, D-7739): `POST /api/accounts`, `/:id/credential`, `/:id/set`,
@@ -563,7 +566,9 @@ describe('the scanner is looking at something', () => {
     // checked; the HTTP half 189 -> 190, the gated count stays 118, the exempt-HTTP count 70 -> 71.
     // 194 since `POST /api/linear/proxy/issues/:id/links` (D-8141): a box-token lane IN EXEMPT; the HTTP half 190 -> 191, the gated
     // count stays 118, the exempt-HTTP count 71 -> 72.
-    expect(ROUTES.length).toBe(194);
+    // 195 since D-8076's `POST /api/runs/:id/end-request`: a box-token lane IN EXEMPT: the HTTP half 191 -> 192, the exempt-HTTP count 72 -> 73.
+    // 197 since D-8076's `POST /api/items/:id/act` and `/decline`: the operator's two, session-gated and NOT EXEMPT: the HTTP half 192 -> 194, the gated count 118 -> 120, the exempt count stays 73.
+    expect(ROUTES.length).toBe(197);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -732,7 +737,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 194 scanned + the static wildcard when the bundle is built.
+    // 197 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -889,6 +894,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/advance',
       'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch',
+      'POST /api/runs/:id/end-request',
       'POST /api/runs/:id/items',
       'POST /api/runs/:id/review-rounds',
       'POST /api/runs/:id/route',
@@ -921,7 +927,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-eight box-token lanes in EXEMPT are those coord routes, and sixty-three with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and sixty-four with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -986,7 +992,7 @@ describe('EXEMPT is complete in both directions', () => {
       // W3 Q3f (D-7030): the question family's claimant pair, box-token lanes like the four doors they share cores with.
       'POST /api/questions/:id/release', 'POST /api/questions/:id/rule',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
-      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items', 'POST /api/runs/:id/route',
+      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/end-request', 'POST /api/runs/:id/items', 'POST /api/runs/:id/route',
       // TB9 (D-7554): the test box's sync takes the box token as the fallback, the `GET /api/runs` shape (its read is above).
       'POST /api/testbox/tools-sync',
     ]);
@@ -1426,7 +1432,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 191 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 194 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1490,7 +1496,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 191 HTTP routes, not the 72 exempt.
+          //    is not itself flag-aware — the assertion that covers all 194 HTTP routes, not the 73 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

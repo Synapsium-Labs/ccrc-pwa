@@ -29,12 +29,15 @@ import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusa
 import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  earlierTickBlocks, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  earlierTickBlocks, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
-import { itemMailSubject, tickMail } from './ledgersMail.js';
+import type { CoordRoutesHandle } from './routes.js';
+import type { CloseOutcome } from './close.js';
+import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
+import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
@@ -82,7 +85,7 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
     options: row.options, recommended: row.recommended, recommendedWhy: row.recommendedWhy,
     neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
-    secretSlot: row.secretSlot,
+    secretSlot: row.secretSlot, action: row.action,
     secretSet: secret === null ? null
       : 'unreadable' in secret ? { unreadable: true }
         // `tail: ''` for a console from before the PL6 follow-up, which reads `tail` and would say "Ends in undefined" (review
@@ -90,7 +93,7 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
         // pl6f-r1-unrecorded-state).
         : secret.setAt === null ? { at: null, tail: '' }
           : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
-    history: events.map((e) => ({ at: e.at, act: e.act, note: e.note })),
+    history: events.map((e) => ({ at: e.at, act: e.act, note: e.note, actor: e.actor })),
   };
 }
 
@@ -118,9 +121,14 @@ export function viewOfItem(
 
 /** What waits on the operator, whole: every programme's open and checking items, the Recently cleared trail, and goals for
  *  each programme that holds an item or a spec pin (slug order). The read route and the live frame both answer this. */
+/** The note an end-request item closes with when its run had closed before the operator's act reached it (spec §10, step 4). */
+const RUN_ALREADY_CLOSED_NOTE = 'The run had already closed.';
+
 export function waitingViewOf(
   coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, secretOf: SecretMetaOf = NO_SECRETS,
 ): WaitingView {
+  // A death between the operator's act and its item leaves an open end request on a closed run: the next read closes it.
+  coord.settleEndRequestsOfClosedRuns(RUN_ALREADY_CLOSED_NOTE, now);
   const { open, cleared } = coord.itemsFor(null, now);
   const programmes = [...new Set([...open.map((i) => i.program), ...cleared.map((i) => i.program), ...coord.pinnedProgrammes()])].sort();
   return {
@@ -325,8 +333,17 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
 
   /** A move by the coordinator. The programme has an open run by construction (`claimsProgramme` held), and only
    *  `dismiss` reads that, so the context says what is true. */
-  const move = (coord: CoordStore, reply: FastifyReply, item: ItemRow, act: 'confirm' | 'return' | 'withdraw', note: string | null) => {
-    const res = coord.moveItem(item.id, act, 'coordinator', act === 'return' ? { note } : {}, deps.now(), { programmeHasOpenRun: true });
+  const move = (coord: CoordStore, reply: FastifyReply, item: ItemRow, act: 'confirm' | 'return' | 'withdraw', note: string | null, byId: string | null = null) => {
+    // A withdrawn end request tells its asker, in the move's own transaction (A22). The coordinator's own request tells nobody.
+    if (act === 'withdraw' && isActing(coord, item.id)) return refuseRoute(reply, 'not-open', { detail: ACT_IN_FLIGHT_DETAIL(item.id) });
+    const ending = act === 'withdraw' && isEndRunAction(item.action) ? item.action : null;
+    const asker = ending !== null && item.raisedBy !== byId ? item.raisedBy : null;
+    const res = asker !== null && ending !== null
+      ? coord.moveItemWithMail(item.id, act, 'coordinator', {}, deps.now(), { programmeHasOpenRun: true }, (moved) => {
+        const endedMail = endRequestEndedMail(moved, ending.runId, 'withdrawn');
+        return insertSystemMailTx(coord, null, { fromId: 'coordinator', toId: asker, runId: null, kind: 'status', subject: endedMail.subject, body: endedMail.body });
+      })
+      : coord.moveItem(item.id, act, 'coordinator', act === 'return' ? { note } : {}, deps.now(), { programmeHasOpenRun: true });
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${item.id} cannot be ${act === 'return' ? 'returned' : act === 'confirm' ? 'confirmed' : 'withdrawn'} from here` });
     changed();
     return reply.code(200).send({ ok: true });
@@ -372,7 +389,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (head === null) return;
     const item = ownedItem(coord, reply, head);
     if (item === null) return;
-    return move(coord, reply, item, 'withdraw', null);
+    return move(coord, reply, item, 'withdraw', null, head.byId);
   });
 
   app.post('/api/items/:id/blocking', async (req, reply) => {
@@ -491,6 +508,12 @@ export interface LedgerOperatorDeps {
   /** The egress masker's retirement of a removed slot's lane (`SecretMasker.retireSecret`): masked for the life of this process,
    *  never reloaded after. */
   retireSecret: (laneId: string) => void;
+  /** The coordination serialiser's abandon hold (`CoordRoutesHandle.withAbandon`): the operator's `act` on an end-request item
+   *  runs the abandon arm inside it, exactly as the abandon route does (D-8076; spec 2026-11-04 §10, "The act"). */
+  withAbandon: CoordRoutesHandle['withAbandon'];
+  /** `closeRun`'s typed result as the abandon route sends it (`sendCloseOutcome`), so the act answers in the same shapes and
+   *  the sheet reads the same refusals and `childReclaim` fields (A23). */
+  sendClose: (reply: FastifyReply, outcome: CloseOutcome) => FastifyReply;
   /** How long an act waits for the slot's previous act before it answers `slot-busy` (`SLOT_WAIT_MS`; a test passes its own). */
   slotWaitMs?: number;
 }
@@ -507,6 +530,24 @@ export const SECRET_BODY_LIMIT = SECRET_VALUE_MAX * 6 + 1024;
 /** How long an act on a slot waits for that slot's previous act (review 1391 A-3): past it the act answers `slot-busy` and does
  *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
 export const SLOT_WAIT_MS = 30_000;
+
+/** The end-request items whose Abandon run is in flight, per store. The abandon's fleet act awaits before it commits, and
+ *  the coordinator's withdraw and the operator's decline take no coordination hold, so while an item is in this set both
+ *  refuse it: the asker is never told "Nothing was ended" about a run the operator is ending (D-8076). */
+const actingItems = new WeakMap<CoordStore, Set<number>>();
+const isActing = (coord: CoordStore, id: number): boolean => actingItems.get(coord)?.has(id) === true;
+const ACT_IN_FLIGHT_DETAIL = (id: number): string => `item ${id} is being acted on: the operator's Abandon run is in progress`;
+const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
+
+/** Why an operator's `act` or `decline` cannot take an item, or null: it must be open (`nextItemState`'s word), not held (the
+ *  operator never saw a held item), and carry an `end-run` action, the one verb that may abandon today. */
+function endRunItemRefusal(item: ItemRow, act: 'act' | 'decline', now: number): { why: RouteRefusal; detail: string } | null {
+  const verdict = nextItemState(item.state, act, 'operator', { programmeHasOpenRun: true });
+  if (!verdict.ok) return { why: verdict.why, detail: `item ${item.id} is ${item.state}, not open` };
+  if (!isEndRunAction(item.action)) return { why: 'not-open', detail: `item ${item.id} carries no action the operator can ${act}` };
+  if (item.heldUntil !== null && item.heldUntil > now) return { why: 'not-open', detail: `item ${item.id} is held and is not yet on the operator's list` };
+  return null;
+}
 
 export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerOperatorDeps): void {
   const bad = (reply: FastifyReply, detail: string) => refuseRoute(reply, 'bad-request', { detail });
@@ -587,6 +628,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (item.kind === 'secret') {
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.useSecretRoute, { detail: 'a secret is given on its own route; it never rides a tick' });
     }
+    // An item that carries an action is answered by `act` or `decline` alone; a tick would strand it in `checking`, where both are refused.
+    if (isEndRunAction(item.action)) return refuseRoute(reply, 'not-open', { detail: `item ${id} is ended with Abandon run or Keep the run, not ticked` });
+    if (item.heldUntil !== null && item.heldUntil > deps.now()) return refuseRoute(reply, 'not-open', { detail: `item ${id} is held and is not yet on the operator's list` });
     const verdict = nextItemState(item.state, 'tick', 'operator', { programmeHasOpenRun: false });
     if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${item.state}, not open` });
     const given = body['answer'];
@@ -602,6 +646,90 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const now = deps.now();
     const res = tickNow(coord, id, answer, plan, now);
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be ticked from here` });
+    deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
+  });
+
+  /**
+   * `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10, "The act"): the operator's Abandon run on an end-request item.
+   * SESSION ONLY and BODY-LESS: no box token, and no field of the request is read, so a caller cannot name another run or an
+   * archive (the abandon route's own rule, D-280). The whole act runs inside `withAbandon`'s coordMutex hold, in the spec's
+   * order: read the item (open, not held, carrying an action that may abandon: `end-run`); run the abandon arm as the operator
+   * with `abandon:requested:<item>`; move the item `act` (open to done); and a run that had already closed closes the item
+   * with a note and is success. The abandon's fleet act runs before its commit, so the item's move is a second step: a death
+   * between the two is mended by `settleEndRequestsOfClosedRuns` on the next read. A refusal of the arm is the abandon route's
+   * answer, sent as it sends it, and the item stays raised.
+   */
+  app.post('/api/items/:id/act', async (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const id = itemIdOf(req);
+    if (id === null) return bad(reply, 'the item id is a positive integer');
+    if (coord.itemById(id) === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    return deps.withAbandon(coord, async (abandon) => {
+      // Read again inside the hold: the item may have moved while this act waited for it.
+      const item = coord.itemById(id);
+      if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+      const now = deps.now();
+      const refusal = endRunItemRefusal(item, 'act', now);
+      if (refusal !== null) return refuseRoute(reply, refusal.why, { detail: refusal.detail });
+      const runId = (item.action as { runId: number }).runId;
+      const read = coord.run(runId);
+      if (read.ok && read.run !== null && (TERMINAL_RUN_STATES as readonly string[]).includes(read.run.state)) {
+        const settled = coord.moveItem(id, 'settle', 'ccrc', { note: RUN_ALREADY_CLOSED_NOTE }, now, { programmeHasOpenRun: true });
+        if (!settled.ok) return refuseRoute(reply, settled.why, { detail: `item ${id} cannot be closed from here` });
+        deps.bus.emit('waiting');
+        // `alreadyClosed` tells the sheet nothing was abandoned here: the run closed before the operator's tap, so it must not claim
+        // an abandon nor a sibling's hold on the workspace.
+        return reply.code(200).send({ ok: true, id: runId, state: read.run.state, released: false, childReclaim: 'not-queued', alreadyClosed: true });
+      }
+      // Held from the check above to the move below: a withdraw or a decline in between is refused (`isActing`).
+      const holds = actingItems.get(coord) ?? new Set<number>();
+      actingItems.set(coord, holds);
+      holds.add(id);
+      try {
+        const outcome = await abandon(runId, `abandon:requested:${id}`);
+        if (!outcome.ok) return deps.sendClose(reply, outcome);
+        let moved = coord.moveItem(id, 'act', 'operator', {}, deps.now(), { programmeHasOpenRun: true });
+        // The run is abandoned either way. A refused move is mended with a settle; an item the mender already closed is fine;
+        // anything else is a fault the operator is told about, never a silent success.
+        if (!moved.ok && coord.itemById(id)?.state !== 'done') {
+          moved = coord.moveItem(id, 'settle', 'ccrc', { note: RUN_ABANDONED_NOTE }, deps.now(), { programmeHasOpenRun: true });
+          if (!moved.ok) {
+            deps.bus.emit('waiting');
+            return refuseRoute(reply, 'write-failed', { detail: `run ${runId} was abandoned, but item ${id} could not be closed (${moved.why}); it settles on the next read` });
+          }
+        }
+        deps.bus.emit('waiting');
+        return deps.sendClose(reply, outcome);
+      } finally {
+        holds.delete(id);
+      }
+    });
+  });
+
+  /**
+   * `POST /api/items/:id/decline` (D-8076; spec §10): Keep the run. SESSION ONLY and BODY-LESS. The item moves `decline` (open to
+   * dismissed) and its asker is mailed in the move's own transaction (A22), so a declined item always has its mail and a failed
+   * mail leaves the item open. Applies to an end-request item alone. No await: the item is read and moved in one step.
+   */
+  app.post('/api/items/:id/decline', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const id = itemIdOf(req);
+    if (id === null) return bad(reply, 'the item id is a positive integer');
+    const item = coord.itemById(id);
+    if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    const now = deps.now();
+    const refusal = endRunItemRefusal(item, 'decline', now);
+    if (refusal !== null) return refuseRoute(reply, refusal.why, { detail: refusal.detail });
+    if (isActing(coord, id)) return refuseRoute(reply, 'not-open', { detail: ACT_IN_FLIGHT_DETAIL(id) });
+    const action = item.action as { runId: number };
+    const res = coord.moveItemWithMail(id, 'decline', 'operator', {}, now, { programmeHasOpenRun: true }, (moved) => {
+      const mail = endRequestEndedMail(moved, action.runId, 'declined');
+      return insertSystemMailTx(coord, null, { fromId: 'operator', toId: moved.raisedBy, runId: null, kind: 'status', subject: mail.subject, body: mail.body });
+    });
+    if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be declined from here` });
     deps.bus.emit('waiting');
     return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
   });

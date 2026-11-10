@@ -23,6 +23,8 @@ export const QUESTION_WORD = 'Question';
 export const LIMIT_WORD = 'Usage limit';
 export const LIMIT_PILL_WORD = 'No account has room';
 export const LIMIT_WAITING_PILL_WORD = 'Waiting for reset';
+/** A review cap row's kind word, in the place an item's kind word stands. */
+export const REVIEW_CAP_WORD = 'Review cap';
 
 /** The spec's exact labels (plan Global Constraints). */
 export const CHECKING_WORD = 'Checking…';
@@ -159,11 +161,13 @@ export const openRunsOf = (program: string, runs: readonly RunSummary[]): RunSum
 export const programmeIsLive = (program: string, runs: readonly RunSummary[] | null): boolean =>
   runs === null || openRunsOf(program, runs).length > 0;
 
-/** One line of the list: an item, a session's question, or a session on a usage limit with no account to take it (D-8123). */
+/** One line of the list: an item, a session's question, a session on a usage limit with no account to take it (D-8123), or a
+ *  run whose review cap waits (its Lift cap control is on the row; runs rebuild §8.7, F21). */
 export type Row =
   | { readonly kind: 'item'; readonly item: ItemView }
   | { readonly kind: 'question'; readonly question: QuestionRow }
-  | { readonly kind: 'limit'; readonly limit: LimitRow };
+  | { readonly kind: 'limit'; readonly limit: LimitRow }
+  | { readonly kind: 'cap'; readonly run: RunSummary };
 
 export interface ProgrammeGroup {
   /** The programme's slug, or `null` for questions of sessions that are in none. */
@@ -177,33 +181,40 @@ export interface ProgrammeGroup {
 
 /** The list grouped by programme: programmes with a blocking item first, then by slug, "Not in a programme" last. Within a
  *  group the open blocking items come first, then the sessions stopped on a usage limit (D-8123: a stopped session is the most
- *  urgent thing a session can ask), then the session questions, then the rest in `orderItems` order. */
+ *  urgent thing a session can ask), then the session questions, then the review caps that wait (`caps`: the runs `capWaiting`
+ *  reads waiting; none by default), then the rest in `orderItems` order. */
 export function groupByProgramme(
-  items: readonly ItemView[], questions: readonly QuestionRow[], limits: readonly LimitRow[] = [],
+  items: readonly ItemView[], questions: readonly QuestionRow[], limits: readonly LimitRow[] = [], caps: readonly RunSummary[] = [],
 ): ProgrammeGroup[] {
-  const slugs = new Set<string | null>([...items.map((i) => i.program), ...questions.map((q) => q.program), ...limits.map((l) => l.program)]);
+  const slugs = new Set<string | null>([
+    ...items.map((i) => i.program), ...questions.map((q) => q.program), ...limits.map((l) => l.program), ...caps.map((r) => r.program),
+  ]);
   const groups: ProgrammeGroup[] = [];
   for (const program of slugs) {
     const mine = orderItems(items.filter((i) => i.program === program));
     const asks = questions.filter((q) => q.program === program).sort((a, b) => a.at - b.at || a.sessionId.localeCompare(b.sessionId));
     const stopped = limits.filter((l) => l.program === program);
+    const capRuns = caps.filter((r) => r.program === program).sort((a, b) => a.id - b.id);
     const isBlocking = (i: ItemView): boolean => i.state === 'open' && i.neededBy === 'blocking';
     const rows: Row[] = [
       ...mine.filter(isBlocking).map((item): Row => ({ kind: 'item', item })),
       ...stopped.map((limit): Row => ({ kind: 'limit', limit })),
       ...asks.map((question): Row => ({ kind: 'question', question })),
+      ...capRuns.map((run): Row => ({ kind: 'cap', run })),
       ...mine.filter((i) => !isBlocking(i)).map((item): Row => ({ kind: 'item', item })),
     ];
-    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingTotal(mine, asks, stopped) });
+    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingTotal(mine, asks, stopped) + capRuns.length });
   }
   const key = (g: ProgrammeGroup): string => g.program ?? '￿';
   return groups.sort((a, b) => Number(b.blocking) - Number(a.blocking) || key(a).localeCompare(key(b)));
 }
 
 /** The summary line's counts, in the order the screen prints them. */
-export interface SummaryCounts { blocking: number; questions: number; limits: number; soon: number; checking: number; cameBack: number }
+export interface SummaryCounts { blocking: number; questions: number; limits: number; caps: number; soon: number; checking: number; cameBack: number }
 
-export function summaryCounts(items: readonly ItemView[], questions: readonly QuestionRow[], limits: readonly LimitRow[] = []): SummaryCounts {
+export function summaryCounts(
+  items: readonly ItemView[], questions: readonly QuestionRow[], limits: readonly LimitRow[] = [], caps: readonly RunSummary[] = [],
+): SummaryCounts {
   // Each open item is counted once: one that came back is counted as that, whatever its needed-by says.
   const open = items.filter((i) => i.state === 'open');
   const fresh = open.filter((i) => !cameBack(i));
@@ -211,6 +222,7 @@ export function summaryCounts(items: readonly ItemView[], questions: readonly Qu
     blocking: fresh.filter((i) => i.neededBy === 'blocking').length,
     questions: questions.length,
     limits: limits.length,
+    caps: caps.length,
     soon: fresh.filter((i) => i.neededBy === 'soon').length,
     checking: items.filter((i) => i.state === 'checking').length,
     cameBack: open.length - fresh.length,
@@ -226,6 +238,7 @@ export function shownSummary(groups: readonly ProgrammeGroup[]): SummaryCounts {
     rows.flatMap((r) => (r.kind === 'item' ? [r.item] : [])),
     rows.flatMap((r) => (r.kind === 'question' ? [r.question] : [])),
     rows.flatMap((r) => (r.kind === 'limit' ? [r.limit] : [])),
+    rows.flatMap((r) => (r.kind === 'cap' ? [r.run] : [])),
   );
 }
 
@@ -237,6 +250,7 @@ export function summaryWords(c: SummaryCounts): { tone: PillTone; text: string }
   if (c.blocking > 0) out.push({ tone: 'blocking', text: `${c.blocking} blocking now` });
   if (c.questions > 0) out.push({ tone: 'ask', text: plural(c.questions, 'question from a session', 'questions from sessions') });
   if (c.limits > 0) out.push({ tone: 'blocking', text: plural(c.limits, 'session on a usage limit', 'sessions on a usage limit') });
+  if (c.caps > 0) out.push({ tone: 'ask', text: plural(c.caps, 'review cap to lift', 'review caps to lift') });
   if (c.soon > 0) out.push({ tone: 'soon', text: `${c.soon} needed soon` });
   if (c.checking > 0) out.push({ tone: 'checking', text: `${c.checking} being checked` });
   if (c.cameBack > 0) out.push({ tone: 'bounced', text: `${c.cameBack} came back` });

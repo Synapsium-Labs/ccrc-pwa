@@ -164,6 +164,7 @@ describe('the closed route table', () => {
     [['runs', 'close', '12'], 'POST', '/api/runs/12/close'],
     [['runs', 'items', '12'], 'POST', '/api/runs/12/items'],
     [['runs', 'items-list', '12'], 'GET', '/api/runs/12/items'],
+    [['runs', 'end-request', '12'], 'POST', '/api/runs/12/end-request'],
     [['runs', 'signals', '12'], 'GET', '/api/runs/12/signals'],
     // The coordinator's escalation/demotion/manual-override door (routing
     // spec 2026-09-14 §5.3, slice 5, Task 4) — never `ccd route` directly.
@@ -276,7 +277,8 @@ describe('the closed route table', () => {
     // Fifty-eight since `leases.retain` (delegation broker wave 5, PR8, W5-R15).
     // Fifty-nine since `runs.review-rounds` (the coordinator's review-cap extension, D-8125).
     // Sixty since `linear.link` (D-8141).
-    expect(keys).toHaveLength(60);
+    // Sixty-one since `runs.end-request` (D-8076, the runs rebuild's wave B6).
+    expect(keys).toHaveLength(61);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -290,7 +292,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -443,7 +445,7 @@ describe('the four claimant rows send the question door family, and refuse local
     const keys = new Set(CLAIMANT.map(([g, v]) => `${g}.${v}`));
     const rows: string[][] = [
       ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
-      ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'signals', '12'],
+      ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'end-request', '12'], ['runs', 'signals', '12'],
       ['runs', 'route', '12'], ['runs', 'review-rounds', '12', '--json', '-'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
       ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
       ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'],

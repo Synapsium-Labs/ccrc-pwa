@@ -315,8 +315,10 @@ describe('reviveParkedDeliveries: the server\'s own notices stay parked (the rea
     // A new notice in this voice would be revived unless it is named in `REVIVE_SKIPPED_SUBJECT_HEADS`; this reds first.
     const said = files.flatMap((f) => [...readFileSync(f, 'utf8').matchAll(/fromId: 'coordinator',[^;]*?(subject: \w+|\.\.\.doneRejectionMail)/g)]
       .map((m) => m[1]!));
-    expect(new Set(said)).toEqual(new Set(['subject: WAVE_BRIEF_SUBJECT', '...doneRejectionMail']));
-    expect(said).toHaveLength(4);
+    // The withdrawn end request's notice to its asker (D-8076) is sent with `runId: null`, and revive joins the mail's
+    // run, so it never comes back.
+    expect(new Set(said)).toEqual(new Set(['subject: WAVE_BRIEF_SUBJECT', '...doneRejectionMail', 'subject: endedMail']));
+    expect(said).toHaveLength(5);
   });
 });
 

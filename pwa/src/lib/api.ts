@@ -67,6 +67,20 @@ export const clipUrl = (id: string, name: string): string =>
   new URL(`/api/sessions/${encodeURIComponent(id)}/clip/${encodeURIComponent(name)}`,
     location.origin).href;
 
+/** The resolution of a close, as `closeAnswerOf` reads it. */
+type CloseAnswer = { released: boolean; childReclaim?: 'queued' | 'not-queued'; alreadyClosed?: true };
+
+/** What a close route answers (`abandonRun`, `actItem`): `released` as before, and the child reclaim's two facts when the server
+ *  sent them (F24); an older server sends neither, and an absent `released` reads TRUE. */
+async function closeAnswerOf(res: Response): Promise<CloseAnswer> {
+  const body = (await res.json().catch(() => ({}))) as { released?: unknown; childReclaim?: unknown; alreadyClosed?: unknown };
+  return {
+    released: body.released !== false,
+    ...(body.alreadyClosed === true ? { alreadyClosed: true as const } : {}),
+    ...(body.childReclaim === 'queued' || body.childReclaim === 'not-queued' ? { childReclaim: body.childReclaim } : {}),
+  };
+}
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit, opts?: ReadOpts): Promise<Response> => {
@@ -770,17 +784,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  re-hold, and a `planned` run with no session, which does no fleet act
      *  at all — and only the first is worth a sentence about another run.
      *  `AbandonSheet` separates them on the run's own `sessionId`. */
-    abandonRun: async (id: number, opts?: ReadOpts): Promise<{
-      released: boolean; childReclaim?: 'queued' | 'not-queued';
-    }> => {
-      const res = await request(`/api/runs/${id}/abandon`, { method: 'POST' }, opts);
-      const body = (await res.json().catch(() => ({}))) as { released?: unknown; childReclaim?: unknown };
-      // The child reclaim's two facts ride along when the server sent them (F24); an older server sends neither.
-      return {
-        released: body.released !== false,
-        ...(body.childReclaim === 'queued' || body.childReclaim === 'not-queued' ? { childReclaim: body.childReclaim } : {}),
-      };
+    abandonRun: async (id: number, opts?: ReadOpts): Promise<CloseAnswer> => {
+      return closeAnswerOf(await request(`/api/runs/${id}/abandon`, { method: 'POST' }, opts));
     },
+    /** `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10): the operator's Abandon run on an end-request item. Body-less and
+     *  session only like `abandonRun`, and it answers as `abandonRun` does, so the one sheet reads the same refusals and
+     *  `released` and `childReclaim` fields. The server closes the item itself. */
+    actItem: async (itemId: number, opts?: ReadOpts): Promise<CloseAnswer> => closeAnswerOf(await request(`/api/items/${itemId}/act`, { method: 'POST' }, opts)),
+    /** `POST /api/items/:id/decline` (D-8076): Keep the run. The item closes as declined and its asker is told. Body-less. */
+    declineItem: (itemId: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${itemId}/decline`),
     /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING
      *  coordinator after the one they name has died. The wedge it opens is the
      *  one two readers create between them by answering the lowest-id

@@ -40,6 +40,7 @@ import { inAppClick } from './settingsText';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, cn, toast } from '@ccrc/ui';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api, isRegistryUnmeasurable, type ReadOpts } from '../lib/api';
+import { LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { navigate } from '../lib/router';
 import { runPath } from '../lib/routes';
 import './fleet.css';
@@ -90,6 +91,19 @@ export function abandonErrorText(err: unknown): AbandonError {
     if (typeof stderr === 'string' && stderr.trim().length > 0) return { lead: ABANDON_COPY['fleet-failed'], text: stderr.trim(), record: false };
   }
   return { lead: null, text: closed ? `${said}.` : said, record: closed };
+}
+
+/** The two refusals `POST /api/items/:id/act` adds to the abandon route's own: the item moved or is gone. The arm's refusals
+ *  after them are the route's, read by `abandonErrorText`. */
+const ITEM_ACT_REFUSAL_TEXT: Readonly<Record<'not-open' | 'unknown-item', string>> = {
+  'not-open': LEDGER_REFUSAL_TEXT['not-open'],
+  'unknown-item': LEDGER_REFUSAL_TEXT['unknown-item'],
+};
+
+/** `abandonErrorText` for a confirm that went through an item's act: the item's own two refusals first. */
+function itemActErrorText(err: unknown): AbandonError {
+  const said = refusalText(err, ITEM_ACT_REFUSAL_TEXT);
+  return said === null ? abandonErrorText(err) : { lead: null, text: said, record: false };
 }
 
 /** What the sheet says under a refusal: an optional lead sentence, the text, and whether a link to the record follows. */
@@ -214,6 +228,8 @@ export function abandonConsequence(
 export interface AbandonAnswer {
   readonly released: boolean;
   readonly childReclaim?: 'queued' | 'not-queued';
+  /** The act found its run already closed and only settled the item: nothing was abandoned. */
+  readonly alreadyClosed?: boolean;
 }
 
 export interface AbandonSheetProps {
@@ -228,6 +244,10 @@ export interface AbandonSheetProps {
   coordinatorPresence?: CoordinatorPresence;
   onClose: () => void;
   onDone?: () => void;
+  /** The end-request item this sheet's confirm acts for (spec 2026-11-04 §10): the confirm then calls
+   *  `POST /api/items/:id/act`, which runs the same abandon arm and closes the item itself. Absent, it calls the run's
+   *  own abandon route. */
+  itemId?: number;
 }
 
 export function AbandonSheet({
@@ -237,13 +257,17 @@ export function AbandonSheet({
   coordinatorPresence = 'unknown',
   onClose,
   onDone,
+  itemId,
   abandonRun = api.abandonRun,
+  actItem = api.actItem,
 }: AbandonSheetProps & {
   /** Injectable for tests, same shape `CoordBanner`'s own `coordPause` prop
    *  uses — defaults to the real `api.abandonRun`, whose own URL/method are
    *  pinned separately in `api.test.ts` so this injection is never the ONLY
    *  coverage of the write path. */
   abandonRun?: (id: number, opts?: ReadOpts) => Promise<AbandonAnswer>;
+  /** Injectable like `abandonRun`; the item act's URL and method are pinned in `api.test.ts`. */
+  actItem?: (itemId: number, opts?: ReadOpts) => Promise<AbandonAnswer>;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AbandonError | null>(null);
@@ -293,7 +317,7 @@ export function AbandonSheet({
     const mine = gen.current;
     setBusy(true);
     setError(null);
-    void abandonRun(run.id).then(
+    void (itemId === undefined ? abandonRun(run.id) : actItem(itemId)).then(
       (res) => {
         if (gen.current !== mine) return; // superseded — a different run's sheet is open now
         setBusy(false);
@@ -302,7 +326,9 @@ export function AbandonSheet({
         // gated on `run.sessionId`: a `planned` run with no session does no fleet act, and no sibling holds a workspace that
         // was never allocated. A queued child reclaim is exclusive with a sibling's hold: the close never re-held it.
         const action = { label: 'Open record', onClick: () => navigate(runPath(run.id)) };
-        if (res.childReclaim === 'queued') {
+        if (res.alreadyClosed === true) {
+          toast(`Run ${run.id} had already closed, so nothing was abandoned.`, 'info', action);
+        } else if (res.childReclaim === 'queued') {
           toast(`Run ${run.id} abandoned. Its workspace is being reclaimed.`, 'info', action);
         } else if (!res.released && run.sessionId !== null) {
           toast(`Run ${run.id} abandoned — ${ws} is still claimed by another open run.`, 'info', action);
@@ -315,7 +341,7 @@ export function AbandonSheet({
       (err: unknown) => {
         if (gen.current !== mine) return; // superseded — this refusal belongs to a run no longer shown
         setBusy(false);
-        setError(abandonErrorText(err));
+        setError(itemId === undefined ? abandonErrorText(err) : itemActErrorText(err));
       },
     );
   };

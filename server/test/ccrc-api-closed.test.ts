@@ -36,6 +36,19 @@ const client = (): string => fs.readFileSync(CCRC_API, 'utf8');
 
 const routeKeys = (): Set<string> => new Set(clientRoutes().map((r) => r.key));
 
+// D-8076 (spec 2026-11-04 §10): the operator's act and decline of an end-request item are absent from the client, like the
+// abandon door: a session asks with `end-request` and has no verb that ends a run or keeps one.
+describe("the operator's act and decline are not in ccrc-api's table", () => {
+  it('no client row reaches /api/items/:id/act or /decline, and the client text never spells them', () => {
+    const paths = clientRoutes().map((r) => r.path);
+    for (const door of ['/api/items/:id/act', '/api/items/:id/decline']) {
+      expect(paths, `${door} is a row of the client: a session could end a run`).not.toContain(door);
+    }
+    const text = fs.readFileSync(CCRC_API, 'utf8');
+    expect(text).not.toMatch(/\/act\b|\/decline\b/);
+  });
+});
+
 /** The client with its comments stripped. The negative flag scans below MUST
  *  read this and not the raw file: `ccrc-api`'s own header names every flag it
  *  deliberately does not have ("no `--url`, no `--host`, no `--path`, no
@@ -142,6 +155,7 @@ describe('the corpora no longer invoke curl', () => {
       'asks.release',
       'claims.release',
       'claims.take',
+      'items.withdraw',
       'landing.entries',
       'landing.order',
       'landing.show',
@@ -157,6 +171,7 @@ describe('the corpora no longer invoke curl', () => {
       'linear.update',
       'mail.send',
       'peers.list',
+      'runs.end-request',
       'runs.list',
       'runs.open',
       'runs.route',
@@ -359,6 +374,7 @@ describe('the client stays closed', () => {
     // `leases.retain` (delegation broker wave 5, PR8) took it to fifty-eight; it takes the caller's own body and fills none.
     // `runs.review-rounds` (the coordinator's review-cap extension, D-8125) took it to fifty-nine; it takes the caller's own body and fills none.
     // `linear.link` (D-8141) took it to sixty; it takes the caller's own body and fills none.
+    // `runs.end-request` (D-8076) took it to sixty-one; it takes the caller's own body, `byId` and `byUuid` included, and fills none.
     // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
     // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
     // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
@@ -367,7 +383,7 @@ describe('the client stays closed', () => {
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(60);
+    expect(routeKeys().size).toBe(61);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

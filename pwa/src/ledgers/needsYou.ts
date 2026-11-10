@@ -19,9 +19,9 @@ export interface NeedsYouEntry {
   readonly kind: 'item' | 'question' | 'review-cap' | 'limit';
 }
 
-/** The kinds the `/waiting` page lists today. A review cap joins that page with its Lift cap control later in the rebuild
- *  (Task 24), and until then the page's own count is these kinds. A usage-limit row (D-8123) is listed there with its own controls. */
-const LISTED_ON_WAITING: ReadonlySet<NeedsYouEntry['kind']> = new Set(['item', 'question', 'limit']);
+/** The kinds the `/waiting` page lists: an item, a session's question, a run whose review cap waits (its row carries the Lift
+ *  cap control) and a usage-limit row (D-8123, with its own controls), so the page, its badge and every chip print the one count. */
+const LISTED_ON_WAITING: ReadonlySet<NeedsYouEntry['kind']> = new Set(['item', 'question', 'review-cap', 'limit']);
 
 /** Every OPEN run an asking session is the operator's question for: the one it is bound to as a worker, then each it claims
  *  as a coordinator. The entry names the first; the Runs badge counts them all. */
