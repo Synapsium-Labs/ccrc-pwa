@@ -94,6 +94,7 @@ import {
   beltNodesStep,
 } from './derive.mjs';
 import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, lstatKind, withdrawCards } from './card.mjs';
+import { formatCensus, runCensus } from './census.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] [--unanswered <path>]... --secrets <file...> -- <home...>';
 
@@ -1783,7 +1784,7 @@ function walkTranscripts(homes, take, stop = null, agents = null) {
 /** W4 P20. One lstat for the subagent arm: `{ st }`, `{ absent: true }` for a path that is not there (ENOENT, ENOTDIR: no
  *  entry, no count), or `{ failed: true }` for any other error (read as a directory that cannot be listed). */
 function agentLstat(p) {
-  try { return { st: lstatSync(p) }; } catch (e) {
+  try { return { st: lstatSync(p, { bigint: true }) }; } catch (e) {
     const c = e && e.code;
     return c === 'ENOENT' || c === 'ENOTDIR' ? { absent: true } : { failed: true };
   }
@@ -1868,7 +1869,10 @@ function agentEntry(agents, state, at, runId, runOk, path, c) {
   state.taken += 1;
   agents.take({
     type: 'file', ...at, runId, id: c.id, path, verdict: v.verdict, reason: v.verdict === 'refuse' ? v.reason : null,
-    mtimeMs: l.st === undefined ? 0 : Math.floor(l.st.mtimeMs),
+    mtimeMs: l.st === undefined ? 0 : Number(l.st.mtimeMs),
+    // The census's physical-file and unbound-holding facts (P18): the listing's own lstat, read as bigints so an inode past 2^53
+    // matches the store's. `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave.
+    dev: l.st === undefined ? 0n : l.st.dev, ino: l.st === undefined ? 0n : l.st.ino, size: l.st === undefined ? 0 : Number(l.st.size),
   });
 }
 
@@ -7160,7 +7164,7 @@ export function mergeSteps(db, ctx, budget) {
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS, or an arm in bindingPass, and one in OP_DRY_RUNS when it has a dry run.
  *  W2-1 adds recall-off, whose arm is opPass's own (recallOffPass): it has no dry run (D-5763 (history-w2-recall-off-no-dry-run)). */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore', 'rebuild', 'recall-off']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore', 'rebuild', 'recall-off', 'census']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -7181,6 +7185,7 @@ const OP_DRY_RUNS = Object.freeze({
   },
   prune: (h) => pruneDryRunOp(h.home, h.P, h.args, h.out, h.now()),
   reparse: (h) => reparseDryRunOp(h.home, h.P, h.args, h.out),
+  census: (c) => censusOp(c.P, c.parsed.homes, c.args, c.out, c.home),   // W4 P16 (a): never a writing form (formOf answers null)
 });
 
 /** Each writing verb's body, on the store openStore opened, under the lock, after the lock-take journal half, the
@@ -7752,6 +7757,62 @@ function importAgentsDryRun(P, homes, out, home) {
   }
 }
 
+/** P12's settled predicate and the timing of its evidence (D-8161, act M1, measured on Claude Code 2.1.321): a workflow's launching call
+ *  answers at once with a `tool_result` that reads `Workflow launched in background. Task ID: ...` and a line `Run ID: <runId>`, so
+ *  option (b), the run named in a parent user row, is the predicate and its window is `[t0 - 15 min, t0 + 15 min]` around the run's
+ *  first row (`immediate`); 98 of 98 named samples fell within 15 minutes of it. The one place either constant is spelled. */
+const CENSUS_PREDICATE = 'b';
+const CENSUS_RUN_WINDOW = 'immediate';
+
+/** Option (c)'s evidence (P12): `<session>/workflows/<runId>.json`, one lstat. 'exists' for a regular file, 'absent' for ENOENT or
+ *  ENOTDIR, 'unreadable' for anything else (a link, a directory, a failed lstat). */
+function runSummaryState({ home, slug, uuid, runId }) {
+  try {
+    return lstatSync(`${home}/projects/${slug}/${uuid}/workflows/${runId}.json`).isFile() ? 'exists' : 'unreadable';
+  } catch (e) {
+    return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'absent' : 'unreadable';
+  }
+}
+
+/** Whether a file can be opened for reading by this process (the census asks it of an unread holding only). */
+function canReadPath(p) {
+  try { accessSync(p, constants.R_OK); return true; } catch { return false; }
+}
+
+/** The census report (W4 P16 (a)): discovery's one walk over the rostered homes with the agent arm, no stop and no seam, so it sees
+ *  the whole tree, handed whole to runCensus with the store, the install record and the uuids a tick would ingest. It writes nothing
+ *  and bumps no counter. `over` replaces any dependency (an in-process test's seam, as the pass's `deps`: the op arm passes none). */
+export function censusReport(db, homes, home, over = {}) {
+  const main = [];
+  const agents = [];
+  walkTranscripts(homes, (t) => { main.push(t); }, null, { take: (e) => { agents.push(e); }, stop: null });
+  return runCensus(db, { main, agents }, {
+    readMeta: readAgentMeta, predicate: CENSUS_PREDICATE, runWindow: CENSUS_RUN_WINDOW, sinceMs: installRecordOf(db),
+    known: knownUuids(db, home), summaryState: runSummaryState, canRead: canReadPath, ...over,
+  });
+}
+
+/** `census [--json]` (W4 P16 (a)): READ-ONLY, behind the dry runs' bounded reachability probe. The store is opened read-only; no store
+ *  on this box (absent or zero bytes) is exit 9. The report is one JSON line under `--json`, else one group per line; it exits 0
+ *  whatever it withholds. The census opens no writer, runs no decideInstallRecord and bumps no counter. */
+function censusOp(P, homes, args, out, home) {
+  let size = 0;
+  try { size = statSync(P.dbFile).size; } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  if (size === 0) {
+    out('history-sweep: no store on this box; nothing to census');
+    return { rc: EXIT.NO_STORE };
+  }
+  const ro = openReader(P.dbFile);
+  try {
+    const report = censusReport(ro, homes, home);
+    if (args.json) out(JSON.stringify(report));
+    else for (const line of formatCensus(report)) out(line);
+  } finally {
+    ro.close();
+  }
+  return { rc: EXIT.OK };
+}
+
 /** `import --agents --apply` (W4 P6): the operator's import of the subagent files written before capture began. The plan (agentImportPlan)
  *  holds the pre-install files of parents in `knownUuids`, literally the tick's admitted set and never importEvidence's wider map (D-8157),
  *  ruled by decideAgentIngest, form 'import'; each is asked again through agentGate (the tick's own asker) with history-off, just before it
@@ -7918,11 +7979,11 @@ async function opPass(parsed, deps, out) {
     const r = recallOffPass(home, args, out);
     return result(r.rc, r.reason);
   }
-  if (form === null && parsed.op === 'import' && parsed.rosterUnreadable) {
+  if (form === null && (parsed.op === 'import' || parsed.op === 'census') && parsed.rosterUnreadable) {
     // B1's D-4313 (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or
     // admit; reading it as an empty roster answered "nothing to import" and exit 0. A dry run writes nothing at all
-    // (§8.4), so it cannot count the condition; --apply does (below). Import only: prune's and reparse's dry runs
-    // need no roster.
+    // (§8.4), so it cannot count the condition; --apply does (below). Import and the census only: prune's and reparse's dry
+    // runs need no roster. The census (W4 P16 (a)) needs it: no home would read as no units, an unknown turned into a zero.
     out('history-sweep: accounts.sh could not be read, so no home is known; nothing listed');
     return result(EXIT.REFUSED, 'roster-unreadable');
   }

@@ -80,6 +80,8 @@ const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => 
   'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
   // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
   'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  // W4 Task 1H: the subagent census, L4 like derive.mjs (it imports lib and store's unbrotli, and runs statements on the handle it is handed).
+  'census.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
   'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
   // W3 Task 1B: the steer file's IO, L3, which card.mjs (L4) calls. It imports lib and store and nothing outward, and reaches SQLite through the handle it is given.
   'steer.mjs': { ring: 'L3', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './card.mjs' || s === './derive.mjs' || s.startsWith('../') },

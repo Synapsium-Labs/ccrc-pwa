@@ -13,8 +13,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, type HistoryBox } from './historyHelpers.js';
 import { userRow } from './historyFixtures.js';
 import { capBytes, historyPaths } from '../../ccd/history/lib.mjs';
-import { createStore, openWriter } from '../../ccd/history/store.mjs';
-import { ingestTick, makeIngestCtx, newBudget, recordAgentsInstall } from '../../ccd/history/sweep.mjs';
+import { closeWriter, createStore, openWriter } from '../../ccd/history/store.mjs';
+import { censusReport, ingestTick, makeIngestCtx, newBudget, recordAgentsInstall } from '../../ccd/history/sweep.mjs';
 
 export type Arm = 'none' | 'file';
 export const noMarker: Arm = 'none';   // tick() removes ~/.ccrc/history/agents-on first
@@ -51,6 +51,9 @@ export interface TickOpts {
   /** The store's size as a share of a 1 GB cap: the ingest context's sizeBytes is ceil(storeAt * capBytes(1)), its capBytes
    *  capBytes(1) and its pause null, as tick() hands them from the pass (Task 1E). Default 0. */
   storeAt?: number;
+  /** The tick's run budget limits (newBudget's second argument): `{ chunkBytes: 1, maxBytes: 1 }` reads one line of the first file and stops
+   *  (Task 1H: a parent read only to part of its file). */
+  budget?: { maxMs?: number; maxBytes?: number; chunkBytes?: number };
   /** A registry id: an empty file is planted in spool/.draining/ under a name drainingNameParts parses as that id, so hintedUuids
    *  hints the id's uuid this tick. */
   hint?: string;
@@ -58,6 +61,7 @@ export interface TickOpts {
 
 export interface AgentRig {
   box: HistoryBox;
+  /** Replaceable: `reopenWriter` hands the rig a fresh handle after a case ran an op beside it. */
   db: DatabaseSync;
   /** recordAgentsInstall(db, nowMs), then one ingestTick(db, { ...makeIngestCtx(...), agentStop, pause: null, sizeBytes, capBytes },
    *  newBudget()): the pass's own order. `arm` null leaves the marker as it stands. Answers what ingestTick answers. A case about
@@ -88,6 +92,7 @@ export async function agentRig(prefix: string): Promise<AgentRig> {
     db,
     async tick(arm = null, o = {}) {
       const st = seqOf.get(rig)!;
+      const db = rig.db;   // the handle as it stands: a case that closed and reopened the writer (an op run) hands the tick the new one
       if (arm === 'none') plantMarker(box, 'none');
       else if (arm === 'file') plantMarker(box, 'file');
       const nowMs = o.nowMs ?? (st.last === 0 ? T0 : st.last) + 60_000;
@@ -108,7 +113,7 @@ export async function agentRig(prefix: string): Promise<AgentRig> {
         sizeBytes: Math.ceil((o.storeAt ?? 0) * capBytes(1)),
         capBytes: capBytes(1),
       };
-      return ingestTick(db, ctx, newBudget());
+      return ingestTick(db, ctx, newBudget(undefined, o.budget));
     },
   };
   seqOf.set(rig, { n: 0, last: 0 });
@@ -144,6 +149,8 @@ export interface TreeSpec {
   parent?: 'registered' | 'epoch' | 'compactions' | 'unknown';
   /** false: the parent's main transcript is not planted (only its session directory). Default true. */
   main?: boolean;
+  /** The parent's main transcript rows, in place of the default two user rows (Task 1H: tool_use and tool_result rows at chosen times). */
+  mainRows?: object[];
 }
 
 /** `n` user rows under one message-uuid family, so two agents never share an entry uuid: rows `tag`.`i`. */
@@ -170,7 +177,7 @@ export function plantAgentTree(rig: AgentRig, spec: TreeSpec, o: { sinceMs?: num
   const proj = path.join(home, 'projects', spec.slug);
   fs.mkdirSync(proj, { recursive: true });
   const mainPath = path.join(proj, `${spec.uuid}.jsonl`);
-  if (spec.main !== false) fs.writeFileSync(mainPath, jsonlOf(fixtureRows(0x7000 + st.n, 2, spec.uuid)));
+  if (spec.main !== false) fs.writeFileSync(mainPath, jsonlOf(spec.mainRows ?? fixtureRows(0x7000 + st.n, 2, spec.uuid)));
   const sub = path.join(proj, spec.uuid, 'subagents');
   const paths: Record<string, string> = {};
   const put = (dir: string, runId: string | null, a: AgentSpec): void => {
@@ -290,4 +297,75 @@ export function holdAgainIn(fromPath: string, fromHome: string, toHome: string, 
   if (meta !== undefined) fs.writeFileSync(toMeta, JSON.stringify(meta));
   else if (fs.existsSync(fromMeta)) { if (how === 'link') fs.linkSync(fromMeta, toMeta); else fs.copyFileSync(fromMeta, toMeta); }
   return to;
+}
+
+// ── Task 1H: the census rig ─────────────────────────────────────────────────────────────────────────────────────────────
+/** The first row's time of every `fixtureRows` agent (a whole second): an agent's `t0`. */
+export const AGENT_T0 = Date.UTC(2026, 10, 1, 10, 0, 0);
+export const iso = (ms: number): string => new Date(ms).toISOString();
+const rowUuid = (tag: number, i: number): string => `00000000-${tag.toString(16).padStart(4, '0')}-4000-8000-${(i + 1).toString(16).padStart(12, '0')}`;
+
+/** Assistant rows each holding one `tool_use` block per id (the first named Read, the others Agent, so a row's `tool_name` names the
+ *  FIRST block and a later id is found only by testing every block). `ms` null writes the row with no timestamp. Message uuids are
+ *  `tag`.`i`, so no two fixtures share one (entries.uuid is unique store-wide). */
+export function callRows(tag: number, calls: Array<{ ms: number | null; ids: string[] }>, sessionId = '0189abcd-1234-4678-9abc-000000000001'): object[] {
+  return calls.map((c, i) => ({
+    parentUuid: null, isSidechain: false, userType: 'external', cwd: '/home/u/worktrees/p/quiet-basin', sessionId, version: '2.1.289',
+    gitBranch: 'ws/quiet-basin', uuid: rowUuid(tag, i), type: 'assistant', requestId: `req_${tag}_${i}`,
+    ...(c.ms === null ? {} : { timestamp: iso(c.ms) }),
+    message: {
+      id: `msg_${tag}_${i}`, type: 'message', role: 'assistant', model: 'claude-fixture-4',
+      content: c.ids.map((id, k) => ({ type: 'tool_use', id, name: k === 0 ? 'Read' : 'Agent', input: { file_path: '/x' } })),
+    },
+  }));
+}
+
+/** User rows each holding one `tool_result` block whose text is `text` (a string, or `items` as text items when `items` is true). */
+export function resultRows(tag: number, results: Array<{ ms: number | null; text: string; items?: boolean }>, offset = 0, sessionId = '0189abcd-1234-4678-9abc-000000000001'): object[] {
+  return results.map((r, i) => ({
+    parentUuid: null, isSidechain: false, userType: 'external', cwd: '/home/u/worktrees/p/quiet-basin', sessionId, version: '2.1.289',
+    gitBranch: 'ws/quiet-basin', uuid: rowUuid(tag, offset + i), type: 'user',
+    ...(r.ms === null ? {} : { timestamp: iso(r.ms) }),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_res_${tag}_${i}`, content: r.items === true ? [{ type: 'text', text: r.text }] : r.text }] },
+  }));
+}
+
+/** Plain user rows with no timestamp at all (`n` of them, tag.i): a subagent with no timed row. */
+export function untimedRows(tag: number, n: number, sessionId = '0189abcd-1234-4678-9abc-000000000001'): object[] {
+  return Array.from({ length: n }, (_, i) => {
+    const r = userRow({ uuid: rowUuid(tag, i), ts: iso(AGENT_T0), sessionId, text: `untimed ${tag}.${i}` }) as Record<string, unknown>;
+    delete r['timestamp'];
+    return r;
+  });
+}
+
+export interface CensusUnits {
+  D: number; R: number; P: number; Q: number; Ad: number; L: number; U: number; M: number; X: number; I: number;
+  G: { notFound: number; unknown: number };
+}
+export interface CensusShare { lo: number; hi: number; den: number }
+export interface CensusReport {
+  units: CensusUnits;
+  byKind: { agent: CensusUnits; workflow: { a: CensusUnits | 'unavailable'; b: CensusUnits | 'unavailable'; c: CensusUnits | 'unavailable' } };
+  K: Array<{ level: string; reason: string; n: number }>;
+  beside: {
+    holdings: number; physical: number; holdingUnbound: Record<string, number>; refusedSinceStored: number; shapes: Record<string, number>;
+    companions: { meta: number; journal: number }; agentMetaOrphan: number; agentFileRefused: Record<string, number>;
+    identityCollision: number; qParentUnknown: number; lookups: { agentTool: number; workflow: number; decodes: number };
+  };
+  reasons: Record<string, number>;
+  sums: { ok: boolean; failed: string[] };
+  shares: Record<string, CensusShare> | null;
+  withheld: string[];
+  canonical: { lo: number; hi: number } | null;
+}
+/** The census over the rig's store and homes, as the verb computes it (`over` replaces a dependency: predicate, runWindow, summaryState). */
+export function censusOf(rig: AgentRig, over: Record<string, unknown> = {}): CensusReport {
+  return censusReport(rig.db, rig.box.homes, rig.box.home, over) as unknown as CensusReport;
+}
+
+/** Close the rig's writer, run `fn` (an op beside the store, such as the shim's `import --agents --apply`), and open a fresh writer. */
+export async function whileClosed<T>(rig: AgentRig, fn: () => T): Promise<T> {
+  closeWriter(rig.db);
+  try { return fn(); } finally { rig.db = openWriter(historyPaths(rig.box.home).dbFile); }
 }

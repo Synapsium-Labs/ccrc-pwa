@@ -220,7 +220,7 @@ export const HOLDING_SHAPES: readonly ['none', 'single', 'identical', 'prefix', 
 export function holdingShape(lists: string[][]): HoldingShape;
 /** What the subagent arm of the walk hands over (W4 P20). Paths stay in memory; nothing prints them. */
 export type AgentWalkEntry =
-  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number }
+  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number; dev: bigint; ino: bigint; size: number }
   | { type: 'companion'; home: string; slug: string; uuid: string; runId: string | null; role: 'meta' | 'journal'; id: string | null; path: string }
   | { type: 'unentered'; home: string; level: AgentLevel; reason: AgentDirReason; path: string };
 export interface AgentSink {

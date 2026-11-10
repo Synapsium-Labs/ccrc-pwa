@@ -1497,6 +1497,8 @@ export function formOf(op, args) {
       return has('--apply') ? 'reparse-apply' : null;
     case 'recall-off':
       return has('--clear-all') ? 'recall-off-clear-all' : 'recall-off';
+    case 'census':
+      return null;   // W4 P16 (a): read-only, never a writing form, so it runs inside a session too
     case 'repair': case 'backup': case 'migrate': case 'adopt': case 'restore': case 'rebuild':
       return op;
     default:
@@ -7461,6 +7463,12 @@ export function parseOpVerbArgs(op, args) {
     case 'backup':
     case 'adopt':
       return args.length === 0 ? ok({ op }) : refuse('bad-args');
+    case 'census': {
+      // W4 P16 (a): `--json` alone (a bool); any other argument is bad-args
+      const r = readOpFlags(args, { '--json': 'bool' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      return ok({ op, json: r.flags['--json'] === true });
+    }
     case 'prune': {
       const r = readOpFlags(args, { '--apply': 'bool', '--older-than': 'value' });
       if (r === null || r.positional.length > 0 || r.flags['--older-than'] === undefined) return refuse('bad-args');
