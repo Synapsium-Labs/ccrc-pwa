@@ -4,12 +4,11 @@
 // describeDarwin launchd block, whose body also runs on Linux).
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 import { installFixtureTree, installVersionedTree } from './installTreeFixture.js';
-import { plantFakeRuntime } from './codexLaneFixture.js';
 import { BOX_SETTINGS_TIMER_S } from '../../shared/api.js';
 import { here, REPO, realPath, BASH, treeRoot, ccrcIn, treeFile, placed, freshBox, ccrcEnv, runInstall, runLauncherVersion, pathWithout, read, dotCcrc, preexisting, gitInit, unitDir, SLICE_DIR, UNIT_FILES, systemctlCalls, FLEET_URL, FLEET_TOKEN, runInstallTty, type Result } from './ccrc-installFixture.js';
 
@@ -728,23 +727,22 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       .not.toContain('ccgpt-usage');
   });
 
-  it('ccrc-codex-usage@.service runs the isolated runtime\'s interpreter under -I, with the cost map local and a start bound (D-3486, Plan 3a Task 6)', () => {
-    // D-3164, the half Plan 2b-2 owns: the publisher's shebang is `env
-    // python3`, and on the operator's fleet box that python imports a
-    // third-party litellm fork from user site-packages — a SILENT wrong
-    // interpreter. The unit now names the runtime `ccgpt-runtime` builds, and
-    // this case holds it there in two halves: the TEXT (one ExecStart, `-I`,
-    // the cost map local, no PATH line) and the AGREEMENT — the interpreter the
-    // unit names, resolved, is the one `ccgpt-runtime python` answers on a box
-    // that has a runtime. Plan 3a places the pair under ccrc's own name and arms
-    // one instance per codex lane (the cases above and the converge describe).
+  it('ccrc-codex-usage@.service runs the system python3 under -I, names no runtime path, and has a start bound (codex-bridge Stage 4, Task 3)', () => {
+    // THE HISTORY (D-3164, D-3486): the publisher once imported LiteLLM, and on the operator's fleet box the bare
+    // `python3` imported a third-party litellm fork from user site-packages, a SILENT wrong interpreter. So the unit
+    // named the isolated runtime's interpreter. The publisher has imported nothing of LiteLLM since codex-bridge
+    // Stage 1 (Task 7), and `-I` keeps the user site off the path, so that reason is gone. What it cost stayed: a
+    // `direct` lane, which needs no runtime to serve, needed one for its usage row. This case holds the unit in two
+    // halves: the TEXT (one ExecStart, the system python3, `-I`, no runtime path, no cost-map line, no PATH line)
+    // and the PREMISE, that the publisher imports the standard library only.
     const unit = read(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.service'));
     const code = unit.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
     const execs = code.filter((l) => l.startsWith('ExecStart='));
     expect(execs, 'the unit must carry exactly one ExecStart').toHaveLength(1);
-    expect(execs[0]).toBe('ExecStart=%h/.ccrc/runtime/codex/current/bin/python -I %h/.local/bin/ccgpt-usage.py');
-    expect(code, 'the cost map is not local — every poll would fetch a mutable remote JSON (D-3484)')
-      .toContain('Environment=LITELLM_LOCAL_MODEL_COST_MAP=True');
+    expect(execs[0]).toBe('ExecStart=/usr/bin/env python3 -I %h/.local/bin/ccgpt-usage.py');
+    expect(code.filter((l) => /runtime\/codex/.test(l)), 'the usage poll names the LiteLLM runtime again').toEqual([]);
+    expect(code.filter((l) => /LITELLM/.test(l)), 'a LiteLLM variable is set for a publisher that imports none of it')
+      .toEqual([]);
     expect(code).toContain('Environment=CCGPT_ACCOUNT_ID=%i');
     // Plan 3a Task 1: a oneshot has NO start timeout by default. The
     // publisher refuses a device sign-in in-process; this bounds everything
@@ -769,21 +767,15 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     // another target and every one of those readers goes blind.
     expect(timer, 'the usage timer is no longer wanted by timers.target').toContain('WantedBy=timers.target');
 
-    // The agreement half, in a fixture HOME only. The runtime is planted by
-    // `codexLaneFixture.ts`' `plantFakeRuntime`, the one planter of the
-    // builder's layout in the test tree: a `gen-<UTC>-<n>` generation, a
-    // RELATIVE `current` symlink, and a stamp derived from the shipped
-    // `ccd/ccgpt-runtime`. So this case types no second copy of that layout.
-    const home = mkTmp('ccrc-usage-unit-interp-');
-    const rt = plantFakeRuntime(home);
-    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccgpt-runtime'), 'python'],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
-    expect(r.status, `ccgpt-runtime python: ${r.stderr}`).toBe(0);
-    expect(realpathSync(r.stdout.trim()), 'ccgpt-runtime python answered an interpreter the fixture did not plant')
-      .toBe(realpathSync(rt.python));
-    const named = execs[0]!.slice('ExecStart='.length).split(' ')[0]!.replace(/^%h\//, `${home}/`);
-    expect(realpathSync(named), 'the unit names an interpreter the runtime builder does not answer')
-      .toBe(realpathSync(r.stdout.trim()));
+    // The premise half. Every import statement in the publisher, at any depth, names a standard-library module:
+    // the list is today's, so a new import is a deliberate edit here, with its reason.
+    const STDLIB = ['datetime', 'importlib', 'json', 'os', 're', 'stat', 'sys', 'time', 'urllib'];
+    const imported = [...read(join(REPO, 'ccd', 'ccgpt-usage.py')).matchAll(/^[ \t]*(?:import|from)[ \t]+([A-Za-z_][\w]*)(?:\.[\w.]+)?(?:[ \t]+import\b.*|[ \t]*)$/gm)]
+      .map((m) => m[1]!);
+    expect(imported.length, 'the scan found no import statement — this pin has gone blind').toBeGreaterThan(5);
+    expect([...new Set(imported)].sort().filter((m) => !STDLIB.includes(m)),
+      'the publisher imports a module outside the standard library, which the system python3 under -I may not have')
+      .toEqual([]);
   });
 
   it('the installed ccrc.service reads ccrc.env first, then exposure.env, both optional', () => {
