@@ -512,7 +512,7 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
 
   it.skipIf(!HAS_FLOCK)('the unit takes the lock, runs the sub, records its phases, and ends the act ok', () => {
     const h = fixture({ SYSTEMD_RUN_RC: '0' });
-    const prog = SRC('linux') + '_tba_run_repair() { _tba_phase verify; _tba_phase copy; _tba_phase install; return 0; }; '
+    const prog = SRC('linux') + '_tba_run_repair() { [ "${1-}" = --precheck ] && return 0; _tba_phase verify; _tba_phase copy; _tba_phase install; return 0; }; '
       + 'id="$(_tba_main repair | sed -n \'s/.*"act":"\\([0-9a-f]*\\)".*/\\1/p\')"; '
       + 'echo "$id"; CCRC_TBA_ACT="$id" _tba_main repair >/dev/null; echo "rc=$?"';
     const r = sh(h, prog, [VERB]);
@@ -531,7 +531,7 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
   it.skipIf(!HAS_FLOCK)('a sub that fails ends the act failed with its closed code; an unknown code is dropped', () => {
     for (const [code, want] of [['verify-failed', 'verify-failed'], ['not-a-code', null]] as const) {
       const h = fixture({ SYSTEMD_RUN_RC: '0' });
-      const prog = SRC('linux') + `_tba_run_repair() { _tba_phase verify; TBA_CODE=${code}; return 1; }; `
+      const prog = SRC('linux') + `_tba_run_repair() { [ "\${1-}" = --precheck ] && return 0; _tba_phase verify; TBA_CODE=${code}; return 1; }; `
         + 'id="$(_tba_main repair | sed -n \'s/.*"act":"\\([0-9a-f]*\\)".*/\\1/p\')"; CCRC_TBA_ACT="$id" _tba_main repair >/dev/null';
       sh(h, prog, [VERB]);
       const status = readTestboxAdminStatus(run(h, ['status']).out.trim());
@@ -541,7 +541,7 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
 
   it.skipIf(!HAS_FLOCK)('a unit that finds the lock held ends the act failed busy and runs nothing', () => {
     const h = fixture({ SYSTEMD_RUN_RC: '0' });
-    const prog = SRC('linux') + '_tba_run_repair() { echo ran >"$HOME/ran"; }; '
+    const prog = SRC('linux') + '_tba_run_repair() { [ "${1-}" = --precheck ] && return 0; echo ran >"$HOME/ran"; }; '
       + 'id="$(_tba_main repair | sed -n \'s/.*"act":"\\([0-9a-f]*\\)".*/\\1/p\')"; '
       + 'exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; CCRC_TBA_ACT="$id" _tba_main repair >/dev/null';
     sh(h, prog, [VERB]);
@@ -552,7 +552,7 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
 
   it('the environment alone starts nothing: CCRC_TBA_ACT without the argument file is an ordinary call', () => {
     const h = fixture({ SYSTEMD_RUN_RC: '0' });
-    const r = sh(h, SRC('linux') + `_tba_run_repair() { echo ran >"$HOME/ran"; }; CCRC_TBA_ACT=${ID} _tba_main repair; echo "rc=$?"`, [VERB]);
+    const r = sh(h, SRC('linux') + `_tba_run_repair() { [ "\${1-}" = --precheck ] && return 0; echo ran >"$HOME/ran"; }; CCRC_TBA_ACT=${ID} _tba_main repair; echo "rc=$?"`, [VERB]);
     expect(existsSync(join(h.home, 'ran'))).toBe(false);
     expect(r.out).toMatch(/"ok":true,"act":"[0-9a-f]{32}"/);
   });
@@ -561,10 +561,10 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
     const h = fixture();
     let r = sh(h, SRC('linux') + '_tba_run_probe() { _tba_ok \'"fingerprint":"x"\'; }; _tba_main probe', [VERB]);
     expect(r.out).toBe('{"ok":true,"fingerprint":"x"}\n');
-    // `read` is built by a later task (TC8); until then it is a usage error, never half-run
-    r = sh(h, SRC('linux') + '_tba_main read; echo "rc=$?"', [VERB]);
+    // `parity` is built by a later task (TC9); until then it is a usage error, never half-run
+    r = sh(h, SRC('linux') + '_tba_main parity; echo "rc=$?"', [VERB]);
     expect(r.rc).toBe(2);
-    expect(r.err).toContain('read is not built in this release');
+    expect(r.err).toContain('parity is not built in this release');
     expect(existsSync(h.state)).toBe(false);
   });
 

@@ -201,7 +201,10 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     expect(inst).toContain(`--push-key ${STG}/push.pub`);
     // the tarball went to the box on stdin, and the staging directory was removed at the end
     expect(stdinOf(h, 'tar -xzf')).toBe('TARBALL-BYTES');
-    expect(sshCalls(h).map(cmdOf).slice(-1)[0]).toContain(`rm -rf -- ${STG}`);
+    const seq = sshCalls(h).map(cmdOf);
+    expect(seq.findIndex((c) => c.includes(`rm -rf -- ${STG}`))).toBeGreaterThan(seq.findIndex((c) => c.includes('install.sh')));
+    // and only the check phase's read of the box's own settings (TC8) follows it
+    expect(seq.slice(seq.findIndex((c) => c.includes(`rm -rf -- ${STG}`)) + 1).every((c) => c.includes('--testbox-knobs') || c.includes('sha256sum'))).toBe(true);
     expect(JSON.parse(stdinOf(h, 'rows')!).name).toBe('project-a');
   });
 
