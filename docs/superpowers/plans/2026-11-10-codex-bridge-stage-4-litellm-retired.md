@@ -75,8 +75,8 @@ Each has a recommendation. None blocks wave 4a's first tasks.
 2. **Each lane's watch verdict**, from Task 0's readings (runbook step R1). lane-a has no baseline of its own defined:
    it was switched six hours into lane-b's watch (the Stage 2 plan's record of the second lane's switch).
    Recommendation: judge both lanes on the criteria that need no baseline, and both together on the two that do.
-3. **New lanes start `direct`** (Task 7). Recommendation: yes, once the verdict is in. Until then `account add` keeps
-   writing a `litellm` lane.
+3. **New lanes start `direct`** (Task 7). **Ruled 2026-11-10: yes, always.** `account add` writes a `direct` lane,
+   and no longer waits for the watch verdict.
 4. **When the runtime leaves the fleet box** (R4). Recommendation: after the 4a build has run there for a week with
    the doctor green, the usage rows fresh and the hourly refresh clean.
 5. **The catalogue probe's identity.** The design's D27 has ccrc name itself on the backend route. The bridge and the
@@ -295,11 +295,12 @@ copy from the user site. The publisher has not imported it since Stage 1, and `-
 
 ### Task 7: a new lane starts `direct`
 
-Waits for ruling 3.
+Ruling 3 is made, so this is built.
 
 **Files:**
-- Modify: `deploy/account-op.mjs` (`addedEntry`), `ccd/ccrc` (`_acct_codex_pick`), `pwa/src/fleet/accountWords.ts`
-- Test: `server/test/account-ops.test.ts`, `server/test/ccrc-account-codex-add.test.ts`,
+- Modify: `deploy/account-op.mjs` (`check-add`'s plan), `ccd/ccrc` (`_acct_codex_pick`),
+  `pwa/src/fleet/accountWords.ts`, `README.md`
+- Test: `server/test/ccrc-account-codex-add.test.ts`, `server/test/ccrc-account.test.ts`,
   `pwa/test/chatgpt-sheet.test.tsx`
 
 **Interfaces:**
@@ -307,13 +308,15 @@ Waits for ruling 3.
   `_codex_python` where it asked for the runtime, and still draws two ports, because `exec.litellmPort` stays
   required.
 
-- [ ] **Step 1: Write the failing tests.** "a new codex row is written with bridge direct"; "add with no runtime and
-  a python3 at 3.9 succeeds"; "add with no usable python3 refuses `python-absent`"; the PWA's refusal words for the
-  new code.
-- [ ] **Step 2: Run them and see them fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run the tests and see them pass.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write the failing tests.** "a new codex row is written with bridge direct"; "add with no runtime and
+  a python3 at 3.9 succeeds"; "add with no usable python3 refuses `codex-python-absent`"; the PWA's refusal words for
+  the new code.
+- [x] **Step 2: Run them and see them fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run the tests and see them pass.**
+- [x] **Step 5: Commit.**
+
+The PWA keeps its words for `codex-runtime-absent`: a fleet host on an older build still answers it.
 
 ### Task 8: the README and the usage text say what is true
 
@@ -415,7 +418,7 @@ reported in the pull request that met it.
 Task 6 (#2595), Task 8 (the README) and Task 9 (#2593, #2590). Task 10 needed no change. The first release that
 carries all of it is the one cut from Task 9's merge.
 
-**Still to build:** Task 7, which waits for ruling 3, and wave 4c, which waits for R4.
+**Still to build:** wave 4c, which waits for R4. Task 7 is built: a new lane starts `direct`.
 
 **The operator's:** R1 to R5. R1 needs nothing but a build at or after v0.0.1076 on the fleet box.
 

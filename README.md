@@ -2006,9 +2006,9 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   names and nothing answers on, from `CCRC_ACCOUNT_CODEX_PORT_BASE` (default 14100), refusing `no-free-port`, and names
   a fresh folder, `exec.authDir: ".local/share/ccrc/codex/<id>-<six random hex digits>"`, refusing `authdir-occupied` if
   anything stands there. So a re-added id never meets an old lane's sign-in. The folder is only a name until the first
-  sign-in makes it. It refuses `codex-runtime-absent`, with nothing written, on a box with no Codex runtime, and builds
-  none: run `ccgpt-runtime build`, then add the lane again. `ccrc install` builds a runtime only for a lane the roster
-  already names, so the first ChatGPT lane on a box takes that step. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
+  sign-in makes it. The row carries `exec.bridge: "direct"`: a new lane runs on ccrc's own bridge under the system
+  `python3`, and an add neither needs nor builds a LiteLLM runtime. It refuses `codex-python-absent`, with nothing
+  written, on a box with no `python3` at 3.9 or later. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
   the next `ccrc install` or `ccrc update` enables `ccrc-codex-usage@<id>.timer`. The next step is `auth-start --method
   openai-login`, then `check` and `enable`.
   **The PWA runs the same steps** from Add account › OpenAI, with the sign-in page's link, its host and the device code on

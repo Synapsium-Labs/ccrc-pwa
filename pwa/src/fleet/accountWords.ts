@@ -542,6 +542,8 @@ const ADD_REFUSAL_TEXT: Readonly<Record<AddRefusalWord, { frame: AddRefusalFrame
 /** The Codex arm's own refusals of an add (spec §7.2 step 3; A24), which cross as `lane-act-refused` with the verb's code
  *  beside it. None of them wrote anything. */
 const CODEX_ADD_REFUSAL: Readonly<Record<string, string>> = {
+  'codex-python-absent': "This fleet host has no python3 at 3.9 or later, which a ChatGPT lane runs under. Nothing was added. Install it on the fleet host, then add it again.",
+  // What a fleet host on an older ccrc still answers: there a new lane ran on the LiteLLM runtime.
   'codex-runtime-absent': "This fleet host has no Codex runtime, so a ChatGPT lane has nothing to run on. Nothing was added. Run `ccgpt-runtime build` on the fleet host, then add it again.",
   'no-free-port': "No two free ports were found for this lane's gateway. Nothing was added.",
   'authdir-occupied': "This lane's new sign-in folder already exists on the fleet host. Nothing was added. Add it again for a fresh folder.",
