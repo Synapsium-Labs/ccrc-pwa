@@ -2,8 +2,9 @@
 // coordinator whose dispatch (or send-back) the concurrency cap refused is MAILED when the cap has room again, one
 // mail per refusal, round-robin by programme, no faster than the wake budget's rate and in a window of the lane's own.
 //
-// The first block is the CHARACTERIZATION, green on the base: a refused dispatch writes nothing and the run stays
-// `planned`; a refusal sends no mail. The blocks after it flip exactly those rows.
+// The characterization commit pinned, green on the base, that a refused dispatch wrote nothing and the run stayed
+// `planned`; the stamp's block below flips exactly the rows that changed (the stamp and the journal line). A refusal
+// still sends no mail: the wake is the lane's, when the cap has room.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -60,8 +61,8 @@ function fixture() {
 const capRefused = (out: DispatchOutcome): boolean => !out.ok && out.kind === 'refused' && out.code === 'cap-concurrency';
 const mailCount = (coord: CoordStore): number => (coord.db.prepare('SELECT count(*) AS c FROM mail').get() as { c: number }).c;
 
-describe('characterization: a cap-refused dispatch writes nothing (today)', () => {
-  it('the run stays planned, its journal stays empty and no mail is sent', async () => {
+describe('a cap-refused dispatch is stamped and journalled (D-6095)', () => {
+  it('the run stays planned and carries the stamp, its journal names the refusal, and no mail is sent', async () => {
     const f = fixture();
     f.coord.setCaps({ maxConcurrentWorkers: 1 });
     f.holder('other');
@@ -69,8 +70,34 @@ describe('characterization: a cap-refused dispatch writes nothing (today)', () =
     expect(capRefused(await dispatchRun(f.deps, id, 'go', undefined))).toBe(true);
     const run = f.coord.run(id);
     expect(run.ok && run.run !== null && run.run.state).toBe('planned');
-    expect(f.coord.runEvents(id)).toEqual([]);
+    expect(f.coord.runEvents(id).map((e) => e.detail)).toEqual(['admission-refused:cap-concurrency limit=1 running=1']);
+    expect(f.coord.admissionStampOf(id)).toMatchObject({ claimedBy: 'coord-a' });
+    expect(f.coord.admissionStampOf(id)!.since).not.toBeNull();
     expect(mailCount(f.coord)).toBe(0);
+  });
+
+  it('a refusal by the pause or the mail-disabled marker is not a cap refusal and stamps nothing', async () => {
+    const f = fixture();
+    f.coord.setCaps({ maxConcurrentWorkers: 1 });
+    f.holder('other');
+    const id = f.planned('prog-a', 'coord-a');
+    writeFileSync(path.join(f.home, '.cc-sessions', 'coordinator-paused'), '');
+    const out = await dispatchRun(f.deps, id, 'go', undefined);
+    expect(!out.ok && out.kind === 'refused' && out.code === 'paused').toBe(true);
+    expect(f.coord.admissionStampOf(id)!.since).toBeNull();
+  });
+
+  it('a dispatch that proceeds clears the stamp', async () => {
+    const f = fixture();
+    f.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const blocker = f.holder('other');
+    const id = f.planned('prog-a', 'coord-a');
+    expect(capRefused(await dispatchRun(f.deps, id, 'go', undefined))).toBe(true);
+    expect(f.coord.admissionStampOf(id)!.since).not.toBeNull();
+    expect(f.coord.advance(blocker, 'working', 'test').ok).toBe(true);
+    expect(f.coord.advance(blocker, 'awaiting-review', 'test').ok).toBe(true);   // the slot is free
+    expect(await dispatchRun(f.deps, id, 'go', undefined)).toMatchObject({ ok: true });
+    expect(f.coord.admissionStampOf(id)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
   });
 });
 

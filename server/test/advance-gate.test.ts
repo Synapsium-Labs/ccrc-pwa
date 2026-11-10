@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { parsedFile } from './scan/symbols.js';
 import {
-  ADVANCE_GATES, ADVANCE_TARGETS, advanceGate, advanceRequest as advanceRequestParsed,
+  ADVANCE_GATES, ADVANCE_TARGETS, advanceGate, advanceRequest as advanceRequestParsed, capWaitOf,
   type AdvanceGate, type AdvanceGateFacts, type AdvanceRefusal, type AdvanceRunFacts,
 } from '../src/coord/advance.js';
 import { parseCanonicalPositiveSafeInteger } from '../../shared/api.js';
@@ -214,6 +214,15 @@ describe('advanceRequest — the body, then the target (ARCH-33)', () => {
 
   it.each(ADVANCE_TARGETS)('accepts the target %s', (to) => {
     expect(advanceRequest('1', { to, fingerprint: FP }).ok).toBe(true);
+  });
+});
+
+describe('capWaitOf: a refusal by the concurrency cap is a wait (D-6095)', () => {
+  it('answers the cap refusal\'s numbers, and null for every other refusal', () => {
+    expect(capWaitOf({ reject: { code: 'cap-concurrency', limit: 2, running: 3 } })).toEqual({ limit: 2, running: 3 });
+    expect(capWaitOf({ reject: { code: 'review-in-flight', reviewRunId: 4 } })).toBeNull();
+    expect(capWaitOf({ reject: { code: 'unknown-run' } })).toBeNull();
+    expect(capWaitOf({ error: 'bad-request' })).toBeNull();
   });
 });
 

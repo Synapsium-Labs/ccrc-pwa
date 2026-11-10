@@ -73,6 +73,12 @@ export type AdvanceRefusal =
   | { error: 'run-unreadable'; detail: string }
   | { reject: AdvanceReject };
 
+/** D-6095: the numbers of a refusal by the concurrency cap, or null for any other refusal. The advance route reads it to
+ *  stamp a refused send-back as a wait (`noteCapRefusal`), so the handler decides nothing itself (ARCH-33). Pure. */
+export function capWaitOf(r: AdvanceRefusal): { limit: number; running: number } | null {
+  return 'reject' in r && r.reject.code === 'cap-concurrency' ? { limit: r.reject.limit, running: r.reject.running } : null;
+}
+
 /** What the route reads of the request: a `to` and a fingerprint of four typed fields (`prPhase` is checked
  *  against the closed set later, by `verifyDone`, as before). */
 export interface AdvanceBody {
