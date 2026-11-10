@@ -1015,7 +1015,7 @@ it('SA27 forked copies and a true conflict', () => {
   // two holdings sharing a prefix, then different rows: every row stored, transcript_forked counted,
   // each leaf from the copy that holds its boundary; one message uuid with two bodies: one entry, two entry_variants rows (one per body, nothing dropped)
   expect(counter(db, 'transcript_forked')).toBeGreaterThan(0);
-  expect(variantsOf(db, conflictUuid)).toBe(2);
+  expect(variantsOf(db, agentKey)).toBe(2);   // variantsOf counts a transcript's variant rows by its agent key
 });
 ```
 
