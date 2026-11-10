@@ -17,11 +17,26 @@
 - **The carry's copy under the current root, never returned by the tool.** Accepted 3 times (2026-09-24 to 10-15),
   then refused 4 of 4 (2026-10-22 and 10-25).
 - **The whole script passed inline (`script`) with `resumeFromRunId`, after a swap.** Accepted 5 of 5
-  (2026-10-19 to 10-26). Each one came within a minute after a `script-path` refusal of the same run. This is not one
-  of the plan's matrix rows.
+  (2026-10-19 to 10-26). Each one came within a minute after a `script-path` refusal of the same run. The coordinator
+  added it to the live matrix as row R5 (`inline-script-row`).
 - **History does not test row R3.** No call passed a working-directory copy that the tool had not returned in the same
   process. Copies under `/tmp` that were never returned were accepted after a swap, 3 of 3.
 - **Step 7 is closed:** doctor's `oom-policy` line reads PASS (D-8103).
+- **Task 3 (live, build 2.1.314, after one `--interrupt` swap).** Two rows were refused, both with
+  `scriptPath must be a script path this tool returned, …`:
+  - R2, the old root's returned path;
+  - R1, the same relative path under the current root (the carry's hard link of the same file).
+
+  Two rows were accepted, and both runs completed:
+  - R3, a copy in the working directory;
+  - R5, the whole script inline.
+
+  In both completed runs `quick` returned from cache and `slow` ran again from its start. R4 (`/add-dir`) was not run,
+  because the operator declined it.
+- **After the swap, nothing redrove the subject for 15.5 minutes.** It had been idle, so ccd sent no resume prompt.
+  Seven stopped-task notifications started no turn. The stall watch's orphaned-task mail woke it.
+- **Task 4 was not run (item 145).** The lent plan has no five-hour window, and a weekly limit cannot show a paused
+  workflow under a blocked parent. Step 6, and the longer bound for delegated work it was to inform, stay open.
 
 ## 1. Task 1: the resume calls on disk
 
@@ -377,3 +392,43 @@ Both accepted runs resumed in the same `journal.jsonl`, the carry's hard link. E
 
 So both shapes that were accepted resumed the run as the tool promises: completed agents return from cache, and the
 interrupted agent runs again from its start, not from where it stood.
+
+## 3. Task 4: step 6, a paused workflow under a blocked parent, not run
+
+**Neither arm ran, by the operator's ruling (item 145, 2026-11-10 23:38Z).** That ruling also ended the loan. Under
+the cut list (D-8107):
+- the one-account arm (Step 5) is **not run**. It stood in for arm 1, because there is no `scratch-b`;
+- arm 2 (both accounts limited) is **unreachable**, because there is one lent account and no second.
+
+**Why, as measured.**
+- **The lent plan has no five-hour window.** Before Task 4, `scratch-a`'s limits file (written 23:07:05Z) read:
+  weekly 42%, weekly reset 2026-11-16 07:00Z, and no five-hour figure, with no five-hour window since 2026-10-28.
+  Since #2473 (D-8120), ccrc has read such a lane as having no five-hour limit. The arm assumed a five-hour limit and
+  its reset.
+- **A weekly limit cannot show the case.** The parent's first limit would be the weekly one, 58 points away. Claude
+  Code declines to pause its workflow agents for a reset that far off, as `too far out to wait for` (spec §1.1, 7
+  runs). The 30-minute bound after the reset would have fallen on about 2026-11-16 07:30Z.
+- **The behaviour is about to change.** The operator's session-host ruling Q4 (research doc #2526, its section 6.1)
+  turns Claude Code's own auto-continue at the usage limit off in the settings ccd passes to every spawn, as D-8173.
+  D-8173 is allocated only, not built, so a reading made now would describe behaviour that is about to change.
+- **The ruling:** item 145.
+
+**Still open.** Spec §5.4 rule 2 and §11 item 3 leave "a longer bound for delegated work in flight" waiting on
+step 6. That stays open: nothing here measures what a five-hour pause does to a run under ccd.
+
+## 4. What ran, under the cut list
+
+| Spike step | Ran | Answer |
+|---|---|---|
+| 5, history (Task 1) | yes | 184 calls on disk; an old-root or carry-copy path after a swap accepted until 2026-10-21, refused 17 of 17 since 2026-10-22 |
+| 5, live (Task 3) | R1, R2, R3, R5 yes; R4 no | on 2.1.314 after one `--interrupt` swap: both root paths refused; the working-directory copy and the inline script accepted and completed |
+| 6, one-account arm (Task 4) | no | the lent plan has no five-hour window; item 145 |
+| 6, arm 2 | no | unreachable with one lent account |
+| 7 (Task 1) | yes, read only | doctor's `oom-policy` PASS (D-8103) |
+
+*Table 8. The spike's steps.*
+
+**Also measured on the way:** what woke the subject after the swap. ccd sent no redrive, because the subject was idle
+when stopped. The new process received seven stopped-task notifications and took no turn on them. The stall watch's
+orphaned-task mail woke it at 23:01:58Z, 15.5 minutes after the restart at 22:46:31Z. This note records the
+measurement only; any remedy is the coordinator's to rule.
