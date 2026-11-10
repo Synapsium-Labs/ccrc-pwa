@@ -183,6 +183,40 @@ const SURPLUS_FIX = (id: string): string => `  remedy: systemctl --user disable 
 const UNLISTABLE_WARN = "WARN codex: ccrc's own enabled usage timers could not be listed (the wrapper shape contract could not be read), so a ccrc-codex-usage@<id>.timer left enabled for an id that is no longer a Codex lane cannot be seen — unmeasured, never none";
 const UNLISTABLE_FIX = '  remedy: ccrc install — the wrapper shape contract ships with ccrc, and the install places it again';
 
+// ── codex bridge Stage 4, Task 5: the runtime row asks whether any lane runs in litellm mode ──────────────────────────
+// Only such a lane runs on the LiteLLM runtime. `_dr_cx_runtime` is measured alone, in `usageRows`' bare shell, with
+// the question (`_codex_runtime_wanted`, measured against the real roster op in ccrc-codex-bridge.test.ts) answered by
+// table and a `ccgpt-runtime` whose `check` answers `absent`, the verdict every case would FAIL on.
+describe('doctor: the codex runtime row asks whether a lane needs the runtime (codex bridge Stage 4, Task 5)', () => {
+  const runtimeRow = (wanted: 0 | 1 | 2): Result => {
+    const home = usageBox('ccrc-doctor-codex-runtime-row-');
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(home, '.local', 'bin', 'ccgpt-runtime'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$1" >> "$HOME/rt-calls"\necho "ccgpt-runtime: absent"\nexit 1\n', { mode: 0o755 });
+    const r = usageRows(home, false, [
+      'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=(); DRX_RUNTIME=""',
+      `_codex_runtime_wanted() { return ${wanted}; }`,
+      '_dr_cx_runtime; rc=$?; asked=""; [ -f "$HOME/rt-calls" ] && asked="$(< "$HOME/rt-calls")"',
+      'printf "rc=%s\\nruntime=%s\\nasked=%s\\n" "$rc" "$DRX_RUNTIME" "$asked"',
+      '_dr_cx_report "runtime row measured"; :',
+    ].join('\n'));
+    return r;
+  };
+
+  it('no lane in litellm mode: no finding, the runtime is not asked, and the row says none is needed', () => {
+    const r = runtimeRow(1);
+    expect(r.stdout).toContain('rc=0\nruntime=not needed (no codex lane runs in litellm mode)\nasked=\n');
+    expect(r.stdout).not.toMatch(/^FAIL codex: /m);
+  });
+
+  it.each([[0, 'a lane runs in litellm mode'], [2, 'the modes cannot be told']] as const)(
+    'wanted %s (%s): an absent runtime is the FAIL it always was', (wanted, _why) => {
+      const r = runtimeRow(wanted);
+      expect(r.stdout).toContain('asked=check\n');
+      expect(r.stdout).toMatch(/^FAIL codex: no isolated LiteLLM runtime is current on this box \(ccgpt-runtime check: absent\)/m);
+    });
+});
+
 // ════════════════════════════════════════════════════════════════════════
 // Plan 3a Task 8 — `doctor --fix` for a codex lane, and for its launcher.
 // ════════════════════════════════════════════════════════════════════════
@@ -287,6 +321,9 @@ function runFixCodex(c: FixCodexCase = {}): {
       '}',
     ].join('\n'),
     _codex_runtime_cli: '_codex_runtime_cli() { printf \'%s\' "$HOME/.local/bin/ccgpt-runtime"; }',
+    _codex_runtime_wanted: c.wanted === undefined
+      ? '_codex_runtime_wanted() { return 0; }'
+      : `_codex_runtime_wanted() { printf '%s\\n' _codex_runtime_wanted >> "$HOME/calls"; return ${c.wanted}; }`,
     // The lane library's own one-liner: which placed file a shim tier runs.
     _codex_shim_file: ccrcLine(/^_codex_shim_file\(\) .*$/m, '_codex_shim_file'),
     // And the one the litellm tier loads its credential through (codex-bridge Stage 1, Task 6).
@@ -2015,6 +2052,26 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
       DONE(1),
     ]);
     expect(r.calls[r.calls.length - 1]).toBe('_inst_codex_tiers role=both');
+  });
+
+  // Codex bridge Stage 4, Task 5: only a lane in litellm mode runs on the LiteLLM runtime, so step 2 asks first.
+  it('with no lane in litellm mode, a runtime its check would refuse is neither checked nor rebuilt', () => {
+    const r = runFixCodex({ runtime: { check: 1, build: 0, afterBuild: 0 }, wanted: 1 });
+    expect(r.calls).toContain('_codex_runtime_wanted');
+    expect(r.calls.filter((c) => c.startsWith('ccgpt-runtime ')), 'the runtime was asked or built for a box that needs none').toEqual([]);
+    expect(r.fix.filter((l) => /runtime/.test(l))).toEqual([]);
+    expect(r.calls, 'a fix that rebuilt nothing restarted the tiers').not.toContain('_inst_codex_tiers role=both');
+  });
+
+  it('when the modes cannot be told, a refused runtime is rebuilt as before: cannot tell is never "not needed"', () => {
+    const r = runFixCodex({ runtime: { check: 1, build: 0, afterBuild: 0 }, wanted: 2 });
+    expect(r.calls.slice(0, 5)).toEqual(['_codex_lanes', '_codex_runtime_wanted', 'ccgpt-runtime check', 'ccgpt-runtime build', 'ccgpt-runtime check']);
+    expect(r.fix).toContain('FIX codex: runtime: rebuilt, probed and current');
+  });
+
+  it('the fix refuses when the question itself is not loaded, like any other seam', () => {
+    const r = runFixCodex({ unload: '_codex_runtime_wanted' });
+    expect(r.fix.join('\n')).toMatch(/^FIX codex: refused — ccrc's own _codex_runtime_wanted is not loaded/m);
   });
 
   it('a runtime that is not on this box is said, and no build is attempted', () => {
@@ -5628,6 +5685,8 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
       '_codex_row() { CX_ID="$1"; return 0; }',
       '_codex_lane_json_state() { echo current; }',
       '_codex_lane_mode() { case "$1" in codex-c) printf \'litellm\\n\' ;; *) printf \'direct\\n\' ;; esac; }',
+      // Stage 4, Task 5: codex-c runs in litellm mode, so this box wants its runtime, whose check answers 0.
+      '_codex_runtime_wanted() { return 0; }',
       '_codex_bus_defaults() { :; }',
       '_models_roster_path() { printf \'%s\' "$HOME/.ccrc/accounts.json"; }',
       '_models_node() { echo \'{"ok":true,"op":"materialise","check":true,"changed":{"lane":false,"classes":false,"effort":false}}\'; }',
