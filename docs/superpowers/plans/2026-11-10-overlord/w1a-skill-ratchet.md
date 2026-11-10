@@ -462,6 +462,8 @@ programme's run open to mint the three numbers above. No code dependency.
 3. **The count word.** Settled: the clause's pull request offsets the count word's bytes inside the same file
    (§11.4).
 4. **M31's "coordinator skill bytes".** Settled: the measure reads the files, not the caps (§11.4).
-5. **The scope: every skill file, or `SKILL.md` only.** This is the operator's, ruling 16 of the spec's "Waiting on
-   you". The rule binds every programme from the day it merges, so the test's pull request stays a draft until
-   the ruling. Recommendation: every skill file, with coordinators told before it merges.
+5. **The scope: every skill file, or `SKILL.md` only.** Ruled by the operator on 2026-11-10: cap each `SKILL.md`,
+   and hold each contract inside what a compaction keeps. So where this plan says every `.md` under a skill
+   directory, read every `SKILL.md`: reference files are not capped. The test gained a sixth rule, R6: the
+   contract is the file's first section, a notice stands before it, and it ends within 16,000 bytes. It was built
+   so, with each role skill's contract moved first, in #2555.

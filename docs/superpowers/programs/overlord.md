@@ -18,7 +18,8 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | merged |
 | W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
-| W1a, foundations | The skill-size ratchet | #2530 (draft); plan `w1a-skill-ratchet.md` | built. Waits for the operator's ruling on its scope |
+| W1a, foundations | The skill-size ratchet, and each skill's contract moved first | #2555 (supersedes #2530); plan `w1a-skill-ratchet.md` | in review |
+| spec | The operator's ruling on the ratchet's scope | #2556 | in review |
 | W1a, foundations | Ports for time and chance | plan `w1a-time-ports.md` | planned |
 | W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | plan `w1a-roles.md` | planned |
 | W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | planned |
@@ -34,7 +35,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 
 ## Decisions & deviations
 
-- **The spec stays a draft until the operator rules.** Sixteen rulings wait on the operator. They are listed in the
+- **The spec stays a draft until the operator rules.** Fifteen rulings wait on the operator. They are listed in the
   spec under "Waiting on you" and tracked in #2514. The spec is written as if each proposed answer holds. W0 needs
   none of them.
 - **A plan's gap is closed in the spec, not recorded as a deviation.** Each plan was reviewed by reading the spec as
@@ -51,6 +52,10 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   17 of 17. Once the ratchet merges, a pull request that grows a skill file fails in the merge queue, unless it adds a
   pinned clause or puts the new text in a new reference file. So #2530 is a draft until the operator rules on its
   scope: every skill file, or `SKILL.md` only. It is ruling 16. The other foundations need no ruling.
+- **Ruling 16 is made (2026-11-10).** Cap each `SKILL.md`, hold each contract inside what a compaction keeps, and
+  optimise the skills. Reference files are not capped. #2555 builds it: each role skill's contract is now the first
+  section of its file, behind a notice that tells a session how to see a cut, and a test holds the contract inside
+  16,000 bytes. No sentence of a contract changed. The coordinator's contract has about 2,300 bytes left.
 - **No D-numbers are defined yet.** The spec defines none, and the plans name each recorded decision
   `D-TBD-<slug>`. The programme mints real numbers through the ledger door when its run opens, and replaces each
   slug in the same act. Until then the plans cannot merge: `server/test/dtbd.test.ts` fails on a concrete slug.
@@ -125,7 +130,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   protocol first (§3.3.9). So they start when the programme's run is open, its claims are placed, and its deviation
   block is minted.
 - **What must not start.** W1 and later. They wait for D-8126 and for the operator's rulings.
-- **What the operator owes.** The sixteen rulings (#2514), of which the ratchet's scope gates #2530, and W0's setup
+- **What the operator owes.** The fifteen open rulings (#2514), and W0's setup
   item for Tasks 8 to 11: scratch accounts, a scratch project, a subject session and the consent list, as the W0 plan
   sets out.
 - **What to report.** Each piece ends with its pull request merged through the queue, its plan's "Deviations found"
