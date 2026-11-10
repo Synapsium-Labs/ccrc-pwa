@@ -5,6 +5,54 @@ description: Read one finished wave of a ccrc program as the dispatched reviewer
 
 # Reviewing one wave of a ccrc program
 
+**A compaction keeps only the start of this file.** Claude Code re-attaches the
+beginning of a loaded skill after a compaction, so the skill still looks loaded
+while its later sections are gone. The contract comes first so that it survives.
+If you cannot see `## Reporting review-done` further down, load this skill again
+before you report.
+
+## The contract
+
+These ten clauses are the boundary between "a wave reviewer" and "an agent
+with a shell on the fleet host and someone else's branch". They are not advice.
+
+1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.
+2. Ack before you act, keyed on the row's DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.
+3. Measure the reviewed tip ONCE, before you read a line: `reviewedTip` is the 40-hex sha of the worker branch the brief names, read from this repository's own ref (`git rev-parse refs/heads/ws/<worker-slug>`). Every finding cites that sha. If the ref moves while you read, say so in the report and stop — a report about two tips is a report about neither. In a project your brief names as opted in to the radar's lineage, a move whose only new commit is a clean merge of the radar base on top of the tip you read is not a move: keep reading at that tip.
+4. Read in YOUR OWN worktree only: `git checkout --detach <reviewedTip>` here, and never `checkout` the worker's branch, never commit, amend, rebase, cherry-pick, reset or push it, never open a PR on it, and never `git worktree add` or `remove` anything. This workspace's own branch (`ws/<slug>`) stays where dispatch left it; you land nothing on it.
+5. Run the SDD shape the brief names and nothing lighter: the review lenses over the wave's whole diff against the plan file the brief names (that plan's text governs over your recollection of the spec), then the whole-branch pass, then the suites the plan says to run, in this worktree, at `reviewedTip`.
+6. Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.
+7. One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{"reviewedTip":"<sha>","report":"<absolute path>"}`, which the coordinator submits to the close route exactly as you wrote it.
+8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.
+9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
+10. Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.
+
+## Notes on the contract
+
+**Editing note (D-104):** these ten lines are pinned verbatim by
+`server/test/reviewer-skill.test.ts`, whose clause literals are double-quoted.
+Keep every apostrophe STRAIGHT and keep double-quote characters out of a
+clause except the JSON shape in clause 7 and the `rm -rf "$X"` shape in
+clause 9 (D-5292), which the pin spells escaped.
+
+**Clause 3 is the one the server checks.** When the coordinator closes your
+run it re-measures the worker branch's tip NOW and compares it to the
+`reviewedTip` you reported. If the worker pushed after its wave-done (except,
+in a project your brief names as opted in to the radar's lineage, one clean
+merge of the radar base, which the close carries across), the
+close is refused `stale-review` and your report is evidence about a commit
+that is no longer the tip — the coordinator opens a fresh review run against
+the new tip. If the report path you named cannot be opened, the close is
+refused `report-unreadable`. Both are the mechanism behind "a report and its
+tip are one pair"; neither is a judgement of your work.
+
+**Clause 4 is what makes you safe to run beside a live worker.** Both
+worktrees share one repository, so the worker's branch is a local ref you can
+read without fetching — and could write without meaning to. Detaching onto the
+sha is the whole of what you do to git.
+
+## What you are
+
 You are a dispatched reviewer. One workspace, one review run, one tip: a
 coordinator verified a worker's wave-done, opened a review run naming that
 work run, and dispatched you to READ it. The coordinator is asleep until you
@@ -30,44 +78,6 @@ uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}
 ```
 
 `id` is your `fromId`, `uuid` your `fromUuid`. Re-derive both on every call.
-
-## The contract
-
-These ten clauses are the boundary between "a wave reviewer" and "an agent
-with a shell on the fleet host and someone else's branch". They are not advice.
-
-**Editing note (D-104):** these ten lines are pinned verbatim by
-`server/test/reviewer-skill.test.ts`, whose clause literals are double-quoted.
-Keep every apostrophe STRAIGHT and keep double-quote characters out of a
-clause except the JSON shape in clause 7 and the `rm -rf "$X"` shape in
-clause 9 (D-5292), which the pin spells escaped.
-
-1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.
-2. Ack before you act, keyed on the row's DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.
-3. Measure the reviewed tip ONCE, before you read a line: `reviewedTip` is the 40-hex sha of the worker branch the brief names, read from this repository's own ref (`git rev-parse refs/heads/ws/<worker-slug>`). Every finding cites that sha. If the ref moves while you read, say so in the report and stop — a report about two tips is a report about neither. In a project your brief names as opted in to the radar's lineage, a move whose only new commit is a clean merge of the radar base on top of the tip you read is not a move: keep reading at that tip.
-4. Read in YOUR OWN worktree only: `git checkout --detach <reviewedTip>` here, and never `checkout` the worker's branch, never commit, amend, rebase, cherry-pick, reset or push it, never open a PR on it, and never `git worktree add` or `remove` anything. This workspace's own branch (`ws/<slug>`) stays where dispatch left it; you land nothing on it.
-5. Run the SDD shape the brief names and nothing lighter: the review lenses over the wave's whole diff against the plan file the brief names (that plan's text governs over your recollection of the spec), then the whole-branch pass, then the suites the plan says to run, in this worktree, at `reviewedTip`.
-6. Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.
-7. One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{"reviewedTip":"<sha>","report":"<absolute path>"}`, which the coordinator submits to the close route exactly as you wrote it.
-8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.
-9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
-10. Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.
-
-**Clause 3 is the one the server checks.** When the coordinator closes your
-run it re-measures the worker branch's tip NOW and compares it to the
-`reviewedTip` you reported. If the worker pushed after its wave-done (except,
-in a project your brief names as opted in to the radar's lineage, one clean
-merge of the radar base, which the close carries across), the
-close is refused `stale-review` and your report is evidence about a commit
-that is no longer the tip — the coordinator opens a fresh review run against
-the new tip. If the report path you named cannot be opened, the close is
-refused `report-unreadable`. Both are the mechanism behind "a report and its
-tip are one pair"; neither is a judgement of your work.
-
-**Clause 4 is what makes you safe to run beside a live worker.** Both
-worktrees share one repository, so the worker's branch is a local ref you can
-read without fetching — and could write without meaning to. Detaching onto the
-sha is the whole of what you do to git.
 
 ## The brief
 
