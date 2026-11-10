@@ -1259,7 +1259,7 @@ These are unnumbered. The coordinator rules each, and numbers any departure it a
 
 ## Deviations found
 
-W4-1 (run 1745) defines the eleven below: the departures the coordinator approved for it and numbered at dispatch, each by its slug under "Build questions and proposed departures", all dated 2026-11-10. `history-w4-install-record-at-arming` was ruled keep and takes no number; the slugs of W4-2 to W4-4 stay unnumbered until their PRs.
+W4-1 (run 1745) defines the thirteen below, all dated 2026-11-10: D-8151 to D-8161, the departures the coordinator approved for it and numbered at dispatch, each by its slug under "Build questions and proposed departures"; and D-8162 and D-8163, which the coordinator licensed in fix round 1 (review 1749). `history-w4-install-record-at-arming` was ruled keep and takes no number; the slugs of W4-2 to W4-4 stay unnumbered until their PRs.
 
 - **D-8151 — `history-w4-agents-on-marker-name`** (2026-11-10). The arming marker is `~/.ccrc/history/agents-on`, `SWITCHES.agentsOn`, read only as a regular non-link file; the addendum names no file.
 - **D-8152 — `history-w4-active-agents-stored-only`** (2026-11-10). P3's non-scan arm stats only the stored subagent holdings of a parent `activeFiles` took; a subagent file not yet stored waits for the next scan tick.
