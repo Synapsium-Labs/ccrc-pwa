@@ -470,11 +470,28 @@ describe('an in-place run\'s close, abandon and done-claim never touch its coord
     mkdirSync(gitHeads, { recursive: true });
     writeFileSync(path.join(gitHeads, 'sibling'), `${TIP}\n`);
     const run = okRun(b.coord.run(id))!;
-    const row = { number: 42, state: 'OPEN', headRefName: `ws/${BOSS}`, baseRefName: 'main', isCrossRepository: false, ours: true, isDraft: false };
-    const prRun: Runner = async () => ({ ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows: [row], baseShort: 'main', branch: `ws/${BOSS}`, ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' });
+    // the coordinator's own workspace has a PR (#7) and the sibling branch has another (#42): the claim is about #42
+    const row = (number: number, head: string, over: Record<string, unknown> = {}) =>
+      ({ number, state: 'OPEN', headRefName: head, baseRefName: 'main', isCrossRepository: false, ours: true, isDraft: false, ...over });
+    const seen: string[][] = [];
+    const prRun: Runner = async (_cmd, args) => {
+      seen.push(args);
+      const rows = [row(7, `ws/${BOSS}`), row(42, 'feat/sibling')];
+      return { ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows, baseShort: 'main', branch: `ws/${BOSS}`, ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' };
+    };
     const deps = testDeps(b.home, prRun);
     const claim = { branchTip: TIP, prNumber: 42, prPhase: 'open' as const, handoffCommit: TIP };
-    expect(await verifyDone(deps, doneRunOf({ ...run, sessionId: BOSS }), claim)).toMatchObject({ ok: true, measured: { branchTip: TIP } });
+    const inPlace = doneRunOf({ ...run, sessionId: BOSS });
+    expect(await verifyDone(deps, inPlace, claim)).toMatchObject({ ok: true, measured: { branchTip: TIP, prNumber: 42, prPhase: 'open' } });
+    // the PR is read by project, never by the claimant's session
+    expect(seen.every((a) => a.includes('--project') && !a.includes('--session'))).toBe(true);
+    // a claim with no PR number is measured on the sibling's PR, not the coordinator's #7
+    expect(await verifyDone(deps, inPlace, { ...claim, prNumber: null })).toMatchObject({ ok: true, measured: { prNumber: 42 } });
+    // a claim naming the coordinator's own PR is refused
+    expect(await verifyDone(deps, inPlace, { ...claim, prNumber: 7 })).toMatchObject({ ok: false, code: 'pr-regressed' });
+    // the sibling has no PR of its own: an open claim is refused although the coordinator's workspace has one
+    const noPr: Runner = async () => ({ ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows: [row(7, `ws/${BOSS}`)], baseShort: 'main', branch: `ws/${BOSS}`, ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' });
+    expect(await verifyDone(testDeps(b.home, noPr), inPlace, claim)).toMatchObject({ ok: false, code: 'pr-regressed' });
     // the same claim for a run NOT taken in place reads the registry's `ws/<id>` branch, where there is no ref
     expect(await verifyDone(deps, { sessionId: BOSS, project: PROJECT, branch: 'feat/sibling' }, claim))
       .toMatchObject({ ok: false, code: 'tip-unmeasurable' });

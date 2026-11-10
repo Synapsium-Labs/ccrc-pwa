@@ -8,7 +8,7 @@
  * The lineage DECISION is `lineage.ts`'s (pure, L1); this file reads, asks it, and re-reads the tip once after an accept.
  */
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
+import { boundRow, isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
 import { measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readBranchTip } from './gitref.js';
 import { decideLineage, lineageQualifies } from './lineage.js';
@@ -297,6 +297,25 @@ async function settleStaleTip(
 const withLineageDetail = (today: string, s: Extract<StaleSettled, { kind: 'today' }>): string =>
   s.detail === undefined ? today : `${today} (${s.detail})`;
 
+type PrLineRead = { ok: true; line: CcdPrLine } | { ok: false; code: DoneRejectCode; detail: string };
+
+/** The PR read of an in-place run (D-6096): `pr-state --project` carries the repo's PR rows on every line, and the line is
+ *  rebound to the run's recorded sibling branch (`ahead` unmeasured, since no registry row counts that branch), so
+ *  `phaseFor` reads the PR whose head is that branch. The line taken is the first whose own base binds a row to the branch,
+ *  else the first full line, which then reads `none`. */
+async function inPlacePrLine(deps: VerifyDoneDeps, project: string, branch: string): Promise<PrLineRead> {
+  const argv = CCD_ARGV.prStateProject(project);
+  if (!ccdCan(deps.fleetState, 'prStateProject')) {
+    return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
+  }
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return { ok: false, code: 'pr-unmeasurable', detail: res.stderr.trim() };
+  const lines = parsePrLines(res.stdout).filter(isFullLine);
+  const bound = lines.find((l) => boundRow(l.rows, l.baseShort, branch) !== null) ?? lines[0];
+  if (!bound) return { ok: false, code: 'pr-unmeasurable', detail: 'pr-state answered no full line for the project' };
+  return { ok: true, line: { ...bound, branch, ahead: null } };
+}
+
 /**
  * Re-measure a done claim. THE RUN IS NOT TOUCHED HERE — this answers, and the
  * route decides; a verifier that also advanced would be a verifier nobody can
@@ -394,14 +413,24 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
     }
   }
 
-  const argv = CCD_ARGV.prStateSession(run.sessionId);
-  if (!ccdCan(deps.fleetState, 'prStateSession')) {
-    return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
+  // D-6096: an in-place run's PR is the sibling branch's, never the claimant coordinator's own workspace PR, which
+  // `pr-state --session` would read. The project form answers the repo's PR rows, and the recorded branch is bound to one.
+  let line: CcdPrLine;
+  if (run.inPlace === true) {
+    const read = await inPlacePrLine(deps, run.project, branch);
+    if (!read.ok) return read;
+    line = read.line;
+  } else {
+    const argv = CCD_ARGV.prStateSession(run.sessionId);
+    if (!ccdCan(deps.fleetState, 'prStateSession')) {
+      return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
+    }
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return { ok: false, code: 'pr-unmeasurable', detail: res.stderr.trim() };
+    const full = parsePrLines(res.stdout).find(isFullLine);
+    if (!full) return { ok: false, code: 'pr-unmeasurable', detail: 'pr-state answered no full line' };
+    line = full;
   }
-  const res = await deps.runCcd(argv);
-  if (!res.ok) return { ok: false, code: 'pr-unmeasurable', detail: res.stderr.trim() };
-  const line = parsePrLines(res.stdout).find(isFullLine);
-  if (!line) return { ok: false, code: 'pr-unmeasurable', detail: 'pr-state answered no full line' };
   const measured = phaseFor(line);
 
   const verdict = prVerdict(claim.prPhase, measured.phase);
