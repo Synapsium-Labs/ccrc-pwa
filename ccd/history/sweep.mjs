@@ -1877,8 +1877,9 @@ function agentEntry(agents, state, at, runId, runOk, path, c) {
   agents.take({
     type: 'file', ...at, runId, id: c.id, path, verdict: v.verdict, reason: v.verdict === 'refuse' ? v.reason : null,
     // The census's physical-file and unbound-holding facts (P18): the listing's own lstat, read as bigints so an inode past 2^53
-    // matches the store's. `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave.
-    mtimeMs: Number(l.st.mtimeMs), dev: l.st.dev, ino: l.st.ino, size: Number(l.st.size),
+    // matches the store's. `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave. `birthNs` is bindFile's
+    // rule for the stored birth time (null where the filesystem reports none), for lib's sameFileIdentity.
+    mtimeMs: Number(l.st.mtimeMs), dev: l.st.dev, ino: l.st.ino, size: Number(l.st.size), birthNs: l.st.birthtimeNs > 0n ? l.st.birthtimeNs : null,
   });
   return true;
 }
@@ -4689,7 +4690,13 @@ function findLineEnd(fd, start, size) {
 // backup held rather than move onto the exported: row replay just made (whose file_id is always the larger); and at ingest
 // a live copy beats an exported: holder at an equal rank whatever the file ids, which brings back an entry a replay took at
 // a strictly newer rank once the live file is read at that rank. A strictly newer rank wins from either caller, as before.
-const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
+// W4 (review 1749 F6): the entry is keyed by uuid alone, across transcripts, so a subagent row reusing a uuid its parent's main
+// transcript holds would share the main entry (its transcript_pk is the first reader's, and a newer-ranked copy rewrites its
+// structure), and a raw line keyed rawRowKey(<parent uuid>, sha) equal to a parent's line would too. Measured read-only on one node
+// on 2026-11-10 (19 homes, 14,367 subagent files and their 585 parent sessions): no subagent row reuses a uuid of its parent's
+// transcript or of a sibling's, and none of 488,265 raw lines repeats a parent line. No subagent of agentType `fork` existed there,
+// so a context-inheriting one is unmeasured; the coordinator re-measures before each node is armed.
+const ENTRY_UPSERT =`INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
     ts_ms, request_id, api_block_index, msg_id, source_tool_use_id, tool_name, is_compact_summary,
     provenance, prov_version, parse_state, struct_rank_ns, struct_file_id, blob_id)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -5442,24 +5449,26 @@ function bytesWaiting(row, st) {
   return bytesLeftOf({ stored: row, size: st.size, dev: st.dev, ino: st.ino }) > 0;
 }
 
-/** The live row a path names, `{ dev, ino, offset }` as bigints: one statement, prepared once per handle. The scan arm's count of a
- *  withheld file (bytesWaiting) and the import's forecast (agentBytesLeft) both ask it, the forecast on its read-only handle. */
-const AGENT_PATH_ROWS = new WeakMap();
-function agentPathRowOf(db) {
-  let st = AGENT_PATH_ROWS.get(db);
+/** The row a file's device and inode name, `{ dev, ino, offset }` as bigints: the row bindFile resumes (ROW_BY_INODE's key), so a
+ *  hardlinked second holding the store has not aliased yet reads the cursor its bind would resume at, not a whole file (review 1749
+ *  F1). One statement, prepared once per handle. The scan arm's count of a withheld file (scanFileWaiting) and the import's forecast
+ *  (agentBytesLeft) both ask it, the forecast on its read-only handle. */
+const AGENT_INODE_ROWS = new WeakMap();
+function agentInodeRowOf(db) {
+  let st = AGENT_INODE_ROWS.get(db);
   if (st === undefined) {
-    st = db.prepare("SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p JOIN ingest_files f ON f.file_id = p.file_id WHERE p.path = ? AND f.source_key = '' AND f.status = 'live'");
+    st = db.prepare("SELECT dev, ino, offset FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ''");
     st.setReadBigInts(true);
-    AGENT_PATH_ROWS.set(db, st);
+    AGENT_INODE_ROWS.set(db, st);
   }
   return st;
 }
 
-/** bytesWaiting for a file the scan walk handed over (`e`, an admitted file entry): its stored row by path against the walk's own
- *  size, device and inode, ruled by lib's bytesLeftOf for every case: an unstored file waits with its size, so an unstored empty
- *  one waits for nothing. */
+/** bytesWaiting for a file the scan walk handed over (`e`, an admitted file entry): the row of its device and inode against the
+ *  walk's own size, ruled by lib's bytesLeftOf for every case: an unstored file waits with its size, so an unstored empty one waits
+ *  for nothing. */
 function scanFileWaiting(db, e) {
-  return bytesLeftOf({ stored: agentPathRowOf(db).get(e.path) ?? null, size: e.size, dev: e.dev, ino: e.ino }) > 0;
+  return bytesLeftOf({ stored: agentInodeRowOf(db).get(e.dev, e.ino) ?? null, size: e.size, dev: e.dev, ino: e.ino }) > 0;
 }
 
 /** One admitted subagent file's gate (W4 P3, P5, P6, P15 (b)), the one place both arms ask decideAgentIngest: 'read' when it is
@@ -7734,12 +7743,16 @@ function agentImportSkipLines(skipped) {
 }
 
 /** How many bytes of one subagent file are still waiting to be ingested, by lib's bytesLeftOf (the tick's rule too): its size, or,
- *  when a live row of the same file (device and inode) holds a cursor, the size past that cursor. A file stored whole waits for
- *  none; a vanished path waits for none. `rowOf` is the path's live row statement (agentPathRowOf), or null when no store is open. */
-function agentBytesLeft(path, rowOf) {
+ *  when the row of its device and inode holds a cursor, the size past that cursor. A file stored whole waits for none; a vanished
+ *  path waits for none, and so does a physical file already counted (`seen`, keyed by device and inode): the apply reads one file
+ *  once, whatever its holdings. `rowOf` is the inode row statement (agentInodeRowOf), or null when no store is open. */
+function agentBytesLeft(path, rowOf, seen) {
   let st;
   try { st = lstatSync(path, { bigint: true }); } catch { return 0; }
-  return bytesLeftOf({ stored: rowOf === null ? null : rowOf.get(path) ?? null, size: Number(st.size), dev: st.dev, ino: st.ino });
+  const id = `${st.dev}:${st.ino}`;
+  if (seen.has(id)) return 0;
+  seen.add(id);
+  return bytesLeftOf({ stored: rowOf === null ? null : rowOf.get(st.dev, st.ino) ?? null, size: Number(st.size), dev: st.dev, ino: st.ino });
 }
 
 /** `import --agents` without --apply (W4 P6): READ-ONLY, one JSON forecast line, then the words. `files` and `bytes` are what the apply
@@ -7756,11 +7769,12 @@ function importAgentsDryRun(P, homes, out, home) {
     const known = ro === null ? registeredUuids(home) : knownUuids(ro, home);
     const sinceMs = ro === null ? null : installRecordOf(ro);
     const { take, skipped } = agentImportPlan(homes, known, ev, sinceMs);
-    const rowOf = ro === null ? null : agentPathRowOf(ro);
+    const rowOf = ro === null ? null : agentInodeRowOf(ro);
+    const seen = new Set();
     let files = 0;
     let bytes = 0;
     for (const e of take) {
-      const left = agentBytesLeft(e.path, rowOf);
+      const left = agentBytesLeft(e.path, rowOf, seen);
       if (left === 0) continue;
       files += 1;
       bytes += left;

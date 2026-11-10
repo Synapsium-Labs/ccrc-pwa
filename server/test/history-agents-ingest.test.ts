@@ -303,6 +303,59 @@ describe('what the agent arm does not enter, and which parents it serves', () =>
     expect([...(await failing('agent'))], 'an unreadable subagent file does not').toEqual([]);
   });
 
+  it('a subagent file whose read fails at a tick (ingestTick\'s fs-error catch) leaves its parent out of skipped; a main copy\'s puts it in (review 1749 F5)', async () => {
+    // Mode 000 fails earlier, at admitFile's open (the case above); this arm is an error the OS raises after admission, so readSync is
+    // faulted in this process for the one file's descriptor, as history-ingest's failReads does.
+    const failing = async (which: 'agent' | 'main'): Promise<{ skipped: string[]; faulted: number; unreadable: number }> => {
+      const rig = await rigOf(`ccrc-hist-eio-${which}-`);
+      const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x924)] }, SINCE);
+      const victim = which === 'agent' ? paths['a']! : path.join(rig.box.homes[0]!, 'projects', SLUG, `${PARENT}.jsonl`);
+      const realRead = fs.readSync;
+      let faulted = 0;
+      const err = Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO', errno: -5, syscall: 'read' });
+      (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+        if (fs.readlinkSync(`/proc/self/fd/${fd}`) === victim) { faulted += 1; throw err; }
+        return (realRead as (...a: unknown[]) => number)(fd, ...rest);
+      };
+      syncBuiltinESMExports();
+      try {
+        const t = (await rig.tick(armed, { scan: true })) as { skipped: ReadonlySet<string> };
+        return { skipped: [...t.skipped], faulted, unreadable: counterOf(rig.db, 'file_unreadable') };
+      } finally { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); }
+    };
+    const main = await failing('main');
+    expect(main.faulted, 'CONTROL: the fault fired on the main copy').toBeGreaterThanOrEqual(1);
+    expect(main.skipped, 'CONTROL: a main copy whose read fails withdraws the parent\'s predictions').toEqual([PARENT]);
+    const sub = await failing('agent');
+    expect(sub.faulted, 'the fault fired on the subagent file').toBeGreaterThanOrEqual(1);
+    expect(sub.unreadable, 'and the catch counted it').toBe(1);
+    expect(sub.skipped, 'a subagent file whose read fails does not withdraw them').toEqual([]);
+  });
+
+  it('a subagent file whose parse crashes (ingestPath\'s crash arm) leaves its parent out of skipped; a main copy\'s puts it in (review 1749 F5)', async () => {
+    // The parser throws on one file's lines only (a bug the content reaches), as history-ingest's crash case does.
+    const crashing = async (which: 'agent' | 'main'): Promise<{ skipped: string[]; crashes: number }> => {
+      const rig = await rigOf(`ccrc-hist-crash-${which}-`);
+      plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: fixtureRows(0x925, 2, PARENT), agents: [agent('a', 0x926)] }, SINCE);
+      const poison = which === 'agent' ? `fixture ${0x926}.` : `fixture ${0x925}.`;
+      const wrapCtx = (ctx: Record<string, unknown>): Record<string, unknown> => {
+        const real = ctx['prepareLines'] as (...a: unknown[]) => unknown;
+        return { ...ctx, prepareLines: (lines: { bytes: Buffer }[], ...rest: unknown[]): unknown => {
+          if (lines.some((l) => l.bytes.toString('utf8').includes(poison))) throw new Error('parser bug');
+          return real(lines, ...rest);
+        } };
+      };
+      const t = (await rig.tick(armed, { scan: true, wrapCtx })) as { skipped: ReadonlySet<string> };
+      return { skipped: [...t.skipped], crashes: counterOf(rig.db, 'parser_crash') };
+    };
+    const main = await crashing('main');
+    expect(main.crashes, 'CONTROL: the crash fired on the main copy').toBe(1);
+    expect(main.skipped, 'CONTROL: a main copy whose parse crashes withdraws the parent\'s predictions').toEqual([PARENT]);
+    const sub = await crashing('agent');
+    expect(sub.crashes, 'the crash fired on the subagent file').toBe(1);
+    expect(sub.skipped, 'a subagent file whose parse crashes does not withdraw them').toEqual([]);
+  });
+
   it('history-off reads no subagent file (failure row 26)', async () => {
     const rig = await rigOf('ccrc-hist-off-');
     const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x900)] }, SINCE);
@@ -797,6 +850,18 @@ describe('the subagent meta, its lifecycle and agent_type (W4 addendum P17, SA6,
       expect(counterOf(db, 'agent_meta_conflict'), 'both holdings name the same link').toBe(0);
     });
 
+    it('a hardlinked second holding with nothing waiting is not counted withheld at 90%: its bytes are the inode row\'s, as bindFile resumes it (review 1749 F1)', async () => {
+      const { rig, first, fromHome, otherHome } = await held('ccrc-hist-f1-scan-');
+      const second = holdAgainIn(first, fromHome, otherHome, 'link');
+      expect(aliasesOf(rig.db, 'a'), 'CONTROL: the second path is not yet an alias').toBe(1);
+      await rig.tick(armed, { scan: true, storeAt: 0.9 });
+      expect(counterNames(rig.db), 'the second holding has nothing to read').not.toContain('capture_paused_agents_at_cap');
+      expect(aliasesOf(rig.db, 'a'), 'CONTROL: the paused tick bound nothing, so the path stayed unaliased').toBe(1);
+      grow(second, 0x1101, T0 + 500_000);
+      await rig.tick(armed, { scan: true, storeAt: 0.9 });
+      expect(counterOf(rig.db, 'capture_paused_agents_at_cap'), 'CONTROL: once the shared file grows, the tick withholds bytes').toBe(1);
+    });
+
     it('SA25 identical copies: two file rows, one transcript, a membership in each, no variant', async () => {
       const { rig, first, fromHome, otherHome } = await held('ccrc-hist-sa25-');
       const second = holdAgainIn(first, fromHome, otherHome, 'copy');
@@ -1001,10 +1066,11 @@ describe('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
     expect(listersOfSubagents([{ name: 'x.mjs', text: '// the list of `${s}/subagents` is the walk\'s\n * /subagents\n' }]), 'a comment is not a lister').toEqual([]);
   });
 
-  it('the live row a path names is one statement (the tick\'s withheld count and the import\'s forecast share it), and its bytes-left rule is lib\'s (final review M2)', () => {
+  it('the row a file\'s inode names is one statement (the tick\'s withheld count and the import\'s forecast share it), and its bytes-left rule is lib\'s (final review M2; review 1749 F1)', () => {
     const sweep = historyModules().find((m) => m.name === 'sweep.mjs')!.text;
-    const rowStatements = codeLines(sweep).filter((l) => l.includes('SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p'));
-    expect(rowStatements, 'the path-row statement is spelled once').toHaveLength(1);
+    const rowStatements = codeLines(sweep).filter((l) => l.includes("SELECT dev, ino, offset FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ''"));
+    expect(rowStatements, 'the inode-row statement is spelled once').toHaveLength(1);
+    expect(codeLines(sweep).filter((l) => l.includes('SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p')), 'and no path-only lookup is left').toEqual([]);
     // and neither arm re-spells the rule: size minus the cursor is lib's bytesLeftOf alone
     expect(codeLines(sweep).filter((l) => /Math\.max\(\s*size\s*-\s*Number\(row\.offset\)/.test(l) || /st\.size\s*!==\s*Number\(row\.offset\)/.test(l))).toEqual([]);
   });
@@ -1166,6 +1232,25 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     expect(dry.stdout, 'the remedy names its exceptions').toContain('It does not when the same id already holds the uuid as an unconfirmed epoch');
     expect(op(rig.box, 'import', '--agents', '--apply').code).toBe(0);
     expect(storedAgents(rig.box)).toBe(0);
+  });
+
+  it('the dry run counts and sizes one physical file once, as the apply reads it once, by the row of its inode (review 1749 F1)', async () => {
+    // two holdings of one unstored file: one file, its size once
+    const rig = await rigOf('ccrc-hist-f1-dry-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1060)] }, SINCE);
+    const second = holdAgainIn(paths['a']!, rig.box.homes[0]!, rig.box.homes[1]!, 'link');
+    expect(fs.statSync(second).ino, 'CONTROL: one inode').toBe(fs.statSync(paths['a']!).ino);
+    closeWriter(rig.db);
+    expect(forecastOf(op(rig.box, 'import', '--agents').stdout)).toMatchObject({ files: 1, bytes: sizeOf(paths['a']!) });
+    // a file stored whole, now held only under a path the store has not aliased: nothing waits
+    const rig2 = await rigOf('ccrc-hist-f1-dry2-');
+    const { paths: p2 } = plantAgentTree(rig2, { slug: SLUG, uuid: PARENT, agents: [pre('b', 0x1061)] }, SINCE);
+    closeWriter(rig2.db);
+    expect(op(rig2.box, 'import', '--agents', '--apply').code).toBe(0);
+    expect(storedAgents(rig2.box), 'CONTROL: stored whole').toBe(1);
+    holdAgainIn(p2['b']!, rig2.box.homes[0]!, rig2.box.homes[1]!, 'link');
+    fs.unlinkSync(p2['b']!);
+    expect(forecastOf(op(rig2.box, 'import', '--agents').stdout)).toMatchObject({ files: 0, bytes: 0 });
   });
 
   /** One pre-install file of a known parent on a fixture box with a 1 GB cap and no marker. */

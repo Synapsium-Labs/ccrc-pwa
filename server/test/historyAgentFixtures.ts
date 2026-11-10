@@ -57,6 +57,9 @@ export interface TickOpts {
   /** A registry id: an empty file is planted in spool/.draining/ under a name drainingNameParts parses as that id, so hintedUuids
    *  hints the id's uuid this tick. */
   hint?: string;
+  /** The ingest context as tick() built it, to the one ingestTick is handed: a case's seam (a parser that throws on one file's
+   *  lines, as history-ingest's crash case replaces ctx.prepareLines). */
+  wrapCtx?: (ctx: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export interface AgentRig {
@@ -113,7 +116,7 @@ export async function agentRig(prefix: string): Promise<AgentRig> {
         sizeBytes: Math.ceil((o.storeAt ?? 0) * capBytes(1)),
         capBytes: capBytes(1),
       };
-      return ingestTick(db, ctx, newBudget(undefined, o.budget));
+      return ingestTick(db, o.wrapCtx === undefined ? ctx : o.wrapCtx(ctx), newBudget(undefined, o.budget));
     },
   };
   seqOf.set(rig, { n: 0, last: 0 });
