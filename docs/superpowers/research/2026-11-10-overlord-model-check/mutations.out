@@ -1,0 +1,17 @@
+| mutation | scenario | expected | caught by | states | secs |
+|---|---|---|---|---|---|
+| restart_extends_deadline | core {'BOOT_UNMEASURED_RELEASES': False} | I1 | I1 | 136048 | 4.2 |
+| reach_without_outbox | push  | I2 | I2 I9 | 3090 | 0.1 |
+| no_reach_guard | core {'OUTCOME_REACH_TXN': 'reach-first'} | I2 | I2 | 884830 | 35.2 |
+| sweep_raw_clock | core {'SKEWS': 1, 'SERVER_CRASHES': 0} | I1 | I1 | 33410 | 1.0 |
+| item_answer_no_act_row | core  | I3 | I3 | 92314 | 2.6 |
+| no_fence | rebind  | I5 | I5 | 41045 | 0.9 |
+| staged_no_fence_recheck | grants  | I5 | I5 | 133683 | 3.3 |
+| staged_no_grant_recheck | grants  | I4 | I4 | 130199 | 3.2 |
+| mayhold_ignores_readiness | deadpush {'KINDS': (('item_none',),)} | I9 | I9 X5 | 3306 | 0.1 |
+| no_operator_has_it | asks  | X2 | X2 | 28608 | 0.7 |
+| no_restore_detection | restore  | I7 | I7 I7t | 3651 | 0.1 |
+| held_rows_hidden | core  | I10 | I10 | 94966 | 2.7 |
+| renewing_keeps_all | renewal  | none expected: retention is not an invariant | NOT CAUGHT | 514476 | 13.2 |
+| no_natural_key | asks {'OUTCOME_AT': 'done', 'REV_BUMP_AT': 'settle'} | none expected: the dialog takes one press | NOT CAUGHT | 33036 | 0.8 |
+python3 check.py --mutations  215.61s user 0.73s system 99% cpu 3:36.56 total
