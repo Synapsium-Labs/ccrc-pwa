@@ -1,6 +1,6 @@
 ---
 name: ccrc-coordinator
-description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, dispatch a review run and rule on its report, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or `GET /api/runs` names this session id as the `claimedBy` of an open run). Never use it inside a subagent — a session started by another session's Agent tool or a workflow agent() call is a subagent and returns its report to its parent; it never opens, dispatches or closes a run. Never use it to do a wave's own work — a coordinator that starts implementing has become a worker with a stale plan.
+description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, dispatch a review run and rule on its report, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or `GET /api/runs` names this session id as the `claimedBy` of an open run). Never use it inside a subagent — a session started by another session's Agent tool or a workflow agent() call is a subagent and returns its report to its parent; it never opens, dispatches or closes a run. Never use it to do a wave's own work while a dispatch can still be made — only a refused wave is taken in place, by the rules in its "When something is wrong" entry.
 ---
 
 # Coordinating a ccrc program
@@ -595,8 +595,9 @@ slot, and neither does a run parked IDLE at `awaiting-review`, `merging` or
 `closing` — it gives its slot back without closing (D-2803) — while a
 dispatched run consumes one concurrency slot for as long as it stays active.
 There is no daily dispatch count: concurrency is the only cap.
-`cap-concurrency` remains authoritative — stop, say so, and wait to be woken,
-exactly as you would for any other run.
+`cap-concurrency` remains authoritative as a count, not as a stop: a refused
+wave is done in place by you unless one of the seven reasons in "When something
+is wrong" applies, exactly as for any other run.
 
 **Every brief for a foreign-repo wave carries the three immutable-plan
 coordinates: `homeRepoRoot`, `planRepoPath`, and `planSha`.** `homeRepoRoot` is
@@ -650,8 +651,47 @@ is never read by this session.
   waves, while non-dispatch work continues: landing already-reviewed PRs,
   reviews and docs. Absent: the registry was unlistable, a fault retried with
   backoff and a time wake, then dispatch again. Do not touch the file.
-- **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
-  woken.
+- **A dispatch or a send-back is refused `cap-concurrency`.** Do not stop. The
+  operator's ruling (2026-10-20): a coordinator whose dispatch is refused does
+  that wave itself, now, following the worker skill clauses it would brief a
+  worker with (one PR, wave-done evidence, no merge without review), unless one
+  of the seven reasons below applies. The refusal's own `detail` says the same.
+  - *The tree rule.* Work in a plain `git worktree add` sibling inside your own
+    workspace directory, cut from `origin/main`: a git act, not a `ccd ws-*`
+    verb. Your own checkout and the programme ledger (normally dirty) are never
+    switched and never committed into the wave. Remove the sibling after the PR
+    is pushed and the run closes.
+  - *The in-place bind.* Bind the run to yourself with the dispatch route and
+    `inPlace: true`, `by`, `byUuid` and the sibling worktree's `branch`: no
+    admission, no `ensure`, no hold and no brief, and no slot is charged. A plain
+    dispatch onto yourself is refused `self-dispatch`. The run then reaches
+    `awaiting-review` and closes as any run does; its review is still a review
+    run (reason 1).
+  - *Tests while self-working* use the repo's capped worker count and never start
+    a full suite while another runs on the box.
+  - *Routed asks.* While you work, your other children's questions wait for you:
+    check for them between commits and end your turn when one arrives.
+  - *The seven reasons not to, each named in your status.* When one applies, end
+    your turn: the server mails you once the cap has room.
+    1. The refused run is a review: it is never done inline, because clause 14
+       makes the review a held-out panel run by a reviewer session.
+    2. Wrong repository: the wave crosses into a project your workspace does not
+       sit in (`project-mismatch`).
+    3. Another wave is open in your sibling worktree (uncommitted or unpushed work,
+       or an open PR the new work would mix into): finish or park that first, then
+       take the refused wave serially. Ledger edits in your own checkout do not
+       count.
+    4. The work needs an act forbidden to sessions (clauses 1 and 3, the ccrc
+       SAFETY rules, a credentialed operator act) or the plan marks it
+       operator-only.
+    5. The plan marks the wave as needing an isolated workspace and says why (for
+       example a second account's limits).
+    6. The operator's pause (clause 4): there is no dispatch, no in-place bind and
+       no self-work on new waves, and non-dispatch work continues: landing
+       already-reviewed PRs, reviews and docs.
+    7. The box is in distress: the refusal or the console says memory is short
+       (the `capacity` refusal a later wave adds). The memory hogs are tool
+       children (test workers, builds), so self-work then would deepen the stall.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
   the held workspace — that is the recovery the hold exists for.
 - **Your own run row disagrees with the ledger.** The run row is the machine's

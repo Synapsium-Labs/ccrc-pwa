@@ -2708,8 +2708,8 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     const para = flat(caps.slice(start, caps.indexOf('\n\n**', start + 1)));
 
     const concurrency = capRefusalFields('cap-concurrency');
-    expect(concurrency, 'cap-concurrency no longer carries limit and running')
-      .toEqual(['limit', 'running']);
+    expect(concurrency, 'cap-concurrency no longer carries detail, limit and running')
+      .toEqual(['detail', 'limit', 'running']);
     for (const field of concurrency!) {
       expect(para, `the caps paragraph never names cap-concurrency's \`${field}\``)
         .toContain(`\`${field}\``);
@@ -4621,10 +4621,43 @@ describe('the coordinator skill: every stop gets its recovery or its class (D-81
     expect(e).toContain('references/decision-procedure.md');
   });
 
-  it('keeps the cap-concurrency entry as it stands until the fleet-capacity plan rewrites it (W1-5, P11)', () => {
-    expect(wrong()).toContain('- **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be woken.');
-    expect(flat(skill)).toContain('`cap-concurrency` remains authoritative â€” stop, say so, and wait to be woken, exactly as you would for any other run.');
-    expect(flat(skill.slice(0, skill.indexOf('# Coordinating')))).toContain('Never use it to do a wave\'s own work');
+  // D-6097 (W1-5, A8-5): the operator's 2026-10-20 ruling in words. The cap entry, the crossing paragraph and the description
+  // say "do it yourself unless a named reason applies"; no "wait to be woken" for a cap remains anywhere in the skill.
+  it('the cap-concurrency entry states the ruling, the tree rule, the in-place bind, routed asks and all seven reasons (D-6097)', () => {
+    const w = wrong();
+    const at = w.indexOf('- **A dispatch or a send-back is refused `cap-concurrency`.**');
+    expect(at, 'the cap entry is gone').toBeGreaterThanOrEqual(0);
+    const e = w.slice(at, w.indexOf('- **A worker has gone dead mid-wave.**'));
+    expect(e).toContain('Do not stop.');
+    expect(e).toContain('does that wave itself, now');
+    expect(e).toContain('(one PR, wave-done evidence, no merge without review)');
+    expect(e).toContain('a plain `git worktree add` sibling inside your own workspace directory, cut from `origin/main`');
+    expect(e).toContain('not a `ccd ws-*` verb');
+    expect(e).toContain('never switched and never committed into the wave');
+    expect(e).toContain('`inPlace: true`, `by`, `byUuid` and the sibling worktree\'s `branch`');
+    expect(e).toContain('A plain dispatch onto yourself is refused `self-dispatch`');
+    expect(e).toContain('never start a full suite while another runs on the box');
+    expect(e).toContain('end your turn when one arrives');
+    expect(e).toContain('the server mails you once the cap has room');
+    const reasons = [
+      '1. The refused run is a review',
+      '2. Wrong repository',
+      '3. Another wave is open in your sibling worktree',
+      '4. The work needs an act forbidden to sessions',
+      '5. The plan marks the wave as needing an isolated workspace',
+      '6. The operator\'s pause (clause 4): there is no dispatch, no in-place bind and no self-work on new waves, and non-dispatch work continues: landing already-reviewed PRs, reviews and docs.',
+      '7. The box is in distress',
+    ];
+    for (const r of reasons) expect(e, r).toContain(r);
+    expect(e.match(/ \d\. [A-Z]/g) ?? [], 'all seven reasons, no more').toHaveLength(7);
+  });
+
+  it('no wait-to-be-woken remains for a cap anywhere in the skill, and the crossing paragraph and description carry the ruling (D-6097)', () => {
+    expect(flat(allSkillText)).not.toMatch(/wait to be woken/i);
+    expect(flat(skill)).toContain('`cap-concurrency` remains authoritative as a count, not as a stop: a refused wave is done in place by you unless one of the seven reasons in "When something is wrong" applies');
+    const head = flat(skill.slice(0, skill.indexOf('# Coordinating')));
+    expect(head).toContain('Never use it to do a wave\'s own work while a dispatch can still be made');
+    expect(head).toContain('only a refused wave is taken in place');
   });
 
   it('step 4 re-reads the ids once on unknown-item, records and goes on, and treats item-terminal as a no-op', () => {
@@ -4813,8 +4846,12 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     expect(one('item-terminal')).toContain('no-op');
   });
 
-  it('the cap-concurrency row is left as it stands for W1-5 to rewrite', () => {
-    expect(doCell(rowsOf(wl(), 'cap-concurrency')[0]!)).toBe('stop, name the cap, wait');
+  it('the cap-concurrency row says do it yourself unless a named reason applies, and waits only for the server\'s mail (D-6097)', () => {
+    const cell = doCell(rowsOf(wl(), 'cap-concurrency')[0]!);
+    expect(cell).toContain('do the wave yourself in place (`inPlace: true`, a sibling worktree)');
+    expect(cell).toContain('seven reasons');
+    expect(cell).toContain('wait for the server\'s mail');
+    expect(cell).not.toContain('name the cap, wait');
   });
 
   it('the spawn-state bullets and the answer\'s sessionId check carry their dispositions (rows 36, 37, 38, 39)', () => {
