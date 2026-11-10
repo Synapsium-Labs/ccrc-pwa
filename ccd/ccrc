@@ -2581,7 +2581,9 @@ already running).
             proves is this lane's - its unit by exact name, or its verified
             pid - and leaves anything else running, named; "status <id>
             [--json]" reports each tier; "switch <id> litellm|direct" moves
-            the lane between modes; "login <id>" signs a codex lane in
+            the lane between modes; "runtime remove" takes the LiteLLM
+            runtime off a box whose lanes all run direct, and refuses while
+            one does not; "login <id>" signs a codex lane in
             through the lane's own runtime (a device code, shown in the
             terminal or the account pane) and writes nothing but what that
             runtime writes into the lane's exec.authDir. Needs jq and node.
@@ -15989,6 +15991,60 @@ _codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff th
   return 1
 }
 
+# `ccrc codex runtime remove` — THE OPERATOR'S ACT that takes the LiteLLM
+# runtime off a box whose lanes no longer run on it (codex-bridge Stage 4,
+# Task 9; spec 2026-10-15 §2.8: "The LiteLLM environment is removed once both
+# lanes have passed"). Nothing else removes it on an installed box: the install
+# step stops building it once no lane runs in litellm mode, and leaves one that
+# is there alone.
+# REFUSED, with nothing removed:
+#   - `lane-needs-runtime`: the roster records a lane in litellm mode, named
+#     with the switch that moves it;
+#   - `modes-unreadable`: the roster cannot say (`_codex_runtime_wanted` rc 2).
+#     "Cannot tell" is never "no lane needs it";
+#   - `tier-running`: a litellm or shim tier of any lane is this lane's and
+#     runs or is starting, whatever the roster says (a roster edited by hand, a
+#     switch that failed half way). It runs on the runtime, so it is named and
+#     left running;
+#   - `tier-unmeasured`: whether such a tier runs could not be asked.
+# The roster writers' lock is held from the first question until this process
+# ends, so no switch records a lane back to litellm before the removal.
+# With no runtime on the box the answer is `already absent`, rc 0. The lanes'
+# own files are not touched: a lane's litellm.yaml is a pure render that the
+# hourly refresh keeps current, so a lane switched back after a rebuild finds
+# it there.
+_codex_cmd_runtime_remove() {
+  local wrc=0 lanes id t ids='' moves='' none="Nothing was removed."
+  _codex_roster_lock "this removal" "this removal acts on every lane's mode in the roster" "$none" || exit 1
+  _codex_runtime_wanted || wrc=$?
+  for id in $CX_RUNTIME_LANES; do ids="${ids:+$ids, }$id"; moves="${moves:+$moves; }ccrc codex switch $id direct"; done
+  case "$wrc" in
+    0) _codex_say lane-needs-runtime "$ids runs in litellm mode, which runs on the LiteLLM runtime. Move each such lane to the bridge first ($moves), then re-run. $none"; exit 1 ;;
+    1) ;;
+    *) _codex_say modes-unreadable "which mode each codex lane runs in could not be read from ~/.ccrc/accounts.json ('ccrc doctor' names what is wrong with it), so whether a lane still needs the LiteLLM runtime cannot be told. $none"; exit 1 ;;
+  esac
+  lanes="$(_codex_lanes)" || exit 1
+  for id in $lanes; do
+    _codex_row "$id" || exit $?
+    for t in litellm shim; do
+      _codex_tier_ours "$id" "$t"
+      case "$?" in
+        0|4) _codex_say tier-running "$id's $t tier still runs${CX_TIER_PID:+ (pid $CX_TIER_PID)}, and it runs on the LiteLLM runtime though the roster records $id as a direct lane. Stop the lane ('ccrc codex stop $id'), start it again as the roster records it ('ccrc codex start $id'), then re-run. $none"; exit 1 ;;
+        3) _codex_say tier-unmeasured "whether $id's $t tier runs could not be measured (said above), so whether anything still runs on the LiteLLM runtime cannot be told. $none"; exit 1 ;;
+      esac
+    done
+  done
+  if ! _codex_runtime_rm; then
+    _codex_say runtime-remove-failed "removing \$HOME/.ccrc/runtime/codex failed, so part of the LiteLLM runtime may still be on this box. 'ccgpt-runtime check' says what is there; fix what refused the removal, then re-run."
+    exit 1
+  fi
+  if [ "$CX_RUNTIME_RM" = absent ]; then
+    printf '%s codex: runtime: already absent: there is no LiteLLM runtime on this box, and no codex lane runs in litellm mode.\n' "$PROG"
+  else
+    printf '%s codex: runtime: removed $HOME/.ccrc/runtime/codex: no codex lane of this box runs in litellm mode. To run a lane in litellm mode again, build the runtime first (ccgpt-runtime build), then switch the lane. A ccrc from before the runtime became optional asks for it after a rollback, and its "ccrc doctor --fix" builds it.\n' "$PROG"
+  fi
+}
+
 # `ccrc codex {start|stop|status|login} <id>` — the lane's lifecycle verb (D-3479).
 # The usage parse comes first and reads nothing. The role gate comes next: a
 # server-role box runs no sessions, so it runs no lanes, and it is refused
@@ -16005,10 +16061,17 @@ cmd_codex() {
   esac
   local sub="${1:-}" id json=0 mode='' scratch=''
   case "$sub" in
-    start|stop|status|login|switch) shift ;;
-    '') _codex_say usage "ccrc codex needs a subcommand: ccrc codex {start|stop|status|login|switch} <id> (status also takes --json; a switch names the mode to move the lane to: ccrc codex switch <id> litellm|direct)."; exit 2 ;;
-    *)  _codex_say usage "ccrc codex has no subcommand \"$sub\" in this build; it implements start, stop, status, login and switch."; exit 2 ;;
+    start|stop|status|login|switch|runtime) shift ;;
+    '') _codex_say usage "ccrc codex needs a subcommand: ccrc codex {start|stop|status|login|switch} <id> (status also takes --json; a switch names the mode to move the lane to: ccrc codex switch <id> litellm|direct), or ccrc codex runtime remove."; exit 2 ;;
+    *)  _codex_say usage "ccrc codex has no subcommand \"$sub\" in this build; it implements start, stop, status, login and switch, and runtime remove."; exit 2 ;;
   esac
+  # `runtime` is the one subcommand about the BOX, not a lane (Stage 4, Task 9):
+  # its one form is `ccrc codex runtime remove`, and `remove` stands where a
+  # lane id stands for the others, so the gates below name the command whole.
+  if [ "$sub" = runtime ] && { [ "${1:-}" != remove ] || [ $# -ne 1 ]; }; then
+    _codex_say usage "ccrc codex runtime has one form: ccrc codex runtime remove (it removes the LiteLLM runtime from a box whose codex lanes all run in direct mode)$([ $# -gt 0 ] && printf ', and got "%s"' "$*")."
+    exit 2
+  fi
   id="${1:-}"
   case "$id" in
     ''|-*) _codex_say usage "ccrc codex $sub needs a lane id: ccrc codex $sub <id>$([ "$sub" = switch ] && printf ' litellm|direct'). 'ccrc status' lists this box's accounts."; exit 2 ;;
@@ -16048,6 +16111,7 @@ cmd_codex() {
     status) _codex_cmd_status "$id" "$json" ;;
     login)  _codex_login "$id" "$scratch" ;;
     switch) _codex_cmd_switch "$id" "$mode" ;;
+    runtime) _codex_cmd_runtime_remove ;;
   esac
 }
 
