@@ -8,6 +8,7 @@ import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, Dig
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
+import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
 import type { RotateAnswer } from '../../../shared/box-token';
@@ -930,6 +931,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Settings' Automation card reads it through `useDispatchAbandonView`, whose `asDispatchAbandonView` is the wire
      *  guard. 501 `not-configured` and an older server's 404 read as not available. Session-gated when armed. */
     dispatchAbandon: (opts?: ReadOpts) => getJson<DispatchAbandonView>('/api/coord/dispatch-abandon', opts),
+    /** `GET /api/coord/run-close` (D-8077, Task 26): each run-close lane group's state, would-close list and 7-day tally, for Advanced's
+     *  "What ccrc closes on its own". 501 `not-configured` and an older server's 404 reject like every non-2xx. Session-gated when armed. */
+    runClose: (opts?: ReadOpts) => getJson<RunCloseView>('/api/coord/run-close', opts),
+    /** `POST /api/coord/run-close`: `{group, choice}`; the reply is the same view, read after the write. `postJsonOr`, for
+     *  `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
+    setRunClose: (body: RunCloseRequest) => postJsonOr<RunCloseView | 'unreadable'>('/api/coord/run-close', 'unreadable', body),
     /** `GET /api/coord/scope-sweep` (D-7994): the sweep's two switches, as the registry reads them. Settings' Automation
      *  card reads it through `useScopeSweepView`, whose `asScopeSweepView` is the wire guard. */
     scopeSweep: (opts?: ReadOpts) => getJson<ScopeSweepView>('/api/coord/scope-sweep', opts),

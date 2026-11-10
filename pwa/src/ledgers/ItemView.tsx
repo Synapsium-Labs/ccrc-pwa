@@ -33,7 +33,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QuickConfirm, RadioFieldset, TextInput, TextLink } from '@ccrc/ui';
 import {
-  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isEndRunAction, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretRemoveAnswer,
+  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretRemoveAnswer,
   type SecretSaveAnswer, type SecretUnmasked, SECRET_TAIL_MIN,
 } from '../../../shared/ledgers';
 import type { AuthStatus, FleetSession, RunSummary } from '../../../shared/api';
@@ -49,7 +49,7 @@ import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
-import { EndRunControls, useItemActs, type ItemActs } from './ItemActs';
+import { ItemControls, useItemActs, type ItemActs } from './ItemActs';
 import { ageWords, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
@@ -429,8 +429,8 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
 
   const open = item.state === 'open';
   const checking = item.state === 'checking';
-  // An end-request item has its own two controls (spec §10): its act closes it, so it is never ticked or dismissed.
-  const acting = isEndRunAction(item.action ?? null);
+  // An item with an action has its own controls (spec §10, §12.2): its act closes it, so it is never ticked or dismissed.
+  const acting = (item.action ?? null) !== null;
   // A programme with no open run has no coordinator waiting for a tick: nothing is asked, and only Dismiss is offered.
   const ended = (open || checking) && !programmeLive && !acting;
   const mayTick = open && programmeLive && item.kind !== 'secret' && !acting;
@@ -495,7 +495,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
       {notCurrent && <p className="wi-hint" data-current="false">{NOT_CURRENT_ACTS_WORD}</p>}
       <div className="wi-actions">
-        {acting && <EndRunControls item={item} runs={runs} acts={acts} enabled={current} />}
+        {acting && <ItemControls item={item} runs={runs} acts={acts} enabled={current} />}
         {mayTick && (
           <Button variant="primary" size="fit" disabled={busy || !ready || !current}
                   onClick={() => void run(() => (answer === null || !needsAnswer ? onTick() : onTick(answer)))}>Mark done</Button>

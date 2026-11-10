@@ -13,7 +13,9 @@ import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
 import { run as runFixture } from './rollupFixture';
 import { ApiError, api } from '../src/lib/api';
 import { needsYou, needsYouCount } from '../src/ledgers/needsYou';
-import { endRunAction } from '../../shared/ledgers';
+import { ITEM_DOORS, closeRefusedAction, endRunAction } from '../../shared/ledgers';
+import { matchRoute } from '../src/lib/routes';
+import { ITEM_DOOR_WORDS } from '../src/ledgers/ItemActs';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -502,5 +504,114 @@ describe('the controls on /waiting (Task 24)', () => {
   it('a review cap sits under the programme filter it belongs to', () => {
     open({ runs: [cap(12)], programme: 'other', view: waitingView({ items: [itemView({ id: 1, program: 'other' })] }) });
     expect(document.querySelector('[data-run="12"]')).toBeNull();
+  });
+});
+
+// Task 27 (runs rebuild §12.2, A19, A62; D-8077): the controls of a refused close. Each door the item carries renders on its row, a
+// link door opens a page that exists, "Abandon anyway" and "Abandon" reuse the one sheet and `act`, and "Hand to a coordinator"
+// opens the Resume sheet at its third step.
+describe('the doors of a refused close (Task 27)', () => {
+  const live = runFixture(7, 'lane-gone', 'w-7');
+  const refused = (id: number, doors: Parameters<typeof closeRefusedAction>[1], over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
+    id, program: 'port-api', runId: 7, title: 'Item of a refused close: Port the API', why: 'ccrc would close this run on its own, but it did not.\nIts coordinator is gone',
+    how: ['Read why ccrc did not close it.', 'Take the control on this row.'], action: closeRefusedAction(7, doors), ...over,
+  });
+  const rowOf = (id: number): HTMLElement => document.querySelector<HTMLElement>(`li:has([data-item="${id}"])`)!;
+  const WORDS = {
+    'open-pr': 'Open the PR', 'hand-to-coordinator': 'Hand to a coordinator', abandon: 'Abandon', 'abandon-anyway': 'Abandon anyway',
+    'open-worker': 'Open the worker', 'open-coordinator': 'Open the coordinator',
+  } as const;
+
+  it('each door renders on the row, in the order the item names, beside the row and never inside its button', () => {
+    const doors = Object.keys(WORDS) as (keyof typeof WORDS)[];
+    open({ runs: [live], view: waitingView({ items: [refused(51, doors as never)] }) });
+    const li = rowOf(51);
+    const acts = within(li).getByRole('group', { name: 'Run 7' });
+    expect(Array.from(acts.querySelectorAll('[data-door]')).map((d) => d.textContent)).toEqual(doors.map((d) => WORDS[d]));
+    expect(li.querySelector('[data-item="51"] button, [data-item="51"] a')).toBeNull();
+    expect(acts.parentElement).toBe(li);
+    expect(li.getAttribute('data-acts')).toBe('true');
+    expect(within(rowOf(51)).queryByRole('button', { name: 'Keep the run' }), 'decline applies to an end request alone').toBeNull();
+  });
+
+  it('each link door opens a page that exists for that run', () => {
+    open({ runs: [live], view: waitingView({ items: [refused(52, ['open-pr', 'open-worker', 'open-coordinator'])] }) });
+    const hrefs = Array.from(rowOf(52).querySelectorAll<HTMLAnchorElement>('a[data-door]')).map((a) => a.getAttribute('href')!);
+    expect(hrefs).toEqual(['/runs/7', '/s/w-7', '/s/lane-gone']);
+    for (const h of hrefs) expect(matchRoute(h), h).not.toBeNull();
+  });
+
+  it('a link door falls back to the run\'s page when the run names no such session', () => {
+    open({ runs: [runFixture(7, 'lane-gone', null)], view: waitingView({ items: [refused(53, ['open-worker'])] }) });
+    expect(rowOf(53).querySelector('a[data-door]')!.getAttribute('href')).toBe('/runs/7');
+  });
+
+  it('Abandon opens the one sheet with the cannot-tell sentence and calls act', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(54, ['abandon'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+    expect(await screen.findByText('Abandon run 7?')).toBeTruthy();
+    expect(screen.getByText(/cannot tell whether/)).toBeTruthy();
+    expect(screen.queryByText('The branch stays on disk.')).toBeNull();
+    expect(act).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 7' }));
+    await waitFor(() => expect(act).toHaveBeenCalledWith(54));
+  });
+
+  it('Abandon anyway reuses act, with The branch stays on disk.', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    const abandon = vi.spyOn(api, 'abandonRun');
+    open({ runs: [live], view: waitingView({ items: [refused(55, ['hand-to-coordinator', 'abandon-anyway'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon anyway' }));
+    expect(await screen.findByText('Abandon run 7?')).toBeTruthy();
+    expect(screen.getByText('The branch stays on disk.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 7' }));
+    await waitFor(() => expect(act).toHaveBeenCalledWith(55));
+    expect(abandon).not.toHaveBeenCalled();
+  });
+
+  it('an act-time refusal shows in the sheet, which stays open', async () => {
+    vi.spyOn(api, 'actItem').mockRejectedValue(new ApiError(409, { error: 'not-open' }));
+    open({ runs: [live], view: waitingView({ items: [refused(56, ['abandon'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Abandon run 7' }));
+    expect(await screen.findByText(/This item is not open any more/)).toBeTruthy();
+    expect(screen.getByText('Abandon run 7?')).toBeTruthy();
+  });
+
+  it('Hand to a coordinator opens the Resume sheet at step 3, with the hand-over in front', async () => {
+    open({ runs: [live], view: waitingView({ items: [refused(57, ['hand-to-coordinator', 'abandon-anyway'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand to a coordinator' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByLabelText('Hand run 7 to this session id')).toBeTruthy();
+  });
+
+  it('an abandoning or hand-over door needs the run among the runs heard; the links do not', () => {
+    open({ runs: [], view: waitingView({ items: [refused(58, ['open-pr', 'hand-to-coordinator', 'abandon-anyway'])] }) });
+    expect(Array.from(rowOf(58).querySelectorAll('[data-door]')).map((d) => d.getAttribute('data-door'))).toEqual(['open-pr']);
+  });
+
+  it('a saved copy draws the buttons disabled', () => {
+    open({ runs: [live], notCurrent: 'Saved on this device.', view: waitingView({ items: [refused(59, ['hand-to-coordinator', 'abandon-anyway'])] }) });
+    expect((screen.getByRole('button', { name: 'Abandon anyway' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Hand to a coordinator' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('an item being checked or closed carries no door', () => {
+    open({ runs: [live], view: waitingView({ items: [refused(60, ['abandon'], { state: 'checking', tickedAt: NOW })] }) });
+    expect(screen.queryByRole('button', { name: 'Abandon' })).toBeNull();
+  });
+
+  it('the row gains needs you from the selector', () => {
+    const item = refused(61, ['open-pr']);
+    const entries = needsYou([item], [], [live]);
+    expect(entries).toEqual([{ programme: 'port-api', runId: 7, kind: 'item' }]);
+    expect(needsYouCount(entries)).toBe(1);
+    // A held item (the server leaves it out of every list) never reaches the selector, so it is no marker.
+    expect(needsYou([], [], [live])).toEqual([]);
+  });
+
+  it('every door in the vocabulary has its words and renders', () => {
+    for (const d of ITEM_DOORS) expect(ITEM_DOOR_WORDS[d]).toBe(WORDS[d]);
   });
 });

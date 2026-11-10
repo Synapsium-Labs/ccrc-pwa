@@ -248,7 +248,12 @@ export interface AbandonSheetProps {
    *  `POST /api/items/:id/act`, which runs the same abandon arm and closes the item itself. Absent, it calls the run's
    *  own abandon route. */
   itemId?: number;
+  /** The "Abandon anyway" door of a refused close (spec §12.2): the same act, and the sheet adds that the branch stays on disk. */
+  anyway?: boolean;
 }
+
+/** The line "Abandon anyway" adds: the unpushed commits are on the branch, and the close does not remove it. */
+export const ABANDON_ANYWAY_LINE = 'The branch stays on disk.';
 
 export function AbandonSheet({
   run,
@@ -258,6 +263,7 @@ export function AbandonSheet({
   onClose,
   onDone,
   itemId,
+  anyway = false,
   abandonRun = api.abandonRun,
   actItem = api.actItem,
 }: AbandonSheetProps & {
@@ -369,6 +375,7 @@ export function AbandonSheet({
         <p className={QC_CONSEQUENCE}>
           {abandonConsequence(run, workspaceChild)}
         </p>
+        {anyway && <p className="abandon-note">{ABANDON_ANYWAY_LINE}</p>}
         {run.waitsOn === 'worker' && <p className="abandon-note">Its worker is still running.</p>}
         {told && <p className="abandon-note">Its coordinator is told.</p>}
         <p className="abandon-note abandon-links">

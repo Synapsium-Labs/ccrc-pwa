@@ -250,6 +250,9 @@ const CONTROLS: Record<string, string> = {
   'fleet/GroupAbandonSheet.tsx <a> (computed)':
     'VARIANT buttonVariants. The group sheet\'s "Open record" links (the runs rebuild, D-8074): `GHOST_ANCHOR`, the ghost button on an anchor, '
     + 'whose `min-h-tap` this census checks.',
+  'screens/RunCloseSection.tsx <a> (computed)':
+    'VARIANT buttonVariants. The Turn on sheet\'s run links (the runs rebuild, Task 26, D-8077): `GHOST_ANCHOR`, the ghost button on an anchor, '
+    + 'whose `min-h-tap` this census checks.',
   'fleet/GroupAbandonSheet.tsx <button> group-abandon-row':
     'TOKEN. A ticked run in the group sheet (D-8074): the whole line is one `role="checkbox"` button, and `.group-abandon-sheet .group-abandon-row` '
     + 'declares the floor.',
@@ -372,6 +375,10 @@ const CONTROLS: Record<string, string> = {
     + 'system\'s own ghost button — `buttonVariants()` carries `min-h-tap` in '
     + 'its base, which this census checks rather than trusts. An anchor, not a '
     + 'button, because it navigates to GitHub; the styling is the button\'s.',
+  'ledgers/ItemActs.tsx <a> (computed)':
+    'VARIANT buttonVariants. The three link doors of a refused-close item (the runs rebuild, Task 27, D-8077): "Open the PR", "Open the '
+    + 'worker" and "Open the coordinator": `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this census checks. Anchors, '
+    + 'not buttons, because they navigate; each stands alone on the row, so none is an in-sentence TextLink.',
   'ledgers/ProgrammeScreen.tsx <a> (computed)':
     'VARIANT buttonVariants. The Goals page\'s "N waiting on you" link to the one Waiting on you list, filtered to the '
     + 'programme (desktop-polish PL11, D-7986): `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this '

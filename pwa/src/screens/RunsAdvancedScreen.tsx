@@ -7,6 +7,7 @@ import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, EmptyState, PageScaffold } from '@ccrc/ui';
 import type { CoordCapsView, RunFindQuery, RunSummary } from '../../../shared/api';
+import type { RunCloseRequest } from '../../../shared/run-close';
 import { api } from '../lib/api';
 import { CapsControl } from '../fleet/CapsControl';
 import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
@@ -19,6 +20,7 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { WayStrip } from './RunDetailScreen';
 import { COULD_NOT_LOAD, RunPane } from './RunsScreen';
 import { ResultRow } from './RunFind';
+import { RunCloseSection } from './RunCloseSection';
 import { useColumnName } from './runColumn';
 import { readFind, useRunList, type FindReader } from './useRunList';
 import './run-detail.css';
@@ -65,9 +67,14 @@ function withOpen(base: string, id: number): string {
   return `${base}${base.includes('?') ? '&' : '?'}${RUNS_OPEN_QUERY}=${id}`;
 }
 
-export function RunsAdvancedScreen({ store = useFleetStore, read = readFind, loadCaps = loadCapsDefault }: {
+export function RunsAdvancedScreen({
+  store = useFleetStore, read = readFind, loadCaps = loadCapsDefault, readRunClose, writeRunClose,
+}: {
   store?: FleetStore;
   read?: FindReader;
+  /** The lane rows' own read and write, injected so a test can hold them; absent, the section's `api` defaults. */
+  readRunClose?: () => Promise<unknown>;
+  writeRunClose?: (body: RunCloseRequest) => Promise<unknown>;
   /** The caps dial's own read, injected so a test can hold it. */
   loadCaps?: () => Promise<CoordCapsView>;
 }): ReactNode {
@@ -141,6 +148,9 @@ export function RunsAdvancedScreen({ store = useFleetStore, read = readFind, loa
     </section>
   );
 
+  // What ccrc closes on its own (§8.6 item 2, Task 26): one row per lane group, between the switches and All runs.
+  const closes = <RunCloseSection read={readRunClose} write={writeRunClose} />;
+
   const allRuns = (
     <section className="ra-section" aria-label={ADVANCED_WORDS.allRuns}>
       <h2 className="ra-head">{ADVANCED_WORDS.allRuns}</h2>
@@ -161,10 +171,10 @@ export function RunsAdvancedScreen({ store = useFleetStore, read = readFind, loa
         <WayStrip to="/runs" label={ADVANCED_WORDS.back} />
         {column === 'broad' ? (
           <div className="runs-split">
-            <div className="runs-list-pane">{switches}{allRuns}</div>
+            <div className="runs-list-pane">{switches}{closes}{allRuns}</div>
             <RunPane openId={openId} store={store} />
           </div>
-        ) : <>{switches}{allRuns}</>}
+        ) : <>{switches}{closes}{allRuns}</>}
       </PageScaffold>
     </div>
   );

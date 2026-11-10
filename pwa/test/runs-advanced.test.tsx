@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { CoordCapsView, ProgrammeRow, RunHit, RunSummary } from '../../shared/api';
+import type { RunCloseGroupView, RunCloseRequest, RunCloseView } from '../../shared/run-close';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { clearScreenCache } from '../src/lib/screenCache';
@@ -52,6 +53,8 @@ beforeEach(() => {
   vi.spyOn(api, 'runItems').mockResolvedValue({ ok: true, items: [] } as never);
   vi.spyOn(api, 'runSignals').mockRejectedValue(new ApiError(404, { ok: false }));
   vi.spyOn(api, 'goals').mockRejectedValue(new ApiError(404, { ok: false }));
+  // Advanced's lane rows read their own door; every older suite here leaves it unanswered.
+  vi.spyOn(api, 'runClose').mockImplementation(NEVER as never);
 });
 afterEach(() => {
   cleanup(); vi.restoreAllMocks();
@@ -441,5 +444,187 @@ describe('Finished is the programmes (§8.2.3, A26, D-8075)', () => {
       expect(finishedSlugs()).toEqual(['prog-done']);
       expect(screen.getByText(FINISHED_FAILED)).toBeInTheDocument();
     });
+  });
+});
+
+describe('What ccrc closes on its own (§8.6 item 2, §12.3, A15, o7, o12, Task 26, D-8077)', () => {
+  const HOUR = 3_600_000;
+  const none = { closed7d: 0, refused7d: 0, updatedAt: 0, marker: 'clear' as const, held: null };
+  const group = (g: 'never-started' | 'claimant-crashed', over: Partial<RunCloseGroupView> = {}): RunCloseGroupView =>
+    ({ group: g, choice: 'shadow', state: 'shadow', list: null, ...none, ...over });
+  const would = (runId: number, at: number, why: 'never-started' | 'review-of-closed' | 'later-review' = 'never-started') =>
+    ({ runId, program: `prog-${runId}`, why, at });
+  /** 14 runs would close, 11 now and 3 later (the spec's example), with 1085 held and 65 under an archived coordinator. */
+  const fourteen = (): RunCloseGroupView => {
+    const ws = [
+      ...Array.from({ length: 11 }, (_, k) => would(100 + k, NOW - HOUR)),
+      would(899, NOW + 5 * HOUR), would(396, NOW + 9 * HOUR), would(984, NOW + 30 * HOUR, 'review-of-closed'),
+    ];
+    const named = [
+      { runId: 1085, program: 'prog-1085', why: 'live-session' },
+      { runId: 65, program: 'prog-65', why: 'coordinator-not-reached' },
+      { runId: 66, program: 'prog-66', why: 'coordinator-not-reached' },
+    ];
+    return group('never-started', { list: { would: ws, named, now: 0, later: 0 }, closed7d: 3, refused7d: 1 });
+  };
+  const view = (...groups: RunCloseGroupView[]): RunCloseView =>
+    ({ groups: groups.length > 0 ? groups : [fourteen(), group('claimant-crashed')] });
+  const mount = (v: RunCloseView | (() => Promise<unknown>), write: (b: RunCloseRequest) => Promise<unknown> = async () => v) => {
+    navigate('/runs/advanced', { replace: true });
+    const readRunClose = typeof v === 'function' ? v : async () => ({ ok: true, ...v });
+    const writeRunClose = vi.fn(write);
+    const out = render(<RunsAdvancedScreen store={makeStore()} read={vi.fn<FindReader>(async () => answer([]))} loadCaps={NO_CAPS}
+      readRunClose={readRunClose} writeRunClose={writeRunClose} />);
+    return { ...out, writeRunClose };
+  };
+  const rowOf = (g: string): HTMLElement => screen.getByTestId(`run-close-${g}`);
+
+  it('a row shows its state word, Turn off and Turn on, and Back to shadow when on (o7)', async () => {
+    mount(view());
+    await flush();
+    const shadow = rowOf('never-started');
+    expect(within(shadow).getByText('Shadow')).toBeInTheDocument();
+    expect(within(shadow).getByRole('button', { name: 'Turn on' })).toBeEnabled();
+    expect(within(shadow).getByRole('button', { name: 'Turn off' })).toBeEnabled();
+    expect(within(shadow).queryByRole('button', { name: 'Back to shadow' })).toBeNull();
+    cleanup();
+    mount(view(group('never-started', { choice: 'on', state: 'on' }), group('claimant-crashed')));
+    await flush();
+    const on = rowOf('never-started');
+    expect(within(on).getByText('On')).toBeInTheDocument();
+    expect(within(on).getByRole('button', { name: 'Turn off' })).toBeEnabled();
+    expect(within(on).getByRole('button', { name: 'Back to shadow' })).toBeEnabled();
+    expect(within(on).queryByRole('button', { name: 'Turn on' })).toBeNull();
+  });
+
+  it('Turn on lists every run that would close with reasons, and counts those closing now and those closing when their time runs out', async () => {
+    mount(view());
+    await flush();
+    fireEvent.click(within(rowOf('never-started')).getByRole('button', { name: 'Turn on' }));
+    const sheet = await screen.findByTestId('run-close-sheet');
+    expect(screen.getByText('Let ccrc close these on its own?')).toBeInTheDocument();
+    expect(within(sheet).getByTestId('run-close-sheet-count')).toHaveTextContent('14 runs would close, 11 now and 3 when their time runs out.');
+    const closing = within(within(sheet).getByRole('list', { name: 'Would close' })).getAllByRole('listitem');
+    expect(closing).toHaveLength(14);
+    expect(closing[0]).toHaveTextContent('Run 100 · prog-100');
+    expect(closing[0]).toHaveTextContent('Planned, nothing started, and the programme is quiet · closes now');
+    expect(closing[11]).toHaveTextContent('Run 899 · prog-899');
+    expect(closing[11]).toHaveTextContent('closes in 5 h');
+    expect(closing[13]).toHaveTextContent('A review of work that is already closed');
+  });
+
+  it('a run the row fits but the lane holds, such as 1085 with a live session, is named under the list and not in it', async () => {
+    mount(view());
+    await flush();
+    fireEvent.click(within(rowOf('never-started')).getByRole('button', { name: 'Turn on' }));
+    const sheet = await screen.findByTestId('run-close-sheet');
+    const closing = within(sheet).getByRole('list', { name: 'Would close' });
+    expect(within(closing).queryByText(/Run 1085/)).toBeNull();
+    const named = within(sheet).getByRole('list', { name: 'Not closing' });
+    expect(within(named).getByText(/Run 1085/).closest('li')).toHaveTextContent('it has a live session');
+  });
+
+  it('a run whose E1 warning cannot be delivered, such as 65, 66 and 83 under an archived coordinator, is named and not counted', async () => {
+    mount(view());
+    await flush();
+    fireEvent.click(within(rowOf('never-started')).getByRole('button', { name: 'Turn on' }));
+    const sheet = await screen.findByTestId('run-close-sheet');
+    expect(within(within(sheet).getByRole('list', { name: 'Would close' })).queryByText(/Run 65 ·/)).toBeNull();
+    const named = within(sheet).getByRole('list', { name: 'Not closing' });
+    expect(within(named).getByText(/Run 65 ·/).closest('li')).toHaveTextContent('Open the coordinator');
+    expect(within(named).getByText(/Run 66 ·/)).toBeInTheDocument();
+    expect(within(sheet).getByTestId('run-close-sheet-count')).toHaveTextContent('14 runs would close');
+  });
+
+  it("the Advanced row's count matches the sheet's", async () => {
+    mount(view());
+    await flush();
+    const row = within(rowOf('never-started')).getByTestId('run-close-count').textContent;
+    expect(row).toBe('14 runs would close, 11 now and 3 when their time runs out.');
+    fireEvent.click(within(rowOf('never-started')).getByRole('button', { name: 'Turn on' }));
+    expect((await screen.findByTestId('run-close-sheet-count')).textContent).toBe(row);
+  });
+
+  it('Turn on sends the group and choice once, Keep it in shadow sends nothing, and Turn off and Back to shadow act at once', async () => {
+    const m = mount(view(), async () => ({ ok: true, ...view(group('never-started', { choice: 'on', state: 'on' }), group('claimant-crashed')) }));
+    await flush();
+    fireEvent.click(within(rowOf('never-started')).getByRole('button', { name: 'Turn on' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep it in shadow' }));
+    expect(m.writeRunClose).not.toHaveBeenCalled();
+    fireEvent.click(within(rowOf('never-started')).getByRole('button', { name: 'Turn on' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Turn on' }));
+    await flush();
+    expect(m.writeRunClose).toHaveBeenCalledTimes(1);
+    expect(m.writeRunClose).toHaveBeenCalledWith({ group: 'never-started', choice: 'on' });
+    // The reply is installed as the view: the row now reads On.
+    expect(within(rowOf('never-started')).getByText('On')).toBeInTheDocument();
+    fireEvent.click(within(rowOf('never-started')).getByRole('button', { name: 'Back to shadow' }));
+    await flush();
+    expect(m.writeRunClose).toHaveBeenLastCalledWith({ group: 'never-started', choice: 'shadow' });
+    fireEvent.click(within(rowOf('claimant-crashed')).getByRole('button', { name: 'Turn off' }));
+    await flush();
+    expect(m.writeRunClose).toHaveBeenLastCalledWith({ group: 'claimant-crashed', choice: 'off' });
+  });
+
+  it('while coordination is paused every row reads held with no would-close list, and Turn on is disabled (o12)', async () => {
+    mount(view(
+      group('never-started', { state: 'held', held: 'coordination-paused' }),
+      group('claimant-crashed', { state: 'held', held: 'coordination-paused' }),
+    ));
+    await flush();
+    for (const g of ['never-started', 'claimant-crashed']) {
+      const row = rowOf(g);
+      expect(within(row).getByText('Held')).toBeInTheDocument();
+      expect(within(row).getByText('Held while coordination is paused.')).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Turn on' })).toBeDisabled();
+      expect(within(row).queryByTestId('run-close-count')).toBeNull();
+    }
+  });
+
+  it('an off row cannot be turned on blind: it offers Back to shadow first', async () => {
+    mount(view(group('never-started', { choice: 'off', state: 'off' }), group('claimant-crashed')));
+    await flush();
+    const row = rowOf('never-started');
+    expect(within(row).getByText('Off')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Turn on' })).toBeDisabled();
+    expect(within(row).getByRole('button', { name: 'Back to shadow' })).toBeEnabled();
+  });
+
+  it('a marker remains an emergency override: the row says so and offers no control it could not keep', async () => {
+    mount(view(group('never-started', { choice: 'off', state: 'on', marker: 'set' }), group('claimant-crashed')));
+    await flush();
+    const row = rowOf('never-started');
+    expect(within(row).getByText('On')).toBeInTheDocument();
+    expect(within(row).getByText(/A marker on the box arms this group/)).toBeInTheDocument();
+    expect(within(row).queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('the crash row gets the same control; its sheet has no list to show', async () => {
+    mount(view());
+    await flush();
+    const row = rowOf('claimant-crashed');
+    expect(within(row).getByText('Shadow')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Turn off' })).toBeEnabled();
+    fireEvent.click(within(row).getByRole('button', { name: 'Turn on' }));
+    const sheet = await screen.findByTestId('run-close-sheet');
+    expect(within(sheet).getByText(/closes the runs of a coordinator that crashed/)).toBeInTheDocument();
+    expect(within(sheet).queryByRole('list')).toBeNull();
+  });
+
+  it('closes and refusals of the last 7 days show per group', async () => {
+    mount(view(fourteen(), group('claimant-crashed', { closed7d: 2, refused7d: 0 })));
+    await flush();
+    expect(within(rowOf('never-started')).getByText('Last 7 days: 3 closed, 1 refused.')).toBeInTheDocument();
+    expect(within(rowOf('claimant-crashed')).getByText('Last 7 days: 2 closed, 0 refused.')).toBeInTheDocument();
+  });
+
+  it('a read that fails says so with a way to try again, and a write that fails toasts and re-reads', async () => {
+    let calls = 0;
+    mount(async () => { calls += 1; if (calls === 1) throw new Error('down'); return { ok: true, ...view() }; });
+    await flush();
+    expect(screen.getByText(/Could not read what ccrc closes on its own/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await flush();
+    expect(rowOf('never-started')).toBeInTheDocument();
   });
 });

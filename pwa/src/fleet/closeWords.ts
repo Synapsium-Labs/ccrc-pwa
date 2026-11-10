@@ -2,6 +2,7 @@
 // the stored detail only adds the reason, because history stores none. `runStateWord` (`runWords.ts`) asks this first,
 // so an abandoned run never reads "failed". An older server sends neither field, and every run then reads as today.
 import { isRunClosedBy, type RunSummary } from '../../../shared/api';
+import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers';
 
 type CloseFacts = Pick<RunSummary, 'state' | 'closedBy' | 'closeDetail'>;
 
@@ -14,11 +15,12 @@ const REASON_WORDS: Readonly<Record<string, string>> = {
   'start-never-landed': 'start never finished',
 };
 
-const REQUESTED = 'abandon:requested:';
-
 const reasonOf = (detail: string | null | undefined, prefix: 'abandon:' | 'expired:'): string | null => {
   if (typeof detail !== 'string' || !detail.startsWith(prefix)) return null;
-  return REASON_WORDS[detail.slice(prefix.length)] ?? null;
+  // The lane stores more than the reason (`expired:never-started quiet-since=<ms>`, `expired:review-orphaned target-closed`): the
+  // reason is the first token, and the lane's `review-orphaned` is the stuck verdict's `review-of-closed`.
+  const token = detail.slice(prefix.length).split(' ')[0] ?? '';
+  return REASON_WORDS[token === 'review-orphaned' ? 'review-of-closed' : token] ?? null;
 };
 
 /** The words for a run someone ended, or null when the run is open, a coordinator closed it, or nobody is recorded (the
@@ -27,7 +29,9 @@ export function closeWords(run: CloseFacts): string | null {
   if (run.state !== 'done' && run.state !== 'failed') return null;
   const by = isRunClosedBy(run.closedBy) ? run.closedBy : null;
   if (by === 'operator') {
-    if (typeof run.closeDetail === 'string' && run.closeDetail.startsWith(REQUESTED)) return 'closed by you, at its request';
+    if (typeof run.closeDetail === 'string' && run.closeDetail.startsWith(ABANDON_REQUESTED_PREFIX)) return 'closed by you, at its request';
+    // A refused-close item's Abandon: ccrc's lane held the close and the operator took the door; no session asked.
+    if (typeof run.closeDetail === 'string' && run.closeDetail.startsWith(ABANDON_REFUSED_PREFIX)) return 'closed by you, after ccrc held it';
     const why = reasonOf(run.closeDetail, 'abandon:');
     return why === null ? 'closed by you' : `closed by you: ${why}`;
   }
