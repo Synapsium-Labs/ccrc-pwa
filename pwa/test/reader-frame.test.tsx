@@ -750,6 +750,20 @@ describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
     expect(h2.mountFn).toHaveBeenCalledTimes(1);
   });
 
+  it('a frame mounted with its own bar publishes none, even once the slot asks for ccrc\'s (a window narrowed after the mount)', async () => {
+    // Refinement (f): a desk-born frame keeps its own bar for its life, so the head keeps option 1's row over it.
+    const h = harness();
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    const r = render(slotted(h, 'frame-bar', publish));
+    const input = await ready(h);
+    expect(input.chrome).toBe('frame-bar');
+    r.rerender(slotted(h, 'host-bar', publish));
+    act(() => { input.onReady(); });
+    await act(async () => { await new Promise((res) => setTimeout(res, 0)); });
+    expect(publish.mock.calls.filter((c) => c[0] !== null)).toEqual([]);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+  });
+
   it('the Docs screen asks for ccrc\'s bar under the compact width and for the frame\'s own above it', async () => {
     const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
     atWidth(412);
