@@ -1515,6 +1515,11 @@ export const FIXTURE_REQUIREMENT = 'fixture-requirement>=0';
 export function runRuntimeStep(c: {
   lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; builder?: boolean;
   before?: string; after?: string; buildRc?: number; requirement?: string | null; merge?: boolean;
+  // Codex bridge Stage 4, Task 4: `_codex_runtime_wanted`'s answer, which the step asks once it knows the roster has
+  // a codex lane. 0: a lane runs in litellm mode; 1: none does; 2: it could not be told. A case that names it has
+  // the question recorded as `wanted` in `calls`, in order with the builder's; a case that does not is answered 0
+  // silently, so the cases written before the question existed count the builder's calls as they did.
+  wanted?: 0 | 1 | 2;
 }): StepRun {
   const home = mkTmp('ccrc-codex-runtime-step-');
   const rt = join(home, 'rt');
@@ -1551,6 +1556,9 @@ export function runRuntimeStep(c: {
     `INST_ROLE=${c.role ?? 'both'}`,
     'INST_DEGRADED=()',
     lanesFn(c.lanes ?? ['codex-a'], c.lanesRc ?? 0),
+    c.wanted === undefined
+      ? '_codex_runtime_wanted() { return 0; }'
+      : `_codex_runtime_wanted() { printf 'wanted\\n' >> "$HOME/rt/calls"; return ${c.wanted}; }`,
     RUNTIME_CLI_DEF(),
     ccrcFunction('_inst_codex_runtime'),
     c.merge === true ? '_inst_codex_runtime 2>&1; rc=$?' : '_inst_codex_runtime; rc=$?',
@@ -1654,7 +1662,10 @@ export function runTiersStep(c: {
     recordingStub('_codex_tier_stale', c.stale, 1),
     recordingStub('_codex_stop_tier', c.stopRc, 0, stopWords),
     recordingStub('_codex_start_tier', c.startRc, 0),
-    ...(c.runtimeBuildFails === true ? [ccrcFunction('_inst_codex_runtime'), '_inst_codex_runtime'] : []),
+    // Stage 4, Task 4: the real step asks whether a lane runs in litellm mode before it builds. These cases are about
+    // a litellm lane's failed build, so the answer is yes.
+    ...(c.runtimeBuildFails === true
+      ? ['_codex_runtime_wanted() { return 0; }', ccrcFunction('_inst_codex_runtime'), '_inst_codex_runtime'] : []),
     ccrcFunction('_inst_codex_tiers'),
     '_inst_codex_tiers; rc=$?',
     DEGRADED_OUT,

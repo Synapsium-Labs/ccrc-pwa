@@ -761,6 +761,12 @@ const OPS = {
   // THE ROSTER HALF OF `ccrc codex switch` (codex-bridge Stage 2, Task 12; spec D20): a codex lane's mode, written
   // through `writeRoster`, the one writer. Silent on success, like `drop`. Its arm says why the default is DELETED.
   'codex-mode': { keys: ['file', 'id', 'bridge'], repeat: [] },
+  // EVERY CODEX LANE'S MODE, READ (codex-bridge Stage 4, Task 4). One line per exec.kind "codex" row, `<id> <mode>`,
+  // in roster order, the mode RESOLVED by the roster's own parser, so an absent `exec.bridge` reads the first word of
+  // its set. The install step and the doctor ask it before they build or demand a LiteLLM runtime: bash may not read
+  // `exec.bridge` from the roster, and a lane's `lane.json` is one lane's, once rendered. Read-only. A roster that
+  // cannot be read or does not validate is `readRoster`'s refusal and exit 1, never an answer with no lines.
+  'codex-modes': { keys: ['file'], repeat: [] },
   // Accounts plan Task A16 (D-7735).
   'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
   'set-done': { keys: ['file', 'id'], repeat: [] },
@@ -3271,6 +3277,18 @@ function main(argv) {
       `removing "${a['id']}" would make ${a['file']} unparseable: `);
     if (admits !== 0) return admits;
     if (!writeRoster(a['file'], next, stands)) return 1;
+    return 0;
+  }
+
+  if (op === 'codex-modes') {
+    if (a['file'] === undefined) { refuse('bad-argv', 'codex-modes needs --file'); return 2; }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    // `readRoster` validated it, so the parse cannot throw; its accounts carry each codex row's RESOLVED mode.
+    const lines = rosterFromJson(json).accounts
+      .filter((acct) => acct.execKind === 'codex')
+      .map((acct) => `${acct.id} ${acct.bridge}\n`);
+    process.stdout.write(lines.join(''));
     return 0;
   }
 

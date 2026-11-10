@@ -11,7 +11,7 @@
  * Every spawn is a stub `ccrc` inside a fixture HOME; nothing here runs a real verb.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -337,6 +337,76 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
   it('output past the cap is cut and answered too-large', async () => {
     const { home } = fixtureHome('head -c 4096 /dev/zero');
     expect(await localAccountOps({ home, maxOutputBytes: 1024 }).run('roster', null, {})).toEqual({ kind: 'too-large' });
+  });
+});
+
+// ── codex bridge Stage 4, Task 4: `account-op codex-modes`, every codex lane's mode, read ───────────────────────────
+// Bash may not read `exec.bridge` from the roster (`single-definition/late-census.test.ts`), and the mode it reads from
+// a lane's `lane.json` is one lane's, and only once that file is rendered. So the question "does any codex lane on this
+// box run in litellm mode", which the install step and the doctor ask before they build or demand a LiteLLM runtime, is
+// asked here: one line per codex row, `<id> <mode>`, each mode resolved by the roster's own parser. Read-only. A
+// roster it cannot read is refused, never answered with no lines: "cannot tell" is not "no lane needs it".
+describe('account-op codex-modes (codex bridge Stage 4, Task 4)', () => {
+  const ACCOUNT_OP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'account-op.mjs');
+  const op = (args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync(process.execPath, [ACCOUNT_OP, 'codex-modes', ...args], { encoding: 'utf8', timeout: 15_000 });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const box = (lanes: Array<{ id: string; proxyPort: number; litellmPort: number }>): string => {
+    const home = mkTmp('ccrc-account-ops-codex-modes-');
+    codexRoster(home, lanes, [], { accountsSh: false });
+    return path.join(home, '.ccrc', 'accounts.json');
+  };
+  const setBridge = (file: string, id: string, bridge: string): void => {
+    const json = JSON.parse(readFileSync(file, 'utf8')) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+    json.accounts.find((a) => a.id === id)!.exec['bridge'] = bridge;
+    writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+  };
+
+  it('prints each codex lane and its resolved mode, an absent key as litellm, and no other row', () => {
+    const file = box([{ id: 'lane-a', proxyPort: 45111, litellmPort: 45112 }, { id: 'lane-b', proxyPort: 45113, litellmPort: 45114 }]);
+    setBridge(file, 'lane-b', 'direct');
+    const before = readFileSync(file, 'utf8');
+    expect(op(['--file', file])).toEqual({ code: 0, stdout: 'lane-a litellm\nlane-b direct\n', stderr: '' });
+    expect(readFileSync(file, 'utf8'), 'a read op wrote the roster').toBe(before);
+  });
+
+  it('an explicit litellm reads litellm, and two direct lanes read direct', () => {
+    const file = box([{ id: 'lane-a', proxyPort: 45115, litellmPort: 45116 }, { id: 'lane-b', proxyPort: 45117, litellmPort: 45118 }]);
+    setBridge(file, 'lane-a', 'litellm');
+    expect(op(['--file', file]).stdout).toBe('lane-a litellm\nlane-b litellm\n');
+    setBridge(file, 'lane-a', 'direct');
+    setBridge(file, 'lane-b', 'direct');
+    expect(op(['--file', file]).stdout).toBe('lane-a direct\nlane-b direct\n');
+  });
+
+  it('a roster with no codex lane prints nothing and exits 0', () => {
+    const file = box([]);
+    expect(op(['--file', file])).toEqual({ code: 0, stdout: '', stderr: '' });
+  });
+
+  // A refusal is the op protocol's one JSON object on stdout and a non-zero exit, as every op of this file refuses.
+  // What binds here is that it is never a list of lanes: a caller that reads the exit code first is never told
+  // "no lane" by a roster nobody could read.
+  const refusal = (r: { stdout: string }): { ok: unknown; error: unknown; detail: unknown } =>
+    JSON.parse(r.stdout) as { ok: unknown; error: unknown; detail: unknown };
+  it.each([
+    ['no roster file', (file: string) => rmSync(file), 'roster-absent'],
+    ['a roster that is not JSON', (file: string) => writeFileSync(file, '{ not json'), 'roster-invalid'],
+    ['a mode the parser does not know', (file: string) => setBridge(file, 'lane-a', 'sideways'), 'roster-invalid'],
+  ])('%s is refused, exit 1, with no lane line: cannot tell is never an empty answer', (_what, breakIt, error) => {
+    const file = box([{ id: 'lane-a', proxyPort: 45119, litellmPort: 45120 }]);
+    breakIt(file);
+    const r = op(['--file', file]);
+    expect(r.code).toBe(1);
+    expect(refusal(r)).toMatchObject({ ok: false, error });
+    expect(r.stdout).not.toMatch(/^lane-a /m);
+  });
+
+  it('needs --file', () => {
+    const r = op([]);
+    expect(r.code).toBe(2);
+    expect(refusal(r)).toMatchObject({ ok: false, error: 'bad-argv' });
   });
 });
 
