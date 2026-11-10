@@ -7180,8 +7180,9 @@ sums the nodes' reports into one comparison.
 space and journal; doctor's `history` check reads it. Its `spool-planted` warning counts each node at
 `~/.ccrc/history/spool/<id>.jsonl` that is a FIFO, a link, a directory or any other non-regular node:
 the hook appends nothing to one and the sweep never reads it, so that id spools nothing until the node
-is removed. The writing verbs are the operator's: `import`, `prune --older-than <age>` (30 days at
-least) and `reparse`, each a dry run unless `--apply`, and `doctor --backup`, `--repair`, `--migrate`,
+is removed. The writing verbs are the operator's: `import`, `import --agents` (the subagent transcripts written
+before their capture began), `prune --older-than <age>` (30 days at least) and `reparse`, each a dry
+run unless `--apply`, and `doctor --backup`, `--repair`, `--migrate`,
 `--adopt`, `--restore <file>` and `--rebuild`. Each runs through the sweep's shim, one writer at a time
 (exit 4 while a pass holds the lock). Every `--apply` form and every `doctor` flag refuses inside a
 session (`CLAUDECODE` set), and all but the three that bind a store refuse under `~/.ccrc/history-off`.

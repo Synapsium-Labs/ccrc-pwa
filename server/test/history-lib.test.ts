@@ -1153,6 +1153,9 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
     expect(libPlan.formOf('import', [])).toBe(null);
     expect(libPlan.formOf('import', ['--session', 'demo-quiet-basin'])).toBe(null);
     expect(libPlan.formOf('import', ['--apply'])).toBe('import-apply');
+    expect(libPlan.formOf('import', ['--agents'])).toBe(null);
+    expect(libPlan.formOf('import', ['--agents', '--apply'])).toBe('import-agents-apply');
+    expect(libPlan.formOf('import', ['--apply', '--agents'])).toBe('import-agents-apply');
     expect(libPlan.formOf('import', ['--session', 'demo-quiet-basin', '--file', '/home/u/.claude-a/projects/p/x.jsonl', '--apply'])).toBe('import-session-apply');
     expect(libPlan.formOf('prune', ['--older-than', '90d'])).toBe(null);
     expect(libPlan.formOf('prune', ['--older-than', '90d', '--apply'])).toBe('prune-apply');
@@ -1164,7 +1167,7 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
     expect(libPlan.formOf('frobnicate', ['--apply'])).toBe(libPlan.UNKNOWN_OP_FORM);
   });
   it('every non-null form formOf answers for a known verb is a WRITING_FORMS key', () => {
-    const argvs = [[], ['--apply'], ['--session', 'x', '--file', 'y', '--apply'], ['--clear-all']];
+    const argvs = [[], ['--apply'], ['--session', 'x', '--file', 'y', '--apply'], ['--clear-all'], ['--agents', '--apply']];
     for (const op of ['import', 'prune', 'reparse', 'recall-off', 'repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) {
       for (const a of argvs) {
         const f = libPlan.formOf(op, a);
@@ -1191,6 +1194,7 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
     }
     expect(FORMS['import-session-apply']!.irreversible).toBe(true);
     expect(FORMS['import-apply']!.irreversible).toBe(false);
+    expect(FORMS['import-agents-apply']).toMatchObject({ op: 'import', irreversible: false, binding: false });
     expect(FORMS['migrate']!.irreversible).toBe(false);
   });
   it('from a cc- pane only the irreversible forms refuse irreversible-in-pane; another pane passes', () => {
@@ -6421,7 +6425,7 @@ describe('decideOpGate while a recovery step is registered: every writing form b
   const FORMS = libOps.WRITING_FORMS as unknown as Readonly<Record<string, Readonly<{ op: string; irreversible: boolean; binding: boolean }>>>;
   /** RB6's list: import --apply (both forms), prune --apply, reparse --apply, doctor --repair, --backup, --adopt, --migrate.
    *  migrate and adopt are refused here because `recovering` alone carries none of RB13's or RB14's facts. */
-  const REFUSED = ['import-apply', 'import-session-apply', 'prune-apply', 'reparse-apply', 'repair', 'backup', 'adopt', 'migrate'];
+  const REFUSED = ['import-apply', 'import-agents-apply', 'import-session-apply', 'prune-apply', 'reparse-apply', 'repair', 'backup', 'adopt', 'migrate'];
   /** RB6 allows restore and rebuild (they replace the step); RB12 exempts W2's recall-off forms. */
   const ALLOWED = ['restore', 'rebuild', 'recall-off', 'recall-off-clear-all'];
   const recovering = { claudecode: false, historyOff: false, recovering: true };
@@ -6492,9 +6496,9 @@ describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8
   const FILE = '/home/u/.claude/projects/-home-u-worktrees-p-quiet-basin/0189abcd-1234-4678-9abc-000000000001.jsonl';
 
   it("import keeps B1's grammar: --apply, and --session with --file, both or neither", () => {
-    expect(ok('import', [])).toEqual({ op: 'import', apply: false, session: null, file: null });
-    expect(ok('import', ['--apply'])).toEqual({ op: 'import', apply: true, session: null, file: null });
-    expect(ok('import', ['--session', 'claude-demo', '--file', FILE, '--apply'])).toEqual({ op: 'import', apply: true, session: 'claude-demo', file: FILE });
+    expect(ok('import', [])).toEqual({ op: 'import', apply: false, session: null, file: null, agents: false });
+    expect(ok('import', ['--apply'])).toEqual({ op: 'import', apply: true, session: null, file: null, agents: false });
+    expect(ok('import', ['--session', 'claude-demo', '--file', FILE, '--apply'])).toEqual({ op: 'import', apply: true, session: 'claude-demo', file: FILE, agents: false });
     expect(why('import', ['--session', 'claude-demo'])).toBe('bad-args');
     expect(why('import', ['--apply', '--apply'])).toBe('bad-args');
     expect(why('import', ['stray'])).toBe('bad-args');
@@ -6502,6 +6506,20 @@ describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8
     expect(why('import', ['--session', '../x', '--file', FILE])).toBe('bad-id');
     expect(why('import', ['--session', 'claude-demo', '--file', '/home/u/notes.txt'])).toBe('bad-args');
     expect(why('import', ['--session', 'claude-demo', '--file', '/home/u/x/not-a-uuid.jsonl'])).toBe('bad-args');
+  });
+
+  it('import --agents (W4 P6): a bool beside --apply, and never beside --session or --file', () => {
+    expect(ok('import', ['--agents'])).toEqual({ op: 'import', apply: false, session: null, file: null, agents: true });
+    expect(ok('import', ['--agents', '--apply'])).toEqual({ op: 'import', apply: true, session: null, file: null, agents: true });
+    expect(why('import', ['--agents', '--agents'])).toBe('bad-args');
+    expect(why('import', ['--agents', 'stray'])).toBe('bad-args');
+    // CONTROL: the pair parses without --agents (a valid id, a <uuid>.jsonl file), so only the combination refuses
+    expect(why('import', ['--session', 'claude-demo', '--file', FILE])).toBe('ok');
+    expect(why('import', ['--agents', '--session', 'claude-demo', '--file', FILE])).toBe('bad-args');
+    expect(why('import', ['--agents', '--session', 'claude-demo'])).toBe('bad-args');
+    expect(why('import', ['--agents', '--file', FILE, '--apply'])).toBe('bad-args');
+    // the combination is bad-args before the id grammar can say bad-id
+    expect(why('import', ['--agents', '--session', '../x', '--file', FILE])).toBe('bad-args');
   });
 
   it('migrate, repair, backup and adopt take no arguments', () => {

@@ -166,6 +166,9 @@ export interface AgentIngestInputs {
 export function decideAgentIngest(i: AgentIngestInputs): boolean;
 /** The share of the store cap at which subagent capture pauses (W4 P5). */
 export const AGENTS_PAUSE_SHARE: 0.9;
+/** §9.3's store-to-source ratios, the two ends of `import --agents`' size forecast (W4 P6). */
+export const AGENTS_STORE_RATIO_LOW: 0.4;
+export const AGENTS_STORE_RATIO_HIGH: 0.55;
 /** The pause order's one rule (W4 P5, D-8155): `'at-90'` when armed, no other pause stands, the cap is measured (over 0) and the size has reached
  *  `AGENTS_PAUSE_SHARE` of it; else null. */
 export function decideAgentsPause(i: { armed: boolean; pause: string | null; sizeBytes: number; capBytes: number }): 'at-90' | null;
@@ -929,7 +932,7 @@ export function parentRollup(children: readonly RollupChild[]): {
 
 // --- W1-B2 Task 6: operator-verb decisions (spec §6.6, §6.9, §8.3, §8.4)
 export type OpArgs =
-  | { readonly op: 'import'; readonly apply: boolean; readonly session: string | null; readonly file: string | null }
+  | { readonly op: 'import'; readonly apply: boolean; readonly session: string | null; readonly file: string | null; readonly agents: boolean }
   | { readonly op: 'migrate' }
   | { readonly op: 'prune'; readonly days: number; readonly apply: boolean }
   | { readonly op: 'reparse'; readonly node: string | null; readonly session: string | null; readonly apply: boolean }

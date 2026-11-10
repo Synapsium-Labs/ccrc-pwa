@@ -102,6 +102,8 @@ export const REFUSALS = Object.freeze(Object.keys(REASONS).filter((w) => REASONS
 const form = (op, irreversible, binding) => Object.freeze({ op, irreversible, binding });
 export const WRITING_FORMS = Object.freeze({
   'import-apply': form('import', false, false),
+  // W4 P6 (the operator's ruling, item 92): the subagent import, a bulk form that is not irreversible, like import-apply.
+  'import-agents-apply': form('import', false, false),
   'import-session-apply': form('import', true, false),
   'prune-apply': form('prune', true, false),
   repair: form('repair', true, false),
@@ -561,6 +563,10 @@ export function decideAgentIngest(i) {
 /** The share of the store cap at which subagent capture pauses while main capture goes on to the cap (W4 P5, ruled by the operator,
  *  item 92, 2026-11-08). */
 export const AGENTS_PAUSE_SHARE = 0.9;
+/** The ratios of the store's size to the source JSONL's, §9.3's measured 0.4 to 0.55: `import --agents`' forecast prints a store
+ *  size at each end (W4 P6). */
+export const AGENTS_STORE_RATIO_LOW = 0.4;
+export const AGENTS_STORE_RATIO_HIGH = 0.55;
 /** The pause order, the one rule (W4 P5, D-8155): subagent capture pauses at 90% of the store cap. Answers `'at-90'` when the marker
  *  arms the ingest, no other pause stands (`pause` null: neither at the cap nor below the floor, which pause every capture already),
  *  the cap is measured (`capBytes` over 0: an unmeasured cap pauses nothing by this rule, review 1737 F2) and the store has reached
@@ -1317,6 +1323,7 @@ export function formOf(op, args) {
   switch (op) {
     case 'import':
       if (!has('--apply')) return null;
+      if (has('--agents')) return 'import-agents-apply';   // before the --session/--file branch: parseOpVerbArgs refuses the mix (bad-args)
       return has('--session') || has('--file') ? 'import-session-apply' : 'import-apply';
     case 'prune':
       return has('--apply') ? 'prune-apply' : null;
@@ -7256,7 +7263,8 @@ function readOpFlags(args, spec) {
 }
 
 /** One operator verb's argv (§8.4), as both doors read it. `import` keeps B1's grammar (`--apply`, and
- *  `--session <id> --file <path>` both or neither, the session an idOk id and the file a `<uuid>.jsonl`).
+ *  `--session <id> --file <path>` both or neither, the session an idOk id and the file a `<uuid>.jsonl`), plus W4 P6's `--agents`
+ *  (a bool: the subagent import, one meaning, so beside `--session` or `--file` it is `bad-args`, before the id grammar can say `bad-id`).
  *  `prune` needs `--older-than <dur>` at or above PRUNE_FLOOR_DAYS. `reparse` takes `--node <full id>` (Task 1's
  *  HISTORY_NODE_ID_RE, the one spelling of a full node id) or `--session <id>`, never both
  *  D-4697 (history-reparse-targets). `restore` takes one bare backup name, refused
@@ -7268,17 +7276,19 @@ export function parseOpVerbArgs(op, args) {
   const ok = (a) => ({ ok: true, args: Object.freeze(a) });
   switch (op) {
     case 'import': {
-      const r = readOpFlags(args, { '--apply': 'bool', '--session': 'value', '--file': 'value' });
+      const r = readOpFlags(args, { '--apply': 'bool', '--session': 'value', '--file': 'value', '--agents': 'bool' });
       if (r === null || r.positional.length > 0) return refuse('bad-args');
       const session = r.flags['--session'] ?? null;
       const file = r.flags['--file'] ?? null;
+      const agents = r.flags['--agents'] === true;
       if ((session === null) !== (file === null)) return refuse('bad-args');
+      if (agents && session !== null) return refuse('bad-args');
       if (session !== null) {
         if (!idOk(session)) return refuse('bad-id');
         const base = file.slice(file.lastIndexOf('/') + 1);
         if (!base.endsWith('.jsonl') || !UUID_RE.test(base.slice(0, -'.jsonl'.length))) return refuse('bad-args');
       }
-      return ok({ op, apply: r.flags['--apply'] === true, session, file });
+      return ok({ op, apply: r.flags['--apply'] === true, session, file, agents });
     }
     case 'migrate':
     case 'repair':

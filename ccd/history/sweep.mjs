@@ -73,7 +73,7 @@ import {
   // W4 P1, P6, P15 (b), P20: the subagent walk's grammar, its identity and the ingest gates.
   RUN_ID_RE, classifyAgentName, decideAgentDir, decideAgentFile, agentKey, META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, decideMetaType, INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
   // W4 P5 (D-8155): the pause order's one rule, and the cap's byte count the pass hands to the tick.
-  decideAgentsPause, capBytes,
+  decideAgentsPause, capBytes, AGENTS_PAUSE_SHARE, AGENTS_STORE_RATIO_LOW, AGENTS_STORE_RATIO_HIGH,
   // W2-1 Task 4 (W2-D30): the presence record's lib decisions.
   RECALL_OFF_KEYS, RECALL_OFF_SCAN_MAX, recallOffStateOf, planRecallOffObservation, recallOffReplayRows,
 } from './lib.mjs';
@@ -7175,7 +7175,8 @@ const OP_NEEDS_CODE_VERSION = new Set(['import', 'prune', 'reparse', 'repair']);
  *  {rc, reason?}. */
 const OP_DRY_RUNS = Object.freeze({
   import: async (c) => {
-    importDryRun(c.P, c.parsed.homes, c.args, c.out);
+    if (c.args.agents) importAgentsDryRun(c.P, c.parsed.homes, c.out, c.home);
+    else importDryRun(c.P, c.parsed.homes, c.args, c.out);
     return { rc: EXIT.OK };
   },
   prune: (h) => pruneDryRunOp(h.home, h.P, h.args, h.out, h.now()),
@@ -7186,7 +7187,7 @@ const OP_DRY_RUNS = Object.freeze({
  *  op marker and the first outbox flush. c = {db, ctx, P, args, opened, free}; answers {rc, reason?}. An rc of 0 is
  *  followed by the release flush and journal half (§8.4: every writing form flushes before it exits 0). */
 const OP_HANDLERS = Object.freeze({
-  import: (c) => importApply(c.db, c.ctx, c.P, c.args),
+  import: (c) => (c.args.agents ? importAgentsApply(c.db, c.ctx, c.P, c.args) : importApply(c.db, c.ctx, c.P, c.args)),
   migrate: (c) => migrateOp(c.db, c.ctx, c.opened, c.free),
   prune: (c) => pruneApplyOp(c.db, c.ctx, c.args),
   reparse: (c) => reparseApplyOp(c.db, c.ctx, c.args),
@@ -7515,25 +7516,32 @@ export function transcriptsUnder(homes) {
  *  STATFS_DEADLINE_MS, through Task 14's in-process seam when a test injects one), the cap file and the store's
  *  measured size, and lets lib's planRun decide — the rule a scheduled pass applies, never a second one here
  *  (L4). null when it may; else the word it stops on. */
-export async function importRoom(db, ctx) {
+export async function importRoom(db, ctx, agents = false) {
   const free = await statfsWithDeadline(probePath(ctx.paths, ctx.home), STATFS_DEADLINE_MS, ctx.deps.statfs);
   const sizeBytes = (ctx.deps.measureSize ?? measuredSize)(db, ctx.paths.dbFile);
+  const capGb = capOf(capText(ctx.paths.cap)).gb;
   const run = planRun({
-    historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb: capOf(capText(ctx.paths.cap)).gb,
+    historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb,
     migration: 'none', recovering: false,
   });
   if (run.arm !== 'run') return 'store-unreachable';   // planRun's only hold for these inputs: a probe that never settled
   if (run.pause === 'at-cap') return 'at-cap';
   if (run.pause === 'low-disk') return 'capture-paused-low-disk';
+  // W4 P5, P6 (the coordinator's ruling in fix round 3, review 1731 F2): the `--agents` form is subagent capture, so the pause at 90% of
+  // the cap reaches it as it reaches a tick's. The operator's act is its own arming (`armed: true`, whatever the marker says, D-8158),
+  // and every other pause was answered above, so none stands here (`pause: null`): decideAgentsPause stays the one rule.
+  if (agents && decideAgentsPause({ armed: true, pause: null, sizeBytes, capBytes: capBytes(capGb) }) !== null) return 'agents-paused-at-cap';
   return null;
 }
 
-/** importRoom's answer counted and said as a scheduled pass counts a pause (§9.3); true when the import must stop. */
-async function importPaused(db, ctx, say) {
-  const pause = await importRoom(db, ctx);
+/** importRoom's answer counted and said as a scheduled pass counts a pause (§9.3); true when the import must stop. `agents` is the
+ *  `--agents` form's (importRoom's third argument): its 90% pause is counted `capture_paused_agents_at_cap`, as a tick counts it (D-8155). */
+async function importPaused(db, ctx, say, agents = false) {
+  const pause = await importRoom(db, ctx, agents);
   if (pause === null) return false;
   if (pause === 'at-cap') bump(db, 'capture_paused_at_cap');
   if (pause === 'capture-paused-low-disk') bump(db, 'capture_paused_low_disk');
+  if (pause === 'agents-paused-at-cap') bump(db, 'capture_paused_agents_at_cap');
   say(pause);
   return true;
 }
@@ -7553,15 +7561,19 @@ const floorStopWord = (floor) => (floor === 'low-disk' ? 'capture-paused-low-dis
  *  chunks"). A file that is not a regular file under a rostered projects/ root, or that has gone, is counted by
  *  `ingestPath`'s admission and answers 'refused'. The ingest context is Task 19's own `makeIngestCtx`, with
  *  `fts` false, so these blobs are written unindexed; `importApply` then calls Task 23's `resetFtsPending`,
- *  and the next scheduled tick's `deriveFts` indexes them through its full pair index. */
-export async function importFile(db, ctx, filePath, uuid) {
+ *  and the next scheduled tick's `deriveFts` indexes them through its full pair index.
+ *  W4 P6: `agent` ({ agentKey, runId }) is a subagent file's identity, handed to the bind as the tick hands it; it also selects the
+ *  `--agents` form's pause (importRoom) and its stop message, which names the act that resumes the file: no scheduled tick takes a
+ *  pre-install file, whatever stopped it (review 1735 A4). A main file's call is unchanged. */
+export async function importFile(db, ctx, filePath, uuid, agent = null) {
   const home = homeOfPath(filePath, ctx.homes) ?? '';
-  const say = (word) => ctx.out(`history-sweep: ${word}: ingest stopped at ${filePath}; the scheduled ticks resume it by cursor`);
+  const resume = agent === null ? 'the scheduled ticks resume it by cursor' : 're-run import --agents --apply to resume it: the scheduled ticks never take a pre-install file (P6)';
+  const say = (word) => ctx.out(`history-sweep: ${word}: ingest stopped at ${filePath}; ${resume}`);
   for (;;) {
-    if (await importPaused(db, ctx, say)) return 'paused';
+    if (await importPaused(db, ctx, say, agent !== null)) return 'paused';
     // Task 19's per-chunk floor probe, on db/ (a link followed), through the same in-process seam importRoom uses.
     const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
-    const r = await ingestPath(db, ictx, { path: filePath, uuid, home }, newBudget(ctx.now));
+    const r = await ingestPath(db, ictx, { path: filePath, uuid, home, ...(agent ?? {}) }, newBudget(ctx.now));
     if (r === null) return 'refused';
     if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed');
     if (r.floor !== undefined) {
@@ -7641,6 +7653,91 @@ function importDryRun(P, homes, args, out) {
   } finally {
     ro?.close();
   }
+}
+
+/** The subagent files `import --agents` (either form) ranks, from the walk's agent arm alone, as the census lists them (P20 (a), SA34):
+ *  `transcriptsUnder` stays main-only and no second lister of `subagents/` exists. Nothing is opened; the file entries only. */
+function agentImportEntries(homes) {
+  const files = [];
+  walkTranscripts(homes, () => {}, null, { take: (e) => { if (e.type === 'file') files.push(e); }, stop: null });
+  return files;
+}
+
+/** Why `import --agents` does not take one subagent file, or null when it does (W4 P6, D-8157). The rule is decideAgentIngest's, form
+ *  'import' (history on, no pause, an admitted file, a pre-install one, its parent in `known`); a file it refuses is named by its first
+ *  failing fact: refused by the walk, not this import's (post-install: a tick's), then by its parent, which `ev` (importEvidence's wider
+ *  map) tells apart: `parent-unconfirmed` is named by evidence a plain `import --apply` can confirm, `parent-unknown` by none. */
+function agentImportSkip(e, known, ev, sinceMs) {
+  const preInstall = isPreInstall(e.mtimeMs, sinceMs);
+  const take = decideAgentIngest({
+    form: 'import', armed: false, historyOff: false, pause: null, admitted: e.verdict === 'admit', preInstall, parentKnown: known.has(e.uuid),
+  });
+  if (take) return null;
+  if (e.verdict !== 'admit') return 'refused';
+  if (!preInstall) return 'post-install';
+  return ev.has(e.uuid) ? 'parent-unconfirmed' : 'parent-unknown';
+}
+
+/** The remedy the dry run prints when a file's parent is named by evidence only (`parent-unconfirmed` above 0), with its two exceptions
+ *  (review 1731 F9): at main, mapRegistryUuid answers `skipped` in the first (D-4297) and `refused` in the second. */
+const AGENT_IMPORT_REMEDY = 'history-sweep: run `ccrc history import --apply` first: it confirms these parents\' epochs, and `import --agents --apply` then admits their subagent files. '
+  + 'It does not when the same id already holds the uuid as an unconfirmed epoch, or another family holds it confirmed; those files stay parent-unconfirmed';
+
+/** `import --agents` without --apply (W4 P6): READ-ONLY, one JSON forecast line, then the words. `files` and `bytes` are the pre-install
+ *  files of known parents the apply would take, `storeBytesLow` and `storeBytesHigh` that size at §9.3's two ratios, `pauseAtBytes` the
+ *  90% bound the apply stops at, and `skipped` the files it would not take, by reason. `home` is the pass's (knownUuids' registry half);
+ *  a missing store has no epochs, so only the registry names a known parent. */
+function importAgentsDryRun(P, homes, out, home) {
+  let ro = null;
+  try { if (statSync(P.dbFile).size > 0) ro = openReader(P.dbFile); } catch { ro = null; }
+  try {
+    const ev = importEvidence(ro, P);
+    const known = ro === null ? registeredUuids(home) : knownUuids(ro, home);
+    const sinceMs = ro === null ? null : installRecordOf(ro);
+    const skipped = { 'parent-unconfirmed': 0, 'parent-unknown': 0, 'post-install': 0, refused: 0 };
+    let files = 0;
+    let bytes = 0;
+    for (const e of agentImportEntries(homes)) {
+      const why = agentImportSkip(e, known, ev, sinceMs);
+      if (why !== null) { skipped[why] += 1; continue; }
+      let size;
+      try { size = lstatSync(e.path).size; } catch { continue; }   // gone since the walk: nothing to take
+      files += 1;
+      bytes += size;
+    }
+    const pauseAtBytes = AGENTS_PAUSE_SHARE * capBytes(capOf(capText(P.cap)).gb);
+    out(JSON.stringify({
+      files, bytes, storeBytesLow: Math.round(bytes * AGENTS_STORE_RATIO_LOW), storeBytesHigh: Math.round(bytes * AGENTS_STORE_RATIO_HIGH), pauseAtBytes, skipped,
+    }));
+    out(`history-sweep: the apply stops once the store reaches ${Math.ceil(pauseAtBytes)} bytes (${AGENTS_PAUSE_SHARE * 100}% of the cap): re-run it to resume`);
+    if (skipped['parent-unconfirmed'] > 0) out(AGENT_IMPORT_REMEDY);
+  } finally {
+    ro?.close();
+  }
+}
+
+/** `import --agents --apply` (W4 P6): the operator's import of the subagent files written before capture began. Each file the walk's
+ *  agent arm hands over is ruled by decideAgentIngest, form 'import' (agentGate, the tick's own asker): a pre-install file of a parent in
+ *  `knownUuids`, literally the tick's admitted set and never importEvidence's wider map (D-8157). It reads no arming marker (D-8158) and
+ *  maps nothing. The 90% pause is importFile's, per window (importRoom with agents, armed: true), and ends the import with the files left
+ *  for a re-run. A main transcript and a sidecar are never touched. */
+async function importAgentsApply(db, ctx, P, args) {
+  const known = knownUuids(db, ctx.home);
+  const sinceMs = installRecordOf(db);
+  const ends = [];
+  for (const e of agentImportEntries(ctx.homes)) {
+    const gate = agentGate(ctx, {
+      form: 'import', armed: false, historyOff: existsSync(P.off), admitted: e.verdict === 'admit',
+      preInstall: isPreInstall(e.mtimeMs, sinceMs), parentKnown: known.has(e.uuid),
+    });
+    if (gate !== 'read') continue;
+    const end = await importFile(db, ctx, e.path, e.uuid, { agentKey: agentKey(e.id, e.runId), runId: e.runId });
+    ends.push(end);
+    if (end === 'paused') break;
+  }
+  // §9.1, as importApply: these blobs are written unindexed (fts false), so the next tick's deriveFts indexes them.
+  if (ends.some((end) => end !== 'refused')) resetFtsPending(db);
+  return { rc: EXIT.OK };
 }
 
 /** `import --apply` and `import --session <id> --file <path> --apply` (§8.4): map from evidence, one verdict

@@ -12,9 +12,9 @@ import {
   holdAgainIn, LANE_ROSTER, linkOf, mainRows, membershipsPerEntry, noMarker, offsetOf, plantAgentTree, plantMarker, recordOpenFlagsAsync,
   runIdsOf, sidecarsOf, T0, transcriptRows, variantsOf, type AgentRig, type TreeSpec,
 } from './historyAgentFixtures.js';
-import { makeHistoryBox, openStoreRO, plantSession, plantTranscript, recordOpenFlags, runDriver, skipOnDarwin } from './historyHelpers.js';
+import { counters, makeHistoryBox, openStoreRO, plantSession, plantTranscript, recordOpenFlags, runCli, runDriver, runShim, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
 import { mkTmp, removeTmpFixturesSince, tmpMark } from './tmpHelpers.js';
-import { agentIdOk, capBytes, historyPaths, META_MAX_BYTES, SCAN_INTERVAL_MS } from '../../ccd/history/lib.mjs';
+import { agentIdOk, capBytes, historyPaths, META_MAX_BYTES, parseOpVerbArgs, SCAN_INTERVAL_MS, WRITING_FORMS } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
 import { behindStats, candidateFiles, discoverTranscripts, ingestTick, makeIngestCtx, newBudget, readAgentMeta } from '../../ccd/history/sweep.mjs';
 
@@ -929,3 +929,184 @@ describe('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
   });
 });
 
+
+describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA12, SA32; departures D-8157, D-8158)', () => {
+  const pre = (id: string, tag: number): TreeSpec['agents'][number] => agent(id, tag, { atMs: -60_000 });
+  const post = (id: string, tag: number): TreeSpec['agents'][number] => agent(id, tag, { atMs: 60_000 });
+  const op = (box: HistoryBox, ...args: string[]) => runShim(box, ['--op', ...args]);
+  interface Forecast { files: number; bytes: number; storeBytesLow: number; storeBytesHigh: number; pauseAtBytes: number; skipped: Record<string, number> }
+  /** The dry run's one JSON line (the forecast), whatever else the run prints. */
+  const forecastOf = (stdout: string): Forecast => {
+    const line = stdout.split('\n').find((l) => l.startsWith('{"files"'));
+    expect(line, `no forecast line in:\n${stdout}`).toBeDefined();
+    return JSON.parse(line!) as Forecast;
+  };
+  /** Every entry under ~/.ccrc with its size and mtime: "writes nothing", measured. The shim's lock and SQLite's WAL sidecars are
+   *  excluded (a read-only open may create them); directories are listed by name. */
+  const treeState = (box: HistoryBox): string[] => {
+    const root = path.join(box.home, '.ccrc');
+    const out: string[] = [];
+    const visit = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.name === 'history-sweep.lock' || /-(wal|shm)$/.test(e.name)) continue;
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { out.push(`${path.relative(root, p)}/`); visit(p); continue; }
+        const st = fs.lstatSync(p);
+        out.push(`${path.relative(root, p)} ${st.size} ${Math.trunc(st.mtimeMs)}`);
+      }
+    };
+    visit(root);
+    return out.sort();
+  };
+  const storedAgents = (box: HistoryBox): number => { const ro = openStoreRO(box); try { return agentRows(ro); } finally { ro.close(); } };
+  const sizeOf = (p: string): number => fs.statSync(p).size;
+  const REMEDY = 'run `ccrc history import --apply` first';
+  const RESUME = 're-run import --agents --apply to resume it: the scheduled ticks never take a pre-install file';
+
+  it('SA12 no backfill (P6): a tick ingests no pre-install file; the dry run forecasts, skips a file whose parent is unknown, and writes nothing', async () => {
+    const rig = await rigOf('ccrc-hist-sa12i-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1000)] }, SINCE);
+    plantAgentTree(rig, { slug: SLUG, uuid: uuidOf(2), agents: [pre('b', 0x1001)], parent: 'unknown' }, SINCE);
+    await rig.tick(armed, { scan: true });
+    expect(agentRows(rig.db), 'a tick takes no pre-install file').toBe(0);
+    closeWriter(rig.db);
+    const before = treeState(rig.box);
+    const r = op(rig.box, 'import', '--agents');
+    expect(r.code, r.stderr).toBe(0);
+    expect(forecastOf(r.stdout)).toMatchObject({
+      files: 1, bytes: sizeOf(paths['a']!), skipped: { 'parent-unconfirmed': 0, 'parent-unknown': 1, 'post-install': 0, refused: 0 },
+    });
+    expect(treeState(rig.box), 'a dry run writes nothing: no byte, no mtime').toEqual(before);
+    expect(storedAgents(rig.box)).toBe(0);
+  });
+
+  it('the forecast counts each skipped file under one reason, and the store sizes follow the bytes (the 0.4 and 0.55 ratios)', async () => {
+    const rig = await rigOf('ccrc-hist-fcast-');
+    const a = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1010), post('p', 0x1011)], runs: [{ id: 'wf_bad', agents: [pre('x', 0x1012)] }] }, SINCE);
+    plantAgentTree(rig, { slug: SLUG, uuid: uuidOf(3), agents: [pre('c', 0x1013)], parent: 'compactions' }, SINCE);
+    plantAgentTree(rig, { slug: SLUG, uuid: uuidOf(4), agents: [pre('d', 0x1014)], parent: 'unknown' }, SINCE);
+    closeWriter(rig.db);
+    fs.writeFileSync(historyPaths(rig.box.home).cap, '1\n');
+    const r = op(rig.box, 'import', '--agents');
+    expect(r.code, r.stderr).toBe(0);
+    const bytes = sizeOf(a.paths['a']!);
+    expect(forecastOf(r.stdout)).toEqual({
+      files: 1, bytes, storeBytesLow: Math.round(bytes * 0.4), storeBytesHigh: Math.round(bytes * 0.55), pauseAtBytes: 0.9 * capBytes(1),
+      skipped: { 'parent-unconfirmed': 1, 'parent-unknown': 1, 'post-install': 1, refused: 1 },
+    });
+    expect(r.stdout, 'the pause bound is said in words').toContain(`the apply stops once the store reaches ${Math.ceil(0.9 * capBytes(1))} bytes (90% of the cap)`);
+  });
+
+  it('SA32 the import writing form (P6): a WRITING_FORMS row, refused in a session and under history-off, bad-args beside --session or --file', async () => {
+    const rig = await rigOf('ccrc-hist-sa32-');
+    closeWriter(rig.db);
+    const { box } = rig;
+    expect(WRITING_FORMS['import-agents-apply']).toMatchObject({ op: 'import', irreversible: false, binding: false });
+    const apply = ['import', '--agents', '--apply', '--json'];
+    const inSession = runCli(box, apply, { env: { CLAUDECODE: '1' } });
+    expect(inSession.json, `${inSession.stdout}${inSession.stderr}`).toMatchObject({ exit: 2, reason: 'apply-in-session' });
+    fs.writeFileSync(historyPaths(box.home).off, '');
+    const off = runCli(box, apply);
+    expect(off.json, `${off.stdout}${off.stderr}`).toMatchObject({ exit: 2, reason: 'history-off' });
+    fs.rmSync(historyPaths(box.home).off);
+    // only the combination refuses: a valid id and a <uuid>.jsonl file parse without --agents
+    const pair = ['--session', 'lane-a-s1', '--file', `${box.homes[0]!}/projects/${SLUG}/${PARENT}.jsonl`];
+    expect(parseOpVerbArgs('import', pair)).toMatchObject({ ok: true });
+    expect(parseOpVerbArgs('import', ['--agents', ...pair])).toEqual({ ok: false, reason: 'bad-args' });
+    const both = runCli(box, ['import', '--agents', ...pair, '--json']);
+    expect(both.json, `${both.stdout}${both.stderr}`).toMatchObject({ exit: 2, reason: 'bad-args' });
+    // not irreversible: a pipe (no terminal) runs it
+    const piped = runCli(box, apply);
+    expect(piped.code, `${piped.stdout}${piped.stderr}`).toBe(0);
+    expect(piped.json).toMatchObject({ exit: 0 });
+  });
+
+  it('the apply ingests the pre-install files of known parents, workflow agents included, and never a post-install file or the parent\'s main transcript', async () => {
+    const rig = await rigOf('ccrc-hist-apply-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1020), post('p', 0x1021)], runs: [{ id: RUN, agents: [pre('b', 0x1022)] }] }, SINCE);
+    closeWriter(rig.db);
+    const r = op(rig.box, 'import', '--agents', '--apply');
+    expect(r.code, r.stderr).toBe(0);
+    const ro = openStoreRO(rig.box);
+    try {
+      expect(agentKeys(ro)).toEqual(['a', `${RUN}/b`]);
+      expect(mainRows(ro), 'the form ingests subagent files only').toEqual([]);
+    } finally { ro.close(); }
+    // the marker is not read (D-8158): none stands, and the rows are there
+    expect(fs.existsSync(historyPaths(rig.box.home).agentsOn)).toBe(false);
+    const again = op(rig.box, 'import', '--agents', '--apply');
+    expect(again.code, again.stderr).toBe(0);
+    expect(storedAgents(rig.box), 'a second apply adds nothing').toBe(2);
+  });
+
+  it('a parent known only through importEvidence waits for a plain import --apply (review 1728, F9; D-8157)', async () => {
+    const rig = await rigOf('ccrc-hist-f9-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1030)], parent: 'compactions' }, SINCE);
+    closeWriter(rig.db);
+    const dry = op(rig.box, 'import', '--agents');
+    expect(forecastOf(dry.stdout)).toMatchObject({ files: 0, skipped: { 'parent-unconfirmed': 1, 'parent-unknown': 0 } });
+    expect(dry.stdout).toContain(REMEDY);
+    expect(op(rig.box, 'import', '--agents', '--apply').code).toBe(0);
+    expect(storedAgents(rig.box), 'the wider map does not admit it').toBe(0);
+    expect(op(rig.box, 'import', '--apply').code).toBe(0);   // confirms the parent's epoch: knownUuids now holds it
+    expect(forecastOf(op(rig.box, 'import', '--agents').stdout)).toMatchObject({ files: 1, skipped: { 'parent-unconfirmed': 0 } });
+    expect(op(rig.box, 'import', '--agents', '--apply').code).toBe(0);
+    expect(storedAgents(rig.box)).toBe(1);
+  });
+
+  it('the remedy\'s exception: a parent the same id holds as an unconfirmed epoch stays parent-unconfirmed (review 1731, F9)', async () => {
+    const rig = await rigOf('ccrc-hist-f9x-');
+    const { parentId } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1040)], parent: 'compactions' }, SINCE);
+    const pk = Number(rig.db.prepare("INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES (?, '', 'p', 1)").run(parentId!).lastInsertRowid);
+    rig.db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 1, ?, 'startup', 'spool', NULL)").run(pk, PARENT);
+    closeWriter(rig.db);
+    expect(op(rig.box, 'import', '--apply').code).toBe(0);   // mapRegistryUuid answers skipped: nothing is confirmed
+    const dry = op(rig.box, 'import', '--agents');
+    expect(forecastOf(dry.stdout)).toMatchObject({ files: 0, skipped: { 'parent-unconfirmed': 1 } });
+    expect(dry.stdout, 'the remedy names its exceptions').toContain('It does not when the same id already holds the uuid as an unconfirmed epoch');
+    expect(op(rig.box, 'import', '--agents', '--apply').code).toBe(0);
+    expect(storedAgents(rig.box)).toBe(0);
+  });
+
+  /** One pre-install file of a known parent on a fixture box with a 1 GB cap and no marker. */
+  const capBox = async (prefix: string): Promise<HistoryBox> => {
+    const rig = await rigOf(prefix);
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1050)] }, SINCE);
+    closeWriter(rig.db);
+    fs.writeFileSync(historyPaths(rig.box.home).cap, '1\n');
+    return rig.box;
+  };
+
+  it('import --agents --apply pauses at 90% of the cap, armed or not (review 1731, F2)', async () => {
+    const box = await capBox('ccrc-hist-p90-');
+    expect(fs.existsSync(historyPaths(box.home).agentsOn), 'no marker').toBe(false);
+    const r = runDriver(box, { sizeBytes: Math.ceil(0.9 * capBytes(1)) }, ['--op', 'import', '--agents', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('agents-paused-at-cap');
+    expect(r.stdout).toContain(RESUME);
+    expect(r.stdout).not.toContain('the scheduled ticks resume it by cursor');
+    expect(storedAgents(box)).toBe(0);
+    expect(counters(box)['capture_paused_agents_at_cap']).toBe(1);
+    expect(forecastOf(op(box, 'import', '--agents').stdout)).toMatchObject({ pauseAtBytes: 0.9 * capBytes(1) });
+  });
+
+  it('CONTROL: one byte under 90% the same import writes the row and counts nothing', async () => {
+    const box = await capBox('ccrc-hist-p90c-');
+    const r = runDriver(box, { sizeBytes: Math.ceil(0.9 * capBytes(1)) - 1 }, ['--op', 'import', '--agents', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toContain('agents-paused-at-cap');
+    expect(storedAgents(box)).toBe(1);
+    expect(counters(box)['capture_paused_agents_at_cap'] ?? 0).toBe(0);
+  });
+
+  it('every stop word of the --agents form names the act that resumes it: at the cap, too; a plain import keeps its message', async () => {
+    const box = await capBox('ccrc-hist-stop-');
+    const r = runDriver(box, { sizeBytes: capBytes(1) }, ['--op', 'import', '--agents', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: at-cap: ingest stopped at .*; re-run import --agents --apply to resume it: the scheduled ticks never take a pre-install file \(P6\)$/m);
+    expect(storedAgents(box)).toBe(0);
+    const plain = runDriver(box, { sizeBytes: capBytes(1) }, ['--op', 'import', '--apply']);
+    expect(plain.code, plain.stderr).toBe(0);
+    expect(plain.stdout, 'a plain import counts no agent pause').not.toContain('agents-paused-at-cap');
+  });
+});

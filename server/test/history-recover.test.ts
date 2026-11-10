@@ -1061,6 +1061,7 @@ describe('RB6: while a recovery step is registered, every writing --op form but 
     registerRecovery(box, Date.now());
     const forms: ReadonlyArray<{ form: string; cli: string[]; op: string[] }> = [
       { form: 'import-apply', cli: ['import', '--apply'], op: ['--op', 'import', '--apply'] },
+      { form: 'import-agents-apply', cli: ['import', '--agents', '--apply'], op: ['--op', 'import', '--agents', '--apply'] },
       {
         form: 'import-session-apply',
         cli: ['import', '--session', ID, '--file', transcript, '--apply'],

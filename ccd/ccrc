@@ -29232,6 +29232,8 @@ _usage_history_paragraph() {
     '            --backup|--repair|--migrate|--adopt|--restore|--rebuild, is' \
     '            for the operator alone, from a terminal outside any session;' \
     '            inside one it is refused.' \
+    '            import --agents adds the subagent transcripts written before' \
+    '            their capture began; a dry run unless --apply.' \
     '            See README, "Session history: lossless recall"'
 }
 
