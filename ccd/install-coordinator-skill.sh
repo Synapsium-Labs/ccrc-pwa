@@ -53,10 +53,11 @@ fi
 # (`deploy/deploy.sh`'s `rsync -az --delete`, interrupted; SKILL.md sorts
 # before `references/`) does not fail closed, it REPLACES a good install with
 # the fragment, exit 0, no stderr. Every file below is named by something a
-# live session reads: SKILL.md points at wave-lifecycle.md ("Read it before
-# the first dispatch of a program"), at ledger-template.md and
-# mail-envelope.md in the lifecycle steps, and at resume.md in the paragraph
-# on what survives this session's death; the WORKER skill points across at
+# live session reads: SKILL.md's map ("Where the procedures live") points at
+# wave-steps.md ("Read it before the first dispatch of a program"), at
+# wave-lifecycle.md (the index, which names each wave-lifecycle-*.md part),
+# at api.md, cross-project.md and resume.md, and names ledger-template.md and
+# mail-envelope.md among those the steps use; the WORKER skill points across at
 # peer-protocol.md (`../ccrc-coordinator/references/peer-protocol.md` — Build
 # 9 wave 8, D-214: it ships here because a skill's references install as one
 # unit and the worker ships none of its own). Every one of them missing is
