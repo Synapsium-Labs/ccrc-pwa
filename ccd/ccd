@@ -20392,6 +20392,7 @@ _pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR
   return 0
 }
 
+# FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is waiting out a limit on its own (D-2229).
   # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
   # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
@@ -20580,6 +20581,7 @@ _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its
   grep -qiE "usage limit has reset.*press enter to continue" <<<"$1"
 }
 
+# FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its own auto-continue went stale.
   # Runs on the supervise tick BEFORE `_auto_swap_check`: the account has reset,
   # the continuation is right there, and Enter is Claude Code's documented
@@ -25668,6 +25670,43 @@ _browser_spawn_compose() {   # id launchflags -> sets BROWSER_SPAWN_FLAGS; write
   return 0
 }
 
+# ── THE THREE FLEET PINS IN EVERY SPAWN'S ONE `--settings` (D-8173) ──────────
+# The operator's rulings of 2026-11-10 (session host research §6.1), each a fixed default, no knob:
+#   Q4 `autoContinueAtUsageLimit: false` — Claude Code's own wait-then-continue at a usage limit is OFF, so ccd always
+#      swaps the session to an account with room; the operator's options (wait until the reset, ...) come only when no
+#      account has room (D-8123's watchdog and the limit menu reading).
+#   Q5 `crossSessionInbound: "refuse"` — a stray inbox message can never open the approval dialog; nudges stay typed.
+#   Q6 `idleCompaction: true` — pinned ON, so no account or session setting can switch it off.
+# `FLEET_SPAWN_PINS` is the ONE spelling. `_fleet_spawn_compose` merges it LAST (so a lane's own value never beats the
+# pin) into the row's one `--settings` (D-5391): a row with none gets it inline; a row with a path or inline value gets
+# the two merged. Every lane execs Claude Code with the same flags, so it composes on every row, like the account file.
+# IT FAILS OPEN, for the account composer's reason (it is on every swap's path): a base that cannot be read or merged
+# spawns with the flags as they were and warns.
+# FOLLOW-UP, NOT HERE: once the pin is watched working live, the four screen-read holds that exist only because the
+# native wait could be armed are deleted (`_pane_auto_continue_armed` D-2229, the mail sweep's hold D-2369, the rescue
+# near-wait `_rescue_armed`, the stale-Enter check `_auto_stale_check`).
+FLEET_SPAWN_PINS='{"autoContinueAtUsageLimit":false,"crossSessionInbound":"refuse","idleCompaction":true}'
+_fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fails
+  local id="$1" flags="$2" v base="" merged re="--settings '([^']*)'"
+  FLEET_SPAWN_FLAGS="$flags"
+  [[ -n "$FLEET_SPAWN_PINS" ]] || return 0   # EMPTY composes nothing: the older argv suites' harness clears it after sourcing (as it pins the browser default); no setting reads it
+  if [[ "$flags" =~ $re ]]; then
+    v="${BASH_REMATCH[1]}"
+    if [[ "$v" == "{"* ]]; then base="$v"
+    elif [[ -f "$v" && ! -L "$v" ]] && ! grep -q "'" -- "$v" 2>/dev/null; then base=$(jq -c . "$v" 2>/dev/null) || base=""
+    fi
+    if [[ -n "$base" ]] && merged=$(jq -c -n --argjson b "$base" --argjson p "$FLEET_SPAWN_PINS" "[\$b, \$p] | $SETTINGS_UNION_JQ" 2>/dev/null) \
+       && [[ -n "$merged" && "$merged" != *"'"* ]]; then
+      FLEET_SPAWN_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
+    else
+      echo "ccd: warn: $id: could not merge the fleet pins into this spawn's one --settings — spawning without them" >&2
+    fi
+  else
+    FLEET_SPAWN_FLAGS="${flags:+$flags }--settings '$FLEET_SPAWN_PINS'"
+  fi
+  return 0
+}
+
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
 # `$REG/tmproots/<id>` says "ccd handed THIS directory, by dev, ino and btime,
 # to run <run> as its temp root": one line, `v=1 id=<id> run=<run> dev=<n>
@@ -26251,6 +26290,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # denial into the one `--settings`; the record says what this spawn applied (`_browser_spawn_compose`, never fails).
   _browser_spawn_compose "$id" "$launchflags"; launchflags="$BROWSER_SPAWN_FLAGS"
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
+  # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
+  _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -29608,6 +29649,7 @@ _rescuewait_close() {   # id end-word — RECORDED ONCE ON EXIT; a no-op unless 
   echo "$(date '+%F %T') rescuewait-end $id: kind=$kind on $w reset=$reset after $((now - 10#$since))s end=$end" >> "$REG/swap.log"
 }
 
+# FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _rescue_armed() {   # pane text -> Claude Code's own auto-continue FOOTER: `_pane_auto_continue_armed`'s phrases, outside the prompt box and on a `·`-separated line
   # A FALSE "ARMED" HERE PARKS A STALLED SESSION, where the typing sites that share the
   # detector only decline to type. So the footer's shape, as the two pane rungs read theirs:

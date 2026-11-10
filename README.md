@@ -6916,6 +6916,11 @@ session whether or not it ever opens a browser, so the box default is **off**:
 - **A running session keeps what it has** until its next spawn: a change waits for a restart, and nothing restarts a
   session for it. Hibernation ends the pane; with **Stop leftovers** on (Settings › Automation), it also stops the server
   processes a pane leaves behind.
+
+Three more keys ride the same one `--settings` at every spawn, on every lane, as fixed values with no setting (D-8173):
+`autoContinueAtUsageLimit` off (Claude Code never waits out a usage limit by itself, so `ccd` swaps the session to an
+account with room), `crossSessionInbound` refuse (a stray inbox message never opens an approval dialog; nudges stay
+typed) and `idleCompaction` on (no account or session setting can switch it off).
 - **Settings › Automation › Browser tools** shows the box default, the server list and how many running sessions use a
   browser. `ccrc doctor`'s `browser-mcp` check counts the Claude Code processes that run a configured browser server
   against the sessions whose last spawn applied `on`, and warns when more run one than asked for.
