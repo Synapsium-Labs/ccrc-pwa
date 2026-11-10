@@ -500,15 +500,15 @@ tree's rule against an overloaded null at a seam.
 reader, which feeds `designation`, and the audit and replay lanes (§9.5), which feed `auditBody` and `replayBody`.
 
 **Open questions for the operator, most important first:**
-1. **The Overlord's view is `coordinator`, so the roll lane would take it.** Unreachable before W1, because the
-   designation has no reader. Recommendation: W1's "one `overlord` hold in the roll lane's table" (C4) lands in the
-   same pull request as the designation reader.
-2. **What is today's view of `auditor` and `replay`?** The spec does not say whether their sessions carry `.child`.
-   Recommendation: `child`, so the roll lane never takes a server-launched body and the hook never tells it to
-   coordinate. Unreachable until their waves either way.
-3. **Is `plain` still a role after D-8142?** Since 2026-11-09 every session the operator creates is told from its
-   first turn that it is its project's coordinator, yet `roleOf` reads one with no claim and no declared intent as
-   `plain`. Its view stays `coordinator` ("rolled as today", Table 3.3.9a). Recommendation: no change in this piece;
-   the card door piece decides what `plain` is told, as a behaviour change of its own.
-4. **A wire field for the full role?** Recommendation: no, until a PWA reader needs it. Then it is additive, with a
+1. **The Overlord's view is `coordinator`, so the roll lane would take it.** Settled: the roll lane's `overlord`
+   hold lands in the pull request that first reads the designation (§3.3.9).
+2. **What is today's view of `auditor` and `replay`?** Settled: `child`, so the roll lane never takes a
+   server-launched body and the hook never tells it to coordinate (§3.3.9).
+3. **Is `plain` still a role after D-8142?** Settled: yes. `plain` is what the server measures, not what a session
+   was told, and its view stays `coordinator` (§3.3.9). The card door piece decides what `plain` is told.
+4. **What reads an undecided answer?** Settled by the spec's later edition, and to build here: every reader but
+   the `SessionRole` view takes the member that does less. No renewal starts on an undecided answer, it takes the
+   slower mail pace, and its card says which fact could not be measured. A child mark that could not be measured
+   reads as undecided too, as an unreadable one does (§3.3.9). Task 3's `roleOf` cases gain both.
+5. **A wire field for the full role?** Recommendation: no, until a PWA reader needs it. Then it is additive, with a
    reviver and an `isFleetRole` guard beside the table.
