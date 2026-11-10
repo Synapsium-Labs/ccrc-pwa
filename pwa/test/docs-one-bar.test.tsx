@@ -193,6 +193,26 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     expect(titleButton().querySelector('.docs-title-dot')).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('the freshness dot sits before the title text (refinement (h))', async () => {
+    await openReady('/docs/demo/specs/a.md');
+    const name = titleButton().querySelector<HTMLElement>('.docs-compact-name');
+    expect(name).not.toBeNull();
+    expect(name!.firstElementChild).toHaveClass('docs-title-dot');
+    expect(name!.firstChild).toBe(name!.firstElementChild);
+    expect(name!.textContent).toBe('Doc title');
+  });
+
+  it('a navigation closes the details panel (refinement (k))', async () => {
+    const r = await openReady('/docs/demo/specs/a.md');
+    fireEvent.click(titleButton());
+    expect(titleButton()).toHaveAttribute('aria-expanded', 'true');
+    act(() => navigate('/docs/demo/specs/b.md'));
+    await waitFor(() => expect(r.inputs.length).toBe(2));
+    act(() => r.inputs[1]!.onReady());
+    expect(titleButton()).toHaveAttribute('aria-expanded', 'false');
+    expect(panelOf()).toHaveAttribute('hidden');
+  });
+
   it('the reading line shows the share the frame reports', async () => {
     const r = await openReady('/docs/demo/specs/a.md');
     const line = oneBar().querySelector<HTMLElement>('.docs-read');
