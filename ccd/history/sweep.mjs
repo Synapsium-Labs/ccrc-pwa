@@ -47,7 +47,7 @@ import {
   heavyVersionsBetween, passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, metaPathOf, bytesLeftOf, CENSUS_PREDICATE, CENSUS_RUN_WINDOW, SIDECAR_READ_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, metaPathOf, bytesLeftOf, sameFileIdentity, CENSUS_PREDICATE, CENSUS_RUN_WINDOW, SIDECAR_READ_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
   SIDECAR_WALK_META, parseSidecarWalk, formatSidecarWalk, emptySidecarWalk, startSidecarWalk, foldWalkCandidates, finishSidecarWalk, walkCandidates,
   parseSidecarScanAt, formatSidecarScanAt, sidecarWrapClose,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
@@ -4696,7 +4696,7 @@ function findLineEnd(fd, start, size) {
 // on 2026-11-10 (19 homes, 14,367 subagent files and their 585 parent sessions): no subagent row reuses a uuid of its parent's
 // transcript or of a sibling's, and none of 488,265 raw lines repeats a parent line. No subagent of agentType `fork` existed there,
 // so a context-inheriting one is unmeasured; the coordinator re-measures before each node is armed.
-const ENTRY_UPSERT =`INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
+const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
     ts_ms, request_id, api_block_index, msg_id, source_tool_use_id, tool_name, is_compact_summary,
     provenance, prov_version, parse_state, struct_rank_ns, struct_file_id, blob_id)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -5449,26 +5449,43 @@ function bytesWaiting(row, st) {
   return bytesLeftOf({ stored: row, size: st.size, dev: st.dev, ino: st.ino }) > 0;
 }
 
-/** The row a file's device and inode name, `{ dev, ino, offset }` as bigints: the row bindFile resumes (ROW_BY_INODE's key), so a
- *  hardlinked second holding the store has not aliased yet reads the cursor its bind would resume at, not a whole file (review 1749
- *  F1). One statement, prepared once per handle. The scan arm's count of a withheld file (scanFileWaiting) and the import's forecast
- *  (agentBytesLeft) both ask it, the forecast on its read-only handle. */
+/** The row of a file's device and inode (ROW_BY_INODE's key), with what bindFile asks of it: its status, transcript uuid, agent key
+ *  and birth time (as text, so the BigInt compare loses nothing past 2^53). One statement, prepared once per handle. */
 const AGENT_INODE_ROWS = new WeakMap();
 function agentInodeRowOf(db) {
   let st = AGENT_INODE_ROWS.get(db);
   if (st === undefined) {
-    st = db.prepare("SELECT dev, ino, offset FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ''");
+    st = db.prepare("SELECT i.dev AS dev, i.ino AS ino, i.offset AS offset, i.status AS status, t.cc_session_uuid AS uuid, t.agent_id AS key, "
+      + "CAST(i.birth_ns AS TEXT) AS birth_ns FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk "
+      + "WHERE i.dev = ? AND i.ino = ? AND i.source_key = ''");
     st.setReadBigInts(true);
     AGENT_INODE_ROWS.set(db, st);
   }
   return st;
 }
 
-/** bytesWaiting for a file the scan walk handed over (`e`, an admitted file entry): the row of its device and inode against the
- *  walk's own size, ruled by lib's bytesLeftOf for every case: an unstored file waits with its size, so an unstored empty one waits
- *  for nothing. */
+/** The row bindFile would resume for one subagent file, `{ dev, ino, offset }`, or null: the row of its device and inode counts only
+ *  when it is live and is the same file by lib's sameFileIdentity (the path's uuid and agent key, the birth time where both sides
+ *  have one), asked with no first-line sha, as the census asks it. A row marked gone, or one bindFile would retire, is no row: the
+ *  file then waits with its whole size, as a file with no row does (review 1750 F1). So a hardlinked second holding the store has
+ *  not aliased yet reads the cursor its bind would resume at (review 1749 F1). The scan arm's count of a withheld file
+ *  (scanFileWaiting) and the import's forecast (agentBytesLeft) both ask it, the forecast on its read-only handle. `f` is `{ dev, ino,
+ *  uuid, agentKey, birthNs }`. */
+function agentWaitingRow(db, f) {
+  const r = agentInodeRowOf(db).get(f.dev, f.ino);
+  if (r === undefined || r.status !== 'live') return null;
+  const same = sameFileIdentity({
+    row: { transcriptUuid: r.uuid, agentKey: r.key, birthNs: r.birth_ns, headSha: null },
+    pathUuid: f.uuid, pathAgentKey: f.agentKey, birthNs: f.birthNs, headSha: null,
+  });
+  return same ? r : null;
+}
+
+/** bytesWaiting for a file the scan walk handed over (`e`, an admitted file entry): agentWaitingRow's row against the walk's own size,
+ *  ruled by lib's bytesLeftOf for every case: a file with no such row waits with its size, so an unstored empty one waits for nothing. */
 function scanFileWaiting(db, e) {
-  return bytesLeftOf({ stored: agentInodeRowOf(db).get(e.dev, e.ino) ?? null, size: e.size, dev: e.dev, ino: e.ino }) > 0;
+  const stored = agentWaitingRow(db, { dev: e.dev, ino: e.ino, uuid: e.uuid, agentKey: agentKey(e.id, e.runId), birthNs: e.birthNs ?? null });
+  return bytesLeftOf({ stored, size: e.size, dev: e.dev, ino: e.ino }) > 0;
 }
 
 /** One admitted subagent file's gate (W4 P3, P5, P6, P15 (b)), the one place both arms ask decideAgentIngest: 'read' when it is
@@ -7742,17 +7759,21 @@ function agentImportSkipLines(skipped) {
   return lines;
 }
 
-/** How many bytes of one subagent file are still waiting to be ingested, by lib's bytesLeftOf (the tick's rule too): its size, or,
- *  when the row of its device and inode holds a cursor, the size past that cursor. A file stored whole waits for none; a vanished
- *  path waits for none, and so does a physical file already counted (`seen`, keyed by device and inode): the apply reads one file
- *  once, whatever its holdings. `rowOf` is the inode row statement (agentInodeRowOf), or null when no store is open. */
-function agentBytesLeft(path, rowOf, seen) {
+/** How many bytes of one subagent file (`e`, a walk entry the import takes) are still waiting to be ingested, by lib's bytesLeftOf
+ *  (the tick's rule too): its size, or, when agentWaitingRow finds the row bindFile would resume (live, and the same file), the size
+ *  past that cursor. A file stored whole waits for none; a vanished path waits for none, and so does a physical file already counted
+ *  (`seen`, keyed by device and inode): the apply reads one file once, whatever its holdings. `ro` is the read-only handle, or null
+ *  when no store is open. */
+function agentBytesLeft(e, ro, seen) {
   let st;
-  try { st = lstatSync(path, { bigint: true }); } catch { return 0; }
+  try { st = lstatSync(e.path, { bigint: true }); } catch { return 0; }
   const id = `${st.dev}:${st.ino}`;
   if (seen.has(id)) return 0;
   seen.add(id);
-  return bytesLeftOf({ stored: rowOf === null ? null : rowOf.get(st.dev, st.ino) ?? null, size: Number(st.size), dev: st.dev, ino: st.ino });
+  const stored = ro === null ? null : agentWaitingRow(ro, {
+    dev: st.dev, ino: st.ino, uuid: e.uuid, agentKey: agentKey(e.id, e.runId), birthNs: st.birthtimeNs > 0n ? st.birthtimeNs : null,
+  });
+  return bytesLeftOf({ stored, size: Number(st.size), dev: st.dev, ino: st.ino });
 }
 
 /** `import --agents` without --apply (W4 P6): READ-ONLY, one JSON forecast line, then the words. `files` and `bytes` are what the apply
@@ -7769,12 +7790,11 @@ function importAgentsDryRun(P, homes, out, home) {
     const known = ro === null ? registeredUuids(home) : knownUuids(ro, home);
     const sinceMs = ro === null ? null : installRecordOf(ro);
     const { take, skipped } = agentImportPlan(homes, known, ev, sinceMs);
-    const rowOf = ro === null ? null : agentInodeRowOf(ro);
     const seen = new Set();
     let files = 0;
     let bytes = 0;
     for (const e of take) {
-      const left = agentBytesLeft(e.path, rowOf, seen);
+      const left = agentBytesLeft(e, ro, seen);
       if (left === 0) continue;
       files += 1;
       bytes += left;

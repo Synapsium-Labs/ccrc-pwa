@@ -16,7 +16,7 @@ import { counters, makeHistoryBox, openStoreRO, plantSession, plantTranscript, r
 import { userRow } from './historyFixtures.js';
 import { mkTmp, removeTmpFixturesSince, tmpMark } from './tmpHelpers.js';
 import { agentIdOk, capBytes, historyPaths, lagOfTick, META_FAILURES, META_MAX_BYTES, parseOpVerbArgs, SCAN_INTERVAL_MS, WRITING_FORMS } from '../../ccd/history/lib.mjs';
-import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
+import { closeWriter, createStore, getMeta, openWriter } from '../../ccd/history/store.mjs';
 import { behindStats, candidateFiles, discoverTranscripts, ingestTick, makeIngestCtx, newBudget, readAgentMeta } from '../../ccd/history/sweep.mjs';
 
 skipOnDarwin();
@@ -862,6 +862,23 @@ describe('the subagent meta, its lifecycle and agent_type (W4 addendum P17, SA6,
       expect(counterOf(rig.db, 'capture_paused_agents_at_cap'), 'CONTROL: once the shared file grows, the tick withholds bytes').toBe(1);
     });
 
+    it('a stored file whose inode row is not the row bindFile resumes (marked gone, or another birth time) waits with its whole size at 90% (review 1750 F1)', async (ctx) => {
+      for (const how of ['gone', 'birth'] as const) {
+        const { rig, first } = await held(`ccrc-hist-f1r2-scan-${how}-`);
+        expect(offsetOf(rig.db, first), 'CONTROL: stored whole').toBe(fs.statSync(first).size);
+        await rig.tick(armed, { scan: true, storeAt: 0.9 });
+        expect(counterNames(rig.db), 'CONTROL: a live, same-file row has nothing waiting').not.toContain('capture_paused_agents_at_cap');
+        const where = "source_key = '' AND transcript_pk = (SELECT transcript_pk FROM transcripts WHERE agent_id = 'a')";
+        if (how === 'birth') {
+          const b = rig.db.prepare(`SELECT birth_ns IS NULL AS none FROM ingest_files WHERE ${where}`).get() as { none: number };
+          if (b.none === 1) ctx.skip();   // a filesystem that reports no birth time: the identity rule cannot see it
+          rig.db.prepare(`UPDATE ingest_files SET birth_ns = birth_ns + 1000 WHERE ${where}`).run();
+        } else rig.db.prepare(`UPDATE ingest_files SET status = 'gone' WHERE ${where}`).run();
+        await rig.tick(armed, { scan: true, storeAt: 0.9 });
+        expect(counterOf(rig.db, 'capture_paused_agents_at_cap'), `a row ${how === 'gone' ? 'marked gone' : 'of another birth time'} is no row: the whole file waits`).toBe(1);
+      }
+    });
+
     it('SA25 identical copies: two file rows, one transcript, a membership in each, no variant', async () => {
       const { rig, first, fromHome, otherHome } = await held('ccrc-hist-sa25-');
       const second = holdAgainIn(first, fromHome, otherHome, 'copy');
@@ -1066,10 +1083,20 @@ describe('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
     expect(listersOfSubagents([{ name: 'x.mjs', text: '// the list of `${s}/subagents` is the walk\'s\n * /subagents\n' }]), 'a comment is not a lister').toEqual([]);
   });
 
-  it('the row a file\'s inode names is one statement (the tick\'s withheld count and the import\'s forecast share it), and its bytes-left rule is lib\'s (final review M2; review 1749 F1)', () => {
+  it('the row a file\'s inode names is one statement and one lookup (the tick\'s withheld count and the import\'s forecast both call it), and its bytes-left rule is lib\'s (final review M2; review 1749 F1; review 1750 A3)', () => {
     const sweep = historyModules().find((m) => m.name === 'sweep.mjs')!.text;
-    const rowStatements = codeLines(sweep).filter((l) => l.includes("SELECT dev, ino, offset FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ''"));
+    const rowStatements = codeLines(sweep).filter((l) => l.includes('CAST(i.birth_ns AS TEXT) AS birth_ns FROM ingest_files i JOIN transcripts t'));
     expect(rowStatements, 'the inode-row statement is spelled once').toHaveLength(1);
+    // both arms call the one lookup, and only it asks the statement
+    const bodyOf = (name: string): string => {
+      const at = sweep.indexOf(`function ${name}(`);
+      expect(at, `${name} is defined`).toBeGreaterThan(-1);
+      return sweep.slice(at, sweep.indexOf('\n}\n', at));
+    };
+    expect(bodyOf('scanFileWaiting'), 'the scan arm calls the one lookup').toMatch(/\bagentWaitingRow\(/);
+    expect(bodyOf('agentBytesLeft'), 'the forecast calls the one lookup').toMatch(/\bagentWaitingRow\(/);
+    expect(codeLines(sweep).filter((l) => /\bagentInodeRowOf\(db\)\.get\(/.test(l)), 'only agentWaitingRow asks the statement').toHaveLength(1);
+    expect(bodyOf('agentWaitingRow')).toMatch(/\bagentInodeRowOf\(db\)\.get\(/);
     expect(codeLines(sweep).filter((l) => l.includes('SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p')), 'and no path-only lookup is left').toEqual([]);
     // and neither arm re-spells the rule: size minus the cursor is lib's bytesLeftOf alone
     expect(codeLines(sweep).filter((l) => /Math\.max\(\s*size\s*-\s*Number\(row\.offset\)/.test(l) || /st\.size\s*!==\s*Number\(row\.offset\)/.test(l))).toEqual([]);
@@ -1251,6 +1278,27 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     holdAgainIn(p2['b']!, rig2.box.homes[0]!, rig2.box.homes[1]!, 'link');
     fs.unlinkSync(p2['b']!);
     expect(forecastOf(op(rig2.box, 'import', '--agents').stdout)).toMatchObject({ files: 0, bytes: 0 });
+  });
+
+  it('the dry run counts a stored file whose inode row is not the row bindFile resumes (marked gone, or another birth time) at its whole size (review 1750 F1)', async (ctx) => {
+    for (const how of ['gone', 'birth'] as const) {
+      const rig = await rigOf(`ccrc-hist-f1r2-dry-${how}-`);
+      const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1062)] }, SINCE);
+      closeWriter(rig.db);
+      expect(op(rig.box, 'import', '--agents', '--apply').code).toBe(0);
+      expect(forecastOf(op(rig.box, 'import', '--agents').stdout), 'CONTROL: stored whole, nothing waits').toMatchObject({ files: 0, bytes: 0 });
+      const w = openWriter(historyPaths(rig.box.home).dbFile);
+      try {
+        const where = "source_key = '' AND transcript_pk = (SELECT transcript_pk FROM transcripts WHERE agent_id = 'a')";
+        if (how === 'birth') {
+          const b = w.prepare(`SELECT birth_ns IS NULL AS none FROM ingest_files WHERE ${where}`).get() as { none: number };
+          if (b.none === 1) ctx.skip();   // a filesystem that reports no birth time: the identity rule cannot see it
+          w.prepare(`UPDATE ingest_files SET birth_ns = birth_ns + 1000 WHERE ${where}`).run();
+        } else w.prepare(`UPDATE ingest_files SET status = 'gone' WHERE ${where}`).run();
+      } finally { closeWriter(w); }
+      expect(forecastOf(op(rig.box, 'import', '--agents').stdout), `a row ${how === 'gone' ? 'marked gone' : 'of another birth time'} is no row`)
+        .toMatchObject({ files: 1, bytes: sizeOf(paths['a']!) });
+    }
   });
 
   /** One pre-install file of a known parent on a fixture box with a 1 GB cap and no marker. */
