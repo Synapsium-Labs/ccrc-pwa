@@ -15596,24 +15596,40 @@ _codex_cmd_stop() {   # <id>
 # Between 3 and 5 no refresher runs, so the credential changes hands without a
 # race. On success the start's own line is followed by one line naming the move
 # and the stop words.
+# THE ROSTER WRITERS' LOCK (`$_SVC_REG/.account-placement.lock`), for a verb of
+# this library that writes the roster or needs it to hold still. The switch
+# takes it, because it records a lane's mode there; so will the removal of the
+# LiteLLM runtime (codex-bridge Stage 4, Task 9), which acts on every lane's
+# mode. rc 0 with the lock held on the fd CX_ROSTER_FD names (empty on a box
+# with no flock, where nothing is held, as before); rc 1 with one line,
+# `roster-unwritable` or `roster-busy`. `$1` is who asks ("this switch"), `$2`
+# why it needs the roster ("this switch writes the roster"), `$3` how the
+# refusal ends. The caller closes the fd when it is done.
+_codex_roster_lock() {   # <who> <why> <how the refusal ends>
+  local plock bound
+  CX_ROSTER_FD=''
+  command -v flock >/dev/null 2>&1 || return 0
+  plock="$_SVC_REG/.account-placement.lock"
+  if ! mkdir -p -- "$_SVC_REG" 2>/dev/null || ! { exec {CX_ROSTER_FD}>>"$plock"; } 2>/dev/null; then
+    CX_ROSTER_FD=''
+    _codex_say roster-unwritable "$plock could not be opened, so $1 cannot be serialised against the account verbs that write ~/.ccrc/accounts.json. Fix $_SVC_REG, then re-run. $3"
+    return 1
+  fi
+  bound=$(( $(_codex_ready_secs) + 30 ))
+  if ! flock -w "$bound" "$CX_ROSTER_FD"; then
+    _codex_say roster-busy "another roster writer (a 'ccrc account' verb, or a 'ccrc codex switch' of this or another lane) has held the roster writers' lock ($plock) for ${bound}s without finishing, and $2. Re-run once it has ended. $3"
+    return 1
+  fi
+}
+
 _codex_cmd_switch() {   # <id> <litellm|direct>
-  local id to="${2:-}" from up t w q rc said='' all=1 outgoing rev='' stopped='' down='' state pfd='' plock bound
+  local id to="${2:-}" from up t w q rc said='' all=1 outgoing rev='' stopped='' down='' state pfd=''
   _codex_row "${1:-}" || exit $?
   id="$CX_ID"
   _codex_mode_tiers "$to" >/dev/null || exit 2   # `cmd_codex` checks the word and says why
   # 0. THE ROSTER WRITERS' LOCK, then the lane's.
-  if command -v flock >/dev/null 2>&1; then
-    plock="$_SVC_REG/.account-placement.lock"
-    if ! mkdir -p -- "$_SVC_REG" 2>/dev/null || ! { exec {pfd}>>"$plock"; } 2>/dev/null; then
-      _codex_say roster-unwritable "$plock could not be opened, so this switch cannot be serialised against the account verbs that write ~/.ccrc/accounts.json. Fix $_SVC_REG, then re-run. Nothing was stopped or written."
-      exit 1
-    fi
-    bound=$(( $(_codex_ready_secs) + 30 ))
-    if ! flock -w "$bound" "$pfd"; then
-      _codex_say roster-busy "another roster writer (a 'ccrc account' verb, or a 'ccrc codex switch' of this or another lane) has held the roster writers' lock ($plock) for ${bound}s without finishing, and this switch writes the roster. Re-run once it has ended. Nothing was stopped or written."
-      exit 1
-    fi
-  fi
+  _codex_roster_lock "this switch" "this switch writes the roster" "Nothing was stopped or written." || exit 1
+  pfd="$CX_ROSTER_FD"
   _codex_lock "$id" || exit 1
   _codex_lane_json_ensure "$id" || exit 1
   from="$(_codex_lane_mode "$id")" || exit 1
@@ -28668,6 +28684,20 @@ _uninst_codex_by_hand() {   # <id> <tier, or '*'> -> one clause on stdout, no ne
     "$1" "$unit" "$1" "$2" "$marker"
 }
 
+# THE LITELLM RUNTIME'S DIRECTORY, REMOVED. One place removes it. The uninstall
+# comes here, and so will `ccrc codex runtime remove` (codex-bridge Stage 4,
+# Task 9). rc 0 with CX_RUNTIME_RM `removed` or `absent` (nothing was there);
+# rc 1 when the removal failed and something is still there. It checks nothing
+# about lanes or tiers: each caller has its own reasons to be here.
+_codex_runtime_rm() {
+  local rt="$HOME/.ccrc/runtime/codex"
+  CX_RUNTIME_RM=absent
+  if [ -e "$rt" ] || [ -L "$rt" ]; then
+    rm -rf -- "${rt:?_codex_runtime_rm: rt is empty or unset}" || return 1
+    CX_RUNTIME_RM=removed
+  fi
+}
+
 _uninst_codex() {   # [<the role ccrc.env records>]
   local role="${1:-}" lanes id tier rc w sc rt="$HOME/.ccrc/runtime/codex" rt_word roster=read lanes_rc=0
   local stopped="" left="" nostop=""
@@ -28774,11 +28804,8 @@ _uninst_codex() {   # [<the role ccrc.env records>]
     _codex_unlock
   done
   rt_word="was not installed"
-  if [ -e "$rt" ] || [ -L "$rt" ]; then
-    rm -rf -- "${rt:?_uninst_codex: rt is empty or unset}" \
-      || _ccrc_die "removing $rt failed — the codex runtime is still on this box"
-    rt_word="removed"
-  fi
+  _codex_runtime_rm || _ccrc_die "removing $rt failed — the codex runtime is still on this box"
+  [ "$CX_RUNTIME_RM" != removed ] || rt_word="removed"
   if [ "$roster" = server ]; then
     echo "uninstall: codex: a server-role box (ccrc.env records CCRC_ROLE=server) runs no codex lane — no lane was read, measured or stopped; the runtime at \$HOME/.ccrc/runtime/codex $rt_word"
     return 0
