@@ -56,7 +56,7 @@ function blockedTitle(rung: 1 | 2): string {
     },
     child: { kind: 'unlisted' }, runs: [], episode: null,
   } as unknown as StallCoordBlockedInput;
-  const n = { mode: 'live', arm: 'coord-blocked', rung, key: 1, at: 0 } as StallNotify;
+  const n = { mode: 'live', arm: 'coord-blocked', rung, key: 1, at: 0 } as unknown as StallNotify;
   return stallCoordBlockedPushText(input, n, Date.now()).title;
 }
 
