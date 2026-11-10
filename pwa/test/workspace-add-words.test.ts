@@ -62,6 +62,30 @@ describe('the PR sheet\'s tracker-id-public sentence', () => {
     expect(branch).toContain("branch is named for KEY-123");
     expect(branch).not.toContain('title and body');
   });
+
+  it('names a commit that carries the id, and says to reword the commit', () => {
+    const commits = apiErrorText(err(409, { ok: false, error: 'tracker-id-public', ids: ['KEY-12'], in: 'commits', mode: 'public' }));
+    expect(commits).toContain('commit on this branch names KEY-12');
+    expect(commits).toContain('Reword that commit first');
+    expect(commits).not.toContain('title and body');
+  });
+
+  it('says a linking that could not be read in words, never as the bare word', () => {
+    expect(apiErrorText(err(503, { ok: false, error: 'unavailable', detail: 'commits-unread' }))).toMatch(/could not do that just now/);
+    expect(apiErrorText(err(502, { ok: false, error: 'registry-unmeasurable' }))).toMatch(/registry could not be read/);
+  });
+});
+
+describe('the box\'s own text never speaks for a linking word', () => {
+  it('template-failed shows its fixed sentence, not the stderr beside it', () => {
+    const text = apiErrorText(err(502, { ok: false, error: 'template-failed', stderr: 'pr-template: push failed for ccrc/linking-template' }));
+    expect(text).toBe(LINKING_REFUSAL_TEXT['template-failed']);
+    expect(text).not.toContain('push failed');
+  });
+
+  it('a lifecycle failure without a linking word still shows ccd\'s stderr', () => {
+    expect(apiErrorText(err(502, { ok: false, stderr: 'ccd said no' }))).toBe('ccd said no');
+  });
 });
 
 describe('addRefusalText', () => {

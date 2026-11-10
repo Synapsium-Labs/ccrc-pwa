@@ -361,6 +361,21 @@ describe('Linear team key and the template PR (D-8147)', () => {
     expect(toastText.textContent).not.toContain('box text');
   });
 
+  it('a failed template act shows the fixed sentence, never the box\'s stderr', async () => {
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+    });
+    vi.spyOn(api, 'openTemplatePr').mockRejectedValue(new ApiError(502, { ok: false, error: 'template-failed', stderr: 'pr-template: push failed for ccrc/linking-template' }));
+    mount(props());
+    fillClone();
+    typeIn(keyField(), 'KEY');
+    fireEvent.click(templateBox());
+    fireEvent.click(confirm());
+    const toastText = await screen.findByText(new RegExp(`^${projectAddedText('repo', 'github')} `));
+    expect(toastText.textContent).toContain(LINKING_REFUSAL_TEXT['template-failed']);
+    expect(toastText.textContent).not.toContain('push failed');
+  });
+
   it('the template box runs the template act after the add and reports it in the toast', async () => {
     vi.spyOn(api, 'saveLinking').mockResolvedValue({
       ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },

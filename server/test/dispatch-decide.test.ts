@@ -85,6 +85,24 @@ describe('decideDispatch, the request step (ARCH-22)', () => {
       .toEqual({ ok: false, kind: 'bad-request', detail: 'slug: this run resumes its bound session; a slug names a fresh spawn only' });
   });
 
+  it("D-8147: a slug carrying the team's ticket is refused unless the project is private; an unreadable linking refuses too", () => {
+    const c = store(); const id = planned(c);
+    const linking = (mode: 'private' | 'public' | 'unknown', teamKey: string | null) => () => ({ mode, teamKey });
+    const refusal = (over: Partial<RequestFacts>) => outcomeOf(decideDispatch(request(c, id, { slug: 'key-12-fix-login', ...over })));
+    expect(refusal({ linking: linking('public', 'KEY') }))
+      .toMatchObject({ ok: false, kind: 'bad-request', detail: expect.stringMatching(/^slug: .*KEY-12/) });
+    expect(refusal({ linking: linking('unknown', 'KEY') })).toMatchObject({ ok: false, kind: 'bad-request' });
+    expect(refusal({ slug: 'fix-key-12-login', linking: linking('public', 'KEY') })).toMatchObject({ ok: false, kind: 'bad-request' });
+    expect(refusal({ linking: () => null })).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+    // allowed: a private project, a project with no key, another team's id, a slug with no id
+    expect(refusal({ linking: linking('private', 'KEY') })).toHaveProperty('go');
+    expect(refusal({ linking: linking('public', null) })).toHaveProperty('go');
+    expect(refusal({ linking: linking('public', 'OTHER') })).toHaveProperty('go');
+    expect(refusal({ slug: 'fix-login', linking: linking('public', 'KEY') })).toHaveProperty('go');
+    // not asked when no slug is named
+    expect(refusal({ slug: undefined, linking: () => null })).toHaveProperty('go');
+  });
+
   it('a clean request carries its landing intent keys; absent and [] both mean none', () => {
     const c = store(); const id = planned(c);
     const keys = (intents: unknown) => { const d = decideDispatch(request(c, id, { intents })); return d.kind === 'go' ? d.plan.intentKeys : null; };

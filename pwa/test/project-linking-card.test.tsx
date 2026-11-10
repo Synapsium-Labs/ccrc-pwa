@@ -7,7 +7,7 @@ import { LINKING_REFUSALS, type ProjectLinkingWire } from '../../shared/linking'
 import type { ProjectRow } from '../../shared/api';
 import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
-import { LINKING_REFUSAL_TEXT } from '../src/lib/refusalWords';
+import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
 
@@ -113,6 +113,30 @@ describe('the card', () => {
       fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
       const sentence = await within(rowOf('project-a')).findByRole('status');
       expect(sentence.textContent, word).toBe(LINKING_REFUSAL_TEXT[word]);
+      expect(sentence.textContent).not.toContain('box text');
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('the template act\'s refusal is its fixed sentence, never the box\'s stderr', async () => {
+    await mount([row('project-a', wire({ teamKey: 'KEY' }))]);
+    vi.spyOn(api, 'openTemplatePr').mockRejectedValue(new ApiError(502, { ok: false, error: 'template-failed', stderr: 'pr-template: push failed for ccrc/linking-template — nothing was opened' }));
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.openTemplate }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: LINKING_TEXT.openTemplateConfirm }));
+    const sentence = await within(rowOf('project-a')).findByRole('status');
+    expect(sentence.textContent).toBe(LINKING_REFUSAL_TEXT['template-failed']);
+    expect(sentence.textContent).not.toContain('push failed');
+  });
+
+  it('the write route\'s own words (write-failed, bad-request) are sentences, not bare words', async () => {
+    for (const word of ['write-failed', 'bad-request']) {
+      cleanup();
+      await mount([row('project-a', wire({ teamKey: 'KEY' }))]);
+      vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(503, { ok: false, error: word, detail: 'box text that must not show' }));
+      fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+      const sentence = await within(rowOf('project-a')).findByRole('status');
+      expect(sentence.textContent, word).toBe(LINKING_ROUTE_TEXT[word as 'write-failed' | 'bad-request']);
+      expect(sentence.textContent).not.toBe(word);
       expect(sentence.textContent).not.toContain('box text');
       vi.restoreAllMocks();
     }

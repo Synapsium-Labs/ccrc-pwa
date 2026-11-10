@@ -18,7 +18,7 @@ import type { ProjectRow } from '../../../../shared/api';
 import { ResultLine, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { api } from '../../lib/api';
 import { loadProjects } from '../../fleet/useProjectRows';
-import { apiErrorText } from '../../lib/refusalWords';
+import { linkingErrorText } from '../../lib/refusalWords';
 
 /** The card's words. Short labels only; the sentences a refusal says are `LINKING_REFUSAL_TEXT`'s. */
 export const LINKING_TEXT = {
@@ -84,7 +84,7 @@ function LinkingRow({ name, linking, now, onStored }: {
     void api.saveLinking(name, body)
       .then(
         (a) => { onStored(name, a.linking); result.say(LINKING_TEXT.saved); },
-        (err: unknown) => result.say(apiErrorText(err), 'refusal'),
+        (err: unknown) => result.say(linkingErrorText(err), 'refusal'),
       )
       .finally(() => setBusy(false));
   };
@@ -98,7 +98,7 @@ function LinkingRow({ name, linking, now, onStored }: {
     void api.openTemplatePr(name)
       .then(
         (a) => { setPr(a.url); onStored(name, withTemplatePresent(linking)); },
-        (err: unknown) => result.say(apiErrorText(err), 'refusal'),
+        (err: unknown) => result.say(linkingErrorText(err), 'refusal'),
       )
       .finally(() => setBusy(false));
   };

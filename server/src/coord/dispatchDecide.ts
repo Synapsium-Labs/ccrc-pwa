@@ -12,6 +12,8 @@ import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReasonVerdict, type
 import type { TurnVerdict } from './archiveDoor.js';
 import type { RunReadResult, RunRow } from './store.js';
 import type { DispatchOutcome, SpawnPollTarget } from './dispatch.js';
+import { trackerIdsIn } from '../linking/policy.js';
+import type { LinkingMode } from '../../../shared/linking.js';
 
 /**
  * `dispatchRun`'s decisions, as data (ARCH-22, GitHub #553; architecture doc increment 4, the half
@@ -83,6 +85,10 @@ export interface RequestFacts {
   /** The landing intents held in a project for these keys: a synchronous thunk over `coord.db` (the step stays
    *  synchronous from the row read to its answer), called only for a non-empty key list that passed every earlier gate. */
   held: (project: string, keys: readonly string[]) => readonly LandingIntentHold[];
+  /** D-8147: the run's project's linking (the rule that applies and the team's key), or null when it could not be read.
+   *  Called only for a fresh spawn that names a slug, once the slug passed its grammar. Absent: the slug is not checked
+   *  (a caller with no store has no key to protect). */
+  linking?: (project: string) => { mode: LinkingMode; teamKey: string | null } | null;
   /** The standing protocol a brief of each kind invokes (`dispatch.ts` hands over its L0 constants). */
   prefixes: KickoffPrefixes;
 }
@@ -103,7 +109,7 @@ export interface RequestPlan {
 export interface KickoffPrefixes { work: string; review: string }
 
 function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
-  const { read, brief, items, route, slug, intents, held, prefixes } = f;
+  const { read, brief, items, route, slug, intents, held, prefixes, linking } = f;
   // D-2545: the row exists and its integers are unrepresentable: refused in words, ahead of any fleet act.
   if (!read.ok) return refused({ ok: false, kind: 'hold-invalid', detail: read.detail });
   const run = read.run;
@@ -168,6 +174,18 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
     if (run.sessionId !== null) {
       return refused({ ok: false, kind: 'bad-request',
         detail: 'slug: this run resumes its bound session; a slug names a fresh spawn only' });
+    }
+    // D-8147: the slug IS the worker's branch, pushed by the worker itself, so a project that is not private never
+    // carries its team's ticket in it: refused here, before any fleet act, never renamed (the child's id is
+    // `<project>-<slug>` and the coordinator expects exactly that). A reading that cannot be made refuses too.
+    if (linking !== undefined) {
+      const l = linking(run.project);
+      if (l === null) return refused({ ok: false, kind: 'registry-unmeasurable' });
+      const ids = l.mode === 'private' ? [] : trackerIdsIn(slug, l.teamKey);
+      if (ids.length > 0) {
+        return refused({ ok: false, kind: 'bad-request',
+          detail: `slug: this project is not private, so its branch never carries the team's ticket id (${ids.join(', ')}); name the workspace in words` });
+      }
     }
     childSlug = slug;
   }

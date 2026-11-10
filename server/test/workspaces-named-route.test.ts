@@ -2,7 +2,7 @@
 // carry `name` and `wrapper`. The bodyless create is pinned in `workspaces-route.test.ts` and stays unchanged; this file
 // is the named half. Every refusal below is asserted with `calls` EMPTY: a refused request must never have an argv to
 // send. Nothing here reaches the network (`deps.linear.fetch` is the seam) or a real ccd (the Runner is a spy).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -195,6 +195,20 @@ describe('a named create and the linking standard', () => {
       coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'd', 2);
       expect((await post(app, { name: 'fix key-123 crash' })).json()).toMatchObject({ slug: 'fix-key-123-crash' });
     } finally { coord.db.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a linking row that cannot be read refuses the create (unavailable), never goes on keyless', async () => {
+    const dir = mkTmp('ccrc-ws-named-');
+    const coord = new CoordStore(openCoordDb(path.join(dir, 'coord.db')));
+    try {
+      coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'd', 1);
+      vi.spyOn(coord, 'linkingOf').mockImplementation(() => { throw new Error('db locked'); });
+      const { app, calls } = await boot({ coord });
+      const res = await post(app, { name: 'fix key-123 crash' });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+      expect(calls).toEqual([]);
+    } finally { vi.restoreAllMocks(); coord.db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

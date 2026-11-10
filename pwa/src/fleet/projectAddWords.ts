@@ -9,7 +9,7 @@
 // STATUS: a 502, which is git's failure and is said from its stderr whatever word rides beside it, and a 404, a server
 // older than the route.
 import { ApiError } from '../lib/apiError';
-import { apiErrorText, refusalText } from '../lib/refusalWords';
+import { linkingErrorText, refusalText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
 import {
   deriveProjectName, isNewProjectName, parseGithubRepo, PROJECT_NAME_MAX, type GithubRepo, type ProjectAddBody,
@@ -260,7 +260,7 @@ export async function linkingFollowUps(
       await acts.save(project, { teamKey: choice.teamKey, override: null });
       lines.push(LINKING_ADD_TEXT.keySaved(choice.teamKey));
     } catch (err) {
-      lines.push(LINKING_ADD_TEXT.keyFailed(apiErrorText(err)));
+      lines.push(LINKING_ADD_TEXT.keyFailed(linkingErrorText(err)));
     }
   }
   if (choice.template) {
@@ -268,7 +268,7 @@ export async function linkingFollowUps(
       lines.push(LINKING_ADD_TEXT.templateOpened((await acts.open(project)).url));
     } catch (err) {
       const unmeasured = refusalText(err, { 'repo-unmeasured': LINKING_ADD_TEXT.unmeasured });
-      lines.push(unmeasured ?? LINKING_ADD_TEXT.templateFailed(apiErrorText(err)));
+      lines.push(unmeasured ?? LINKING_ADD_TEXT.templateFailed(linkingErrorText(err)));
     }
   }
   return lines;

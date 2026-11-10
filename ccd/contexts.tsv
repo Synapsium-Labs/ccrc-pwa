@@ -140,6 +140,9 @@ _ws_stash_count	C4
 _ws_ignored_digest	C4
 _gh_repo_slug	C4
 _gh_fail_reason	C4
+_gh_repo_meta	C4
+_pr_template_rel	C4
+_pr_template_file	C4
 _gh_pr_list	C4
 _gh_pr_checks	C4
 _gh_rows_ok	C4
@@ -184,6 +187,9 @@ _attic_project	C4
 cmd_ws_attic	C4
 _pr_bind_facts	C4
 _pr_state_one	C4
+cmd_repo_visibility	C4
+cmd_pr_template	C4
+_pr_template_open	C4
 cmd_pr_state	C4
 _gh_pr_landing_query	C4
 _pr_landing_py	C4

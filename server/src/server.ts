@@ -38,7 +38,7 @@ import { bodyDigest } from '../../shared/mark.mjs';
 import { ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
          capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
-import { parsePrLines, prView, sweepFailureReason, unknownView } from './prstate.js';
+import { isFullLine, parsePrLines, prView, sweepFailureReason, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
@@ -3135,10 +3135,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // D-8147: in a PUBLIC project the slug (the branch) is the title's words, never the ticket id.
     let slug = plan.ask.slug;
     if (deps.coord !== undefined) {
-      let row: ReturnType<CoordStore['linkingOf']> | undefined;
-      try { row = deps.coord.linkingOf(project); } catch { row = undefined; }
+      // A row that cannot be read is not "no key": the slug is the public branch, so the create is refused instead.
+      let row: ReturnType<CoordStore['linkingOf']>;
+      try { row = deps.coord.linkingOf(project); } catch { return refuseRoute(reply, 'unavailable'); }
       // Anything but a measured or chosen PRIVATE reading (unmeasured and failed ones included) counts as public.
-      if (row !== undefined && row.teamKey !== null && row.mode !== 'private') {
+      if (row.teamKey !== null && row.mode !== 'private') {
         // Only the project's own team's ticket is rewritten: a name like `phase-2` parses as a ticket but is no tracker id.
         if (plan.ask.ticket !== null && plan.ask.ticket.key.toUpperCase() === row.teamKey.toUpperCase()) {
           const words = publicTicketSlug(title, plan.ask.ticket, project);
@@ -3859,19 +3860,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   // D-8147: the session's project's linking, for the PR paths: the rule that applies, the team's key and the session's
-  // branch. A project nothing could be read for (no store, the registry names no project, the store failed) is PUBLIC with
-  // no key: the fail-closed rule, so a wrong guess never writes a tracker id.
-  const sessionLinking = async (id: string): Promise<{ mode: LinkingMode; teamKey: string | null; branch: string | null }> => {
+  // branch. FAIL CLOSED: on a server WITH a coordination store, a reading that cannot be made (the registry listing or
+  // record unreadable, `.project` not measured, the store's read throwing) is `unreadable`, never "public with no key": with
+  // no key `trackerIdsIn` finds nothing, so a guessed-public reading would let a stored team's id through. A server with
+  // no store has no key stored anywhere, so there is nothing to protect and today's draft stands.
+  type SessionLinking =
+    | { ok: true; mode: LinkingMode; teamKey: string | null; branch: string | null }
+    | { ok: false; word: 'registry-unmeasurable' | 'unavailable' };
+  const sessionLinking = async (id: string): Promise<SessionLinking> => {
     const coord = deps.coord;
-    const closed = { mode: 'public' as const, teamKey: null, branch: null };
-    if (coord === undefined) return closed;
+    if (coord === undefined) return { ok: true, mode: 'public', teamKey: null, branch: null };
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     const project = measuredProjectOf(read);
-    if (project === null) return closed;
+    if (project === null) return { ok: false, word: 'registry-unmeasurable' };
     try {
       const row = coord.linkingOf(project);
-      return { mode: row.mode, teamKey: row.teamKey, branch: read.kind === 'found' ? read.record.branch : null };
-    } catch { return closed; }
+      return { ok: true, mode: row.mode, teamKey: row.teamKey, branch: read.kind === 'found' ? read.record.branch : null };
+    } catch { return { ok: false, word: 'unavailable' }; }
   };
 
   app.get('/api/sessions/:id/pr', async (req, reply) => {
@@ -3893,7 +3898,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const res = await deps.runCcd(argv);
     if (!res.ok) return unknownView(sweepFailureReason(res));
     const [first] = parsePrLines(res.stdout);
-    return prView(first ?? null, await tasks, null, await linking);
+    // A project whose linking could not be read drafts nothing: the draft's id guard needs the key, and a draft made
+    // without it could carry the team's id into a public repository. The cap says so and offers Retry.
+    const read = await linking;
+    if (!read.ok) return unknownView(read.word === 'unavailable' ? 'unavailable' : 'error');
+    return prView(first ?? null, await tasks, null, read);
   });
 
   app.post('/api/sessions/:id/pr', async (req, reply) => {
@@ -3907,13 +3916,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // D-8147: a PUBLIC project's pull request never names its team's tracker id (Linear links it from its side).
     const linking = await sessionLinking(id);
-    if (linking.mode !== 'private') {
+    if (!linking.ok) return refuseRoute(reply, linking.word);
+    if (linking.mode !== 'private' && linking.teamKey !== null) {
       const ids = trackerIdsIn(`${body.title}\n${body.body}`, linking.teamKey);
       if (ids.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids, mode: linking.mode });
       // The branch is pushed to the repository too: a head branch carrying the team's ticket ANYWHERE in its name (not
       // only at the start) is refused, and said so.
       const refs = linking.branch === null ? [] : trackerIdsIn(linking.branch, linking.teamKey);
       if (refs.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids: refs, in: 'branch', mode: linking.mode });
+      // The commits are pushed with the branch and keep their own messages (the draft's list is redacted, the commits
+      // are not), so they are read AGAIN here, at the act, and a subject or body naming the team's id is refused. Commits
+      // that cannot be read in full prove nothing, so they refuse too.
+      if (!ccdCan(deps.fleetState, 'prStateSession')) return refuseRoute(reply, 'unavailable', { detail: 'commits-unread' });
+      const state = await deps.runCcd(CCD_ARGV.prStateSession(id));
+      const [line] = state.ok ? parsePrLines(state.stdout) : [];
+      if (line === undefined || !isFullLine(line) || typeof line.ahead !== 'number' || line.commits.length < line.ahead) {
+        return refuseRoute(reply, 'unavailable', { detail: 'commits-unread' });
+      }
+      const inCommits = trackerIdsIn(line.commits.map((c) => `${c.subject}\n${c.body}`).join('\n'), linking.teamKey);
+      if (inCommits.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids: inCommits, in: 'commits', mode: linking.mode });
     }
     const b64 = Buffer.from(body.body, 'utf8').toString('base64');
     const argv = CCD_ARGV.prOpen(id, body.title, b64, body.draft === true);

@@ -1,7 +1,7 @@
 // D-8147: `POST /api/sessions/:id/pr` refuses a public project's title or body that names its team's tracker id,
 // before any ccd call; a private or unmeasured project's text is sent as the operator wrote it.
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { mkdirSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Runner } from '../src/exec.js';
@@ -36,10 +36,22 @@ beforeEach(() => {
 });
 afterEach(async () => { await app?.close(); app = undefined; coord.db.close(); rmSync(home, { recursive: true, force: true }); });
 
-const open = async (title: string, body: string) => {
+const LINE = JSON.stringify({
+  id: 'project-a-key-123-fix', project: 'project-a', repo: 'owner/repo', branch: 'ws/key-123-fix',
+  base: 'origin/main', baseShort: 'main', tip: 'f'.repeat(40), ahead: 1, dirty: 0,
+  commits: [{ sha: 'aaaaaaa', subject: 'the work', body: '' }], template: null, rows: [],
+  phase: 'none', number: null, checkedAt: 1785300000000, reason: null,
+});
+
+const lineWith = (commits: { sha: string; subject: string; body: string }[], ahead = commits.length): string =>
+  JSON.stringify({ ...JSON.parse(LINE) as object, commits, ahead });
+
+// `state` is what `ccd pr-state` answers: the POST reads the branch's commits again before it sends anything.
+const open = async (title: string, body: string, state: string = LINE) => {
   const run: Runner = async (_c, args) => {
     calls.push(args);
     if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    if (args.includes('pr-state')) return { ran: true, code: 0, stdout: state, stderr: '' };
     return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   await app?.close();
@@ -47,13 +59,6 @@ const open = async (title: string, body: string) => {
   return app.inject({ method: 'POST', url: '/api/sessions/project-a-key-123-fix/pr', payload: { title, body } });
 };
 const sentToCcd = (): boolean => calls.some((a) => a[0] === 'pr-open');
-
-const LINE = JSON.stringify({
-  id: 'project-a-key-123-fix', project: 'project-a', repo: 'owner/repo', branch: 'ws/key-123-fix',
-  base: 'origin/main', baseShort: 'main', tip: 'f'.repeat(40), ahead: 1, dirty: 0,
-  commits: [{ sha: 'aaaaaaa', subject: 'the work', body: '' }], template: null, rows: [],
-  phase: 'none', number: null, checkedAt: 1785300000000, reason: null,
-});
 
 describe('GET /api/sessions/:id/pr and the linking standard', () => {
   const draftBody = async (): Promise<string> => {
@@ -152,5 +157,69 @@ describe('POST /api/sessions/:id/pr and the linking standard', () => {
     const res = await open('Fix the login', 'Closes KEY-123\n');
     expect(res.statusCode).toBe(409);
     expect(sentToCcd()).toBe(false);
+  });
+
+  it("a commit whose message names the team's id is refused on a public project, and ccd is not asked to open", async () => {
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 1);
+    const bySubject = await open('Fix the login', 'Closes #12\n', lineWith([{ sha: 'aaaaaaa', subject: 'KEY-12 fix login', body: '' }]));
+    expect(bySubject.statusCode).toBe(409);
+    expect(bySubject.json()).toEqual({ ok: false, error: 'tracker-id-public', ids: ['KEY-12'], in: 'commits', mode: 'public' });
+    const byBody = await open('Fix the login', 'Closes #12\n', lineWith([{ sha: 'aaaaaaa', subject: 'fix login', body: 'Refs key-13' }]));
+    expect(byBody.json()).toMatchObject({ error: 'tracker-id-public', ids: ['KEY-13'], in: 'commits' });
+    expect(sentToCcd()).toBe(false);
+  });
+
+  it("a private project's commits naming the id are sent, and so are a public project's with none", async () => {
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'test', 1);
+    expect((await open('Fix the login', 'Body\n', lineWith([{ sha: 'aaaaaaa', subject: 'KEY-12 fix login', body: '' }]))).statusCode).toBe(200);
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 2);
+    expect((await open('Fix the login', 'Body\n')).statusCode).toBe(200);
+  });
+
+  it('commits that cannot be read in full refuse on a public project: fewer listed than ahead, no line, a failed read', async () => {
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 1);
+    for (const state of [lineWith([], 2), '', JSON.stringify({ id: 'project-a-key-123-fix', phase: 'unknown', reason: 'error' })]) {
+      calls = [];
+      const res = await open('Fix the login', 'Body\n', state);
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ error: 'unavailable', detail: 'commits-unread' });
+      expect(sentToCcd()).toBe(false);
+    }
+  });
+});
+
+describe('a linking that cannot be read fails closed to the public rule (D-8147)', () => {
+  const draft = async (): Promise<{ pr: { phase: string; reason: string | null }; draft: unknown }> => {
+    const run: Runner = async (_c, args) => {
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: LINE, stderr: '' };
+    };
+    await app?.close();
+    app = await buildServer({ ...testDeps(home, run), coord });
+    return (await app.inject({ method: 'GET', url: '/api/sessions/project-a-key-123-fix/pr' })).json();
+  };
+
+  it("a record whose project was not measured refuses the open (registry-unmeasurable) and drafts nothing", async () => {
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 1);
+    unlinkSync(path.join(home, '.cc-sessions', 'project-a-key-123-fix.project'));
+    const res = await open('KEY-12 fix login', 'Body\n');
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(sentToCcd()).toBe(false);
+    const view = await draft();
+    expect(view.pr).toMatchObject({ phase: 'unknown' });
+    expect(view.draft).toBeNull();
+  });
+
+  it('a store that throws on the linking read refuses the open (unavailable) and drafts nothing', async () => {
+    const spy = vi.spyOn(coord, 'linkingOf').mockImplementation(() => { throw new Error('db locked'); });
+    const res = await open('KEY-12 fix login', 'Body\n');
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+    expect(sentToCcd()).toBe(false);
+    const view = await draft();
+    expect(view.pr).toMatchObject({ phase: 'unknown', reason: 'unavailable' });
+    expect(view.draft).toBeNull();
+    spy.mockRestore();
   });
 });

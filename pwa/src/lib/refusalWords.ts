@@ -283,6 +283,9 @@ const API_ERROR_TEXT: Record<string, string> = {
   // sentence, where the session id is in scope anyway.
   'not-configured': 'This box does not run coordination — there is no mail store to queue a kickoff into.',
   'registry-unmeasurable': 'The session registry could not be read, so this box cannot say whether that session exists.',
+  // D-8147: the pull request and the workspace create answer it when the project's linking or the branch's commits could
+  // not be read, which the rule needs before it can say nothing carries a ticket id; the linking routes, with no store.
+  unavailable: 'This box could not do that just now, so nothing was changed or sent. Try again in a minute.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a
@@ -315,9 +318,17 @@ export const isRegistryUnmeasurable = (err: unknown): boolean =>
  *  bare message stays the floor. */
 export function apiErrorText(err: unknown): string {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
+    const code = (err.body as { error?: unknown }).error;
+    // The linking standard's words speak before any stderr (D-8147): `template-failed` carries the box's own text beside
+    // its word, and that text is never shown, only the word's fixed sentence.
+    if (typeof code === 'string' && !Object.hasOwn(API_ERROR_TEXT, code)) {
+      const named = Object.hasOwn(LINKING_NAMED_TEXT, code) ? LINKING_NAMED_TEXT[code]!(err.body as Record<string, unknown>) : null;
+      if (named !== null) return named;
+      const linking = refusalText(err, LINKING_REFUSAL_TEXT);
+      if (linking !== null) return linking;
+    }
     const stderr = (err.body as { stderr?: unknown }).stderr;
     if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
-    const code = (err.body as { error?: unknown }).error;
     if (code === 'pool-mismatch') {
       const { accountPool, projectPool } = err.body as {
         accountPool?: unknown;
@@ -336,11 +347,6 @@ export function apiErrorText(err: unknown): string {
     if (typeof code === 'string') {
       const text = API_ERROR_TEXT[code];
       if (text !== undefined) return text;
-      // The linking standard's words (D-8147): the ones that name a fact the answer carries, then the fixed table.
-      const named = Object.hasOwn(LINKING_NAMED_TEXT, code) ? LINKING_NAMED_TEXT[code]!(err.body as Record<string, unknown>) : null;
-      if (named !== null) return named;
-      const linking = refusalText(err, LINKING_REFUSAL_TEXT);
-      if (linking !== null) return linking;
     }
   }
   return err instanceof Error ? err.message : String(err);
@@ -366,6 +372,17 @@ export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
   'override-private-public': 'GitHub reads this repository as public, so it cannot be set to Private: a private rule would write ticket ids into a public repository. Choose Automatic or Public.',
 };
 
+/** The words the linking POST routes answer beside the fixed table (D-8147): not in `LINKING_REFUSAL_TEXT`, because
+ *  `bad-request` belongs to the upload and kickoff translators, which read `apiErrorText`'s output as a key. The Settings
+ *  card and the add-project sheet read them through `linkingErrorText`. */
+export const LINKING_ROUTE_TEXT: Readonly<Record<'write-failed' | 'bad-request', string>> = {
+  'write-failed': 'The server could not save that. Nothing was changed. Try again.',
+  'bad-request': 'The server did not accept that request. Reload the page and try again.',
+};
+
+/** A linking route's failure in words: the route words first, then every other refusal's sentence. */
+export const linkingErrorText = (err: unknown): string => refusalText(err, LINKING_ROUTE_TEXT) ?? apiErrorText(err);
+
 /** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
  *  code). `null`: the answer did not carry it, so the fixed sentence above is what is said. */
 const LINKING_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {
@@ -380,8 +397,11 @@ const LINKING_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>
       if (unread) return `ccrc has not read this repository's visibility yet, and this workspace's branch carries ${ids.join(', ')}, so it will not open the pull request. Try again in a few minutes, or set the visibility in Settings.`;
       return `This repository is public and this workspace's branch is named for ${ids.join(', ')}, so ccrc will not open the pull request. Add a new workspace named in words and move the work there.`;
     }
+    if (body['in'] === 'commits') {
+      return `${unread ? "ccrc has not read this repository's visibility yet, and a" : 'This repository is public and a'} commit on this branch names ${ids.join(', ')}, so ccrc will not open the pull request. Reword that commit first.`;
+    }
     if (unread) return `ccrc has not read this repository's visibility yet, so ${ids.join(', ')} stays out of the pull request. Try again in a few minutes, or set the visibility in Settings.`;
-    return `This repository is public: remove ${ids.join(', ')} from the title and body. If a commit message carries it, reword that commit first. Link the ticket from Linear instead.`;
+    return `This repository is public: remove ${ids.join(', ')} from the title and body. Link the ticket from Linear instead.`;
   },
 };
 
