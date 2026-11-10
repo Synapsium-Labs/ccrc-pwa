@@ -488,14 +488,15 @@ export function classifyAgentName(name, where) {
   const t = AGENT_TRANSCRIPT_RE.exec(name);
   return { role: 'candidate', id: t && agentIdOk(t[1]) ? t[1] : null };
 }
-/** The name of an agent's meta companion: the one spelling of `agent-<ID>.meta.json` (AGENT_META_RE reads it back). */
-export function metaNameOf(id) {
-  return `agent-${id}.meta.json`;
+/** The name of an agent's meta companion: the one spelling of `agent-<ID>.meta.json` (AGENT_META_RE reads it back). The
+ *  parameter is Claude Code's agent id, never a ccd session id, so ccd-id-cap's census of names built from a ccd id does not count it. */
+export function metaNameOf(agentId) {
+  return `agent-${agentId}.meta.json`;
 }
-/** The path of an agent's meta: beside its transcript, in the directory `agentFilePath` names, under metaNameOf(id). A pure string
+/** The path of an agent's meta: beside its transcript, in the directory `agentFilePath` names, under metaNameOf(agentId). A pure string
  *  rule (no I/O): the store side and the census both ask it, and neither spells the meta's name. */
-export function metaPathOf(agentFilePath, id) {
-  return `${agentFilePath.slice(0, agentFilePath.lastIndexOf('/') + 1)}${metaNameOf(id)}`;
+export function metaPathOf(agentFilePath, agentId) {
+  return `${agentFilePath.slice(0, agentFilePath.lastIndexOf('/') + 1)}${metaNameOf(agentId)}`;
 }
 /** Whether the walk enters a directory entry, from its lstat kind and whether it could be listed. A link is never followed. */
 export function decideAgentDir(i) {

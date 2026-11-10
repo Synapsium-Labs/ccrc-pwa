@@ -146,9 +146,9 @@ export type AgentName =
   | { role: 'descend' };
 export function classifyAgentName(name: string, where: 'subagents' | 'run'): AgentName;
 /** The name of an agent's meta companion, `agent-<ID>.meta.json`: its one spelling (final review M3). */
-export function metaNameOf(id: string): string;
-/** The path of an agent's meta: in the directory of `agentFilePath`, named by metaNameOf(id). A pure string rule. */
-export function metaPathOf(agentFilePath: string, id: string): string;
+export function metaNameOf(agentId: string): string;
+/** The path of an agent's meta: in the directory of `agentFilePath`, named by metaNameOf(agentId). A pure string rule. */
+export function metaPathOf(agentFilePath: string, agentId: string): string;
 export function decideAgentDir(i: { kind: 'dir' | 'link' | 'file' | 'other'; listable: boolean }): { enter: true } | { enter: false; reason: AgentDirReason };
 export function decideAgentFile(i: { kind: 'file' | 'link' | 'dir' | 'other'; id: string | null; runOk: boolean }): { verdict: 'admit' } | { verdict: 'refuse'; reason: AgentFileReason };
 export function agentKey(id: string, runId: string | null): string;
