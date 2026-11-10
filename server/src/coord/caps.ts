@@ -35,7 +35,7 @@ export const CAP_MIN = 1;
 /** A fat-finger ceiling, not a claim about fleet size. The box these caps
  *  govern runs about twenty live sessions, so sixty-four is far above any real
  *  setting and far below the range where `640` could read as deliberate. It
- *  once bounded the daily brake too, on `MAIL_QUIET_MS`'s stated principle (two
+ *  once bounded the daily brake too, on `MAIL_PACE.worker.quietMs`'s stated principle (two
  *  numbers for one policy is two numbers to get out of step); that brake is
  *  retired (D-7068), so it bounds the concurrency cap alone. */
 export const CAP_MAX = 64;

@@ -22,14 +22,14 @@
  *  transcribed from cited the wrong pair): the parent is BY CONSTRUCTION the
  *  `claimedBy` of a non-terminal run — exactly `openCoordinatorIds()`'s
  *  membership test — so `sweepMail` scores it against the COORDINATOR pair
- *  (`watch.ts`'s `COORD_QUIET_MS`/`COORD_COOLDOWN_MS`), not the worker one: `COORD_QUIET_MS` (15s, measured from
- *  `statusUpdatedAt`) gates a just-idle parent, and `COORD_COOLDOWN_MS` (30s)
+ *  (`coord/mailPace.ts`'s `MAIL_PACE.coordinator`), not the worker one: `MAIL_PACE.coordinator.quietMs` (15s, measured from
+ *  `statusUpdatedAt`) gates a just-idle parent, and `MAIL_PACE.coordinator.cooldownMs` (30s)
  *  does not bind it — that gate is measured from the recipient's own LAST
  *  successful injection, in-memory, so a parent with no prior mail (the
  *  ordinary case for an ask nudge) clears it for free. Add the same
  *  sweep-granularity/injection-sleep overhead an already-quiet session pays
- *  anyway and the real floor is ~25s — not the ~70s a `MAIL_QUIET_MS`
- *  (`watch.ts`) reading
+ *  anyway and the real floor is ~25s — not the ~70s a `MAIL_PACE.worker.quietMs`
+ *  (`coord/mailPace.ts`) reading
  *  would suggest — so a window under that gives a just-idle parent no turn at
  *  all. CEILING: every second here is latency the operator pays on the asks
  *  the parent declines, which is why the claimant's release (`POST /api/questions/ask-<n>/release`) exists — a

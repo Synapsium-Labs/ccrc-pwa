@@ -6644,7 +6644,7 @@ export class CoordStore {
    * forever and the new, later `deliveredAt` a replay just wrote was
    * silently ignored — so the clock froze at the FIRST `UserPromptSubmit`
    * edge and every replay after that one was due again almost immediately,
-   * spaced only by the per-session `MAIL_COOLDOWN_MS` instead of
+   * spaced only by the per-session `MAIL_PACE` cooldown instead of
    * `MAIL_REPLAY_MS` (a 120 s floor standing in for the intended 10
    * minutes). `MAX` always picks whichever of the two actually happened
    * last, so a fresh replay's `deliveredAt` re-dates the clock exactly the
@@ -6747,7 +6747,7 @@ export class CoordStore {
    * Kept independent of `attempts` (`MAIL_MAX_ATTEMPTS`'s own docstring:
    * SEND FAILURES only) on purpose: without a separate counter,
    * spec:174-177's replay-until-ack has no ceiling at all once a delivery
-   * succeeds even once — `MAIL_COOLDOWN_MS` only SPACES the injections, it
+   * succeeds even once — `MAIL_PACE`'s cooldown only SPACES the injections, it
    * was never a bound on their number, and a delivery that keeps succeeding
    * can never fail its way into `MAIL_MAX_ATTEMPTS`. This is the ceiling
    * that lets a delivery no one ever acks eventually reach

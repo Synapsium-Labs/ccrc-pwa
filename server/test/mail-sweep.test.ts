@@ -57,10 +57,10 @@ const FROM_ID = 'demo-quiet-mesa';
 const FROM_UUID = 'b'.repeat(36);
 const NOW = 1_800_000_000_000; // arbitrary fixed epoch ms, no relation to real time
 
-// Local mirrors of watch.ts's own (private, unexported) lane constants — same
-// idiom as name-sweep.test.ts's PAST_LANE_MS: this file has no import path to
-// the real ones, so it redeclares them and a drift shows up as a failing
-// test rather than a silently-wrong assertion.
+// Local mirrors of the lane's cadence and of `MAIL_PACE`'s rows
+// (`server/src/coord/mailPace.ts`) — same idiom as name-sweep.test.ts's
+// PAST_LANE_MS. They stay literal on purpose, never imported: a value change
+// then shows up as a failing test rather than a silently-wrong assertion.
 const MAIL_SWEEP_MS = 10_000;
 const MAIL_QUIET_MS = 60_000;
 const MAIL_COOLDOWN_MS = 120_000;

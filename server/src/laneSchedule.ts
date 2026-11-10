@@ -98,7 +98,7 @@ export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
 export const IDLE_NUDGE_SWEEP_MS = 10_000;
 
 /** The mail lane (the seventh; spec:159 fixes the cadence). Ten seconds is not how fast mail should arrive, it is how
- *  often the lane is allowed to ASK: delivery is bounded below by `MAIL_QUIET_MS`, so mail lands at a turn boundary. */
+ *  often the lane is allowed to ASK: delivery is bounded below by `MAIL_PACE`'s quiet time (`coord/mailPace.ts`), so mail lands at a turn boundary. */
 export const MAIL_SWEEP_MS = 10_000;
 
 /** The ask-release lane's own self-throttle (RULING F4, task-7-brief): not how fast a lapsed hold fires (that ceiling is

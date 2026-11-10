@@ -864,6 +864,10 @@ describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)',
     expect(RETIRED.test('const COORD_QUIET_MS = 15_000;')).toBe(true);
     expect(RETIRED.test("import { MAIL_PACE } from './coord/mailPace.js';")).toBe(false);
   });
+  it('no source names a retired pace constant, in code or prose', () => {
+    const NAMES = /\b(?:MAIL_QUIET_MS|MAIL_COOLDOWN_MS|COORD_QUIET_MS|COORD_COOLDOWN_MS)\b/;
+    expect(ALL.filter((f) => NAMES.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
 });
 
 // ── program-leverage wave 8 ────────────────────────────────────────────────

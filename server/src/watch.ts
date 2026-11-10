@@ -7439,7 +7439,7 @@ export class FleetWatcher {
    *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
    *      turn — `idle`, or `shell` (an idle main loop over a background shell)
    *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
-   *      least `MAIL_QUIET_MS` old (`COORD_QUIET_MS` for a coordinator): the
+   *      least `MAIL_PACE.worker.quietMs` old (`MAIL_PACE.coordinator.quietMs` for a coordinator): the
    *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
    *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
    *      tripwire only. It never reads a folded word,
