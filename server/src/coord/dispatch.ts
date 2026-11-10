@@ -25,6 +25,8 @@ import {
   type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillInstall, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
+import { isDocsBareRef } from '../../../shared/docs.js';
+import type { AttributionRead, AttributionRefusal } from './openRun.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
   admitMarkerRefusal, decideDispatch, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
@@ -204,8 +206,11 @@ export type DispatchOutcome =
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' |
         'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch' | 'status-unmeasurable' |
-        'intent-held'>;
+        'intent-held' | 'self-dispatch' | 'claimed-by-another'>;
       limit?: number; running?: number; candidates?: number;
+      /** `self-dispatch`'s own field, PRESENT exactly on that code: the other door, in words (D-6096). Distinguishes by
+       *  presence, like `by` and `key`. */
+      detail?: string;
       /** `intent-held`'s own fields, PRESENT exactly on that code: the key and the other programme's run that holds it. */
       key?: string; holder?: { runId: number; program: string };
       /** WHICH project the measured party belongs to — `project-mismatch`'s
@@ -883,6 +888,76 @@ export async function dispatchRun(
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
     adopted, spawnState: adoptedSpawn, skillState, skillInstall: null, skillWrapper: bound.wrapper, intents: intentKeys };
+}
+
+/** The deps `bindRunInPlace` needs: the store, the registry reads and the caller's attribution. A plain subset of what
+ *  the dispatch route already holds; no `runCcd`, no `sendClear` and no `fleetState`, because the in-place arm composes no
+ *  fleet act, which this type makes unrepresentable. */
+export interface InPlaceDeps {
+  readonly coord: CoordStore;
+  readonly io: FleetIO;
+  readonly cfg: CcrcConfig;
+  /** `attributionVerdict` over the route's io and cfg, with the `claimedByUuid` field name (the same gate `POST /api/runs`
+   *  applies to a claimant). */
+  readonly attribute: (who: string, uuid: string) => Promise<AttributionRead>;
+}
+
+/** `bindRunInPlace`'s answer: the bind, a refusal of the dispatch union, or the attribution gate's own refusal. */
+export type InPlaceOutcome =
+  | { ok: true; id: number; sessionId: string; branch: string }
+  | Extract<DispatchOutcome, { ok: false }>
+  | { ok: false; kind: 'attribution'; error: AttributionRefusal; detail: string };
+
+/**
+ * D-6096 (fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave as the run's own
+ * worker, in a sibling worktree on `branch`. Called by `POST /api/runs/:id/dispatch` with `inPlace: true`, INSIDE
+ * `coordMutex`. It is NOT `dispatchRun`: it starts no process and composes NO fleet act (no `ensure`, no `ws-hold`, no
+ * `ccd route`, no brief mail and no `/clear`), and its deps carry no `runCcd` to compose one with.
+ *
+ * Every refusal comes before any write, in this order: the operator's pause and the mail-disabled marker (the operator's
+ * stop binds every path, DISPATCH, THE IN-PLACE BIND AND SELF-WORK ON NEW WAVES, and nothing else: the close, the abandon
+ * and the advance do not read the marker; the listing fails shut, as the dispatch's admit step does), then the run (it
+ * exists, is a `planned` work run, is not already bound to another session), the caller (it is the claimant, and its uuid
+ * is the registry's), the claimant's measured project (equal to the run's; unreadable or unrecorded refuses), and the
+ * branch (a bare git ref name, `isDocsBareRef`, the one shared reader). The concurrency cap is not asked: an in-place run
+ * starts nothing and is charged to neither cap (`CoordStore.bindInPlace` leaves `dispatchedAt` null).
+ */
+export async function bindRunInPlace(
+  deps: InPlaceDeps, id: number, by: string, byUuid: string, branch: unknown,
+): Promise<InPlaceOutcome> {
+  const { coord } = deps;
+  const markers = admitMarkerRefusal(await deps.io.readdir(deps.cfg.registryDir));
+  if (markers !== null) return markers;
+  const read = coord.run(id);
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
+  if (run === null) return { ok: false, kind: 'unknown-run' };
+  if (run.kind !== 'work') {
+    return { ok: false, kind: 'bad-request', detail: 'inPlace: only a work run is bound in place' };
+  }
+  if (run.state !== 'planned') return { ok: false, kind: 'bad-transition', from: run.state, to: 'working' };
+  if (run.claimedBy !== by) return { ok: false, kind: 'refused', code: 'claimed-by-another' };
+  // A planned run already bound to another session (a wave N>=2 reclaim) would be silently re-bound, and its worker's
+  // mail re-issued to the coordinator: refused instead.
+  if (run.sessionId !== null && run.sessionId !== by) {
+    return { ok: false, kind: 'bad-request', detail: 'inPlace: this run is already bound to another session' };
+  }
+  const who = await deps.attribute(by, byUuid);
+  if (!who.ok) return { ok: false, kind: 'attribution', error: who.error, detail: who.detail };
+  // The claimant's project, MEASURED through `fieldMeasured` (never `SessionRecord.project`, whose `project ?? id` default
+  // answers as if it were a measurement). Unreadable is transient; an unrecorded project proves nothing and fails shut.
+  const project = await fieldMeasured(deps.io, deps.cfg.registryDir, by, 'project');
+  if (!project.ok && project.reason === 'unreadable') return { ok: false, kind: 'registry-unmeasurable' };
+  if (!project.ok || project.content === '') {
+    return { ok: false, kind: 'refused', code: 'project-mismatch' };
+  }
+  if (project.content !== run.project) return { ok: false, kind: 'refused', code: 'project-mismatch', by: project.content };
+  if (typeof branch !== 'string' || !isDocsBareRef(branch)) {
+    return { ok: false, kind: 'bad-request', detail: 'branch: must be the sibling worktree\'s bare git branch name' };
+  }
+  const adv = coord.bindInPlace(id, by, branch);
+  if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
+  return { ok: true, id, sessionId: by, branch };
 }
 
 /** The bound on one `skill-ensure` call: two installers over one home, no network. */

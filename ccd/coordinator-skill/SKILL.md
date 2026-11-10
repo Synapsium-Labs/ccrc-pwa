@@ -169,7 +169,7 @@ field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
 `refused` (`paused`, `mail-disabled`, `cap-concurrency`,
 `ambiguous-dispatch`, `worker-busy`, `hookstate-unmeasurable`,
 `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
-`workspace-spent`, `spent-unmeasured`, `intent-held`); those same
+`workspace-spent`, `spent-unmeasured`, `intent-held`, `self-dispatch`); those same
 three routes put `unknown-run`, `bad-transition` and the re-measurement
 family (`stale-tip`, `pr-regressed`, `no-handoff-commit`) on `error` instead;
 `POST /api/mail` puts every one of its own refusals on `error`; and `POST /api/runs/:id/advance` puts **every**
@@ -186,8 +186,13 @@ response said. The refusals you will actually meet are
 `spent-unmeasured`, `hold-oversize`, `hold-invalid`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,
 `pr-regressed`, `no-handoff-commit`, `unknown-run`, `registry-unmeasurable`,
-`unknown-item`, `item-terminal`, `intent-held`. Their meanings are in
+`unknown-item`, `item-terminal`, `intent-held`, `self-dispatch`. Their meanings are in
 `references/wave-lifecycle.md`.
+
+`self-dispatch` is a plain dispatch of a run onto
+the session that claims it, which is you: it is refused before anything is
+composed, and you take such a wave in place instead, with the same route and
+`inPlace: true`, `by`, `byUuid` and the sibling worktree's `branch`.
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
 `/:id/advance`, `/:id/items`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a

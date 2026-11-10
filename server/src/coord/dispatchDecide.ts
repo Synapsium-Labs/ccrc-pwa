@@ -96,6 +96,11 @@ export function capRefusalOf(
   return admitFreedSlot !== undefined && admitFreedSlot() === true ? null : freed;
 }
 
+/** `self-dispatch`'s words: the other door, with the fields it takes (D-6096). */
+export const SELF_DISPATCH_DETAIL =
+  'a run bound to its own claimant is not dispatched onto its coordinator: send this route with inPlace: true, by, byUuid ' +
+  'and the sibling worktree\'s branch to take the wave in place';
+
 /** The run row a dispatch decides on, once it is known to exist. */
 export type DispatchRun = RunRow;
 
@@ -218,6 +223,12 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   // The stored SESSION ID, re-checked for the hold's reason (spec §2.3): every id-taking call after this takes this
   // column. It runs after the body checks and before the pause listing, so a refused id costs no read.
   if (run.sessionId !== null && !isRegistryId(run.sessionId)) return refused({ ok: false, kind: 'bad-session' });
+  // D-6096: a run bound to the session that CLAIMS it would be dispatched onto its own coordinator: `ensure`, the hold and
+  // the `/clear` would all name the coordinator's workspace. Refused here, before the pause listing and any fleet act, with
+  // the other door in words; the in-place bind (`bindRunInPlace`) is the way to take such a wave.
+  if (run.sessionId !== null && run.sessionId === run.claimedBy) {
+    return refused({ ok: false, kind: 'refused', code: 'self-dispatch', detail: SELF_DISPATCH_DETAIL });
+  }
   // D-8083, D-8085: another programme's run in this project holds a key this dispatch names. The run's own programme
   // never blocks itself (wave 2 may name what wave 1 holds). The thunk is read only for a non-empty list.
   if (intentKeys.length > 0) {

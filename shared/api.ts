@@ -6551,6 +6551,11 @@ export function routeForBrowserCap(r: RouteFields | null, browserOk: boolean): {
  * account", because an unreadable marker or ledger is not a spent one. A
  * workspace with no marker is refused only when the registry cannot be listed.
  *
+ * `self-dispatch` (D-6096) — a plain `POST /api/runs/:id/dispatch` of a run whose bound session IS its claimant: it
+ * would `ensure`, hold and `/clear` the coordinator's own workspace. Refused before any read or fleet act, with a
+ * `detail` naming the other door: the same route with `inPlace: true`, `by`, `byUuid` and the sibling worktree's
+ * `branch`, which binds the run to its claimant with no fleet act at all.
+ *
  * `status-unmeasurable` and `worker-starting` are the dispatch resume arm's
  * live gate (D-5238): the `/clear` is typed only when the fail-closed turn
  * verdict (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`.
@@ -6571,7 +6576,8 @@ export type RunRefuseCode =
   | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
   | 'cap-review-rounds'   // D-6795: a fourth review run for one work run
   | 'ejection-not-merging'   // D-7619: an ejection body on a run not at merging
-  | 'intent-held';   // D-8085: another programme's run holds a landing intent this dispatch names
+  | 'intent-held'   // D-8085: another programme's run holds a landing intent this dispatch names
+  | 'self-dispatch';   // D-6096: a plain dispatch of a run onto the session that claims it; bind it in place instead
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6582,7 +6588,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
-  'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
+  'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true, 'self-dispatch': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 

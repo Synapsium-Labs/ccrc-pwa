@@ -54,7 +54,7 @@ import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, reEntersWorking, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, noteCapRefusal, type WorkerReading } from './dispatch.js';
+import { bindRunInPlace, dispatchRun, installAbsentSkill, type DispatchOutcome, type InPlaceOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, noteCapRefusal, type WorkerReading } from './dispatch.js';
 import { capRefusalOf } from './dispatchDecide.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -303,6 +303,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // type is `number` and must stay so: `by` is the project's NAME.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
         ...(r.by === undefined ? {} : { by: r.by }),
+        // D-6096: `self-dispatch`'s words, by presence, like `by` and `key` (an adapter may not narrow what it received).
+        ...(r.detail === undefined ? {} : { detail: r.detail }),
         ...(r.key === undefined ? {} : { key: r.key }), ...(r.holder === undefined ? {} : { holder: r.holder }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
@@ -337,6 +339,17 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
     }
   }
+}
+
+/**
+ * `bindRunInPlace`'s result -> HTTP status + body (D-6096). A bind answers `200 {ok, id, sessionId, inPlace, branch}`; the
+ * caller's attribution refusal goes out through `refuseRoute` with the words `requireAttribution` uses; every other refusal
+ * is a member of `DispatchOutcome`'s failures and is answered by `sendDispatchOutcome`, so the two doors share one wire.
+ */
+function sendInPlaceOutcome(reply: FastifyReply, r: InPlaceOutcome) {
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, sessionId: r.sessionId, inPlace: true, branch: r.branch });
+  if (r.kind === 'attribution') return refuseRoute(reply, r.error, { detail: r.detail });
+  return sendDispatchOutcome(reply, r);
 }
 
 /** `closeRun`'s typed result union -> HTTP status + body. Same discipline as
@@ -1669,7 +1682,22 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown;
+      inPlace?: unknown; by?: unknown; byUuid?: unknown; branch?: unknown };
+    // D-6096: the IN-PLACE bind. A coordinator takes its own refused wave as the run's worker; no process starts and no
+    // fleet act is composed, so none of the dispatch's deps below are built for it, and the skill self-install (which
+    // belongs to a bound WORKER) never runs for it. Any `inPlace` value but `true` is malformed.
+    if (body.inPlace !== undefined) {
+      if (body.inPlace !== true) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'inPlace: must be true when given' });
+      if (typeof body.by !== 'string' || body.by === '' || typeof body.byUuid !== 'string' || body.byUuid === '') {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'inPlace: by and byUuid (the claimant) are required' });
+      }
+      const by = body.by;
+      const byUuid = body.byUuid;
+      const inPlaceDeps = { coord, io: deps.io, cfg: deps.cfg,
+        attribute: (who: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, who, uuid, 'claimedByUuid') };
+      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, body.branch)));
+    }
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
       // The one place a wrapper becomes a directory, called from L4 where the

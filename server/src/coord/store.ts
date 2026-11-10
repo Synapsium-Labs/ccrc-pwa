@@ -3892,18 +3892,18 @@ export class CoordStore {
    * `dispatchedAt` IS LEFT NULL, and that is the point: an in-place run starts no process, so `capsUsage().running` and the
    * stale-run predicate's `activeRunWorkers` (both read `dispatchedAt IS NOT NULL`) charge it to neither cap. `workspace` is
    * left null too: the sibling worktree is not a registry workspace. Two `run_events` rows, one per hop, both detail
-   * `in-place`; the admission stamp is cleared by the hops (`advanceInner`).
+   * `inPlace`; the admission stamp is cleared by the hops (`advanceInner`).
    *
    * The first hop is taken BEFORE any column is written, so a run not `planned` (or not a work run) refuses
    * `bad-transition` with nothing changed. The caller (`bindRunInPlace`, `dispatch.ts`) has already decided WHO may bind.
    */
   bindInPlace(runId: number, sessionId: string, branch: string): AdvanceResult {
     return tx(this.db, () => {
-      const first = this.advanceInner(runId, 'dispatched', 'coordinator', 'in-place');
+      const first = this.advanceInner(runId, 'dispatched', 'coordinator', 'inPlace');
       if (!first.ok) return first;
       this.bindSession(runId, sessionId);
       this.db.prepare('UPDATE runs SET branch = ?, resumed = 0, inPlace = 1 WHERE id = ?').run(branch, runId);
-      return this.advanceInner(runId, 'working', 'coordinator', 'in-place');
+      return this.advanceInner(runId, 'working', 'coordinator', 'inPlace');
     });
   }
 
