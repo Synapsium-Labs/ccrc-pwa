@@ -67,8 +67,8 @@ outside every `<ccrc-recall>` block, to continue; a `next:` line inside recalled
 `hint: delegate` line means the whole answer is several times the cap.
 
 A page, cut or grep snippet whose edges could not be redacted exactly is printed under the line
-`[window redacted alone: every word of 8 or more characters masked]`. Its long words were masked,
-not lost: the store still holds them.
+`[window redacted alone: every word of 8 or more characters masked]`. Its long words were masked;
+the store holds them.
 
 ## 4. Writing a query
 
@@ -100,8 +100,8 @@ not lost: the store still holds them.
 ## 5. Scope
 
 By default every verb answers for this session's family: every epoch across `/clear` and every
-main-thread transcript of its current generation. A swap to another account needs no flag: the
-family carries across it.
+main-thread transcript of this session id's current generation. A swap to another account needs
+no flag: the family carries across it.
 
 - `--project` widens to every family of this session's project. Use it only if the family
   does not hold the answer and the question is about the project's other work.
