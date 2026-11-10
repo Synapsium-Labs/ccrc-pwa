@@ -157,7 +157,7 @@ their own pieces.
 | Column | Ships here | Why |
 |---|---|---|
 | long-lived | `longLived: boolean` | Table 3.3.9a gives every value: `overlord` and `coordinator` yes, the rest no |
-| today's view (not in the spec) | `sessionRole: SessionRole` | `SessionRole` becomes a column read with one definition (D-TBD-session-role-column) |
+| today's view | `sessionRole: SessionRole` | `SessionRole` becomes a column read with one definition (§3.3.9) |
 | launch profile | typed `null` | No profile exists; W1a's launch-profile piece composes them (§3.6, H1) |
 | card renderer | typed `null` | Today's role card is bash in the hook; the card door piece (§3.3.3) brings renderers |
 | compaction instructions | typed `null` | No text exists (a bare `/compact`); waits on history W3-1 (§14, C51) |
@@ -281,8 +281,8 @@ export function roleOf(f: RoleFacts): RoleReading;
 export function sessionRoleOfReading(r: RoleReading): SessionRole;
 ```
 
-The decision, first match wins (Table 3.3.9a, plus §11.1's typed undecided reading for the cases the table does not
-name, D-TBD-role-undecided):
+The decision, first match wins (Table 3.3.9a, plus §3.3.9's typed undecided answer for the cases the table does not
+name):
 1. `designation` is `pending` or `live`: `overlord`.
 2. `auditBody`: `auditor`. 3. `replayBody`: `replay`.
 4. `child.kind` is `unreadable`: undecided `worker-or-reviewer`.
@@ -466,16 +466,6 @@ ternary body: "goes through roleOf" and "the old two-word derivation" go red.
 
 The programme mints the real numbers when its run opens; until then each entry is named `D-TBD-<slug>`.
 
-- **D-TBD-role-undecided.** §11.1 asks for "a typed undecided reading, never a guess" but names neither its shape nor
-  its cases, and Table 3.3.9a names no answer for an unreadable child marker, a child whose run kind is `unknown` or
-  unread, or a non-child whose claim or intent read is unmeasured. Today `SessionRole` calls the first two a child.
-  `roleOf` answers one of two named ambiguities (`worker-or-reviewer`, `coordinator-or-plain`), never a null (the
-  rule against an overloaded null at a seam). Each ambiguity's members share one view value, so `SessionRole` stays
-  total.
-- **D-TBD-session-role-column.** `FLEET_ROLES` gains a `sessionRole` column, not in the spec's list, so the view is a
-  column read and has one definition. Its type is an `import type` of the sibling `shared/api.ts`; the spec says an
-  L0 table "imports nothing", and the tree's L0 rule (`server/test/rings/shared-imports.test.ts`) allows `./`
-  siblings only, which this is.
 - **D-TBD-role-columns-deferred.** Four of the spec's five columns ship typed `null`; Task 2's column table says which
   piece fills each and why.
 - **D-TBD-sessionroleof-moves.** `sessionRoleOf` moves from `shared/api.ts` (L0) to `server/src/roleOf.ts` (L1, C3),
@@ -489,6 +479,11 @@ The programme mints the real numbers when its run opens; until then each entry i
   reason; they are not views of `roleOf`.
 - **D-TBD-hook-role-card.** `ccd/session-hook.sh#_hook_role_card` keeps reading `.child` existence itself. It runs in
   another process and language and cannot call `roleOf`; the card door piece replaces it.
+
+**Settled by the spec's later edition, so no longer deviations:** the undecided answer and its two
+cases, and the `SessionRole` view as a column of `FLEET_ROLES` typed by the kernel's own `SessionRole` (§3.3.9). The
+names `worker-or-reviewer` and `coordinator-or-plain` are this plan's. `roleOf` never answers a null, which is the
+tree's rule against an overloaded null at a seam.
 
 ## Where things stand
 

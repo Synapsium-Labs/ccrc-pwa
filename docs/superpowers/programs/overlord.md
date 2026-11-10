@@ -10,7 +10,8 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | # | scope | PRs | state |
 |---|---|---|---|
 | spec | The hardened edition of the spec, on top of rev 8 | #2513 | merged |
-| spec | The model check's fixes: 24 unsettled readings and one design fault | #2529 | in review |
+| spec | The model check's fixes: 24 unsettled readings and one design fault | #2529 | in the merge queue |
+| spec | The builders' gaps closed, and the ratchet's scope put to the operator | #2533 | in review |
 | W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | in review |
 | W1a, foundations | The skill-size ratchet | #2530 (draft); plan `w1a-skill-ratchet.md` | built. Waits for the operator's ruling on its scope |
@@ -29,9 +30,15 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 
 ## Decisions & deviations
 
-- **The spec stays a draft until the operator rules.** Fifteen rulings wait on the operator. They are listed in the
+- **The spec stays a draft until the operator rules.** Sixteen rulings wait on the operator. They are listed in the
   spec under "Waiting on you" and tracked in #2514. The spec is written as if each proposed answer holds. W0 needs
   none of them.
+- **A plan's gap is closed in the spec, not recorded as a deviation.** Each plan was reviewed by reading the spec as
+  its builder would. Where the spec left a choice open, #2533 settles it in the text, and the plan's placeholder
+  entry was removed. That took the plans from 47 placeholder deviations to 31. What remains is a decision of the
+  plan's own, or a real departure from the spec.
+- **W0 does not write a second model.** The model that checked the spec is the first model. W0's Task 7 re-runs it
+  on the merged edition, and the simulator piece moves it under the test tree.
 - **W1a is planned in two parts.** The foundations need no W0 measurement and no prerequisite spec, and each is
   useful to coordinators today. So they are planned and built first, one pull request each. The generation machine
   waits for W0, because its renewal act, its anchor slot and its preconditions rest on what W0 measures.
@@ -39,7 +46,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   `main` over 14 days, the coordinator skill's `SKILL.md` grew in 17 of 18 commits, and its largest reference file in
   17 of 17. Once the ratchet merges, a pull request that grows a skill file fails in the merge queue, unless it adds a
   pinned clause or puts the new text in a new reference file. So #2530 is a draft until the operator rules on its
-  scope: every skill file, or `SKILL.md` only. The other foundations need no ruling.
+  scope: every skill file, or `SKILL.md` only. It is ruling 16. The other foundations need no ruling.
 - **No D-numbers are defined yet.** The spec defines none, and the plans name each recorded decision
   `D-TBD-<slug>`. The programme mints real numbers through the ledger door when its run opens, and replaces each
   slug in the same act. Until then the plans cannot merge: `server/test/dtbd.test.ts` fails on a concrete slug.
@@ -88,7 +95,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   protocol first (§3.3.9). So they start when the programme's run is open, its claims are placed, and its deviation
   block is minted.
 - **What must not start.** W1 and later. They wait for D-8126 and for the operator's rulings.
-- **What the operator owes.** The fifteen rulings (#2514), the ruling on the ratchet's scope (#2530), and W0's setup
+- **What the operator owes.** The sixteen rulings (#2514), of which the ratchet's scope gates #2530, and W0's setup
   item for Tasks 8 to 11: scratch accounts, a scratch project, a subject session and the consent list, as the W0 plan
   sets out.
 - **What to report.** Each piece ends with its pull request merged through the queue, its plan's "Deviations found"

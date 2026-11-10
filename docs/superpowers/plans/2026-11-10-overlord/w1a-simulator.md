@@ -34,7 +34,7 @@ chance; the simulator's skeleton; mutation floors for new deciders").
 Not here: the ports, their rules, the fake clock, scheduler and seeded chance, the system adapters, the L5 wiring and
 the ambient-call scan (the time-ports piece, merged first), `renewalDue` and its exhaustive test (the renewal piece),
 the invariant monitor and `overlord_sequence` (W1), the real-lane simulator with SQLite and a fake agent link (W1 and
-later, see D-TBD-sim-pure-deciders-first).
+later, as Table 11.7b's simulator row says).
 
 ## What exists today
 
@@ -770,23 +770,14 @@ describe.skipIf(PY === null)('the Overlord model (§11.7, the first model)', () 
 
 The programme mints real numbers when its run opens; until then each entry is named by its slug.
 
-- **D-TBD-sim-pure-deciders-first.** Table 11.7b's simulator runs "the real lanes and SQLite on a fake clock and a fake
-  agent link", with "crash, restore and gap injection". The skeleton drives pure deciders through a lane double in
-  test code, and injects crashes, gaps (a crash's downtime) and wall skew, but no restore: no decider that reads a
-  restore exists yet. The time-ports piece hands the ports on `Deps.time`, but no lane reads them yet (the stall lane
-  reads `Date.now()` inside `FleetWatcher`), so a real-lane simulator needs a lane that takes its time from the ports
-  first. The skeleton's API (`Scenario`, `SimWorld`, `SequenceLine`) is the one the real-lane simulator extends.
 - **D-TBD-sim-line-is-sequence-line.** The simulator records lines in `overlord_sequence`'s shape (§10.4), not a
   free-form event log, so a predicate written for the simulator runs unchanged in the W1 monitor.
-- **D-TBD-model-stays-python.** §11.7 recommends "a TypeScript-bridged model checker". The model is kept in Python's
+- **D-TBD-model-stays-python.** §11.7 recommends a dependency-free explorer and names no language. The model is kept in Python's
   standard library, run by `python3 -I -B` from a vitest test, as the tree already does for other Python. No toolchain
   or dependency is added. Porting it to TypeScript would rewrite about 1 900 lines for no new check.
 - **D-TBD-mutation-runner-in-tree.** §11.7 recommends "a mutation runner". The plan writes a small TypeScript runner
   with `mutation-run.py`'s contract (textual mutants, `old` exactly once, a baseline first) instead of adding Stryker.
   Its mutants are listed by hand per decider, so the score is over a chosen set, not over every operator.
-- **D-TBD-no-property-library-yet.** §11.7 also recommends "a property-test library". This piece adds none: the
-  skeleton's seeded scenarios need only the fake's seeded `Entropy`, and the stateful property tests arrive with each
-  machine's wave (Table 11.7b), which decides then whether `fast-check` earns its dependency.
 - **D-TBD-mutation-floors-every-run.** Table 11.7b says "Daily". The floor test costs a few seconds (Task 5 Step 3
   measures it, and the PR records the figure), so it runs wherever the suite selects it (a pull request whose change
   reaches it, the merge queue and the daily run). A daily-only job would need a `.github/` change. When a later set
@@ -794,6 +785,11 @@ The programme mints real numbers when its run opens; until then each entry is na
 - **D-TBD-one-mulberry32.** The nine test copies of `mulberry32` move onto the one the time-ports piece exports from
   `server/test/fakeTime.ts` (the same slug there), so the simulator's chance is not a tenth. The move changes imports
   only.
+
+**Settled by the spec's later edition, so no longer deviations:** the skeleton drives the new
+deciders on the fake ports, with crash and gap injection; the real lanes join once the watcher's runner reads
+`Clock`, and restore injection joins with the first decider that reads a restore (Table 11.7b). The property-test
+library is chosen with the first machine's wave (§11.7).
 
 ## Where things stand
 

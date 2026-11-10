@@ -9,8 +9,9 @@
 > worker run (W0a). Tasks 8 to 11 wait for the operator's setup item (W0b). Task 12 closes both.
 
 **Goal:** Measure, on the installed Claude Code builds and on the fleet, every platform fact and every starting number
-the Overlord design rests on, so that W1a and W1 build on measured behaviour. Write the first model of holds,
-readiness, generations and restarts (§11.7, Table 11.7b). Take or schedule the replay quiz's baseline.
+the Overlord design rests on, so that W1a and W1 build on measured behaviour. Re-run the first model of holds,
+readiness, generations and restarts on the merged edition (§11.7, Table 11.7b). Take or schedule the replay quiz's
+baseline.
 
 **Why:** The design leans on many facts about Claude Code and the fleet that nobody has measured on today's builds: how
 much hook text reaches the context, whether a compaction changes the session's id, what a `/clear` or a fresh start
@@ -30,8 +31,9 @@ the real binary against a mock with ccrc's own hook installed.
 - **A subject**: one scratch session on scratch accounts, driven by mail, for what only a real model or a real swap
   can show (Task 9). The operator supplies the setup, the account facts and a few console acts (Tasks 9 to 11).
 
-**Tech Stack:** bash and jq (`rig.sh`), Node with no new dependency (stubs, the model's explorer), vitest for the
-tests, `python3 -I` importing `deploy/measure-working-state.py`'s readers, `ccrc-api` reads, `ccrc history` read verbs.
+**Tech Stack:** bash and jq (`rig.sh`), Node with no new dependency (stubs), `python3` for the model (standard library
+only), vitest for the tests, `python3 -I` importing `deploy/measure-working-state.py`'s readers, `ccrc-api` reads,
+`ccrc history` read verbs.
 
 **Spec:** `docs/superpowers/specs/2026-11-09-overlord-design.md`, hardened edition: §14 and Table 14's W0 row; §1.2
 (the platform rows); §3.2 C2; §3.3 (Claude Code facts); §3.3.3 C38; §3.3.4 C39; §3.3.7 C44 and H14; §3.3.9 C52;
@@ -80,8 +82,8 @@ tests, `python3 -I` importing `deploy/measure-working-state.py`'s readers, `ccrc
 - **One commit per task**, on the workspace's own branch. Never rebase, update-branch or force-push.
 - **Touch only the files a task names.** Nothing that runs changes: no change under `server/src`, `agent/src`,
   `pwa/src`, `ui/`, `shared/`, `ccd/` or `deploy/`. Commits are the results note, the spec's as-measured lines and
-  test-only files (the rig's extension, its stubs and scenarios, and the model). A test-only commit still changes the
-  release tarball (`git archive`), so a merge cuts a prerelease (D-TBD-w0-test-files-ship). Nothing in it runs.
+  test-only files (the rig's extension, its stubs and scenarios). A test-only commit still changes the
+  release tarball (`git archive`), so a merge cuts a prerelease, as the spec's W0 row says (§14). Nothing in it runs.
 - **Suites run from inside the package, in the foreground,** with a timeout of at least 600,000 ms, one file at a time:
   `cd server && ./node_modules/.bin/vitest run test/<file>`. Never bare `npx vitest`.
 - **Cite code by symbol** (`file#symbol`) or by anchor (`file#@name`), never by line number.
@@ -120,9 +122,9 @@ tests, `python3 -I` importing `deploy/measure-working-state.py`'s readers, `ccrc
 3. **A rig result read as a model fact.** The rig shows what Claude Code sent, never whether a real model heeded it;
    that comes only from the subject (W0-20 to W0-22). "Inconclusive" is an outcome too, and it selects the
    conservative branch. Each row of the results note says which kind it is (Tasks 4 to 6, Step "Record").
-4. **A model that proves nothing.** An explorer that stops early, or a transition that never fires, passes every
-   invariant vacuously. Task 7 pins `exhaustive`, pins `labelsFired` equal to `TRANSITIONS`' keys, and makes each
-   mutant break its own invariant. A violation is a finding, never cured by weakening an invariant.
+4. **A model that proves nothing.** An exploration that stops at its bound, or a planted mutation that no invariant
+   catches, passes vacuously. Task 7 records that every scenario ended under the bound, and that each of the 12
+   mutations broke its own invariant. A violation is a finding, never cured by weakening an invariant.
 5. **A permission bypass leaking into the delegation corpus.** The bypass exception is for `scenarios-overlord/`
    only. Task 2 pins it twice: a bypass in a `scenarios/` file is refused, and no committed corpus file names one.
 
@@ -545,128 +547,38 @@ git commit -m "test(rig): W0 scenarios for the launch profile, the door and its 
 
 ### Task 7: The first model of holds, readiness, generations and restarts (W0-27)
 
+The model exists. It was written while the spec was reviewed, before any code, and it is in the tree as research:
+`docs/superpowers/research/2026-11-10-overlord-model-check/` (`model.py`, `check.py` and `REPORT.md`; Python standard
+library only). It is an explicit-state breadth-first search over holds, readiness, generations, grants and restore,
+with 15 scenarios, 24 switches for readings the text had left open, and 14 planted mutations, 12 of which an invariant
+must catch. This task writes no second model. It re-runs that one against the merged edition and records W0-27.
+
 **Files:**
-- Create: `server/test/model/explore.ts` (a breadth-first explicit-state explorer, no dependency)
-- Create: `server/test/model/overlordModel.ts` (the abstraction)
-- Test: `server/test/model/overlord-composition.model.test.ts`
+- Read: `docs/superpowers/research/2026-11-10-overlord-model-check/` (this task changes nothing in it)
+- Modify: the results note (row W0-27)
 
-Test-only, outside the ring census. In W1 the model imports the real `overlordReadiness` in place of its own
-`readinessOf`, so the rule has one definition once it exists. The model follows Table 3.3.11a (states), Table 6.4a
-(the readiness words it models), Table 6.7c (retention) and Table 11.7a (the invariants).
+**Interfaces:** Produces W0-27. The simulator piece (`w1a-simulator.md`, its model task) moves the two files under
+`server/test/model/overlord/` and runs the fast scenarios on every CI run. This task moves nothing.
 
-`explore` is breadth-first and does not stop at a violation: it visits every reachable state up to `maxStates`, and
-reports the first violation found in breadth-first order, so its trace is a shortest one. The trace starts with the
-initial state under the label `init`. `exhaustive` is true when the queue emptied within `maxStates`. `labelsFired`
-holds transition labels only, never `init`.
-
-**Interfaces:**
-
-```ts
-// explore.ts
-export interface Model<S> { init: readonly S[]; next(s: S): ReadonlyArray<readonly [string, S]>; key(s: S): string }
-export interface Invariant<S> { name: string; holds(s: S): boolean }
-export interface Exploration<S> {
-  states: number; exhaustive: boolean; labelsFired: ReadonlySet<string>;
-  violation: { invariant: string; trace: ReadonlyArray<{ label: string; state: S }> } | null;
-}
-export function explore<S>(m: Model<S>, inv: readonly Invariant<S>[], maxStates: number): Exploration<S>;
-
-// overlordModel.ts
-export type GenState = 'active' | 'draining' | 'checkpointed' | 'clearing' | 'carded' | 'probing' | 'degraded';
-export type Word = 'unmeasured' | 'dead' | 'restarting' | 'renewing' | 'degraded' | 'ready';
-export type Mutation = 'none' | 'no-boot-pass' | 'reach-outside-outbox-tx' | 'no-key-check'
-  | 'card-from-stale-snapshot' | 'hold-while-not-ready';
-export interface ModelOptions { holds: 1 | 2; maxGen: number; mutation: Mutation }
-export function overlordModel(o: ModelOptions): Model<ModelState>;
-export function readinessOf(s: ModelState): Word;   // Table 6.4a's first-match order, the subset above
-export const TRANSITIONS: Readonly<Record<string, unknown>>;  // keyed by label; LABELS = Object.keys(TRANSITIONS)
-export const INVARIANTS: readonly Invariant<ModelState>[];   // names exactly 'I1', 'I2', 'I5', 'I8', 'C23'
-export const MUTANTS: Readonly<Record<Exclude<Mutation, 'none'>, string>>;  // each mutation, and the invariant it breaks
-```
-
-The state: server `up|down` and swept-since-boot; session `live|down` and restarts in the hour (0 to 3); the
-generation (n up to `maxGen`, its state, due); the card rendered at the last start, with whether it listed every
-unsettled message and held row at that instant; up to two holds, each `none|held|reached|answered` with overdue,
-keep-past-bound (chosen at take), reach stamps, outbox `none|sent`, missed-sweep and taken-while-not-ready flags; one
-unsettled message or none; the last write attempt with its key and verdict.
-
-| Label | Enabled when | Effect |
-|---|---|---|
-| `message`, `settle` | none unsettled; or one, with the generation `active` | one unsettled; or none |
-| `take-hold` | a hold is `none`, server up, `readinessOf` is `ready` | `held`; two successors for keep-past-bound |
-| `answer` | `held`, not overdue, session live, generation `active` | `answered` |
-| `deadline` | `held`, not overdue | overdue (time passes, server up or down) |
-| `sweep` | server up | swept; every overdue `held` row reached (one stamp, outbox sent, one step); retention by Table 6.7c, on the word `readinessOf` gives as the sweep starts: under `renewing` or `restarting`, held rows not kept past the bound reached; under `unmeasured`, `dead` or `degraded`, every held row reached |
-| `trigger`, `drain`, `drain-timeout` | `active`; `active` and due; `draining` | due; `draining`; `active`, not due |
-| `checkpoint`, `hard-skip` | `draining` | `checkpointed`; `clearing` |
-| `clear-ok` | `clearing`, n < `maxGen` | n + 1 at `carded`, the card rendered from the rows now |
-| `clear-fail-before`, `clear-fail-after` | `checkpointed` or `clearing`; `clearing` | `active`; `degraded` |
-| `card-read`, `card-timeout`, `probe-pass`, `probe-fail` | `carded`; `carded`; `probing`; `probing` | `probing`; `degraded`; `active`; `degraded` |
-| `renew-now` | `degraded` | `draining` |
-| `crash`, `restart`, `hour-passes` | live; down with restarts < 3 and n < `maxGen`; restarts > 0 | down; live, restarts + 1, n + 1 at `carded` with a fresh card; restarts 0 |
-| `server-down`, `server-boot` | up; down | down, not swept; up |
-| `stale-write` | n ≥ 1 | a write with key n − 1, accepted only if its key is n |
-
-`readinessOf`, first match: not swept, `unmeasured`; session down with restarts at most 2, `restarting`; generation
-in `draining`, `checkpointed`, `clearing`, `carded` or `probing`, `renewing`; session down, `dead`; generation
-`degraded`, `degraded`; otherwise `ready`. This is Table 6.4a's order for these words: `dead` holds only when neither
-`restarting` nor `renewing` matches.
-
-Invariants: **I1** no hold has missed a sweep while `held` and overdue. **I2** every hold has at most one reach stamp,
-and a reached row has its outbox row. **I5** (its generation part; terms and act keys are W1's model) an accepted
-write carries the current n. **I8** the card, when rendered, listed every unsettled message and held row. **C23** no
-hold was taken while not `ready`.
-
-- [ ] **Step 1: The explorer's failing test.**
-
-```ts
-it('explore finds the seeded violation in a toy model and returns its shortest trace', () => {
-  const toy: Model<number> = { init: [0], next: (s) => (s < 3 ? [['inc', s + 1]] : []), key: String };
-  const r = explore(toy, [{ name: 'below-3', holds: (s) => s < 3 }], 100);
-  expect(r.violation?.invariant).toBe('below-3');
-  expect(r.violation?.trace.map((t) => t.label)).toEqual(['init', 'inc', 'inc', 'inc']);
-  expect(r.exhaustive).toBe(true);
-});
-```
-
-  Run `cd server && ./node_modules/.bin/vitest run test/model/overlord-composition.model.test.ts`. Expect a failure:
-  the module does not exist. Implement `explore` (a queue, a seen map keyed by `key`, a parent map for the trace).
-  Run, expect a pass. No commit yet: the task commits once, at Step 6.
-- [ ] **Step 2: The model's failing tests**, in the same file.
-
-```ts
-let full: Exploration<ModelState>;
-beforeAll(() => { full = explore(overlordModel({ holds: 2, maxGen: 3, mutation: 'none' }), INVARIANTS, 500_000); },
-  120_000);
-it('the model is exhaustive under its cap and fires every transition', () => {
-  expect(full.exhaustive).toBe(true);
-  expect([...full.labelsFired].sort()).toEqual(Object.keys(TRANSITIONS).sort());
-});
-it('I1, I2, I5, I8 and C23 hold in every reachable state', () => {
-  expect(full.violation).toBeNull();
-});
-it.each(Object.entries(MUTANTS))('the mutant %s breaks %s', (mutation, invariant) => {
-  const r = explore(overlordModel({ holds: 2, maxGen: 3, mutation: mutation as Mutation }), INVARIANTS, 500_000);
-  expect(r.violation?.invariant).toBe(invariant);
-}, 120_000);
-```
-
-  with `MUTANTS` mapping `no-boot-pass` to I1 (the first sweep after boot skips rows that went overdue while down),
-  `reach-outside-outbox-tx` to I2 (the stamp and the outbox row are two labels), `no-key-check` to I5,
-  `card-from-stale-snapshot` to I8 (the card comes from the rows at `checkpoint`), and `hold-while-not-ready` to C23
-  (`take-hold` skips the readiness test).
-- [ ] **Step 3: Run.** Expect failures: the module does not exist.
-- [ ] **Step 4: Implement** `overlordModel` from the table above.
-- [ ] **Step 5: Run.** Expect green. If the unmutated model shows a violation, stop: it is a finding against the spec.
-  Mail the coordinator the trace. Never weaken an invariant to pass. The coordinator rules whether the spec or the
-  abstraction moves, and the ruling is a deviation entry. If the exploration is not exhaustive under 500,000 states,
-  coarsen the state (fewer flags, never fewer invariants or labels), never raise the cap, and say what was coarsened
-  in the results note.
-- [ ] **Step 6: Record** in the results note: the state count, the labels, the deepest trace, and each mutant's
-  counterexample length. Commit.
+- [ ] **Step 1: The switches against the merged edition.** `python3 check.py --list` prints the 24 switches and their
+  defaults. For each one, find the sentence in the merged spec that settles it: `REPORT.md`'s table names the sentence
+  proposed, and the spec's follow-up wrote each in. Record the section, and whether the default equals the spec's
+  reading. A default that disagrees is a finding, and Step 2 runs it both ways. Never change a default to make a run
+  pass.
+- [ ] **Step 2: Run,** from the model's directory: `python3 check.py --matrix` (about 4.5 minutes) and
+  `python3 check.py --mutations` (about 3.5 minutes). Expected: at the defaults every scenario holds every invariant
+  and ends under the bound of 3,000,000 states. The 12 mutations an invariant should catch are caught, and the 2
+  marked "none expected" are not.
+- [ ] **Step 3: A violation at the defaults is a finding against the spec.** Stop, and mail the coordinator the trace
+  that `python3 check.py SCENARIO` prints. Never weaken an invariant to pass. The coordinator rules whether the spec
+  or the abstraction moves, and the ruling is a deviation entry. If a scenario hits the bound, cut the scenario down
+  (fewer questions or ticks, never fewer invariants), and say what was cut in the results note.
+- [ ] **Step 4: Record** in the results note: each scenario's state count and the invariants it checked; the mutation
+  table; each switch's section and verdict from Step 1; and what the model leaves out (the last section of
+  `REPORT.md`). Commit.
 
 ```bash
-git commit -m "test(overlord): the first model of holds, readiness, generations and restarts; five mutants each go red"
+git commit -m "docs(overlord): W0 Task 7, the first model re-run on the merged edition: every invariant, every planted mutation"
 ```
 
 ### Task 8: Fleet reads, under consent (W0-06, W0-09, W0-12, W0-19, W0-26)
@@ -745,7 +657,7 @@ paragraph each in §1.2, §3.3, §3.3.3, §3.3.4, §3.3.7, §3.3.11, §3.4, §3.
 - [ ] **Step 2:** The private-name check of Global Constraints, then from `server/`, each alone in the foreground:
   `test/topology-clean.test.ts`, `test/dtbd.test.ts`, `test/anchors.test.ts`, `test/citations.test.ts`,
   `test/docs-parity.test.ts`, `test/delegation-rig.test.ts`, `test/delegation-rig-w0.test.ts`,
-  `test/delegation-fixtures.test.ts` and `test/model/overlord-composition.model.test.ts`, and after
+  `test/delegation-fixtures.test.ts`, and after
   `git fetch origin main`, `test/deviation-refs.test.ts`. Expect all green.
 - [ ] **Step 3:** Commit, push and open one PR. Never merge, enqueue, rebase or update-branch it.
 
@@ -766,21 +678,18 @@ this plan lands (`dtbd.test.ts` reds on a concrete slug in any tracked file).
 - **D-TBD-w0-rig-bypass** (safety): the rig's "never a permission bypass" rule gains one exception, scenarios under
   `scenarios-overlord/`, because the launch being measured is ccd's bypass launch. The delegation corpus stays
   bypass-free, and a test holds it.
-- **D-TBD-w0-test-files-ship** (scope): "changes nothing that ships" is read as "changes nothing that runs". W0
-  commits test-only files, which ride the tarball and cut a prerelease.
 - **D-TBD-w0-listed-order-is-w1** (scope): "whether the swap honours the listed account order" cannot be measured,
   because no listed order exists. W0 characterises today's pick (W0-25), and the order is W1's (C56).
 - **D-TBD-w0-flagged-switch-emulated** (method): a flagged request cannot be caused on purpose. The rig emulates its
   documented refusal, and the fleet's history counts the real ones.
 - **D-TBD-w0-inbox-socket-docs-only** (method): the inbox socket is judged from documentation only. No undocumented
   interface is probed.
-- **D-TBD-w0-renewal-stand-ins** (method): no renewal act or probe exists before W1a, so W0-21 and W0-22 use a typed
-  `/clear`, a card file and closed-form questions as stand-ins. W1a measures the real ones.
 - **D-TBD-w0-quiz-baseline-deferred** (scope, if ruled B): §3.3.9 C52 says W0 runs the replay quiz once as the
   baseline; under B, M13's baseline is the first run of W1a's quiz lane instead.
-- **D-TBD-w0-explorer-not-library** (method): §11.7 recommends a TypeScript-bridged model checker. W0 writes a
-  dependency-free breadth-first explorer instead: a library is a dependency change, which forces a full CI run and a
-  supply-chain review, for a state space this small. W1's authority and restore model may revisit it.
+
+**Settled by the spec's later edition, so no longer deviations:** W0 changes nothing that runs,
+and its test-only files ship (§14). W0 measures a swap with a stand-in renewal, and W1a measures the real act
+(§3.4). The first model is a dependency-free explorer (§11.7).
 
 ## Where things stand
 
@@ -804,7 +713,8 @@ model-switch journal, the restart bound and the reservation's Fable arm).
 4. **Reuse wave 5's scratch accounts?** Recommended: yes, after its Task 4, never beside it.
 5. **Which lanes get a record?** Recommended: one client-side record per installed build, which covers every
    Anthropic account. Another provider's lane waits for the spec's Waiting on you ruling 6.
-6. **The model's tool.** Recommended: the dependency-free explorer here (D-TBD-w0-explorer-not-library).
+6. **The model's tool.** Settled: the spec recommends a dependency-free explorer for the first model (§11.7), and
+   that model exists as research (Task 7).
 7. **Commit W0's captures as fixtures?** Recommended: no. The results note holds the facts. W1a captures again when it
    pins a behaviour in a test.
 8. **Re-measurement on a model-class advance** (§3.3: "W0 and the probes measure it again"). Recommended: the

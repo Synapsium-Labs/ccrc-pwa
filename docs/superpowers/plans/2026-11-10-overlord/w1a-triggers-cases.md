@@ -281,7 +281,7 @@ export function casesDue(input: CasesInput): CaseDue[];
 whatever their rung or mode (live and shadow both record that the failure happened). Its time is its earliest row's
 `at`, and its evidence id is that row's `eventId` (lowest `eventId` on a tie). It is **counted** for signature
 `stall-arm:<arm>` when its run is in `programOf`, its time is `>= caseWindowFrom(now)`, and its time is `>` that
-signature's `newestCaseAt` (a case consumes its evidence: D-TBD-a-case-consumes-its-evidence). Then, per signature,
+signature's `newestCaseAt` (a case consumes its evidence, §10.5). Then, per signature,
 first match: no counted occurrence, none; counted `>= CASE_MIN_OCCURRENCES`, `count`; distinct programmes of the
 counted occurrences `>= CASE_MIN_PROGRAMMES`, `programmes`; otherwise none. Output is sorted by signature text;
 `programmes` and `evidence` ascending.
@@ -526,7 +526,7 @@ other answer leaves the run out, which can only lower what is counted); `casesDu
   `LANE_SCHEDULE has no lane named cases`.
 - [ ] **Step 3: Implement** the four changes. The `tick` line, never awaited, below `sweepUntold`'s:
   `void this.sweepCases().catch(() => { /* one bad sweep must not kill the poll */ });` with a one-line comment naming
-  the lane and its minted D-number (D-TBD-case-lane-cadence until minted).
+  the lane and Table 11.1c's row for it.
 - [ ] **Step 4: Run** `test/cases-lane.test.ts`, `test/lane-schedule.test.ts`,
   `test/lane-beats-characterization.test.ts`, `test/consolidation-census.test.ts`,
   `test/rings/watcher-store-port.test.ts`, `test/rings/totality.test.ts`,
@@ -552,22 +552,15 @@ The programme mints real numbers when its run opens (`POST /api/ledger/deviation
   import L1. `stall.ts` re-exports; `stall-vocabulary.test.ts`'s allowed imports gain `shared/stall-watch.js`.
 - **D-TBD-trigger-kind-stall-arm.** The kind word is `stall-arm`. The quoted `'stall'` is the sent detail head and has
   one home, `stall.ts` (`update-stall.test.ts`).
-- **D-TBD-occurrence-is-an-episode.** "Occurs three times" counts episodes, one per `(run, arm, key)`, not
-  `run_events` rows: one stalled worker writes up to three rows, one per rung, and must not open a case alone. Live and
-  shadow rows both count.
-- **D-TBD-run-bound-occurrences-only.** W1a counts only run-bound observations. Run-less notices (a coordinator's, an
-  unbound session's) leave no durable row that names a programme, and a run-less shadow rung records nothing.
-- **D-TBD-programmes-in-the-window.** "Or in two programmes" is read inside the same 14-day window.
-- **D-TBD-a-case-consumes-its-evidence.** The spec says nothing of what ends a case before W4b. Here a case consumes
-  its evidence: only occurrences after a signature's newest case count towards its next one. So a signature recurs as
-  a new case on fresh evidence, which is the baseline M31 will compare remedies against.
-- **D-TBD-case-lane-cadence.** Table 11.1c says the lane runs "on each signature". The tree has no such hook, and
-  adding one would give the stall lane a second job. The lane is a `LANE_SCHEDULE` row on the drift reconciler's
-  cadence by reference (`DRIFT_SWEEP_MS`, fifteen minutes), reading durable rows, so a restart loses nothing.
 - **D-TBD-one-observation-window-read.** The lane reads through `CoordStore.stallObservationsSince`, extended with
   `eventId` and `runId`, and resolves programmes through `CoordStore.run`. No second read of `run_events` is added.
 - **D-TBD-no-case-switch.** No operator switch in W1a. The lane writes only its own table and acts on nothing; shadow
   is structural (no review code exists, and the import pin keeps mail, push and feed out of the lane).
+
+**Settled by the spec's later edition, so no longer deviations:** one occurrence is one episode
+(one run, one arm, one key), live or shadow; "two programmes" is read inside the 14 days; a case consumes its
+evidence; W1a counts run-bound occurrences only (§10.5). The lane is a `LANE_SCHEDULE` row on the drift reconciler's
+cadence, reading durable rows (Table 11.1c).
 
 ## Where things stand
 
@@ -584,15 +577,12 @@ M31's recurrence baseline (§12). Nothing crosses the agent link or the capabili
 
 **Open questions for the operator, most important first:**
 
-1. **How many cases may one signature have?** Recommend "a case consumes its evidence"
-   (D-TBD-a-case-consumes-its-evidence). The alternative, one case per signature until W4b reviews it, records at
-   most fourteen rows in W1a and measures nothing.
-2. **Does "two programmes" mean within the 14 days?** Recommend yes (D-TBD-programmes-in-the-window). The
-   alternative, two programmes ever, opens a case for any arm that two programmes ever met, which is nearly every arm.
+1. **How many cases may one signature have?** Settled: a case consumes its evidence (§10.5).
+2. **Does "two programmes" mean within the 14 days?** Settled: yes (§10.5).
 3. **Should every arm be a trigger?** `restarted` and `limit-cap` describe the fleet more than the work, and may open
    cases often. Recommend all fourteen now (the table stays total over the arms) and let the shadow counts decide
    whether W4b adds a column that excludes some.
-4. **Should run-less stall notices count?** Recommend not in W1a. Counting them needs the stall watch to record a
+4. **Should run-less stall notices count?** Settled: not in W1a (§10.5). Counting them needs the stall watch to record a
    run-less observation durably, with the session's programme, which is the stall watch's change, not this lane's.
 5. **Where does the operator see shadow cases?** Recommend nowhere new in W1a; the table is read with `sqlite3` during
    the shadow period. W4b's review surface is the first reader.

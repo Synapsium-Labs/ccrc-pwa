@@ -744,9 +744,6 @@ Mechanical: mostly. Judgement: the `context` classification of `Date` in `ambien
 
 The programme mints real numbers when its run opens; until then each entry keeps its `D-TBD-<slug>` name.
 
-- **D-TBD-time-ports-in-the-clock-kernel** (shape): §3.6 H2 says each port is declared by its consumer. These three are
-  declared once in K (`server/src/time/ports.ts`), because their consumers span C3, C5 and C10 and three copies would
-  break the one-definition rule. §11.1's row already places them in K.
 - **D-TBD-lane-clocks-is-clock** (consolidation): `laneRunner.ts`'s `LaneClocks` is deleted and `LaneRunner` takes
   `Clock`: one definition of the two-clock shape. A type change only; `lane-schedule.test.ts` and
   `disk-retention-beats.test.ts` run unedited.
@@ -755,10 +752,6 @@ The programme mints real numbers when its run opens; until then each entry keeps
   mechanism.
 - **D-TBD-time-bounds** (values the spec does not pin): `TIMER_MAX_MS` 2,147,483,647 (Node's ceiling, refused rather
   than clamped to 1 ms); `ENTROPY_MIN_BYTES` 16 and `ENTROPY_MAX_BYTES` 1024; `ENTROPY_MAX_BOUND` 2^32.
-- **D-TBD-scan-scope-is-new-modules** (scope): §11.5 says the scan is red "in those contexts". Those contexts hold
-  about 60 ambient clock calls in `coord/routes.ts`, `coord/store.ts` and `coord/questions.ts` alone, so the scan covers
-  named new directories and file families (`TIME_PORT_SCOPE`) and `CoordStore` methods named for the Overlord or
-  continuity. It grows by edit as modules land.
 - **D-TBD-sql-clock-repo-wide** (tightening): "SQL never reads the clock" is held over all of `server/src`, because
   today's count is zero (measured in Task 6 Step 1). Chance in SQL (`random()`, `randomblob`) is held with it.
 - **D-TBD-one-mulberry32** (consolidation): the test tree holds nine local copies of `mulberry32` today
@@ -772,6 +765,10 @@ The programme mints real numbers when its run opens; until then each entry keeps
   `Deps.time.clock.mono` both carry the monotonic clock until the first is folded into the second. This is not a
   "legitimately different" pair: it is one fact with two carriers, kept only because folding it rewrites the watcher's
   lane wiring and the 36 test files that set `monotonicMs` (33 call `withFakeClock`). See the fourth question below.
+
+**Settled by the spec's later edition, so no longer deviations:** the three ports are declared
+once in the clock kernel, K (§3.6 H2). The scan covers the new Overlord and continuity modules, and existing code is
+not rewritten for it (§11.5); `TIME_PORT_SCOPE` names those modules and grows by edit as they land.
 
 ## Where things stand
 
@@ -802,8 +799,8 @@ and probe doors, the act key's draw, the trigger table's stall arms) and the sim
 3. **Observed time** (§11.5: a timer whose expiry permits something counts only time the server observed). `mono` does
    not survive a restart. It is first needed in W1a, not W3: Table 11.5b's renewal hold-off (10 minutes), a
    generation's least age (30 minutes) and the soft renewal budget (three in six hours) are W1a rows on the observed
-   clock. Recommendation: the renewal lane's piece adds one L1 accumulator to `time/rules.ts` (observed milliseconds as
-   a stored column, advanced by mono deltas within one process and never across a gap), rather than a second clock.
+   clock. Settled: the renewal lane's piece adds one L1 accumulator to `time/rules.ts` (observed milliseconds as
+   a stored column, advanced by mono deltas within one process and never across a gap), never a second clock (§11.5).
 4. **When is `Deps.monotonicMs` folded into `Deps.time.clock`?** Recommendation: in the simulator skeleton's piece, as
    a characterized move (the lane suites green first, then the watcher's runner reads `deps.time.clock`, then the field
    goes), because the simulator needs the watcher's runner on the fake clock anyway.

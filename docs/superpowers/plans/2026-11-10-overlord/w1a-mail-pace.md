@@ -15,7 +15,7 @@ turns were (H19). With a table keyed by role, the Overlord's row is one more row
 table and the one decider of a session's row. `FleetWatcher.mailPass` (L4) reads both and keeps its two gates as
 they are. A characterization test pins today's pace at each edge first, on the old code, and stays unchanged and
 green through the switch. A single-definition pin then holds the table to one home. The Overlord's row, totality over
-`FLEET_ROLES` and the move to `roleOf` belong to W1a's role-table plan, not this one (D-TBD-mail-pace-two-rows-first).
+`FLEET_ROLES` and the move to `roleOf` belong to W1a's role-table plan, not this one, as the spec's W1a row says (§14).
 `coord/delivery.ts` (the L1 mail delivery policy) was considered as the home and not used: its header keeps the
 gate-only rungs in `watch.ts`, and the pace table's one reason to change is the role vocabulary.
 
@@ -390,13 +390,12 @@ it('no source names a retired pace constant, in code or prose', () => {
 
 The programme mints the real numbers when its run opens; until then each entry is named by slug.
 
-- **D-TBD-mail-pace-two-rows-first** (scope): spec §6.4 says the Overlord has a row in `MAIL_PACE`, and §3.3.9 and
-  §11.1 say the table is total over `FLEET_ROLES`. This plan ships today's two rows, keyed by a local
-  `MailPaceRole`, and no Overlord row. `FLEET_ROLES` does not exist yet, and the spec gives no values for the
-  Overlord's row. W1a's role-table plan adds both, with the move to `roleOf`.
 - **D-TBD-mail-pace-key-worker** (naming): until `FLEET_ROLES` exists, the `'worker'` key is the row every session
   that is not an open claimant reads today, plain sessions and reviewers included, as the spec's "a worker's pace"
   says. Both keys are `FLEET_ROLES` members, so the role table only adds rows.
+
+**Settled by the spec's later edition, so no longer deviations:** the table ships today's two
+rows first, and becomes total over `FLEET_ROLES`, with the Overlord's row, once the role table lands (§14).
 
 ## Where things stand
 
@@ -410,13 +409,10 @@ a commit of its own with its own test (a case added to Task 1's describe, flippe
 start before that plan lands, the Overlord reads the worker row, as the spec says it would today.
 
 **Open questions, most important first:**
-1. **The Overlord row's values** (for the spec's editor). The spec fixes none, and no W0 measure supplies them.
-   Recommendation: start at the coordinator pair (15 s, 30 s), since the Overlord, like a coordinator, ends its turn
-   and waits; the lapse measure (M3) moves them.
-2. **The spec's two readings of the pace column** (for the editor). §13's C49 row lists "mail pace" among
-   `FLEET_ROLES`' columns; §3.3.9 says an L0 table holds data only and the pace is an L1 record keyed by role. This
-   plan follows §3.3.9. Recommendation: reword the C49 row to "renewal triggers and mail pace are L1 records keyed
-   by role".
+1. **The Overlord row's values.** Settled: the spec starts the row at the coordinator pair (15 s, 30 s), and the
+   lapse measure (M3) moves it (§6.4).
+2. **The spec's two readings of the pace column.** Settled: §13's C49 row now agrees with §3.3.9. The pace is an
+   L1 record keyed by role, never a column of `FLEET_ROLES`.
 3. **The module's home** (for the operator). `coord/mailPace.ts` is a new file beside `coord/delivery.ts`, the L1
    mail delivery policy. Recommendation: keep the new file (see Architecture); the alternative is a section of
    `delivery.ts` with the same exports and the same tests.

@@ -426,10 +426,6 @@ The programme mints real numbers when its run opens; each `D-TBD-<slug>` below i
 lands. The corpus (every `.md` under `ccd/*-skill/`) and growth against the merge-base are §11.3's own words, so they
 are not deviations.
 
-- **D-TBD-skill-ratchet-clause-bytes.** §11.3's "the length of its whole numbered line" is read as UTF-8 bytes,
-  number and newline included, for clauses numbered past the base's highest. A reworded clause earns nothing. The
-  count word a new clause changes ("twenty" to "twenty-one", 4 bytes) is not the clause, so that pull request finds
-  those bytes elsewhere in the file.
 - **D-TBD-skill-ratchet-pinned-by-count.** "Pinned" is read from the `SKILL.md` text, not from the pin arrays, which
   are literals inside three test files. It leans on each pin suite's `1..N` check, so it counts only in a `SKILL.md`
   whose base already has clauses: a first contract, with no suite behind it yet, earns nothing.
@@ -438,10 +434,15 @@ are not deviations.
 - **D-TBD-skill-ratchet-stale-cap.** A cap that names no skill file fails (R1), where the shellcheck ratchet only
   prints it, so a renamed or deleted file cannot leave a cap standing for a later file at its old path.
 
+**Settled by the spec's later edition, so no longer deviations:** a clause's bytes are the UTF-8
+bytes of its whole numbered line, newline included, for clauses numbered past the merge base's highest; a reworded
+clause earns nothing; a `SKILL.md` earns the raise only once its contract has a pinned clause at the merge base; a
+new skill file is capped at its size at that merge (§11.3).
+
 ## Where things stand
 
 **Needs before it starts:** the spec on `main` at `docs/superpowers/specs/2026-11-09-overlord-design.md`, and the
-programme's run open to mint the four numbers above. No code dependency.
+programme's run open to mint the three numbers above. No code dependency.
 
 **Depends on it:**
 - The recall clause (spec clause 23; on today's tree it takes number 21). Its pull request is the first use of the
@@ -458,7 +459,9 @@ programme's run open to mint the four numbers above. No code dependency.
 2. **An absolute bound for `ccrc-overlord`'s `SKILL.md`.** §11.3 says it stays under 5,000 tokens; a relative byte
    ratchet does not say that. Recommendation: W1's overlord-skill piece asserts an absolute byte ceiling in its own
    pin suite (about 4 bytes a token, so 20,000 bytes), and this ratchet caps it from the pull request that adds it.
-3. **The count word.** Recommendation: leave §11.3 as written; 4 bytes per clause is easy to offset, and widening
-   the allowance to prose would let any edit claim it.
-4. **M31's "coordinator skill bytes".** Recommendation: the metric measures the files, not the caps; a cap is a bound
-   and may carry slack.
+3. **The count word.** Settled: the clause's pull request offsets the count word's bytes inside the same file
+   (§11.4).
+4. **M31's "coordinator skill bytes".** Settled: the measure reads the files, not the caps (§11.4).
+5. **The scope: every skill file, or `SKILL.md` only.** This is the operator's, ruling 16 of the spec's "Waiting on
+   you". The rule binds every programme from the day it merges, so the test's pull request stays a draft until
+   the ruling. Recommendation: every skill file, with coordinators told before it merges.
