@@ -332,16 +332,22 @@ Waits for ruling 3.
 
 **Interfaces:**
 - Consumes: Task 4's `codex-modes` op, `_codex_tier_ours`.
-- Produces: `ccrc codex runtime remove` removes `~/.ccrc/runtime/codex` and each lane's `litellm.yaml` and its
-  `.prev`, keeps every log, and prints what it removed. It is refused, with nothing removed, as `lane-needs-runtime`
-  (naming each lane the roster resolves to `litellm`), `tier-running` (a LiteLLM or shim tier of any lane still
-  answers), or `modes-unreadable`. With no runtime on the box it answers `already` and exits 0. Its last line says
-  that a rollback to a build before wave 4a needs `ccgpt-runtime build`, which that build's `ccrc doctor --fix` runs.
+- Produces: `ccrc codex runtime remove` removes `~/.ccrc/runtime/codex` and nothing else, and says so in one line
+  that also says how to go back: `ccgpt-runtime build` before a switch to `litellm`, and after a rollback to a build
+  from before the runtime became optional, which that build's `ccrc doctor --fix` runs. It is refused, with nothing
+  removed, as `lane-needs-runtime` (naming each lane the roster resolves to `litellm`, with its switch),
+  `modes-unreadable`, `tier-running` (a LiteLLM or shim tier of any lane still runs, whatever the roster says) or
+  `tier-unmeasured`. With no runtime on the box it answers `already absent` and exits 0. It holds the roster
+  writers' lock while it asks and removes, so no switch records a lane back to `litellm` between them. A lane's
+  `litellm.yaml` stays: it is a pure render the hourly refresh keeps current, so a lane switched back after a
+  rebuild finds it there.
 
-- [ ] **Step 1: Write the failing tests**, one per refusal, the removal itself, `already`, and "uninstall and the
-  verb remove through one function".
+- [ ] **Step 1: Write the failing tests**, one per refusal, the removal itself with a bridge left serving,
+  `already absent`, the usage forms, and "the uninstall and the verb remove through one function".
 - [ ] **Step 2: Run them and see them fail.**
-- [ ] **Step 3: Implement.** The removal is `_uninst_codex`'s, moved into one function both call.
+- [ ] **Step 3: Implement.** The removal is `_uninst_codex`'s, moved into `_codex_runtime_rm`, and the roster
+  writers' lock is the switch's, moved into `_codex_roster_lock` (both in #2593, a move with no change in
+  behaviour), so the verb's own change stays under the growth limit on `ccd/ccrc`.
 - [ ] **Step 4: Run the tests and see them pass.**
 - [ ] **Step 5: Commit.**
 
