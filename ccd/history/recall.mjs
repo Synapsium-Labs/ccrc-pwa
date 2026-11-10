@@ -1628,8 +1628,6 @@ function expandStmts(rc) {
   const q = (sql) => rc.db.prepare(sql);
   const s = {
     node: q(`SELECT ${cols('nodes', ['node_id', 'kind', 'session_pk'])} FROM nodes WHERE node_id = ?`),
-    // A row's agent_id (D-8175): asked only under --agents, once per entry shown.
-    agentOf: q('SELECT agent_id FROM transcripts WHERE transcript_pk = ?'),
     entryById: q(`SELECT ${cols('entries', EXPAND_ENTRY_COLS)} FROM entries WHERE entry_id = ?`),
     entryByUuid: q(`SELECT ${cols('entries', EXPAND_ENTRY_COLS)} FROM entries WHERE uuid = ?`),
     hop: q(`SELECT ${cols('entries', ['parent_uuid', 'blob_id'])} FROM entries WHERE uuid = ?`),
@@ -1955,7 +1953,7 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   const t = isEntry ? expandEntryText(rc, e) : expandSidecarText(rc, s, it.blobId);
   const ts = e.ts_ms === null ? '-' : new Date(Number(e.ts_ms)).toISOString();
   // D-8175: under --agents a row of a subagent transcript carries `agent:<agent_id>` right after its id, and its --json item `agent_id`.
-  const agentId = agentsOn(rc) ? (s.agentOf.get(e.transcript_pk)?.agent_id ?? '') : '';
+  const agentId = agentsOn(rc) ? ((s.agentOf ??= rc.db.prepare('SELECT agent_id FROM transcripts WHERE transcript_pk = ?')).get(e.transcript_pk)?.agent_id ?? '') : '';
   const mark = agentMark(rc, agentId);
   const lead = isEntry
     ? `── ${pos}/${total} ${e.type === '' ? 'raw' : tx(e.type)}${e.role ? `/${tx(e.role)}` : ''} ${tx(src)} ${asText(uuidShown)}${mark} ${ts}`
