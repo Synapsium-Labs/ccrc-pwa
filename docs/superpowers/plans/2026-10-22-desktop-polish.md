@@ -3300,6 +3300,14 @@ F5); a flag value with a full stop before an upper-case letter is unknown, never
 in its node's source range, so one on a middle line of a container keeps its mark (F4); an unquoted `#` word ends the command
 (F7); a flag's value is never a flag (F9); and the record nits (F6). F8 and F10 are recorded. Details in `c20.md`.
 
+**Fix round 2 (review 1768, ruled by the coordinator).** Four families of messages (G1 to G4) still lost a command's
+repository flag, and the bare name then opened the home repository. One net closes the class: in a message that holds a
+`gh` word, every `-R`, `--repo` or `--repo=` flag (a run such as `-sR` and a glued `-Ro/r` too) names its repository
+wherever it stands, and one the chat cannot read names an unknown repository, so a lost flag gives text, never home. A
+`pr` or `issue` command that loses its flag gives its number to an unknown repository, so no other command decides it. The
+boolean sets are per group (`api`; `pr` and `issue`), from `gh`'s help; other groups have none. G5 is recorded; G6 to G8
+are fixed. Details in `c20.md`.
+
 **Acceptance.** Every item is fixed, or recorded as fixed already or as record-only, in `c20.md`; every reproduction of
 reviews 1762 and 1766 is a row; the mutation count is recorded. **Rollback.** A plain revert.
 

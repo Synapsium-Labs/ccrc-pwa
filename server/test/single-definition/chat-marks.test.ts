@@ -52,11 +52,13 @@ describe("chat's marks have one recogniser table and one plugin (chat reading Ta
     expect(holders(decl('claimsRunElsewhere')), 'claimsRunElsewhere').toEqual(['pwa/src/lib/chatRefs.ts']);
   });
 
-  // Task C20 (D-8187; reviews 1762 F8 and 1766 F2): which gh flags are booleans, and which first path segments are GitHub's
-  // own pages, are each one list, so a second list beside the reader cannot drift from it unnoticed.
+  // Task C20 (D-8187; reviews 1762 F8, 1766 F2 and 1768): which gh flags are booleans, which first path segments are GitHub's
+  // own pages and what a repository flag looks like are each one list or reader, so a second beside it cannot drift unnoticed.
   it('the gh boolean flags and the reserved owners are each declared once (Task C20)', () => {
-    for (const name of ['GH_BOOLEAN_FLAGS', 'RESERVED_OWNERS']) {
+    for (const name of ['GH_BOOLEAN_FLAGS', 'RESERVED_OWNERS', 'repoFlags', 'REPO_FLAG']) {
       expect(holders(decl(name)), name).toEqual(['pwa/src/lib/chatRepoEvidence.ts']);
     }
+    // Review 1768 G7: the value-flag list of round 1 is gone, and a second list in its place would read flags two ways.
+    expect(holders(decl('GH_VALUE_FLAGS')), 'GH_VALUE_FLAGS').toEqual([]);
   });
 });
