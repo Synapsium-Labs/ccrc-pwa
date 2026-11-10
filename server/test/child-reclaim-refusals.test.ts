@@ -7,6 +7,7 @@
 // need not be deployed for any of this to be measured.
 import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { waveLifecycleText } from './waveLifecycle.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -194,7 +195,7 @@ describe('the coordinator is told, where it decides', () => {
   const flat = (s: string): string => s.replace(/\s+/g, ' ');
 
   it('§5 states one PR per child AHEAD of the same-project arm, and names both refusals', () => {
-    const wl = read('ccd/coordinator-skill/references/wave-lifecycle.md');
+    const wl = waveLifecycleText();
     const start = wl.indexOf('## 5 — The boundary');
     expect(start, 'wave-lifecycle.md lost §5').toBeGreaterThanOrEqual(0);
     const beforeSame = flat(wl.slice(start, wl.indexOf('**Same project:**', start)));
@@ -482,7 +483,7 @@ describe('the dispatch refusal is documented field for field', () => {
     const fields = [...new Set([...arm.matchAll(/(\w+):/g)].map((m) => m[1]!))]
       .filter((f) => f !== 'ok' && f !== 'refused').sort();
     expect(fields).toEqual(['detail', 'pr', 'unbound']);
-    const wl = readFileSync(path.join(repoRoot, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+    const wl = waveLifecycleText();
     const s2 = wl.slice(wl.indexOf('## 2 — Dispatch a wave'), wl.indexOf('## 3 — Read mail'));
     const rows = s2.split('\n')
       .filter((l) => l.startsWith('| `workspace-spent`') || l.startsWith('| `spent-unmeasured`')).join('\n');
@@ -491,7 +492,7 @@ describe('the dispatch refusal is documented field for field', () => {
   });
 
   it('§5 tells the coordinator what unbound:true asks of it', () => {
-    const wl = readFileSync(path.join(repoRoot, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+    const wl = waveLifecycleText();
     const start = wl.indexOf('## 5 — The boundary');
     expect(wl.slice(start, wl.indexOf('**Same project:**', start)).replace(/\s+/g, ' ')).toContain('`unbound:true`');
   });

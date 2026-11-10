@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { CCRC_API } from './ccdWsHelpers.js';
+import { waveLifecycleText } from './waveLifecycle.js';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -185,7 +186,7 @@ describe('the coordinator skill: its contract', () => {
   });
 
   it('names the admin-merge door on approval-missing only, spelled once with the bound head (D-8124)', () => {
-    const wl = flat(refs('wave-lifecycle.md'));
+    const wl = flat(waveLifecycleText());
     const door = '`ccd pr-admin-merge --repo <owner/repo> --pr <pr> --head <handoffCommit>`';
     expect(wl.split(door)).toHaveLength(2);
     expect(wl).toContain('On `STOP approval-missing`, and on no other line');
@@ -197,12 +198,12 @@ describe('the coordinator skill: its contract', () => {
     expect(skill).not.toContain('Review the handoff commit');
     expect(skill).not.toContain('review the handoff commit');
     expect(flat(skill)).toContain('never read by this session');
-    expect(flat(refs('wave-lifecycle.md'))).not.toContain('Review the handoff commit the way you would review any commit.');
-    expect(flat(refs('wave-lifecycle.md'))).not.toContain('your ordinary review');
+    expect(flat(waveLifecycleText())).not.toContain('Review the handoff commit the way you would review any commit.');
+    expect(flat(waveLifecycleText())).not.toContain('your ordinary review');
   });
 
   it('withdraws the loose --admin allowance (R5 as amended 2026-10-25, ruling 5)', () => {
-    const lifecycle = flat(refs('wave-lifecycle.md'));
+    const lifecycle = flat(waveLifecycleText());
     expect(lifecycle).not.toMatch(/where the repository(\u2019|')?s? ruleset requires it/);
     expect(lifecycle).not.toContain('narrow approval licence');
     expect(lifecycle).toContain('**No `--admin`.** A coordinator never passes `--admin` to gh and never makes a GitHub API merge or enqueue call itself');
@@ -293,7 +294,7 @@ describe('the coordinator skill: its contract', () => {
   });
 
   it('wave-lifecycle §6 says what a child is, when it is reclaimed, and what is not', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     const s6 = flat(lifecycle.slice(lifecycle.indexOf('## 6 — Final merge'),
       lifecycle.indexOf('## What happened to a workspace that is gone')));
     expect(s6).toContain('**A child is reclaimed; your own workspace is not.**');
@@ -405,7 +406,7 @@ describe('the coordinator skill: its contract', () => {
   });
 
   it('lands before it closes on a native-queue project — the last wave too — enqueues only a green PR and proves the entry, and names the landing notices by the server\'s own subjects (landing-order wave 2)', () => {
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     const at = wl.indexOf('**Landing on a native-queue project**');
     expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
     const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
@@ -454,7 +455,7 @@ describe('the coordinator skill: its contract', () => {
   });
 
   it('reads the landing back as FOUR answers — queued, merged, armed or neither — so a merged PR never reads as "nothing is queued, disarm it" (landing-order wave 2, review 241 F10(a))', () => {
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     const at = wl.indexOf('**Landing on a native-queue project**');
     expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
     const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
@@ -487,7 +488,7 @@ describe('the coordinator skill: its contract', () => {
     // deployment's label, so `gh pr view` never answers MERGED for it. The
     // server already reads it as merged (`isMergedRow`) and mails `merged:#N`;
     // a proof that demanded MERGED would leave the run at `merging` for ever.
-    const wl = flat(refs('wave-lifecycle.md'));
+    const wl = flat(waveLifecycleText());
     expect(wl).toContain('answering MERGED with `headRefOid` equal to it, or CLOSED with `headRefOid` equal to it '
       + 'and `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`');
     expect(wl).toContain('On `merged:`, prove the merge exactly as above — MERGED, or CLOSED with '
@@ -504,7 +505,7 @@ describe('the coordinator skill: its contract', () => {
       + '`landedInTrain: true` on its row of `ccd pr-state --session <id>` —');
     expect(sk).toContain('interface PR merged at the exact `producerSha` carried in the conditional producer contract '
       + '(it reads MERGED there, or CLOSED there with `landedInTrain: true` on its row of `ccd pr-state --session <id>`)');
-    const wl = flat(refs('wave-lifecycle.md'));
+    const wl = flat(waveLifecycleText());
     expect(wl).toContain('PR merged at the exact `producerSha` carried with `producerRepoRoot` and `producerSourceRepoPath` '
       + 'in the conditional producer contract (it reads MERGED there, or CLOSED there with `landedInTrain: true` on its '
       + 'row of `ccd pr-state --session <sessionId>`)');
@@ -532,7 +533,7 @@ describe('the coordinator skill: its contract', () => {
   // asserts the corpus a coordinator actually reads has been told about it,
   // because a guarantee nobody documented is a guarantee nobody relies on.
   it('tells the coordinator that a claimed workspace keeps its name for the life of the claim', () => {
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     expect(wl).toContain('frozen for the life of the claim');
     // The two mechanisms, named — so a reader can check the promise rather than
     // trust it, and so deleting either rung leaves a documented claim visibly
@@ -938,7 +939,7 @@ describe('the coordinator skill: linkage', () => {
     const sentence = skill.slice(start, end === -1 ? undefined : end);
     const codes = [...sentence.matchAll(/`([a-z]+(?:-[a-z]+)*)`/g)].map((m) => m[1]!);
     expect(codes.length, 'the harvest should find the codes in the sentence').toBeGreaterThanOrEqual(14);
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     for (const code of codes) {
       expect((MAIL_REJECT_CODES as readonly string[]).includes(code) || isRunRefuseCode(code),
         `${code} is not a declared MailRejectCode or RunRefuseCode — the skill promises a refusal ` +
@@ -1025,7 +1026,7 @@ describe('the coordinator skill: linkage', () => {
     // items are the machine-readable half of the same wave plan, and the
     // skill must carry the pairing or a coordinator writes one without the
     // other.
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     expect(skill).toContain('"items"');
     expect(lifecycle).toContain('"items"');
     for (const fact of ['32', '200']) {
@@ -1040,7 +1041,7 @@ describe('the coordinator skill: linkage', () => {
     // `route` rides the SAME dispatch call as `brief` and `items` — a
     // coordinator reading only one of these two files must still see all
     // three keys named together, or it writes a body missing one.
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     // ALL SIX writable fields (D-8121 added `browser`), as ALL FIVE once were, not four: the literal showed `class`, `effort`,
     // `subagent` and `workflow` while the paragraph below it named five, so a
     // coordinator copying the body omitted `compact` every time (slice 5's
@@ -1075,13 +1076,13 @@ describe('the coordinator skill: linkage', () => {
     // EVERY fresh dispatch to a box whose ccd predates `child-argv-v1` — far
     // more often than either `route-omitted` event — so the coordinator's
     // reference must say what it means before a run trail shows it one.
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     expect(lifecycle).toContain('`child-omitted:no-child-argv-cap`');
     expect(lifecycle).toContain('that workspace is simply not a child');
   });
 
   it('names POST /api/runs/:id/items after the re-measurement, never before', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     const settle = lifecycle.indexOf('POST /api/runs/:id/items');
     const advance = lifecycle.indexOf('POST /api/runs/:id/advance');
     expect(settle, 'the settle call is not documented at all').toBeGreaterThan(-1);
@@ -1104,7 +1105,7 @@ describe('the coordinator skill: linkage', () => {
     // verbatim; and nothing in the corpus may tell a coordinator to settle
     // straight off a claim.
     expect(skill).toContain('A `wave-done` is a claim, not a fact.');
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     expect(lifecycle).toMatch(/never (?:off|on) (?:the|a) (?:worker'?s? )?claim(?:\s+alone)?/i);
     // And the ledger stays fixed at dispatch: no route adds an item later.
     expect(lifecycle).toMatch(/fixed at dispatch/i);
@@ -1121,7 +1122,7 @@ describe('the coordinator skill: linkage', () => {
 
 describe('the dispatch response documents that ok is not proof of a ready pane', () => {
   it('names adopted and spawnState, and says what adopted:true costs the coordinator', () => {
-    const ref = refs('wave-lifecycle.md');
+    const ref = waveLifecycleText();
     expect(ref).toContain('adopted');
     expect(ref).toContain('spawnState');
     // The sentence that makes the fields actionable rather than decorative.
@@ -1140,7 +1141,7 @@ describe('the dispatch response documents that ok is not proof of a ready pane',
     // widened: it pins the TWO fields that shipped with section 1.5, and this
     // pins the third on its own terms, so deleting either passage reds a test
     // that names it.
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     expect(wl, 'the dispatch-response table does not name skillState').toContain('skillState');
 
     // BLOCK-SCOPED: the three words must be inside the response block, not
@@ -1209,7 +1210,7 @@ describe('the dispatch response documents that ok is not proof of a ready pane',
     // The table's list is prose, so nothing kept it in step with the union:
     // `narrow` (ccd's rc 6) shipped to the fleet row before it reached this
     // table. DERIVED from SPAWN_VERDICTS, so the next member reds here too.
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     const row = wl.split('\n').find((l) => l.startsWith('| `spawnState` |'));
     expect(row, 'the dispatch-response table has no spawnState row').toBeDefined();
     for (const v of SPAWN_VERDICTS) {
@@ -1245,13 +1246,13 @@ describe('the skill on `final:true` — a release is now conditional', () => {
   // why they would have rotted silently. Neither is one of the NINE pinned
   // contract clauses, so this is additive text, not an edit to a clause.
   it('does not promise `final:true` releases the hold, full stop', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     expect(skill).not.toMatch(/`final:true` releases the\s+hold/);
     expect(lifecycle).not.toMatch(/and \*\*releases\*\* the hold\s*\n\(`ws-release`\) instead of re-holding/);
   });
 
   it('names `released` and says what `released:false` means', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     for (const text of [skill, lifecycle]) {
       expect(text).toMatch(/released/);
     }
@@ -1427,13 +1428,13 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
     expect(flat(skill)).toContain(
       'The standing protocol is not yours to re-type: dispatch prefixes every brief with the ' +
       `sentence that sends the worker to the \`${WORKER_SKILL_NAME}\` skill, and that skill IS the protocol`);
-    expect(flat(refs('wave-lifecycle.md'))).toContain(
+    expect(flat(waveLifecycleText())).toContain(
       'The standing worker protocol is a SKILL, not a paragraph you re-type every wave.');
     // And the brief's REPLACEMENT job is stated, not merely the deletion: a
     // coordinator told what to stop writing and not what to write instead ships
     // an empty brief.
-    expect(flat(refs('wave-lifecycle.md'))).toContain('A brief carries what only THIS wave knows:');
-    expect(flat(refs('wave-lifecycle.md'))).toMatch(
+    expect(flat(waveLifecycleText())).toContain('A brief carries what only THIS wave knows:');
+    expect(flat(waveLifecycleText())).toMatch(
       /A brief carries what only THIS wave knows:[\s\S]{0,320}deviations already ledgered/);
   });
 
@@ -1451,7 +1452,7 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
     // a config dir only once its installer has run there, and a worker on a
     // home that has not had it has the brief and nothing else. F5 is what this
     // costs when it is missing, and `stale-tip` is the shape it arrives in.
-    const wl = flat(refs('wave-lifecycle.md'));
+    const wl = flat(waveLifecycleText());
     // STRAIGHT apostrophes throughout, and both reference files are measured to
     // carry no curly ones (`grep -c ’ wave-lifecycle.md` → 0): a curly
     // apostrophe pasted into either file is a different byte and would red
@@ -1498,7 +1499,7 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
 
   /** The paragraph itself, by its own opening — one blank-line-delimited block. */
   const para = (): string => {
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     const start = wl.indexOf("**A brief may quote the worker's graph card");
     expect(start, 'wave-lifecycle.md carries no graph-card paragraph at all')
       .toBeGreaterThanOrEqual(0);
@@ -1620,7 +1621,7 @@ describe('the coordinator docs state the oversize ceiling the brief writer actua
   // still said "the wave brief itself". No suite went red on that drift: the
   // refusal-code scan above pins only that each promised code is EXPLAINED
   // somewhere, never what the explanation says.
-  const wl = (): string => flat(refs('wave-lifecycle.md'));
+  const wl = (): string => flat(waveLifecycleText());
 
   it('derives the stated ceiling from the two constants, not from a typed-in number', () => {
     const m = /the effective brief ceiling is \*\*(\d+)\*\* bytes today \(`MAIL_BODY_MAX_BYTES` (\d+) − the prefix's (\d+)\)/
@@ -1639,7 +1640,7 @@ describe('the coordinator docs state the oversize ceiling the brief writer actua
   it('no longer says the BRIEF ITSELF is what exceeds the cap', () => {
     // The two drifted sentences, by their own words — the mutation this whole
     // describe exists for is someone restoring either of them.
-    expect(refs('wave-lifecycle.md')).not.toMatch(/the wave brief itself exceeds/);
+    expect(waveLifecycleText()).not.toMatch(/the wave brief itself exceeds/);
     expect(skill).not.toMatch(/when the wave brief itself is too long/);
     // And the corrected claim is actually made, in both places, rather than the
     // wrong sentence merely having been deleted.
@@ -1665,7 +1666,7 @@ describe('the coordinator/worker handshake: shape in, detail out', () => {
   };
 
   it('shows ONE worked wave-done fingerprint, and it is a valid claim shape', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     const blocks = [...lifecycle.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]!)
       .filter((b) => b.includes('branchTip'));
     expect(blocks, 'wave-lifecycle.md carries no fenced JSON wave-done fingerprint').toHaveLength(1);
@@ -1687,7 +1688,7 @@ describe('the coordinator/worker handshake: shape in, detail out', () => {
     // coordinator has to send it. Both halves asserted together, in one test,
     // because either alone is a half-protocol — a worker reading a field nobody
     // sends, or a coordinator sending one nobody reads.
-    expect(flat(refs('wave-lifecycle.md'))).toContain(
+    expect(flat(waveLifecycleText())).toContain(
       "Put `reject.detail` in that mail's body, verbatim.");
     expect(flat(skill)).toContain('mail the worker the rejection code **and its `detail`, verbatim**');
     expect(workerSkill, 'the worker skill no longer reads the detail this forward exists for')
@@ -1708,7 +1709,7 @@ describe('the coordinator/worker handshake: shape in, detail out', () => {
     // SCOPED TO THE LIST, not the file: the point is that the enumeration a
     // coordinator reads as complete IS complete. A mention three sections away
     // would satisfy a whole-file `toContain` and still leave the list wrong.
-    const wl = flat(refs('wave-lifecycle.md'));
+    const wl = flat(waveLifecycleText());
     const marker = 'A brief carries what only THIS wave knows:';
     const start = wl.indexOf(marker);
     expect(start, 'wave-lifecycle.md carries no positive brief-content list').toBeGreaterThan(-1);
@@ -1744,7 +1745,7 @@ describe('the token is EXTRACTED, never cat-ed whole (first-program dogfood find
       expect(text, `${name} SKILL.md regressed to cat-ing the token file whole`)
         .not.toContain('TOKEN=$(cat ~/.cc-secrets/ccrc-mail.token)');
     }
-    expect(refs('wave-lifecycle.md')).not.toContain('$(cat ~/.cc-secrets/ccrc-mail.token)');
+    expect(waveLifecycleText()).not.toContain('$(cat ~/.cc-secrets/ccrc-mail.token)');
   });
 
   // RELOCATED, not relaxed. The extraction used to live in each SKILL.md
@@ -2271,7 +2272,7 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
   };
 
   it('names the five pre-answer route/CAS 409s and every downstream refusal separately', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     // Guard on the INDEX, not the slice: `slice(-1)` on a missing heading hands
     // back the file's last character, so a `not.toBe('')` here can never fire and
     // a renamed heading would red several assertions later under a message about
@@ -2356,7 +2357,7 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
     const omitted = [first, second].find((x) => x !== state);
     expect(omitted, 'the open set no longer has a state this view omits').toBeTruthy();
 
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     const at = lifecycle.indexOf("Read your own children's");
     expect(at, 'the ask lane no longer describes the asks-list read')
       .toBeGreaterThanOrEqual(0);
@@ -2681,7 +2682,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     expect(section).toMatch(/You may coordinate from ANY project/);
     expect(section).toMatch(/crossing \(you sit outside the run's project\) binds only a fresh spawn/);
     expect(section).not.toMatch(/neither the home nor the run's project is refused/);
-    const row = refs('wave-lifecycle.md').split('\n').find((l) => l.startsWith('| `project-mismatch` |'));
+    const row = waveLifecycleText().split('\n').find((l) => l.startsWith('| `project-mismatch` |'));
     expect(row, 'wave-lifecycle has no project-mismatch row').toBeDefined();
     expect(row).toMatch(/a coordinator may sit in ANY project and run a programme whose home and runs are elsewhere/);
     expect(row).toMatch(/you sit outside that project; `by` names YOUR project/);
@@ -2698,7 +2699,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     const section = flat(skill.slice(start, end === -1 ? undefined : end));
     expect(section).toMatch(/Your children's questions come to you wherever you sit/);
     expect(section).toMatch(/held for the recorded claimant of the child's run, which is you, whatever project/);
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     const at = lifecycle.indexOf('## The ask lane');
     expect(at, 'wave-lifecycle.md no longer carries the ask lane').toBeGreaterThanOrEqual(0);
     const lane = flat(lifecycle.slice(at, lifecycle.indexOf('\n## ', at + 1)));
@@ -2726,7 +2727,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
   };
 
   it('tells a refused coordinator the fields its cap frame carries, and names no retired cap', () => {
-    const caps = refs('wave-lifecycle.md');
+    const caps = waveLifecycleText();
     // Anchor follows the heading D-2803 corrected: the paragraph is no longer
     // "runs, not holds" but "ACTIVE runs, not holds and not merely non-terminal".
     const start = caps.indexOf('**Caps count ACTIVE runs,');
@@ -2807,12 +2808,12 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
   ];
 
   it.each(LIFECYCLE)('wave-lifecycle.md states %s', (_what, sentence) => {
-    expect(flat(refs('wave-lifecycle.md')), `wave-lifecycle.md no longer states ${_what}`)
+    expect(flat(waveLifecycleText()), `wave-lifecycle.md no longer states ${_what}`)
       .toContain(flat(sentence));
   });
 
   it('orders each succession branch independently before consumer dispatch', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     const boundary = lifecycle.slice(lifecycle.indexOf('## 5 — The boundary'),
       lifecycle.indexOf('## 6 — Final merge'));
     const sameStart = boundary.indexOf('**Same project:**');
@@ -2944,7 +2945,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
   });
 
   it('does not teach mutable-plan fallbacks or collapse ledger and plan paths', () => {
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     const brief = lifecycle.slice(lifecycle.indexOf('**Every brief for a wave in ANOTHER project'),
       lifecycle.indexOf('**The execution skill is the one list item'));
     expect(brief).not.toContain('cat "$planAbsPath"');
@@ -2974,7 +2975,9 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
   ];
 
   it.each(ROLES)('%s carries the role rule: %s', (file, sentence) => {
-    expect(flat(refs(file)), `${file} no longer states: ${sentence}`).toContain(flat(sentence));
+    // The lifecycle is read whole, whichever of its part files holds the sentence.
+    const text = file === 'wave-lifecycle.md' ? waveLifecycleText() : refs(file);
+    expect(flat(text), `${file} no longer states: ${sentence}`).toContain(flat(sentence));
   });
 
   it('SKILL.md tells the coordinator how to address a worker, in the crossing section', () => {
@@ -3003,7 +3006,7 @@ describe('the routing clauses (routing slice 2)', () => {
     // also contains "the shape of the wave and the routing" ~170 chars before
     // its own routing-matrix.md mention, which made that anchor self-satisfied)
     expect(flat(skill)).toMatch(/what only this wave knows[\s\S]{0,320}routing-matrix\.md/);
-    expect(flat(refs('wave-lifecycle.md'))).toMatch(/A brief carries what only THIS wave knows:[\s\S]{0,900}routing-matrix\.md/);
+    expect(flat(waveLifecycleText())).toMatch(/A brief carries what only THIS wave knows:[\s\S]{0,900}routing-matrix\.md/);
   });
 
   it('clause 14 names the panel reference, which ships, and step 5 sends the REVIEWER to it', () => {
@@ -3019,11 +3022,11 @@ describe('the routing clauses (routing slice 2)', () => {
     expect(REFERENCE_NAMES).toContain('review-panel.md');
     expect(flat(skill)).toMatch(/`Lenses:` line names the held-out panel[\s\S]{0,160}review-panel\.md/);
     expect(flat(refs('review-brief.md'))).toMatch(/Lenses:[\s\S]{0,120}review-panel\.md/);
-    expect(flat(refs('wave-lifecycle.md'))).toMatch(/## 5 — The boundary[\s\S]{0,600}review-panel\.md/);
+    expect(flat(waveLifecycleText())).toMatch(/## 5 — The boundary[\s\S]{0,600}review-panel\.md/);
   });
 
   it('wave-lifecycle.md §4 documents the two signal lines with every word the vocabulary admits, and the signals section names the two new fields', () => {
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     for (const w of SUITE_WORDS) expect(wl).toMatch(new RegExp(`suite: [^\\n]*\\b${w}\\b`));
     for (const k of FAILURE_KINDS) expect(wl).toMatch(new RegExp(`failure: [^\\n]*\\b${k}\\b`));
     expect(wl).toContain('waveDoneMails');
@@ -3057,7 +3060,7 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
     // between two headings, rather than asserting against the whole file
     // (which would stay green even if the paragraph moved into another
     // section entirely).
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     const start = wl.indexOf('## 4 — Advance the run as the wave progresses');
     const end = wl.indexOf('## 5 — The boundary');
     expect(start).toBeGreaterThanOrEqual(0);
@@ -3093,7 +3096,7 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
   });
 
   it('wave-lifecycle.md\'s signals section names arm, routing, armUnparsed and routingUnparsed', () => {
-    const wl = refs('wave-lifecycle.md');
+    const wl = waveLifecycleText();
     const start = wl.indexOf("## The run's own signals");
     const end = wl.indexOf('## The routing door');
     expect(start).toBeGreaterThanOrEqual(0);
@@ -3210,7 +3213,7 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
 // prints, derived from the block wherever the block is the source, so a line the block learns to print and the prose
 // never handles is a red here.
 describe('the landing route from the repository\'s own rules (landing-order wave 3e, spec §5.7)', () => {
-  const wl = refs('wave-lifecycle.md');
+  const wl = waveLifecycleText();
   const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
   const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
   const fence = /```bash\n([\s\S]*?)```/;
@@ -3737,7 +3740,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
 
 describe('wave-lifecycle route default (D-6794)', () => {
   it('says an omitted route fills the run kind default, not a bare argv', () => {
-    const text = refs('wave-lifecycle.md').replace(/\s+/g, ' ');
+    const text = waveLifecycleText().replace(/\s+/g, ' ');
     expect(text).toContain('Omitting `route` on a fresh spawn fills the run kind\'s default row');
     expect(text).toContain('`route-defaulted:<kind>`');
     expect(text).toContain('an empty `{}` is a passed route and is sent bare');
@@ -3750,7 +3753,7 @@ describe('wave-lifecycle route default (D-6794)', () => {
 // `verifiedHead`), and holds no double quote, like every pinned clause. The code census above
 // ('mentions every declared MailRejectCode') is what requires the word at all; these pin what the skill says of it.
 describe('landing order wave 4: the lineage-unmeasured text, the recorded head and the brief\'s opt-in', () => {
-  const wl = flat(refs('wave-lifecycle.md'));
+  const wl = flat(waveLifecycleText());
   const step6 = (): string => {
     const start = skill.indexOf('6. **Rule on the report**');
     expect(start, 'SKILL.md lost step 6').toBeGreaterThanOrEqual(0);
@@ -3811,7 +3814,7 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
   });
 
   it('the verdict block itself is untouched by the rule: it still takes PR=<pr> HC=<handoffCommit> and holds no verifiedHead', () => {
-    const text = refs('wave-lifecycle.md');
+    const text = waveLifecycleText();
     const open = text.indexOf('( # The landing verdict');
     const block = text.slice(open, text.indexOf('\n)\n```', open));
     expect(block).toContain('PR=<pr> HC=<handoffCommit>');
@@ -3850,7 +3853,7 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
 });
 
 describe('landing order wave 5a: §5b names the train-landed proof and the new-head route', () => {
-  const wl = refs('wave-lifecycle.md');
+  const wl = waveLifecycleText();
   const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
   const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
   const fence = /```bash\n([\s\S]*?)```/;
@@ -3883,7 +3886,7 @@ describe('landing order wave 5a: §5b names the train-landed proof and the new-h
 });
 
 describe('landing order wave 5b: the new-head route, the train words, the requested-change ask and the wrap', () => {
-  const wl = refs('wave-lifecycle.md');
+  const wl = waveLifecycleText();
   const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
   const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
   const fence = /```bash\n([\s\S]*?)```/;
@@ -4049,7 +4052,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
 });
 
 describe('landing order wave 5e: the landing line read before every landing', () => {
-  const wl = refs('wave-lifecycle.md');
+  const wl = waveLifecycleText();
   const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
   const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
   const prose = flat(sec.replace(/```bash\n([\s\S]*?)```/, ''));
@@ -4107,7 +4110,7 @@ describe('landing order wave 5e: the landing line read before every landing', ()
 });
 
 describe('landing order wave 5d: the latest attempt decides (D-7546)', () => {
-  const wl = refs('wave-lifecycle.md');
+  const wl = waveLifecycleText();
   const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
   const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
   const fence = /```bash\n([\s\S]*?)```/;
@@ -4165,7 +4168,7 @@ describe('landing order wave 5d: the latest attempt decides (D-7546)', () => {
 // asserted opening and closing markers, normalized by `flat(raw).trim()` alike; the raw physical shape (no double quote, at most
 // 80 columns) is asserted on the original text, so a re-wrap that leaves the normalized text equal still reds.
 describe('landing order wave 5f: the attributed landing writes in both coordinator texts', () => {
-  const wl = refs('wave-lifecycle.md');
+  const wl = waveLifecycleText();
   const SHORT_OPEN = '**Landing writes.**';
   const SHORT_CLOSE = '\n\n## The wave lifecycle';
   const WRITES_OPEN = '**Attributed landing writes.**';
@@ -4419,7 +4422,7 @@ describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R
     expect(sentences[0]).toMatch(/not/);
   });
   it('sends programmeTitle on both wave-1 open examples, so a new programme is named in words (D-8071)', () => {
-    const opens = [skill, refs('wave-lifecycle.md')].map((text) =>
+    const opens = [skill, waveLifecycleText()].map((text) =>
       text.split('\n').filter((l) => l.includes('"program":"<slug>"') && l.includes('"wave":1,')));
     for (const lines of opens) {
       expect(lines.length).toBeGreaterThan(0);
@@ -4435,7 +4438,7 @@ describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R
 // deliberate: a reworded rule is re-pinned.
 describe('the coordinator links every ticketed PR by the repository\'s visibility (D-8141, D-8147)', () => {
   const linearSkill = readFileSync(path.join(root, 'ccd/linear-skill/SKILL.md'), 'utf8');
-  const lifecycle = refs('wave-lifecycle.md');
+  const lifecycle = waveLifecycleText();
 
   it('SKILL.md names the read, the verb, both keywords and the ban on the tracker id', () => {
     expect(skill).toContain('**Link every pull request you open for ticketed work, by the repository\'s visibility.**');
@@ -4492,7 +4495,7 @@ describe('the skills teach end-request as asking', () => {
 
   it('end-request is taught as asking, and the client has its row', () => {
     expect(clientRoutes().map((c) => c.key)).toContain('runs.end-request');
-    const lifecycle = refs('wave-lifecycle.md');
+    const lifecycle = waveLifecycleText();
     expect(lifecycle).toContain('If a run can never finish and you cannot close it, ask the operator to end it.');
     expect(lifecycle).toContain('runs end-request <run id> --json -');
     expect(workerSkill).toContain('"$API" runs end-request <run id> --json -');
@@ -4501,7 +4504,7 @@ describe('the skills teach end-request as asking', () => {
 
   it('abandon does not appear beside it', () => {
     const spans = [
-      section(refs('wave-lifecycle.md'), '## A run that can never finish'),
+      section(waveLifecycleText(), '## A run that can never finish'),
       section(workerSkill, '- **The run can never finish and you cannot close it.**'),
       section(reviewerSkill, '- **The run you review can never finish'),
     ];

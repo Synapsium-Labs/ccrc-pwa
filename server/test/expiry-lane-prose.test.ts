@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { waveLifecycleText } from './waveLifecycle.js';
 
 const root = path.join(import.meta.dirname, '..', '..');
 const read = (p: string): string => readFileSync(path.join(root, p), 'utf8');
@@ -71,7 +72,7 @@ describe('README: what happens to an archived workspace now', () => {
 
 describe('the coordinator’s reference, §6', () => {
   it('a child that has coordinated stays a human’s; an unmarked workspace is the server’s seven days after its archive', () => {
-    const s = flat('ccd/coordinator-skill/references/wave-lifecycle.md');
+    const s = waveLifecycleText().replace(/\s+/g, ' ');
     // `has-coordinated` keeps its `.child` marker, and neither lane ever expires a marked child (#166; spec §5.3).
     expect(s).toContain('`has-coordinated` means the child has coordinated a run, so its workspace is cleaned up by a human. No');
     expect(s).toContain('it stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)');
