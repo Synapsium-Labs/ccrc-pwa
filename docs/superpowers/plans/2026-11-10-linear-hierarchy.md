@@ -94,12 +94,27 @@ number from `POST /api/ledger/deviations`.
     adds `plan map-propose`.
   - **Wave 1 sends no new document live.** `directoryProjects` stays as recorded; the refresher starts the
     `projectStatuses` collection and the initiatives probe only in wave 3, after FX2 has recorded them.
+  - **Further departures, from the second review:**
+    - **The plan store holds the handle.** `planStore.ts` joins `core-vocab.test.ts`'s `HANDLE_HOLDERS` (the
+      `ledgersStore.ts` idiom: every function takes the handle as an argument). Nothing else in `server/src/coord`
+      names `coord.db`: the plan routes, the hierarchy routes, `PlanSync`, `DriftPass` and `LinearMigration` take a
+      `PlanStorePort` (the store's functions bound to the handle), built once in `index.ts` beside `LinearJournal`.
+    - **Plan writes share the run writers' mutex.** Every plan write runs under `CoordRoutesHandle.serial`, and the
+      run insert re-checks the plan facts in its own transaction, so a run never opens into a closed plan, a dropped
+      epic or a dropped ticket. A fifth run refusal, `plan-closed`, refuses `runs open` after `plan close`.
+    - **One writer per Linear object.** `PlanSync` holds one in-process flight per due key; dispatch, the lane tick,
+      the drift pass's restores and the migration's writes to adopted issues all go through it.
+    - **"Live" for a programme with no declared plan is a non-terminal run.** §10.1 says "no live coordinator", but
+      coordinators are long-lived, one per project, so presence would make nearly every done programme live and its
+      open issues unmappable. Presence plays no part in the migration's rules.
+    - **The migration creates the structure it declares,** as move rows with `before` null, so *Put back* cancels it
+      from the move record alone.
 - **D-8180 (2026-11-10)** — linear-hierarchy-w1-proxy: wave 1, the proxy additions: the hierarchy documents and the
   ccrc operation rows, the ccrc actor in the write policy and the journal, the `sync` and `migration` rate lanes, the
   directory's status types and `statusOfType` (unsent until wave 3), and the server-internal caller `runCcrcOp`.
 - **D-8181 (2026-11-10)** — linear-hierarchy-w2-plan: wave 2, ccrc's plan model: migration 57, the plan store and
   deciders, the plan verbs (`plan close` included) and their `ccrc-api` rows, runs attached to tickets with
-  `wave-epic-mismatch`, `plan-missing`, `reserved-programme` and `ticket-unavailable`, the coordinator's
+  `wave-epic-mismatch`, `plan-missing`, `reserved-programme`, `ticket-unavailable` and `plan-closed`, the coordinator's
   `references/plan.md`, the per-project Linear owner settings, and the public-text check `linear-text-public`.
 - **D-8182 (2026-11-10)** — linear-hierarchy-w3-sync: wave 3, the plan sync: open, move and close of the Linear
   objects from the plan, the initiatives-off item, the item act route, and dispatch waiting for a ticket's issue.
@@ -151,6 +166,8 @@ number from `POST /api/ledger/deviations`.
     `server/src/coord/routes.ts` and `pwa/src/lib/api.ts` grow at most +40 net code lines per PR; logic lives in new
     files. A file that cannot stays under adds `server/test/growth-waivers/D-818x-<file>.json` with its reason in the
     same commit.
+  - *handle holders*: `core-vocab.test.ts` lets only `HANDLE_HOLDERS` name `coord.db` in `server/src/coord`
+    (`REACH`). `planStore.ts` joins the set in Task 2.2; every other plan file takes the `PlanStorePort`.
   - *verb-gate*: no new `CcdArgv` builder; a task that adds one adds its `PROBE_ARGS` row.
   - *box-token census, gate count, `ccrc-api` row count*: each new box-token route moves `box-token-census.test.ts`,
     the gate's route count and lane list in `server/src/auth/gate.ts` and `auth-gate.test.ts`; each new client row moves
@@ -202,6 +219,10 @@ number from `POST /api/ledger/deviations`.
    `programs.state` turns `done` or `abandoned` (D-51), and nothing in Linear closes. Test in Task 3.3.
 7. **The reserved row and the mail resolver.** One live programme plus `linear-sync`: mail to `coordinator` with no
    `runId` still resolves. Test in Task 2.2.
+8. **Two writers reaching one object.** A dispatch's `ensureTicketBound`, a lane tick the runner thinks stuck, a drift
+   restore and the migration's write to an adopted issue all reach the same programme: each joins that programme's one
+   flight, so a `name-and-creator` create is sent once and a restore never lands on top of a newer sync write. Tests in
+   Task 3.2 and Task 3.4.
 
 ---
 
@@ -219,9 +240,10 @@ number from `POST /api/ledger/deviations`.
 | `server/test/fixtures/linear/*hierarchy*` | 1, FX2 | Constructed, then recorded, answers |
 | `shared/plan.ts` (new, L0) | 2 | The plan vocabulary, bounds, wire types, refusal words, `isPlanKebab` |
 | `shared/ledgers.ts` | 2 | `ItemAction` gains five hierarchy verbs; `parseItemAction` reads them |
-| `shared/api.ts` | 2 | `RunRefuseCode` +4, `ServerCap` `plan-v1`, `ProjectLinkingWire` gains the hierarchy settings |
+| `shared/api.ts` | 2 | `RunRefuseCode` +5, `ServerCap` `plan-v1`, `ProjectLinkingWire` gains the hierarchy settings |
 | `server/src/coord/schema.ts` | 2, 4 | Migrations 57 and 58 |
-| `server/src/coord/planStore.ts` (new, L3) | 2 | Every SQL of the plan tables, bindings and the sync queue |
+| `server/src/coord/planStore.ts` (new, L3) | 2 | Every SQL of the plan tables, bindings and the sync queue; a handle holder; `PlanStorePort` |
+| `server/test/helpers/plan.ts` (new) | 2 | `seedLegacyProgramme`, so route tests that open runs on a fresh slug keep opening |
 | `server/src/coord/planPolicy.ts` (new, L1) | 2 | Body parsing, the plan diff, state rules, caller and Linear-owner verdicts |
 | `server/src/coord/planRoutes.ts` (new, L4) | 2, 4, 7 | The plan verbs' routes (`plan close` included) |
 | `server/src/coord/hierarchyRoutes.ts` (new, L4) | 2, 3 | Per-project hierarchy settings, `GET /api/hierarchy`, `POST /api/items/:id/linear` |
@@ -287,7 +309,9 @@ Inert: nothing calls the new rows until wave 3. Testable alone over constructed 
 What each document selects (the shapers read exactly these; the implementer writes the GraphQL text once, and FX2
 records that text):
 - initiative: `id name description status updatedAt projects(first: 50) { nodes { id } }`
-- project: `id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt } }`
+- project: `id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } }`
+  (`creator { id }` on a milestone is the bind-by-name check of Task 3.2; FX2 question 7 confirms the field exists,
+  and if the schema has none the selection drops it before FX2 records the document)
 - `projectStatuses`: `id name type`, first 50; `initiativesProbe`: `initiatives(first: 1) { nodes { id } }`
 - `initiativesByName`, `projectsByName`: filtered by exact `name`, first 10, each node `id name createdAt creator { id }`
   (a project also `teams(first: 20) { nodes { key } }`): the bind-by-name read of Task 3.2
@@ -376,7 +400,8 @@ headers, and deletes the objects it created afterwards with its own calls, which
 5. the probe on the initiatives-off workspace;
 6. by observation, whether the GitHub mirror of a synced issue shows an issue relation and an attachment link;
 7. `initiativesByName` and `projectsByName` on an object it created: does the exact-name filter hold, and does
-   `creator { id }` read the key's viewer (the directory's `viewerId`)?
+   `creator { id }` read the key's viewer (the directory's `viewerId`)? And for milestones: does `ProjectMilestone`
+   have a `creator` field (introspection), and does `projectById`'s milestone selection read it as the viewer?
 
 It lands as one fixture-only commit (recorded files replace the constructed ones; their `AWAITING_RECAPTURE` rows are
 removed; the README gains the answers in a "What FX2 measured" section) in a PR of its own, reviewed for leaked
@@ -570,9 +595,10 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
     `PlanTicketBody { key; kind: TicketKind; title; body?: string; project?: string; checkpoint?: string }`;
     `PlanView { program: string; planned: boolean; initiatives: { workspaceId: string; url: string | null; state: BindingState | 'off' | 'none' }[]; epics: EpicView[]; doneWhen: { text: string; proved: boolean }[] }`;
     `EpicView { key; title; summary; project; waves; state: EpicState; url: string | null; sync: BindingState | 'none' | 'unsynced'; checkpoints: CheckpointView[]; tickets: TicketView[] }`;
-    `CheckpointView { key; title; kind; state; proves: number[]; metAt: number | null; evidence: CheckpointEvidence | null; url: string | null }`;
+    `CheckpointView { key; title; kind; state; proves: number[]; metAt: number | null; evidence: CheckpointEvidence | null; url: string | null; sync: BindingState | 'none' | 'unsynced'; syncWord: string | null }`;
     `CheckpointEvidence = { pr: number } | { itemId: number } | { path: string }`;
-    `TicketView { key; kind; title; project; checkpoint: string | null; source; state; runId: number | null; identifier: string | null; url: string | null }`;
+    `TicketView { key; kind; title; project; checkpoint: string | null; source; state; runId: number | null; identifier: string | null; url: string | null; sync: BindingState | 'none' | 'unsynced'; syncWord: string | null }`
+    (`EpicView` gains `syncWord` too: a `failed` binding's word, Task 3.2, so `plan show` names why);
     `HierarchyAnswer { ok: true; projects: HierarchyProjectRow[]; coordinators: { id: string; live: boolean }[] }`;
     `HierarchyProjectRow { project; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean }; ownsTeam: boolean; state: HierarchyState; stateAt: number | null; itemId: number | null; inboundWaiting: number }`.
   - `PLAN_REFUSALS = ['not-plan-owner','not-linear-owner','plan-too-large','plan-bad-body','waves-not-contiguous','wave-overlap','dropped-needs-reason','unknown-epic','unknown-checkpoint','unknown-ticket','ticket-workspace-mismatch','linear-text-public','plan-owned','map-rewrites-plan','map-incomplete','migration-in-flight','not-managed','issue-not-inbound','item-act-mismatch','plan-closed','plan-runs-open'] as const`
@@ -586,7 +612,8 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
   `{ 'linear-map': ['approve','return'], 'linear-report': ['put-back','done'], 'linear-drift': ['hand','keep'], 'linear-initiatives': ['check-again'], 'linear-owner': ['name'] }`;
   `isLinearItemAction(a: ItemAction | null)`. `parseItemAction` reads the five (a run action still needs `runId`).
   `actAbandons` stays false for them.
-- Produces (`shared/api.ts`): `RunRefuseCode` gains `'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable'`;
+- Produces (`shared/api.ts`): `RunRefuseCode` gains `'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'`
+  (`plan-closed` is one word with one status, 409, whether a plan verb or `runs open` answers it);
   `ServerCap` gains `'plan-v1'`; `ProjectLinkingWire` gains `initiatives: 'on' | 'off'`, `linearOwner: string | null`,
   `ownsTeam: boolean`.
 - Statuses: `not-plan-owner`, `not-linear-owner` 403; `unknown-epic`, `unknown-checkpoint`, `unknown-ticket` 404;
@@ -594,7 +621,7 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
 
 - [ ] **Step 1: Write the failing tests** — `every PLAN_REFUSALS word has a status`; `isPlanKebab admits the plan words and refuses run-unreadable`;
   `parseItemAction reads each linear verb and refuses one with a missing field`; `a linear action never abandons`;
-  `the four new run refusals are RunRefuseCodes with statuses`; the single-definition row: `LINEAR_SYNC_PROGRAMME is spelled once`.
+  `the five new run refusals are RunRefuseCodes with statuses`; the single-definition row: `LINEAR_SYNC_PROGRAMME is spelled once`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-vocabulary.test.ts test/single-definition/plan.test.ts test/mail-routes.test.ts`.
 - [ ] **Step 3: Implement**; `mail-routes.test.ts`'s guard list gains `|| isPlanKebab(tok)`; `shared/api.ts` gains no import line.
 - [ ] **Step 4: Run to pass** — same, plus `test/peers-claims-l0.test.ts test/collect-lane-l0.test.ts test/refusal-status.test.ts`.
@@ -602,33 +629,42 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
 
 ### Task 2.2: Migration 57 and the plan store
 
-**Files:** Modify `server/src/coord/schema.ts` (entry 57), `server/src/coord/store.ts` (two lines:
+**Files:** Modify `server/src/coord/schema.ts` (entry 57), `server/src/coord/store.ts` (the hook line:
 `advanceInner` calls `planStore.onRunAdvancedInTx` beside `settleEndRequests`, so `advance`, `dispatchRun`, `closeRun`
 and the sweep's batch all reach it inside their own transaction; `reconstruct`'s programme INSERT writes
-`planRequired` 0), `server/src/coord/linkingStore.ts` (the three new columns); Create `server/src/coord/planStore.ts`;
+`planRequired` 0; Task 2.5 adds `openRun`'s ticket parameter), `server/src/coord/linkingStore.ts` (the three new
+columns), `server/test/single-definition/core-vocab.test.ts` (`planStore.ts` joins `HANDLE_HOLDERS`, with its D-8181
+line in the set's comment, beside `linkingStore.ts`'s); Create `server/src/coord/planStore.ts`;
 Test `server/test/plan-store.test.ts`, `server/test/coord-db.test.ts` (the schema version), `server/test/coord-store.test.ts`.
 `setProgramState` is **not** hooked: `programs.state` is not a programme-end signal (What was read first).
+
+Without the `HANDLE_HOLDERS` row, `REACH` (`/\b(?:coord|store)\.db\s*[.,)]/`) turns `planStore.ts` red, and so would
+`planRoutes.ts` and `hierarchyRoutes.ts` if they called `planOf(coord.db, …)`. They never do: they take the
+`PlanStorePort`, which `index.ts` (outside `coord/`, where `new LinearJournal(coord.db)` already lives) builds once with
+`planStorePort(coord.db)` and hands to the routes' opts, `PlanSync`, `DriftPass` and `LinearMigration`. `store.ts` and
+`routes.ts` are holders already and call the free functions with their own handle.
 
 Migration 57 (renumber at rebase):
 
 ```sql
 CREATE TABLE plan_epics (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT, project TEXT NOT NULL, waves TEXT NOT NULL,
   key TEXT NOT NULL, ordinal INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, state TEXT NOT NULL,
-  droppedWhy TEXT, openedAt INTEGER, doneAt INTEGER, UNIQUE (program, key));
+  droppedWhy TEXT, putBackAt INTEGER, openedAt INTEGER, doneAt INTEGER, UNIQUE (program, key));
 CREATE UNIQUE INDEX plan_epics_upkeep ON plan_epics(project) WHERE program IS NULL;
 CREATE TABLE plan_checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, epicId INTEGER NOT NULL REFERENCES plan_epics(id),
   key TEXT NOT NULL, ordinal INTEGER NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, proves TEXT NOT NULL,
-  state TEXT NOT NULL, metAt INTEGER, evidence TEXT, itemId INTEGER, UNIQUE (epicId, key));
+  state TEXT NOT NULL, droppedWhy TEXT, putBackAt INTEGER, metAt INTEGER, evidence TEXT, itemId INTEGER,
+  UNIQUE (epicId, key));
 CREATE TABLE plan_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT, project TEXT NOT NULL,
   epicId INTEGER NOT NULL REFERENCES plan_epics(id), checkpointId INTEGER REFERENCES plan_checkpoints(id), key TEXT NOT NULL,
   kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, state TEXT NOT NULL, runId INTEGER,
-  UNIQUE (program, key));
+  droppedWhy TEXT, putBackAt INTEGER, UNIQUE (program, key));
 CREATE UNIQUE INDEX plan_tickets_upkeep ON plan_tickets(epicId, key) WHERE program IS NULL;
 ALTER TABLE runs ADD COLUMN ticketId INTEGER;
 CREATE TABLE linear_bindings (id INTEGER PRIMARY KEY AUTOINCREMENT, localKind TEXT NOT NULL, localId INTEGER NOT NULL,
   workspaceId TEXT NOT NULL, teamKey TEXT, linearId TEXT, identifier TEXT, fingerprint TEXT, syncedAt INTEGER,
-  state TEXT NOT NULL, driftCount INTEGER NOT NULL DEFAULT 0, driftSince INTEGER, heldItemId INTEGER,
-  UNIQUE (localKind, localId, workspaceId));
+  state TEXT NOT NULL, failedAt INTEGER, failedWord TEXT, failedInputs TEXT, driftCount INTEGER NOT NULL DEFAULT 0,
+  driftSince INTEGER, heldItemId INTEGER, UNIQUE (localKind, localId, workspaceId));
 CREATE TABLE plan_sync_due (program TEXT PRIMARY KEY, dueAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
 ALTER TABLE project_linking ADD COLUMN initiatives TEXT NOT NULL DEFAULT 'on';
 ALTER TABLE project_linking ADD COLUMN linearOwner TEXT;
@@ -652,11 +688,18 @@ box with one live programme. Nothing writes `paused` today, so nothing moves it.
 slug (Tasks 2.5, 2.4) and `readProgrammes` never lists a programme with no run. `planEnd` (`done` | `abandoned`),
 `planEndWhy` and `planEndAt` are written only by `plan close` (Task 2.4).
 
+`droppedWhy` is the reason a drop carries (`PlanChanges.drop[].why`, `ticket-move`'s `drop.why`, `epic-drop`'s
+`why`), read by Task 3.3's cancel comment. `putBackAt` is set only by *Put back* (Task 7.4), on the records it drops;
+the sync's snapshot leaves out every record with `putBackAt` set, so it emits nothing for them. It is a column, not a
+reason text: a coordinator's own `droppedWhy` that happens to read "put back" is an ordinary drop. `failedAt`,
+`failedWord` and `failedInputs` (the fingerprint of the planned inputs at failure) let Task 3.2 return a `failed`
+binding to `pending`. `plan_sync_due.program` holds a programme slug or `upkeep:<project>` (Task 4.3).
+
 **Interfaces:**
 - Produces (types, in `planStore.ts`; Task 2.3 imports them as types):
-  - `EpicRow { id; program: string | null; project; waves: number[]; key; ordinal; title; summary; state: EpicState; droppedWhy: string | null; openedAt: number | null; doneAt: number | null }`,
-    `CheckpointRow { id; epicId; key; ordinal; title; kind; proves: number[]; state; metAt; evidence: CheckpointEvidence | null; itemId: number | null }`,
-    `TicketRow { id; program: string | null; project; epicId; checkpointId: number | null; key; kind; title; body; source; state; runId: number | null }`,
+  - `EpicRow { id; program: string | null; project; waves: number[]; key; ordinal; title; summary; state: EpicState; droppedWhy: string | null; putBackAt: number | null; openedAt: number | null; doneAt: number | null }`,
+    `CheckpointRow { id; epicId; key; ordinal; title; kind; proves: number[]; state; droppedWhy: string | null; putBackAt: number | null; metAt; evidence: CheckpointEvidence | null; itemId: number | null }`,
+    `TicketRow { id; program: string | null; project; epicId; checkpointId: number | null; key; kind; title; body; source; state; runId: number | null; droppedWhy: string | null; putBackAt: number | null }`,
     `BindingRow` (the table's columns), `StoredPlan { program: string; planBy: string | null; required: boolean; epics: (EpicRow & { checkpoints: CheckpointRow[]; tickets: TicketRow[] })[] }`.
   - `PlanChanges { epics: Changes<NewEpic, EpicPatch>; checkpoints: Changes<NewCheckpoint, CheckpointPatch>; tickets: Changes<NewTicket, TicketPatch> }`
     with `Changes<N, P> = { insert: N[]; update: (P & { id: number })[]; drop: { id: number; why: string }[] }`; a new
@@ -669,23 +712,40 @@ slug (Tasks 2.5, 2.4) and `readProgrammes` never lists a programme with no run. 
   - `applyPlanChanges(db, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string } | null): void`
     — when `newRow` is given and no `programs` row exists, inserts it first in the same transaction (`active`,
     `homeProject` = `home`, `planRequired` 1, `INSERT … ON CONFLICT(slug) DO NOTHING`); then inserts, updates, drops
-    (never deletes); sets `planBy`/`planAt` on the first call; marks the programme due
+    (never deletes; a drop writes its `why` to `droppedWhy`); sets `planBy`/`planAt` on the first call; settles every
+    epic it touched (`settleEpicInTx`: a drop or a move can leave an epic with nothing open); marks the programme due
   - `closePlan(db, program: string, outcome: PlanEndOutcome, why: string | null, now: number): void` — writes
     `planEnd`/`planEndWhy`/`planEndAt` once and marks the programme due
   - `planEndOf(db, program: string): { outcome: PlanEndOutcome; why: string | null; at: number } | null`
-  - `markCheckpointMet(db, checkpointId: number, evidence: CheckpointEvidence, now: number): void`
+  - `settleEpicInTx(db, epicId: number, now: number): void` — the one writer of an epic's `done`: when the epic is
+    `planned` or `active` and `epicIsDone` (Task 2.3) holds over its checkpoints and tickets, sets `done` and `doneAt`
+    and marks its programme (or `upkeep:<project>`; an Upkeep epic never closes, so it is skipped) due. Called from
+    `onRunAdvancedInTx`, `markCheckpointMet`, `applyPlanChanges` (drops and moves, for the source and the target
+    epic), `updateTicket` (a ticket moved or dropped) and `plan take` (Task 4.3). Without it, the usual order (run
+    `done`, then `plan met` with the PR) leaves the epic `active` for good, its Linear project never completes and
+    `programmeEnd`'s derived `done` never fires.
+  - `markCheckpointMet(db, checkpointId: number, evidence: CheckpointEvidence, now: number): void` — then
+    `settleEpicInTx` on its epic, in the same transaction
   - `insertTicket(db, t: NewTicket, now: number): number`; `updateTicket(db, id: number, patch: TicketPatch, now: number): void`
+    (a drop's `why` into `droppedWhy`)
   - `ticketById(db, id)`, `ticketByKey(db, program: string | null, epicId: number, key: string)`
-  - `attachRunTicket(db, runId: number, ticketId: number): void`
+  - `attachTicketInTx(db, runId: number, ticket: OpenRunTicket, now: number): { ok: true } | { ok: false; refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable' }`
+    — inside `openRun`'s transaction (Task 2.5): re-checks the plan facts (`planEnd` null, the epic live, an existing
+    ticket `open` with no run), then inserts the auto ticket (key `run-<runId>`, deterministic) or re-projects the
+    named one, and attaches it only when `runs.ticketId IS NULL` (a retried open attaches nothing twice)
   - `onRunAdvancedInTx(db, runId: number, from: RunState, to: RunState, now: number): void` — called from
-    `advanceInner`: `dispatched` → ticket `started` and its epic `active` (first run); `done` → ticket `done`, then the
-    epic `done` when `epicIsDone`; `failed` → ticket `open`, `runId` cleared. A review run, or a run
+    `advanceInner`: `dispatched` → ticket `started` and its epic `active` (first run); `done` → ticket `done`, then
+    `settleEpicInTx`; `failed` → ticket `open`, `runId` cleared. A review run, or a run
     with no ticket, moves nothing. Marks the programme due through `markSyncDueInTx`.
+  - `export interface PlanStorePort` — each function above and below, bound to one handle, without the `db`
+    argument; `export function planStorePort(db: DatabaseSync): PlanStorePort` (called once, in `index.ts`).
   - `planOwnerOf(db, program: string): string | null` — the `claimedBy` of the programme's newest run, else `planBy`
   - bindings: `bindingOf(db, kind: BindingKind, localId: number, workspaceId: string): BindingRow | null`,
     `ensurePending(db, kind, localId, workspaceId, teamKey: string | null): BindingRow`,
     `markBound(db, id: number, linearId: string, identifier: string | null, fingerprint: string, now: number): void`,
-    `markFailed(db, id: number, now: number): void`, `bindingsOf(db, program: string): BindingRow[]`
+    `markFailed(db, id: number, word: string, inputs: string, now: number): void`,
+    `requeueFailed(db, where: { workspaceId?: string; bindingId?: number; olderThan?: number }): number` (back to
+    `pending`, clearing the three `failed*` columns; Task 3.2's rules), `bindingsOf(db, program: string): BindingRow[]`
   - queue: `markSyncDue(db, program: string, at: number): void` and `markSyncDueInTx` (both keep the earlier `dueAt`), `dueSyncs(db, now: number): string[]`,
     `clearSyncDue(db, program: string): void`, `deferSync(db, program: string, until: number): void` (increments `attempts`)
   - settings: `hierarchySettingsOf(db, project)`, `setHierarchySettings(db, project, s: HierarchySettingsBody, by: string, at: number)`
@@ -698,12 +758,17 @@ slug (Tasks 2.5, 2.4) and `readProgrammes` never lists a programme with no run. 
   `dispatchRun starts the ticket and activates its epic` and `closeRun done closes the ticket, failed reopens it` (both
   driven through the store's own `dispatchRun` and `closeRun`, not `advance`, so the hook is proven on the path that
   bypasses `advance`); `no planStore InTx writer opens a transaction` (calling one inside `tx` does not throw);
-  `a dropped key keeps its row with droppedWhy` ; `two Upkeep epics for one project are refused by the index`;
+  `a dropped key keeps its row with droppedWhy` (an epic, a checkpoint and a ticket); `two Upkeep epics for one
+  project are refused by the index`;
   `onRunAdvancedInTx: done closes the epic too when nothing is open`;
+  `plan met on the last checkpoint after the last run closes the epic`; `dropping the last open ticket closes the
+  epic`; `a ticket moved out of an epic settles the source epic`; `an Upkeep epic never settles done`;
+  `core-vocab's handle ring stays green with planStore.ts holding the handle`;
   `a review run's advance moves no ticket`; `markSyncDue keeps the earlier dueAt`; `planOwnerOf prefers the newest claimant, then planBy`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-store.test.ts test/coord-db.test.ts`.
-- [ ] **Step 3: Implement** the entry with its header comment and the store; `store.ts` gains only the two lines.
-- [ ] **Step 4: Run to pass** — same, plus `test/coord-store.test.ts test/linking-store.test.ts`.
+- [ ] **Step 3: Implement** the entry with its header comment and the store; `store.ts` gains only the hook line and
+  `reconstruct`'s column here.
+- [ ] **Step 4: Run to pass** — same, plus `test/coord-store.test.ts test/linking-store.test.ts test/single-definition/core-vocab.test.ts`.
 - [ ] **Step 5: Commit** — `feat(plan): migration 57 and the plan store (D-8181)`.
 
 ### Task 2.3: The plan deciders
@@ -767,8 +832,9 @@ it('an owner whose presence is unmeasured is not gone', …);
 
 ### Task 2.4: The plan routes and the `ccrc-api plan` rows
 
-**Files:** Create `server/src/coord/planRoutes.ts`; Modify `server/src/server.ts` (register, +`MASKED_GET_ROUTES`
-entry), `server/src/auth/gate.ts` (EXEMPT rows and counts), `ccd/ccrc-api` (rows, identity fill, the `plan-v1` local
+**Files:** Create `server/src/coord/planRoutes.ts`; Modify `server/src/server.ts` (register after
+`registerCoordRoutes`, passing its handle's `serial`; +`MASKED_GET_ROUTES` entry), `server/src/index.ts` and
+`server/src/deps.ts` (`planStorePort(coord.db)` built once, `plan?: PlanStorePort` on the deps), `server/src/auth/gate.ts` (EXEMPT rows and counts), `ccd/ccrc-api` (rows, identity fill, the `plan-v1` local
 refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.test.ts`, `server/test/ccrc-api.test.ts`,
 `server/test/ccrc-api-closed.test.ts`, `server/test/box-token-census.test.ts`, `server/test/auth-gate.test.ts`,
 `server/test/secret-mask.test.ts`.
@@ -776,8 +842,13 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
 **Interfaces:**
 - Consumes: Tasks 2.1–2.3; `attributionVerdict` (as `attribute`), `checkMailToken`, `refuseRoute`, the Linear store
   read and `routeLinear` for `workspaceOfProject`, `redactShapedCount('linear-egress', …)` on every text field.
-- `PlanRouteOpts { coord: CoordStore | undefined; mailToken: () => string | BoxTokenHolder | null; attribute: (id: string, uuid: string) => Promise<AttributionRead>; sessionAuth: (req: FastifyRequest) => SessionVerdict; authEnabled: boolean; readLinearStore: () => Promise<LinearStoreRead>; runOfSession: (id: string) => { program: string; epicId: number | null } | null; now: () => number }`
-  (`linkingStore`'s and the goals read's deps, gathered the same way in `server.ts`).
+- `PlanRouteOpts { coord: CoordStore | undefined; plan: PlanStorePort | undefined; serial: CoordRoutesHandle['serial']; mailToken: () => string | BoxTokenHolder | null; attribute: (id: string, uuid: string) => Promise<AttributionRead>; sessionAuth: (req: FastifyRequest) => SessionVerdict; authEnabled: boolean; readLinearStore: () => Promise<LinearStoreRead>; runOfSession: (id: string) => { program: string; epicId: number | null } | null; now: () => number }`
+  (`linkingStore`'s and the goals read's deps, gathered the same way in `server.ts`; `serial` is the handle
+  `registerCoordRoutes` returns, so these routes are registered after it). Every plan **write** (put, met,
+  ticket-add, ticket-move, epic-drop, close; later take, triage and map-propose) runs its checks and its store write
+  inside `serial(...)`, the same `coordMutex` that holds `POST /api/runs` from its preconditions to its insert, so a
+  plan write never lands between a run's plan check and its attach. Attribution and any Linear read run before it,
+  outside. `plan show` takes no lock. The routes read and write only through `plan`; no `coord.db` (Task 2.2).
 - Produces routes (box token, then the identity pair from the query, then attribution, then the caller check):
   - `POST /api/programmes/:slug/plan` (`plan put`) → `{ ok: true, plan: PlanView }`. The slug `LINEAR_SYNC_PROGRAMME`
     is refused `reserved-programme` (409, its run status). On a slug with no `programs` row (a new programme, which
@@ -807,7 +878,9 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
   `a put on a new slug with home inserts the programme row (active, that home, planRequired 1), and a later runs open
   keeps it`; `a put on a new slug with no home is plan-bad-body and stores nothing`; `a put on linear-sync is
   reserved-programme`; `close abandoned with no why is dropped-needs-reason`; `close with a run working is
-  plan-runs-open`; `a put after close is plan-closed`;
+  plan-runs-open`; `a put after close is plan-closed`; `a plan close sent while a runs open waits on its child gate
+  lands after the open, then answers plan-runs-open` (the shared `serial`); `plan met on the last checkpoint after
+  the last run closes the epic`;
   `a tokenless call is 401 before anything is read`; `plan show answers a cookie and a token alike, masked`;
   `met with evidence {pr: 12} marks the checkpoint`; `ticket-add by a worker into another epic is not-plan-owner`;
   `ticket-move with drop and no why is dropped-needs-reason`; in `ccrc-api.test.ts`: `plan put sends byId and byUuid in the query and the body unchanged`,
@@ -820,39 +893,84 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
 ### Task 2.5: Runs attach to tickets
 
 **Files:** Modify `server/src/coord/openRun.ts` (`OPEN_RUN_GATES`: `reservedProgramme`, `ticketShape` after `shape`;
-`planGate` after `homeVerdict`), `server/src/coord/routes.ts` (`POST /api/runs`: attach inside the mutex),
-`ccd/coordinator-skill/references/api.md` (the four new codes, one recovery line each; `plan-missing`'s points at
+`planGate` after `homeVerdict`), `server/src/coord/routes.ts` (`POST /api/runs`: the plan facts and the ticket handed
+to `openRun`), `server/src/coord/store.ts` (`openRun`'s optional `ticket` parameter and its one
+`attachTicketInTx` call inside the transaction that inserts the run; a `server/test/growth-waivers/D-8181-store.json`
+if the wave's store.ts growth passes +40), `ccd/coordinator-skill/references/api.md` (the five new codes, one recovery
+line each; `plan-missing`'s points at
 `references/plan.md`); Create `ccd/coordinator-skill/references/plan.md` (the refusal ships with its recovery: the
 `plan put` body by example, the design's §4.3 JSON with `home`, and the wave-2 verbs `plan put`, `plan show`,
 `plan met`, `plan ticket-add`, `plan ticket-move`, `plan epic-drop`, `plan close`, each with its body and refusals.
 Verbs are named as `ccrc-api plan <verb>` commands, never as raw `POST /api/...` paths, because
 `coordinator-skill.test.ts`'s route census reads only `coord/routes.ts` and `reviewRoundsRoute.ts`. Wave 6 adds
 clause 21 and the later verbs, and wave 7 adds `plan map-propose`);
-Test `server/test/open-run-preconditions.test.ts` (gate-order rows), `server/test/run-routes.test.ts`,
-`server/test/coordinator-skill.test.ts`, `server/test/ccrc-api-closed.test.ts` (the pinned list of client commands the
-skill corpora run gains each `plan.*` key that `plan.md` runs).
+Test `server/test/open-run-preconditions.test.ts` (gate-order rows, and its facts builder's default `plan` fact),
+`server/test/run-routes.test.ts`, `server/test/plan-run-attach.test.ts` (new), `server/test/coordinator-skill.test.ts`,
+`server/test/ccrc-api-closed.test.ts` (the pinned list of client commands the skill corpora run gains each `plan.*`
+key that `plan.md` runs).
+
+**The ripple into existing route tests.** `plan(slug)` answers `required: true` for an absent row, so every existing
+test that opens a run through `POST /api/runs` on a fresh database and a new slug is refused `plan-missing` from this
+task on. Measured on this branch's base with `grep -rln "url: '/api/runs'" server/test`, narrowed to the files that
+inject a `POST` (the rest only `GET` the list): `archive-coord-handle`, `auth-gate`, `child-reclaim-refusals`,
+`coord-attribution`, `coord-caps-route`, `cross-project-claimant-security`, `fable-ladder-door`,
+`fable-operator-only`, `home-project-required`, `landing-writes-route`, `open-run-preconditions`,
+`route-unreadable-series`, `run-binding-bind-records`, `run-open-registry-id`, `run-route-order`, `run-route-route`,
+`run-route-session-trail`, `run-routes`, `runs-attribution-switch` (each `server/test/<name>.test.ts`). Re-measure
+on `origin/main` before the PR (both greps, and any helper that posts the route under another spelling), and add
+every file found. The fix:
+- Create `server/test/helpers/plan.ts` with `seedLegacyProgramme(db: DatabaseSync, slug: string, home: string): void`,
+  which inserts the programme's row as a pre-plan programme (`active`, `homeProject` = `home`, `planRequired` 0, the
+  same INSERT `runs open` uses). A test whose open is incidental calls it before the open, with the home the open
+  sends, and opens as today. (A test file is not under `REACH`'s coord-directory scan.)
+- A test whose subject is a **new** programme's first open (`home-project-required`, the new-slug rows of
+  `run-routes` and `open-run-preconditions`) declares the plan first through `POST /api/programmes/:slug/plan` with
+  the same `home`, so the "no stored row" arm it tests is still reached by a programme the plan inserted; each
+  assertion that read "absent row" semantics is re-derived and named in the commit message.
+- `open-run-preconditions.test.ts`'s facts builder gets a default `plan` fact (`{ required: false, ended: false,
+  epics: [], ticket: () => null }`), so its existing rows keep their verdicts and only the new rows set it.
+- These files land in **their own commit**, before the feature commit: `test(plan): route tests seed a legacy
+  programme before plan-missing (D-8181)`, run in batches of at most 12 files.
 
 **Interfaces:**
-- Consumes: `epicForWave`, `planOf`, `insertTicket`, `attachRunTicket`.
-- Produces: `OpenRunFacts` gains `plan(slug: string): { required: boolean; epics: …; ticket(key: string): TicketRow | null } `;
+- Consumes: `epicForWave`, `planOf`, `planEndOf`, `attachTicketInTx` (Task 2.2).
+- Produces: `OpenRunFacts` gains `plan(slug: string): { required: boolean; ended: boolean; epics: …; ticket(key: string): TicketRow | null } `;
   `required` is the row's `planRequired`, and `true` for a slug with no `programs` row (a new programme that skipped
-  `plan put`: answering false would silently disarm `plan-missing`);
-  `OpenRunPlan` gains `ticket: { kind: 'existing'; id: number; reproject: string | null } | { kind: 'new'; epicId: number } | null`.
-  Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-missing` (no epic and `planRequired` 1);
-  `wave-epic-mismatch` (no live epic lists the wave, or the named ticket's epic is not the wave's);
-  `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run, or an Upkeep ticket). A review run
-  attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's project,
-  the run's title) in the wave's epic; a named ticket in another project takes the run's project.
+  `plan put`: answering false would silently disarm `plan-missing`); `ended` is `planEnd IS NOT NULL`;
+  `OpenRunPlan` gains `ticket: OpenRunTicket | null`, with
+  `OpenRunTicket = { kind: 'existing'; id: number; epicId: number; reproject: string | null } | { kind: 'new'; epicId: number; project: string; title: string }`.
+  Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-closed` (the plan reads `ended`: `runs open`
+  after `plan close`, which the sync would otherwise answer by closing the initiative under a live run);
+  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (no live epic lists the wave, or the named
+  ticket's epic is not the wave's); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
+  or an Upkeep ticket). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
+  run attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's
+  project, the run's title, key `run-<runId>`, which `UNIQUE (program, key)` needs and a retry derives again) in the
+  wave's epic; a named ticket in another project takes the run's project.
+- **The attach is atomic and idempotent.** The route hands the verdict's `ticket` to `coord.openRun`, and `openRun`
+  calls `attachTicketInTx` inside the same transaction that inserts the `planned` row. So a crash leaves either no
+  run or a run with its ticket, never a run with no ticket in a programme that requires a plan (whose Linear issue
+  would never be made). `attachTicketInTx` re-reads the plan facts in that transaction (`planEnd` null, the epic
+  live, the named ticket `open` with no run): the preconditions are read inside the mutex but before
+  `childBindGate`'s wait (up to 25 s) and the registry reads, and Task 2.4's writers share the mutex, but the
+  re-check makes the insert's own transaction the authority. A failed re-check rolls the insert back and `openRun`
+  answers `{ refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable' }`, which the route already sends
+  through `refuseRun`. `openRun`'s retry arm (it returns the same `planned` row for the same programme, wave and
+  claimant) attaches only when `runs.ticketId IS NULL`, so a retried open never makes a second ticket or a second
+  Linear issue.
 
-- [ ] **Step 1: Write the failing tests** — the four refusals, each with its gate-order row and reorder mutant;
-  `a run with no ticket gets one in its wave's epic`; `a run opened with a ticket of project-a in project-b re-projects the ticket`;
+- [ ] **Step 1: Write the failing tests** — the five refusals, each with its gate-order row and reorder mutant;
+  `a run with no ticket gets one in its wave's epic, keyed run-<id>`; `a run opened with a ticket of project-a in project-b re-projects the ticket`;
   `an older programme (planRequired 0) with no plan opens as today`; `a review run never gets a ticket`;
-  `a new slug with no row and no plan is plan-missing`; the coordinator corpus names the four codes; `plan.md` names
-  every wave-2 plan verb and the body's `home`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/open-run-preconditions.test.ts test/run-routes.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts test/ccrc-api-closed.test.ts test/skill-size-ratchet.test.ts`.
-- [ ] **Step 3: Implement**; the four codes are quoted in `server/src/coord` (the reverse scan).
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `feat(plan): runs attach to tickets (D-8181)`.
+  `a new slug with no row and no plan is plan-missing`; `runs open after plan close is plan-closed`;
+  `a retried open answers the same run and leaves one ticket`; `an epic dropped between the gate and the insert
+  refuses wave-epic-mismatch and leaves no planned row` (the drop injected through the `childBindGate` fake's wait);
+  `a throw after the run insert rolls back the ticket too` (`plan-run-attach.test.ts`); the coordinator corpus names
+  the five codes; `plan.md` names every wave-2 plan verb and the body's `home`.
+- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/open-run-preconditions.test.ts test/run-routes.test.ts test/plan-run-attach.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts test/ccrc-api-closed.test.ts test/skill-size-ratchet.test.ts`.
+- [ ] **Step 3: Implement**; the five codes are quoted in `server/src/coord` (the reverse scan).
+- [ ] **Step 4: Run to pass** — plus the measured ripple files above, at most 12 per command.
+- [ ] **Step 5: Commit** — the ripple commit first (above), then `feat(plan): runs attach to tickets (D-8181)`.
 
 ### Task 2.6: The per-project hierarchy settings (server half)
 
@@ -865,6 +983,8 @@ Test `server/test/hierarchy-routes.test.ts`.
   (`coordinatorPresenceIn` over the watcher's fleet frame and registry ids, `shared/ledgers.ts`), passed in as
   `HierarchyRouteOpts.presenceOf: (id: string) => CoordinatorPresence`: the session standing the console already
   shows (§15 item 10). `alive` (covering `asleep`) is live, `dead`/`absent` gone, `unmeasured` neither.
+  `HierarchyRouteOpts` also carries `plan: PlanStorePort` and `serial` (Task 2.4's rule): every write here, and the
+  item acts later waves add to this file, runs inside `serial(...)`; nothing names `coord.db`.
 - Produces:
   - `POST /api/projects/:project/hierarchy` body `{ initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean }`
     — session-gated when armed, no box token (the linking write's stance); `ownsTeam: true` clears it on every other
@@ -962,9 +1082,14 @@ Starts after FX2 has landed. From here new programmes are born in the new shape 
     The initiative's status values are the set FX2's answer 2 records, held as `LINEAR_INITIATIVE_STATUSES` in
     `hierarchyOps.ts` (the design assumes Planned, Active, Completed; an abandoned programme's initiative uses a
     canceled value only if FX2 found one, else Completed with the "Abandoned on" line).
-  - `PlanSyncDeps` (Task 3.2) and the snapshot builder read only coord.db, the Linear store and the refresher's
-    directory; this file reads none of them. The builder fills `program.end` from `programmeEnd` (Task 2.3): the
-    explicit `plan close`, or the derived `done`. `programs.state` alone never ends a programme.
+  - `PlanSyncDeps` (Task 3.2) and the snapshot builder read only coord.db (through the `PlanStorePort`), the Linear
+    store and the refresher's directory; this file reads none of them. The builder fills `program.end` from
+    `programmeEnd` (Task 2.3): the explicit `plan close`, or the derived `done`. `programs.state` alone never ends a
+    programme. The builder leaves out every epic, checkpoint and ticket with `putBackAt` set (Task 2.2), so no step is
+    ever emitted for a record *Put back* dropped; a drop's cancel comment reads `droppedWhy`.
+  - A `failed` binding emits no step (and nothing under it) until Task 3.2's rules return it to `pending`;
+    `planSyncSteps` also reports, per failed binding, the fingerprint of its planned inputs now, so the pass can see
+    that a new `plan put` changed them.
   - Text guard: every step that carries text for a project whose mode is `public` or `unknown` runs
     `publicTextVerdict` (Task 2.7) first; a refused text yields `{ kind: 'skip', why: 'text-public' }` for that object,
     which the pass turns into a `failed` binding and one mail to the coordinator (§6.1).
@@ -998,9 +1123,23 @@ project statuses`).
   - `export const PLAN_SYNC_BEAT_MS = 5_000`, `PLAN_SYNC_DEBOUNCE_MS = 3_000`,
     `PLAN_SYNC_BACKOFF_MS = [30_000, 120_000, 600_000, 1_800_000] as const` (in `laneSchedule.ts` for the beat; the
     rest in `planSync.ts`)
-  - `export interface PlanSyncDeps { coord: CoordStore; ccrcDir: string; call: (ask: CcrcOpAsk) => Promise<CcrcOpOutcome>; directory: (slot: LinearSlotRef, keyDigest: string) => LinearDirectoryEntries | null; journal: LinearJournal; now: () => number }`
-  - `export class PlanSync { constructor(deps: PlanSyncDeps); tick(now: number): Promise<void>; passFor(program: string, deadlineAt: number): Promise<'done' | 'deferred'> }`
+  - `PLAN_SYNC_TICK_DEADLINE_MS = 60_000` and `PLAN_SYNC_CALL_TIMEOUT_MS = 15_000` (`runCcrcOp`'s `timeoutMs`), pinned
+    so that a tick's deadline plus one call's timeout stays below the lane row's `staleAfterMs`
+  - `export interface PlanSyncDeps { coord: CoordStore; plan: PlanStorePort; ccrcDir: string; call: (ask: CcrcOpAsk) => Promise<CcrcOpOutcome>; directory: (slot: LinearSlotRef, keyDigest: string) => LinearDirectoryEntries | null; journal: LinearJournal; markSlotRejected: (slot: LinearSlotRef, digest: string, now: number) => Promise<void>; now: () => number }`
+    (`coord` only for `insertSystemMailTx`; every plan read and write goes through `plan`)
+  - `export class PlanSync { constructor(deps: PlanSyncDeps); tick(now: number): Promise<void>; passFor(key: string, deadlineAt: number): Promise<'done' | 'deferred'>; withFlight<T>(key: string, fn: () => Promise<T>): Promise<T>; restore(key: string, steps: readonly SyncStep[], pass: 'drift-restore'): Promise<CcrcOpOutcome[]> }`
+    (`key` is a programme slug or `upkeep:<project>`)
   - Lane row `{ name: 'linearPlanSync', cadenceMs: PLAN_SYNC_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: linear plan sync failed' }`
+
+**One writer per Linear object.** `PlanSync` holds an in-process single flight per due key (a `Map<string, Promise>`):
+`passFor` on a key with a pass in flight joins that pass and never starts a second; `ensureTicketBound` (Task 3.4,
+outside `coordMutex`, so a wave's parallel dispatches would otherwise each start one) and `tick` both go through
+`passFor`. The lane runner restarts a `skip` row it thinks stuck after `staleAfterMs` (`laneRunner.ts`'s `start`); a
+tick's total deadline (`PLAN_SYNC_TICK_DEADLINE_MS`) plus one call's timeout stays under it, and a restarted tick
+still only joins the flights in flight. The drift pass hands its restore steps to `restore` (Task 4.2), and the
+migration writes adopted issues inside `withFlight` (Task 7.3), so neither lands between two steps of a pass. Every
+Linear write to a bound object, whoever asked for it, updates that binding's fingerprint in the same flight, so a
+restore of an older planned value can never be read as drift of a newer sync write.
 
 A pass: read the snapshot, take the first steps, run each, write the binding (`pending` before the call, `bound` with
 id and fingerprint after), re-read the plan after every step, stop at the deadline. A create answered "conflict on
@@ -1008,11 +1147,36 @@ insert" reads the object by its `requestId` and binds it. A `name-and-creator` c
 pass that may have sent it) first reads by exact name in its scope (`initiativesByName`; `projectsByName` narrowed to
 the team; a milestone from its project's `projectById`) and binds the one object whose `creator.id` is the key's viewer
 (the directory's `viewerId`) and whose id no binding holds; none sends the create, and two or more mark the binding
-`failed` and mail the coordinator. It does not use `LinearJournal.viaFleet`: that read matches only `outcome = 'ok'`
-rows with a `result`, and in the very crash this exists for (server death after send, before settle) the row is still
-`pending` with no result. Before each write the step's text passes the public-text guard (Task 3.1's `text-public`
-skip). `rate-limited` and `unreachable` defer the programme by the backoff;
-`linear-forbidden`, `linear-invalid` and `policy-denied` mark the binding `failed` and mail the coordinator once.
+`failed` and mail the coordinator. A milestone's creator check holds only if FX2's answer 7 finds `creator` on
+`ProjectMilestone`; if it does not, a milestone binds by exact name inside its own bound project when no binding holds
+that milestone (a ccrc-bound project holds only what ccrc made, so the name is unique there), and the "another
+creator" test row covers initiatives and projects only. It does not use `LinearJournal.viaFleet`: that read matches
+only `outcome = 'ok'` rows with a `result`, and in the very crash this exists for (server death after send, before
+settle) the row is still `pending` with no result. Before each write the step's text passes the public-text guard
+(Task 3.1's `text-public` skip).
+
+Every `CcrcOpOutcome` has one handling (a test row each):
+
+| Outcome | Binding | Programme | Mail |
+|---|---|---|---|
+| `ok` | `bound` (create) or fingerprint updated (update, link) | goes on | none |
+| `rate-limited` | unchanged | deferred by `retryAfterS`, at least the next backoff step | none |
+| `unreachable`, or `timeout` with `maybeSent: false` | unchanged | deferred by the backoff | none |
+| `timeout` (or any word) with `maybeSent: true` | stays `pending`: the next pass binds a create by `requestId` (conflict on insert) or by name and creator, and re-sends an update (updates set absolute values) | deferred by the backoff | none |
+| `malformed` (sent and answered outside the grammar) | as `maybeSent: true`; after the last backoff step it is `failed` | deferred by the backoff | once, at `failed` |
+| `not-configured` (no key for the slot) | unchanged | the tick ends for that workspace; due stays | none (the key settings already show it) |
+| `linear-unauthorised` | unchanged | every programme in that workspace deferred; the slot marked rejected with `markLinearSlotRejected`, as `proxyRoutes.ts` does | none per binding (the key card shows the rejected slot) |
+| `policy-unavailable`, `journal-unavailable` (nothing sent) | unchanged | deferred by the backoff | none |
+| `policy-denied`, `linear-forbidden`, `linear-invalid` | `failed` with the word | goes on with other objects | once per binding and word |
+| `not-found` on an update of a bound object | `failed` with the word (archived or removed in Linear) | goes on | once |
+| a `skip` step (`status-missing`, `text-public`, `workspace-mismatch`) | `failed` with the reason | goes on | once |
+
+A `failed` binding is not terminal. It returns to `pending` (`requeueFailed`) when its planned inputs change (the
+fingerprint `planSyncSteps` reports differs from `failedInputs`, as after a `plan put` that fixes a refused text),
+when the directory refreshes for its workspace (a status type added), when a key is verified for its slot (write
+access regained), when the initiatives probe turns `on`, when its project's team key changes, and otherwise once
+`PLAN_SYNC_BACKOFF_MS`'s last step (30 min) has passed since `failedAt`. A retry that fails again with the same word
+mails nothing more. `plan show` shows `failed` and its word on the epic, checkpoint or ticket (`sync`, `syncWord`).
 
 - [ ] **Step 1: Write the failing tests** (fetch faked from the recorded fixtures):
 
@@ -1028,6 +1192,16 @@ it('two name matches for a name-and-creator create fail the binding', …);
 it('a crash with the journal row still pending binds by name and creator, and sends no second create', …); // Review Focus 2
 it('an object of the same name made by another creator, or already bound, is not taken', …);
 it('a text refused by the public-text guard fails its binding, mails once, and the pass goes on', …);
+it('two concurrent passFor calls on a name-and-creator create send exactly one create', …); // Review Focus 8
+it('a tick the lane runner restarts as stuck joins the pass in flight', …);
+it('tick deadline plus one call timeout is below the row staleAfterMs', …);
+it.each(OUTCOME_ROWS)('outcome %s: binding, programme and mail as the table says', …);
+it('linear-unauthorised marks the slot rejected, defers the workspace and mails nothing', …);
+it('a create that times out after send stays pending and the next pass binds it by name', …);
+it('a failed binding returns to pending when a plan put changes its inputs', …);
+it('a failed binding returns to pending when the directory refresh adds the status type', …);
+it('a failed binding retried after the ceiling and refused again mails nothing more', …);
+it('plan show names a failed binding and its word', …);
 ```
 
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync.test.ts test/lane-schedule.test.ts test/linear-directory-hierarchy.test.ts`.
@@ -1054,12 +1228,18 @@ it('a text refused by the public-text guard fails its binding, mails once, and t
   moved by the plan first, the rest canceled; a ticket's project changed → `issueUpdate` with the new `teamId` inside
   the workspace and the identifier refreshed from the answer.
   - At the start of each tick, an `operator-act` checkpoint whose `itemId` item reads `done` is marked met with
-    `{ itemId }` evidence (`markCheckpointMet`), and its programme is due (§4.1's design call).
+    `{ itemId }` evidence (`markCheckpointMet`, which settles its epic through `settleEpicInTx`), and its programme is
+    due (§4.1's design call).
+  - The epic-dropped and abandoned cancels read the reason from `droppedWhy` (the epic's, the checkpoint's or the
+    ticket's) or `planEndWhy`; a record with `putBackAt` set is never in the snapshot (Task 3.1).
   - The team-key rule (Review Focus 3): `project.teamKey === null` → `skip` `no-team-key` and `plan show` reads
     `unsynced`; a key of the same workspace → the move above; a key of another workspace → `markFailed` and a
     `ticket-workspace-mismatch` mail.
 
 - [ ] **Step 1: Write the failing tests** — one per row above, plus `an operator-act checkpoint is met when its item is done`,
+  `plan met on the last checkpoint after the last run closes the epic, and its project completes`,
+  `the last epic settling done with programs.state done ends the programme and completes the initiative`,
+  `a dropped ticket's cancel comment names its droppedWhy`,
   `the last run of wave 1 closes done while later epics are planned, and nothing in Linear closes`,
   `the last run of wave 1 closes failed (programs.state abandoned), and nothing is canceled` (Review Focus 6, both
   driven through `closeRun`), `plan close abandoned cancels projects and open issues with the reason`,
@@ -1078,8 +1258,10 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
 
 **Interfaces:**
 - Produces:
-  - `PlanSync.ensureTicketBound(runId: number, budgetMs: number): Promise<{ identifier: string | null }>` — one
-    `passFor` of the run's programme with deadline `now + budgetMs`; `PLAN_SYNC_DISPATCH_WAIT_MS = 12_000`.
+  - `PlanSync.ensureTicketBound(runId: number, budgetMs: number): Promise<{ identifier: string | null }>` — joins the
+    pass in flight for the run's programme, or starts one through `passFor` with deadline `now + budgetMs`, and waits
+    at most `budgetMs`; it never starts a second pass for a key in flight (Task 3.2's single flight), so a wave's
+    parallel dispatches share one pass; `PLAN_SYNC_DISPATCH_WAIT_MS = 12_000`.
   - `slugForTicket(identifier: string, given: string | undefined, title: string): string` — `key-123-<words>`,
     lowercase, fitted to `WS_SLUG_MAX` by `fitSlug`; a `given` slug that already starts with the identifier is kept.
   - The route: outside `coordMutex`, when the run is a work run with a ticket, the project's mode is `private`, and
@@ -1094,7 +1276,8 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
 - [ ] **Step 1: Write the failing tests** — `a bound ticket in a private project names the workspace key-123-…`;
   `a public project's slug never carries the identifier, and the sync links the PR`;
   `a resumed work run in a private project with a bound ticket dispatches with no slug and gets the attachment link`;
-  `Linear slow: dispatch goes after 12 s with today's slug`;
+  `Linear slow: dispatch goes after 12 s with today's slug`; `a dispatch during a lane pass joins that pass and sends
+  no create of its own`; `three parallel dispatches of one wave start one pass`;
   `the wait never runs inside coordMutex` (the mutex gate test still green with the new call site); `slugForTicket fits 31 characters`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-dispatch-wait.test.ts test/linking-policy.test.ts test/dispatch-mutex-gate.test.ts`.
 - [ ] **Step 3: Implement**; `routes.ts` grows by the call only.
@@ -1144,14 +1327,20 @@ CREATE TABLE linear_drift_events (id INTEGER PRIMARY KEY AUTOINCREMENT, bindingI
 CREATE TABLE linear_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
   state TEXT NOT NULL, map TEXT, itemId INTEGER, reportItemId INTEGER, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
   appliedAt INTEGER, putBackAt INTEGER);
-CREATE TABLE linear_migration_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, migrationId INTEGER NOT NULL, linearId TEXT NOT NULL,
-  identifier TEXT, before TEXT NOT NULL, after TEXT NOT NULL, appliedAt INTEGER, revertedAt INTEGER);
+CREATE TABLE linear_migration_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, migrationId INTEGER NOT NULL,
+  subject TEXT NOT NULL, kind TEXT NOT NULL, linearId TEXT, identifier TEXT, before TEXT, after TEXT NOT NULL,
+  appliedAt INTEGER, revertedAt INTEGER);
+CREATE UNIQUE INDEX linear_migration_moves_one ON linear_migration_moves(migrationId, subject);
 CREATE TABLE linear_inbound (linearId TEXT PRIMARY KEY, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL, identifier TEXT NOT NULL,
   seenAt INTEGER NOT NULL, mailedTo TEXT, mailedAt INTEGER, handedTo TEXT, state TEXT NOT NULL);
 ```
 
 `linear_drift_events.value` and `actor` hold Linear text, read only under `untrusted`; `linear_inbound.state` is
-`waiting | mailed | handed | taken | placed | closed | raised`.
+`waiting | mailed | handed | taken | placed | closed | raised`. A `linear_migration_moves` row is one subject per
+migration: an existing issue's move (`kind` `issue`, `subject` its UUID, `before` its re-read) or a create of
+structure the map declares (`kind` `initiative` | `project` | `milestone`, `subject` `<bindingKind>:<localId>`,
+`before` null, `linearId` filled when the create answers). The unique index stops a re-run from writing a second row
+whose `before` would be the post-move state (Task 7.3).
 
 **Interfaces:**
 - Produces (`driftPolicy.ts`, pure):
@@ -1194,7 +1383,10 @@ Test `server/test/drift-pass.test.ts`.
     of writing here) and `presenceOf: (id: string) => CoordinatorPresence` (the one `server.ts` builds, Task 2.6;
     read through `linearOwnerOf`'s `live`/`gone`).
   - `export class DriftPass { constructor(deps: DriftPassDeps); tick(now: number): Promise<void> }` — reads `changed*`
-    since the watermark (lane `sync`), compares bound objects, restores (pass `drift-restore`), comments on an issue,
+    since the watermark (lane `sync`), compares bound objects, restores (pass `drift-restore`) by handing the restore
+    steps to `planSync.restore(key, steps, 'drift-restore')`, which runs them inside that programme's flight, re-reads
+    the planned value there (a sync write that landed meanwhile makes the restore moot) and updates the binding's
+    fingerprint with each write (Task 3.2), comments on an issue,
     writes a "Restored" line on an initiative, project or milestone (where FX2's answer 3 says no comment is taken),
     records each event, advances the watermark. While a binding holds an open drift item: at most one restore per
     pass and one comment a day.
@@ -1207,7 +1399,8 @@ Test `server/test/drift-pass.test.ts`.
 - [ ] **Step 1: Write the failing tests** — `a moved issue is restored with one comment`; `a renamed project gets a Restored line, three kept`;
   `the third restore in a week raises the item`; `with the item open, two edits in one pass restore once and comment once a day`;
   `a restore refused linear-forbidden raises the item at once` (Review Focus 5); `an unmanaged team is never read`;
-  `hand mails the coordinator`.
+  `hand mails the coordinator`; `a restore waits for the sync pass in flight and, when that pass wrote the newer
+  planned value, writes nothing and raises no drift`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-pass.test.ts`.
 - [ ] **Step 3: Implement**; tests that build a watcher end with `quietAtTestEnd`.
 - [ ] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
@@ -1223,7 +1416,8 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
 **Interfaces:**
 - Produces:
   - `POST /api/teams/:team/plan/triage` body `{ issue: string (REF); decision: 'hand' | 'upkeep' | 'close' | 'raise'; programme?: string; reason?: string; note?: string }` — caller must be the team's Linear owner (`not-linear-owner`); the issue must be inbound and waiting (`issue-not-inbound`); `hand` mails the programme's coordinator (taken at once when it is the owner's own); `upkeep` places a ticket (source `inbound`, the reporter's title and text) in the team's Upkeep epic, created on first use (`UPKEEP_EPIC_KEY`, project the owning project, no programme); `close` comments with the reason and completes or cancels it; `raise` raises a `decide` item for the operator under `LINEAR_SYNC_PROGRAMME`.
-  - `POST /api/programmes/:slug/plan/take` body `{ issue: string; epic: string; checkpoint?: string } | { issue: string; close: { why: string } } | { issue: string; return: { note: string } }` — the programme's coordinator takes a handed issue or an Upkeep ticket into an epic of its plan (the ticket moves programme and epic; the sync re-parents the issue), closes it, or returns it to the owner.
+  - `POST /api/programmes/:slug/plan/take` body `{ issue: string; epic: string; checkpoint?: string } | { issue: string; close: { why: string } } | { issue: string; return: { note: string } }` — the programme's coordinator takes a handed issue or an Upkeep ticket into an epic of its plan (the ticket moves programme and epic; the sync re-parents the issue), closes it, or returns it to the owner. Each arm settles every epic it touched through `settleEpicInTx` (a close can leave the source epic with nothing open).
+  - Both routes write under `serial` and through the `PlanStorePort` (Task 2.4's rule).
   - `ccd/ccrc-api` rows `[plan.take]='POST|/api/programmes/{id}/plan/take|yes|-'`, `[plan.triage]='POST|/api/teams/{id}/plan/triage|yes|-'`; the `{id}` of `triage` is a team key (SAFE_RE already admits it).
   - No owner, or the owner `gone` (`dead` or `absent`; an `asleep` owner is live and mail wakes it, and an
     `unmeasured` one is a doubt that raises nothing and is mailed as usual): the issue waits, `inboundWaiting` counts
@@ -1462,21 +1656,36 @@ managed object), `server/test/skill-size-caps.json` only if lowered; Test `serve
     programme that is `declared || live` is `map-rewrites-plan` (§10.1: the map declares structure only for a
     programme with no plan **and** no live coordinator, so map-declared structure is confined to done and backlog
     programmes, and the owner never rewrites another programme's plan); a `leaf` or `upkeep` ticket key already used in
-    its programme (or Upkeep epic) is `plan-bad-body`; counts add up. `live` is a non-terminal run or a coordinator that
-    is not `gone` (Task 2.3), never `programs.state`.
+    its programme (or Upkeep epic) is `plan-bad-body`; a `leaf` whose epic's project is bound to another team is
+    `plan-bad-body` (detail `leaf-other-team`: a migration never moves an issue across teams, which would change its
+    identifier and its mirror); counts add up. For a programme with no declared plan, `live` means **it has a
+    non-terminal run**, and nothing else: presence plays no part (coordinators are long-lived, one per project, so
+    "a coordinator that is not gone" would make nearly every done programme live and its open issues unmappable,
+    §10.1's main case), and `programs.state` is never read. The same `live` is `applyTick`'s "done programme" test
+    (Task 7.3) and Task 7.2's "live programme's coordinator" mail.
   - `applySteps(map: MapBody, live: ReadonlySet<string>, reread: ReadonlyMap<string, IssueSnapshot | 'closed'>): { now: MigrationStep[]; waiting: string[]; skipped: string[] }`
-    — skip an issue whose re-read differs from its snapshot; a live programme's part waits.
+    — skip an issue whose re-read differs from its snapshot; a live programme's part waits. A step's `after` holds
+    every field the sync would plan for the adopted ticket (project, milestone, state type, title and description
+    through `issueText`, provenance line included), so the move record covers all of it.
+  - `reconcileMove(row: MoveRow, reread: IssueSnapshot | 'closed'): 'applied' | 'redo' | 'skip'` — for a row with no
+    `appliedAt` found on a re-run: the re-read equals `after` → `applied`; equals `before` → `redo`; anything else →
+    `skip`, listed in the report.
   - `putBackSteps(moves: readonly MoveRow[], current: ReadonlyMap<string, IssueSnapshot>): { steps: MigrationStep[]; moved: string[] }`
-    — reverse order; an issue that moved since is listed, not touched.
+    — reverse order; an issue that moved since (its current state differs from the row's `after`) is listed, not
+    touched; an issue row restores state, project, parent, milestone, **team, title and description** from `before`;
+    a row with `before` null (a create, Task 7.3) becomes a cancel of that object.
   - `replacementComment(home: string, mode: LinkingMode, url: string | null): string` — on a public team, the title only.
 
 - [ ] **Step 1: Write the failing tests** — `an issue missing from the map is map-incomplete`; `an issue listed twice is map-incomplete`;
-  `epics for a programme with a live coordinator's plan is map-rewrites-plan`;
-  `epics for a live programme that has not declared a plan is map-rewrites-plan`;
-  `epics for a declared programme whose coordinator is not live is map-rewrites-plan`;
-  `epics for a done programme with no plan pass`; `a leaf with no ticketKey gets the identifier-derived key`;
-  `a changed snapshot is skipped and listed`;
+  `epics for a declared programme with a run open is map-rewrites-plan`;
+  `epics for an undeclared programme with a non-terminal run is map-rewrites-plan`;
+  `epics for a declared programme with no run at all is map-rewrites-plan` (declaration alone refuses);
+  `epics for a done programme with no plan pass, even while its coordinator is alive`;
+  `a leaf with no ticketKey gets the identifier-derived key`; `a leaf whose epic's project is in another team is
+  plan-bad-body`; `a changed snapshot is skipped and listed`;
   `a live programme's part waits`; `put back reverses in order and lists an issue moved since`;
+  `put back restores team, title and description`; `a create row put back is a cancel`;
+  `reconcileMove: after → applied, before → redo, other → skip`;
   `a public team's replacement comment has no URL and no identifier`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-policy.test.ts test/plan-vocabulary.test.ts`.
 - [ ] **Step 3: Implement**; pure. `isPlanKebab` admits the map classes.
@@ -1499,11 +1708,14 @@ refusals, moved here from wave 6 so the text lands with its row and route),
   - `POST /api/projects/:project/hierarchy/migrate` (operator, session-gated): refused `migration-in-flight` while
     another team's migration is not `applied` with its report done or `put-back`, and refused `no-team-key` without a
     key. It creates the `linear_migrations` row (`proposing`), mails the team's Linear owner to propose (or raises
-    *Name a Linear owner*), and mails each live programme's coordinator of the team to declare its plan first (§10.1).
+    *Name a Linear owner*), and mails each live programme's coordinator of the team to declare its plan first (§10.1;
+    live as Task 7.1 defines it: a non-terminal run, the mail going to its `planOwnerOf`).
   - `POST /api/teams/:team/plan/map` (`plan map-propose`, the Linear owner): reads the team's open issues
     (`teamOpenIssues`, lane `migration`), runs `checkMap`, stores the map with snapshots (`proposed`), raises the
     `decide` item (`action: { verb: 'linear-map', migrationId }`, options `['Approve','Return']`, recommended 0) under
-    `LINEAR_SYNC_PROGRAMME`. A follow-up map covers only issues skipped by the same migration.
+    `LINEAR_SYNC_PROGRAMME`. A follow-up map covers only issues skipped by the same migration. The Linear read runs
+    first, outside the mutex; `checkMap` and the store write run inside `serial` (Task 2.4's rule), as do the
+    `migrate` route and the `approve` and `return` acts.
   - Acts: `approve` → `approved` (the apply lane picks it up); `return` (note) → `proposing` and the note mailed to the
     owner.
   - The console control on the project row: "Reshape in Linear" (`QuickConfirm` naming the team), shown when the state
@@ -1523,7 +1735,8 @@ refusals, moved here from wave 6 so the text lands with its row and route),
 
 **Files:** Modify `server/src/linear/migration.ts`, `server/src/laneSchedule.ts` (row `linearMigration`, cadence
 30_000, `skip`), `server/src/watch.ts`, `server/src/coord/planStore.ts` (backlog programmes, `planRequired = 1` for the
-team's programmes on apply, `adoptIssueAsTicket`); Test `server/test/migration-apply.test.ts`.
+team's programmes on apply, `adoptIssueAsTicket`), `server/src/linear/planSync.ts` (the `applying` guard); Test
+`server/test/migration-apply.test.ts`.
 
 **Interfaces:**
 - Produces (`planStore.ts`): `adoptIssueAsTicket(db, a: { issue: IssueSnapshotRow; programme: string | null; epicId: number; checkpointId: number | null; key: string; kind: TicketKind; source: 'plan' | 'inbound' }, binding: { workspaceId: string; teamKey: string; linearId: string; identifier: string; fingerprint: string }, now: number): number`
@@ -1531,24 +1744,47 @@ team's programmes on apply, `adoptIssueAsTicket`); Test `server/test/migration-a
   `source` `plan` for a `leaf` and `inbound` for an `upkeep` entry, state `open`, or `started` when the issue's state
   type is `started`) and a `linear_bindings` row already `bound` to the **existing** issue's UUID, identifier and
   fingerprint; only then is the programme (or `upkeep:<project>`) marked due. Without it, the sync's "one issue per
-  known ticket" step would create a duplicate issue for every migrated leaf.
-- Produces: `LinearMigration.applyTick(now: number): Promise<void>` — for an `approved` migration: create declared
-  structure for programmes with no plan (backlog programmes `paused`; done programmes a completed initiative only when
-  they own open issues; a "done programme" is one the map lists under `epics` that has no non-terminal run and no
-  coordinator that is not `gone`, as `checkMap` checked, never one read from `programs.state` alone), create the
-  team's Upkeep epic on first use by an `upkeep` entry (`UPKEEP_EPIC_KEY`, the owning project, no programme, as Task
-  4.3 does), adopt each `leaf` and `upkeep` issue with `adoptIssueAsTicket` before any write to it, re-read every listed
-  issue, write each move to `linear_migration_moves` (`before` from the
-  re-read, `after` planned) **before** the write, then write it (pass `migration`, lane `migration`); replaced level
-  issues are canceled with `replacementComment` and an `issueRelationCreate` to the first ticket placed under the home;
-  finished issues completed with their PR as evidence; superseded canceled and related to the successor; stale closed
-  only when the map says so; unclear left. A live programme's part waits for its wave boundary (no run in
-  `ACTIVE_RUN_STATES`). Idempotent: a move with `appliedAt` is not redone. When nothing waits: state `applied`, the team
-  is managed, its programmes' `planRequired` set to 1.
+  known ticket" step would create a duplicate issue for every migrated leaf. Its `fingerprint` is
+  `fingerprintOf` over exactly the fields `planSyncSteps` will plan for that ticket, which are the move's `after`
+  (Task 7.1), so the first sync pass after adoption emits nothing for the issue.
+- Produces: `LinearMigration.applyTick(now: number): Promise<void>` — for an `approved` migration (then `applying`):
+  - **Structure the map declares.** For programmes with no plan (backlog programmes `paused`; done programmes a
+    completed initiative only when they own open issues; a "done programme" is one the map lists under `epics` that
+    has no non-terminal run, Task 7.1's `live`, never one read from `programs.state` alone) and for the team's Upkeep
+    epic on first use by an `upkeep` entry (`UPKEEP_EPIC_KEY`, the owning project, no programme, as Task 4.3 does):
+    the executor inserts the plan rows **without** marking them due, then creates their initiatives, projects and
+    milestones itself, inside that key's `PlanSync.withFlight`, through the sync's step runner (`requestIdOf`, bind
+    by name and creator) with pass `migration` and lane `migration`. Before each create it writes a move row
+    (`before` null, `subject` `<bindingKind>:<localId>`), and on the answer fills `linearId` and `appliedAt` with the
+    binding. Only then is the key due, and the sync finds every object bound. So *Put back* finds these objects in
+    the move record alone (Task 7.4).
+  - **Each listed issue, in this order**, inside its programme's (or `upkeep:<project>`'s) `withFlight`: re-read it;
+    if it differs from its snapshot, skip it, list it and **never adopt it**; else write its move row (`before` from
+    the re-read, `after` from Task 7.1's step, which carries every field the sync would plan) **before** the write,
+    write it (pass `migration`, lane `migration`), set `appliedAt`, and only after the write succeeds adopt a `leaf`
+    or `upkeep` issue with `adoptIssueAsTicket` (fingerprint of the after-state, then due). Adopting first would let
+    the plan sync (5 s beat, 200 calls an hour) move the issue long before the migration lane (30 s, 100 an hour)
+    reaches it, so the re-read would differ, the issue would be skipped with no move row, and *Put back* could not
+    restore it. As a second guard, the sync emits no issue step for a binding whose issue is listed in a migration
+    that is `approved` or `applying` and has no applied move row yet. Replaced level issues are canceled with
+    `replacementComment` and an `issueRelationCreate` to the first ticket placed under the home; finished issues
+    completed with their PR as evidence; superseded canceled and related to the successor; stale closed only when the
+    map says so; unclear left.
+  - **Crash and re-run.** The unique index on `(migrationId, subject)` (Task 4.1) means a re-run never writes a
+    second row. A row with no `appliedAt` is reconciled by Task 7.1's `reconcileMove` against a fresh re-read: equal
+    to `after` → mark it applied (and adopt, if not yet); equal to `before` → redo the write; anything else → skip
+    and list it. A row with `appliedAt` is not redone.
+  - A live programme's part waits for its wave boundary (no run in `ACTIVE_RUN_STATES`). When nothing waits: state
+    `applied`, the team is managed, its programmes' `planRequired` set to 1.
 
 - [ ] **Step 1: Write the failing tests** — `every move is recorded before its write`; `a re-run after a crash redoes nothing applied`;
+  `a crash after the write and before appliedAt marks the row applied on re-run and writes no second row`;
+  `a crash before the write redoes it on re-run`; `an issue adopted only after its write; a skipped issue is never
+  adopted`; `the sync emits nothing for an adopted issue on its next pass` (the adoption fingerprint is the
+  after-state); `a sync pass during applying never moves a listed issue first`;
   `a migrated leaf is bound, and the next sync pass creates no issue`; `the first upkeep entry creates the Upkeep epic
-  once and binds its issue`;
+  once and binds its issue`; `the map's declared projects and initiatives are created by the executor as move rows
+  with before null`;
   `a changed issue is skipped and listed`; `a live programme's part waits until no run is dispatched or working`;
   `nothing is ever deleted` (no delete document reaches the fake); `the team is managed after apply`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-apply.test.ts test/lane-schedule.test.ts`.
@@ -1564,17 +1800,22 @@ Test `server/test/migration-putback.test.ts`.
 **Interfaces:**
 - Produces: on `applied`, the map item settles and a `do` report item is raised (`action: { verb: 'linear-report', migrationId }`):
   counts first (created, moved, closed, skipped as changed, left), then the full list. `put-back` (confirm) runs
-  `putBackSteps` from `linear_migration_moves` alone (pass `put-back`): closed issues reopen to their old state, moved
-  issues return to their old project, parent and milestone, created projects and initiatives are canceled; the
-  programmes' epics and checkpoints the map declared are dropped with the reason "put back"; the tickets
-  `adoptIssueAsTicket` made are dropped with the same reason, and the sync emits nothing for a record dropped "put
-  back" (otherwise its drop would cancel the very issue put back restored); an issue moved since is
+  `putBackSteps` from `linear_migration_moves` alone (pass `put-back`, inside each key's `PlanSync.withFlight`):
+  closed issues reopen to their old state, moved issues return to their old project, parent, milestone, team, title
+  and description, and every row with `before` null (the initiatives, projects and milestones the executor created,
+  Task 7.3) is canceled; the programmes' epics and checkpoints the map declared are dropped with the reason "put
+  back"; the tickets `adoptIssueAsTicket` made are dropped with the same reason. Each of those drops also sets
+  `putBackAt` (Task 2.2), and the sync's snapshot leaves out every record with `putBackAt` set, so it emits nothing
+  for them (otherwise its drop would cancel the very issue put back restored). The filter reads the column, never
+  the reason text, so a coordinator's own drop that reads "put back" is still synced. An issue moved since is
   listed on the item, untouched; state `put-back`, the team unmanaged. `done` closes the report. Put back is refused
   once the team's next migration has started.
 
 - [ ] **Step 1: Write the failing tests** — `the report counts skipped issues`; `put back reverses every move and cancels created objects`;
   `an issue moved since is listed, not touched`; `put back after the next migration started is refused`;
-  `after put back, the next sync pass writes nothing to an adopted issue`;
+  `after put back, the next sync pass writes nothing to an adopted issue`; `put back cancels the projects and
+  initiatives the executor created, from their move rows`; `put back restores an adopted issue's title and
+  description`; `a coordinator's own drop whose why reads "put back" is still canceled by the sync`;
   `the team is no longer managed after put back`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-putback.test.ts`.
 - [ ] **Step 3: Implement** the report and the put-back executor.
