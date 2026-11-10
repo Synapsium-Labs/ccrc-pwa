@@ -355,6 +355,45 @@ for (const width of MATRIX.widths) {
             await ctx.close();
           }
         });
+
+        it('lays the lane rows and the Turn on sheet inside the window with every control at the tap floor (Task 26)', async () => {
+          const opened = await openApp(browser!, { skin, theme, width }, ADVANCED_FIXTURE);
+          const { ctx, page, errors } = opened;
+          try {
+            await page.goto(`${server!.origin}/runs/advanced`);
+            await page.locator('.rc-row').first().waitFor({ timeout: 20_000 });
+            const measure = (): Promise<{ tap: number; vw: number; page: number; boxes: { right: number; left: number; h: number; tag: string }[] }> =>
+              page.evaluate(() => {
+                const probe = document.createElement('div');
+                probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+                document.body.appendChild(probe);
+                const tap = probe.getBoundingClientRect().height;
+                probe.remove();
+                const boxes = [...document.querySelectorAll<HTMLElement>('.rc-row, .rc-control, .rc-sheet, .rc-sheet .rc-run')]
+                  .map((n) => { const r = n.getBoundingClientRect(); return { right: r.right, left: r.left, h: r.height, tag: n.className }; });
+                return { tap, vw: innerWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth, boxes };
+              });
+            const rows = await measure();
+            expect(rows.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            expect(rows.boxes.length).toBeGreaterThan(4);
+            for (const b of rows.boxes) {
+              expect(b.right, `${b.tag} ends inside the window`).toBeLessThanOrEqual(rows.vw);
+              expect(b.left, `${b.tag} starts inside the window`).toBeGreaterThanOrEqual(0);
+              if (b.tag.includes('rc-control')) expect(b.h, 'a control at the tap floor').toBeGreaterThanOrEqual(rows.tap - 1);
+            }
+            await page.getByTestId('run-close-never-started').getByRole('button', { name: 'Turn on' }).click();
+            await page.getByTestId('run-close-sheet').waitFor({ timeout: 20_000 });
+            const sheet = await measure();
+            expect(sheet.page, 'no sideways page scroll with the sheet open').toBeLessThanOrEqual(0);
+            for (const b of sheet.boxes.filter((x) => x.tag.includes('rc-sheet') || x.tag.includes('rc-run'))) {
+              expect(b.right, `${b.tag} ends inside the window`).toBeLessThanOrEqual(sheet.vw);
+              if (b.tag.includes('rc-run')) expect(b.h, 'a run link at the tap floor').toBeGreaterThanOrEqual(sheet.tap - 1);
+            }
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
       });
     }
   }
@@ -425,10 +464,34 @@ const CLOSED = Array.from({ length: 12 }, (_, i) => ({
   kind: 'work', reviews: null, state: 'done', project: 'project-a', workspace: `ws-${1400 + i}`, branch: null,
   claimedBy: 'project-a-coord', openedAt: NOW - 20 * H, closedAt: NOW - (i + 1) * H, closedBy: i % 2 === 0 ? 'operator' : 'sweep', closeDetail: null,
 }));
+/** The lane rows of "What ccrc closes on its own" (Task 26): the never-started group with a list of three, one held back and one
+ *  whose warning cannot be delivered, and the crash row without a list. */
+const RUN_CLOSE_VIEW = {
+  ok: true,
+  groups: [
+    {
+      group: 'never-started', choice: 'shadow', marker: 'clear', state: 'shadow', held: null, closed7d: 3, refused7d: 1, updatedAt: 0,
+      list: {
+        would: [
+          { runId: 1701, program: 'prog-long-programme-name-that-wraps-on-a-phone', why: 'never-started', at: NOW - H },
+          { runId: 1702, program: 'prog-b', why: 'review-of-closed', at: NOW - 2 * H },
+          { runId: 1703, program: 'prog-c', why: 'later-review', at: NOW + 5 * H },
+        ],
+        named: [
+          { runId: 1085, program: 'prog-d', why: 'live-session' },
+          { runId: 65, program: 'prog-e', why: 'coordinator-not-reached' },
+        ],
+        now: 2, later: 1,
+      },
+    },
+    { group: 'claimant-crashed', choice: 'shadow', marker: 'clear', state: 'shadow', held: null, closed7d: 0, refused7d: 0, updatedAt: 0, list: null },
+  ],
+};
 const ADVANCED_FIXTURE: AppFixture = {
   ...FIXTURE,
   api: {
     ...FIXTURE.api,
+    '/api/coord/run-close': RUN_CLOSE_VIEW,
     '/api/runs/find': { ok: true, exact: null, runs: [RUNS[0], ...CLOSED], reviewsOf: [], next: { beforeAt: NOW - 13 * H, beforeId: 1411 } },
     '/api/runs/1400/record': { ok: true, run: CLOSED[0], events: [], reviewedBy: [], olderEvents: 0 },
     '/api/runs/1400': { ok: true, run: CLOSED[0], spend: { measured: false, reason: 'no-sweep' } },

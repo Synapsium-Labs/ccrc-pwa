@@ -20,6 +20,7 @@ describe('closeWords', () => {
   });
   it('operator at its request, with anything else, or with none', () => {
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:requested:item-a' })).toBe('closed by you, at its request');
+    expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:refused:12' })).toBe('closed by you, after ccrc held it');
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:mystery' })).toBe('closed by you');
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'free text' })).toBe('closed by you');
     expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: null })).toBe('closed by you');
@@ -30,6 +31,11 @@ describe('closeWords', () => {
     expect(closeWords({ state: 'failed', closedBy: 'sweep', closeDetail: 'expired:never-started' })).toBe('closed by ccrc: never started');
     expect(closeWords({ state: 'failed', closedBy: 'sweep', closeDetail: 'expired:unheard-of' })).toBe('closed by ccrc');
     expect(closeWords({ state: 'failed', closedBy: 'sweep', closeDetail: null })).toBe('closed by ccrc');
+  });
+  it('sweep reads the detail the lane really stores', () => {
+    expect(closeWords({ state: 'failed', closedBy: 'sweep', closeDetail: 'expired:never-started quiet-since=1730000000000' })).toBe('closed by ccrc: never started');
+    expect(closeWords({ state: 'failed', closedBy: 'sweep', closeDetail: 'expired:review-orphaned target-closed' })).toBe('closed by ccrc: review of finished work');
+    expect(closeWords({ state: 'failed', closedBy: 'sweep', closeDetail: 'expired:review-orphaned later-review' })).toBe('closed by ccrc: review of finished work');
   });
   it('coordinator and absent give no words of their own', () => {
     expect(closeWords({ state: 'failed', closedBy: 'coordinator' })).toBeNull();

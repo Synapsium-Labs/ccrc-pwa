@@ -20,7 +20,7 @@ import {
 import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
 import { RowMain, RowMeta } from './rowParts';
-import { EndRunControls, LiftCapControl, endRunOf, useItemActs, type ItemActs } from './ItemActs';
+import { ItemControls, LiftCapControl, carriesControls, useItemActs, type ItemActs } from './ItemActs';
 import { programmeSpecHref } from './ledgerLinks';
 import './ledgers.css';
 
@@ -69,8 +69,9 @@ function ItemRow({ item, now, onOpen, current, rowActs }: {
   const note = cameBackNote(item);
   const back = cameBack(item);
   const meta = item.state === 'checking' && item.tickedAt !== null ? `ticked ${ageWords(item.tickedAt, now)}` : `raised ${ageWords(item.raisedAt, now)}`;
-  // An end-request item's why holds the asker's words and, on its own line, who it reached the operator through.
-  const carries = rowActs !== null && endRunOf(item, rowActs.runs) !== null;
+  // An item with an action keeps its why's own lines: an end request's holds the asker's words and, on its own line, who it reached
+  // the operator through; a refused close's ends in who it reached the operator through too.
+  const carries = rowActs !== null && carriesControls(item, rowActs.runs);
   return (
     <li className="wl-li" data-acts={carries ? 'true' : undefined}>
       <BareRow className="wl-item" data-item={item.id} data-state={item.state} data-needed={item.neededBy}
@@ -81,7 +82,7 @@ function ItemRow({ item, now, onOpen, current, rowActs }: {
         </RowMain>
         <RowMeta pills={itemPills(item)} when={meta} />
       </BareRow>
-      {rowActs !== null && <EndRunControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} />}
+      {rowActs !== null && <ItemControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} />}
     </li>
   );
 }

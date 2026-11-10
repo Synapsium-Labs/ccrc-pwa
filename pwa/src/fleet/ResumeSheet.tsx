@@ -160,6 +160,8 @@ export interface ResumeSheetProps {
   onDone?: () => void;
   /** Step 3's picker (spec §9.5): the project's live coordinators, by name. None draws no picker, and the typed id stays. */
   heirs?: readonly ResumeHeir[];
+  /** Open with step 3 (the hand-over) already shown: a refused close under a gone coordinator offers the hand-over directly. */
+  atReclaim?: boolean;
 }
 
 export function ResumeSheet({
@@ -167,6 +169,7 @@ export function ResumeSheet({
   onClose,
   onDone,
   heirs = [],
+  atReclaim = false,
   ensure = ensureSession,
   kickoff = api.kickoff,
   reclaimRun = api.reclaimRun,
@@ -188,7 +191,7 @@ export function ResumeSheet({
   const [busy, setBusy] = useState<'revive' | 'kickoff' | 'reclaim' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [reclaimOpen, setReclaimOpen] = useState(false);
+  const [reclaimOpen, setReclaimOpen] = useState(atReclaim);
   const [to, setTo] = useState('');
 
   // `gen`, ReapSheet's/AbandonSheet's idiom (`AbandonSheet.tsx` carries the
@@ -202,7 +205,7 @@ export function ResumeSheet({
   const gen = useRef(0);
   const targetId = run?.id ?? null;
   useEffect(() => {
-    setBusy(null); setError(null); setNote(null); setReclaimOpen(false); setTo('');
+    setBusy(null); setError(null); setNote(null); setReclaimOpen(atReclaim); setTo('');
     return () => { gen.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
