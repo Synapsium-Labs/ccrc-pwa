@@ -2491,6 +2491,17 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE programs ADD COLUMN doneWhen TEXT;   -- JSON array of strings, or NULL; written by setSpecPin and setDoneWhen only
   `,
+  // ── 54: user_version 53 -> 54 ─────────────────────────────────────────────
+  // The claimant-gone group of the run-close lane (D-8078; spec 2026-11-04 §12; the runs rebuild, Task 28): rows E3, E3s and E5
+  // arm together under their own choice, so no row is armed by another group's choice or marker (R8). One nullable-by-default
+  // column on `run_close_settings`, seeded `shadow` (the ruling: shadow arms nothing). An older build opening a file at
+  // `user_version 54` takes rule 3 (it warns, reads as-is and migrates nothing); its `SELECT`s name their own columns and never
+  // name this one. RE-MEASURE the slot before the PR and before merge (it must print 53 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE run_close_settings ADD COLUMN claimantGone TEXT NOT NULL DEFAULT 'shadow';
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

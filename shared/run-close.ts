@@ -7,8 +7,10 @@
 // the row says. Only an exact `on` arms and only an exact `off` stops; any other token a newer build writes reads as shadow.
 import type { MarkerState } from './api.js';
 
-/** The lane groups the control covers: E1 and E1r arm together (the never-started group), and the kept crash row is its own. */
-export const RUN_CLOSE_GROUPS = ['never-started', 'claimant-crashed'] as const;
+/** The lane groups the control covers: E1 and E1r arm together (the never-started group), the kept crash row is its own, and E3, E3s
+ *  and E5 (a coordinator removed or stopped by a person, a session name reused by a later run) arm together as the claimant-gone
+ *  group (D-8078). */
+export const RUN_CLOSE_GROUPS = ['never-started', 'claimant-crashed', 'claimant-gone'] as const;
 export type RunCloseGroup = (typeof RUN_CLOSE_GROUPS)[number];
 export const isRunCloseGroup = (v: unknown): v is RunCloseGroup => typeof v === 'string' && (RUN_CLOSE_GROUPS as readonly string[]).includes(v);
 
@@ -41,6 +43,12 @@ export const RUN_CLOSE_WHY = {
   laterReview: 'later-review',
   /** The crash row: an open run of a coordinator measured crashed, closed once the hour and the two passes are spent. */
   claimantCrashed: 'claimant-crashed',
+  /** E3: its coordinator was removed (archived, forgotten, reaped, purged, destroyed or expired). */
+  claimantGone: 'claimant-gone',
+  /** E3s: its coordinator was stopped by a person and has stayed down a day. */
+  claimantStopped: 'claimant-stopped',
+  /** E5: its session name now belongs to a later run. */
+  nameReused: 'name-reused',
 } as const;
 export type RunCloseWhy = (typeof RUN_CLOSE_WHY)[keyof typeof RUN_CLOSE_WHY];
 
