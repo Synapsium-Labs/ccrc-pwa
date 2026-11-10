@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-spawn-effort-'); });
@@ -85,7 +85,7 @@ describe('a session with no effort field takes SPAWN_EFFORT on the spawn argv (D
 describe('the settle types no effort command (D-8149)', () => {
   it('_inject_spawn_effort and its settle call are gone', () => {
     expect(h.sh('type _inject_spawn_effort 2>&1 || true')).toMatch(/not found/);
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', 'ccd'), 'utf8');
+    const src = fs.readFileSync(CCD, 'utf8');
     expect(src).not.toMatch(/^\s*_inject_spawn_effort\b/m);
     expect(src).not.toMatch(/&&\s*_inject_spawn_effort/);
   });
