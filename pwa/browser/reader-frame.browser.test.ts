@@ -624,6 +624,8 @@ function summariseSrcdoc(page: Page, n: number): Promise<SrcdocSummary> {
 
 describe('W8a reader frame in Chrome', () => {
   it('M8.B1: the 27-channel battery inside the frame reaches neither origin, Mermaid draws (on tap, or after ready where E17 held), and the hostile directive injects no style', async () => {
+    // After ready the library may start drawing while the frame boots, so that arm counts from before the open.
+    const beforeOpen = origins.hits.length;
     const { s, outcome } = await open('flow.md');
     expect(outcome).toBe('ready');
     const frame = await readerFrame(s.page);
@@ -636,7 +638,7 @@ describe('W8a reader frame in Chrome', () => {
     } else {
       expect(await buttons.count(), 'no Render button: the figures draw after ready (after-ready)').toBe(0);
     }
-    const fromDraw = origins.hits.length;
+    const fromDraw = DRAW === 'on-request' ? origins.hits.length : beforeOpen;
     for (let i = 0; i < FIGURES; i += 1) {
       if (DRAW === 'on-request') await frame.locator('figure.mermaid-figure').nth(i).locator('.fig-render-btn').click();
       await frame.waitForFunction((k) => {
