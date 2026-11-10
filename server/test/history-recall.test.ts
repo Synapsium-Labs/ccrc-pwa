@@ -8101,11 +8101,12 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
     c.pairIdx = libRead.makePairIndex([]);
     await S.deriveFts(rig.db, c, S.newBudget());
   }
-  async function build(withAgents: boolean): Promise<Built> {
-    const rig = await agentRig(withAgents ? 'ccrc-hist-ag-b-' : 'ccrc-hist-ag-a-');
+  /** `mainStored` false: the parent's main transcript is never planted, so the family's only rows are the subagent's (F1). */
+  async function build(withAgents: boolean, mainStored = true): Promise<Built> {
+    const rig = await agentRig(!mainStored ? 'ccrc-hist-ag-c-' : withAgents ? 'ccrc-hist-ag-b-' : 'ccrc-hist-ag-a-');
     built.push(rig);
     plantAgentTree(rig, {
-      slug: SLUG_AG, uuid: PARENT, parent: 'epoch', mainRows: mainSeq.rows,
+      slug: SLUG_AG, uuid: PARENT, parent: 'epoch', ...(mainStored ? { mainRows: mainSeq.rows } : { main: false }),
       agents: withAgents ? [{ id: AGENT, rows: agentRows }] : [],
     }, { sinceMs: AG_RIG_T0 });
     await rig.tick(agArmed, { scan: true });
@@ -8117,9 +8118,11 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
   }
   let A: Built;
   let B: Built;
+  let C: Built;
   beforeAll(async () => {
     A = await build(false);
     B = await build(true);
+    C = await build(true, false);
   }, 600_000);
   afterAll(async () => {
     const store = await import('../../ccd/history/store.mjs');
@@ -8193,6 +8196,9 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
     expect(new Set(grepJ.map((i) => i['agent_id'])), 'main and subagent hits both show').toEqual(new Set([null, AGENT]));
     for (const i of items(cli(B, ['grep', 'Segment', '--json']))) expect('agent_id' in i).toBe(false);
     const grepH = cli(B, ['grep', 'Segment', '--agents']).stdout;
+    const heads = grepH.split('\n').filter((l) => l.startsWith('── leaf '));
+    expect(heads.some((l) => new RegExp(`^── leaf [LN][0-9a-f]+ ${MARK} `).test(l)), 'a subagent leaf\'s group header carries the mark (leafHeads)').toBe(true);
+    expect(heads.some((l) => !l.includes('agent:')), 'CONTROL: a main leaf\'s header carries none').toBe(true);
     expect(grepH.split('\n').filter((l) => l.includes(MARK) && l.includes('<ccrc-recall')).length, 'a hit line of the subagent carries the mark').toBeGreaterThan(0);
     expect(grepH.split('\n').filter((l) => l.includes('<ccrc-recall') && !l.includes(MARK)).length, 'a main hit line carries none').toBeGreaterThan(0);
 
@@ -8315,6 +8321,70 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
       expect(edited).toMatch(/^ {4}[LN][0-9a-f]{6} native_leaf depth=0 unknown\.\.2025-10-08T11:05Z <ccrc-recall /);
     } finally {
       w.prepare('UPDATE nodes SET earliest_ms = ?, latest_ms = ? WHERE node_id = ?').run(was.e, was.l, A.main[1]!);
+    }
+  }, HEAVY);
+
+  it('F1 a family whose only stored rows are a subagent\'s answers exit 6 without --agents, with none of its text, and reads with --agents (history-w4-agents-only-family-not-indexed)', () => {
+    const rows = C.rig.db.prepare("SELECT t.agent_id AS a, count(e.entry_id) AS n FROM transcripts t LEFT JOIN entries e ON e.transcript_pk = t.transcript_pk GROUP BY t.transcript_pk").all() as unknown as Array<{ a: string; n: number }>;
+    expect(rows.filter((r) => r.a === '' && r.n > 0), 'CONTROL: no main-thread row is stored').toEqual([]);
+    expect(rows.filter((r) => r.a === AGENT && r.n > 0).length, 'CONTROL: the subagent\'s rows are').toBe(1);
+    const off = cli(C, ['grep', NEEDLE]);
+    expect([off.code, off.json?.['reason']]).toEqual([6, undefined]);
+    expect(`${off.stdout}${off.stderr}`, 'no subagent text without --agents').not.toMatch(/quokka|wombat|agent:/);
+    const on = cli(C, ['grep', NEEDLE, '--agents']);
+    expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
+    expect(on.stdout).toContain(NEEDLE);
+    expect(on.stdout.split('\n').some((l) => l.includes(MARK) && l.includes('<ccrc-recall')), 'the row carries its mark').toBe(true);
+  }, HEAVY);
+
+  /** The headless seam (readContextEnv): the marker lists the family, the boundary N is the main thread's second compaction. */
+  const headless = (b: Built, args: string[]): CliRun => {
+    const root = b.rig.box.root;
+    const storeId = fs.readFileSync(path.join(root, 'store.id'), 'utf8').trim();
+    fs.writeFileSync(path.join(root, 'headless-on'), `store ${storeId}\n${FAMILY} -\n`, { mode: 0o600 });
+    return runCli(b.rig.box, args, {
+      env: {
+        CCRC_RECALL_SESSION: FAMILY, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: mainSeq.boundaryUuids[1]!,
+        NODE_OPTIONS: `--import ${pathToFileURL(PRELOADS.statfs).href} --import data:text/javascript,Date.now=()=>${NOW}`,
+      },
+    });
+  };
+
+  it('F2 the headless seam: grep hides a subagent row without --agents and shows it, marked, with it', () => {
+    const off = headless(B, ['grep', NEEDLE, '--json']);
+    expect([off.code, off.json?.['reason']], 'hidden').toEqual([3, undefined]);
+    const on = headless(B, ['grep', NEEDLE, '--agents', '--json']);
+    expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
+    expect(items(on).map((i) => i['agent_id'])).toEqual([AGENT]);
+    expect(headless(B, ['grep', NEEDLE, '--agents']).stdout).toContain(MARK);
+    const control = headless(B, ['grep', 'Segment', '--json']);
+    expect(control.code, 'CONTROL: the seam reads the main thread').toBe(0);
+    expect(items(control).every((i) => !('agent_id' in i))).toBe(true);
+  }, HEAVY);
+
+  it('F2 the as-of arm of coveringLeaves: under a cut a row a subagent node also holds groups under the main leaf, and under --agents under the subagent\'s', () => {
+    const clone = `L${'0'.repeat(20)}`;
+    const w = B.rig.db;
+    w.exec('PRAGMA foreign_keys = OFF');
+    const source = w.prepare('SELECT entry_id, ord FROM node_sources WHERE node_id = ? ORDER BY ord LIMIT 1').get(B.main[0]!) as { entry_id: number; ord: number };
+    try {
+      w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
+          span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms)
+        SELECT ?, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
+          span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms
+        FROM nodes WHERE node_id = ?`).run(clone, B.agents[0]!);
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)').run(clone, source.entry_id, source.ord);
+      const off = headless(B, ['grep', 'Segment']);
+      expect(off.code, `${off.stderr}${off.stdout}`).toBe(0);
+      expect(off.stdout, 'CONTROL: the cut grep groups under leaves').toMatch(/^── leaf L[0-9a-f]{6} /m);
+      expect(off.stdout, 'no group is headed by the subagent node').not.toContain(clone);
+      expect(off.stdout).not.toContain('agent:');
+      const on = headless(B, ['grep', 'Segment', '--agents']);
+      expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
+      expect(on.stdout, 'with --agents the lower id covers the row').toMatch(new RegExp(`^── leaf L000000 ${MARK} `, 'm'));
+    } finally {
+      w.prepare('DELETE FROM node_sources WHERE node_id = ?').run(clone);
+      w.prepare('DELETE FROM nodes WHERE node_id = ?').run(clone);
     }
   }, HEAVY);
 });
