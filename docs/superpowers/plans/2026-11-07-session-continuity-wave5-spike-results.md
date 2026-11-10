@@ -239,3 +239,141 @@ checks, which this wave does not read.
 Task 3 runs R1 to R3 as planned. The history adds one more call shape stage 3 could use: the whole script inline with
 `resumeFromRunId`. It was accepted 5 of 5 after a swap, but no journal was read for any of them, so whether those
 runs completed is unmeasured. It is reported to the coordinator, not added to the matrix here.
+
+## 2. Task 3: step 5 live, the resume matrix after an ordinary swap
+
+### 2.1 The setup as run, and what differs from the plan
+
+The operator lent one existing account, which was real but idle, instead of two blank scratch accounts (items 95 and 112).
+`scratch-a` is that account, alone in `pool-s`. There is no `scratch-b`. The subject was swapped onto one real lane,
+`lane-r`, and will be swapped back before Task 4. The coordinator names these departures and numbers them at
+acceptance:
+- `lent-account-is-real-not-scratch`, `loan-pool-of-one`, `untagged-account-tagged-for-the-loan`;
+- `task-3-reads-under-a-real-lane-root`, `swap-back-before-task-4`, `lent-lane-homed-rows`;
+- `lent-account-stays-home-able`: `scratch-a` stayed home-able, so a real session homed on it ran there too, as
+  recorded below;
+- `inline-script-row`: row R5, added after Task 1 (section 1.5);
+- `subject-needs-operator-opt-in-for-workflow`: below.
+
+**Expectations before the run, from history (section 1).** Rows R1 and R2 were expected refused, because every such
+call since 2026-10-22 had been refused (4 of 4 and 13 of 13). That expectation came from the history, not from this
+run.
+
+**Preconditions, measured 2026-11-10 19:48:59Z (Task 2).**
+- The subject was on `scratch-a` in `project-s`, and the conductor was on neither lane.
+- `project-s` reads `pool-s`. The pool epoch (25) tags `scratch-a` alone with `pool-s` and every other account with
+  another pool, so none is untagged, and its lease was current.
+- `ccd caps` lists `swap-busy-v1`.
+- Builds on disk (`version_to`): `scratch-a` 2.1.322, `lane-r` 2.1.314.
+- Of the markers, only `mail-gate-busy-shadow` and `stall-watch-live` exist.
+- The subject's one-minute wait is `timeout 55 tail -f /dev/null`. The Bash tool accepted it in the foreground
+  (55.0 s, exit 124).
+
+**The opt-in hold.** At 19:52:44Z the subject declined to launch the workflows on mail alone. Its harness calls
+`Workflow` only when the operator opts into multi-agent orchestration in their own words, in its own session. The
+operator typed a go-ahead into the subject's pane at 22:44:38Z, 2 h 52 min later (item 143). This is part of what a
+resume-after-swap test costs on this harness. The go-ahead covered Task 3 step 1's work. Just before it, the
+subject's pane was revived at 22:44:32Z (its SessionStart hook fired again, with the same uuid and the same root, and
+no resume prompt). That was a restart before Task 3 began, not a confound.
+
+**Builds actually run**, read from the `version` field of the subject's transcript:
+- 2.1.319 until 19:52Z, although `claude --version` printed 2.1.322, the build on disk;
+- 2.1.322 from the revive until the swap;
+- 2.1.314 on `lane-r` from 22:46:31Z.
+
+All four matrix calls ran on 2.1.314.
+
+### 2.2 Step 1 and the swap
+
+At 22:45:04 to 22:45:12Z the subject launched four identical background workflows from one inline script. Each had
+two agents, both on haiku at low effort: `quick`, which returns `QUICK-DONE`, and `slow`, which makes the one-minute
+wait twenty times and returns `SLOW-DONE`. Each result returned a script file under `<root-a>`. Run 3's script was
+copied to `<cwd>/spike-wf-copy.js`, byte-identical to the saved text. The subject also started a background
+`watcher.log` shell, a Monitor on it and one background agent. At 22:45:25Z every journal read
+`launched, started quick, started slow, result quick`.
+
+**Placement before the swap** (`ccd ls`, 22:46:17Z): the subject was on `scratch-a`, and one real session homed on
+`scratch-a` was also running there (`lent-account-stays-home-able`). `lane-r` held two stopped rows. The pools were
+unchanged.
+
+**The swap.** `ccd swap --interrupt --cross-pool <subject> <lane-r>` ran from 22:46:23.0Z to 22:46:24.3Z and exited 0,
+printing `swapped <subject>: scratch-a -> lane-r`. The subject's `swap.log` lines:
+- `ended <subject>: swap-manual`;
+- `carry <uuid>: 1 match(es), 1 copy/copies, 1 destination(s)`;
+- `sidecar <uuid> -> <root-b>/projects/<pdir>/<uuid> (link: via-mount)`;
+- `cross-pool <subject>: scratch-a -> lane-r [project=project-s pool=pool-s target-pool=<another pool>]`;
+- `swap <subject>: scratch-a -> lane-r (uuid <uuid>)`.
+
+**What the carry placed.** Under `<root-b>`, each run's script file and `journal.jsonl` is a hard link of the file
+under `<root-a>`: the same inode, with 2 links. So the R1 path and the R2 path name one file. The transcript itself
+is a separate copy, which grew under `<root-b>` from then on.
+
+**`lane-r`'s limits.** The limits file was last written on 2026-10-31. Its weekly 100% was from before a reset that
+had passed, so it was stale. Its first fresh reading, at 23:02:49Z, was weekly 0% with no five-hour figure, so the
+subject stayed there.
+
+### 2.3 What the swap ended, and what woke the subject
+
+- The subject's last turn had ended at 22:46:18Z. It was idle when stopped, so ccd sent no resume prompt: that
+  prompt is for a session stopped mid-turn.
+- `watcher.log`'s last tick is 22:46:17Z.
+- The new process (22:46:31Z) received seven task notifications, one per background task: the agent, two shells and
+  four workflows. Each said `didn't finish before the previous session ended`, with status `stopped`. Each
+  workflow's note read: `To pick up where it left off, relaunch with Workflow({scriptPath, resumeFromRunId}) using the
+  run id from the summary — completed agent() calls return cached.`
+- **No model turn followed the notifications.** The subject next took a turn at 23:02:01Z, woken by the stall
+  watch's mail of 23:01:58Z (`orphaned: 7 background task(s) (shell, subagent, workflow) did not survive the
+  2026-11-10T22:46Z restart`), 15.5 minutes after the restart. The subject reported that mail and did not act on it.
+- The subject made no `Workflow` call before the matrix mail, so there is no confound.
+
+### 2.4 The matrix
+
+Each row resumed its own run, one call at a time, after the swap:
+
+| Row | Run | `scriptPath` passed | Result (build 2.1.314) |
+|---|---|---|---|
+| R2 | 1 | the path the tool returned before the swap, under `<root-a>` | **refused**, 23:04:39Z |
+| R1 | 2 | the same relative path under `<root-b>` (the carry's hard link of the same file) | **refused**, 23:04:51Z |
+| R3 | 3 | `<cwd>/spike-wf-copy.js` | **accepted**, 23:05:01Z |
+| R4 | 1 | — | **not run**: the operator declined to type `/add-dir` (item 95) |
+| R5 | 4 | none: the same script text passed inline as `script`, with `resumeFromRunId` | **accepted**, 23:05:18Z |
+
+*Table 6. The resume matrix after one `--interrupt` swap.*
+
+R2's and R1's refusals were the same text, differing only in the path:
+
+```
+<tool_use_error>scriptPath must be a script path this tool returned, or a file you can already read (the working directory or a directory you have added): <root-a>/projects/<pdir>/<uuid>/workflows/scripts/spike-quick-slow-<run-id>.js
+A session that cannot call Read cannot load any scriptPath. Pass the whole script inline through Workflow's `script` input instead.</tool_use_error>
+```
+
+R3's result:
+
+```
+Workflow launched in background. Task ID: <task-id>
+Summary: spike: one quick agent and one slow agent
+Transcript dir: <root-b>/projects/<pdir>/<uuid>/subagents/workflows/<run-id>
+Script file: <cwd>/spike-wf-copy.js
+…
+Run ID: <run-id>
+```
+
+R5's result had the same shape, except that the tool wrote the script file under `<root-b>`: `Script file:
+<root-b>/projects/<pdir>/<uuid>/workflows/scripts/spike-quick-slow-<run-id>.js`. That file is still the carry's hard
+link, so the write changed the inode both roots name.
+
+### 2.5 The journals of the accepted rows
+
+Both accepted runs resumed in the same `journal.jsonl`, the carry's hard link. Each resume appended
+`started slow` under a new agent id. Neither started `quick` again: its `QUICK-DONE` result came from cache. Then
+`slow` ran its twenty waits again from the start and returned `SLOW-DONE`:
+
+| Row | Journal after the resume | Final |
+|---|---|---|
+| R3 | `started slow` (new agent), `result slow SLOW-DONE` | completed, `{"quick":"QUICK-DONE","slow":"SLOW-DONE"}` (2 of 2 agents, 21 tool uses, 1,122 s) |
+| R5 | `started slow` (new agent), `result slow SLOW-DONE` | completed, `{"quick":"QUICK-DONE","slow":"SLOW-DONE"}` (2 of 2 agents, 21 tool uses, 1,121 s) |
+
+*Table 7. What the accepted resumes did.*
+
+So both shapes that were accepted resumed the run as the tool promises: completed agents return from cache, and the
+interrupted agent runs again from its start, not from where it stood.
