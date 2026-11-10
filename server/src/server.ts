@@ -3137,7 +3137,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (plan.ask.ticket !== null && deps.coord !== undefined) {
       let row: ReturnType<CoordStore['linkingOf']> | undefined;
       try { row = deps.coord.linkingOf(project); } catch { row = undefined; }
-      if (row !== undefined && linkingMode(row.override, row.measured) === 'public') {
+      // Only the project's own team's ticket is rewritten: a name like `phase-2` parses as a ticket but is no tracker id.
+      if (row !== undefined && row.teamKey !== null && plan.ask.ticket.key.toUpperCase() === row.teamKey.toUpperCase()
+        && linkingMode(row.override, row.measured) === 'public') {
         const words = publicTicketSlug(title, plan.ask.ticket, project);
         if (!words.ok) return refuseRoute(reply, words.error);
         slug = words.slug;

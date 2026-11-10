@@ -27,8 +27,8 @@ afterEach(async () => { await app?.close(); app = undefined; coord.db.close(); r
 // A pasted link, built from parts: the public-tree scanner refuses the host written joined.
 const LINK = ['https:/', ['linear', 'app'].join('.'), 'team-a', 'issue', 'KEY-123', 'fix-the-login-flow'].join('/');
 
-const create = async (name: string, override: 'public' | 'private' | null) => {
-  coord.setLinking('project-a', { teamKey: 'KEY', override }, 'test', 1);
+const create = async (name: string, override: 'public' | 'private' | null, teamKey: string | null = 'KEY') => {
+  coord.setLinking('project-a', { teamKey, override }, 'test', 1);
   const deps = testDeps(home, async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; });
   app = await buildServer({
     ...deps, coord,
@@ -64,6 +64,18 @@ describe('a named create from a ticket and the linking standard', () => {
   it('a plain name on a public project is untouched', async () => {
     const res = await create('quiet basin', 'public');
     expect((res.json() as { slug: string }).slug).toBe('quiet-basin');
+  });
+
+  it("a ticket-shaped name that is not the project's team's keeps its slug on a public project", async () => {
+    const res = await create('phase-2', 'public');
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { slug: string }).slug).toBe('phase-2');
+  });
+
+  it('a ticket-shaped name on a public project with no team key keeps its slug', async () => {
+    const res = await create('phase-2', 'public', null);
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { slug: string }).slug).toBe('phase-2');
   });
 });
 
