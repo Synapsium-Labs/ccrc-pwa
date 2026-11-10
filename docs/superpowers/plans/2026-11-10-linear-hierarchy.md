@@ -37,8 +37,21 @@ On the design's base (`945834579`) and this branch:
   up an `X-Complexity`, an error code or a schema fact.
 - **The plan model today**: `programs` (slug, title, state, `homeProject`, `specPath`, `inShort`, `doneWhen`) and `runs`
   in `server/src/coord/schema.ts`; `MIGRATIONS` ends at entry 53 on `main`; 54, 55 and 56 are taken by PRs landing first.
-  `CoordStore.advance` is the one run-transition writer. `operator_items.program` is `NOT NULL`; `ItemAction` in
+  The one run-transition writer is the private `CoordStore.advanceInner`: `advance` wraps it in its own `tx`, and
+  `dispatchRun`, `closeRun` and the sweep's batch call it inside theirs (`settleEndRequests` already hangs off it, so
+  no seam can skip it). `DatabaseSync` transactions do not nest. `operator_items.program` is `NOT NULL`; `ItemAction` in
   `shared/ledgers.ts` has two verbs, both carrying a `runId`, and `POST /api/items/:id/act` abandons a run.
+- **What `programs` rows mean today**: the only creators are `runs open` (`INSERT … ON CONFLICT(slug) DO NOTHING`, state
+  `active`, `homeProject`) and `reconstruct`. The only writer of `programs.state` after that is D-51's retirement in
+  `closeRun`: when a programme's last open run closes it reads `done`, or `abandoned` if that run failed. That happens
+  at every gap between sequential waves, and nothing sets it back to `active` (no writer of `paused` exists either). So
+  `programs.state` is **not** a programme-end signal, and this plan never reads it as one.
+  `CoordStore.soleActiveCoordinator()` answers only when exactly one row reads `active` (mail to `coordinator` with no
+  `runId`, `tellSender`).
+- **Presence on the server**: `coordinatorPresenceIn` (`shared/ledgers.ts`, `CoordinatorPresence` =
+  `alive | dead | absent | unmeasured`, where `alive` covers an `asleep` session that mail wakes) and the `presenceOf`
+  that `server.ts` builds once from the watcher's fleet frame and registry ids. (`pwa/src/fleet/presence.ts` is the
+  PWA's own word and is not used here.)
 - **The linking standard** (`project_linking`, `server/src/linking/policy.ts`): `linkingMode`, `ticketRefOfBranch`,
   `trackerIdsIn`; the PR route refuses `tracker-id-public`.
 - **The client** (`ccd/ccrc-api`): `ROUTES` rows are `group.verb` with at most one `{id}`; `linear.*` and `linking.show`
@@ -63,18 +76,36 @@ number from `POST /api/ledger/deviations`.
   before the first live write. A team's migration starts from an operator control on its project row (the design names
   no trigger), and the order rule is a refusal. An abandoned run returns its ticket to `open`. The sync's queue is a
   table. "Created after this build" is a column set at migration time. Hierarchy items act through a route of their own.
-  A create with no idempotency key binds by name and creator, not by a hidden marker.
+  A create with no idempotency key binds by name and creator, not by a hidden marker: two by-name reads
+  (`initiativesByName`, `projectsByName`, each selecting `creator { id }`) join the fixed documents for it. Further
+  departures, from the plan review:
+  - **Programme end is the plan's, not `programs.state`'s.** §5.4's close table runs on a new `plan close` verb (the
+    coordinator's explicit end, `done` or `abandoned` with a reason), or on a derived end: `programs.state` reads
+    `done` and every epic is `done` or `dropped` with no ticket `open` or `started`. Any other state is live. Nothing
+    is ever canceled on `abandoned` alone.
+  - **`plan put` creates a new programme's row.** Its body gains `home` (required when no row exists) and an optional
+    `title`; the row is inserted in the same transaction (`active`, `homeProject`, `planRequired` 1). `plan(slug)`
+    answers `required: true` for an absent row, and `reconstruct` writes `planRequired` 0.
+  - **The reserved `linear-sync` row is `paused`, never `active`**, so `soleActiveCoordinator()` is unchanged.
+  - **The public-text check lands in wave 2** (Task 2.7), before any wave writes to Linear. The hashed private-name
+    matcher moves into shared code (`shared/private-names.mjs`), and `server/test/private-names.mjs` keeps its CLI and
+    re-exports the matcher. Each class's `catches` and `passes` fixtures stay in `topology-clean.test.ts`.
+  - **`references/plan.md` ships with `plan-missing`** (wave 2). Wave 6 adds clause 21 and the later verbs, and wave 7
+    adds `plan map-propose`.
+  - **Wave 1 sends no new document live.** `directoryProjects` stays as recorded; the refresher starts the
+    `projectStatuses` collection and the initiatives probe only in wave 3, after FX2 has recorded them.
 - **D-8180 (2026-11-10)** — linear-hierarchy-w1-proxy: wave 1, the proxy additions: the hierarchy documents and the
   ccrc operation rows, the ccrc actor in the write policy and the journal, the `sync` and `migration` rate lanes, the
-  directory's project statuses and initiatives capability, and the server-internal caller `runCcrcOp`.
+  directory's status types and `statusOfType` (unsent until wave 3), and the server-internal caller `runCcrcOp`.
 - **D-8181 (2026-11-10)** — linear-hierarchy-w2-plan: wave 2, ccrc's plan model: migration 57, the plan store and
-  deciders, the plan verbs and their `ccrc-api` rows, runs attached to tickets with `wave-epic-mismatch`,
-  `plan-missing`, `reserved-programme` and `ticket-unavailable`, and the per-project Linear owner settings.
+  deciders, the plan verbs (`plan close` included) and their `ccrc-api` rows, runs attached to tickets with
+  `wave-epic-mismatch`, `plan-missing`, `reserved-programme` and `ticket-unavailable`, the coordinator's
+  `references/plan.md`, the per-project Linear owner settings, and the public-text check `linear-text-public`.
 - **D-8182 (2026-11-10)** — linear-hierarchy-w3-sync: wave 3, the plan sync: open, move and close of the Linear
   objects from the plan, the initiatives-off item, the item act route, and dispatch waiting for a ticket's issue.
 - **D-8183 (2026-11-10)** — linear-hierarchy-w4-drift: wave 4, migration 58, the drift pass and its restores, persistent
-  drift, the inbound path (`plan triage`, `plan take`, the Upkeep epic, *Name a Linear owner*), the public-text check
-  `linear-text-public` and the `plan-owned` refusal.
+  drift, the inbound path (`plan triage`, `plan take`, the Upkeep epic, *Name a Linear owner*) and the `plan-owned`
+  refusal.
 - **D-8184 (2026-11-10)** — linear-hierarchy-w5-console: wave 5, the console: the project row's hierarchy settings, the
   programme page's Plan section, the epic and Upkeep pages, and the controls of the five hierarchy items.
 - **D-8185 (2026-11-10)** — linear-hierarchy-w6-skills: wave 6, the coordinator, worker and Linear skills.
@@ -151,9 +182,12 @@ number from `POST /api/ledger/deviations`.
    programme's coordinator once, and keeps going with every other object; it never throws, never picks by name. Test in
    Task 3.1 (`a missing status type fails the step, not the pass`).
 2. **A restart between a create and its bind.** The server dies after Linear created an object and before the binding
-   row says `bound`: the retry sends the same `requestId` (or, for a create with no idempotent id, finds the object by
-   name and creator) and binds it; nothing is created twice. Test in Task 3.2 (`a create answered conflict-on-insert
-   binds the existing object`).
+   row says `bound`: the retry sends the same `requestId`, or, for a create with no idempotent id, reads by exact name
+   in its scope (`initiativesByName`, `projectsByName`; a milestone from its project's `projectById`) and binds the one
+   object whose `creator` is the key's viewer and that no binding holds. The journal row of that crash is still
+   `pending` with no `result`, so `LinearJournal.viaFleet` cannot be the test. Nothing is created twice. Tests in Task
+   3.2 (`a create answered conflict-on-insert binds the existing object`, `a crash with the journal row still pending
+   binds by name and creator`).
 3. **A project's team key changed or cleared after its objects are bound.** Cleared: bindings stay, the sync skips that
    project's objects and `plan show` marks them `unsynced`; changed within the workspace: open issues move to the new
    team (§5.3); changed to another workspace: bindings go `failed` with `ticket-workspace-mismatch` mailed to the
@@ -163,7 +197,11 @@ number from `POST /api/ledger/deviations`.
    Test in Task 3.2 (`a plan put during a pass is carried by the next pass`).
 5. **The key loses write access to a team.** Linear answers `linear-forbidden` or `linear-invalid` on a write: the
    binding is `failed`, the coordinator is mailed, and for a restore the persistent-drift item is raised at once (§7.4);
-   no retry loop spends the lane. Tests in Task 3.2 and Task 4.3.
+   no retry loop spends the lane. Tests in Task 3.2 and Task 4.2.
+6. **A wave gap is not a programme end.** The last run of a wave closes (done or failed) while later epics are planned:
+   `programs.state` turns `done` or `abandoned` (D-51), and nothing in Linear closes. Test in Task 3.3.
+7. **The reserved row and the mail resolver.** One live programme plus `linear-sync`: mail to `coordinator` with no
+   `runId` still resolves. Test in Task 2.2.
 
 ---
 
@@ -171,12 +209,12 @@ number from `POST /api/ledger/deviations`.
 
 | File | Wave | Responsibility |
 |---|---|---|
-| `server/src/linear/hierarchyOps.ts` (new, L1) | 1 | The hierarchy documents, `LINEAR_CCRC_OPS` rows, their variable builders and shapers, the initiatives probe reader, `LINEAR_CCRC_PROVENANCE_LINE` |
-| `server/src/linear/ops.ts` | 1 | `LINEAR_DOCUMENTS` spreads `LINEAR_HIERARCHY_DOCUMENTS`; `LinearDirectoryEntries` gains project statuses, project status and teams, the initiatives capability |
+| `server/src/linear/hierarchyOps.ts` (new, L1) | 1 | `LINEAR_CCRC_OPS` rows, their variable builders and shapers, the initiatives probe reader, `withCcrcProvenance` (no document text and no mutation: `single-definition/linear-ops.test.ts` keeps both in `ops.ts`) |
+| `server/src/linear/ops.ts` | 1 | `LINEAR_HIERARCHY_DOCUMENTS` (every hierarchy query and mutation string) and `LINEAR_CCRC_PROVENANCE_LINE`, spread into `LINEAR_DOCUMENTS`; `LinearDirectoryEntries` gains project statuses and the initiatives capability (filled from wave 3); `directoryProjects` unchanged |
 | `server/src/linear/policy.ts` | 1 | `LinearWriteAsk` gains the `ccrc` actor, the hierarchy ops and the object kind |
 | `server/src/linear/journal.ts` | 1 | The hierarchy ops and fields, `ccrcActor`, the UUID `target` and `result` |
 | `server/src/linear/rate.ts` | 1 | Lanes `sync` and `migration` |
-| `server/src/linear/refresher.ts`, `directory.ts` | 1 | Fill the new directory parts and run the probe |
+| `server/src/linear/refresher.ts`, `directory.ts` | 1, 3 | Wave 1: the new parts' types and readers, unsent; wave 3 (after FX2): fill project statuses and run the probe |
 | `server/src/linear/ccrcCall.ts` (new) | 1 | `runCcrcOp`: rate, key, policy, journal, `callLinear`, shape, settle, as the ccrc actor |
 | `server/test/fixtures/linear/*hierarchy*` | 1, FX2 | Constructed, then recorded, answers |
 | `shared/plan.ts` (new, L0) | 2 | The plan vocabulary, bounds, wire types, refusal words, `isPlanKebab` |
@@ -185,20 +223,21 @@ number from `POST /api/ledger/deviations`.
 | `server/src/coord/schema.ts` | 2, 4 | Migrations 57 and 58 |
 | `server/src/coord/planStore.ts` (new, L3) | 2 | Every SQL of the plan tables, bindings and the sync queue |
 | `server/src/coord/planPolicy.ts` (new, L1) | 2 | Body parsing, the plan diff, state rules, caller and Linear-owner verdicts |
-| `server/src/coord/planRoutes.ts` (new, L4) | 2, 4, 7 | The plan verbs' routes |
+| `server/src/coord/planRoutes.ts` (new, L4) | 2, 4, 7 | The plan verbs' routes (`plan close` included) |
 | `server/src/coord/hierarchyRoutes.ts` (new, L4) | 2, 3 | Per-project hierarchy settings, `GET /api/hierarchy`, `POST /api/items/:id/linear` |
 | `server/src/coord/openRun.ts`, `routes.ts`, `store.ts` | 2, 3 | Run ↔ ticket attach, refusals, the dispatch wait |
 | `ccd/ccrc-api` | 2, 4, 7 | The `plan.*` rows |
 | `server/src/linear/planSyncPolicy.ts` (new, L1) | 3 | Steps from a snapshot, the texts, fingerprints, request ids |
 | `server/src/linear/planSync.ts` (new, L4) | 3 | `PlanSync`: the due queue, passes, binding writes, dispatch wait |
 | `server/src/laneSchedule.ts`, `server/src/watch.ts` | 3, 4, 7 | Lanes `linearPlanSync`, `linearDrift`, `linearMigration` |
-| `server/src/linking/publicTextClasses.ts` (new) | 4 | The topology deny classes, moved from the test suite |
-| `server/src/linking/policy.ts` | 3, 4 | `slugForTicket`, `publicTextVerdict` |
+| `server/src/linking/publicTextClasses.ts` (new) | 2 | The topology deny classes' `name`, `pattern`/`match`, `allowed` and `skipLine`, moved from the test suite (their `catches`/`passes` fixtures stay in `topology-clean.test.ts`) |
+| `shared/private-names.mjs` (moved) | 2 | The hashed private-name matcher, moved from `server/test/private-names.mjs`, which keeps its CLI and the local scan and re-exports it |
+| `server/src/linking/policy.ts` | 2, 3 | `publicTextVerdict`, `slugForTicket` |
 | `server/src/linear/driftPolicy.ts` (new, L1), `driftPass.ts` (new, L4) | 4 | Drift verdicts, restores, inbound detection |
 | `server/src/linear/migrationPolicy.ts` (new, L1), `migration.ts` (new, L4) | 7 | Map check, apply steps, put-back steps, executor |
 | `pwa/src/ledgers/planWords.ts`, `PlanSection.tsx`, `EpicScreen.tsx`, `UpkeepScreen.tsx`, `LinearItemControls.tsx` (new) | 5 | The console |
 | `pwa/src/screens/settings/ProjectLinkingCard.tsx`, `hierarchyWords.ts` (new), `pwa/src/fleet/AddProjectSheet.tsx` | 5, 7 | Per-project settings, migration control |
-| `ccd/coordinator-skill/…`, `ccd/worker-skill/SKILL.md`, `ccd/linear-skill/SKILL.md` | 2, 4, 6 | The skills |
+| `ccd/coordinator-skill/…`, `ccd/worker-skill/SKILL.md`, `ccd/linear-skill/SKILL.md` | 2, 4, 6, 7 | The skills (`references/plan.md` from wave 2) |
 
 ---
 
@@ -209,21 +248,26 @@ Inert: nothing calls the new rows until wave 3. Testable alone over constructed 
 ### Task 1.1: The hierarchy documents and the ccrc operation rows
 
 **Files:**
-- Create: `server/src/linear/hierarchyOps.ts`
-- Modify: `server/src/linear/ops.ts` (`LINEAR_DOCUMENTS`)
+- Create: `server/src/linear/hierarchyOps.ts` (rows and shapers only)
+- Modify: `server/src/linear/ops.ts` (`LINEAR_HIERARCHY_DOCUMENTS` and `LINEAR_CCRC_PROVENANCE_LINE` declared here, spread
+  into `LINEAR_DOCUMENTS`). `server/test/single-definition/linear-ops.test.ts` pins that every document and every
+  mutation (`['`]mutation\s`, `issueCreate(`, …) is written in `ops.ts` and nowhere else, so no GraphQL text goes into
+  `hierarchyOps.ts`; that census stays unchanged and green. `ops.ts` is not a growth-checked file.
 - Create: `server/test/fixtures/linear/<name>-constructed.json`, one per new document (names below)
 - Modify: `server/test/linear-fixtures.test.ts` (file count, `AWAITING_RECAPTURE`), `server/test/fixtures/linear/README.md`,
   `docs/superpowers/specs/2026-10-31-linear-central-key-design.md` (§2: one line pointing to this design's reversal of
   its initiatives non-goal, design §15 item 11)
-- Test: `server/test/linear-hierarchy-ops.test.ts`, `server/test/linear-ops.test.ts` (census)
+- Test: `server/test/linear-hierarchy-ops.test.ts`, `server/test/linear-ops.test.ts` (census),
+  `server/test/single-definition/linear-ops.test.ts` (unchanged, run)
 
 **Interfaces:**
 - Consumes: `isPlainObject`-style helpers are private to `ops.ts`; copy nothing, import `cleanName`, `stripLine`,
   `stripMultiline` from `shared/unprintable.js` and `isLinearUuid` from `shared/linear.js`.
 - Produces:
-  - `export const LINEAR_HIERARCHY_DOCUMENTS` — frozen record of query and mutation strings, keys:
-    reads `initiativeById`, `projectById`, `projectStatuses`, `initiativesProbe`, `changedInitiatives`,
-    `changedProjects`, `changedMilestones`, `changedIssues`, `teamOpenIssues`, `issueOwned`;
+  - `export const LINEAR_HIERARCHY_DOCUMENTS` (in `ops.ts`) — frozen record of query and mutation strings, keys:
+    reads `initiativeById`, `projectById`, `projectStatuses`, `initiativesProbe`, `initiativesByName`,
+    `projectsByName`, `changedInitiatives`, `changedProjects`, `changedMilestones`, `changedIssues`, `teamOpenIssues`,
+    `issueOwned`;
     writes `initiativeCreate`, `initiativeUpdate`, `initiativeToProjectCreate`, `initiativeToProjectDelete`,
     `projectCreate`, `projectUpdate`, `projectMilestoneCreate`, `projectMilestoneUpdate`, `issueRelationCreate`.
   - `export type CcrcOpName = keyof typeof LINEAR_CCRC_OPS` — the hierarchy keys above plus `issueCreate`,
@@ -237,7 +281,7 @@ Inert: nothing calls the new rows until wave 3. Testable alone over constructed 
   - `export const LINEAR_CCRC_OPS: Readonly<Record<CcrcOpName, CcrcOpRow>>`
   - `export type CcrcShaped = { ok: true; value: Record<string, unknown>; created: string | null } | { ok: false; word: LinearAnswerRefusalWord }`
   - `export function readInitiativesProbe(body: unknown): 'on' | 'off' | 'unknown'`
-  - `export const LINEAR_CCRC_PROVENANCE_LINE = '— kept by ccrc from its plan'`
+  - `export const LINEAR_CCRC_PROVENANCE_LINE = '— kept by ccrc from its plan'` (in `ops.ts`, beside the session line)
   - `export function withCcrcProvenance(text: string): string` (appends once after a blank line, as `withLinearProvenance` does)
 
 What each document selects (the shapers read exactly these; the implementer writes the GraphQL text once, and FX2
@@ -245,6 +289,8 @@ records that text):
 - initiative: `id name description status updatedAt projects(first: 50) { nodes { id } }`
 - project: `id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt } }`
 - `projectStatuses`: `id name type`, first 50; `initiativesProbe`: `initiatives(first: 1) { nodes { id } }`
+- `initiativesByName`, `projectsByName`: filtered by exact `name`, first 10, each node `id name createdAt creator { id }`
+  (a project also `teams(first: 20) { nodes { key } }`): the bind-by-name read of Task 3.2
 - `changed*`: the same fields filtered by `updatedAt: { gt: $since }` (issues also by team key set), first 100, paged
 - issue (`issueOwned`, `teamOpenIssues`, `changedIssues`): `id identifier title description updatedAt team { key } state { type } project { id } projectMilestone { id } parent { id } labels(first: 50) { nodes { id } }`
 - every mutation answers `success` and the created or updated object's `id` (and `identifier` for issues)
@@ -287,19 +333,21 @@ it('withCcrcProvenance appends the line once', () => {
 Run: `cd server && npx vitest run --maxWorkers=2 test/linear-hierarchy-ops.test.ts test/linear-fixtures.test.ts`
 Expected: FAIL, `hierarchyOps.js` not found.
 
-- [ ] **Step 3: Implement `server/src/linear/hierarchyOps.ts` and spread it into `LINEAR_DOCUMENTS`**
+- [ ] **Step 3: Write the documents in `ops.ts`, the rows in `server/src/linear/hierarchyOps.ts`, and spread the
+  documents into `LINEAR_DOCUMENTS`**
 
-Write each document once. Constructed fixtures follow `mutation-attachment-link-url-constructed.json`'s shape (fixture
+Write each document once, in `ops.ts`. Constructed fixtures follow `mutation-attachment-link-url-constructed.json`'s shape (fixture
 UUIDs `00000000-000N-4000-8000-…`, team keys `AAA`/`BBB`, no recorded headers' numbers invented: a constructed file
 carries no `x-complexity`), named `read-initiative-by-id-constructed.json`, `read-project-by-id-constructed.json`,
 `read-project-statuses-constructed.json`, `read-initiatives-probe-constructed.json`,
+`read-initiatives-by-name-constructed.json`, `read-projects-by-name-constructed.json`,
 `read-changed-{initiatives,projects,milestones,issues}-constructed.json`, `read-team-open-issues-constructed.json`,
 `read-issue-owned-constructed.json`, `mutation-{initiative-create,initiative-update,initiative-to-project-create,initiative-to-project-delete,project-create,project-update,project-milestone-create,project-milestone-update,issue-relation-create}-constructed.json`.
 Each gets an `AWAITING_RECAPTURE` row in `linear-fixtures.test.ts`, and the README's table gains them under "constructed".
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cd server && npx vitest run --maxWorkers=2 test/linear-hierarchy-ops.test.ts test/linear-fixtures.test.ts test/linear-ops.test.ts`
+Run: `cd server && npx vitest run --maxWorkers=2 test/linear-hierarchy-ops.test.ts test/linear-fixtures.test.ts test/linear-ops.test.ts test/single-definition/linear-ops.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -326,17 +374,20 @@ headers, and deletes the objects it created afterwards with its own calls, which
 3. an introspection of `CommentCreateInput` (does it take an initiative, a project or a milestone?);
 4. a milestone update followed by its project's read (does the project's `updatedAt` move?);
 5. the probe on the initiatives-off workspace;
-6. by observation, whether the GitHub mirror of a synced issue shows an issue relation and an attachment link.
+6. by observation, whether the GitHub mirror of a synced issue shows an issue relation and an attachment link;
+7. `initiativesByName` and `projectsByName` on an object it created: does the exact-name filter hold, and does
+   `creator { id }` read the key's viewer (the directory's `viewerId`)?
 
 It lands as one fixture-only commit (recorded files replace the constructed ones; their `AWAITING_RECAPTURE` rows are
-removed; the README gains the six answers in a "What FX2 measured" section) in a PR of its own, reviewed for leaked
+removed; the README gains the answers in a "What FX2 measured" section) in a PR of its own, reviewed for leaked
 names before it merges. Every later task that depends on an answer reads it from the README, never from this plan.
 
 ### Task 1.2: The ccrc actor in the write policy and the journal
 
 **Files:**
 - Modify: `server/src/linear/policy.ts`, `server/src/linear/journal.ts`
-- Test: `server/test/linear-policy.test.ts`, `server/test/linear-journal.test.ts`
+- Test: `server/test/linear-policy.test.ts`, `server/test/linear-journal.test.ts`, `server/test/linear-ops.test.ts` (the
+  session shaper row)
 
 **Interfaces:**
 - Produces:
@@ -349,6 +400,10 @@ names before it merges. Every later task that depends on an answer reads it from
   - `LINEAR_JOURNAL_FIELDS` rows: `initiative-create`/`-update`: `['name','description','status']`;
     `initiative-link`/`-unlink`: `['project']`; `project-create`/`-update`: `['name','description','status','teams','initiative']`;
     `milestone-create`/`-update`: `['name','description','targetDate','project']`; `relation-create`: `['type','related']`.
+    The issue rows the sync writes journal as `create` and `update`, so `create` gains `milestone` and `update` gains
+    `milestone` and `team` (§5.2 step 4's `projectMilestoneId`, §5.3's team move, the migration's moves and put back's
+    restores). The session body shaper (`ops.ts`'s field map) still has no `projectMilestoneId` and no `teamId` on
+    update, so a session can send neither.
   - `export function ccrcActor(pass: CcrcPass): CcrcActor` — a frozen, minted object whose `toString()` is
     `ccrc:<pass>`; `isCcrcActor(a: unknown): a is CcrcActor`.
   - `LinearPendingInput.actor: AccountActor | CcrcActor | null`. A ccrc write row: `sessionId` and `sessionUuid` null,
@@ -370,6 +425,10 @@ it('an unminted object shaped like a ccrc actor is refused (actor)', () => {
 it('a session pair on a ccrc op is refused (session)', () => { /* sessionId: 'lane-a' → { ok: false, why: 'session' } */ });
 it('a UUID target and a UUID result settle on a hierarchy op', () => { /* settle(id, 'ok', undefined, UUID_B) → ok */ });
 it('a field outside the op list is refused (fields)', () => { /* fields: ['title'] on project-create → fields */ });
+it('a ccrc issue update moving team, project and milestone journals ok', () => {
+  /* op 'update', actor ccrcActor('plan-sync'), target 'KEY-123', fields ['team','project','milestone'] → ok */
+});
+it('a session update naming team or milestone is still refused by the proxy body shaper', () => { /* … */ });
 it('the policy point passes a ccrc ask to the policy unchanged', async () => {
   const seen: LinearWriteAsk[] = [];
   await askWithDeadline(async (a) => { seen.push(a); return { allow: true, decisionId: null }; }, ccrcAsk);
@@ -377,10 +436,10 @@ it('the policy point passes a ccrc ask to the policy unchanged', async () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-journal.test.ts test/linear-policy.test.ts`; Expected: FAIL (`ccrcActor` not exported).
+- [ ] **Step 2: Run them to verify they fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-journal.test.ts test/linear-policy.test.ts test/linear-ops.test.ts`; Expected: FAIL (`ccrcActor` not exported).
 - [ ] **Step 3: Implement** the types and `pendingRefusal`'s ccrc arm in `journal.ts`; `settleRefusal` admits a UUID `result` on a hierarchy op; `policy.ts`'s docstring keeps "the actor is attribution, never a grant".
 - [ ] **Step 4: Run them to verify they pass** — same command; Expected: PASS.
-- [ ] **Step 5: Commit** — `git add server/src/linear/policy.ts server/src/linear/journal.ts server/test/linear-journal.test.ts server/test/linear-policy.test.ts`; message `feat(linear): the ccrc actor in the write policy and the journal (D-8180)`.
+- [ ] **Step 5: Commit** — `git add server/src/linear/policy.ts server/src/linear/journal.ts server/test/linear-journal.test.ts server/test/linear-policy.test.ts server/test/linear-ops.test.ts`; message `feat(linear): the ccrc actor in the write policy and the journal (D-8180)`.
 
 ### Task 1.3: The `sync` and `migration` rate lanes
 
@@ -413,34 +472,39 @@ it('the migration lane is the smallest write lane', () => {
 - [ ] **Step 4: Run to pass** — same; Expected: PASS (the existing "restart starts at a quarter" rows cover the new lanes).
 - [ ] **Step 5: Commit** — `git add server/src/linear/rate.ts server/test/linear-rate.test.ts`; `feat(linear): the sync and migration rate lanes (D-8180)`.
 
-### Task 1.4: The directory's statuses and the initiatives capability
+### Task 1.4: The directory's status types (unsent until wave 3)
 
-**Files:** Modify `server/src/linear/ops.ts` (`LinearDirectoryEntries`, `LINEAR_DIRECTORY_COLLECTIONS`,
-`readLinearDirectoryPage`, `LINEAR_DOCUMENTS.directoryProjects`), `server/src/linear/directory.ts`,
-`server/src/linear/refresher.ts`; fixtures: the changed `directoryProjects` document no longer matches its recording, so
-it gets `directory-projects-page-1-constructed.json` and an `AWAITING_RECAPTURE` row until FX2 re-records it, and
-`directory-project-statuses-page-1-constructed.json` is new; Create `server/test/linear-directory-hierarchy.test.ts`;
-Test `server/test/linear-ops.test.ts`, `server/test/linear-fixtures.test.ts`.
+Wave 1 is inert, and no new document is sent live before FX2 records it (a schema guess that Linear rejects would fail
+the existing refresher's whole page and break sessions' `linear create --project` lookups). So this task changes no
+live document and no refresher cycle: `LINEAR_DOCUMENTS.directoryProjects` and its recording stay as they are. A
+project's status and teams are read by the sync through `projectById` (Task 1.1), from wave 3.
+
+**Files:** Modify `server/src/linear/ops.ts` (`LinearDirectoryEntries`, `LINEAR_DIRECTORY_COLLECTIONS`'s type,
+`readLinearDirectoryPage`), `server/src/linear/directory.ts`, `server/src/linear/refresher.ts` (the new parts default
+empty and `unknown`; nothing new is sent); fixture: `directory-project-statuses-page-1-constructed.json` (new, with its
+`AWAITING_RECAPTURE` row); Create `server/test/linear-directory-hierarchy.test.ts`; Test `server/test/linear-ops.test.ts`,
+`server/test/linear-fixtures.test.ts` (the refresher has no test file of its own: its rows go in the new file, over
+`linearServicesFake.ts`).
 
 **Interfaces:**
 - Produces:
-  - `LinearDirectoryEntries.projects: readonly { id: string; name: string; statusType: string | null; teamKeys: readonly string[] }[]`
-  - `LinearDirectoryEntries.projectStatuses: readonly { id: string; name: string; type: string }[]`
-  - `LinearDirectoryEntries.initiatives: 'on' | 'off' | 'unknown'`
-  - `LINEAR_DIRECTORY_COLLECTIONS` gains `'projectStatuses'` (read after `projects`); the refresher then runs the probe
-    (`LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe`) once per refresh on the `floor` lane, and also when a key is
-    verified.
+  - `LinearDirectoryEntries.projectStatuses: readonly { id: string; name: string; type: string }[]` (empty until wave 3)
+  - `LinearDirectoryEntries.initiatives: 'on' | 'off' | 'unknown'` (`unknown` until wave 3)
+  - the page reader for `projectStatuses` (`LINEAR_HIERARCHY_DOCUMENTS.projectStatuses`), exported and tested over the
+    constructed fixture, but not in the refresher's collection order yet. Task 3.2 (after FX2) adds the
+    `projectStatuses` collection to the refresher and runs the probe (`initiativesProbe`) once per refresh on the
+    `floor` lane, and also when a key is verified.
   - `export function statusOfType(entries: LinearDirectoryEntries, kind: 'project' | 'issue', type: string, teamKey: string | null): { id: string } | null`
     in `ops.ts`: the first status of that type (issue states per team), never by name.
 
 - [ ] **Step 1: Write the failing tests** — `a directory page of project statuses reads id, name and type`;
-  `projects carry their status type and team keys`; `the probe's answer lands in entries.initiatives`;
+  `a wave-1 refresh sends exactly the documents it sent before` (the fetch fake's request log against today's four);
   `statusOfType finds by type and ignores a renamed name` (a status named `Shipped` of type `completed` is found for
   `completed`); `statusOfType answers null when no status has the type`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-directory-hierarchy.test.ts test/linear-ops.test.ts test/linear-fixtures.test.ts`.
 - [ ] **Step 3: Implement**; the directory keeps the slot-and-digest keying unchanged.
 - [ ] **Step 4: Run to pass** — same command.
-- [ ] **Step 5: Commit** — the five files and fixtures; `feat(linear): project statuses and the initiatives capability in the directory (D-8180)`.
+- [ ] **Step 5: Commit** — the files and the fixture; `feat(linear): status types in the directory, unsent until the capture (D-8180)`.
 
 ### Task 1.5: `runCcrcOp`, the server-internal caller
 
@@ -490,13 +554,17 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
   - `EPIC_STATES = ['planned','active','done','dropped']`, `CHECKPOINT_KINDS = ['acceptance','operator-act','measured']`,
     `CHECKPOINT_STATES = ['open','met','dropped']`, `TICKET_KINDS = ['work','task','bug','follow-up']`,
     `TICKET_SOURCES = ['plan','worker','inbound']`, `TICKET_STATES = ['open','started','done','dropped']`,
+    `PLAN_END_OUTCOMES = ['done','abandoned']` (type `PlanEndOutcome`),
     `BINDING_KINDS = ['programme','epic','checkpoint','ticket']`, `BINDING_STATES = ['pending','bound','failed']`,
     `MIGRATION_STATES = ['proposing','proposed','approved','applying','applied','put-back','failed']`,
     `HIERARCHY_STATES = ['not-migrated','map-waiting','migrating','migrated','put-back']`, each with its type.
   - `PLAN_BOUNDS = { epics: 24, checkpointsPerEpic: 16, ticketsPerBody: 200, titleChars: 255, summaryChars: 500, bodyBytes: 65_536, reasonChars: 500 } as const`
   - `LINEAR_SYNC_PROGRAMME = 'linear-sync'`, `UPKEEP_EPIC_KEY = 'upkeep'`, `UPKEEP_EPIC_TITLE = 'Upkeep'`
   - Keys use the programme slug grammar (`shapeProgramSlug` in `shared/api.ts`): `isPlanKey(v: unknown): v is string`.
-  - Wire: `PlanPutBody { epics: PlanEpicBody[] }`; `PlanEpicBody { key; title; summary; project?; waves: number[]; checkpoints: PlanCheckpointBody[]; tickets?: PlanTicketBody[]; droppedWhy?: string }`;
+  - Wire: `PlanPutBody { home?: string; title?: string; epics: PlanEpicBody[] }` (`home` is the programme's home
+    project, required when the programme has no row yet and refused `plan-bad-body` when it differs from a stored
+    one; `title` names a new programme, default from its slug);
+    `PlanCloseBody { outcome: 'done' | 'abandoned'; why?: string }` (`why` required for `abandoned`); `PlanEpicBody { key; title; summary; project?; waves: number[]; checkpoints: PlanCheckpointBody[]; tickets?: PlanTicketBody[]; droppedWhy?: string }`;
     `PlanCheckpointBody { key; title; kind: CheckpointKind; proves?: number[]; itemId?: number }` (`itemId` only on an
     `operator-act` checkpoint: the operator item whose `done` marks it met, §4.1);
     `PlanTicketBody { key; kind: TicketKind; title; body?: string; project?: string; checkpoint?: string }`;
@@ -507,7 +575,7 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
     `TicketView { key; kind; title; project; checkpoint: string | null; source; state; runId: number | null; identifier: string | null; url: string | null }`;
     `HierarchyAnswer { ok: true; projects: HierarchyProjectRow[]; coordinators: { id: string; live: boolean }[] }`;
     `HierarchyProjectRow { project; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean }; ownsTeam: boolean; state: HierarchyState; stateAt: number | null; itemId: number | null; inboundWaiting: number }`.
-  - `PLAN_REFUSALS = ['not-plan-owner','not-linear-owner','plan-too-large','plan-bad-body','waves-not-contiguous','wave-overlap','dropped-needs-reason','unknown-epic','unknown-checkpoint','unknown-ticket','ticket-workspace-mismatch','linear-text-public','plan-owned','map-rewrites-plan','map-incomplete','migration-in-flight','not-managed','issue-not-inbound','item-act-mismatch'] as const`
+  - `PLAN_REFUSALS = ['not-plan-owner','not-linear-owner','plan-too-large','plan-bad-body','waves-not-contiguous','wave-overlap','dropped-needs-reason','unknown-epic','unknown-checkpoint','unknown-ticket','ticket-workspace-mismatch','linear-text-public','plan-owned','map-rewrites-plan','map-incomplete','migration-in-flight','not-managed','issue-not-inbound','item-act-mismatch','plan-closed','plan-runs-open'] as const`
   - `export const isPlanKebab = (tok: string): boolean` — true for every kebab word in the lists above (the state
     and kind lists included).
 - Produces (`shared/ledgers.ts`): `ItemAction` gains `{ verb: 'linear-map'; migrationId: number }`,
@@ -534,10 +602,12 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
 
 ### Task 2.2: Migration 57 and the plan store
 
-**Files:** Modify `server/src/coord/schema.ts` (entry 57), `server/src/coord/store.ts` (`advance` calls
-`onRunAdvanced`; `setProgramState` calls `markSyncDue`: two lines), `server/src/coord/linkingStore.ts` (the three new
-columns); Create `server/src/coord/planStore.ts`; Test `server/test/plan-store.test.ts`, `server/test/coord-db.test.ts`
-(the schema version).
+**Files:** Modify `server/src/coord/schema.ts` (entry 57), `server/src/coord/store.ts` (two lines:
+`advanceInner` calls `planStore.onRunAdvancedInTx` beside `settleEndRequests`, so `advance`, `dispatchRun`, `closeRun`
+and the sweep's batch all reach it inside their own transaction; `reconstruct`'s programme INSERT writes
+`planRequired` 0), `server/src/coord/linkingStore.ts` (the three new columns); Create `server/src/coord/planStore.ts`;
+Test `server/test/plan-store.test.ts`, `server/test/coord-db.test.ts` (the schema version), `server/test/coord-store.test.ts`.
+`setProgramState` is **not** hooked: `programs.state` is not a programme-end signal (What was read first).
 
 Migration 57 (renumber at rebase):
 
@@ -566,13 +636,21 @@ ALTER TABLE project_linking ADD COLUMN ownsTeam INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE programs ADD COLUMN planBy TEXT;
 ALTER TABLE programs ADD COLUMN planAt INTEGER;
 ALTER TABLE programs ADD COLUMN planRequired INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE programs ADD COLUMN planEnd TEXT;
+ALTER TABLE programs ADD COLUMN planEndWhy TEXT;
+ALTER TABLE programs ADD COLUMN planEndAt INTEGER;
 UPDATE programs SET planRequired = 0;
-INSERT OR IGNORE INTO programs (slug, title, createdAt, state) VALUES ('linear-sync', 'Linear sync', 0, 'active');
+INSERT OR IGNORE INTO programs (slug, title, createdAt, state, planRequired) VALUES ('linear-sync', 'Linear sync', 0, 'paused', 0);
 ```
 
 `planRequired = 0` marks every programme that existed before this build (they open runs as today until their team
-migrates, §4.3); a programme created later gets the default 1. The `linear-sync` row is the reserved item home (§7.6);
-`runs open` refuses it (Task 2.6) and `readProgrammes` never lists a programme with no run.
+migrates, §4.3); a programme created later gets the default 1, and `reconstruct` (a legacy programme rebuilt from its
+ledger) writes 0. The `linear-sync` row is the reserved item home (§7.6): it is inserted `paused`, never `active`,
+because `soleActiveCoordinator()` answers only when exactly one row reads `active`, and an extra active row would turn
+every `to: coordinator` mail with no `runId` (`routes.ts`) and the watcher's `tellSender` into `unknown-recipient` on a
+box with one live programme. Nothing writes `paused` today, so nothing moves it. `runs open` and `plan put` refuse the
+slug (Tasks 2.5, 2.4) and `readProgrammes` never lists a programme with no run. `planEnd` (`done` | `abandoned`),
+`planEndWhy` and `planEndAt` are written only by `plan close` (Task 2.4).
 
 **Interfaces:**
 - Produces (types, in `planStore.ts`; Task 2.3 imports them as types):
@@ -584,33 +662,47 @@ migrates, §4.3); a programme created later gets the default 1. The `linear-sync
     with `Changes<N, P> = { insert: N[]; update: (P & { id: number })[]; drop: { id: number; why: string }[] }`; a new
     checkpoint or ticket names its epic by `epicKey` (its epic may be inserted in the same change); patches carry only
     the fields that differ.
-- Produces (`planStore.ts`, free functions over `DatabaseSync`, each write in `tx`):
+- Produces (`planStore.ts`, free functions over `DatabaseSync`). A function named `…InTx` runs inside the caller's
+  open transaction and never opens one (`DatabaseSync` transactions do not nest, so calling a `tx`-opening writer from
+  `advanceInner` would throw); every other write opens its own `tx`:
   - `planOf(db, program: string): StoredPlan` — epics with checkpoints and tickets, in ordinal order
-  - `applyPlanChanges(db, program: string, changes: PlanChanges, by: string, now: number): void` — inserts, updates,
-    drops (never deletes); sets `planBy`/`planAt` on the first call; marks the programme due
+  - `applyPlanChanges(db, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string } | null): void`
+    — when `newRow` is given and no `programs` row exists, inserts it first in the same transaction (`active`,
+    `homeProject` = `home`, `planRequired` 1, `INSERT … ON CONFLICT(slug) DO NOTHING`); then inserts, updates, drops
+    (never deletes); sets `planBy`/`planAt` on the first call; marks the programme due
+  - `closePlan(db, program: string, outcome: PlanEndOutcome, why: string | null, now: number): void` — writes
+    `planEnd`/`planEndWhy`/`planEndAt` once and marks the programme due
+  - `planEndOf(db, program: string): { outcome: PlanEndOutcome; why: string | null; at: number } | null`
   - `markCheckpointMet(db, checkpointId: number, evidence: CheckpointEvidence, now: number): void`
   - `insertTicket(db, t: NewTicket, now: number): number`; `updateTicket(db, id: number, patch: TicketPatch, now: number): void`
   - `ticketById(db, id)`, `ticketByKey(db, program: string | null, epicId: number, key: string)`
   - `attachRunTicket(db, runId: number, ticketId: number): void`
-  - `onRunAdvanced(db, runId: number, to: RunState, now: number): void` — `dispatched` → ticket `started` and its epic
-    `active` (first run); `done` → ticket `done`, then the epic `done` when `epicIsDone`; `failed` → ticket `open`,
-    `runId` cleared. A review run moves nothing. Marks the programme due.
+  - `onRunAdvancedInTx(db, runId: number, from: RunState, to: RunState, now: number): void` — called from
+    `advanceInner`: `dispatched` → ticket `started` and its epic `active` (first run); `done` → ticket `done`, then the
+    epic `done` when `epicIsDone`; `failed` → ticket `open`, `runId` cleared. A review run, or a run
+    with no ticket, moves nothing. Marks the programme due through `markSyncDueInTx`.
   - `planOwnerOf(db, program: string): string | null` — the `claimedBy` of the programme's newest run, else `planBy`
   - bindings: `bindingOf(db, kind: BindingKind, localId: number, workspaceId: string): BindingRow | null`,
     `ensurePending(db, kind, localId, workspaceId, teamKey: string | null): BindingRow`,
     `markBound(db, id: number, linearId: string, identifier: string | null, fingerprint: string, now: number): void`,
     `markFailed(db, id: number, now: number): void`, `bindingsOf(db, program: string): BindingRow[]`
-  - queue: `markSyncDue(db, program: string, at: number): void` (keeps the earlier `dueAt`), `dueSyncs(db, now: number): string[]`,
+  - queue: `markSyncDue(db, program: string, at: number): void` and `markSyncDueInTx` (both keep the earlier `dueAt`), `dueSyncs(db, now: number): string[]`,
     `clearSyncDue(db, program: string): void`, `deferSync(db, program: string, until: number): void` (increments `attempts`)
   - settings: `hierarchySettingsOf(db, project)`, `setHierarchySettings(db, project, s: HierarchySettingsBody, by: string, at: number)`
 
 - [ ] **Step 1: Write the failing tests** — `migration 57 applies on a file at 56 and an older build's SELECTs still run`;
-  `every pre-existing programme reads planRequired 0 and a new one 1`; `linear-sync exists after the migration`;
+  `every pre-existing programme reads planRequired 0 and a new one 1`; `linear-sync exists after the migration, paused`;
+  `one real active programme plus linear-sync: soleActiveCoordinator still answers its claimant` (Review Focus 7);
+  `a reconstructed programme reads planRequired 0`; `applyPlanChanges with newRow inserts the programme row active with
+  its home, and a second call leaves it unchanged`;
+  `dispatchRun starts the ticket and activates its epic` and `closeRun done closes the ticket, failed reopens it` (both
+  driven through the store's own `dispatchRun` and `closeRun`, not `advance`, so the hook is proven on the path that
+  bypasses `advance`); `no planStore InTx writer opens a transaction` (calling one inside `tx` does not throw);
   `a dropped key keeps its row with droppedWhy` ; `two Upkeep epics for one project are refused by the index`;
-  `onRunAdvanced: dispatched starts the ticket and activates the epic; done closes both when nothing is open; failed reopens the ticket`;
+  `onRunAdvancedInTx: done closes the epic too when nothing is open`;
   `a review run's advance moves no ticket`; `markSyncDue keeps the earlier dueAt`; `planOwnerOf prefers the newest claimant, then planBy`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-store.test.ts test/coord-db.test.ts`.
-- [ ] **Step 3: Implement** the entry with its header comment and the store; `store.ts` gains only the two calls.
+- [ ] **Step 3: Implement** the entry with its header comment and the store; `store.ts` gains only the two lines.
 - [ ] **Step 4: Run to pass** — same, plus `test/coord-store.test.ts test/linking-store.test.ts`.
 - [ ] **Step 5: Commit** — `feat(plan): migration 57 and the plan store (D-8181)`.
 
@@ -625,18 +717,29 @@ migrates, §4.3); a programme created later gets the default 1. The `linear-sync
     — closed bodies (unknown field refused), bounds from `PLAN_BOUNDS`, titles 1–255 code points with no control
     characters, keys `isPlanKey`, `proves` indexes inside the programme's done-when list length (passed in).
   - `diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { ok: true; changes: PlanChanges } | { ok: false; word: PlanRefusal; detail: string }`
-    where `PlanCtx = { home: string; doneWhenCount: number; workspaceOfProject(project: string): string | null }`.
+    where `PlanCtx = { home: string; doneWhenCount: number; workspaceOfProject(project: string): string | null }`;
+    the route fills `home` from the stored row's `homeProject`, or from the put's `home` when no row exists (a put on
+    an absent row with no `home` is `plan-bad-body` before `diffPlan` runs).
     Rules: waves of one epic are one contiguous range; no wave in two epics (live epics only) → `wave-overlap`; a key
     that disappears is dropped and needs `droppedWhy` on that epic or a `drops` map → `dropped-needs-reason`; a ticket
     whose project's workspace differs from its epic's → `ticket-workspace-mismatch`; a met or dropped checkpoint is not
     re-opened by a put; `itemId` on a checkpoint that is not `operator-act` is `plan-bad-body`.
+  - `parsePlanClose(body: unknown): { ok: true; close: PlanCloseBody } | { ok: false; word: 'plan-bad-body' | 'dropped-needs-reason'; detail: string }`
+    — `abandoned` with no `why` is `dropped-needs-reason`.
+  - `programmeEnd(f: { planEnd: PlanEndOutcome | null; programState: ProgramState; epics: readonly { state: EpicState }[]; openTickets: number }): PlanEndOutcome | null`
+    — the explicit `planEnd` when set; else `done` only when `programState` is `done`, there is at least one epic,
+    every epic is `done` or `dropped` and no ticket is `open` or `started`; else `null` (live). Never `abandoned`
+    without `planEnd`: a failed last run of a wave is not an abandoned programme.
   - `epicIsDone(checkpoints: readonly { state: CheckpointState }[], tickets: readonly { state: TicketState }[]): boolean`
   - `epicForWave(epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number): number | null`
   - `planCallerVerdict(caller: string, owner: string | null, verb: 'programme' | 'follow-up', runOfCaller: { program: string; epicId: number | null } | null): { ok: true } | { ok: false; word: 'not-plan-owner' }`
     — a follow-up from a worker is allowed only into its own run's epic, kind `follow-up`.
-  - `linearOwnerOf(project: string, f: OwnerFacts): { id: string | null; source: 'named' | 'default' | 'none'; live: boolean }`
-    with `OwnerFacts = { named: string | null; ownsTeamProject: string | null; latestProgrammeCoordinator(project: string): string | null; live(id: string): boolean }`:
-    a shared team key answers the owning project's owner (default the first project that set the key).
+  - `linearOwnerOf(project: string, f: OwnerFacts): { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; gone: boolean }`
+    with `OwnerFacts = { named: string | null; ownsTeamProject: string | null; latestProgrammeCoordinator(project: string): string | null; presence(id: string): CoordinatorPresence }`
+    (`CoordinatorPresence` from `shared/ledgers.ts`): a shared team key answers the owning project's owner (default the
+    first project that set the key). `live` is `alive` (which covers a hibernated, `asleep` session that mail wakes);
+    `gone` is `dead` or `absent` only. `unmeasured` is a doubt, neither live nor gone: it never raises *Name a Linear
+    owner* and never holds an inbound issue (§7.5, the coordinator-autonomy ruling).
 
 - [ ] **Step 1: Write the failing tests** (one per rule, with the design's values):
 
@@ -649,8 +752,12 @@ it('a ticket of project-b in an epic of project-a across workspaces is ticket-wo
 it('a 256-code-point title is plan-bad-body; a title with a control character is plan-bad-body', …);
 it('proves [5] on a programme with 3 done-when entries is plan-bad-body', …);
 it('epicIsDone: all met or dropped and no open or started ticket', …);
+it('programmeEnd: state done with a planned epic is live; abandoned with no planEnd is live; planEnd wins', …);
+it('a put on an absent programme with no home is plan-bad-body', …);
+it('abandoned close with no why is dropped-needs-reason', …);
 it('a worker files a follow-up into its own epic only', …);
 it('the Linear owner of a shared key is the owning project\'s, and the default is the latest programme\'s coordinator', …);
+it('an owner whose presence is unmeasured is not gone', …);
 ```
 
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-policy.test.ts`.
@@ -672,23 +779,35 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
 - `PlanRouteOpts { coord: CoordStore | undefined; mailToken: () => string | BoxTokenHolder | null; attribute: (id: string, uuid: string) => Promise<AttributionRead>; sessionAuth: (req: FastifyRequest) => SessionVerdict; authEnabled: boolean; readLinearStore: () => Promise<LinearStoreRead>; runOfSession: (id: string) => { program: string; epicId: number | null } | null; now: () => number }`
   (`linkingStore`'s and the goals read's deps, gathered the same way in `server.ts`).
 - Produces routes (box token, then the identity pair from the query, then attribution, then the caller check):
-  - `POST /api/programmes/:slug/plan` (`plan put`) → `{ ok: true, plan: PlanView }`
+  - `POST /api/programmes/:slug/plan` (`plan put`) → `{ ok: true, plan: PlanView }`. The slug `LINEAR_SYNC_PROGRAMME`
+    is refused `reserved-programme` (409, its run status). On a slug with no `programs` row (a new programme, which
+    clause 21 declares before its first run), `home` is required and the row is inserted in the same transaction as
+    the plan (`applyPlanChanges`'s `newRow`: `active`, `homeProject`, `planRequired` 1); the later `runs open` keeps it
+    (its INSERT is `ON CONFLICT DO NOTHING`). A put after `plan close` is `plan-closed`.
   - `GET /api/programmes/:slug/plan` (`plan show`), EXEMPT-BUT-AUTHENTICATED (a session cookie or the box token, the
     goals read's stance), in `MASKED_GET_ROUTES`
   - `POST /api/programmes/:slug/plan/met` body `{ checkpoint, evidence }`
   - `POST /api/programmes/:slug/plan/tickets` body `PlanTicketBody & { epic: string }` (`plan ticket-add`)
   - `POST /api/programmes/:slug/plan/tickets/move` body `{ ticket, epic?, checkpoint?, project?, drop?: { why } }`
   - `POST /api/programmes/:slug/plan/epics/drop` body `{ epic, why }`
+  - `POST /api/programmes/:slug/plan/close` body `PlanCloseBody` (`plan close`): the coordinator's explicit programme
+    end, the only source of an `abandoned` end (§5.4). Refused `plan-runs-open` while any run of the programme is not
+    terminal, `plan-closed` when already closed; `abandoned` needs `why`.
   - `export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): void`
   - `ccd/ccrc-api` rows: `[plan.put]='POST|/api/programmes/{id}/plan|yes|-'`, `[plan.show]='GET|/api/programmes/{id}/plan|yes|-'`,
     `[plan.met]='POST|/api/programmes/{id}/plan/met|yes|-'`, `[plan.ticket-add]='POST|/api/programmes/{id}/plan/tickets|yes|-'`,
-    `[plan.ticket-move]='POST|/api/programmes/{id}/plan/tickets/move|yes|-'`, `[plan.epic-drop]='POST|/api/programmes/{id}/plan/epics/drop|yes|-'`.
+    `[plan.ticket-move]='POST|/api/programmes/{id}/plan/tickets/move|yes|-'`, `[plan.epic-drop]='POST|/api/programmes/{id}/plan/epics/drop|yes|-'`,
+    `[plan.close]='POST|/api/programmes/{id}/plan/close|yes|-'`.
     Every `plan.*` row but `plan.show` gets the pane's identity in the query (the `linear.*` block's rule, never the
     body); every `plan.*` row is refused locally `no-plan-door` when a current cap file omits `plan-v1`.
   - `serverCaps` lists `plan-v1`.
 
 - [ ] **Step 1: Write the failing tests** — `a put by the claimant stores the plan and answers PlanView`;
   `a put by another session is not-plan-owner`; `a programme with no run accepts its first put and records planBy`;
+  `a put on a new slug with home inserts the programme row (active, that home, planRequired 1), and a later runs open
+  keeps it`; `a put on a new slug with no home is plan-bad-body and stores nothing`; `a put on linear-sync is
+  reserved-programme`; `close abandoned with no why is dropped-needs-reason`; `close with a run working is
+  plan-runs-open`; `a put after close is plan-closed`;
   `a tokenless call is 401 before anything is read`; `plan show answers a cookie and a token alike, masked`;
   `met with evidence {pr: 12} marks the checkpoint`; `ticket-add by a worker into another epic is not-plan-owner`;
   `ticket-move with drop and no why is dropped-needs-reason`; in `ccrc-api.test.ts`: `plan put sends byId and byUuid in the query and the body unchanged`,
@@ -702,13 +821,22 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
 
 **Files:** Modify `server/src/coord/openRun.ts` (`OPEN_RUN_GATES`: `reservedProgramme`, `ticketShape` after `shape`;
 `planGate` after `homeVerdict`), `server/src/coord/routes.ts` (`POST /api/runs`: attach inside the mutex),
-`ccd/coordinator-skill/references/api.md` (the four new codes, one recovery line each);
+`ccd/coordinator-skill/references/api.md` (the four new codes, one recovery line each; `plan-missing`'s points at
+`references/plan.md`); Create `ccd/coordinator-skill/references/plan.md` (the refusal ships with its recovery: the
+`plan put` body by example, the design's §4.3 JSON with `home`, and the wave-2 verbs `plan put`, `plan show`,
+`plan met`, `plan ticket-add`, `plan ticket-move`, `plan epic-drop`, `plan close`, each with its body and refusals.
+Verbs are named as `ccrc-api plan <verb>` commands, never as raw `POST /api/...` paths, because
+`coordinator-skill.test.ts`'s route census reads only `coord/routes.ts` and `reviewRoundsRoute.ts`. Wave 6 adds
+clause 21 and the later verbs, and wave 7 adds `plan map-propose`);
 Test `server/test/open-run-preconditions.test.ts` (gate-order rows), `server/test/run-routes.test.ts`,
-`server/test/coordinator-skill.test.ts`.
+`server/test/coordinator-skill.test.ts`, `server/test/ccrc-api-closed.test.ts` (the pinned list of client commands the
+skill corpora run gains each `plan.*` key that `plan.md` runs).
 
 **Interfaces:**
 - Consumes: `epicForWave`, `planOf`, `insertTicket`, `attachRunTicket`.
 - Produces: `OpenRunFacts` gains `plan(slug: string): { required: boolean; epics: …; ticket(key: string): TicketRow | null } `;
+  `required` is the row's `planRequired`, and `true` for a slug with no `programs` row (a new programme that skipped
+  `plan put`: answering false would silently disarm `plan-missing`);
   `OpenRunPlan` gains `ticket: { kind: 'existing'; id: number; reproject: string | null } | { kind: 'new'; epicId: number } | null`.
   Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-missing` (no epic and `planRequired` 1);
   `wave-epic-mismatch` (no live epic lists the wave, or the named ticket's epic is not the wave's);
@@ -719,8 +847,9 @@ Test `server/test/open-run-preconditions.test.ts` (gate-order rows), `server/tes
 - [ ] **Step 1: Write the failing tests** — the four refusals, each with its gate-order row and reorder mutant;
   `a run with no ticket gets one in its wave's epic`; `a run opened with a ticket of project-a in project-b re-projects the ticket`;
   `an older programme (planRequired 0) with no plan opens as today`; `a review run never gets a ticket`;
-  the coordinator corpus names the four codes.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/open-run-preconditions.test.ts test/run-routes.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts`.
+  `a new slug with no row and no plan is plan-missing`; the coordinator corpus names the four codes; `plan.md` names
+  every wave-2 plan verb and the body's `home`.
+- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/open-run-preconditions.test.ts test/run-routes.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts test/ccrc-api-closed.test.ts test/skill-size-ratchet.test.ts`.
 - [ ] **Step 3: Implement**; the four codes are quoted in `server/src/coord` (the reverse scan).
 - [ ] **Step 4: Run to pass**.
 - [ ] **Step 5: Commit** — `feat(plan): runs attach to tickets (D-8181)`.
@@ -732,7 +861,10 @@ in `MASKED_GET_ROUTES`), `server/src/coord/linkingStore.ts` (the wire's new fiel
 Test `server/test/hierarchy-routes.test.ts`.
 
 **Interfaces:**
-- Consumes: `linearOwnerOf`, `setHierarchySettings`, `presenceOf` (`'alive'` is live, §15 item 10).
+- Consumes: `linearOwnerOf`, `setHierarchySettings`, and the `presenceOf` that `server.ts` already builds once
+  (`coordinatorPresenceIn` over the watcher's fleet frame and registry ids, `shared/ledgers.ts`), passed in as
+  `HierarchyRouteOpts.presenceOf: (id: string) => CoordinatorPresence`: the session standing the console already
+  shows (§15 item 10). `alive` (covering `asleep`) is live, `dead`/`absent` gone, `unmeasured` neither.
 - Produces:
   - `POST /api/projects/:project/hierarchy` body `{ initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean }`
     — session-gated when armed, no box token (the linking write's stance); `ownsTeam: true` clears it on every other
@@ -743,11 +875,60 @@ Test `server/test/hierarchy-routes.test.ts`.
 
 - [ ] **Step 1: Write the failing tests** — `setting ownsTeam on project-b clears it on project-a with the same key`;
   `owner for all writes every project's linearOwner`; `GET answers the default owner and whether it is live`;
+  `a hibernated owner reads live`;
   `an unknown owner id is bad-request`; `inboundWaiting reads 0 before wave 4`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/hierarchy-routes.test.ts`.
 - [ ] **Step 3: Implement**.
 - [ ] **Step 4: Run to pass** — plus `test/secret-mask.test.ts test/auth-gate.test.ts`.
 - [ ] **Step 5: Commit** — `feat(plan): the per-project Linear owner and hierarchy settings (D-8181)`.
+
+### Task 2.7: The public-text check
+
+In wave 2, so it lands before any wave writes to Linear (§4.3: every plan verb checks text before storing it; §6.1:
+the sync checks again before each write). Task 3.2 adds that guard when it creates `planSync.ts`.
+
+**Files:** Create `server/src/linking/publicTextClasses.ts`; Move `server/test/private-names.mjs`'s matcher (the
+tokenizer, `hashEntry`, `entriesOf`, `hitsAt`, `matchLine`, `pairHits`, `maskText`, `EXEMPTIONS`, `PRIVATE_NAMES`,
+`PRIVATE_NAMES_DIGEST`, the salt and `CANARY`) to `shared/private-names.mjs` (shared already holds `.mjs` modules the
+server compiles, `allowJs`); `server/test/private-names.mjs` keeps its CLI (`hash --list`) and the local scan with their
+`fs`/`child_process` reads, and re-exports the matcher, so `private-names.test.ts`, `license.test.ts`, the sweep's local
+scan and the CLI's path are unchanged. Modify `server/test/topology-clean.test.ts` (imports its classes' patterns from
+the new module; its corpus walk, `SELF`, base resolution, liveness rows **and every class's `catches` and `passes`
+fixtures stay in this file**, keyed by class name), `server/src/linking/policy.ts` (`publicTextVerdict`),
+`server/src/coord/planRoutes.ts` (every text field of every plan verb), `pwa/src/lib/refusalWords.ts` (sentence), the
+rings and single-definition rows for the moved matcher (`server/test/rings/*.data.ts`,
+`server/test/single-definition/`); Test `server/test/public-text.test.ts`, `server/test/topology-clean.test.ts`,
+`server/test/private-names.test.ts`, `server/test/license.test.ts`.
+
+Why the split: `topology-clean.test.ts` excludes only itself (`SELF`) from its walk, by path, because each class's
+`catches` list holds tokens the walk forbids (IPs, hosts, session ids, the canary). A `catches` list in
+`server/src/linking/publicTextClasses.ts`, a scanned file, would turn the suite red on its own fixtures. And no
+`server/src` file may import from `server/test`, so the hashed matcher moves to shared code rather than being read in
+place.
+
+**Interfaces:**
+- Produces:
+  - `export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[]` with `PublicTextClass = { name: string; pattern?: RegExp; match?: (line: string, file: string) => string[]; allowed?: (token: string) => boolean; skipLine?: (line: string, file: string) => boolean; why: string }`
+    — no fixtures. The test suite keeps `const FIXTURES: Record<string, { catches: string[]; passes: string[] }>`
+    keyed by `name`, and its liveness rows assert each class through the imported module.
+  - The hashed class reads `shared/private-names.mjs` (`matchLine` over `PRIVATE_NAMES`), in the server check and the
+    suite alike.
+  - `publicTextVerdict(text: string, teamKey: string | null, mode: LinkingMode): { ok: true } | { ok: false; word: 'linear-text-public'; class: string; ids?: string[] }`
+    — `private` mode passes; `public` and `unknown` refuse a team tracker id (`trackerIdsIn`) or any class match; a
+    hashed hit names its class and `#h8`, never the text.
+
+- [ ] **Step 1: Write the characterization test first** — move nothing yet; assert `topology-clean.test.ts`'s
+  liveness rows (each class's `catches` and `passes`, still in that file) through the new import path, red until the
+  move. `private-names.test.ts`'s CLI row still runs `server/test/private-names.mjs`.
+- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/topology-clean.test.ts test/public-text.test.ts test/private-names.test.ts test/license.test.ts`.
+- [ ] **Step 3: Move the classes and the matcher** (a commit that changes only where code lives and its imports), then add
+  `publicTextVerdict` and its tests: `a public project's ticket title naming KEY-123 is refused with ids`,
+  `an email in a public summary is refused with its class`, `a private project passes both`,
+  `an unknown project is treated as public`, `plan put answers linear-text-public at once and stores nothing`,
+  `ticket-add and met evidence are checked too`, `publicTextClasses.ts holds no catches list` (the walk stays green).
+- [ ] **Step 4: Run to pass** — same, plus `test/plan-routes.test.ts`, the rings and single-definition files touched.
+- [ ] **Step 5: Commit** — two commits: `refactor(linking): the topology classes and the private-name matcher in shared
+  modules (D-8181)` and `feat(linking): the public-text check on plan text (D-8181)`.
 
 ---
 
@@ -763,8 +944,8 @@ Starts after FX2 has landed. From here new programmes are born in the new shape 
 - Consumes: `StoredPlan`, `BindingRow`, `LinearDirectoryEntries`, `statusOfType`, `withCcrcProvenance`,
   `redactShapedCount`.
 - Produces:
-  - `export interface SyncSnapshot { program: { slug; title; state: ProgramState; inShort: string | null; doneWhen: string[] }; plan: StoredPlan; bindings: BindingRow[]; workspaces: { workspaceId: string; initiatives: 'on' | 'off' | 'unknown'; directory: LinearDirectoryEntries | null }[]; projects: { project: string; teamKey: string | null; workspaceId: string | null; mode: LinkingMode; initiatives: 'on' | 'off' }[] }`
-  - `export type SyncStep = { kind: 'create'; op: CcrcOpName; local: { kind: BindingKind; id: number }; workspaceId: string; teamKey: string | null; input: CcrcOpInput; fields: string[]; requestId: string } | { kind: 'update'; op: CcrcOpName; bindingId: number; …; fingerprint: string } | { kind: 'link' | 'unlink'; … } | { kind: 'skip'; local; why: 'initiatives-off' | 'no-team-key' | 'status-missing' | 'workspace-mismatch' }`
+  - `export interface SyncSnapshot { program: { slug; title; end: { outcome: PlanEndOutcome; why: string | null; at: number } | null; inShort: string | null; doneWhen: string[] }; plan: StoredPlan; bindings: BindingRow[]; workspaces: { workspaceId: string; initiatives: 'on' | 'off' | 'unknown'; directory: LinearDirectoryEntries | null }[]; projects: { project: string; teamKey: string | null; workspaceId: string | null; mode: LinkingMode; initiatives: 'on' | 'off' }[] }`
+  - `export type SyncStep = { kind: 'create'; op: CcrcOpName; local: { kind: BindingKind; id: number }; workspaceId: string; teamKey: string | null; input: CcrcOpInput; fields: string[]; requestId: string } | { kind: 'update'; op: CcrcOpName; bindingId: number; …; fingerprint: string } | { kind: 'link' | 'unlink'; … } | { kind: 'skip'; local; why: 'initiatives-off' | 'no-team-key' | 'status-missing' | 'workspace-mismatch' | 'text-public' }`
   - `planSyncSteps(s: SyncSnapshot): SyncStep[]` — in §5.2's order: initiatives (per workspace the epics sit in), projects
     (and their teams), milestones (plan order), issues; then updates whose owned fields differ from the binding's
     fingerprint; then links. A step whose parent is not `bound` is not emitted (the next pass emits it).
@@ -782,13 +963,18 @@ Starts after FX2 has landed. From here new programmes are born in the new shape 
     `hierarchyOps.ts` (the design assumes Planned, Active, Completed; an abandoned programme's initiative uses a
     canceled value only if FX2 found one, else Completed with the "Abandoned on" line).
   - `PlanSyncDeps` (Task 3.2) and the snapshot builder read only coord.db, the Linear store and the refresher's
-    directory; this file reads none of them.
+    directory; this file reads none of them. The builder fills `program.end` from `programmeEnd` (Task 2.3): the
+    explicit `plan close`, or the derived `done`. `programs.state` alone never ends a programme.
+  - Text guard: every step that carries text for a project whose mode is `public` or `unknown` runs
+    `publicTextVerdict` (Task 2.7) first; a refused text yields `{ kind: 'skip', why: 'text-public' }` for that object,
+    which the pass turns into a `failed` binding and one mail to the coordinator (§6.1).
 
 - [ ] **Step 1: Write the failing tests** — `a fresh plan yields initiative, projects, milestones, issues in that order`;
   `no milestone step until its project is bound`; `initiatives off: no initiative step and the project description names the programme`;
   `a renamed epic yields one project update, a matching fingerprint none`; `a missing status type fails the step, not the pass`
   (a `skip` with `status-missing` for that object, every other step still emitted); `requestIdOf is stable and v4-shaped`;
-  `fingerprintOf ignores key order`; `a public project's issue text carries no Linear URL and no identifier`.
+  `fingerprintOf ignores key order`; `a public project's issue text carries no Linear URL and no identifier`;
+  `a public project's ticket whose stored title names KEY-123 is skipped text-public, every other step emitted`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-policy.test.ts`.
 - [ ] **Step 3: Implement**; pure. Whether a create sends `id: requestId` is read per kind from FX2's README answer 1;
   a kind with no caller id is marked `bindBy: 'name-and-creator'` on its step.
@@ -799,7 +985,11 @@ Starts after FX2 has landed. From here new programmes are born in the new shape 
 
 **Files:** Create `server/src/linear/planSync.ts`; Modify `server/src/laneSchedule.ts` (row `linearPlanSync`),
 `server/src/watch.ts` (one call per tick), `server/src/index.ts` (build one `PlanSync`), `server/src/deps.ts`
-(`planSync?: PlanSync | null`); Test `server/test/plan-sync.test.ts`, `server/test/lane-schedule.test.ts`.
+(`planSync?: PlanSync | null`), `server/src/linear/refresher.ts` (now that FX2 has recorded them: the
+`projectStatuses` collection after `projects`, and the initiatives probe once per refresh on the `floor` lane and when
+a key is verified, into `entries.initiatives`); Test `server/test/plan-sync.test.ts`, `server/test/lane-schedule.test.ts`,
+`server/test/linear-directory-hierarchy.test.ts` (`the probe's answer lands in entries.initiatives`, `a refresh reads
+project statuses`).
 
 **Interfaces:**
 - Consumes: `planSyncSteps`, `runCcrcOp` (lane `sync`, pass `plan-sync`), `dueSyncs`, `deferSync`, `clearSyncDue`,
@@ -814,9 +1004,14 @@ Starts after FX2 has landed. From here new programmes are born in the new shape 
 
 A pass: read the snapshot, take the first steps, run each, write the binding (`pending` before the call, `bound` with
 id and fingerprint after), re-read the plan after every step, stop at the deadline. A create answered "conflict on
-insert" reads the object by its `requestId` and binds it; a `name-and-creator` create first reads by exact name in
-its scope and binds the single match created through the journal (`LinearJournal.viaFleet`), and two matches mark the
-binding `failed` and mail the coordinator. `rate-limited` and `unreachable` defer the programme by the backoff;
+insert" reads the object by its `requestId` and binds it. A `name-and-creator` create (a binding still `pending` from a
+pass that may have sent it) first reads by exact name in its scope (`initiativesByName`; `projectsByName` narrowed to
+the team; a milestone from its project's `projectById`) and binds the one object whose `creator.id` is the key's viewer
+(the directory's `viewerId`) and whose id no binding holds; none sends the create, and two or more mark the binding
+`failed` and mail the coordinator. It does not use `LinearJournal.viaFleet`: that read matches only `outcome = 'ok'`
+rows with a `result`, and in the very crash this exists for (server death after send, before settle) the row is still
+`pending` with no result. Before each write the step's text passes the public-text guard (Task 3.1's `text-public`
+skip). `rate-limited` and `unreachable` defer the programme by the backoff;
 `linear-forbidden`, `linear-invalid` and `policy-denied` mark the binding `failed` and mail the coordinator once.
 
 - [ ] **Step 1: Write the failing tests** (fetch faked from the recorded fixtures):
@@ -830,9 +1025,12 @@ it('linear-forbidden marks the binding failed and mails the coordinator once', �
 it('rate-limited defers by 30 s, then 2 min', …);
 it('a pass never runs past its deadline', …);
 it('two name matches for a name-and-creator create fail the binding', …);
+it('a crash with the journal row still pending binds by name and creator, and sends no second create', …); // Review Focus 2
+it('an object of the same name made by another creator, or already bound, is not taken', …);
+it('a text refused by the public-text guard fails its binding, mails once, and the pass goes on', …);
 ```
 
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync.test.ts test/lane-schedule.test.ts`.
+- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync.test.ts test/lane-schedule.test.ts test/linear-directory-hierarchy.test.ts`.
 - [ ] **Step 3: Implement**; `watch.ts` gains one `runLane('linearPlanSync', …)` call; a test building a watcher ends
   with `quietAtTestEnd`.
 - [ ] **Step 4: Run to pass** — plus `test/watcher-quiet-census.test.ts test/consolidation-census.test.ts`.
@@ -846,10 +1044,13 @@ it('two name matches for a name-and-creator create fail the binding', …);
 **Interfaces:**
 - Produces in `planSyncSteps`, §5.3 and §5.4's tables row by row: run dispatched → issue `started`; run done → issue
   `completed` (skipped when Linear already reads `completed`); checkpoint met → milestone description gains the met line
-  and `targetDate`; epic active/done → project status; programme paused → the initiative description notes it;
-  programme done → initiative `Completed`, every open epic's project `completed`, an open issue left open and the
-  coordinator mailed; programme abandoned → initiative `Completed` with "Abandoned on <date>: <why>", projects and open
-  issues `canceled` with a comment naming the reason; epic dropped → project `canceled` with the reason, its tickets
+  and `targetDate`; epic active/done → project status; programme `paused` (the only writer is the migration's backlog
+  programmes, Task 7.3) → the initiative description notes it; programme ended `done` (`snapshot.program.end`, from
+  `programmeEnd`: an explicit `plan close` done, or the derived end) → initiative `Completed`, every open epic's
+  project `completed`, an open issue left open and the coordinator mailed; programme ended `abandoned` (only ever an
+  explicit `plan close` with its `why`) → initiative `Completed` with "Abandoned on <date>: <why>", projects and open
+  issues `canceled` with a comment naming the reason. `programs.state` is never read here: D-51 sets it `done` or
+  `abandoned` at every gap between waves, and a programme with `end: null` is live whatever it reads; epic dropped → project `canceled` with the reason, its tickets
   moved by the plan first, the rest canceled; a ticket's project changed → `issueUpdate` with the new `teamId` inside
   the workspace and the identifier refreshed from the answer.
   - At the start of each tick, an `operator-act` checkpoint whose `itemId` item reads `done` is marked met with
@@ -859,6 +1060,9 @@ it('two name matches for a name-and-creator create fail the binding', …);
     `ticket-workspace-mismatch` mail.
 
 - [ ] **Step 1: Write the failing tests** — one per row above, plus `an operator-act checkpoint is met when its item is done`,
+  `the last run of wave 1 closes done while later epics are planned, and nothing in Linear closes`,
+  `the last run of wave 1 closes failed (programs.state abandoned), and nothing is canceled` (Review Focus 6, both
+  driven through `closeRun`), `plan close abandoned cancels projects and open issues with the reason`,
   `a cleared team key leaves bindings and syncs nothing for that project`,
   `a team key moved to another workspace fails the bindings and moves nothing`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-lifecycle.test.ts`.
@@ -878,13 +1082,19 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
     `passFor` of the run's programme with deadline `now + budgetMs`; `PLAN_SYNC_DISPATCH_WAIT_MS = 12_000`.
   - `slugForTicket(identifier: string, given: string | undefined, title: string): string` — `key-123-<words>`,
     lowercase, fitted to `WS_SLUG_MAX` by `fitSlug`; a `given` slug that already starts with the identifier is kept.
-  - The route: outside `coordMutex`, when the run is a work run with a ticket and the project's mode is `private`,
-    await the wait, then pass `slugForTicket(...)` as the dispatch slug; in a `public` or `unknown` project the slug is
-    untouched and, once the run's PR is known, the sync calls `issueLink` with its URL (`attachmentLinkURL`, as the
-    ccrc actor). Not bound in time: dispatch as today, and the sync adds the link when the issue appears.
+  - The route: outside `coordMutex`, when the run is a work run with a ticket, the project's mode is `private`, and
+    the run is a **fresh spawn** (`run.sessionId === null`), await the wait, then pass `slugForTicket(...)` as the
+    dispatch slug. A run that resumes its bound session (waves N≥2) gets no slug: `dispatchDecide.ts` refuses any
+    slug on such a run (`slug: this run resumes its bound session; a slug names a fresh spawn only`), and its branch is
+    the session's, which may carry an earlier ticket's identifier. For a resumed run, as in a `public` or `unknown`
+    project, the slug is untouched and, once the run's PR is known, the sync calls `issueLink` with its URL
+    (`attachmentLinkURL`, as the ccrc actor). Not bound in time: dispatch as today, and the sync adds the link when the
+    issue appears.
 
 - [ ] **Step 1: Write the failing tests** — `a bound ticket in a private project names the workspace key-123-…`;
-  `a public project's slug never carries the identifier, and the sync links the PR`; `Linear slow: dispatch goes after 12 s with today's slug`;
+  `a public project's slug never carries the identifier, and the sync links the PR`;
+  `a resumed work run in a private project with a bound ticket dispatches with no slug and gets the attachment link`;
+  `Linear slow: dispatch goes after 12 s with today's slug`;
   `the wait never runs inside coordMutex` (the mutex gate test still green with the new call site); `slugForTicket fits 31 characters`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-dispatch-wait.test.ts test/linking-policy.test.ts test/dispatch-mutex-gate.test.ts`.
 - [ ] **Step 3: Implement**; `routes.ts` grows by the call only.
@@ -919,32 +1129,7 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
 
 Inert until a team is managed (wave 7); every behaviour is testable with an `applied` migration row inserted by the test.
 
-### Task 4.1: The public-text check
-
-**Files:** Create `server/src/linking/publicTextClasses.ts`; Modify `server/test/topology-clean.test.ts` (imports its
-pattern and hashed classes from there; its own corpus walk, base resolution and liveness rows stay),
-`server/src/linking/policy.ts` (`publicTextVerdict`), `server/src/coord/planRoutes.ts` (every text field),
-`server/src/linear/planSync.ts` (the guard before each write), `pwa/src/lib/refusalWords.ts` (sentence);
-Test `server/test/public-text.test.ts`, `server/test/topology-clean.test.ts`.
-
-**Interfaces:**
-- Produces:
-  - `export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[]` with `PublicTextClass = { name: string; pattern?: RegExp; match?: (line: string) => string[]; allowed?: (token: string) => boolean; catches: string[] }`
-  - `publicTextVerdict(text: string, teamKey: string | null, mode: LinkingMode): { ok: true } | { ok: false; word: 'linear-text-public'; class: string; ids?: string[] }`
-    — `private` mode passes; `public` and `unknown` refuse a team tracker id (`trackerIdsIn`) or any class match.
-  - The sync's guard: a refused write leaves the binding `failed` and mails the coordinator.
-
-- [ ] **Step 1: Write the characterization test first** — move nothing yet; assert `topology-clean.test.ts`'s
-  liveness rows (each class's `catches`) through the new import path, red until the move.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/topology-clean.test.ts test/public-text.test.ts`.
-- [ ] **Step 3: Move the classes** (a commit that changes only imports), then add `publicTextVerdict` and its tests:
-  `a public project's ticket title naming KEY-123 is refused with ids`, `an email in a public summary is refused with its class`,
-  `a private project passes both`, `an unknown project is treated as public`, `plan put answers linear-text-public at once`.
-- [ ] **Step 4: Run to pass** — same, plus `test/plan-routes.test.ts`.
-- [ ] **Step 5: Commit** — two commits: `refactor(linking): the topology classes in one shared module (D-8183)` and
-  `feat(linking): the public-text check on Linear text (D-8183)`.
-
-### Task 4.2: Migration 58 and the drift deciders
+### Task 4.1: Migration 58 and the drift deciders
 
 **Files:** Modify `server/src/coord/schema.ts` (entry 58); Create `server/src/linear/driftPolicy.ts`; Modify
 `server/src/coord/planStore.ts` (drift rows, managed teams); Test `server/test/drift-policy.test.ts`,
@@ -995,7 +1180,7 @@ CREATE TABLE linear_inbound (linearId TEXT PRIMARY KEY, workspaceId TEXT NOT NUL
 - [ ] **Step 4: Run to pass**.
 - [ ] **Step 5: Commit** — `feat(linear): migration 58 and the drift deciders (D-8183)`.
 
-### Task 4.3: The drift pass and persistent drift
+### Task 4.2: The drift pass and persistent drift
 
 **Files:** Create `server/src/linear/driftPass.ts`; Modify `server/src/laneSchedule.ts` (row `linearDrift`),
 `server/src/watch.ts`, `server/src/index.ts`, `server/src/coord/hierarchyRoutes.ts` (acts `hand`, `keep`);
@@ -1006,7 +1191,8 @@ Test `server/test/drift-pass.test.ts`.
   - `DRIFT_PASS_MS = 30 * 60_000` per workspace; lane `{ name: 'linearDrift', cadenceMs: 60_000, …, flight: 'skip' }`
     picks the workspace whose `passAt` is oldest and due.
   - `DriftPassDeps` = `PlanSyncDeps` plus `planSync: PlanSync` (a `catch-up` verdict makes the programme due instead
-    of writing here) and `presenceOf: (id: string) => CoordinatorPresence`.
+    of writing here) and `presenceOf: (id: string) => CoordinatorPresence` (the one `server.ts` builds, Task 2.6;
+    read through `linearOwnerOf`'s `live`/`gone`).
   - `export class DriftPass { constructor(deps: DriftPassDeps); tick(now: number): Promise<void> }` — reads `changed*`
     since the watermark (lane `sync`), compares bound objects, restores (pass `drift-restore`), comments on an issue,
     writes a "Restored" line on an initiative, project or milestone (where FX2's answer 3 says no comment is taken),
@@ -1027,7 +1213,7 @@ Test `server/test/drift-pass.test.ts`.
 - [ ] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
 - [ ] **Step 5: Commit** — `feat(linear): the drift pass and persistent drift (D-8183)`.
 
-### Task 4.4: The inbound path, the Upkeep epic and the Linear owner item
+### Task 4.3: The inbound path, the Upkeep epic and the Linear owner item
 
 **Files:** Modify `server/src/linear/driftPass.ts` (detect and mail), `server/src/coord/planRoutes.ts` (`take`,
 `triage`), `server/src/coord/planPolicy.ts`, `server/src/coord/hierarchyRoutes.ts` (act `name`), `ccd/ccrc-api` (two
@@ -1039,7 +1225,9 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   - `POST /api/teams/:team/plan/triage` body `{ issue: string (REF); decision: 'hand' | 'upkeep' | 'close' | 'raise'; programme?: string; reason?: string; note?: string }` — caller must be the team's Linear owner (`not-linear-owner`); the issue must be inbound and waiting (`issue-not-inbound`); `hand` mails the programme's coordinator (taken at once when it is the owner's own); `upkeep` places a ticket (source `inbound`, the reporter's title and text) in the team's Upkeep epic, created on first use (`UPKEEP_EPIC_KEY`, project the owning project, no programme); `close` comments with the reason and completes or cancels it; `raise` raises a `decide` item for the operator under `LINEAR_SYNC_PROGRAMME`.
   - `POST /api/programmes/:slug/plan/take` body `{ issue: string; epic: string; checkpoint?: string } | { issue: string; close: { why: string } } | { issue: string; return: { note: string } }` — the programme's coordinator takes a handed issue or an Upkeep ticket into an epic of its plan (the ticket moves programme and epic; the sync re-parents the issue), closes it, or returns it to the owner.
   - `ccd/ccrc-api` rows `[plan.take]='POST|/api/programmes/{id}/plan/take|yes|-'`, `[plan.triage]='POST|/api/teams/{id}/plan/triage|yes|-'`; the `{id}` of `triage` is a team key (SAFE_RE already admits it).
-  - No live owner: the issue waits, `inboundWaiting` counts it, and one `do` item per project, `action: { verb: 'linear-owner', project }`, "Name a Linear owner", listing the coordinators live now; act `name` (body `owner`) sets the project's `linearOwner`, then the item settles itself once that owner is live and the waiting issues are mailed to it.
+  - No owner, or the owner `gone` (`dead` or `absent`; an `asleep` owner is live and mail wakes it, and an
+    `unmeasured` one is a doubt that raises nothing and is mailed as usual): the issue waits, `inboundWaiting` counts
+    it, and one `do` item per project, `action: { verb: 'linear-owner', project }`, "Name a Linear owner", listing the coordinators live now; act `name` (body `owner`) sets the project's `linearOwner`, then the item settles itself once that owner is live and the waiting issues are mailed to it.
   - A run is never opened on an Upkeep ticket (`ticket-unavailable`, Task 2.5).
   - The Upkeep epic syncs like a programme's epic, under the due key `upkeep:<project>` in `plan_sync_due` (a programme
     slug never contains `:`): its Linear project is in the team, linked to no initiative, with no milestones, and it
@@ -1051,6 +1239,7 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   `triage by another coordinator is not-linear-owner`; `hand to the owner's own programme takes it at once`;
   `upkeep creates the Upkeep epic once and places the ticket`; `take moves an Upkeep ticket into the programme's epic`;
   `raise makes a decide item for the operator`; `no live owner raises one item per project and it settles when an owner is named and live`;
+  `a hibernated owner is mailed, and no item is raised`; `an unmeasured owner raises no item`;
   `the Upkeep project is created once, outside any initiative, and never closed`; `GET upkeep answers its tickets, masked`;
   the client rows' identity and count pins.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-inbound.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`.
@@ -1058,7 +1247,7 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
 - [ ] **Step 4: Run to pass** — plus `test/auth-gate.test.ts test/mail-routes.test.ts test/secret-mask.test.ts`.
 - [ ] **Step 5: Commit** — `feat(plan): the inbound path, the Upkeep epic and the Linear owner item (D-8183)`.
 
-### Task 4.5: Session writes in managed teams
+### Task 4.4: Session writes in managed teams
 
 **Files:** Modify `server/src/linear/proxyRoutes.ts` (create and update), `ccd/linear-skill/SKILL.md` (the
 `plan-owned` and `linear-text-public` refusals and remedies, kept within its cap: trim elsewhere in the file to fit),
@@ -1147,7 +1336,7 @@ Test `pwa/test/plan-section.test.tsx`, `pwa/browser/programme-page.browser.test.
 **Files:** Create `pwa/src/ledgers/EpicScreen.tsx`, `pwa/src/ledgers/UpkeepScreen.tsx`; Modify `pwa/src/lib/routes.ts`
 (rows `epic` `^/programmes/([^/]+)/epics/([^/]+)/?$` and `upkeep` `^/projects/([^/]+)/upkeep/?$`; builders
 `epicPath(slug, key)`, `upkeepPath(project)`), `pwa/src/app.tsx`, `pwa/src/lib/api.ts` (`upkeep(project)`; the route
-is Task 4.4's); Test `pwa/test/epic-screen.test.tsx`, `pwa/browser/epic-page.browser.test.ts`.
+is Task 4.3's); Test `pwa/test/epic-screen.test.tsx`, `pwa/browser/epic-page.browser.test.ts`.
 
 **Interfaces:**
 - Produces: the epic's checkpoints in order (state, met date, evidence: a PR link, an item link via `itemPath`, or a
@@ -1208,25 +1397,28 @@ The drift item's *Hand to the coordinator* uses the existing door word (`ITEM_DO
 
 ### Task 6.1: The coordinator skill
 
-**Files:** Create `ccd/coordinator-skill/references/plan.md`; Modify `ccd/coordinator-skill/SKILL.md` (contract clause
-21, the map's pointer line, §Linear trimmed to a pointer), `ccd/coordinator-skill/references/wave-lifecycle-1-open.md`,
-`ccd/coordinator-skill/references/ledger-template.md` (the waves table's epic column),
-`server/test/skill-size-caps.json` (raised by clause 21's bytes only); Test `server/test/coordinator-skill.test.ts`,
-`server/test/skill-size-ratchet.test.ts`.
+**Files:** Modify `ccd/coordinator-skill/references/plan.md` (Task 2.5 created it), `ccd/coordinator-skill/SKILL.md`
+(contract clause 21, the map's pointer line, §Linear trimmed to a pointer),
+`ccd/coordinator-skill/references/wave-lifecycle-1-open.md`, `ccd/coordinator-skill/references/ledger-template.md`
+(the waves table's epic column), `server/test/skill-size-caps.json` (raised by clause 21's bytes only); Test
+`server/test/coordinator-skill.test.ts`, `server/test/skill-size-ratchet.test.ts`, `server/test/ccrc-api-closed.test.ts`
+(its pinned list of the commands the skill corpora run, references included, gains every `plan.*` key a new
+executable block runs).
 
 **Interfaces:**
 - Produces clause 21: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
   plan-sized with their waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
-  is recorded with `plan met` and its evidence; this session never files a hierarchy object or a ticket in a managed
+  is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files a hierarchy object or a ticket in a managed
   team with `linear create`." The count word above the contract becomes twenty-one; §Linear shrinks so the file grows
   by the clause line alone.
-- `references/plan.md`: the plan body by example (the design's §4.3 JSON), every `plan` verb with its body and
-  refusals, the run's `ticket` key, handed issues and `plan take`, and the Linear owner's duties (`plan triage`,
-  `plan map-propose`; never another programme's plan).
+- `references/plan.md` gains: the run's `ticket` key, handed issues and `plan take`, and the Linear owner's duty
+  `plan triage` (never another programme's plan). It names only verbs whose client row and route exist by wave 6:
+  `plan map-propose` lands with its row and route in Task 7.2, and naming it here would turn both the closed-corpus
+  parity and `coordinator-skill.test.ts`'s route check red.
 
-- [ ] **Step 1: Write the failing tests** — `clause 21 is pinned`; `plan.md names every plan verb and every PLAN_REFUSALS word a coordinator meets`;
+- [ ] **Step 1: Write the failing tests** — `clause 21 is pinned`; `plan.md names every plan verb registered by wave 6 and every PLAN_REFUSALS word a coordinator meets`;
   `the ledger template's waves table has an epic column`; the ratchet's R4/R6 hold.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts`.
+- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
 - [ ] **Step 3: Write** the text.
 - [ ] **Step 4: Run to pass**.
 - [ ] **Step 5: Commit** — `docs(skills): the coordinator declares and keeps its plan (D-8185)`.
@@ -1235,12 +1427,13 @@ The drift item's *Hand to the coordinator* uses the existing door word (`ITEM_DO
 
 **Files:** Modify `ccd/worker-skill/SKILL.md` (§Linear: follow-ups with `plan ticket-add`, kind `follow-up`, into its
 own run's epic), `ccd/linear-skill/SKILL.md` (the hierarchy is ccrc's; restore comments are ccrc's own; never edit a
-managed object), `server/test/skill-size-caps.json` only if lowered; Test `server/test/worker-skill.test.ts` (or the
-file that pins the worker skill), `server/test/skill-size-ratchet.test.ts`.
+managed object), `server/test/skill-size-caps.json` only if lowered; Test `server/test/worker-skill.test.ts`,
+`server/test/skill-size-ratchet.test.ts`, `server/test/ccrc-api-closed.test.ts` (the worker's executable
+`ccrc-api plan ticket-add` block joins its pinned list).
 
 - [ ] **Step 1: Write the failing tests** — `the worker files follow-ups with plan ticket-add into its own epic`;
   `the Linear skill says the hierarchy is ccrc's`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/worker-skill.test.ts test/skill-size-ratchet.test.ts`.
+- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/worker-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
 - [ ] **Step 3: Write** the text, net size within each cap.
 - [ ] **Step 4: Run to pass** — same command.
 - [ ] **Step 5: Commit** — `docs(skills): the worker's follow-ups and the Linear skill's hierarchy rule (D-8185)`.
@@ -1256,7 +1449,9 @@ file that pins the worker skill), `server/test/skill-size-ratchet.test.ts`.
 **Interfaces:**
 - Produces:
   - `MAP_CLASSES = ['programme','epic','checkpoint','leaf','upkeep','finished','superseded','stale','unclear'] as const`
-    (in `shared/plan.ts`, with `MapBody`, `MapEntry { issue: string (UUID); identifier: string; class: MapClass; target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string } }`,
+    (in `shared/plan.ts`, with `MapBody`, `MapEntry { issue: string (UUID); identifier: string; class: MapClass; target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind } }`
+    (`ticketKey` and `kind` on `leaf` and `upkeep` entries; when absent, `ticketKey` is derived deterministically as
+    the identifier lowercased, `key-123`, and `kind` is `task`),
     `MapBody { team: string; backlog?: { slug: string; title: string; epics: PlanEpicBody[] }[]; epics?: { programme: string; epics: PlanEpicBody[] }[]; entries: MapEntry[]; snapshot: Record<string, IssueSnapshot> }`,
     `IssueSnapshot { state: string; team: string; project: string | null; parent: string | null; milestone: string | null; title: string; description: string }`).
   - `IssueSnapshotRow = IssueSnapshot & { linearId: string; identifier: string }`; `MapCounts = { created: number; moved: number; closed: number; left: number; skipped: number }`;
@@ -1264,7 +1459,11 @@ file that pins the worker skill), `server/test/skill-size-ratchet.test.ts`.
     `MoveRow` = a `linear_migration_moves` row with `before` and `after` parsed.
   - `checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans: (programme: string) => { declared: boolean; live: boolean; plan: StoredPlan | null }): { ok: true; counts: MapCounts } | { ok: false; word: 'map-incomplete' | 'map-rewrites-plan' | 'plan-bad-body'; detail: string }`
     — every open issue listed once and nothing else; every target exists in the map or the store; `epics` given for a
-    programme with a declared plan and a live coordinator is `map-rewrites-plan`; counts add up.
+    programme that is `declared || live` is `map-rewrites-plan` (§10.1: the map declares structure only for a
+    programme with no plan **and** no live coordinator, so map-declared structure is confined to done and backlog
+    programmes, and the owner never rewrites another programme's plan); a `leaf` or `upkeep` ticket key already used in
+    its programme (or Upkeep epic) is `plan-bad-body`; counts add up. `live` is a non-terminal run or a coordinator that
+    is not `gone` (Task 2.3), never `programs.state`.
   - `applySteps(map: MapBody, live: ReadonlySet<string>, reread: ReadonlyMap<string, IssueSnapshot | 'closed'>): { now: MigrationStep[]; waiting: string[]; skipped: string[] }`
     — skip an issue whose re-read differs from its snapshot; a live programme's part waits.
   - `putBackSteps(moves: readonly MoveRow[], current: ReadonlyMap<string, IssueSnapshot>): { steps: MigrationStep[]; moved: string[] }`
@@ -1272,7 +1471,11 @@ file that pins the worker skill), `server/test/skill-size-ratchet.test.ts`.
   - `replacementComment(home: string, mode: LinkingMode, url: string | null): string` — on a public team, the title only.
 
 - [ ] **Step 1: Write the failing tests** — `an issue missing from the map is map-incomplete`; `an issue listed twice is map-incomplete`;
-  `epics for a programme with a live coordinator's plan is map-rewrites-plan`; `a changed snapshot is skipped and listed`;
+  `epics for a programme with a live coordinator's plan is map-rewrites-plan`;
+  `epics for a live programme that has not declared a plan is map-rewrites-plan`;
+  `epics for a declared programme whose coordinator is not live is map-rewrites-plan`;
+  `epics for a done programme with no plan pass`; `a leaf with no ticketKey gets the identifier-derived key`;
+  `a changed snapshot is skipped and listed`;
   `a live programme's part waits`; `put back reverses in order and lists an issue moved since`;
   `a public team's replacement comment has no URL and no identifier`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-policy.test.ts test/plan-vocabulary.test.ts`.
@@ -1285,8 +1488,10 @@ file that pins the worker skill), `server/test/skill-size-ratchet.test.ts`.
 **Files:** Create `server/src/linear/migration.ts`; Modify `server/src/coord/planRoutes.ts` (`plan map-propose`),
 `server/src/coord/hierarchyRoutes.ts` (`POST /api/projects/:project/hierarchy/migrate`; acts `approve`, `return`),
 `ccd/ccrc-api` (row `[plan.map-propose]='POST|/api/teams/{id}/plan/map|yes|-'`),
+`ccd/coordinator-skill/references/plan.md` (the Linear owner's `plan map-propose` duty, its body by example and its
+refusals, moved here from wave 6 so the text lands with its row and route),
 `pwa/src/screens/settings/ProjectLinkingCard.tsx` (the "Reshape in Linear" control); Test
-`server/test/migration-propose.test.ts`, `pwa/test/project-linking-card.test.tsx`,
+`server/test/migration-propose.test.ts`, `server/test/coordinator-skill.test.ts`, `pwa/test/project-linking-card.test.tsx`,
 `pwa/browser/project-linking-card.browser.test.ts`.
 
 **Interfaces:**
@@ -1308,7 +1513,7 @@ file that pins the worker skill), `server/test/skill-size-ratchet.test.ts`.
   `propose by a non-owner is not-linear-owner`; `a map missing an open issue is map-incomplete and raises nothing`;
   `approve moves to approved`; `return mails the owner the note`; the client row's identity and count pins; jsdom
   `the control shows only when not migrated or put back` and the twenty browser views.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-propose.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts`;
+- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-propose.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`;
   `cd pwa && npx vitest run --maxWorkers=2 test/project-linking-card.test.tsx`.
 - [ ] **Step 3: Implement** the routes, the propose read, the acts and the control.
 - [ ] **Step 4: Run to pass** — same, plus `test/auth-gate.test.ts test/linear-items.test.ts` and the browser file.
@@ -1318,12 +1523,22 @@ file that pins the worker skill), `server/test/skill-size-ratchet.test.ts`.
 
 **Files:** Modify `server/src/linear/migration.ts`, `server/src/laneSchedule.ts` (row `linearMigration`, cadence
 30_000, `skip`), `server/src/watch.ts`, `server/src/coord/planStore.ts` (backlog programmes, `planRequired = 1` for the
-team's programmes on apply); Test `server/test/migration-apply.test.ts`.
+team's programmes on apply, `adoptIssueAsTicket`); Test `server/test/migration-apply.test.ts`.
 
 **Interfaces:**
+- Produces (`planStore.ts`): `adoptIssueAsTicket(db, a: { issue: IssueSnapshotRow; programme: string | null; epicId: number; checkpointId: number | null; key: string; kind: TicketKind; source: 'plan' | 'inbound' }, binding: { workspaceId: string; teamKey: string; linearId: string; identifier: string; fingerprint: string }, now: number): number`
+  — in one transaction: a `plan_tickets` row (key, kind, title and body from the issue snapshot, the epic's project,
+  `source` `plan` for a `leaf` and `inbound` for an `upkeep` entry, state `open`, or `started` when the issue's state
+  type is `started`) and a `linear_bindings` row already `bound` to the **existing** issue's UUID, identifier and
+  fingerprint; only then is the programme (or `upkeep:<project>`) marked due. Without it, the sync's "one issue per
+  known ticket" step would create a duplicate issue for every migrated leaf.
 - Produces: `LinearMigration.applyTick(now: number): Promise<void>` — for an `approved` migration: create declared
   structure for programmes with no plan (backlog programmes `paused`; done programmes a completed initiative only when
-  they own open issues), re-read every listed issue, write each move to `linear_migration_moves` (`before` from the
+  they own open issues; a "done programme" is one the map lists under `epics` that has no non-terminal run and no
+  coordinator that is not `gone`, as `checkMap` checked, never one read from `programs.state` alone), create the
+  team's Upkeep epic on first use by an `upkeep` entry (`UPKEEP_EPIC_KEY`, the owning project, no programme, as Task
+  4.3 does), adopt each `leaf` and `upkeep` issue with `adoptIssueAsTicket` before any write to it, re-read every listed
+  issue, write each move to `linear_migration_moves` (`before` from the
   re-read, `after` planned) **before** the write, then write it (pass `migration`, lane `migration`); replaced level
   issues are canceled with `replacementComment` and an `issueRelationCreate` to the first ticket placed under the home;
   finished issues completed with their PR as evidence; superseded canceled and related to the successor; stale closed
@@ -1332,11 +1547,13 @@ team's programmes on apply); Test `server/test/migration-apply.test.ts`.
   is managed, its programmes' `planRequired` set to 1.
 
 - [ ] **Step 1: Write the failing tests** — `every move is recorded before its write`; `a re-run after a crash redoes nothing applied`;
+  `a migrated leaf is bound, and the next sync pass creates no issue`; `the first upkeep entry creates the Upkeep epic
+  once and binds its issue`;
   `a changed issue is skipped and listed`; `a live programme's part waits until no run is dispatched or working`;
   `nothing is ever deleted` (no delete document reaches the fake); `the team is managed after apply`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-apply.test.ts test/lane-schedule.test.ts`.
 - [ ] **Step 3: Implement** `applyTick` and the lane row.
-- [ ] **Step 4: Run to pass** — same, plus `test/watcher-quiet-census.test.ts test/plan-store.test.ts`.
+- [ ] **Step 4: Run to pass** — same, plus `test/watcher-quiet-census.test.ts test/plan-store.test.ts test/plan-sync.test.ts`.
 - [ ] **Step 5: Commit** — `feat(linear): apply an approved map at wave boundaries (D-8186)`.
 
 ### Task 7.4: Report and put back
@@ -1349,12 +1566,15 @@ Test `server/test/migration-putback.test.ts`.
   counts first (created, moved, closed, skipped as changed, left), then the full list. `put-back` (confirm) runs
   `putBackSteps` from `linear_migration_moves` alone (pass `put-back`): closed issues reopen to their old state, moved
   issues return to their old project, parent and milestone, created projects and initiatives are canceled; the
-  programmes' epics and checkpoints the map declared are dropped with the reason "put back"; an issue moved since is
+  programmes' epics and checkpoints the map declared are dropped with the reason "put back"; the tickets
+  `adoptIssueAsTicket` made are dropped with the same reason, and the sync emits nothing for a record dropped "put
+  back" (otherwise its drop would cancel the very issue put back restored); an issue moved since is
   listed on the item, untouched; state `put-back`, the team unmanaged. `done` closes the report. Put back is refused
   once the team's next migration has started.
 
 - [ ] **Step 1: Write the failing tests** — `the report counts skipped issues`; `put back reverses every move and cancels created objects`;
   `an issue moved since is listed, not touched`; `put back after the next migration started is refused`;
+  `after put back, the next sync pass writes nothing to an adopted issue`;
   `the team is no longer managed after put back`.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/migration-putback.test.ts`.
 - [ ] **Step 3: Implement** the report and the put-back executor.
