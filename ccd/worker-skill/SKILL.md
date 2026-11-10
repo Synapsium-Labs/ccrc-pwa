@@ -16,13 +16,6 @@ before you report.
 These nineteen clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
-**Editing note (D-104):** these nineteen lines are pinned verbatim by
-`server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
-Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
-pin without looking like an edit — and keep double-quote characters out of a
-clause, where they would have to be escaped on the other side, except the
-`rm -rf "$X"` shape in clause 5 (D-5292), which the pin spells escaped.
-
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.
 2. Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).
 3. Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
@@ -42,6 +35,15 @@ clause, where they would have to be escaped on the other side, except the
 17. End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.
 18. A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`): they belong in the workspace or in that temp root. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.
 19. Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.
+
+## Notes on the contract
+
+**Editing note (D-104):** these nineteen lines are pinned verbatim by
+`server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
+Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
+pin without looking like an edit — and keep double-quote characters out of a
+clause, where they would have to be escaped on the other side, except the
+`rm -rf "$X"` shape in clause 5 (D-5292), which the pin spells escaped.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh
