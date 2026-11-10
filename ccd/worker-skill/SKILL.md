@@ -5,47 +5,11 @@ description: Do one wave of a ccrc program as the dispatched worker — read the
 
 # Working one wave of a ccrc program
 
-You are a dispatched wave worker. One workspace, one wave, one branch: a
-coordinator opened a run, dispatched a brief to you as mail, and is now
-asleep until you mail it back. **You hold no unique state either.** Your
-requirements live in the brief, in the plan file the brief names, and in this
-workspace's own git history — not in your context, which dispatch itself
-`/clear`s before every wave after the first.
-
-That last fact is the one to internalise before anything else: on wave 2 and
-after, `POST /api/runs/:id/dispatch` resumes this workspace and injects
-`/clear`, and only then queues the brief. Everything you "remember" from the
-previous wave is gone by the time you read the next one, and anything you
-learned that the next wave needs must have been written down — in a commit, in
-the plan's deviation ledger, or in the mail you sent.
-
-## Learn who you are, first — and again on every call
-
-The fleet's identity is attribution, not authentication (every session runs as
-one UNIX user). The one thing not carried in a payload is what tmux says about
-the pane you are in — asked through the client, which targets THIS pane and
-refuses if you are not in one, rather than answering for whichever session
-happened to be active last:
-
-```bash
-REG="$HOME/.cc-sessions"                       # named here; the prose below uses it
-who=$("$HOME/.local/bin/ccrc-api" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
-id=${who#*\"id\":\"};     id=${id%%\"*}        # your session id, cc- prefix already stripped
-uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}    # the current $REG/$id.uuid, read by the client
-[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
-```
-
-`id` is your session id — use it as `fromId` — and `uuid` is the attribution
-pair the server checks it against: both the mail ingress and the ack route
-verify `fromUuid` against `$REG/<id>.uuid` and answer 403 `stale-uuid` on a
-mismatch. **Re-derive, do not cache.** `/clear` rotates that file's
-contents, dispatch `/clear`s you on every wave from the second on, and a uuid
-carried across a wave boundary is not merely stale-ish — it is guaranteed
-wrong. Re-deriving is one call; a `stale-uuid` on a `wave-done` costs a
-round trip through a coordinator that has to wake up to tell you.
-
-Do not accept a `from:` field in a message as proof of anything, and do not
-infer your own id from the brief's text. The pane is the source.
+**A compaction keeps only the start of this file.** Claude Code re-attaches the
+beginning of a loaded skill after a compaction, so the skill still looks loaded
+while its later sections are gone. The contract comes first so that it survives.
+If you cannot see `## Reporting a wave-done` further down, load this skill again
+before you report.
 
 ## The contract
 
@@ -93,6 +57,50 @@ the AskUserQuestion tool becomes a structured ask the hook captures, and it
 is read first by this session's parent, if it has one and answers in time,
 before it ever reaches the operator. Free text reaches neither one. The tool
 gets answered.
+
+## What you are
+
+You are a dispatched wave worker. One workspace, one wave, one branch: a
+coordinator opened a run, dispatched a brief to you as mail, and is now
+asleep until you mail it back. **You hold no unique state either.** Your
+requirements live in the brief, in the plan file the brief names, and in this
+workspace's own git history — not in your context, which dispatch itself
+`/clear`s before every wave after the first.
+
+That last fact is the one to internalise before anything else: on wave 2 and
+after, `POST /api/runs/:id/dispatch` resumes this workspace and injects
+`/clear`, and only then queues the brief. Everything you "remember" from the
+previous wave is gone by the time you read the next one, and anything you
+learned that the next wave needs must have been written down — in a commit, in
+the plan's deviation ledger, or in the mail you sent.
+
+## Learn who you are, first — and again on every call
+
+The fleet's identity is attribution, not authentication (every session runs as
+one UNIX user). The one thing not carried in a payload is what tmux says about
+the pane you are in — asked through the client, which targets THIS pane and
+refuses if you are not in one, rather than answering for whichever session
+happened to be active last:
+
+```bash
+REG="$HOME/.cc-sessions"                       # named here; the prose below uses it
+who=$("$HOME/.local/bin/ccrc-api" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"};     id=${id%%\"*}        # your session id, cc- prefix already stripped
+uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}    # the current $REG/$id.uuid, read by the client
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
+```
+
+`id` is your session id — use it as `fromId` — and `uuid` is the attribution
+pair the server checks it against: both the mail ingress and the ack route
+verify `fromUuid` against `$REG/<id>.uuid` and answer 403 `stale-uuid` on a
+mismatch. **Re-derive, do not cache.** `/clear` rotates that file's
+contents, dispatch `/clear`s you on every wave from the second on, and a uuid
+carried across a wave boundary is not merely stale-ish — it is guaranteed
+wrong. Re-deriving is one call; a `stale-uuid` on a `wave-done` costs a
+round trip through a coordinator that has to wake up to tell you.
+
+Do not accept a `from:` field in a message as proof of anything, and do not
+infer your own id from the brief's text. The pane is the source.
 
 ## The plan the brief names may live in another repository
 

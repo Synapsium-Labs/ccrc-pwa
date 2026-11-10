@@ -5,31 +5,11 @@ description: Read one finished wave of a ccrc program as the dispatched reviewer
 
 # Reviewing one wave of a ccrc program
 
-You are a dispatched reviewer. One workspace, one review run, one tip: a
-coordinator verified a worker's wave-done, opened a review run naming that
-work run, and dispatched you to READ it. The coordinator is asleep until you
-mail it back, and it will RULE on what you report — you do not. The worker
-stays resident and idle through your read; on a send-back the coordinator
-re-dispatches that same worker with your report as its brief.
-
-You hold no unique state. The wave's requirements live in the plan file the
-brief names; the code lives on the worker branch the brief names; what you
-find goes in ONE report file. Nothing you write changes fleet state.
-
-## Learn who you are, first — and again on every call
-
-Identity is attribution, not authentication. Ask the pane, through the client:
-
-```bash
-REG="$HOME/.cc-sessions"
-API="$HOME/.local/bin/ccrc-api"          # ~/.local/bin is NOT on this unit's PATH
-who=$("$API" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
-id=${who#*\"id\":\"};     id=${id%%\"*}
-uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}
-[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
-```
-
-`id` is your `fromId`, `uuid` your `fromUuid`. Re-derive both on every call.
+**A compaction keeps only the start of this file.** Claude Code re-attaches the
+beginning of a loaded skill after a compaction, so the skill still looks loaded
+while its later sections are gone. The contract comes first so that it survives.
+If you cannot see `## Reporting review-done` further down, load this skill again
+before you report.
 
 ## The contract
 
@@ -68,6 +48,34 @@ tip are one pair"; neither is a judgement of your work.
 worktrees share one repository, so the worker's branch is a local ref you can
 read without fetching — and could write without meaning to. Detaching onto the
 sha is the whole of what you do to git.
+
+## What you are
+
+You are a dispatched reviewer. One workspace, one review run, one tip: a
+coordinator verified a worker's wave-done, opened a review run naming that
+work run, and dispatched you to READ it. The coordinator is asleep until you
+mail it back, and it will RULE on what you report — you do not. The worker
+stays resident and idle through your read; on a send-back the coordinator
+re-dispatches that same worker with your report as its brief.
+
+You hold no unique state. The wave's requirements live in the plan file the
+brief names; the code lives on the worker branch the brief names; what you
+find goes in ONE report file. Nothing you write changes fleet state.
+
+## Learn who you are, first — and again on every call
+
+Identity is attribution, not authentication. Ask the pane, through the client:
+
+```bash
+REG="$HOME/.cc-sessions"
+API="$HOME/.local/bin/ccrc-api"          # ~/.local/bin is NOT on this unit's PATH
+who=$("$API" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"};     id=${id%%\"*}
+uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
+```
+
+`id` is your `fromId`, `uuid` your `fromUuid`. Re-derive both on every call.
 
 ## The brief
 
