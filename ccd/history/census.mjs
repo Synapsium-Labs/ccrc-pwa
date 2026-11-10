@@ -13,19 +13,10 @@
 // alone (the ring case).
 import {
   AGENT_LEVELS, CENSUS_COLUMNS, HOLDING_SHAPES, LINK_DECODE_MAX, LINK_WINDOW_MS, agentKey, blobOverDecodeCap, canonicalOf, censusPart, censusSums,
-  censusWithheld, holdingShape, inColumn, isPreInstall, linkVerdict, metaEvidence, shareRange, toolUsesOf, unboundExtra,
-  workflowVerdict, workflowWindow,
+  censusWithheld, HOLDING_UNBOUND_CAUSES, holdingShape, inColumn, isPreInstall, linkVerdict, metaEvidence, shareRange, toolUsesOf, unboundExtra,
+  workflowCanonicalVerdict, workflowVerdict, workflowWindow,
 } from './lib.mjs';
 import { blobReadStmts, bodyOf } from './derive.mjs';
-
-/** Why a listed holding of an admitted unit is not bound to the store (3.1, "unbound holdings"; plan-chosen words): `unread` (no row
- *  holds its inode yet, or the one that did was marked gone), `unreadable` (no row, and the file cannot be opened: ingest records
- *  no row for it either), `replaced` (the path is one the store knows under another inode, or its inode is another transcript's),
- *  `shrunk` (bound, but now shorter than its cursor). A changed first line shows only on a read, so it is not measured here. */
-export const HOLDING_UNBOUND_CAUSES = Object.freeze(['unread', 'unreadable', 'replaced', 'shrunk']);
-/** The reason a workflow unit is `M` while no predicate is settled (`deps.predicate` null): not a lib reason, because lib's verdict
- *  tables have no row for it; the census spells it, in `reasons` only. */
-export const PREDICATE_UNSETTLED = 'predicate-unsettled';
 
 const SEP = '\0';
 const STMTS = new WeakMap();
@@ -236,7 +227,8 @@ function unboundCause(s, pk, h, canRead) {
  *   - `readMeta(path)`: a meta read bounded (sweep.mjs's readAgentMeta), answering MetaRead;
  *   - `predicate`: P12's settled predicate, 'b' (the launch result names the run) or 'c' (the run summary), null while unsettled;
  *   - `runWindow`: when the launch result arrives, 'immediate' or 'at-end' (workflowWindow), null while unsettled;
- *   - `sinceMs`: the install record (P6), null when there is none;
+ *   - `sinceMs`: the install record (P6), null when there is none; `installRecord`: what it is, its milliseconds, `'absent'` or
+ *     `'damaged'` (a damaged record reads as none, and the report says which);
  *   - `known`: the uuids a tick or an import would ingest (`knownUuids`), for `beside.qParentUnknown`;
  *   - `summaryState({ home, slug, uuid, runId })`: 'exists', 'absent' or 'unreadable' for the run's summary file (option (c)); absent
  *     dependency, option (c) is `unavailable`;
@@ -293,7 +285,10 @@ export function runCensus(db, walk, deps) {
 
   const beside = {
     holdings: files.length,
-    physical: new Set(files.map((f) => `${f.dev}:${f.ino}`)).size,
+    // a holding whose lstat failed has no identity: it is counted apart (`physicalUnmeasured`), never as one file with the others
+    physical: new Set(files.filter((f) => f.ino !== null).map((f) => `${f.dev}:${f.ino}`)).size,
+    physicalUnmeasured: files.filter((f) => f.ino === null).length,
+    installRecord: deps.installRecord ?? (sinceMs === null ? 'absent' : sinceMs),
     holdingUnbound: Object.fromEntries(HOLDING_UNBOUND_CAUSES.map((c) => [c, 0])),
     refusedSinceStored: 0,
     shapes: Object.fromEntries(HOLDING_SHAPES.map((c) => [c, 0])),
@@ -314,7 +309,7 @@ export function runCensus(db, walk, deps) {
       hasRow: u.row !== null, listed: u.holdings.length,
       admissibleMtimes: u.holdings.filter((h) => h.verdict === 'admit').map((h) => h.mtimeMs), sinceMs,
     });
-    u.imported = u.part === 'Ad' && sinceMs !== null && u.holdings.every((h) => isPreInstall(h.mtimeMs, sinceMs));
+    u.imported = u.part === 'Ad' && u.holdings.every((h) => isPreInstall(h.mtimeMs, sinceMs));   // no record reads every file as pre-install (lib), `beside.installRecord` says there is none
     u.bound = 0;
     u.unbound = 0;
     if (u.part === 'Q' && !known.has(u.uuid)) beside.qParentUnknown += 1;
@@ -345,8 +340,12 @@ export function runCensus(db, walk, deps) {
   const lookupOf = (u) => {
     const ck = `${u.uuid}${SEP}${u.runId}`;
     if (runCache.has(ck)) return runCache.get(ck);
+    if (runWindow === null) {   // no run window is measured: none is guessed
+      runCache.set(ck, unmeasured('no-run-window'));
+      return runCache.get(ck);
+    }
     const t = s.runTs.get(u.uuid, u.runId);
-    const window = workflowWindow(t?.lo ?? null, runWindow ?? 'immediate', t?.hi ?? null);
+    const window = workflowWindow(t?.lo ?? null, runWindow, t?.hi ?? null);
     const anchor = runWindow === 'at-end' ? t?.hi ?? 0 : t?.lo ?? 0;
     lookups.workflow += 1;
     const tl = { decodes: 0, bytes: 0 };
@@ -374,14 +373,12 @@ export function runCensus(db, walk, deps) {
       u.verdict = linkVerdict({ meta, parent });
       continue;
     }
-    u.verdict = { v: 'L', reason: null };
     u.options = {
       a: workflowVerdict('a', null),
       b: predicate === 'b' ? workflowVerdict('b', lookupOf(u)) : 'unavailable',
       c: workflowVerdict('c', summaryOf(u)),
     };
-    const chosen = predicate === 'b' || predicate === 'c' ? u.options[predicate] : 'unavailable';
-    u.verdict = chosen === 'unavailable' ? { v: 'M', reason: PREDICATE_UNSETTLED } : chosen;
+    u.verdict = workflowCanonicalVerdict(predicate, u.options);
   }
 
   // the report's figures
@@ -425,6 +422,7 @@ export function runCensus(db, walk, deps) {
     sums,
     shares,
     withheld,
+    predicate,
     canonical: canon === null ? null : { lo: canon.lo, hi: canon.hi },
   };
 }
@@ -447,7 +445,7 @@ export function formatCensus(r) {
     unitsLine('workflow units, (c) run summary', r.byKind.workflow.c),
     `census M by reason: ${pairs(r.reasons)}`,
     `census unentered directories (K): ${r.K.length === 0 ? 'none' : r.K.map((k) => `${k.level}:${k.reason} ${k.n}`).join(', ')}`,
-    `census beside: holdings ${b.holdings}, physical files ${b.physical}, refused since stored ${b.refusedSinceStored}, Q with an unknown parent ${b.qParentUnknown}, identity_collision ${b.identityCollision}`,
+    `census beside: holdings ${b.holdings}, physical files ${b.physical} (unmeasured ${b.physicalUnmeasured}), install record ${b.installRecord}, refused since stored ${b.refusedSinceStored}, Q with an unknown parent ${b.qParentUnknown}, identity_collision ${b.identityCollision}`,
     `census holding_unbound: ${pairs(b.holdingUnbound)}`,
     `census shapes: ${pairs(b.shapes)}`,
     `census agent_file_refused: ${pairs(b.agentFileRefused)}`,
@@ -458,7 +456,9 @@ export function formatCensus(r) {
   if (r.shares === null) lines.push(`census share withheld: ${r.withheld.join(', ')}`);
   else {
     for (const [column, x] of Object.entries(r.shares)) lines.push(`census share ${column}: ${pct(x.lo)} to ${pct(x.hi)} (den ${x.den})`);
-    lines.push(r.canonical === null ? 'census canonical: none (the predicate is not settled)' : `census canonical (D-T): ${pct(r.canonical.lo)} to ${pct(r.canonical.hi)}`);
+    let why = 'no unit is in the D-T denominator';
+    if (r.predicate === null) why = 'the workflow predicate is not settled';
+    lines.push(r.canonical === null ? `census canonical: none (${why})` : `census canonical (D-T): ${pct(r.canonical.lo)} to ${pct(r.canonical.hi)}`);
   }
   return lines;
 }

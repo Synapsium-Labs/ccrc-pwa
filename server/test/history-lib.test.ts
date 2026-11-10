@@ -80,7 +80,7 @@ const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => 
   'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
   // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
   'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
-  // W4 Task 1H: the subagent census, L4 like derive.mjs (it imports lib and store's unbrotli, and runs statements on the handle it is handed).
+  // W4 Task 1H: the subagent census, L4 like derive.mjs (it imports lib and derive's blob reads, and runs statements on the handle it is handed).
   'census.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
   'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
   // W3 Task 1B: the steer file's IO, L3, which card.mjs (L4) calls. It imports lib and store and nothing outward, and reaches SQLite through the handle it is given.
@@ -280,7 +280,7 @@ describe('the vocabularies are frozen, and each holds what the spec names', () =
       // W4 P20 (Task 1B's three vocabularies, frozen unchecked until Task 1C)
       AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
       // W4 P11, P12, P17 to P19 (Task 1G): the census's vocabularies
-      libCensus.CENSUS_PARTS, libCensus.CENSUS_VERDICTS, libCensus.CENSUS_COLUMNS, libCensus.META_FAILURES, libCensus.CENSUS_REASONS, libCensus.CENSUS_WITHHELD, libCensus.HOLDING_SHAPES]) {
+      libCensus.CENSUS_PARTS, libCensus.CENSUS_VERDICTS, libCensus.CENSUS_COLUMNS, libCensus.META_FAILURES, libCensus.CENSUS_REASONS, libCensus.CENSUS_WITHHELD, libCensus.HOLDING_SHAPES, libCensus.HOLDING_UNBOUND_CAUSES]) {
       expect(Object.isFrozen(v)).toBe(true);
     }
     for (const f of Object.values(WRITING_FORMS)) expect(Object.isFrozen(f)).toBe(true);
@@ -12402,7 +12402,8 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
     expect(libCensus.CENSUS_REASONS).toEqual([
       'meta-conflict', 'meta-unread:absent', 'meta-unread:oversized', 'meta-unread:not-regular', 'meta-unread:unreadable', 'meta-unread:malformed',
       'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable', 'parent-behind', 'parent-copy-unbound', 'parent-untimed',
-      'summary-unreadable']);
+      'summary-unreadable', 'predicate-unsettled', 'no-run-window']);
+    expect(libCensus.HOLDING_UNBOUND_CAUSES).toEqual(['unread', 'unreadable', 'replaced', 'shrunk']);
     expect(libCensus.CENSUS_WITHHELD).toEqual(['K', 'identity_collision', 'partition-sum']);
     expect(libCensus.HOLDING_SHAPES).toEqual(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
     expect(libCensus.LINK_WINDOW_MS).toBe(900000);
@@ -12493,6 +12494,21 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
     ['c', 'nonsense', 'unavailable'],
   ] as const)('workflowVerdict(%s, %j) is %j', (option, ev, want) => {
     expect(libCensus.workflowVerdict(option, ev as never)).toEqual(want);
+  });
+
+  const UNSETTLED = { v: 'M', reason: 'predicate-unsettled' } as const;
+  it.each([
+    // the settled predicate's verdict, from the option rows
+    ['b', { a: { v: 'L', reason: null }, b: { v: 'U', reason: null }, c: 'unavailable' }, { v: 'U', reason: null }],
+    ['b', { a: { v: 'L', reason: null }, b: { v: 'M', reason: 'over-cap' }, c: { v: 'L', reason: null } }, { v: 'M', reason: 'over-cap' }],
+    ['c', { a: { v: 'L', reason: null }, b: 'unavailable', c: { v: 'L', reason: null } }, { v: 'L', reason: null }],
+    // an unsettled predicate, or a settled one whose evidence was not run, is M and never a guess
+    [null, { a: { v: 'L', reason: null }, b: { v: 'L', reason: null }, c: { v: 'L', reason: null } }, UNSETTLED],
+    ['b', { a: { v: 'L', reason: null }, b: 'unavailable', c: { v: 'L', reason: null } }, UNSETTLED],
+    ['c', { a: { v: 'L', reason: null }, b: { v: 'L', reason: null }, c: 'unavailable' }, UNSETTLED],
+    ['b', {}, UNSETTLED],
+  ] as const)('workflowCanonicalVerdict(%s, %j) is %j', (predicate, options, want) => {
+    expect(libCensus.workflowCanonicalVerdict(predicate, options as never)).toEqual(want);
   });
 
   it('workflowWindow: immediate is t0 +- 15 min, at-end is [tEnd, tEnd + 15 min]', () => {

@@ -349,7 +349,7 @@ export interface CensusReport {
   byKind: { agent: CensusUnits; workflow: { a: CensusUnits | 'unavailable'; b: CensusUnits | 'unavailable'; c: CensusUnits | 'unavailable' } };
   K: Array<{ level: string; reason: string; n: number }>;
   beside: {
-    holdings: number; physical: number; holdingUnbound: Record<string, number>; refusedSinceStored: number; shapes: Record<string, number>;
+    holdings: number; physical: number; physicalUnmeasured: number; installRecord: number | 'absent' | 'damaged'; holdingUnbound: Record<string, number>; refusedSinceStored: number; shapes: Record<string, number>;
     companions: { meta: number; journal: number }; agentMetaOrphan: number; agentFileRefused: Record<string, number>;
     identityCollision: number; qParentUnknown: number; lookups: { agentTool: number; workflow: number; decodes: number };
   };
@@ -357,6 +357,7 @@ export interface CensusReport {
   sums: { ok: boolean; failed: string[] };
   shares: Record<string, CensusShare> | null;
   withheld: string[];
+  predicate: 'b' | 'c' | null;
   canonical: { lo: number; hi: number } | null;
 }
 /** The census over the rig's store and homes, as the verb computes it (`over` replaces a dependency: predicate, runWindow, summaryState). */

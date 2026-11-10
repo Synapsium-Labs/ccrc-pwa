@@ -1810,13 +1810,16 @@ export async function operatorMain(home, argv) {
     return env.exit;
   }
   const P = healthLib.historyPaths(home);
-  // W4 P16 (a): the census's report IS its answer, so under --json it is the one JSON document on stdout, where every other
-  // operator verb's --json stdout is the envelope alone. The sweep prints it as one JSON line when it is handed `--json`
-  // (parseOpVerbArgs' census arm), which this puts back after the strip above; a refusal still prints the envelope.
+  // W4 P16 (a): the census's report IS its answer, so under --json stdout is ONE JSON document: the report on success, the envelope
+  // on any other exit (as every operator verb's --json stdout is the envelope alone). The sweep prints the report as one JSON line
+  // when it is handed `--json` (parseOpVerbArgs' census arm), which this puts back after the strip above. What the sweep prints
+  // itself is held until the exit is known: stdout on exit 0, else stderr beside the envelope's exit, never on stdout.
   const reportOnStdout = json && verb === 'census';
+  const held = [];
   const emit = (line, toStderr = false) => {
     const text = `${line}\n`;
-    if ((json && !reportOnStdout) || toStderr) process.stderr.write(text);
+    if (reportOnStdout && !toStderr) held.push(line);
+    else if (json || toStderr) process.stderr.write(text);
     else process.stdout.write(text);
   };
   // A throw out of the door that is neither a StoreError nor a SQLite error (relayIndexOf's rethrow) is a defect: exit 1.
@@ -1833,6 +1836,10 @@ export async function operatorMain(home, argv) {
     thrown = true;
     r = { exit: EXIT.INTERNAL };
     errLine(`ccrc history ${verb}: internal error: ${thrownText(e)}; ${OP_OPERATOR_NOTE_ANY}`, seam.idx);
+  }
+  for (const line of held) {
+    if (r.exit === EXIT.OK) process.stdout.write(`${line}\n`);
+    else errLine(line, seam.idx);   // already redacted by the relay; errLine is the one stderr door of a held line (H-32)
   }
   if (json && !(reportOnStdout && r.exit === EXIT.OK)) {
     const id = readTrimmed(P.storeId);

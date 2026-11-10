@@ -595,12 +595,19 @@ export const CENSUS_REASONS = Object.freeze([
   'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable',
   'parent-behind', 'parent-copy-unbound', 'parent-untimed',
   'summary-unreadable',
+  // a workflow unit while no predicate is settled (`workflowCanonicalVerdict`), and a lookup asked with no run window (the census's own words)
+  'predicate-unsettled', 'no-run-window',
 ]);
 /** Why every share is withheld (3.3, "Uncertainty is shown, never folded"): `K` and `identity_collision` are the addendum's own
  *  names for the unentered-directories population and the disjoint-holdings counter; `partition-sum` is a failed sum. */
 export const CENSUS_WITHHELD = Object.freeze(['K', 'identity_collision', 'partition-sum']);
 /** The content shape of a key's bound holdings (3.1), `none` when no bound holding has a stored row (nothing to compare). */
 export const HOLDING_SHAPES = Object.freeze(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
+/** Why a listed holding of an admitted unit is not bound to the store (3.1, "unbound holdings"; plan-chosen words): `unread` (no row
+ *  holds its inode yet, or the one that did was marked gone), `unreadable` (no row, and the file cannot be opened: ingest records no
+ *  row for it either), `replaced` (the path is one the store knows under another inode, or its inode is another transcript's),
+ *  `shrunk` (bound, but now shorter than its cursor). A changed first line shows only on a read, so it is not measured. */
+export const HOLDING_UNBOUND_CAUSES = Object.freeze(['unread', 'unreadable', 'replaced', 'shrunk']);
 /** The link search's window (P4, P12 (b)): 15 minutes either side of its anchor; and the most candidates decoded for one search. */
 export const LINK_WINDOW_MS = 15 * 60 * 1000;
 export const LINK_DECODE_MAX = 64;
@@ -660,6 +667,15 @@ export function workflowVerdict(option, ev) {
     if (ev === 'unreadable') return { v: 'M', reason: 'summary-unreadable' };
   }
   return 'unavailable';
+}
+
+/** A workflow unit's verdict in the census's canonical column (P12): the settled predicate's (`b` or `c`), read from `options`, the
+ *  verdict under each option or `'unavailable'`. While no predicate is settled (`predicate` null), or the settled one's evidence was
+ *  not run, it is `M` (`predicate-unsettled`): the unit stays in the denominator and out of the numerator, so a share widens and never
+ *  narrows, and `Ad = L + U + M + X` still holds. */
+export function workflowCanonicalVerdict(predicate, options) {
+  const chosen = predicate === 'b' || predicate === 'c' ? options[predicate] : 'unavailable';
+  return chosen === 'unavailable' || chosen === undefined ? { v: 'M', reason: 'predicate-unsettled' } : chosen;
 }
 
 /** The window a run's parent rows are searched in (3.2, "Option (b)'s lookup" step 2; the predicate and its timing settled by act M1,

@@ -17,6 +17,7 @@ import { holdLock, makeHistoryBox, openStoreRO, recordOpenFlags, runCli, runShim
 import { historyPaths, WRITING_FORMS } from '../../ccd/history/lib.mjs';
 import { closeWriter, getMeta } from '../../ccd/history/store.mjs';
 import { discoverTranscripts } from '../../ccd/history/sweep.mjs';
+import { formatCensus, runCensus } from '../../ccd/history/census.mjs';
 
 skipOnDarwin();
 
@@ -351,6 +352,13 @@ describe('SA14 workflow predicate (P12): (a), (b) and (c) side by side', () => {
     expect(longer.report.units).toMatchObject({ L: 0, U: 1 });
     const items = await wf('ccrc-hist-sa14-items-', resultRows(0x400c, [{ ms: AGENT_T0 - 30_000, text: `${launched(RUN)}\n`, items: true }]));
     expect(items.report.units, 'CONTROL: a tool_result whose content is text items, the run id ended by a line break').toMatchObject({ L: 1 });
+  });
+
+  it('a settled predicate with no run window measures none and guesses none: the lookup is not run, M (no-run-window)', async () => {
+    const { report } = await wf('ccrc-hist-sa14-nowindow-', resultRows(0x400e, [{ ms: AGENT_T0 - 30_000, text: launched(RUN) }]), { over: { runWindow: null } });
+    expect(report.units, 'CONTROL (the row above names the run inside the window it would have guessed)').toMatchObject({ L: 0, U: 0, M: 1 });
+    expect(report.reasons).toEqual({ 'no-run-window': 1 });
+    expect(report.beside.lookups).toMatchObject({ workflow: 0, decodes: 0 });
   });
 
   it('with no predicate settled (a direct call), (b) is unavailable, no canonical share exists, and the workflow unit is M for the range', async () => {
@@ -776,11 +784,55 @@ describe('SA33 a parent\'s window (P19 (b)): M by cause, never U; read past the 
   });
 });
 
+// ── the install record, the physical files, the text ──────────────────────────────────────────────────────────────────
+
+describe('what the report says of its own inputs', () => {
+  it('the install record is reported: its milliseconds, absent, or damaged; with none, every admitted unit reads as imported, as isPreInstall reads a file', async () => {
+    const rig = await rigOf('ccrc-hist-record-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3901, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4901, { meta: { toolUseId: 'toolu_1' } })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    let c = censusOf(rig);
+    expect([c.beside.installRecord, c.units.I]).toEqual([T0, 0]);
+    rig.db.prepare("DELETE FROM meta WHERE k = 'agents_since_ms'").run();
+    c = censusOf(rig);
+    expect([c.beside.installRecord, c.units.I], 'no record: absent, and the unit reads as pre-install').toEqual(['absent', 1]);
+    rig.db.prepare("INSERT INTO meta (k, v) VALUES ('agents_since_ms', 'abc')").run();
+    c = censusOf(rig);
+    expect([c.beside.installRecord, c.units.I], 'a damaged record reads as none, and the report says it is damaged').toEqual(['damaged', 1]);
+    expect(formatCensus(c as never).join('\n')).toContain('install record damaged');
+  });
+
+  it('a holding whose lstat failed is counted apart (physicalUnmeasured), never as one file with the others', async () => {
+    // a hand-made walk: two entries with no identity and one measured; the census reads the store only for the rows it finds
+    const rig = await rigOf('ccrc-hist-physical-');
+    const entry = (id: string, ident: { dev: bigint | null; ino: bigint | null }) => ({
+      type: 'file', home: '/h', slug: 's', uuid: PARENT, runId: null, id, path: `/h/projects/s/${PARENT}/subagents/agent-${id}.jsonl`,
+      verdict: 'refuse', reason: 'not-regular', mtimeMs: 0, size: 0, ...ident,
+    });
+    const walk = { main: [], agents: [entry('x', { dev: null, ino: null }), entry('y', { dev: null, ino: null }), entry('z', { dev: 1n, ino: 5n })] };
+    const c = runCensus(rig.db, walk, { readMeta: () => ({ ok: false, cause: 'absent' }), predicate: 'b', runWindow: 'immediate' }) as unknown as CensusReport;
+    expect(c.beside).toMatchObject({ holdings: 3, physical: 1, physicalUnmeasured: 2 });
+  });
+
+  it('the canonical line says why there is none: an unsettled predicate, or no unit in the D-T denominator', async () => {
+    const rig = await rigOf('ccrc-hist-canon-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('p', 0x4902, { atMs: -60_000 })] }, SINCE);   // pre-install, never ingested: P, outside D-T
+    const settled = censusOf(rig);
+    expect(settled.units).toMatchObject({ D: 1, P: 1 });
+    expect(settled.shares!['D-T'], 'no D-T share: nothing is in its denominator').toBeUndefined();
+    expect(formatCensus(settled as never)).toContain('census canonical: none (no unit is in the D-T denominator)');
+    const unsettled = censusOf(rig, { predicate: null, runWindow: null });
+    expect(formatCensus(unsettled as never)).toContain('census canonical: none (the workflow predicate is not settled)');
+  });
+});
+
 // ── the verb (P16 (a)) ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe('SA23 the census verb writes nothing and answers lib\'s exits', () => {
-  /** The store's bytes, mtime and user_version, and every entry under ~/.ccrc (names, sizes and mtimes; the lock and SQLite's WAL
-   *  sidecars, which a read-only open may create, are excluded), as "writes nothing" is measured. */
+  /** The store's bytes (sha256), mtime and user_version, and every other entry under ~/.ccrc (names, sizes and mtimes), as "writes
+   *  nothing" is measured. The census writes nothing but SQLite's own reader sidecars (`-wal`, `-shm`), which a read-only open
+   *  creates for every read verb, and the shim's lock file, which every op takes: those are the reader's and the shim's, so they
+   *  are left out of the comparison and named here. */
   function fingerprint(box: HistoryBox): { db: string; dbMtime: number; userVersion: number; tree: string[] } {
     const dbFile = historyPaths(box.home).dbFile;
     const ro = openStoreRO(box);
@@ -801,7 +853,7 @@ describe('SA23 the census verb writes nothing and answers lib\'s exits', () => {
     return { db: createHash('sha256').update(fs.readFileSync(dbFile)).digest('hex'), dbMtime: fs.statSync(dbFile).mtimeMs, userVersion, tree: tree.sort() };
   }
 
-  it('SA23 --json prints the report as one JSON document on stdout, exit 0, and the store is untouched; no install record is written', async () => {
+  it('SA23 --json prints the report as one JSON document on stdout, exit 0; the store file and every other file under ~/.ccrc are untouched (SQLite\'s reader sidecars and the lock aside); no install record is written', async () => {
     const rig = await rigOf('ccrc-hist-sa23-');
     plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3801, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4801, { meta: { toolUseId: 'toolu_1' } })] }, SINCE);
     await rig.tick(armed, { scan: true });
@@ -833,6 +885,37 @@ describe('SA23 the census verb writes nothing and answers lib\'s exits', () => {
     expect(r.stdout).toContain('census share D-T: 100.0% to 100.0% (den 1)');
     expect(r.stdout, 'no path').not.toContain(rig.box.home);
     expect(r.stdout).not.toContain('agent-a');
+  });
+
+  /** stdout is exactly one JSON document, the envelope of `exit`, and the sweep's prose went to stderr. */
+  const oneEnvelope = (r: { code: number | null; stdout: string; stderr: string }, exit: number): Record<string, unknown> => {
+    expect(r.code).toBe(exit);
+    expect(r.stdout.trim().split('\n'), 'one line on stdout').toHaveLength(1);
+    const doc = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(doc).toMatchObject({ v: 1, exit });
+    expect(doc).not.toHaveProperty('units');
+    return doc;
+  };
+
+  it('census --json that the sweep refuses prints one envelope on stdout and its own prose on stderr: no store (9), an unreadable roster (2), a held lock (4)', async () => {
+    const empty = makeHistoryBox('ccrc-hist-sa23-json-nostore-');
+    const none = runCli(empty, ['census', '--json']);
+    oneEnvelope(none, 9);
+    expect(none.stderr).toContain('history-sweep: no store on this box; nothing to census');
+    expect(none.stdout, 'the prose is not on stdout').not.toContain('history-sweep');
+
+    const rig = await rigOf('ccrc-hist-sa23-json-roster-');
+    closeWriter(rig.db);
+    fs.rmSync(path.join(rig.box.home, '.ccrc', 'accounts.sh'));
+    const roster = runCli(rig.box, ['census', '--json']);
+    expect(oneEnvelope(roster, 2)).toMatchObject({ reason: 'roster-unreadable' });
+    expect(roster.stderr).toContain('accounts.sh could not be read');
+    expect(roster.stdout).not.toContain('accounts.sh');
+
+    const held = await rigOf('ccrc-hist-sa23-json-lock-');
+    closeWriter(held.db);
+    const release = holdLock(held.box);
+    try { oneEnvelope(runCli(held.box, ['census', '--json']), 4); } finally { release(); }
   });
 
   it('no store on this box is exit 9; a held lock is exit 4; any argument but --json is exit 2', async () => {

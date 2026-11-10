@@ -1871,8 +1871,8 @@ function agentEntry(agents, state, at, runId, runOk, path, c) {
     type: 'file', ...at, runId, id: c.id, path, verdict: v.verdict, reason: v.verdict === 'refuse' ? v.reason : null,
     mtimeMs: l.st === undefined ? 0 : Number(l.st.mtimeMs),
     // The census's physical-file and unbound-holding facts (P18): the listing's own lstat, read as bigints so an inode past 2^53
-    // matches the store's. `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave.
-    dev: l.st === undefined ? 0n : l.st.dev, ino: l.st === undefined ? 0n : l.st.ino, size: l.st === undefined ? 0 : Number(l.st.size),
+    // matches the store's; null when that lstat failed (the file's identity is then unmeasured, not 0). `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave.
+    dev: l.st === undefined ? null : l.st.dev, ino: l.st === undefined ? null : l.st.ino, size: l.st === undefined ? 0 : Number(l.st.size),
   });
 }
 
@@ -5462,6 +5462,14 @@ function installRecordOf(db) {
   const n = raw === null ? NaN : installRecordNumber(raw);
   return Number.isFinite(n) ? n : null;
 }
+/** The install record as the census reports it: its milliseconds, `'absent'` (no record), or `'damaged'` (a value that is not digits,
+ *  which installRecordOf reads as null and so as "every file is pre-install"). */
+function installRecordState(db) {
+  const raw = getMeta(db, INSTALL_META);
+  if (raw === null) return 'absent';
+  const n = installRecordNumber(raw);
+  return Number.isFinite(n) ? n : 'damaged';
+}
 /** A stored record as a number: digits only, else NaN (damaged). Number('') and Number(' ') are 0, a finite record that would
  *  read every file as post-install and never be repaired, so the text is checked before Number sees it. */
 function installRecordNumber(raw) {
@@ -7787,7 +7795,7 @@ export function censusReport(db, homes, home, over = {}) {
   const agents = [];
   walkTranscripts(homes, (t) => { main.push(t); }, null, { take: (e) => { agents.push(e); }, stop: null });
   return runCensus(db, { main, agents }, {
-    readMeta: readAgentMeta, predicate: CENSUS_PREDICATE, runWindow: CENSUS_RUN_WINDOW, sinceMs: installRecordOf(db),
+    readMeta: readAgentMeta, predicate: CENSUS_PREDICATE, runWindow: CENSUS_RUN_WINDOW, sinceMs: installRecordOf(db), installRecord: installRecordState(db),
     known: knownUuids(db, home), summaryState: runSummaryState, canRead: canReadPath, ...over,
   });
 }

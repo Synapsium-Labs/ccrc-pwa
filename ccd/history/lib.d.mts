@@ -186,7 +186,7 @@ export type CensusReason =
   | 'meta-conflict' | `meta-unread:${MetaFailure}`
   | 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable'
   | 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed'
-  | 'summary-unreadable';
+  | 'summary-unreadable' | 'predicate-unsettled' | 'no-run-window';
 export const CENSUS_REASONS: readonly CensusReason[];
 export type CensusWithheldReason = 'K' | 'identity_collision' | 'partition-sum';
 export const CENSUS_WITHHELD: readonly CensusWithheldReason[];
@@ -199,11 +199,14 @@ export type ParentSearch =
   | { outcome: 'match' }
   | { outcome: 'none'; complete: true }
   | { outcome: 'none'; complete: false; cause: 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed' }
-  | { outcome: 'unmeasured'; cause: 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable' };
+  | { outcome: 'unmeasured'; cause: 'parent-not-stored' | 'no-timed-row' | 'no-run-window' | 'decode-bound' | 'over-cap' | 'undecodable' };
 export type LinkVerdict = { v: 'L' | 'U' | 'M' | 'X'; reason: CensusReason | null };
 export function linkVerdict(i: { meta: MetaEvidence; parent: ParentSearch }): LinkVerdict;
 export type WorkflowVerdict = { v: 'L' | 'U' | 'M'; reason: CensusReason | null };
 export type WorkflowSummary = 'exists' | 'absent' | 'unreadable';
+export const HOLDING_UNBOUND_CAUSES: readonly ['unread', 'unreadable', 'replaced', 'shrunk'];
+export type HoldingUnboundCause = (typeof HOLDING_UNBOUND_CAUSES)[number];
+export function workflowCanonicalVerdict(predicate: 'b' | 'c' | null, options: { a?: WorkflowVerdict | 'unavailable'; b?: WorkflowVerdict | 'unavailable'; c?: WorkflowVerdict | 'unavailable' }): WorkflowVerdict;
 export function workflowVerdict(option: 'a' | 'b' | 'c', ev: ParentSearch | WorkflowSummary | null): WorkflowVerdict | 'unavailable';
 /** null when the anchor (`t0`, or `tEnd` for `at-end`) is not a finite number: no window, so the caller reads `no-timed-row` (an `M`). */
 export function workflowWindow(t0: number | null, runWindow: 'immediate' | 'at-end', tEnd?: number | null): [number, number] | null;
@@ -220,7 +223,7 @@ export const HOLDING_SHAPES: readonly ['none', 'single', 'identical', 'prefix', 
 export function holdingShape(lists: string[][]): HoldingShape;
 /** What the subagent arm of the walk hands over (W4 P20). Paths stay in memory; nothing prints them. */
 export type AgentWalkEntry =
-  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number; dev: bigint; ino: bigint; size: number }
+  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number; dev: bigint | null; ino: bigint | null; size: number }
   | { type: 'companion'; home: string; slug: string; uuid: string; runId: string | null; role: 'meta' | 'journal'; id: string | null; path: string }
   | { type: 'unentered'; home: string; level: AgentLevel; reason: AgentDirReason; path: string };
 export interface AgentSink {
