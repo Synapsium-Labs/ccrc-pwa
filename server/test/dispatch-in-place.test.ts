@@ -21,7 +21,7 @@ import { bindRunInPlace, dispatchRun, type DispatchRunDeps, type InPlaceDeps } f
 import { attributionVerdict } from '../src/coord/attribution.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER } from '../src/coord/rundefs.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
-import { resolveDoneBranch } from '../src/coord/fingerprint.js';
+import { doneRunOf, resolveDoneBranch, verifyDone } from '../src/coord/fingerprint.js';
 import { clearSender } from '../src/inject/send.js';
 import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP } from '../src/ccdargv.js';
@@ -395,3 +395,159 @@ describe('POST /api/runs/:id/dispatch with inPlace: the route (D-6096)', () => {
     expect(w.b.calls).toEqual([]);
   });
 });
+
+describe('an in-place run\'s close, abandon and done-claim never touch its coordinator\'s workspace (D-6096)', () => {
+  const TIP = 'a'.repeat(40);
+  /** An in-place run, bound through the real store call, at `working`. */
+  const inPlaceRun = (b: ReturnType<typeof build>, wave = 1, branch = 'feat/sibling'): number => {
+    const id = b.open({ wave });
+    if (!b.coord.bindInPlace(id, BOSS, branch).ok) throw new Error('fixture: bind refused');
+    return id;
+  };
+
+  it('closing an in-place run composes no ws-* verb on the claimant (final, and non-final)', async () => {
+    for (const final of [true, false]) {
+      const b = build();
+      const id = inPlaceRun(b);
+      const out = await closeRun(b.deps, id, { ...FAILED_CLOSE, final }, 'coordinator');
+      expect(out, `final ${final}`).toMatchObject({ ok: true, state: 'failed', released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
+      expect(b.acts(), `final ${final}: no release, no hold`).toEqual([]);
+      expect(b.calls.filter((c) => ['ws-release', 'ws-hold', 'ws-archive', 'ws-reclaim'].includes(c[0] ?? ''))).toEqual([]);
+      expect(okRun(b.coord.run(id))!.state).toBe('failed');
+    }
+  });
+
+  it('a non-final in-place close leaves no programme hold on the coordinator and hands the next wave no session', async () => {
+    const b = build();
+    const id = inPlaceRun(b);
+    expect(await closeRun(b.deps, id, FAILED_CLOSE, 'coordinator')).toMatchObject({ ok: true });
+    expect(b.calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+    const next = b.coord.openRun({ program: 'p', title: 't', project: PROJECT, wave: 2, waveOf: 3, claimedBy: BOSS });
+    if (!('id' in next)) throw new Error('fixture: the next wave was refused');
+    expect(okRun(b.coord.run(next.id))!.sessionId, 'the next wave names no session, never the claimant').toBeNull();
+  });
+
+  it('a failed close with archive never archives the claimant', async () => {
+    const b = build();
+    const id = inPlaceRun(b);
+    const out = await closeRun(b.deps, id, { ...FAILED_CLOSE, archive: true }, 'coordinator');
+    expect(out).toMatchObject({ ok: false, kind: 'hold-invalid', detail: expect.stringContaining('archive') });
+    expect(b.acts()).toEqual([]);
+    expect(okRun(b.coord.run(id))!.state, 'the refusal leaves the run where it was').toBe('working');
+  });
+
+  it('abandoning an in-place run composes no ws-* verb, and still moves the run to failed', async () => {
+    const b = build();
+    const id = inPlaceRun(b);
+    expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'operator')).toMatchObject({ ok: true, state: 'failed', released: false });
+    expect(b.acts()).toEqual([]);
+    expect(b.calls).toEqual([]);
+    expect(okRun(b.coord.run(id))).toMatchObject({ state: 'failed', closedBy: 'operator' });
+  });
+
+  it('the dead-coordinator sweep\'s guard still binds the in-place abandon path, with no fleet act', async () => {
+    const b = build();
+    const id = inPlaceRun(b);
+    const stop = { kind: 'revived' } as never;
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'sweep', { claimedBy: BOSS, stillCrashed: async () => stop });
+    expect(out).toMatchObject({ ok: false, kind: 'sweep-stopped', fleetAct: null });
+    expect(okRun(b.coord.run(id))!.state).toBe('working');
+    expect(b.calls).toEqual([]);
+  });
+
+  it('every other run\'s close and abandon are unchanged (the characterization rows above stay green)', async () => {
+    const b = build();
+    const id = b.open({ session: 'demo-worker', state: 'dispatched' });
+    seedRow(b.home, 'demo-worker');
+    expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'operator')).toMatchObject({ ok: true, released: true });
+    expect(b.acts()).toEqual([['ws-release', 'demo-worker']]);
+  });
+
+  it('an in-place done-claim is measured on the sibling branch, not the registry\'s branch for the claimant', async () => {
+    const b = build();
+    const id = inPlaceRun(b);
+    const gitHeads = path.join(b.base.cfg.projectsRoot, PROJECT, '.git', 'refs', 'heads', 'feat');
+    mkdirSync(gitHeads, { recursive: true });
+    writeFileSync(path.join(gitHeads, 'sibling'), `${TIP}\n`);
+    const run = okRun(b.coord.run(id))!;
+    const row = { number: 42, state: 'OPEN', headRefName: `ws/${BOSS}`, baseRefName: 'main', isCrossRepository: false, ours: true, isDraft: false };
+    const prRun: Runner = async () => ({ ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows: [row], baseShort: 'main', branch: `ws/${BOSS}`, ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' });
+    const deps = testDeps(b.home, prRun);
+    const claim = { branchTip: TIP, prNumber: 42, prPhase: 'open' as const, handoffCommit: TIP };
+    expect(await verifyDone(deps, doneRunOf({ ...run, sessionId: BOSS }), claim)).toMatchObject({ ok: true, measured: { branchTip: TIP } });
+    // the same claim for a run NOT taken in place reads the registry's `ws/<id>` branch, where there is no ref
+    expect(await verifyDone(deps, { sessionId: BOSS, project: PROJECT, branch: 'feat/sibling' }, claim))
+      .toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+  });
+
+  it('resolveDoneBranch answers the recorded branch with its own provenance for an in-place run, and still refuses a bad session id', async () => {
+    const b = build();
+    expect(await resolveDoneBranch(b.base, { sessionId: BOSS, project: PROJECT, branch: 'feat/sibling', inPlace: true }))
+      .toEqual({ ok: true, branch: 'feat/sibling', provenance: expect.stringContaining('in-place'), project: PROJECT });
+    expect(await resolveDoneBranch(b.base, { sessionId: BOSS, project: PROJECT, branch: '', inPlace: true }))
+      .toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+    expect(await resolveDoneBranch(b.base, { sessionId: '../x', project: PROJECT, branch: 'feat/sibling', inPlace: true }))
+      .toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+    // the registry is not read for an in-place run at all: an unlistable registry does not change the answer
+    const dark = { ...b.base, io: { ...b.base.io, readdir: async () => null } as typeof b.base.io };
+    expect(await resolveDoneBranch(dark, { sessionId: BOSS, project: PROJECT, branch: 'feat/sibling', inPlace: true })).toMatchObject({ ok: true });
+  });
+
+  it('an in-place run reaches awaiting-review and opens a review run', () => {
+    const b = build();
+    const id = inPlaceRun(b);
+    expect(b.coord.advance(id, 'awaiting-review', 'coordinator')).toMatchObject({ ok: true, to: 'awaiting-review' });
+    const rv = b.coord.openRun({ program: 'p', title: 't', project: PROJECT, wave: 1, waveOf: 3, claimedBy: BOSS, kind: 'review', reviews: id });
+    expect('id' in rv).toBe(true);
+  });
+});
+
+describe('the operator\'s pause does not refuse non-dispatch acts (D-8126 answer 2, D-6096)', () => {
+  const TOKEN = 'f'.repeat(64);
+  const H = { 'x-ccrc-mail-token': TOKEN };
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+  const paused = async () => {
+    const b = build();
+    app = await buildServer({ ...b.base, mailToken: TOKEN, coord: b.coord, fleetState: b.fleetState });
+    writeFileSync(path.join(b.home, '.cc-sessions', COORDINATOR_PAUSE_MARKER), '');
+    return b;
+  };
+
+  it('dispatch and the in-place bind are refused paused', async () => {
+    const b = await paused();
+    const id = b.open();
+    const bind = await app!.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers: H,
+      payload: { inPlace: true, by: BOSS, byUuid: `u-${BOSS}`, branch: 'feat/sibling' } });
+    expect(bind.json()).toEqual({ ok: false, refused: 'paused' });
+    const plain = await app!.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers: H, payload: { brief: 'go' } });
+    expect(plain.json()).toEqual({ ok: false, refused: 'paused' });
+    expect(okRun(b.coord.run(id))!.state).toBe('planned');
+  });
+
+  it('a close, an abandon and an advance of an in-place run are not refused by the pause', async () => {
+    const b = await paused();
+    // abandon
+    const a = b.open();
+    b.coord.bindInPlace(a, BOSS, 'feat/a');
+    const ab = await app!.inject({ method: 'POST', url: `/api/runs/${a}/abandon` });
+    expect(ab.statusCode).toBe(200);
+    expect(ab.json()).toMatchObject({ ok: true, state: 'failed' });
+    // close (the abandon-shaped ordinary close, which needs no git fixture)
+    const c = b.open({ wave: 2 });
+    b.coord.bindInPlace(c, BOSS, 'feat/c');
+    const cl = await app!.inject({ method: 'POST', url: `/api/runs/${c}/close`, headers: H, payload: { ...FAILED_CLOSE, final: true } });
+    expect(cl.statusCode).toBe(200);
+    expect(cl.json()).toMatchObject({ ok: true, state: 'failed' });
+    // advance: a send-back from awaiting-review to working retreats and re-measures nothing
+    const d = b.open({ wave: 3 });
+    b.coord.bindInPlace(d, BOSS, 'feat/d');
+    expect(b.coord.advance(d, 'awaiting-review', 'coordinator').ok).toBe(true);
+    const adv = await app!.inject({ method: 'POST', url: `/api/runs/${d}/advance`, headers: H,
+      payload: { to: 'working', fingerprint: { branchTip: TIP_FOR_ADVANCE, prNumber: null, prPhase: 'none', handoffCommit: TIP_FOR_ADVANCE } } });
+    expect(adv.statusCode, adv.body).toBe(200);
+    expect(okRun(b.coord.run(d))!.state).toBe('working');
+    expect(b.acts(), 'none of the three composed a ws-* verb on the claimant').toEqual([]);
+  });
+});
+const TIP_FOR_ADVANCE = 'a'.repeat(40);

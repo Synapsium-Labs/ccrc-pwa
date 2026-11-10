@@ -12,12 +12,12 @@ import type { FleetState } from '../fleetstate.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { RunVerdict } from './runVerdicts.js';
 import {
-  abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
+  NO_CHILD_GATE, abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
   type RequestPlan,
 } from './closeDecide.js';
 import { CCD_ARGV, ccdCan, sweepDec, type CcdArgv } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
-import { verifyDone, verifyReviewDone, type DoneVerdict } from './fingerprint.js';
+import { doneRunOf, verifyDone, verifyReviewDone, type DoneVerdict } from './fingerprint.js';
 import {
   type AdvanceResult, type CoordStore, type OpenSiblingsResult, type RunRow,
 } from './store.js';
@@ -353,7 +353,10 @@ async function abandonRun(
   const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, false, 'failed', null) });
   if (act.kind !== 'go') return stopped(deps, act);
-  const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
+  // D-6096: an in-place run composes no fleet act; the sweep's gate is still asked once, in the act's place, so the
+  // dead-coordinator lane's compare-and-set and re-measure bind this path as they bind every other.
+  const halt = act.plan.fleet === null ? await sweepGateOf(deps, id, sweep)
+    : await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
   if (halt !== null) return halt;
   if (sweep !== undefined) {
     const after = decideClose({ step: 'recheck', stop: await sweep.stillCrashed(), release: act.plan.released });
@@ -384,7 +387,7 @@ async function closeWorkRun(
   if (plan.verify) {
     const measured = await verifyDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-      { sessionId, project: run.project, branch: run.branch ?? '' }, plan.claim);
+      doneRunOf({ ...run, sessionId }), plan.claim);
     const verdict = decideClose({ step: 'verified', verdict: measured });
     if (verdict.kind !== 'go') return stopped(deps, verdict, run);
     line = verdict.plan.line;
@@ -399,7 +402,7 @@ async function closeWorkRun(
     branch: run.branch });
   if (ledger.kind !== 'go') return stopped(deps, ledger);
   coord.foldPrLineage(id, ledger.plan.entries);
-  const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet);
+  const halt = act.plan.fleet === null ? null : await actOnFleet(deps, id, sessionId, act.plan.fleet);   // D-6096: none for an in-place run
   if (halt !== null) return halt;
   // The transition, the handoff commit, the delivery cancellation and the program-retirement check, as ONE
   // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281).
@@ -474,7 +477,7 @@ async function closeReviewRun(
     }
     const verdict = await verifyReviewDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-      { sessionId: work.sessionId, project: work.project, branch: work.branch ?? '' },
+      doneRunOf({ ...work, sessionId: work.sessionId }),
       // Non-null: `state !== 'failed'` here means `state === 'done'`, and
       // `fpRequired` above was true in exactly that case — the guard already
       // refused a null `validFp` on that path.
@@ -535,8 +538,6 @@ async function closeReviewRun(
 
 /** What a close decided about the child, and the request it would hand off. */
 export interface ChildGate { readonly decision: ChildReclaimDecision; readonly request: ChildReclaimRequest | null }
-
-const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child' }, request: null };
 
 /**
  * Read both authorities and ask `childReclaimDecision`, inside the mutex and

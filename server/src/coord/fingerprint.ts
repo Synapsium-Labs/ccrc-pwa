@@ -88,7 +88,20 @@ export interface VerifyDoneDeps {
  *  about this session at all" — and because `markDispatched` writes the column
  *  once and nothing updates it, every refusal produced from it says so in its
  *  own detail. */
-export interface DoneRun { sessionId: string; project: string; branch: string }
+export interface DoneRun {
+  sessionId: string; project: string; branch: string;
+  /** D-6096: the run was taken IN PLACE by its coordinator (`runs.inPlace`), so `branch` is the sibling worktree's branch,
+   *  recorded at the bind, and the registry's branch for `sessionId` is the COORDINATOR's workspace, which this run did
+   *  not touch. `resolveDoneBranch` then answers `branch` itself, never the registry's. Absent for every other run. */
+  inPlace?: boolean;
+}
+
+/** A run row's `DoneRun`, the one place a caller builds it: the run's session, project and recorded branch, and the in-place
+ *  flag only where it is set (so every other run's value is byte-identical to the literal each caller used to write). */
+export const doneRunOf = (
+  run: { sessionId: string; project: string; branch: string | null; inPlace?: boolean },
+): DoneRun => ({ sessionId: run.sessionId, project: run.project, branch: run.branch ?? '',
+  ...(run.inPlace === true ? { inPlace: true } : {}) });
 
 /**
  * A PR phase that has gone BACKWARDS since the worker looked. Forward motion is
@@ -107,6 +120,10 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
       (measured === 'none' || measured === 'no-commits')) return 'regressed';
   return 'ok';
 }
+
+/** Appended to a refusal that names an in-place run's branch (the `provenance` slot), so the coordinator reads where the name
+ *  came from: the bind, not a registry row. */
+const IN_PLACE_PROVENANCE = ' — the in-place run\'s recorded branch';
 
 /** `resolveDoneBranch`'s answer. `project` is the registry record's own `.project`, or `null` when the branch came from
  *  the run row (the registry has no row at all), which the lineage step does not trust. A record with no `.project`
@@ -133,6 +150,16 @@ export async function resolveDoneBranch(
   if (!isRegistryId(run.sessionId)) {
     return { ok: false, code: 'tip-unmeasurable',
       detail: 'the run\'s session id is not a registry id: it is refused, never read' };
+  }
+  // D-6096: an in-place run's work is on the sibling worktree's branch, recorded at the bind (`CoordStore.bindInPlace`) and
+  // never renamed (`sweepNames` renames registry workspaces, and this branch belongs to none). The registry's row for the
+  // session is the COORDINATOR's own workspace and says nothing about it, so the registry is not read at all.
+  if (run.inPlace === true) {
+    if (run.branch === '') {
+      return { ok: false, code: 'branch-unmeasurable',
+        detail: 'this in-place run records no branch, so there is nothing to re-measure' };
+    }
+    return { ok: true, branch: run.branch, provenance: IN_PLACE_PROVENANCE, project: run.project };
   }
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
   // why the DB column cannot be trusted here. `record` is undefined on ONE
