@@ -2896,7 +2896,7 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
 
 
 describe('the compaction card — PreCompact and the helper (spec §3.1)', () => {
-  it('with a fresh graph and the helper, PreCompact writes the card (nonce first) and the mined set, and prints nothing', () => {
+  it('with a fresh graph and the helper, PreCompact writes the card (nonce first) and the mined set, and prints nothing (unarmed: PreCompact prints only when armed and scope main)', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
@@ -9379,8 +9379,15 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(end).toBeGreaterThan(start);
     expect(start, 'the block must sit below the turn marker').toBeGreaterThan(src.indexOf('_hook_turn_mark "$tmkind" || true; fi'));
     expect(end, 'the block must sit above the StopFailure exit').toBeLessThan(src.indexOf('[[ -n "$stopfail$sessend" ]] && exit 0'));
-    const code = s1Code(src.slice(start, end));
-    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
+    // W3-1 Task 1C: the write moved into `_hook_history_spool_append`, which sits right above the block; its body is read with the block.
+    const fnBody = hookFnBody(src, '_hook_history_spool_append');
+    expect(fnBody, '_hook_history_spool_append is not defined in the hook').not.toBeNull();
+    expect(src.indexOf('\n_hook_history_spool_append() {'), 'the append function sits above the block').toBeLessThan(start);
+    expect(src.indexOf('\n_hook_history_spool_append() {'), 'the append function sits below the compact-arm emit anchor (the tail rule)')
+      .toBeGreaterThan(src.indexOf('# @anchor compact-arm-emit-call'));
+    const code = s1Code(`${fnBody!}\n${src.slice(start, end)}`);
+    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$1"`);
+    expect(code, 'the block no longer appends through the function').toContain('_hook_history_spool_append "$_hs"');
     // FR4 (review 353 F2): every arm of the string pin, each under its own label. STRING_ROWS plants a form for each arm.
     for (const [arm, check] of S1_STRING_ARMS) expect(check(code), arm).toBeNull();
   });
@@ -9515,6 +9522,19 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
     expect(r.stderr).toBe('');
     expect(readState().state).toBe('done');
+  });
+
+  // W3-1 Task 1C, commit 1: the bytes the spool append writes, which the factoring into `_hook_history_spool_append`
+  // must leave exactly as they are. The whole file, not a parsed line: the fence's two LFs are part of the contract.
+  it('S12 (W3-1 pin): the file holds exactly the fenced lines, byte for byte: a leading LF, the JSON, a trailing LF, once per append', () => {
+    plantSpool();
+    const env = { ...SCRUB, CCRC_SESSION_GENERATION: '', BASH_ENV: epochEnv('1700000000.123456') };
+    const stop = `\n{"v":1,"ev":"Stop","id":"${ID}","sid":"${SID}","ts":1700000000123}\n`;
+    const post = `\n{"v":1,"ev":"PostCompact","id":"${ID}","sid":"${SID}","trig":"auto","ts":1700000000123}\n`;
+    expect(runFull({ hook_event_name: 'Stop', session_id: SID }, env)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe(stop);
+    runFull({ hook_event_name: 'PostCompact', trigger: 'auto', session_id: SID }, env);
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe(stop + post);
   });
 
   it('S14: SessionStart(compact) writes no line; startup, resume, clear and fork (ruled Q16, W1-B2) write one each, each carrying src', async () => {
@@ -9824,8 +9844,11 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
   /** Bash keywords and builtins the block may run. None of them forks. */
   const SPOOL_BUILTINS: ReadonlySet<string> = new Set(['if', 'then', 'elif', 'else', 'fi', 'case', 'esac', '[[', '((', 'printf', 'read', 'return', 'true']);
   /** The hook functions the block calls. Each body is scanned too, against the builtins alone. */
-  const SPOOL_FUNCS = ['_ct_read'] as const;
-  const spoolBlock = (src: string): string => src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'));
+  const SPOOL_FUNCS = ['_ct_read', '_hook_history_spool_append'] as const;
+  /** The block's code as the S1 pins read it: the block, behind the body of `_hook_history_spool_append` (W3-1 Task 1C: the gate and
+   *  the append moved out of the block into that tail function, which the block calls with its built line). */
+  const spoolBlock = (src: string): string =>
+    `${hookFnBody(src, '_hook_history_spool_append') ?? ''}\n${src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'))}`;
   const hookFnBody = (src: string, name: string): string | null => new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)^\\}`, 'm').exec(src)?.[1] ?? null;
   const A = '_hs_g="${CCRC_SESSION_GENERATION:-}"';
   const T = "_hs+='}'";
@@ -10468,6 +10491,50 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(fs.existsSync(marker())).toBe(false);
   });
 
+  // W3-1 Task 1C, commit 1: pins the factoring of `_hook_history_scope`'s unset arm into `_hook_history_scope_verdict`
+  // could change. The unset arm (compact-card-off: the card returns before scoping) is the one the factoring moves.
+  it('S16 (W3-1 pin): an ambiguous verdict is written as ambiguous, on the card\'s path and on the unset arm alike, exit 0 and silent', () => {
+    plantScope();
+    // two live subagents: the scope rule's own overlap, with no card-side set file involved
+    const two = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }, { id: 'a2', lines: [tl.user('z')], age: LIVE }] });
+    expect(runFull(pre(two.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+    fs.rmSync(marker());
+    cardOff();                                            // the unset arm: the block parses the payload and scopes itself
+    expect(runFull(pre(two.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect([read().scope, read().sid]).toEqual(['ambiguous', SID]);
+    // one live subagent beside a LIVE parent: ambiguous by the parent's own liveness
+    fs.rmSync(marker());
+    const live = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    expect(runFull(pre(live.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+  });
+
+  it('S16 (W3-1 pin): an empty transcript_path writes no marker, exit 0 and silent, on the card\'s path and on the unset arm alike', () => {
+    plantScope();
+    plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre('', 'manual', { transcript_path: '' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    cardOff();
+    expect(runFull(pre('', 'manual', { transcript_path: '' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    // the key absent altogether reads as the same empty path
+    const { transcript_path: _gone, ...bare } = pre('', 'manual') as Record<string, unknown>;
+    expect(runFull(bare, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('S16 (W3-1 pin): an absent trigger on the unset arm is read as auto — one live subagent beside a quiet parent is subagent', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    const { trigger: _gone, ...bare } = pre(transcript, 'auto') as Record<string, unknown>;
+    expect(runFull(bare, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('subagent');
+  });
+
   it('an undecided verdict empties a fresh main marker this psid left, and creates nothing where none was', () => {
     plantScope();
     fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);
@@ -10676,7 +10743,14 @@ describe('history scope marker: PreCompact records whose context is compacting (
     const fnAt = src.indexOf('\n_hook_history_scope() {');
     expect(fnAt, 'no _hook_history_scope definition').toBeGreaterThan(-1);
     const fnCode = src.slice(fnAt, src.indexOf('\n}\n', fnAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    expect(`${early[0]!}\n${gate!}\n${fnCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
+    // W3-1 Task 1C: the unset arm's jq read and scope call moved into `_hook_history_scope_verdict`, so its body is scanned too.
+    const verdictAt = src.indexOf('\n_hook_history_scope_verdict() {');
+    expect(verdictAt, 'no _hook_history_scope_verdict definition').toBeGreaterThan(-1);
+    expect(verdictAt, 'the verdict function sits below the compact-arm emit anchor (the tail rule)').toBeGreaterThan(src.indexOf('# @anchor compact-arm-emit-call'));
+    expect(verdictAt, 'the verdict function sits inside the history-scope block').toBeGreaterThan(open);
+    expect(verdictAt).toBeLessThan(close);
+    const verdictCode = src.slice(verdictAt, src.indexOf('\n}\n', verdictAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(`${early[0]!}\n${gate!}\n${fnCode}\n${verdictCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
     // B1's D-4418 rule (spec §5.1): the type test is the line DIRECTLY above the write,
     // so nothing but builtins runs between the test and the `>`; the gate and the early line refuse a symlinked scope/.
     const fnLines = fnCode.split('\n');

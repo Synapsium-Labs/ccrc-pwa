@@ -89,7 +89,7 @@ import {
   deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP, rederiveGistsFor, redactNodeFields, reparseFailClosed, rerollNodes,
   beltNodesStep,
 } from './derive.mjs';
-import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards } from './card.mjs';
+import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, lstatKind, withdrawCards } from './card.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] [--unanswered <path>]... --secrets <file...> -- <home...>';
 
@@ -3688,8 +3688,8 @@ export async function bindingPass(home, P, op, args, deps, out) {
  * 22. `markScan`: a due scan is marked done, unless the roster was unreadable;
  * 23. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, on its own slice of the run's ONE budget (D-6974), with a writer token only,
  *     outside the ingest gate, behind its own floor on the home filesystem; a check after a bind runs first, on a slice of its own (D-6975);
- * 24. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
- *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
+ * 24. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/, card/ and steer/ made 0700, a
+ *     link or a file there refused and counted `history_dir_refused:<name>` (card.mjs; W1-B3 Task 5; steer/ W3-1).
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
  *  `periodicCensus` after the tick. `bump` and `countOutside` are counters, not steps. */
@@ -5127,13 +5127,16 @@ function statActive(path) {
 /** CP-39d (D-7096). The between-scans pass: a registered session's live main-thread files that changed since the sweep last
  *  examined them, so a transcript that grows mid-turn (no Stop hint yet, a recorded size that is stale) is read within a
  *  tick. The registered uuids are `$REG/*.uuid`'s now; `activeRows` orders each uuid's newest recorded copy first. One
- *  file per `fileId`: the first path under a rostered home's `projects/` (behindFiles' test); a file with none is passed
- *  over. A path already taken this tick (`seen`: hinted or behind) is neither stat'ed nor counted. At most
+ *  file per `fileId`: the first path under a rostered home's `projects/` (behindFiles' test) that a stat measures, so a path
+ *  that vanished leaves the file's next path to be offered (review 1065 F4); a file with none is passed over. No registered
+ *  uuid runs no statement (review 1065 F10). A path already taken this tick (`seen`: hinted or behind) is neither stat'ed nor counted. At most
  *  `ctx.activeStatMax` (ACTIVE_STAT_MAX) lstats; before each lstat the budget is asked, and a spent one ends the pass with
  *  `complete` false. lib's decideActiveRead rules each file: a vanished path or a link is skipped silently (the hint and
  *  the scan own it), anything else changed is taken. */
 function activeFiles(db, ctx, seen, budget) {
   const uuids = [...registeredUuids(ctx.home)];
+  // No registered uuid: no row can name one, so the statement is not run (review 1065 F10).
+  if (uuids.length === 0) return { files: [], complete: true };
   const files = [];
   const stat = ctx.activeStat ?? statActive;
   const max = ctx.activeStatMax ?? ACTIVE_STAT_MAX;
@@ -5143,8 +5146,7 @@ function activeFiles(db, ctx, seen, budget) {
     if (fileIds.has(row.fileId)) continue;
     const home = ctx.homes.find((h) => row.path.startsWith(`${h}/projects/`));
     if (home === undefined) continue;
-    fileIds.add(row.fileId);
-    if (seen.has(row.path)) continue;
+    if (seen.has(row.path)) { fileIds.add(row.fileId); continue; }   // taken this tick already: the file's other paths are not offered
     if (statted >= max) break;
     if (budget !== null && !budgetLeft(budget)) return { files, complete: false };
     statted += 1;
@@ -5154,6 +5156,9 @@ function activeFiles(db, ctx, seen, budget) {
       nowMs: ctx.nowMs,
       tornStaleMs: TORN_STALE_MS,
     });
+    // The file is taken only after a verdict that measured it: a first path that vanished or is no regular file ('skip') leaves
+    // the file's next path to be offered (review 1065 F4).
+    if (verdict !== 'skip') fileIds.add(row.fileId);
     if (verdict === 'read') files.push({ path: row.path, uuid: row.uuid, home });
   }
   return { files, complete: true };
@@ -6922,17 +6927,12 @@ export function writeOpMarker(P, verb, nowMs) {
 //        empty.
 
 /** What lstat says a recall-off path is: 'absent', 'dir', 'link', 'file', 'special' (a FIFO, a socket, a device) or
- *  'unmeasured' (any other failure). It never follows a link. */
-function recallOffKind(p) {
-  let st;
-  try {
-    st = lstatSync(p);
-  } catch (e) {
-    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? 'absent' : 'unmeasured';
-  }
-  if (st.isSymbolicLink()) return 'link';
-  if (st.isDirectory()) return 'dir';
-  return st.isFile() ? 'file' : 'special';
+ *  'unmeasured' (any other failure). It never follows a link. The measurement is card.mjs's lstatKind, the one lstat-kind
+ *  predicate of the history tree; this keeps the recall-off lines' own word for what it calls 'other' (W3-1 Task 1B: the merge
+ *  of the two predicates, a carry of W2-1's reviews). */
+export function recallOffKind(p) {
+  const kind = lstatKind(p);
+  return kind === 'other' ? 'special' : kind;
 }
 
 /** The words a recall-off path's kind is named with in a line. */

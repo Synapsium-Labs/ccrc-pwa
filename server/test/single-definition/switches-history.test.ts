@@ -347,10 +347,10 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // writer's shape.
   const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
     ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
-    ['history-steer-off', ['ccd/history/lib.mjs']],
+    ['history-steer-off', ['ccd/history/lib.mjs', 'ccd/session-hook.sh']],
     ['history-steer-live', ['ccd/history/lib.mjs']],
     ['history-max-gb', ['ccd/history/lib.mjs']],
-    ['steer-on', ['ccd/history/lib.mjs']],
+    ['steer-on', ['ccd/history/lib.mjs', 'ccd/session-hook.sh']],
     ['headless-on', ['ccd/history/lib.mjs']],
   ];
   /** W1-B2: the skill's text joins the corpus with the skill (spec §9.11 O13 names "every bash, .mjs or skill
@@ -575,7 +575,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
   const EV_MJS = /\bev\s*:\s*['"`]([A-Za-z]+)['"`]/g;
   /** SPOOL_EVENTS members whose emitter ships in a later PR. A member found emitted while listed here reds, so
    *  the PR that adds the emitter removes its line. */
-  const PENDING_EMITTERS: Record<string, string> = { steer: 'W3 (the steering hook)' };
+  const PENDING_EMITTERS: Record<string, string> = {};
   type Lib = Record<string, unknown>;
   const lib = async (): Promise<Lib> => (await import('../../../ccd/history/lib.mjs')) as unknown as Lib;
 

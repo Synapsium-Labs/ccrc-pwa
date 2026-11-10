@@ -6,7 +6,7 @@
 //
 // Linux-only (O24): the sweep's timer never installs on the Darwin arm, and
 // the shim needs util-linux `flock`.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,7 +17,9 @@ import {
 } from './historyHelpers.js';
 import { SCHEMA_VERSION, STATFS_DEADLINE_MS, historyPaths } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta, openWriter, userVersion } from '../../ccd/history/store.mjs';
-import { parseSweepArgv, recordRecallOff } from '../../ccd/history/sweep.mjs';
+import { candidateFiles, makeIngestCtx, newBudget, parseSweepArgv, recallOffKind, recordRecallOff } from '../../ccd/history/sweep.mjs';
+import { lstatKind } from '../../ccd/history/card.mjs';
+import { mkTmp } from './tmpHelpers.js';
 import { readFileSync as readUnitText } from 'node:fs';
 import { join as joinUnitPath, resolve as resolveUnitPath } from 'node:path';
 
@@ -885,4 +887,153 @@ describe('W2-D43: the drain skips the recall_off_stale bump for a line carrying 
     expect(arms(), 'CONTROL: the arm-less line is received too').toEqual(['treatment', null]);
     expect(counters(box)['recall_off_stale'], 'CONTROL: and it bumps once').toBe(1);
   }, 120_000);
+});
+
+// ── W3-1 Task 1B Step 5: the carries on sweep.mjs ───────────────────────────────────────────────────────────────────────
+// Review 1065 F4 and F10 (the between-scans pass, activeFiles) and the recallOffKind merge. In-process, against a fixture HOME and
+// a hand-built store: `candidateFiles(db, ctx, false)` is the non-scan tick's candidate list, whose active half is activeFiles.
+describe('the between-scans pass takes a file only after a non-skip verdict, and runs no statement with no registered uuid (reviews 1065 F4, F10)', () => {
+  const U = 'd1e00000-1111-4111-8111-111111111111';
+  const fixture = (registered: boolean) => {
+    const home = mkTmp('ccrc-hist-sweep-active-');
+    createStore(home);
+    const P = historyPaths(home);
+    const db = openWriter(P.dbFile);
+    const p1 = path.join(home, 'projects', 'a-slug', `${U}.jsonl`);
+    const p2 = path.join(home, 'projects', 'b-slug', `${U}.jsonl`);
+    db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (1, ?, '')").run(U);
+    db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, size, mtime_ns, offset, status, parser_version) VALUES (1, 1, 1, 1, 10, 5, 10, 'live', 1)").run();
+    db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, 1, 1), (?, 1, 1)').run(p1, p2);
+    if (registered) {
+      fs.mkdirSync(P.reg, { recursive: true });
+      fs.writeFileSync(path.join(P.reg, 'claude-demo.uuid'), U);
+    }
+    return { home, db, p1, p2 };
+  };
+  const statOf = (ino: bigint) => ({ isFile: true, dev: 1n, ino, size: 10, mtimeNs: 5n });
+
+  it('activeFiles adds a file only after a non-skip verdict: a file whose first path vanished while a second path lives is taken in this tick', () => {
+    const f = fixture(true);
+    try {
+      const ctx = makeIngestCtx(f.home, [f.home], Date.now(), null) as Record<string, unknown>;
+      const stats: string[] = [];
+      ctx['activeStat'] = (p: string): unknown => { stats.push(p); return p === f.p1 ? null : statOf(2n); };   // p1 vanished; p2 stands at another inode
+      const r = candidateFiles(f.db, ctx, false) as { files: Array<{ path: string }> };
+      expect(stats, 'the first path was stat\'ed and skipped, then the second').toEqual([f.p1, f.p2]);
+      expect(r.files.map((x) => x.path), 'the live path is taken').toEqual([f.p2]);
+    } finally { closeWriter(f.db); }
+  });
+
+  it('CONTROL: a file whose first path is live is taken once, and its second path is not stat\'ed', () => {
+    const f = fixture(true);
+    try {
+      const ctx = makeIngestCtx(f.home, [f.home], Date.now(), null) as Record<string, unknown>;
+      const stats: string[] = [];
+      ctx['activeStat'] = (p: string): unknown => { stats.push(p); return statOf(2n); };
+      const r = candidateFiles(f.db, ctx, false) as { files: Array<{ path: string }> };
+      expect(stats).toEqual([f.p1]);
+      expect(r.files.map((x) => x.path)).toEqual([f.p1]);
+    } finally { closeWriter(f.db); }
+  });
+
+  it('a file one of whose two paths was already taken this tick is not offered again by its other path (the seen-path half, review 1732 A5)', () => {
+    const f = fixture(true);
+    try {
+      // The spool hints `claude-demo`, whose registered uuid is U, so the hinted half discovers U's files on disk: only p1
+      // stands there, so this tick takes p1 and not p2. The active pass then meets p1 (seen) and must not offer p2.
+      fs.mkdirSync(path.dirname(f.p1), { recursive: true });
+      fs.writeFileSync(f.p1, '');
+      const P = historyPaths(f.home);
+      fs.mkdirSync(P.draining, { recursive: true });
+      fs.writeFileSync(path.join(P.draining, 'claude-demo.1.1.jsonl'), '');
+      const ctx = makeIngestCtx(f.home, [f.home], Date.now(), null) as Record<string, unknown>;
+      const stats: string[] = [];
+      ctx['activeStat'] = (p: string): unknown => { stats.push(p); return statOf(2n); };   // p2 would read as changed
+      const r = candidateFiles(f.db, ctx, false) as { files: Array<{ path: string }> };
+      expect(r.files.map((x) => x.path), 'the hinted path is taken, and the file is not offered again by p2').toEqual([f.p1]);
+      expect(stats, 'neither path is stat\'ed: p1 was taken, and its file with it').toEqual([]);
+    } finally { closeWriter(f.db); }
+  });
+
+  /** Counts the executions of the one statement whose text names the registered-uuid join. */
+  const spyActiveRows = (db: DatabaseSync): { spy: DatabaseSync; runs: () => number } => {
+    let n = 0;
+    const spy = new Proxy(db, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop, target) as unknown;
+        if (typeof v !== 'function') return v;
+        if (prop !== 'prepare') return (v as (...a: unknown[]) => unknown).bind(target);
+        return (sql: string) => {
+          const st = (v as (q: string) => object).call(target, sql);
+          if (!sql.includes('json_each(?)') || !sql.includes('DENSE_RANK()')) return st;
+          return new Proxy(st, {
+            get(t, p) {
+              const m = Reflect.get(t, p, t) as unknown;
+              if (typeof m !== 'function') return m;
+              return (...a: unknown[]) => { if (p === 'all') n += 1; return (m as (...x: unknown[]) => unknown).apply(t, a); };
+            },
+          });
+        };
+      },
+    }) as DatabaseSync;
+    return { spy, runs: () => n };
+  };
+
+  it('activeRows is not run when no uuid is registered: an empty registry runs no activeRows statement', () => {
+    const f = fixture(false);
+    try {
+      const ctx = makeIngestCtx(f.home, [f.home], Date.now(), null) as Record<string, unknown>;
+      ctx['activeStat'] = (): unknown => { throw new Error('nothing is registered: nothing is stat\'ed'); };
+      const { spy, runs } = spyActiveRows(f.db);
+      const r = candidateFiles(spy, ctx, false) as { files: unknown[]; complete: boolean };
+      expect(runs()).toBe(0);
+      expect(r).toMatchObject({ files: [], complete: true });
+    } finally { closeWriter(f.db); }
+  });
+
+  it('CONTROL: with a registered uuid the same pass runs the statement once', () => {
+    const f = fixture(true);
+    try {
+      const ctx = makeIngestCtx(f.home, [f.home], Date.now(), null) as Record<string, unknown>;
+      ctx['activeStat'] = (): unknown => null;
+      const { spy, runs } = spyActiveRows(f.db);
+      candidateFiles(spy, ctx, false);
+      expect(runs()).toBe(1);
+    } finally { closeWriter(f.db); }
+  });
+});
+
+describe('one lstat-kind predicate answers both callers (the recallOffKind merge, W3-1 Task 1B Step 5)', () => {
+  let dir = '';
+  let d = '';
+  let file = '';
+  let link = '';
+  let fifo = '';
+  beforeAll(() => {
+    dir = mkTmp('ccrc-hist-sweep-kind-');
+    d = path.join(dir, 'd');
+    file = path.join(dir, 'f');
+    link = path.join(dir, 'l');
+    fifo = path.join(dir, 'p');
+    fs.mkdirSync(d);
+    fs.writeFileSync(file, 'x');
+    fs.symlinkSync(d, link);   // a link to a DIRECTORY: a predicate that follows links answers 'dir'
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+  });
+  // [name, path, card.mjs's word (lstatKind)] ; sweep.mjs's word is the same but for 'other' -> 'special'. Paths are thunks: the dir exists only after beforeAll.
+  const rows: Array<[string, () => string, string]> = [
+    ['a directory', () => d, 'dir'],
+    ['a file', () => file, 'file'],
+    ['a link', () => link, 'link'],
+    ['a FIFO', () => fifo, 'other'],
+    ['an absent path', () => path.join(dir, 'nope'), 'absent'],
+    ['an unmeasurable one (a path below a file: ENOTDIR)', () => path.join(file, 'below'), 'unmeasured'],
+  ];
+  for (const [name, pathOf, kind] of rows) {
+    it(`${name}: card.mjs's lstatKind answers ${kind}, sweep.mjs's recallOffKind ${kind === 'other' ? 'special' : kind}`, () => {
+      const p = pathOf();
+      expect(lstatKind(p)).toBe(kind);
+      expect(recallOffKind(p)).toBe(kind === 'other' ? 'special' : kind);
+    });
+  }
 });

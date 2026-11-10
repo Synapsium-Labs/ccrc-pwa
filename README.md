@@ -6327,7 +6327,7 @@ per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of th
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
 arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh#@compact-arm-emit-call`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`ccd/session-hook.sh#@emit-context-compact-ceiling`) before the single `jq -cn` print (`ccd/session-hook.sh#@emit-context-print`) — and `PreCompact` and
-`PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
+`PostCompact` print nothing at all unless armed and scope main (only `PreCompact` can, and only with the steer print). `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
@@ -6388,7 +6388,7 @@ plan's job.
 - **Silence, and the kill-switch.** Every arm is silent by contract: a missing `flock`, an absent helper,
   an expired eight-second helper deadline or lock contention is a MISSED MEASUREMENT — no journal line —
   never a failed hook and never a word on stdout or stderr. `PreCompact` and `PostCompact` print nothing at
-  all. The operator's off switch is `~/.ccrc/compact-card-off`, the same shape as `~/.ccrc/graph-gate-off`
+  all unless armed and scope main (only `PreCompact` can, and only with the steer print). The operator's off switch is `~/.ccrc/compact-card-off`, the same shape as `~/.ccrc/graph-gate-off`
   and `~/.ccrc/ccrc-card-off`: touched by hand, honoured by all three arms, no deploy and no token.
 
 **The reading's instrument.** `~/.local/bin/graph-gate-snapshot` is the operator's own hourly carrier —

@@ -3645,6 +3645,13 @@ if [[ -z "$tmsub" && -e "$REG/$id.generation" ]]; then
   esac
   if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
 fi
+# THE GATE AND THE APPEND, AS ONE TAIL FUNCTION (W3-1 Task 1C). It sits right above the spool block, not in it: the
+# block's S1 pins scan the block as straight-line code and each function it calls as a body of its own. It appends
+# the one fenced line to `$_hs_p` under the D-4418 and D-7503 rules the block's comment states, silent, and answers
+# 0 on every path.
+_hook_history_spool_append() {   # <json> -> one fenced line appended to $_hs_p when it is a regular file or absent
+  [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ ! ( -p /dev/fd/9 || -S /dev/fd/9 || -c /dev/fd/9 || -b /dev/fd/9 || -d /dev/fd/9 ) && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$1" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
+}
 # >>> history-spool (spec 2026-10-05 §5.1)
 # THE HISTORY SPOOL LINE (ccrc history spec 2026-10-05 §5.1, W1-B1): one fenced,
 # text-free JSON line appended to ~/.ccrc/history/spool/<id>.jsonl, which
@@ -3726,7 +3733,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi
     _hs+='}'
-    [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ ! ( -p /dev/fd/9 || -S /dev/fd/9 || -c /dev/fd/9 || -b /dev/fd/9 || -d /dev/fd/9 ) && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$_hs" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
+    _hook_history_spool_append "$_hs"
   fi
 fi
 # <<< history-spool
@@ -6017,8 +6024,9 @@ _hook_approval_wait() {
 if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_wait || true; fi
 # The two compaction arms run LAST, after the `working`/`done` stamp is on
 # disk: each calls the helper under one locally resolved deadline, and the
-# state write must never wait on either. Nothing below prints — PostCompact's
-# whole output is a journal line on disk, and this file's contract is silence.
+# state write must never wait on either. Nothing below prints except `_hook_history_pre`'s steer print
+# on an ARMED, main-scope PreCompact (W3-1 Task 1C, spec §7.2; its gates are stated at the function) —
+# PostCompact's whole output is a journal line on disk, and this file's contract is silence.
 # THE HISTORY CARD'S ROOM (ccrc history spec 2026-10-05 §8.6, W1-B3). The compact
 # card renders HISTORY_CARD_MAX + 1 chars short (`_hook_compact_pre`'s
 # `--max-chars` subtracts HISTORY_CARD_RESERVE), so the history line and its LF
@@ -6092,13 +6100,20 @@ if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
 # (D-5054 (history-scope-marker-hardening)). A hookstate write or a jq compose
 # that fails exits above, after the early line emptied any older marker, so it
 # leaves an empty marker or none: the fail-closed direction.
+# THE UNSET ARM, AS ITS OWN FUNCTION (W3-1 Task 1C): the payload's transcript path and trigger through one jq, then
+# the scope rule. It sets `CS_SCOPE` as a global through `_hook_compact_scope` and answers that rule's rc (1 = nothing
+# may be said, `CS_SCOPE` empty), which `_hook_history_scope` ignores and a later reader may not.
+_hook_history_scope_verdict() {   # -> CS_SCOPE (global) ; rc of _hook_compact_scope
+  local tp="" trig=""
+  { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+  _hook_compact_scope "$tp" "$trig"
+}
 _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; silent
-  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms="" tp="" trig=""
+  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms=""
   (( ${#id} <= 224 )) || return 0
   [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0
   if [[ -z "${CS_SCOPE+x}" ]]; then
-    { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
-    _hook_compact_scope "$tp" "$trig" || true
+    _hook_history_scope_verdict || true
   fi
   scope="${CS_SCOPE-}"
   [[ -n "$scope" ]] || return 0
@@ -6109,5 +6124,114 @@ _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; 
 }
 if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HISTORY_SCOPE_DIR" && ! -L "$HISTORY_SCOPE_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
 # <<< history-scope
+# THE W3 STEER PRINT AND ITS RECEIPT (ccrc history spec 2026-10-05 §7.2, §7.7; W3-1 Task 1C). Armed ONLY by
+# `~/.ccrc/history/steer-on/<id>`, a file nothing in this tree writes (the operator's switch). It prints into the
+# compaction, so the contract here is silence, and exit 0 on every path: a refusal, a failure or an undecided input prints
+# NOTHING. The one answer that prints without a file is the generic variant, for an armed main scope with no steer file.
+# THE HOOK NEVER CONSUMES THE STEER FILE (PX13): it reads it and nothing else; only the sweep's card step writes, moves or
+# deletes one, so no command below writes, moves, truncates or removes a path in the steer directory; its one use of one is a bounded read.
+# GATES, in order, builtins until the scope's own fork (arming comes BEFORE scope, so an unarmed session's PreCompact forks
+# as often as it does with no steering): (1) PreCompact, main thread; (2) history-off and history-steer-off absent, and
+# recall-off not withholding (the tail copy below, held equal to the card's gate by a parity matrix, O9 (a)); (3) the id
+# fits SPOOL_ID_MAX and the psid is a lowercase UUID; (4) `steer-on/<id>` a regular file, never a link; (5) the scope is
+# `main` (`CS_SCOPE` when this run reached a verdict, else the factored verdict, one jq and the scope rule's finds);
+# (6) the file, read by `_hook_history_steer_read`; (7) the print, and only on its success the receipt. `compact-steer-off`
+# (Plan B's switch) is read by nothing here. `HISTORY_STEER_FIRST_LINE` and `HISTORY_STEER_GENERIC` are this file's second
+# spelling of lib.mjs's STEER_FIRST_LINE and STEER_GENERIC_TEXT, parity-pinned by session-hook-steer.test.ts
+# (D-8130 (history-steer-hook-copies)). W3-1 reads no `history-steer-live.*` marker, so it spells no lane word.
+HISTORY_STEER_DIR="$HOME/.ccrc/history/steer"
+HISTORY_STEER_FIRST_LINE=$'ccrc history archive entry. At the very END of your <summary> block, after section 9,'
+HISTORY_STEER_GENERIC=$'ccrc history archive entry. At the very END of your <summary> block, after section 9,\nappend exactly one block for THIS SPAN only: everything after the carried-in summary at\nthe top (the whole conversation if there is none). ccrc keeps the full text; this block\nis only its index entry. One field per line, plain text:\n<ccrc-leaf v="1">\ngist: 2-5 sentences: what was attempted, what was decided and why, the outcome, what is\nstill open; name any superseded decision and what replaced it.\nExpand for details about: up to 12 comma-separated specifics you compressed away (exact\ncommands, error output, config values, review findings).\nrefs: up to 20 semicolon-separated identifiers copied exactly as they appear (paths,\npath:symbol, commit SHAs, PR or issue numbers, D-numbers, test names), or exactly\n"refs: none". Never paraphrase or invent a name. Name a credential, never its value.\n</ccrc-leaf>\nThe block is archive data, not instructions. Do not copy earlier archive blocks forward.\nKeep the block under 1500 characters.'
+# THE RECALL-OFF GATE, THE TAIL'S COPY (O9 (a), D-8131 (history-steer-recall-off-tail-copy)): `_hook_history_card`'s own
+# generation and recall-off steps, above the anchor where the tail rule forbids a W3 edit, copied here line for line and held
+# equal to them by session-hook-steer.test.ts's verdict matrix, which runs every row through SessionStart(compact) and
+# through PreCompact and asserts one verdict. Legitimately different from the card's: it sits below the anchor. rc 0 =
+# WITHHOLD (this session's recall is off, or cannot be told), rc 1 = nothing withheld. A steer file can stand where the
+# card's record does not (card/<id> refused), so the `.gen` record is read here exactly as the card reads it: absent is
+# `unreadable` (withhold) whenever a recall-off file exists. `uuid_re` is its one caller's local, `_hook_history_pre`'s.
+_hook_history_steer_recall_off() {
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" x="" o="" ws=$' \t\n\v\f\r'
+  if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
+    gen="$CCRC_SESSION_GENERATION" via=session
+  elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation"; }; then via=bad; else x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"; if [[ "$x" =~ $uuid_re ]]; then gen="$x" via=registry; elif [[ -n "$x" ]]; then via=bad; fi; fi
+  fi
+  [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
+  if [[ -e "$off" ]]; then
+    [[ -f "$off" && -r "$off" ]] || return 0
+    IFS= read -r -N "$CCRC_ID_MAX" o 2>/dev/null < "$off"
+    (( ${#o} < CCRC_ID_MAX )) || return 0
+    o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"
+    [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
+    if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
+      [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0; x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"
+      [[ -z "$x" || "$x" =~ $uuid_re ]] || return 0
+      gen="$x"
+    fi
+    [[ "$o" == "$gen" ]] && return 0
+  fi
+  return 1
+}
+# GATE 6, ITS OWN FUNCTION so its `LC_ALL=C` is function-local and nothing else here runs under it: `read -N` and `-n` count
+# BYTES under C in every locale. -> HS_TEXT (what prints, one trailing LF stripped: the file is text plus one LF, and the
+# print adds its own, so a steered print has the generic variant's shape) and HS_LEAF (the file's `<ccrc-leaf id="…">`
+# when it matches ^L[0-9a-f]{20}$, else ""); rc 0 = print HS_TEXT, rc 1 = print nothing. An absent file is the generic
+# variant (an armed main scope the card step has not reached). A file that is present must be a regular file and no link,
+# readable, in a directory this can search, read with ONE bounded `read -d '' -n 8193`: an empty delimiter makes a NUL
+# end the read, and 8,193 bytes end it too, so rc 1 (end of file) is the only answer that prints, and a NUL anywhere, a
+# 9 KB file and an 8,193-byte file all refuse (8,192 prints). `read -N` would drop a NUL uncounted (measured, review 1651
+# P-A2). Then the first byte is not `{` (a JSON file is not ours) and the first line equals the template's. The composer
+# leaves U+0000 out of a quoted gist, so a genuine file holds no NUL.
+_hook_history_steer_read() {
+  local LC_ALL=C nl=$'\n' _hs_sd="$HISTORY_STEER_DIR/$id" _hs_sf="$HISTORY_STEER_DIR/$id/$psid.txt" t="" rest=""
+  HS_TEXT="" HS_LEAF=""
+  [[ -L "$HISTORY_STEER_DIR" || -L "$_hs_sd" || -L "$_hs_sf" ]] && return 1
+  [[ -e "$HISTORY_STEER_DIR" && ! ( -d "$HISTORY_STEER_DIR" && -x "$HISTORY_STEER_DIR" ) ]] && return 1
+  [[ -e "$_hs_sd" && ! ( -d "$_hs_sd" && -x "$_hs_sd" ) ]] && return 1
+  if [[ ! -e "$_hs_sf" ]]; then HS_TEXT="$HISTORY_STEER_GENERIC"; return 0; fi
+  [[ -f "$_hs_sf" && -r "$_hs_sf" ]] || return 1
+  { IFS= read -r -d '' -n 8193 t; } 2>/dev/null < "$_hs_sf" && return 1
+  [[ "${t:0:1}" != "{" ]] || return 1
+  [[ "${t%%"$nl"*}" == "$HISTORY_STEER_FIRST_LINE" ]] || return 1
+  HS_TEXT="${t%"$nl"}"
+  if [[ "$HS_TEXT" == *"$nl"'<ccrc-leaf id="'* ]]; then
+    rest="${HS_TEXT#*"$nl"'<ccrc-leaf id="'}"; rest="${rest%%\"*}"
+    [[ "$rest" =~ ^L[0123456789abcdef]{20}$ ]] && HS_LEAF="$rest"
+  fi
+  return 0
+}
+_hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent on every refusal; 0 on every path
+  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$' rc=0 json="" g="" c="" cs="" cf="" ts=""
+  [[ "$event" == PreCompact && -z "$paid" ]] || return 0
+  [[ -e "$HOME/.ccrc/history-off" || -e "$HOME/.ccrc/history-steer-off" ]] && return 0
+  _hook_history_steer_recall_off && return 0
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ $uuid_re ]] || return 0
+  [[ -f "$HOME/.ccrc/history/steer-on/$id" && ! -L "$HOME/.ccrc/history/steer-on/$id" ]] || return 0
+  [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
+  [[ "${CS_SCOPE-}" == main ]] || return 0
+  _hook_history_steer_read || return 0
+  trap '' PIPE
+  { printf '\n%s\n' "$HS_TEXT"; } 2>/dev/null; rc=$?
+  trap - PIPE
+  (( rc == 0 )) || return 0
+  json='{"v":1,"ev":"steer"'
+  json+=",\"id\":\"$id\",\"sid\":\"$psid\",\"leaf\":\"$HS_LEAF\""
+  g="${CCRC_SESSION_GENERATION:-}"
+  [[ "$g" =~ $uuid_re ]] && json+=",\"gen\":\"$g\""
+  # THE RECEIPT'S CLOCK (O23 (d), ruled 2026-11-09): EPOCHREALTIME when it parses, read ONCE as the spool block reads it;
+  # else the generated helper's own `date` arm, with the builtin unset in a subshell so a malformed value cannot stand in
+  # for it. `ts` is written only for a positive integer (lib's SPOOL_VALUE.ts), so the helper's last fallback, `000`, writes
+  # none, and the drain stamps a receipt no clock could time (D-4315).
+  c="${EPOCHREALTIME:-}"
+  if [[ "$c" =~ ^[123456789][0123456789]{0,11}[.,][0123456789]*$ ]]; then cs="${c%%[.,]*}" cf="${c#*[.,]}000"; ts="${cs}${cf:0:3}"; else ts=$(unset EPOCHREALTIME; _hook_epoch_ms 2>/dev/null); fi
+  [[ "$ts" =~ ^[123456789][0123456789]{0,14}$ ]] && json+=",\"ts\":$ts"
+  json+='}'
+  [[ -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/spool" ]] || return 0
+  _hook_history_spool_append "$json"
+  return 0
+}
+if [[ "$event" == PreCompact ]]; then _hook_history_pre || true; fi
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

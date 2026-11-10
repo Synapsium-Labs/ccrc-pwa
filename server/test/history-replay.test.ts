@@ -11737,8 +11737,8 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     'node:fs': '{ lstatSync, readFileSync, realpathSync, writeFileSync }',
     'node:path': 'path',
     'node:url': '{ fileURLToPath, pathToFileURL }',
-    '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, sha256Hex }',
-    '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
+    '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor }',
+    '../ccd/history/store.mjs': '{ StoreError, blobPlainTextMeasured, openReader, userVersion }',
     '../ccd/history/derive.mjs': '{ epochOfUuid, holdingCopyOf }',
     '../ccd/history/recall.mjs': '{ expandEntryBody }',
     './history-gate.mjs': '{ ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf, windowOf }',
@@ -11762,7 +11762,7 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     w6cExpect(importViolations(real), 'the counter itself').toEqual([]);
     const variants: Array<[string, string]> = [
       ['derive', real.replace('import { StoreError', "import { keptOf } from '../ccd/history/derive-extra.mjs';\nimport { StoreError")],
-      ['openWriter', real.replace('{ StoreError, openReader, userVersion }', '{ StoreError, openReader, openWriter, userVersion }')],
+      ['openWriter', real.replace('{ StoreError, blobPlainTextMeasured, openReader, userVersion }', '{ StoreError, blobPlainTextMeasured, openReader, openWriter, userVersion }')],
       ['missing', real.replace("import { fileURLToPath, pathToFileURL } from 'node:url';\n", '')],
       ['dynamic', `${real}\nconst m = await import('node:zlib');\n`],
       ['env', real.replace('process.exitCode = main(process.argv.slice(2));', 'process.exitCode = main(process.argv.slice(2), process.env);')],
@@ -13280,7 +13280,7 @@ w6cDescribe('W2-6 Task 3: combine, the nodes\' reports summed into one arm compa
     const foreign = w6cInProcess(() => W6C_T3.combineCommand({ ...flags, store: '/home/u/x.db', out: `${out}-3` }));
     w6cExpect(foreign.refusal).toEqual({ word: 'args-invalid', detail: '--store is not a combine flag' });
     w6cExpect([w6cFs.existsSync(`${out}-2`), w6cFs.existsSync(`${out}-3`)]).toEqual([false, false]);
-    w6cExpect([...W6C_T3.COUNTER_SUBCOMMANDS]).toEqual(['count', 'combine']);
+    w6cExpect([...W6C_T3.COUNTER_SUBCOMMANDS]).toEqual(['count', 'combine', 'spike']);
   });
 });
 

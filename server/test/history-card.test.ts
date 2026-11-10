@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   makeHistoryBox, runSweep, runDriver, plantSession, plantTranscript, spoolLine, openStoreRO, counters, skipOnDarwin,
-  recoverRow, PRELOADS, type DriverDeps, type HistoryBox,
+  recoverRow, rewindStoreToV1, PRELOADS, type DriverDeps, type HistoryBox,
 } from './historyHelpers.js';
 
 /** Spec §8.6's grammar, as the spec spells it. */
@@ -1733,4 +1733,768 @@ describe("purged sessions' scope markers and card directories go 7 days on, at t
     expect(fs.statSync(path.join(box.root, 'spool')).isDirectory()).toBe(true);
     expect(counters(box)['scope_files_purged']).toBe(1);
   }, 240_000);
+});
+
+// ===========================================================================
+// W3 Task 1B: the steer file, a second artifact of the card's per-session step (spec 2026-10-05 §7.1, §9.4; plan
+// 2026-10-29-ccrc-history-w3-steering.md Task 1B). `steer/<id>/<uuid>.txt` is decided by the card's own lib deciders
+// (decideCardFile with artifact 'steer', decideCardWithdraw, decideCardGenFile's record) and acted on in oneCard from the
+// card's own prediction, atEof, mayWrite and recorded. Each case below is the card's own, applied to the steer file.
+// ===========================================================================
+const steerPath = (box: HistoryBox, id: string, uuid: string): string => path.join(box.root, 'steer', id, `${uuid}.txt`);
+const steerOf = (box: HistoryBox, id: string, uuid: string): string | null =>
+  (fs.existsSync(steerPath(box, id, uuid)) ? fs.readFileSync(steerPath(box, id, uuid), 'utf8') : null);
+/** Every steer counter (and the directory refusal), so a case that expects none reads `{}`. */
+const steerCountersC = (box: HistoryBox): Record<string, number> =>
+  Object.fromEntries(Object.entries(counters(box)).filter(([k]) => k.startsWith('steer_') || k === 'history_dir_refused:steer'));
+const NO_PAIRS = libCard.makePairIndex([]);
+/** The text a correct steer file holds: lib's composition for the leaf (and a previous leaf when one is quotable), and one LF. */
+const expectedSteer = (leaf: string, prev: libCard.SteerPrev | null = null): string =>
+  `${libCard.composeSteerFile({ leafId: leaf, prev, children: [], pairIdx: NO_PAIRS }).text}\n`;
+
+describe("the steer file rides the card's lifecycle: written, consumed, withdrawn and collected with the card (spec 7.1, 9.4; W3 Task 1B)", () => {
+  skipOnDarwin();
+
+  it("the steer file's id equals the card's predicted leaf id: an ordinary next span, a first span, and a fork (no file, O6 (a))", () => {
+    // An ordinary next span: the last boundary's head.
+    const box = makeHistoryBox('ccrc-hist-steer-parity-');
+    const [ID, U] = ['steer-parity', sidC(0x1b01)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0x1b01, sessionId: U, startMs: T0C });
+    plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    settleC(box);
+    pokeC(box, ID);
+    const next = libCard.leafId(ID, U, s.headUuids[0]!);
+    const file = steerOf(box, ID, U);
+    expect(file, 'the ordinary span').toBe(expectedSteer(next));
+    expect(libCard.steerLeafOf(file!.replace(/\n$/, '')), 'the id the file names').toBe(next);
+    expect(next.startsWith(printed(cardOf(box, ID, U)!).leaf), "it is the card's own leaf").toBe(true);
+    expect(fs.statSync(steerPath(box, ID, U)).mode & 0o777).toBe(0o600);
+    for (const d of [path.join(box.root, 'steer'), path.join(box.root, 'steer', ID)]) expect(fs.statSync(d).mode & 0o777, d).toBe(0o700);
+    expect(steerCountersC(box)).toEqual({ steer_written: 1 });
+    // A first span: no boundary yet, the copy's first row.
+    const [ID1, U1] = ['steer-parity-first', sidC(0x1b02)];
+    const s1 = compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b02, sessionId: U1, startMs: T0C });
+    plantC(box, ID1, U1, s1.rows.slice(0, cutBefore(s1, 0)));
+    settleC(box);
+    pokeC(box, ID1);
+    const first = libCard.leafId(ID1, U1, firstUuidC(s1));
+    expect(steerOf(box, ID1, U1), 'the first span').toBe(expectedSteer(first));
+    expect(first.startsWith(printed(cardOf(box, ID1, U1)!).leaf)).toBe(true);
+    // A fork: the plain id is bound to another boundary, so the card skips fork-qualified and no steer file stands.
+    const [ID2, U2] = ['steer-parity-fork', sidC(0x1b03)];
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b03, sessionId: U2, startMs: T0C });
+    const other = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0x1b04, sessionId: U2, startMs: T0C + 600_000 });
+    const a = plantTranscript(box, 'claude', CARD_SLUG, U2, [...pre.rows, ...other.rows]);
+    const hourAgo = (Date.now() - 3_600_000) / 1000;
+    fs.utimesSync(a, hourAgo, hourAgo);
+    plantC(box, ID2, U2, [...pre.rows, userRow({ uuid: sidC(0xbb03), ts: new Date(T0C + 900_000).toISOString(), sessionId: U2, text: 'fork b' })], 'claude-a');
+    settleC(box);
+    pokeC(box, ID2);
+    expect(cardOf(box, ID2, U2), 'the card skipped').toBeNull();
+    expect(counters(box)['card_skipped:fork-qualified']).toBeGreaterThanOrEqual(1);
+    expect(steerOf(box, ID2, U2), 'so no steer file stands').toBeNull();
+    expect(steerCountersC(box)).toEqual({ steer_written: 2 });
+  }, 240_000);
+
+  it('the steer file is written only at end-of-file with budget left, and a spent budget still consumes it', () => {
+    const box = makeHistoryBox('ccrc-hist-steer-eof-');
+    const [ID, U] = ['steer-eof', sidC(0x1b11)];
+    const s = compactionSequence({ n: 3, trigger: 'manual', seed: 0x1b11, sessionId: U, startMs: T0C });
+    const torn = (n: number): string => JSON.stringify(userRow({ uuid: sidC(0xbb110 + n), ts: new Date(T0C + 3_600_000 + n).toISOString(), sessionId: U, text: `still being written ${n}` }));
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    fs.appendFileSync(p, torn(1));
+    settleC(box);
+    pokeC(box, ID);
+    expect(leavesC(box, U), 'boundary 0 is final').toHaveLength(1);
+    expect(steerOf(box, ID, U), 'never at end-of-file: no steer file').toBeNull();
+    fs.appendFileSync(p, '\n');
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U)).toBe(expectedSteer(libCard.leafId(ID, U, s.headUuids[0]!)));
+    // A spent budget: A's steer file is consumed by the boundary this pass ingests and is not rewritten; B's, which no
+    // boundary reached, is withdrawn under the budget word.
+    const [B, UB] = ['steer-eof-b', sidC(0x1b12)];
+    plantC(box, B, UB, compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b12, sessionId: UB, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, B);
+    expect(steerOf(box, B, UB), 'CONTROL: B has a steer file').not.toBeNull();
+    const before = steerCountersC(box);
+    appendRows(p, s.rows.slice(cutBefore(s, 1), cutBefore(s, 2)));
+    fs.appendFileSync(p, '\n');
+    spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID });
+    const r = runDriver(box, { budgetBytes: 1 });
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(steerOf(box, ID, U), "A's steer file was consumed and deleted").toBeNull();
+    expect(steerOf(box, B, UB), "B's steer file is withdrawn").toBeNull();
+    const after = steerCountersC(box);
+    expect(after['steer_written'], 'no write past the budget').toBe(before['steer_written']);
+    expect((after['steer_consumed'] ?? 0) - (before['steer_consumed'] ?? 0), 'the consumption is counted').toBe(1);
+    expect(after['steer_withdrawn:budget'], "B's alone: A's was already consumed").toBe(1);
+  }, 240_000);
+
+  it('a consumed steer file is deleted off end-of-file, and the next pass at end-of-file re-mints it with the new predicted id', () => {
+    const box = makeHistoryBox('ccrc-hist-steer-remint-');
+    const [ID, U] = ['steer-remint', sidC(0x1b21)];
+    const s = compactionSequence({ n: 3, trigger: 'manual', seed: 0x1b21, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 0)));
+    settleC(box);
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U), 'the first span').toBe(expectedSteer(libCard.leafId(ID, U, firstUuidC(s))));
+    appendRows(p, s.rows.slice(cutBefore(s, 0), cutBefore(s, 1)));
+    fs.appendFileSync(p, JSON.stringify(userRow({ uuid: sidC(0xbb21), ts: new Date(T0C + 3_600_000).toISOString(), sessionId: U, text: 'still being written' })));
+    pokeC(box, ID);
+    derivedC(box);
+    expect(leavesC(box, U), 'boundary 0 ingested').toHaveLength(1);
+    expect(steerOf(box, ID, U), 'consumed off end-of-file: deleted, not rewritten').toBeNull();
+    expect(steerCountersC(box)).toMatchObject({ steer_written: 1, steer_consumed: 1 });
+    fs.appendFileSync(p, '\n');
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U), 'the next pass at end-of-file re-mints it, naming the next leaf')
+      .toBe(expectedSteer(libCard.leafId(ID, U, s.headUuids[0]!)));
+    expect(steerCountersC(box)).toMatchObject({ steer_written: 2, steer_consumed: 1 });
+  }, 240_000);
+
+  // Every reason in CARD_WITHDRAW_REASONS, each driven through its real pass. A withdrawal unlinks the steer file with the
+  // card's prediction under the card's own verdict, counted `steer_withdrawn:<reason>` (or printed as a line when no DB is
+  // open), and the next pass at end-of-file re-mints it. The hook half (what PreCompact prints after one) is Task 1C's.
+  describe('every withdrawal reason unlinks the steer file with the card\'s prediction', () => {
+    const GiB = 1024 ** 3;
+    interface Planted { id: string; uuid: string; path: string; s: SeqC }
+    interface Drive {
+      /** Runs the withdrawing pass; answers what to undo and what it printed. */
+      run(box: HistoryBox, c: { id: string; uuid: string; path: string; s: SeqC; extra: Planted | null }): { stdout: string; restore?: () => void };
+      /** Plants what the pass needs beside the subject, before the counters are read. */
+      prepare?(box: HistoryBox): Planted;
+      /** The consumptions the pass makes of its own besides the withdrawal (default 0). */
+      consumed?: number;
+      /** A reason with no DB open prints its count instead of counting it. */
+      printed?: boolean;
+      /** The next leaf the re-mint names: head 0 unless the drive appended boundary 1 for the pass to ingest. */
+      head?: 0 | 1;
+      /** The drive appends boundary 1's rows before the pass. */
+      appends?: boolean;
+      skipIfRoot?: boolean;
+    }
+    const sweepOut = (r: { code: number | null; stdout: string; stderr: string }, code = 0): string => {
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(code);
+      return r.stdout;
+    };
+    const DRIVES: Record<string, Drive> = {
+      'at-cap': {
+        run(box) {
+          const cap = path.join(box.home, '.ccrc', 'history-max-gb');
+          fs.writeFileSync(cap, '1\n');
+          const r = runDriver(box, { sizeBytes: 2 * GiB });
+          expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+          expect(counters(box)['capture_paused_at_cap'], 'CONTROL: the pass was a cap pause').toBeGreaterThanOrEqual(1);
+          return { stdout: r.stdout, restore: () => fs.unlinkSync(cap) };
+        },
+      },
+      'low-disk': {
+        run(box) {
+          const r = runSweep(box, [], { env: { HISTORY_TEST_STATFS: `${FLOOR_C - 4096}:${FS_C}` } });
+          expect(counters(box)['capture_paused_low_disk'], 'CONTROL: the pass was a floor pause').toBeGreaterThanOrEqual(1);
+          return { stdout: sweepOut(r) };
+        },
+      },
+      'floor-stop': {
+        appends: true,
+        run(box, c) {
+          spoolLine(box, c.id, { v: 1, ev: 'Stop', id: c.id });
+          const r = runSweep(box, [], { env: { HISTORY_TEST_STATFS_AFTER: `1:1:${2 ** 40}` } });
+          return { stdout: sweepOut(r) };
+        },
+      },
+      'roster-unreadable': {
+        run(box) { return { stdout: sweepOut(runSweep(box, ['--roster-unreadable'])) }; },
+      },
+      budget: {
+        // The run's one byte is spent by a second session's ingest, so the card step's own slice is spent when it starts;
+        // that session's own steer file is consumed by the boundary the pass ingests, never withdrawn.
+        consumed: 1,
+        prepare(box) {
+          const [A, UA] = ['steer-wd-budget-a', sidC(0x1b9a)];
+          const sa = compactionSequence({ n: 2, trigger: 'manual', seed: 0x1b9a, sessionId: UA, startMs: T0C });
+          const pa = plantC(box, A, UA, sa.rows.slice(0, cutBefore(sa, 1)));
+          settleC(box);
+          pokeC(box, A);
+          return { id: A, uuid: UA, path: pa, s: sa };
+        },
+        run(box, c) {
+          const a = c.extra!;
+          appendRows(a.path, a.s.rows.slice(cutBefore(a.s, 1)));
+          spoolLine(box, a.id, { v: 1, ev: 'Stop', id: a.id });
+          const r = runDriver(box, { budgetBytes: 1 });
+          expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+          return { stdout: r.stdout };
+        },
+      },
+      recovering: {
+        run(box) {
+          const db = openWriter(libCard.historyPaths(box.home).dbFile);
+          try {
+            db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+          } finally {
+            closeWriter(db);
+          }
+          let out = '';
+          for (let passes = 1; (recoverRow(box)?.completed_ms ?? null) === null; passes += 1) {
+            expect(passes, 'the recovery step completes within five passes').toBeLessThanOrEqual(5);
+            out += sweepOut(runSweep(box));
+          }
+          return { stdout: out };
+        },
+      },
+      migrating: {
+        run(box) {
+          const P = libCard.historyPaths(box.home);
+          rewindStoreToV1(P.dbFile);
+          const out = sweepOut(runSweep(box));
+          expect(out, 'CONTROL: the pass migrated').toContain('history-sweep: migrated');
+          return { stdout: out };
+        },
+      },
+      held: {
+        run(box) {
+          const P = libCard.historyPaths(box.home);
+          const token = fs.readFileSync(P.writer);
+          fs.rmSync(P.writer);
+          const out = sweepOut(runSweep(box));
+          expect(out, 'CONTROL: the pass held on the writer token').toContain('history-sweep: held');
+          return { stdout: out, restore: () => fs.writeFileSync(P.writer, token) };
+        },
+      },
+      unreachable: {
+        printed: true,
+        run(box) {
+          const out = sweepOut(runSweep(box, [], { env: { HISTORY_TEST_STATFS: 'hang' } }));
+          expect(out, 'CONTROL: the pass held on the volume').toContain('history-sweep: store-unreachable');
+          return { stdout: out };
+        },
+      },
+      refused: {
+        printed: true,
+        run(box) {
+          const P = libCard.historyPaths(box.home);
+          const id = fs.readFileSync(P.storeId);
+          fs.writeFileSync(P.storeId, `${sidC(0xd2)}\n`);
+          const out = sweepOut(runSweep(box), 5);
+          expect(out).toContain('history-sweep: store-mismatch');
+          return { stdout: out, restore: () => fs.writeFileSync(P.storeId, id) };
+        },
+      },
+      unbound: {
+        printed: true,
+        run(box) {
+          const P = libCard.historyPaths(box.home);
+          const id = fs.readFileSync(P.storeId);
+          fs.rmSync(P.storeId);
+          const out = sweepOut(runSweep(box), 5);
+          expect(out).toContain('history-sweep: store-unbound');
+          return { stdout: out, restore: () => fs.writeFileSync(P.storeId, id) };
+        },
+      },
+      'copy-skipped': {
+        appends: true,
+        skipIfRoot: true,
+        run(box, c) {
+          const mode = fs.statSync(c.path).mode & 0o777;
+          fs.chmodSync(c.path, 0o000);
+          pokeC(box, c.id);
+          return { stdout: '', restore: () => fs.chmodSync(c.path, mode) };
+        },
+      },
+    };
+
+    it('the table covers every word in CARD_WITHDRAW_REASONS, once', () => {
+      expect(Object.keys(DRIVES).sort()).toEqual([...libCard.CARD_WITHDRAW_REASONS].sort());
+    });
+
+    for (const [reason, drive] of Object.entries(DRIVES)) {
+      it.skipIf(drive.skipIfRoot === true && process.getuid?.() === 0)(`${reason}: both files are gone, steer_withdrawn:${reason} is counted (or printed), and the next run-arm pass at end-of-file re-mints it`, () => {
+        const box = makeHistoryBox(`ccrc-hist-steer-wd-${reason}-`);
+        const [ID, U] = [`steer-wd-${reason}`, sidC(0x1c00 + Object.keys(DRIVES).indexOf(reason))];
+        const s = compactionSequence({ n: 3, trigger: 'manual', seed: 0x1c00 + Object.keys(DRIVES).indexOf(reason), sessionId: U, startMs: T0C });
+        const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+        settleC(box);
+        pokeC(box, ID);
+        const standing = expectedSteer(libCard.leafId(ID, U, s.headUuids[0]!));
+        expect(steerOf(box, ID, U), 'CONTROL: a plain pass leaves the steer file in place').toBe(standing);
+        expect(cardOf(box, ID, U), 'CONTROL: and the card').not.toBeNull();
+        if (drive.appends === true) appendRows(p, s.rows.slice(cutBefore(s, 1), cutBefore(s, 2)));
+        const extra = drive.prepare?.(box) ?? null;
+        const before = steerCountersC(box);
+        const done = drive.run(box, { id: ID, uuid: U, path: p, s, extra });
+        done.restore?.();
+        expect(cardOf(box, ID, U), 'the card is withdrawn').toBeNull();
+        expect(steerOf(box, ID, U), 'the steer file goes with it').toBeNull();
+        if (drive.printed === true) {
+          expect(done.stdout, "no DB is open: the card's count and the steer's are lines").toContain(`history-sweep: card_withdrawn:${reason} 1\n`);
+          expect(done.stdout).toContain(`history-sweep: steer_withdrawn:${reason} 1\n`);
+        } else {
+          expect((steerCountersC(box)[`steer_withdrawn:${reason}`] ?? 0) - (before[`steer_withdrawn:${reason}`] ?? 0), 'counted once').toBe(1);
+        }
+        expect((steerCountersC(box)['steer_consumed'] ?? 0) - (before['steer_consumed'] ?? 0), 'a withdrawal is no consumption').toBe(drive.consumed ?? 0);
+        pokeC(box, ID);
+        derivedC(box);
+        pokeC(box, ID);
+        const want = libCard.leafId(ID, U, s.headUuids[drive.head ?? (drive.appends === true ? 1 : 0)]!);
+        expect(steerOf(box, ID, U), 'the next pass at end-of-file re-mints it').toBe(expectedSteer(want));
+      }, 240_000);
+    }
+  });
+
+  // D-5059's arm for the steer file: the seam is the faults preload's ENOSPC on the first Buffer write to the steer file's
+  // temp, which only the steer path holds (`/steer/<id>/`), so the card's own write lands and the steer write is the one that fails.
+  it("a consumed steer file whose replacement cannot be written is unlinked, counted steer_write_failed once, and consumed once (D-5059's arm)", () => {
+    const box = makeHistoryBox('ccrc-hist-steer-consumedfail-');
+    const [ID, U] = ['steer-cfail', sidC(0x1b31)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0x1b31, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 0)));
+    settleC(box);
+    pokeC(box, ID);
+    const want0 = libCard.leafId(ID, U, firstUuidC(s));
+    expect(steerOf(box, ID, U), 'CONTROL: the steer file stands').toBe(expectedSteer(want0));
+    const failing = (): void => {
+      spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID });
+      const r = runSweep(box, [], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_ENOSPC: `/steer/${ID}/${U}.txt.tmp` } });
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    };
+    const before = steerCountersC(box);
+    appendRows(p, s.rows.slice(cutBefore(s, 0), cutBefore(s, 1)));
+    failing();   // ingests boundary 0 at end-of-file: the new steer file would replace the consumed one, and cannot be written
+    const after = steerCountersC(box);
+    expect(steerOf(box, ID, U), 'the consumed file is gone, not served as the next compaction').toBeNull();
+    expect(fs.readdirSync(path.join(box.root, 'steer', ID)), 'and no temp or other name stands in its place').toEqual([]);
+    expect(cardOf(box, ID, U), "the card's own write was not matched by the seam, and landed").not.toBeNull();
+    expect((after['steer_write_failed'] ?? 0) - (before['steer_write_failed'] ?? 0)).toBe(1);
+    expect((after['steer_consumed'] ?? 0) - (before['steer_consumed'] ?? 0), 'consumed once, counted once it is gone').toBe(1);
+    expect(after['steer_unrecorded_removed'], 'the record was acted on: this is no unrecorded removal').toBeUndefined();
+    failing();   // the write still fails and nothing stands: nothing more is consumed
+    expect(steerOf(box, ID, U)).toBeNull();
+    expect(steerCountersC(box)['steer_consumed']).toBe(after['steer_consumed']);
+    pokeC(box, ID);   // CONTROL: with the fault gone the next steer file is written
+    derivedC(box);
+    expect(steerOf(box, ID, U)).toBe(expectedSteer(libCard.leafId(ID, U, s.headUuids[0]!)));
+  }, 240_000);
+
+  it('an unrecorded generation record takes the steer file with the card, counted steer_unrecorded_removed (R-recalloff-keep)', () => {
+    const box = makeHistoryBox('ccrc-hist-steer-genkeep-');
+    const [ID, U] = ['steer-genkeep', sidC(0x1b41)];
+    const p = plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b41, sessionId: U, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID);
+    const genPath = path.join(box.root, 'card', ID, `${U}.gen`);
+    const text = steerOf(box, ID, U);
+    expect(text, 'CONTROL: a steer file stands').not.toBeNull();
+    const removed = (): number => steerCountersC(box)['steer_unrecorded_removed'] ?? 0;
+    const blockRecord = (): void => { fs.rmSync(genPath, { recursive: true, force: true }); fs.mkdirSync(genPath); };
+    // At end-of-file: the record is due for a rewrite that fails.
+    blockRecord();
+    let r0 = removed();
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U), 'at end-of-file: no steer file left beside the stale record').toBeNull();
+    expect(removed(), 'at end-of-file: counted').toBe(r0 + 1);
+    // CONTROL: the record unblocked, the same pass shape writes both back, and nothing is removed.
+    fs.rmSync(genPath, { recursive: true });
+    r0 = removed();
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U), 'CONTROL: the steer file is written back').toBe(text);
+    expect(removed(), 'CONTROL: nothing removed').toBe(r0);
+    // Off end-of-file (a torn last line): a healthy record keeps both, and a record whose removal fails takes both.
+    fs.appendFileSync(p, JSON.stringify(userRow({ uuid: sidC(0xbb41), ts: new Date(T0C + 3_600_000).toISOString(), sessionId: U, text: 'still being written' })));
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U), 'CONTROL: off end-of-file a recorded steer file is kept').toBe(text);
+    blockRecord();
+    r0 = removed();
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U), 'off end-of-file: no steer file left beside the stale record').toBeNull();
+    expect(removed(), 'off end-of-file: counted').toBe(r0 + 1);
+  }, 240_000);
+
+  it("one steer file per id: another uuid's file and a stale temp are removed after a write, and other names stay", () => {
+    const box = makeHistoryBox('ccrc-hist-steer-one-');
+    const [ID, U1, U2] = ['steer-one', sidC(0x1b51), sidC(0x1b52)];
+    plantC(box, ID, U1, compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b51, sessionId: U1, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID);
+    const dir = path.join(box.root, 'steer', ID);
+    expect(fs.readdirSync(dir), 'CONTROL: the steer directory holds the one file and no .gen').toEqual([`${U1}.txt`]);
+    fs.writeFileSync(path.join(dir, 'notes'), "not the writer's");
+    fs.writeFileSync(path.join(dir, `${sidC(0x1b53)}.txt.tmp.99999`), 'a killed writer\'s temp');
+    // A /clear: the registry names the new uuid, and the hook spools the clear line.
+    const s2 = compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b52, sessionId: U2, startMs: T0C + 3_600_000 });
+    plantSession(box, ID, { uuid: U2 });
+    plantTranscript(box, 'claude', CARD_SLUG, U2, s2.rows);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U2, src: 'clear', gen: CARD_GEN });
+    settleC(box);
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U2)).toBe(expectedSteer(libCard.leafId(ID, U2, s2.headUuids[0]!)));
+    expect(fs.readdirSync(dir).sort(), "U1's file and the stale temp went with the write; notes stays").toEqual([`${U2}.txt`, 'notes']);
+  }, 240_000);
+
+  it('a steer file the registry no longer names is still consumed when its boundary is ingested, with or without the card file beside it', () => {
+    const box = makeHistoryBox('ccrc-hist-steer-reg-');
+    const [ID, U] = ['steer-reg', sidC(0x1b61)];
+    const s = compactionSequence({ n: 3, trigger: 'manual', seed: 0x1b61, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    settleC(box);
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U)).toBe(expectedSteer(libCard.leafId(ID, U, s.headUuids[0]!)));
+    fs.rmSync(path.join(box.reg, `${ID}.uuid`));
+    appendRows(p, s.rows.slice(cutBefore(s, 1), cutBefore(s, 2)));
+    pokeC(box, ID);
+    derivedC(box);
+    expect(leavesC(box, U)).toHaveLength(2);
+    expect(steerOf(box, ID, U), 'consumed, and not written again: the registry names no session').toBeNull();
+    expect(steerCountersC(box)).toMatchObject({ steer_consumed: 1, steer_written: 1 });
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U), 'still unnamed: still no steer file').toBeNull();
+    plantSession(box, ID, { uuid: U });
+    pokeC(box, ID);
+    expect(steerOf(box, ID, U)).toBe(expectedSteer(libCard.leafId(ID, U, s.headUuids[1]!)));
+    // The steer file alone: the registry names no session and no card file stands, so only the steer directory's own listing
+    // finds it. It is still consumed when its boundary is ingested.
+    fs.rmSync(path.join(box.reg, `${ID}.uuid`));
+    for (const f of [`${U}.txt`, `${U}.gen`]) fs.rmSync(path.join(box.root, 'card', ID, f));
+    appendRows(p, s.rows.slice(cutBefore(s, 2)));
+    pokeC(box, ID);
+    derivedC(box);
+    expect(leavesC(box, U)).toHaveLength(3);
+    expect(steerOf(box, ID, U), 'consumed from the steer directory alone').toBeNull();
+    expect(steerCountersC(box)).toMatchObject({ steer_consumed: 2 });
+    expect(cardOf(box, ID, U), 'and no card file is made for a session the registry does not name').toBeNull();
+  }, 240_000);
+
+  it('a link at steer/, steer/<id> or the file itself is never entered, read or written through', () => {
+    const box = makeHistoryBox('ccrc-hist-steer-links-');
+    const [ID, U] = ['steer-link', sidC(0x1b71)];
+    const [ID2, U2] = ['steer-link-dir', sidC(0x1b72)];
+    const [ID3, U3] = ['steer-link-root', sidC(0x1b73)];
+    const s1 = compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b71, sessionId: U, startMs: T0C });
+    plantC(box, ID, U, s1.rows);
+    plantC(box, ID2, U2, compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b72, sessionId: U2, startMs: T0C }).rows);
+    settleC(box);
+    // The file itself a link to a file elsewhere: never read through, and the write replaces the link, never its target.
+    const victim = path.join(box.home, 'victim.txt');
+    fs.writeFileSync(victim, 'the target, untouched');
+    fs.mkdirSync(path.join(box.root, 'steer', ID), { recursive: true, mode: 0o700 });
+    fs.symlinkSync(victim, steerPath(box, ID, U));
+    // steer/<id> a link to a directory holding a file under a steer name: never entered.
+    const elsewhere = path.join(box.home, 'elsewhere-steer-id');
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, `${U2}.txt`), 'kept\n');
+    fs.symlinkSync(elsewhere, path.join(box.root, 'steer', ID2));
+    pokeC(box, ID, ID2);
+    expect(fs.readFileSync(victim, 'utf8'), 'the link\'s target is untouched').toBe('the target, untouched');
+    expect(fs.lstatSync(steerPath(box, ID, U)).isSymbolicLink(), 'the link was replaced by the write').toBe(false);
+    expect(steerOf(box, ID, U)).toBe(expectedSteer(libCard.leafId(ID, U, s1.headUuids[0]!)));
+    expect(fs.readdirSync(elsewhere), 'steer/<id> as a link is never entered').toEqual([`${U2}.txt`]);
+    expect(fs.readFileSync(path.join(elsewhere, `${U2}.txt`), 'utf8')).toBe('kept\n');
+    expect(fs.lstatSync(path.join(box.root, 'steer', ID2)).isSymbolicLink()).toBe(true);
+    expect(counters(box)['steer_dir_refused'], 'the refused directory is counted').toBeGreaterThanOrEqual(1);
+    // steer/ itself a link: never walked by a pass that consumes, writes or withdraws, and refused by the directory step.
+    const root = path.join(box.home, 'elsewhere-steer-root');
+    fs.mkdirSync(path.join(root, ID3), { recursive: true });
+    fs.writeFileSync(path.join(root, ID3, `${U3}.txt`), 'kept\n');
+    fs.rmSync(path.join(box.root, 'steer'), { recursive: true });
+    fs.symlinkSync(root, path.join(box.root, 'steer'));
+    plantC(box, ID3, U3, compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b73, sessionId: U3, startMs: T0C }).rows);
+    const r = runSweep(box, [], { env: { HISTORY_TEST_STATFS: `${FLOOR_C - 4096}:${FS_C}` } });   // a withdrawing pass
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    pokeC(box, ID3);
+    expect(fs.readdirSync(path.join(root, ID3)), "the link's target is untouched").toEqual([`${U3}.txt`]);
+    expect(fs.readFileSync(path.join(root, ID3, `${U3}.txt`), 'utf8')).toBe('kept\n');
+    expect(counters(box)['history_dir_refused:steer'], 'the directory step refuses a link at steer/').toBeGreaterThanOrEqual(1);
+  }, 240_000);
+
+  it('history-off writes, consumes and withdraws nothing: the steer file stands as the card does (D-5062\'s arm, as today)', () => {
+    const box = makeHistoryBox('ccrc-hist-steer-off-');
+    const [ID, U] = ['steer-off', sidC(0x1b81)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0x1b81, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    settleC(box);
+    pokeC(box, ID);
+    const standing = steerOf(box, ID, U);
+    expect(standing).toBe(expectedSteer(libCard.leafId(ID, U, s.headUuids[0]!)));
+    const card = cardOf(box, ID, U);
+    const counted = counters(box);
+    fs.writeFileSync(path.join(box.home, '.ccrc', 'history-off'), '');
+    appendRows(p, s.rows.slice(cutBefore(s, 1)));
+    pokeC(box, ID);   // a boundary no pass will ingest while the switch stands
+    passC(box);
+    expect(steerOf(box, ID, U), 'the steer file stands').toBe(standing);
+    expect(cardOf(box, ID, U), 'and so does the card').toBe(card);
+    expect(steerCountersC(box), 'nothing counted').toEqual(Object.fromEntries(Object.entries(counted).filter(([k]) => k.startsWith('steer_'))));
+    fs.rmSync(path.join(box.home, '.ccrc', 'history-off'));
+    pokeC(box, ID);
+    derivedC(box);
+    expect(steerCountersC(box)).toMatchObject({ steer_consumed: 1 });
+  }, 240_000);
+
+  it('writes one file per registered session, keyed on the uuid; a subagent boundary never re-mints it (G4)', async () => {
+    // Two registered sessions, each with its own file.
+    const box = makeHistoryBox('ccrc-hist-steer-per-session-');
+    const [A, UA, B, UB] = ['steer-ps-a', sidC(0x1b91), 'steer-ps-b', sidC(0x1b92)];
+    plantC(box, A, UA, compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b91, sessionId: UA, startMs: T0C }).rows);
+    plantC(box, B, UB, compactionSequence({ n: 1, trigger: 'manual', seed: 0x1b92, sessionId: UB, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, A, B);
+    expect(fs.readdirSync(path.join(box.root, 'steer')).sort()).toEqual([A, B]);
+    expect(fs.readdirSync(path.join(box.root, 'steer', A))).toEqual([`${UA}.txt`]);
+    expect(libCard.steerLeafOf(steerOf(box, B, UB)!.replace(/\n$/, ''))).not.toBe(libCard.steerLeafOf(steerOf(box, A, UA)!.replace(/\n$/, '')));
+    // A subagent transcript of the same uuid with a boundary of its own: the step reads the main transcript's copy only.
+    const fx = await store7();
+    try {
+      const first = await fx.run();
+      expect(first.text, 'the main copy names its leaf').toBe(expectedSteer(fx.nextLeaf));
+      fx.addSubagentBoundary();
+      const second = await fx.run();
+      expect(second.text, 'a subagent boundary re-mints nothing').toBe(first.text);
+      expect(fx.counter('steer_written'), 'and writes nothing').toBe(1);
+    } finally {
+      fx.db.close();
+    }
+  }, 240_000);
+
+  it("a purged id's steer directory is collected 7 days on, and steer/.lanes/ is never entered", () => {
+    const box = makeHistoryBox('ccrc-hist-steer-purge-');
+    const DAY = 24 * 60 * 60 * 1000;
+    const rows = [['steer-gone', sidC(0x1ba1), 8], ['steer-young', sidC(0x1ba2), 6], ['steer-live', sidC(0x1ba3), 8]] as const;
+    rows.forEach(([id, uuid], i) => plantC(box, id, uuid, [
+      userRow({ uuid: sidC(0x7200 + 16 * i), ts: new Date(T0C).toISOString(), sessionId: uuid, text: 'a request' }),
+      userRow({ uuid: sidC(0x7201 + 16 * i), ts: new Date(T0C + 1000).toISOString(), sessionId: uuid, text: 'a follow-up' }),
+    ]));
+    settleC(box);
+    pokeC(box, ...rows.map(([id]) => id));
+    const age = (p: string, ms: number): void => {
+      const t = (Date.now() - ms) / 1000;
+      fs.lutimesSync(p, t, t);
+    };
+    // The lane map's directory: a lane file inside it, aged past the grace, with no registry entry of that name.
+    const lanes = path.join(box.root, 'steer', '.lanes');
+    fs.mkdirSync(lanes, { mode: 0o700 });
+    fs.writeFileSync(path.join(lanes, 'lane-a'), 'anthropic\n');
+    for (const [id, uuid, days] of rows) {
+      expect(steerOf(box, id, uuid), id).not.toBeNull();
+      for (const p of [steerPath(box, id, uuid), path.join(box.root, 'card', id, `${uuid}.txt`), path.join(box.root, 'card', id, `${uuid}.gen`), path.join(box.root, 'card', id), path.join(box.root, 'steer', id)]) age(p, days * DAY);
+    }
+    for (const p of [path.join(lanes, 'lane-a'), lanes]) age(p, 8 * DAY);
+    const purge = (id: string): void => {
+      for (const f of fs.readdirSync(box.reg).filter((n) => n.startsWith(`${id}.`))) fs.rmSync(path.join(box.reg, f));
+    };
+    purge('steer-gone');
+    purge('steer-young');
+    passC(box);
+    expect(fs.existsSync(path.join(box.root, 'steer', 'steer-gone')), "this pass's scan was not due").toBe(true);
+    const r = runDriver(box, { offsetMs: libCard.SCAN_INTERVAL_MS + 60_000 });
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(fs.existsSync(path.join(box.root, 'steer', 'steer-gone')), 'registry absent and 8 days old: removed').toBe(false);
+    expect(steerOf(box, 'steer-young', rows[1][1]), '6 days old: kept').not.toBeNull();
+    expect(steerOf(box, 'steer-live', rows[2][1]), 'still in the registry: kept').not.toBeNull();
+    expect(fs.readFileSync(path.join(lanes, 'lane-a'), 'utf8'), 'steer/.lanes/ is never entered').toBe('anthropic\n');
+    expect(steerCountersC(box)).toMatchObject({ steer_files_purged: 1 });
+  }, 240_000);
+});
+
+// ── prevLeafOf and the stored directive_flag, end to end through oneCard (in-process; review 1695 A1) ───────────────────
+// A fixture store whose one registered session has a previous level-0 node of the test's choosing: card.mjs's
+// consumeAndWriteCards runs over it exactly as the tick runs it (the registry names the session, its live copy is read to
+// its end this tick), so only these cases read the stored `nodes` columns Task 1A's hand-built previous leaves do not.
+interface Prev7 {
+  kind?: string; status?: string; gist?: string | null; flag?: number | string; nodeId?: string;
+  earliest?: number | string | null; latest?: number | string | null;
+}
+interface Store7 {
+  home: string;
+  db: DatabaseSync;
+  /** The leaf the next compaction will be (the card's own prediction, by lib's span rule). */
+  nextLeaf: string;
+  prevId: string;
+  run(): Promise<{ text: string | null }>;
+  addSubagentBoundary(): void;
+  counter(name: string): number;
+}
+const E7 = 'd7e00000-1111-4111-8111-111111111111';
+const ID7 = 'steer-prev';
+const store7Imports = async (): Promise<{ C: { consumeAndWriteCards(db: DatabaseSync, ictx: object, budget: object): object; ensureHistoryDirs(db: DatabaseSync, home: string): object }; S: { makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>; newBudget(): object } }> => ({
+  C: (await import('../../ccd/history/card.mjs')) as never,
+  S: (await import('../../ccd/history/sweep.mjs')) as never,
+});
+async function store7(prev: Prev7 | null = null): Promise<Store7> {
+  const { C, S } = await store7Imports();
+  const home = mkTmp('ccrc-hist-steer-prev-');
+  createStore(home);
+  const P = libCard.historyPaths(home);
+  const db = openWriter(P.dbFile);
+  const now = Date.now();
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID7);
+  db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(E7);
+  db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (1, ?, ''), (2, ?, 'agent-x')").run(E7, E7);
+  db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, eof_ms, parser_version) VALUES (1, 1, 7001, 1, 'live', ?, 1), (2, 1, 7002, 2, 'live', ?, 1)").run(now, now);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 7), Buffer.from([0]));
+  const ent = db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, ?, ?, ?, 'harness', 1, 0, 0, 1, ?)");
+  const member = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+  ent.run(1, 'd7e00000-0000-4000-8000-000000000001', 1, 'user', null, 1000);
+  member.run(1, 1, 1);
+  ent.run(2, 'd7e00000-0000-4000-8000-000000000002', 1, 'system', 'compact_boundary', 2000);
+  db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (2, 1, 1)').run();
+  member.run(1, 2, 2);
+  const prevId = prev?.nodeId ?? libCard.leafId(ID7, E7, 'd7e00000-0000-4000-8000-000000000001');
+  if (prev !== null) {
+    db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, boundary_entry_id,
+      earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, parser_version, created_ms)
+      VALUES (?, 1, 1, 1, ?, 0, ?, ?, 2, ?, ?, 100, 0, 0, ?, 1, 1)`).run(
+      prevId, prev.kind ?? 'steered_leaf', prev.status ?? 'ok', prev.gist === undefined ? 'Moved the parser into lib and kept the old reader for one release.' : prev.gist,
+      prev.earliest === undefined ? Date.UTC(2026, 9, 29, 7, 5) : prev.earliest, prev.latest === undefined ? Date.UTC(2026, 9, 29, 9, 40) : prev.latest,
+      prev.flag ?? 0);
+  }
+  fs.mkdirSync(P.reg, { recursive: true });
+  fs.writeFileSync(path.join(P.reg, `${ID7}.uuid`), E7);
+  C.ensureHistoryDirs(db, home);
+  const ictx = S.makeIngestCtx(home, [], now, null);
+  const nextLeaf = libCard.leafId(ID7, E7, libCard.predictedSpanStart({ firstRowUuid: null, lastBoundary: { uuid: 'd7e00000-0000-4000-8000-000000000002', headUuid: null } })!);
+  return {
+    home, db, nextLeaf, prevId,
+    async run() {
+      C.consumeAndWriteCards(db, ictx, S.newBudget());
+      const f = path.join(P.root, 'steer', ID7, `${E7}.txt`);
+      return { text: fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null };
+    },
+    addSubagentBoundary() {
+      db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (3, 'd7e00000-0000-4000-8000-000000000003', 2, 'system', 'compact_boundary', 'harness', 1, 0, 0, 1, 3000)").run();
+      db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (3, 2, 1)').run();
+      db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (2, 3, 1)').run();
+    },
+    counter: (name) => Number((db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n ?? 0),
+  };
+}
+
+describe("the previous leaf a steer file quotes is read from the stored node row (W3 Task 1B; review 1695 A1)", () => {
+  skipOnDarwin();
+  const GIST = 'Moved the parser into lib and kept the old reader for one release.';
+  const quotable = (fx: Store7): libCard.SteerPrev => ({
+    id: fx.prevId, range: libCard.nodeRangeText(Date.UTC(2026, 9, 29, 7, 5), Date.UTC(2026, 9, 29, 9, 40)),
+    kind: 'steered_leaf', status: 'ok', gist: GIST, flag: false,
+  });
+
+  it('a stored steered ok previous leaf is quoted only when its directive_flag is 0: 0 quotes, 1 and 2 (a value derive never writes) quote nothing', async () => {
+    for (const [flag, quotes] of [[0, true], [1, false], [2, false]] as const) {
+      const fx = await store7({ flag });
+      try {
+        const { text } = await fx.run();
+        expect(text, `flag ${flag}`).toBe(expectedSteer(fx.nextLeaf, quotes ? quotable(fx) : null));
+        expect(text!.includes('Previous leaf'), `flag ${flag}: the lines`).toBe(quotes);
+        expect(text!.includes(GIST), `flag ${flag}: the gist`).toBe(quotes);
+      } finally {
+        fx.db.close();
+      }
+    }
+  });
+
+  it('a previous leaf whose node row cannot be read quotes no gist: an unknown status or an unreadable instant answers unreadable, and the file is still written', async () => {
+    const { prevLeafOf } = (await import('../../ccd/history/steer.mjs')) as unknown as {
+      prevLeafOf(db: DatabaseSync, copyFileId: number, epoch: { session_pk: number; seq: number }): libCard.SteerPrev | null;
+    };
+    for (const [name, prev] of [
+      ['a status outside lib\'s words', { status: 'bogus' }],
+      ['a non-numeric earliest instant', { earliest: 'not-a-time' }],
+      ['an instant out of the date range', { latest: 9e15 }],
+      ['a non-finite directive_flag', { flag: 'x' }],
+      ['a steered ok leaf with no gist', { gist: null }],
+    ] as const) {
+      const fx = await store7(prev);
+      try {
+        const direct = prevLeafOf(fx.db, 1, { session_pk: 1, seq: 1 });
+        expect(direct?.status, `${name}: prevLeafOf`).toBe('unreadable');
+        const { text } = await fx.run();
+        expect(text, `${name}: the steer file`).toBe(expectedSteer(fx.nextLeaf));
+        expect(fx.counter('steer_write_failed'), `${name}: nothing threw through oneCard`).toBe(0);
+      } finally {
+        fx.db.close();
+      }
+    }
+  });
+
+  // The steer text is composed (and the previous leaf read) only when a write is possible. A spy on the one statement that reads the
+  // previous leaf counts it through oneCard; every off-end-of-file arm must still reach the verdict it reaches with the text.
+  it('the previous leaf is read only when a write is possible: off end-of-file no composition runs, and every arm decides as it does with the text', async () => {
+    const { C, S } = await store7Imports();
+    const PREV_SQL = 'FROM nodes n JOIN memberships m';
+    for (const [name, atEof, seed, want] of [
+      ['CONTROL: at end-of-file with no file, a write composes once', true, null, 'written'],
+      ['off end-of-file, no file: none', false, null, 'absent'],
+      ['off end-of-file, this leaf as written: keep', false, 'own', 'kept'],
+      ['off end-of-file, this leaf re-rendered (another previous gist): keep', false, 'rerendered', 'kept'],
+      ['off end-of-file, another leaf (consumed): delete', false, 'other', 'deleted'],
+      ['off end-of-file, an empty file: delete (an empty text is not the line)', false, '', 'deleted'],
+      ['off end-of-file, text that is no steer file: delete', false, 'not a steer file\n', 'deleted'],
+    ] as const) {
+      const fx = await store7({});
+      try {
+        const f = path.join(libCard.historyPaths(fx.home).root, 'steer', ID7, `${E7}.txt`);
+        const own = (await fx.run()).text!;   // at end-of-file: the file as the writer makes it
+        fs.rmSync(f);
+        if (seed === 'own') fs.writeFileSync(f, own);
+        else if (seed === 'rerendered') fs.writeFileSync(f, `${own}Previous leaf, context only, do not repeat it: [stale]\n`);
+        else if (seed === 'other') fs.writeFileSync(f, own.replace(fx.nextLeaf, `L${'0'.repeat(20)}`));
+        else if (seed !== null) fs.writeFileSync(f, seed);
+        let reads = 0;
+        const spy = new Proxy(fx.db, {
+          get(target, prop) {
+            const v = Reflect.get(target, prop, target) as unknown;
+            if (typeof v !== 'function') return v;
+            if (prop !== 'prepare') return (v as (...a: unknown[]) => unknown).bind(target);
+            return (sql: string) => {
+              const st = (v as (q: string) => Record<string, unknown>).call(target, sql);
+              if (!sql.includes(PREV_SQL)) return st;
+              return new Proxy(st, {
+                get(t, p) {
+                  const m = Reflect.get(t, p, t) as unknown;
+                  if (typeof m !== 'function') return m;
+                  return (...a: unknown[]) => { if (p === 'get') reads += 1; return (m as (...x: unknown[]) => unknown).apply(t, a); };
+                },
+              });
+            };
+          },
+        }) as DatabaseSync;
+        const eofMs = Number((fx.db.prepare('SELECT eof_ms FROM ingest_files WHERE file_id = 1').get() as { eof_ms: number }).eof_ms);
+        const ictx = S.makeIngestCtx(fx.home, [], atEof ? eofMs : eofMs + 1, null);
+        C.consumeAndWriteCards(spy, ictx, S.newBudget());
+        const after = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+        expect(reads, `${name}: previous-leaf reads`).toBe(atEof ? 1 : 0);
+        if (want === 'written') expect(after).toBe(own);
+        else if (want === 'absent' || want === 'deleted') expect(after, name).toBeNull();
+        else expect(after, name).toBe(seed === 'own' ? own : `${own}Previous leaf, context only, do not repeat it: [stale]\n`);
+      } finally {
+        fx.db.close();
+      }
+    }
+  });
+
+  it("prevLeafOf answers unreadable for a node_id off the grammar, null when the copy has no level-0 node, and the row's own fields otherwise", async () => {
+    const { prevLeafOf } = (await import('../../ccd/history/steer.mjs')) as unknown as {
+      prevLeafOf(db: DatabaseSync, copyFileId: number, epoch: { session_pk: number; seq: number }): libCard.SteerPrev | null;
+    };
+    const none = await store7(null);
+    try {
+      expect(prevLeafOf(none.db, 1, { session_pk: 1, seq: 1 }), 'no node: null').toBeNull();
+    } finally {
+      none.db.close();
+    }
+    const ok = await store7({});
+    try {
+      expect(prevLeafOf(ok.db, 1, { session_pk: 1, seq: 1 })).toEqual(quotable(ok));
+      expect(prevLeafOf(ok.db, 2, { session_pk: 1, seq: 1 }), "another copy's boundary is not this copy's").toBeNull();
+    } finally {
+      ok.db.close();
+    }
+    for (const nodeId of ['Lxyz', `L${'0'.repeat(19)}`, `X${'0'.repeat(20)}`, `L${'0'.repeat(20)}0`, `L${'G'.repeat(20)}`]) {
+      const fx = await store7({ nodeId });
+      try {
+        expect(prevLeafOf(fx.db, 1, { session_pk: 1, seq: 1 })?.status, nodeId).toBe('unreadable');
+      } finally {
+        fx.db.close();
+      }
+    }
+  });
 });

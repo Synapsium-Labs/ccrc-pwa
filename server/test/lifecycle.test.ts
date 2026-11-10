@@ -1137,7 +1137,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'claude-tmp-session-dirs', 'tmp-sweep-census', 'child-tmp-roots', 'ccd-orphan-worktrees', 'agent-worktrees',
       'cc-tmp-loose-entries', 'child-workspaces', 'workspace-dependency-dirs', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
       'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
-      'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-replay-out',
+      'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-steer-files', 'history-replay-out',
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
       'testbox-token', 'testbox-push-key', 'testbox-times', 'testbox-runs-log',
@@ -1231,7 +1231,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4', 'W2-1'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4', 'W2-1', 'W3'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1450,6 +1450,29 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
         .toContain(`the files of purged sessions after ${days} days`);
     }
     expect(LIFECYCLE.find((x) => x.name === 'history-card-files')!.tier).toBe(`<=${CARD_LINE_MAX} B per session`);
+  });
+
+  // ── ccrc history W3-1 (spec 2026-10-05 §9.4; plan 2026-10-29 Task 1B) ────────────────────────────────────────────
+  // The steer file rides the card's per-session step, so its class is the card files' class in kind: the sweep writes it
+  // through card.mjs, deletes it on consumption, withdraws it on a pass that runs no card step, and collects it with its
+  // purged session. Each promise has its own case in history-card.test.ts (the steer file's lifecycle describe).
+  it('declares history-steer-files: an R class the sweep writes through card.mjs on the card\'s lifecycle, 8 KB per session, with the lane map under steer/.lanes/', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-steer-files');
+    expect(c, 'shared/lifecycle.ts declares no history-steer-files class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through card.mjs)']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('deleted on consumption');
+    expect(c!.collector).toContain('withdrawn by a pass that runs no card step');
+    expect(c!.root).toBe('~/.ccrc/history/steer/<id>/, and the lane map steer/.lanes/<wrapper>');
+    expect(c!.ruling).toBeNull();
+    // The manifest is L0 and imports nothing, so its prose numbers are bound to the code's own here, as the B3 rows' are.
+    const { PURGED_FILES_GRACE_MS, STEER_FILE_MAX } = await import('../../ccd/history/lib.mjs');
+    expect(c!.collector, "the collector names another grace than the sweep's")
+      .toContain(`the files of purged sessions after ${PURGED_FILES_GRACE_MS / 86_400_000} days`);
+    expect(c!.collector, 'spec §9.4: a lane file whose account left the roster is removed on the next tick')
+      .toContain('a lane file whose account left the roster is removed on the next tick');
+    expect(c!.tier).toBe(`<=${STEER_FILE_MAX / 1024} KB per session; one word per rostered account`);
   });
 
   // ── ccrc history W2-4 (spec 2026-10-05 §9.4, O17's W2-4 half; W2-D9, W2-D53) ──────────────────────────────────────

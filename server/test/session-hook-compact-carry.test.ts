@@ -48,7 +48,7 @@ const hookEnv = (): NodeJS.ProcessEnv => ({
 const run = (payload: object, env: NodeJS.ProcessEnv = {}): void => {
   const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: { ...hookEnv(), ...env } });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
-  expect(r.stdout, 'a compaction prints nothing').toBe('');
+  expect(r.stdout, 'an unarmed compaction prints nothing (PreCompact prints only when armed and scope main)').toBe('');
 };
 const reg = (): string => path.join(home, '.cc-sessions');
 const stateFile = (): string => path.join(reg(), `${ID}.hookstate.json`);
