@@ -1259,4 +1259,16 @@ These are unnumbered. The coordinator rules each, and numbers any departure it a
 
 ## Deviations found
 
-No deviation number is defined by this plan, and none is issued for this run. Its proposed departures are not "none": each is listed by slug, unnumbered, under "Build questions and proposed departures". The coordinator numbers any that is approved.
+W4-1 (run 1745) defines the eleven below: the departures the coordinator approved for it and numbered at dispatch, each by its slug under "Build questions and proposed departures", all dated 2026-11-10. `history-w4-install-record-at-arming` was ruled keep and takes no number; the slugs of W4-2 to W4-4 stay unnumbered until their PRs.
+
+- **D-8151 — `history-w4-agents-on-marker-name`** (2026-11-10). The arming marker is `~/.ccrc/history/agents-on`, `SWITCHES.agentsOn`, read only as a regular non-link file; the addendum names no file.
+- **D-8152 — `history-w4-active-agents-stored-only`** (2026-11-10). P3's non-scan arm stats only the stored subagent holdings of a parent `activeFiles` took; a subagent file not yet stored waits for the next scan tick.
+- **D-8153 — `history-w4-agent-scan-not-rotating`** (2026-11-10). The scan tick's discovery is budget-cut, not rotating, as transcript discovery is at the base; subagent reads resume by cursor and no rotation is built.
+- **D-8154 — `history-w4-refusals-counted-by-census`** (2026-11-10). `agent_file_refused:<reason>`, `agent_dir_refused:<level>:<reason>` and `agent_meta_orphan` are census figures, recomputed each census, never tick counters.
+- **D-8155 — `history-w4-agents-pause-and-kill-rule`** (2026-11-10). `capture_paused_agents_at_cap` matches §10.7's `capture_paused_*` by name but does not join W1's kill rule; the 90% WARN is its watch (the coordinator's ruling under P5, which the operator may override).
+- **D-8156 — `history-w4-census-unmapped-parents`** (2026-11-10). A unit of `Q` whose parent's uuid is not in `knownUuids` stays in `Q` and in `D − T`, reported apart as `beside.qParentUnknown`, P11's denominator unchanged.
+- **D-8157 — `history-w4-agent-import-known-parents-only`** (2026-11-10). `import --agents --apply` admits a pre-install subagent file only when its parent's uuid is in `knownUuids`, fewer than the addendum's "every admissible pre-install subagent file"; the dry run counts the rest as `parent-unconfirmed` with its remedy.
+- **D-8158 — `history-w4-import-ignores-marker`** (2026-11-10). `import --agents --apply` reads no arming marker: it is the operator's own act, refused in a session and under `history-off`, and paused at 90%.
+- **D-8159 — `history-w4-sa11-warn-by-parts`** (2026-11-10). SA11's doctor WARN is pinned by its parts (the `deriveHealth` decider case and the status envelope's `agents_armed`), with no size seam in `cli.mjs`.
+- **D-8160 — `history-w4-ci-node-floor-claims`** (2026-11-10). W4-1 and W4-4 claim `.github/workflows/ci.yml` beyond the addendum's section 8, for the node-floor job's Test list that `ci-pipeline.test.ts` requires of every `history-*.test.ts`.
+- **D-8161 — `history-w4-m1-m2-in-w4-1`** (2026-11-10). Acts M1 and M2 were measured before W4-1's build (the coordinator, 2026-11-10), so W4-1 carries their results instead of a follow-up PR: `AGENT_TYPE_KEY = 'agentType'` with SA16's second row run, and the workflow predicate (b) with the window `[t0 − 15 min, t0 + 15 min]` with SA14's (b) rows run.
