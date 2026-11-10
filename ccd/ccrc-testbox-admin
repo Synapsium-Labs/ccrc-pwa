@@ -63,6 +63,8 @@ TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refuse
   address-not-ip no-egress other-release verify-failed copy-failed box-value-refused install-refused install-failed
   pair-failed status-not-ok pairing-keys-in-ccrc-env key-in-ccrc-env runs-in-progress idle-deadline cancelled
   gh-signed-out parity-differs not-connected box-side-skipped)
+# The long subs whose parent asks them for a precheck before it detaches.
+TBA_PRECHECK_SUBS=(connect)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
 # The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the twenty-eight box keys.
 TBA_FLEET_KEYS=(CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE
@@ -238,9 +240,11 @@ _tba_parse() {
 
 # ── the answers ────────────────────────────────────────────────────────────────────────────────────────────
 _tba_ok() { printf '{"ok":true%s}\n' "${1:+,$1}"; }                       # [json members]
-_tba_refuse() {   # <closed code>
+_tba_refuse() {   # <closed code> [space-separated setting names the refusal names]
+  local k keys=""
   _tba_code_ok "${1-}" || { echo "$PROG: internal error: ${1-} is not a closed code" >&2; exit 70; }
-  printf '{"ok":false,"code":"%s"}\n' "$1"
+  for k in ${2-}; do [[ "$k" =~ ^CCRC_[A-Z0-9_]+$ ]] && keys="${keys:+$keys,}\"$k\""; done
+  if [ -n "$keys" ]; then printf '{"ok":false,"code":"%s","keys":[%s]}\n' "$1" "$keys"; else printf '{"ok":false,"code":"%s"}\n' "$1"; fi
 }
 _tba_usage_die() { echo "$PROG: $*" >&2; echo "usage: $PROG <sub> [--name=value]... [--from agent|pwa|cli]; subs: ${TBA_SUBS[*]}" >&2; exit 2; }
 
@@ -799,6 +803,316 @@ _tba_run_preflight() {
   _tba_ok "\"pass\":$pass,\"checks\":[$PF_ROWS]${fixline:+,\"line\":\"$fixline\"}"
 }
 
+# ── connect: the long act (TC7; spec §2.2 steps 4 and 5, §2.4 steps 2 to 5, §2.5, §5.1, C12, T5, T6) ───────────────
+# Six phases, each idempotent, so **Try again** re-runs from `verify`: verify (the fleet host's own release, fetched and
+# checked on the fleet host, nothing on the box yet), copy (the tarball on the ssh stream into a fresh staging directory,
+# `MANIFEST` checked again there), settings (the box file and the row files, by a temp and a rename, as root), install
+# (the staging tree's own installer), pair (the token and the push key, then the overlay) and check (the status reads ok
+# or degraded). No secret rides argv: the token goes to the box on ssh stdin and to the fleet host's file by a redirect;
+# the push key's private half never leaves the fleet host. The installer's `refused:` and `failed:` lines are kept in
+# ~/.ccrc/testbox-admin.log (0600) and go nowhere else.
+TBA_PAIRING_KEYS=(CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY)
+# The box file's one place on a box (`_tb_box_env_file`'s, without a fixture root).
+TBA_BOX_ENV_PATH=/etc/ccrc-testbox/ccrc.env
+TBA_LOG="$TBA_DIR/testbox-admin.log"
+TBA_PUSH_KEY_COMMENT=ccrc-testbox-push
+
+# A line for the fleet-side log: printable bytes only, one line, at most 300 of them.
+_tba_log() {
+  local LC_ALL=C l="$*"
+  l="${l//[![:print:]]/?}"
+  ( umask 077; printf '%s\n' "${l:0:300}" >>"$TBA_LOG" ) 2>/dev/null || :
+}
+# A `~/`-relative setting value on this host.
+# shellcheck disable=SC2088  # the setting's literal `~/` prefix
+_tba_home_path() { case "${1-}" in "~/"*) printf '%s' "$HOME/${1#"~/"}" ;; *) printf '%s' "${1-}" ;; esac; }
+_tba_b64url_dec() {   # <base64url> -> the bytes, trailing newlines dropped
+  local b
+  b="$(printf '%s' "${1-}" | tr '_-' '/+')"
+  case $(( ${#b} % 4 )) in 2) b="$b==" ;; 3) b="$b=" ;; esac
+  printf '%s' "$b" | base64 -d 2>/dev/null
+}
+# `_tba_row_name <base64url>` -> the row's name (the installer's file name), rc 1 when it is not one.
+_tba_row_name() {
+  local n
+  n="$(_tba_b64url_dec "${1-}" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const n=JSON.parse(s).name;if(typeof n==="string")process.stdout.write(n)}catch{}})' 2>/dev/null)" || return 1
+  [[ "$n" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || return 1
+  printf '%s' "$n"
+}
+# `_tba_ccrc_env_names <KEY>` -> 0 iff ccrc.env names the key (an empty value counts), or cannot be measured: then the
+# overlay would not take effect either. The overlay is pointed at a path that cannot exist, so only ccrc.env answers.
+_tba_ccrc_env_names() {
+  ( CCRC_TESTBOX_OVERLAY_FILE=/nonexistent/ccrc-testbox-overlay; KNOB_FROM=""
+    _ccrc_knob "$1" '' file || exit 0
+    [ "$KNOB_FROM" = file ] || [ "$KNOB_FROM" = empty ] )
+}
+# `_tba_overlay_put KEY=VALUE...` — set the keys in the overlay, keeping every other line, by a temp and a rename at 0600.
+_tba_overlay_put() {
+  local kv line k tmp keep=() drop=" "
+  for kv in "$@"; do drop="$drop${kv%%=*} "; done
+  if [ -f "$CCRC_TESTBOX_OVERLAY_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] || continue
+      k="${line%%=*}"
+      case "$drop" in *" $k "*) ;; *) keep+=("$line") ;; esac
+    done <"$CCRC_TESTBOX_OVERLAY_FILE"
+  fi
+  [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") || return 1
+  tmp="$CCRC_TESTBOX_OVERLAY_FILE.tmp.$$"
+  _tmp_guard "$tmp"
+  ( umask 077
+    { for line in ${keep[@]+"${keep[@]}"}; do printf '%s\n' "$line"; done
+      for kv in "$@"; do printf '%s\n' "$kv"; done; } >"$tmp" ) 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" 2>/dev/null && mv -f -- "$tmp" "$CCRC_TESTBOX_OVERLAY_FILE" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+}
+
+# `_tba_cx_args <word>...` -> CX_SET (key to value), CX_ORDER, CX_REPOS (base64url rows), CX_NAMES; rc 1 on a repeated row name.
+_tba_cx_args() {
+  declare -gA CX_SET=(); CX_ORDER=(); CX_REPOS=(); CX_NAMES=()
+  local w k nm n
+  for w in "$@"; do
+    case "$w" in
+      --set=*) w="${w#--set=}"; k="${w%%=*}"; CX_SET[$k]="${w#*=}"; CX_ORDER+=("$k") ;;
+      --repo=*)
+        w="${w#--repo=}"
+        nm="$(_tba_row_name "$w")" || return 1
+        for n in ${CX_NAMES[@]+"${CX_NAMES[@]}"}; do [ "$n" != "$nm" ] || return 1; done
+        CX_NAMES+=("$nm"); CX_REPOS+=("$w") ;;
+    esac
+  done
+  [ "${#CX_REPOS[@]}" -ge 1 ] && [ "${#CX_REPOS[@]}" -le 4 ]
+}
+# `_tba_cx_render <file>` — the box file: the given settings, in the table's order, one plain KEY=value line each.
+_tba_cx_render() {
+  local k
+  ( umask 077
+    { printf '# the test box settings, written by ccrc testbox-admin\n'
+      for k in "${TBA_BOX_KEYS[@]}"; do
+        [ -z "${CX_SET[$k]+x}" ] || printf '%s=%s\n' "$k" "${CX_SET[$k]}"
+      done; } >"$1" ) 2>/dev/null
+}
+# `_tba_cx_check_box <file>` -> CX_VAL (ROOT, TOOLS, PUSH, SVC, SVC_TOKEN, LISTEN) when the file passes `_tb_load box` with
+# no warning, checked under a fixture root with this verb's own uid as the owner (so it needs no root); rc 1 otherwise.
+_tba_cx_check_box() {
+  local d out rc=0 line
+  declare -gA CX_VAL=()
+  d="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ccrc-tba-chk.XXXXXXXX")" || return 1
+  mkdir -p "$d/etc/ccrc-testbox" && cp -- "$1" "$d/etc/ccrc-testbox/ccrc.env" && chmod 600 "$d/etc/ccrc-testbox/ccrc.env" || { rm -rf -- "$d"; return 1; }
+  out="$(
+    for k in "${TBA_BOX_KEYS[@]}"; do unset "$k"; done
+    export TB_FIXTURE_ROOT="$d" TB_FIXTURE_OWNER_UID
+    TB_FIXTURE_OWNER_UID="$(id -u)"
+    TB_BOX_ENV_FILE="$d/etc/ccrc-testbox/ccrc.env"
+    _tb_load box >/dev/null 2>&1 || exit 1
+    [ "${#TBK_WARN[@]}" -eq 0 ] || { printf 'WARN=%s\n' "${TBK_WARN[0]}"; exit 1; }
+    [ -n "${TBK[CCRC_TESTBOX_LISTEN]}" ] || exit 1
+    printf 'ROOT=%s\nTOOLS=%s\nPUSH=%s\nSVC=%s\nSVC_TOKEN=%s\nLISTEN=%s\n' "${TBK[CCRC_TESTBOX_ROOT]}" "${TBK[CCRC_TESTBOX_TOOLS_DIR]}" \
+      "${TBK[CCRC_TESTBOX_PUSH_USER]}" "${TBK[CCRC_TESTBOX_SERVICE_USER]}" "${TBK[CCRC_TESTBOX_SERVICE_TOKEN_FILE]}" "${TBK[CCRC_TESTBOX_LISTEN]}"
+  )" || rc=$?
+  rm -rf -- "$d"
+  if [ "$rc" != 0 ]; then
+    # The reader's own sentence says which setting is off (a setting is not a secret); it stays in the fleet-side log.
+    while IFS= read -r line; do case "$line" in WARN=*) _tba_log "connect: box settings: ${line#WARN=}" ;; esac; done <<<"$out"
+    return 1
+  fi
+  while IFS= read -r line; do CX_VAL["${line%%=*}"]="${line#*=}"; done <<<"$out"
+}
+
+# What may stop the act before it starts (the parent runs it and answers; the unit runs it again): the closed code is TBA_CODE.
+_tba_cx_precheck() {
+  local key named=()
+  TBA_CODE=""; TBA_CODE_KEYS=""
+  _tba_conn || return 1
+  [ -s "$TBA_PIN" ] || { TBA_CODE=not-connected; return 1; }
+  for key in "${TBA_PAIRING_KEYS[@]}"; do _tba_ccrc_env_names "$key" && named+=("$key"); done
+  if [ "${#named[@]}" -gt 0 ]; then TBA_CODE=pairing-keys-in-ccrc-env; TBA_CODE_KEYS="${named[*]}"; return 1; fi
+  [ -f "$TBA_KEY" ] || { TBA_CODE=no-access-key; return 1; }
+  _tba_cx_args "$@" || { TBA_CODE=box-value-refused; return 1; }
+  CX_BOXENV="$(umask 077 && mktemp "${TMPDIR:-/tmp}/ccrc-tba-box.XXXXXXXX")" || { TBA_CODE=box-value-refused; return 1; }
+  _tmp_guard "$CX_BOXENV"
+  _tba_cx_render "$CX_BOXENV" && _tba_cx_check_box "$CX_BOXENV" || { TBA_CODE=box-value-refused; return 1; }
+  _tba_hostkey_guard "$TBA_ADDR" "$TBA_PORT" >/dev/null || { TBA_CODE=host-key-changed; return 1; }
+  return 0
+}
+
+# `_tba_cx_out <command word>...` -> CX_OUT (the box's stdout, at most 64 KiB), CX_RC; stdin passes to the box.
+_tba_cx_out() {
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ccrc-tba-out.XXXXXXXX")" || { CX_OUT=""; CX_RC=255; TBA_SSH_CODE=unreachable; return 0; }
+  _tmp_guard "$tmp"
+  CX_RC=0
+  _tba_ssh "$@" >"$tmp" || CX_RC=$?
+  CX_OUT="$(head -c 65536 "$tmp")"
+  rm -f -- "$tmp"
+}
+# `_tba_cx_fail <rc> <code>` -> TBA_CODE: ssh's own code for a lost link or a missing connection, else the phase's.
+_tba_cx_fail() {
+  case "$1" in 97|255) TBA_CODE="${TBA_SSH_CODE:-unreachable}" ;; *) TBA_CODE="$2" ;; esac
+  _tba_code_ok "$TBA_CODE" || TBA_CODE="$2"
+}
+
+# phase 1, verify: the fleet host's own tag, fetched and verified on the fleet host (checksum, Sigstore provenance through
+# the installed verifier, MANIFEST, the bound version) by the update lane's own `_upd_resolve` and `_upd_fetch`. A die in
+# either ends the subshell, not the act; `_upd_phase` is silenced there so the update report is not written.
+_tba_cx_verify() {
+  local tag rc=0
+  _box_build_fields >/dev/null 2>&1 || { TBA_CODE=verify-failed; return 1; }
+  tag="${BOX_BUILD[4]:-}"
+  [[ "$tag" =~ ^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$ ]] || { TBA_CODE=verify-failed; return 1; }
+  CX_TAG="$tag"
+  CX_REL="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ccrc-tba-rel.XXXXXXXX")" || { TBA_CODE=verify-failed; return 1; }
+  _tba_rm_on_exit "$CX_REL"
+  ( _upd_phase() { :; }
+    _upd_resolve "$tag" && _upd_fetch 0 && cp -- "$UPD_STAGE/$UPD_TARNAME" "$CX_REL/release.tar.gz"
+  ) >"$CX_REL/verify.log" 2>&1 || rc=$?
+  [ "$rc" = 0 ] && [ -s "$CX_REL/release.tar.gz" ] || { TBA_CODE=verify-failed; return 1; }
+}
+
+# phase 2, copy: the verified tarball on the ssh stream into a fresh staging directory, extracted there and checked
+# against its own MANIFEST again, as the installer does.
+_tba_cx_copy() {
+  _tba_cx_out mktemp -d
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" copy-failed; return 1; }
+  [[ "$CX_OUT" =~ ^/[A-Za-z0-9._/-]+$ ]] || { TBA_CODE=copy-failed; return 1; }
+  CX_STG="$CX_OUT"
+  _tba_cx_out tar -xzf - --no-same-owner -C "$CX_STG" <"$CX_REL/release.tar.gz"
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" copy-failed; return 1; }
+  _tba_cx_out sh -c 'cd "$1" && sha256sum -c MANIFEST >/dev/null 2>&1' sh "$CX_STG"
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" copy-failed; return 1; }
+}
+
+# The push key: made once, create-only, at CCRC_TESTBOX_GIT_KEY (0600); only its public half leaves this host.
+_tba_cx_push_key() {
+  local dir t b
+  _tb_load host >/dev/null 2>&1 || :
+  CX_GIT_KEY="$(_tba_home_path "${TBK[CCRC_TESTBOX_GIT_KEY]:-~/.ccrc/testbox-push.key}")"
+  if [ ! -e "$CX_GIT_KEY" ]; then
+    dir="$(umask 077 && mktemp -d "$TBA_DIR/pushkey.XXXXXXXX")" || return 1
+    _tba_rm_on_exit "$dir"
+    (umask 077; ssh-keygen -q -t ed25519 -N '' -C "$TBA_PUSH_KEY_COMMENT" -f "$dir/k" >/dev/null 2>&1) || { rm -rf -- "$dir"; return 1; }
+    chmod 600 "$dir/k" 2>/dev/null
+    ln -- "$dir/k" "$CX_GIT_KEY" 2>/dev/null || { rm -rf -- "$dir"; [ -e "$CX_GIT_KEY" ] || return 1; }
+    rm -rf -- "$dir"
+  fi
+  # `ssh-keygen -y` prints the public half, with the key's comment on newer OpenSSH; the line sent is type, key, our comment.
+  read -r t b _ < <(ssh-keygen -y -f "$CX_GIT_KEY" 2>/dev/null) || [ -n "$t" ] || return 1
+  [ "$t" = ssh-ed25519 ] && [[ "$b" =~ ^[A-Za-z0-9+/=]+$ ]] || return 1
+  CX_PUSH_PUB="$t $b $TBA_PUSH_KEY_COMMENT"
+}
+
+# phase 3, settings: the box file as root by a temp and a rename (root's, 0600 until the installer gives it the service
+# user's group), and the row files and the push key's public half beside the staging tree.
+_tba_cx_settings() {
+  local b nm
+  _tba_cx_push_key || { TBA_CODE=pair-failed; return 1; }
+  _tba_cx_out sh -c 'umask 077; p=$1; d=$(dirname "$p"); install -d -m 0755 -o root -g root "$d" && t=$(mktemp "$d/.ccrc.env.XXXXXXXX") && { cat >"$t" && chmod 600 "$t" && chown root:root "$t" && mv -f "$t" "$p"; } || { rm -f -- "$t"; exit 1; }' sh "$TBA_BOX_ENV_PATH" <"$CX_BOXENV"
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
+  local i=0
+  for b in "${CX_REPOS[@]}"; do
+    nm="${CX_NAMES[$i]}"; i=$(( i + 1 ))
+    _tba_cx_out sh -c 'umask 077; mkdir -p "$1/rows" && cat >"$1/rows/$2.json.tmp" && mv -f "$1/rows/$2.json.tmp" "$1/rows/$2.json"' sh "$CX_STG" "$nm" \
+      < <({ _tba_b64url_dec "$b"; printf '\n'; })
+    [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
+  done
+  _tba_cx_out sh -c 'umask 077; cat >"$1/push.pub"' sh "$CX_STG" < <(printf '%s\n' "$CX_PUSH_PUB")
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" pair-failed; return 1; }
+}
+
+# phase 4, install: the staging tree's own installer, as root, with the fleet host's tag and node version; its `refused:`
+# and `failed:` lines (it speaks on stderr, so stderr is folded into the stream) are kept here and map to the closed codes.
+_tba_cx_install() {
+  local node mine distro line args=() nm lines=""
+  node="$(node --version 2>/dev/null)"; node="${node#v}"
+  [[ "$node" =~ ^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$ ]] || { TBA_CODE=install-failed; return 1; }
+  mine="$(head -c 65536 "${TBA_OS_RELEASE:-/etc/os-release}" 2>/dev/null)"
+  distro="$(_tba_osrel ID "$mine")-$(_tba_osrel VERSION_ID "$mine")"
+  [ "$distro" != "-" ] || { TBA_CODE=install-failed; return 1; }
+  for nm in "${CX_NAMES[@]}"; do args+=(--repos "$CX_STG/rows/$nm.json"); done
+  _tba_cx_out sh -c 'exec bash "$@" 2>&1' sh "$CX_STG/deploy/testbox/install.sh" --release "$CX_TAG" --node "$node" "${args[@]}" \
+    --distro "$distro" --push-key "$CX_STG/push.pub"
+  while IFS= read -r line; do
+    case "$line" in
+      "ccrc-testbox-install: refused: "*) lines="$lines$line"$'\n'; _tba_log "install: $line"; TBA_CODE=install-refused ;;
+      "ccrc-testbox-install: failed: "*) lines="$lines$line"$'\n'; _tba_log "install: $line"; [ "$TBA_CODE" = install-refused ] || TBA_CODE=install-failed ;;
+    esac
+  done <<<"$CX_OUT"
+  if [ "$CX_RC" = 0 ] && [ -z "$lines" ]; then TBA_CODE=""; return 0; fi
+  if [ "$CX_RC" = 97 ] || [ "$CX_RC" = 255 ]; then _tba_cx_fail "$CX_RC" install-failed; return 1; fi
+  [ -n "$TBA_CODE" ] || TBA_CODE=install-failed
+  return 1
+}
+
+# phase 5, pair: the token (64 hex characters; to this host's file by a temp and a rename, to the box on ssh stdin only),
+# the service restart, then the overlay's four pairing keys and `ccrc settings --write`.
+_tba_cx_pair() {
+  local tok tmp svc_tok port url_host git_host
+  [ -f "$CX_GIT_KEY" ] || { TBA_CODE=pair-failed; return 1; }
+  tok="$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [[ "$tok" =~ ^[0-9a-f]{64}$ ]] || { TBA_CODE=pair-failed; return 1; }
+  CX_TOKEN_FILE="$(_tba_home_path "${TBK[CCRC_TESTBOX_TOKEN_FILE]:-~/.ccrc/testbox.token}")"
+  [ -d "${CX_TOKEN_FILE%/*}" ] || (umask 077 && mkdir -p "${CX_TOKEN_FILE%/*}") || { TBA_CODE=pair-failed; return 1; }
+  tmp="$CX_TOKEN_FILE.tmp.$$"
+  _tmp_guard "$tmp"
+  ( umask 077; printf '%s' "$tok" >"$tmp" ) 2>/dev/null && chmod 600 "$tmp" 2>/dev/null && mv -f -- "$tmp" "$CX_TOKEN_FILE" 2>/dev/null \
+    || { rm -f -- "$tmp"; TBA_CODE=pair-failed; return 1; }
+  svc_tok="${CX_VAL[SVC_TOKEN]}"
+  _tba_cx_out sh -c 'umask 022; p=$1; case $p in "~/"*) p=/var/lib/$2/${p#"~/"}; mkdir -p "$(dirname "$p")" || exit 1;; esac; install -m 0600 -o "$2" /dev/stdin "$p"' sh "$svc_tok" "${CX_VAL[SVC]}" \
+    < <(printf '%s' "$tok")
+  tok=""
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" pair-failed; return 1; }
+  _tba_cx_out systemctl restart ccrc-testbox.service
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" pair-failed; return 1; }
+  port="${CX_VAL[LISTEN]##*:}"
+  url_host="$TBA_ADDR"; git_host="$TBA_ADDR"
+  if _tba_is_ipv6 "$TBA_ADDR"; then url_host="[$TBA_ADDR]"; git_host="[$TBA_ADDR]"; fi
+  _tba_overlay_put "CCRC_TESTBOX_URL=http://$url_host:$port" "CCRC_TESTBOX_TOKEN_FILE=${TBK[CCRC_TESTBOX_TOKEN_FILE]:-~/.ccrc/testbox.token}" \
+    "CCRC_TESTBOX_GIT_URL_BASE=ssh://${CX_VAL[PUSH]}@$git_host:$TBA_PORT/" "CCRC_TESTBOX_GIT_KEY=${TBK[CCRC_TESTBOX_GIT_KEY]:-~/.ccrc/testbox-push.key}" \
+    || { TBA_CODE=pair-failed; return 1; }
+  ( cmd_settings --write ) >/dev/null 2>&1 || :
+}
+
+# phase 6, check: the fleet's own status of the test box until it reads ok, or degraded (a reason that is not
+# `unreachable`: that state is its own), within the deadline.
+_tba_cx_api() { if [ -n "${TBA_API:-}" ]; then "$TBA_API" "$@"; else bash "$TBA_HERE/ccrc-api" "$@"; fi; }
+_tba_cx_check() {
+  local dl="${TBA_CHECK_DEADLINE:-120}" poll="${TBA_CHECK_POLL:-2}" t0 now out st
+  [[ "$dl" =~ ^[0-9]{1,5}$ ]] && [[ "$poll" =~ ^[0-9]{1,3}$ ]] || { dl=120; poll=2; }
+  t0="$(date +%s)"
+  while :; do
+    out="$(_tba_cx_api testbox status 2>/dev/null | head -c 65536)"
+    st="$(printf '%s' "$out" | grep -o '"state" *: *"[a-z]*"' | head -n 1 | sed 's/.*"\([a-z]*\)"$/\1/')"
+    case "$st" in ok|degraded) break ;; esac
+    now="$(date +%s)"
+    if [ $(( now - t0 )) -ge "$dl" ]; then TBA_CODE=status-not-ok; return 1; fi
+    sleep "$poll"
+  done
+  # The box's own settings snapshot is the `read` sub's (a later task); a release without it still connects.
+  if declare -F _tba_run_read >/dev/null 2>&1; then _tba_run_read >/dev/null 2>&1 || :; fi
+}
+
+# connect --set=KEY=VALUE... --repo=<row>...
+_tba_run_connect() {
+  local pre=0 rc=0 sha
+  if [ "${1-}" = --precheck ]; then pre=1; shift; fi
+  _tba_cx_precheck "$@" || return 1
+  [ "$pre" = 0 ] || return 0
+  _tba_log "connect: begins"
+  _tba_phase verify; _tba_cx_verify || rc=1
+  if [ "$rc" = 0 ]; then _tba_phase copy; _tba_cx_copy || rc=1; fi
+  if [ "$rc" = 0 ]; then _tba_phase settings; _tba_cx_settings || rc=1; fi
+  if [ "$rc" = 0 ]; then _tba_phase install; _tba_cx_install || rc=1; fi
+  if [ "$rc" = 0 ]; then _tba_phase pair; _tba_cx_pair || rc=1; fi
+  # The staging directory is the box's to lose: removed whichever way the act went (best effort).
+  if [ -n "${CX_STG-}" ]; then _tba_cx_out rm -rf -- "$CX_STG" || :; fi
+  [ "$rc" = 0 ] || { _tba_log "connect: failed ($TBA_CODE)"; return 1; }
+  _tba_phase check; _tba_cx_check || { _tba_log "connect: failed ($TBA_CODE)"; return 1; }
+  sha="$(_plat_sha256 "$CX_BOXENV" 2>/dev/null)"; sha="${sha%% *}"
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || sha=""
+  _tba_state_write connected=1 "box_sha256=$sha" "box_root=${CX_VAL[ROOT]}" "box_tools=${CX_VAL[TOOLS]}" || :
+  _tba_log "connect: ok"
+  return 0
+}
+
 # ── the dispatch ────────────────────────────────────────────────────────────────────────────────────────────────
 _tba_main() {
   local sub="${1-}"
@@ -822,6 +1136,15 @@ _tba_main() {
   if [ "$CCD_OS" != linux ]; then _tba_refuse unsupported-os; return 0; fi
   declare -F "_tba_run_$sub" >/dev/null 2>&1 || _tba_usage_die "$sub is not built in this release"
   if _tba_is_long "$sub"; then
+    # What can stop a long act before it starts is answered by the parent, with nothing written (the sub says it with
+    # `--precheck`, and a sub that has no such check, or a test's stand-in for it, simply returns 0).
+    if [ "$TBA_IN_UNIT" = 0 ] && _tba_in "$sub" "${TBA_PRECHECK_SUBS[@]}"; then
+      TBA_CODE=""; TBA_CODE_KEYS=""
+      if ! "_tba_run_$sub" --precheck ${TBA_WORDS[@]+"${TBA_WORDS[@]}"}; then
+        _tba_refuse "${TBA_CODE:-box-value-refused}" "$TBA_CODE_KEYS"
+        return 0
+      fi
+    fi
     if [ "$TBA_IN_UNIT" = 1 ]; then _tba_unit "$sub" ${TBA_WORDS[@]+"${TBA_WORDS[@]}"}; return 0; fi
     _tba_detach "$sub" ${TBA_WORDS[@]+"${TBA_WORDS[@]}"}
     return $?
