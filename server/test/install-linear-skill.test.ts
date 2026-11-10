@@ -58,7 +58,7 @@ describe('the start card is byte for byte as on main: no Linear line (D-7682 R6;
     expect(card()).toBe(envelope('ccrc-role: You are this project\'s coordinator from your first turn. Load the '
       + '`ccrc-coordinator` skill now, before anything else, and act as it says. When your work belongs to a programme, '
       + 'read its goals and definition of done in its ledger (`docs/superpowers/programs/<slug>.md`) before you plan or '
-      + 'ask. Your children\'s questions and permission prompts come to you first; your own go to the operator.'));
+      + 'ask. Your children\'s questions and permission prompts come to you first; your own you work out from the programme\'s goals first; only operator-only decisions go to the operator.'));
   });
 
   it('a held worker row is shown the hold card and nothing else', () => {

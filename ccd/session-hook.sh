@@ -3317,8 +3317,7 @@ case "$event" in
     # clear, compact and a source-less start are fresh or rebuilt contexts and are told to load the `ccrc-coordinator` skill NOW
     # and to read their programme's goals; a `resume` or `fork` carries a transcript that already received the fresh text, so it
     # gets a SHORTER reminder (load the skill only if this context lacks it). No "shown" marker exists or is added. Both texts
-    # keep the same last sentence ("your own go to the operator"), so a rebase over the autonomy plan's edit replaces one
-    # sentence. Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
+    # keep the same last sentence ("your own you work out from the programme's goals first; only operator-only decisions go to the operator", D-8126). Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
     # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
     # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
     # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
@@ -3330,8 +3329,8 @@ case "$event" in
       [ -e "$REG/$id.hold" ] && return 0
       case "$src" in
         # compact keeps the short reminder: Claude Code re-attaches skills already invoked, so reloading would only spend tokens.
-        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
-        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own you work out from the programme's goals first; only operator-only decisions go to the operator." ;;
+        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own you work out from the programme's goals first; only operator-only decisions go to the operator." ;;
       esac
       return 0
     }
