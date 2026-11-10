@@ -172,6 +172,50 @@ export const AGENTS_STORE_RATIO_HIGH: 0.55;
 /** The pause order's one rule (W4 P5, D-8155): `'at-90'` when armed, no other pause stands, the cap is measured (over 0) and the size has reached
  *  `AGENTS_PAUSE_SHARE` of it; else null. */
 export function decideAgentsPause(i: { armed: boolean; pause: string | null; sizeBytes: number; capBytes: number }): 'at-90' | null;
+
+// --- W4 P11, P12, P17 to P19: the census's pure deciders (addendum 3.2 and 3.3)
+export type CensusPart = (typeof CENSUS_PARTS)[number];
+export const CENSUS_PARTS: readonly ['R', 'P', 'Q', 'Ad'];
+export type CensusVerdict = (typeof CENSUS_VERDICTS)[number];
+export const CENSUS_VERDICTS: readonly ['L', 'U', 'M', 'X'];
+export type CensusColumn = (typeof CENSUS_COLUMNS)[number];
+/** `D-T` first: the one ever called canonical. */
+export const CENSUS_COLUMNS: readonly ['D-T', 'D', 'E', 'Ad'];
+export const META_FAILURES: readonly MetaFailure[];
+export type CensusReason =
+  | 'meta-conflict' | `meta-unread:${MetaFailure}`
+  | 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable'
+  | 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed'
+  | 'summary-unreadable';
+export const CENSUS_REASONS: readonly CensusReason[];
+export type CensusWithheldReason = 'unentered' | 'identity-collision' | 'partition-sum';
+export const CENSUS_WITHHELD: readonly CensusWithheldReason[];
+export const LINK_WINDOW_MS: number;
+export const LINK_DECODE_MAX: number;
+export function censusPart(i: { hasRow: boolean; listed: number; admissibleMtimes: number[]; sinceMs: number | null }): CensusPart | 'G';
+export type MetaEvidence = { link: string } | { none: true } | { unknown: CensusReason };
+export function metaEvidence(i: { stored: string | null; reads: MetaRead[] }): MetaEvidence;
+export type ParentSearch =
+  | { outcome: 'match' }
+  | { outcome: 'none'; complete: true }
+  | { outcome: 'none'; complete: false; cause: 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed' }
+  | { outcome: 'unmeasured'; cause: 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable' };
+export type LinkVerdict = { v: 'L' | 'U' | 'M' | 'X'; reason: CensusReason | null };
+export function linkVerdict(i: { meta: MetaEvidence; parent: ParentSearch }): LinkVerdict;
+export type WorkflowVerdict = { v: 'L' | 'U' | 'M'; reason: CensusReason | null };
+export type WorkflowSummary = 'exists' | 'absent' | 'unreadable';
+export function workflowVerdict(option: 'a' | 'b' | 'c', ev: ParentSearch | WorkflowSummary | null): WorkflowVerdict | 'unavailable';
+export function workflowWindow(t0: number, runWindow: 'immediate' | 'at-end', tEnd?: number): [number, number];
+export function inColumn(column: CensusColumn, part: CensusPart, imported: boolean): boolean;
+export function censusSums(c: { D: number; R: number; P: number; Q: number; Ad: number; L: number; U: number; M: number; X: number }): { ok: boolean; failed: Array<'D' | 'Ad'> };
+export function unboundExtra(keys: Array<{ bound: number; unbound: number }>): number;
+export interface ShareRange { lo: number; hi: number }
+/** null for an empty denominator: no share, never a zero. */
+export function shareRange(i: { L: number; M: number; den: number; extraLow: number }): ShareRange | null;
+export function censusWithheld(i: { K: number; collisions: number; sumsOk: boolean }): CensusWithheldReason[];
+export function canonicalOf(i: { shares: Partial<Record<CensusColumn, ShareRange | null>> | null; withheld: readonly string[]; predicate: 'a' | 'b' | 'c' | null }): ShareRange | null;
+export type HoldingShape = 'single' | 'identical' | 'prefix' | 'fork' | 'disjoint';
+export function holdingShape(lists: string[][]): HoldingShape;
 /** What the subagent arm of the walk hands over (W4 P20). Paths stay in memory; nothing prints them. */
 export type AgentWalkEntry =
   | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number }

@@ -577,6 +577,167 @@ export function decideAgentsPause({ armed, pause, sizeBytes, capBytes }) {
   return sizeBytes >= AGENTS_PAUSE_SHARE * capBytes ? 'at-90' : null;
 }
 
+// ── the census's deciders (W4 addendum P11, P12, P17 to P19) ──────────────────────────────────────────────────────────
+// Pure, no I/O. The walk and the store join are census.mjs's; these are the parts and their precedence, the two verdict tables,
+// the sums, the ranges and the reasons a share is withheld (addendum 3.2 and 3.3). The census never turns an unknown into a zero.
+/** The parts of `D` (3.3): `D = R + P + Q + Ad`. `censusPart` also answers `G`, which is outside `D`. */
+export const CENSUS_PARTS = Object.freeze(['R', 'P', 'Q', 'Ad']);
+/** The link verdicts of an admitted unit: linked, unresolved, unmeasured, unnamed. `Ad = L + U + M + X`. */
+export const CENSUS_VERDICTS = Object.freeze(['L', 'U', 'M', 'X']);
+/** The columns the census prints, `D-T` first: the one ever called canonical (P11, ruled). */
+export const CENSUS_COLUMNS = Object.freeze(['D-T', 'D', 'E', 'Ad']);
+/** Why a meta could not be read whole (`MetaRead`'s `cause`), as the census spells them in a reason. */
+export const META_FAILURES = Object.freeze(['absent', 'oversized', 'not-regular', 'unreadable', 'malformed']);
+/** Why a verdict is `M`: P17 (c)'s meta side, P19 (b)'s parent side (the lookup's own four causes included), and the one cause
+ *  P12 (c) adds (`summary-unreadable`: the run summary cannot be read). */
+export const CENSUS_REASONS = Object.freeze([
+  'meta-conflict', ...META_FAILURES.map((c) => `meta-unread:${c}`),
+  'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable',
+  'parent-behind', 'parent-copy-unbound', 'parent-untimed',
+  'summary-unreadable',
+]);
+/** Why every share is withheld (3.3, "Uncertainty is shown, never folded"). */
+export const CENSUS_WITHHELD = Object.freeze(['unentered', 'identity-collision', 'partition-sum']);
+/** The link search's window (P4, P12 (b)): 15 minutes either side of its anchor; and the most candidates decoded for one search. */
+export const LINK_WINDOW_MS = 15 * 60 * 1000;
+export const LINK_DECODE_MAX = 64;
+
+/** The part of one unit (3.3, precedence). `G`: a row and no listed holding (outside `D`). Else `Ad` when it has a row; then `P` or
+ *  `Q` only when it has an admissible holding (`P` when every admissible holding is pre-install); else `R`: a unit whose every
+ *  listed holding is refused is `R` whatever the install record is (P18 (a); review 1728 A1). */
+export function censusPart({ hasRow, listed, admissibleMtimes, sinceMs }) {
+  if (hasRow && listed === 0) return 'G';
+  if (hasRow) return 'Ad';
+  if (admissibleMtimes.length === 0) return 'R';
+  return admissibleMtimes.every((m) => isPreInstall(m, sinceMs)) ? 'P' : 'Q';
+}
+
+/** A key's meta evidence (P17 (c), ruled): `{ link }` when every meta read whole names the same link and the stored one, if any,
+ *  agrees; `{ none }` when every one names none and nothing is stored; else `{ unknown: <reason> }`, an `M`. Metas that differ, a
+ *  link beside one naming none, and a stored link the reads no longer equal are `meta-conflict`; a meta not read whole is
+ *  `meta-unread:<cause>` (the first such holding's). A conflict among the whole reads is a fact an unreadable one cannot undo, so
+ *  it comes first. No read at all is a meta absent. */
+export function metaEvidence({ stored, reads }) {
+  const failed = reads.find((r) => !r.ok);
+  const links = new Set(reads.filter((r) => r.ok).map((r) => r.toolUseId));
+  if (stored !== null) links.add(stored);
+  if (links.size > 1) return { unknown: 'meta-conflict' };
+  if (failed !== undefined) return { unknown: `meta-unread:${failed.cause}` };
+  if (reads.length === 0) return { unknown: 'meta-unread:absent' };
+  const [only] = links;
+  return only === null ? { none: true } : { link: only };
+}
+
+/** The parent side (P19 (b), ruled; also a workflow unit's under P12 (b)): `L` on a match, `U` only for no match with the window
+ *  complete, `M` by cause in every other row of the table. */
+function parentVerdict(parent) {
+  if (parent.outcome === 'match') return { v: 'L', reason: null };
+  if (parent.outcome === 'none' && parent.complete === true) return { v: 'U', reason: null };
+  return { v: 'M', reason: parent.cause };
+}
+
+/** An Agent-tool unit's verdict from its two pieces of evidence (3.3): `X` only for a meta that names none; an unknown meta is `M`
+ *  whatever the parent says; a link then takes the parent side. */
+export function linkVerdict({ meta, parent }) {
+  if ('unknown' in meta) return { v: 'M', reason: meta.unknown };
+  if ('none' in meta) return { v: 'X', reason: null };
+  return parentVerdict(parent);
+}
+
+/** A workflow unit's verdict under P12's predicate (3.2). `a`: placement, `L` for every admitted file (it measures nothing). `b`: the
+ *  parent side, `ev` a ParentSearch (the settled predicate, act M1, D-8161). `c`: the run summary, `ev` its state (`exists`,
+ *  `absent`, `unreadable`). `'unavailable'` when the predicate's evidence was not run (`ev` null) or is not a state of the option. */
+export function workflowVerdict(option, ev) {
+  if (option === 'a') return { v: 'L', reason: null };
+  if (ev === null || ev === undefined) return 'unavailable';
+  if (option === 'b') return typeof ev === 'object' ? parentVerdict(ev) : 'unavailable';
+  if (option === 'c') {
+    if (ev === 'exists') return { v: 'L', reason: null };
+    if (ev === 'absent') return { v: 'U', reason: null };
+    if (ev === 'unreadable') return { v: 'M', reason: 'summary-unreadable' };
+  }
+  return 'unavailable';
+}
+
+/** The window a run's parent rows are searched in (3.2, "Option (b)'s lookup" step 2; the predicate and its timing settled by act M1,
+ *  D-8161): `immediate`, `[t0 - 15 min, t0 + 15 min]` with `t0` the run's first timed row; `at-end`, `[tEnd, tEnd + 15 min]` with
+ *  `tEnd` its last. The literal lives here once. */
+export function workflowWindow(t0, runWindow, tEnd) {
+  if (runWindow === 'at-end') return [tEnd, tEnd + LINK_WINDOW_MS];
+  return [t0 - LINK_WINDOW_MS, t0 + LINK_WINDOW_MS];
+}
+
+const IN_COLUMN = Object.freeze({
+  'D-T': Object.freeze({ R: true, P: false, Q: true, Ad: true, I: false }),
+  D: Object.freeze({ R: true, P: true, Q: true, Ad: true, I: true }),
+  E: Object.freeze({ R: false, P: false, Q: true, Ad: true, I: true }),
+  Ad: Object.freeze({ R: false, P: false, Q: false, Ad: true, I: true }),
+});
+/** Whether a unit of `part` is in a column's denominator (3.3's membership table). `imported` splits `Ad` into `Ad - I` and `I`. */
+export function inColumn(column, part, imported) {
+  const row = IN_COLUMN[column];
+  if (row === undefined) return false;
+  return row[part === 'Ad' && imported ? 'I' : part] === true;
+}
+
+/** Whether both partitions hold: `D = R + P + Q + Ad` and `Ad = L + U + M + X`. `failed` names the sums that do not. */
+export function censusSums(c) {
+  const failed = [];
+  if (c.D !== c.R + c.P + c.Q + c.Ad) failed.push('D');
+  if (c.Ad !== c.L + c.U + c.M + c.X) failed.push('Ad');
+  return { ok: failed.length === 0, failed };
+}
+
+/** The units the lower end of a range adds as not linked (P18 (a)): a key with `unbound` holdings not yet read counts that many
+ *  extra units when it has a bound holding, and one fewer when it has none (an unbound holding is then the key's own transcript). */
+export function unboundExtra(keys) {
+  return keys.reduce((n, k) => n + (k.unbound <= 0 ? 0 : k.bound > 0 ? k.unbound : k.unbound - 1), 0);
+}
+
+/** A share as a range (3.3): `L / (den + extraLow)` to `(L + M) / den`, so it widens and never narrows. null for an empty
+ *  denominator, which has no share (never a zero). */
+export function shareRange({ L, M, den, extraLow }) {
+  if (!(den > 0)) return null;
+  return { lo: L / (den + extraLow), hi: (L + M) / den };
+}
+
+/** The reasons every share is withheld (3.3): an unentered directory, an identity collision, a failed partition sum. Empty when none. */
+export function censusWithheld({ K, collisions, sumsOk }) {
+  const out = [];
+  if (K > 0) out.push('unentered');
+  if (collisions > 0) out.push('identity-collision');
+  if (!sumsOk) out.push('partition-sum');
+  return out;
+}
+
+/** The canonical share (P11, P12): `D-T`'s range, or null while the predicate is unsettled (`predicate` null), while anything is
+ *  withheld, or when there is no share or no `D-T` range. `shares` is the printed ranges by column. */
+export function canonicalOf({ shares, withheld, predicate }) {
+  if (predicate === null || withheld.length > 0 || shares === null) return null;
+  return shares['D-T'] ?? null;
+}
+
+/** The content shape of a key's bound holdings (3.1), from each holding's ordered entry uuids in the store. `disjoint` (two holdings
+ *  of at least one row each and no row in common: an identity collision) outranks the rest; then `identical`; a chain of prefixes
+ *  is `prefix` (growing copies); anything else shares rows and is a `fork`. Hardlinks are one file row, so one list: `single`. */
+export function holdingShape(lists) {
+  if (lists.length <= 1) return 'single';
+  for (let i = 0; i < lists.length; i += 1) {
+    for (let j = i + 1; j < lists.length; j += 1) {
+      const a = lists[i];
+      const b = lists[j];
+      if (a.length > 0 && b.length > 0) {
+        const inA = new Set(a);
+        if (!b.some((u) => inA.has(u))) return 'disjoint';
+      }
+    }
+  }
+  const longest = lists.reduce((x, y) => (y.length > x.length ? y : x));
+  const prefixOf = (l) => l.every((u, k) => u === longest[k]);
+  if (!lists.every(prefixOf)) return 'fork';
+  return lists.every((l) => l.length === longest.length) ? 'identical' : 'prefix';
+}
+
 // ── the one role reader (§5.2, O53) ───────────────────────────────────────
 /** One key out of an env file's TEXT, by `ccd/ccrc`'s `_box_env_value` rules
  *  in its default (two-argument) mode, which every doctor caller uses — so the

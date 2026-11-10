@@ -33,6 +33,7 @@ import {
   parseJournalRecord, journalRecord,
 } from '../../ccd/history/lib.mjs';
 import * as libPlan from '../../ccd/history/lib.mjs';
+import * as libCensus from '../../ccd/history/lib.mjs';
 import * as libEpoch from '../../ccd/history/lib.mjs';
 import * as libRows from '../../ccd/history/lib.mjs';
 import * as rowFx from './historyFixtures.js';
@@ -275,7 +276,9 @@ describe('the vocabularies are frozen, and each holds what the spec names', () =
       DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES, BACKENDS, JOURNAL_KINDS,
       JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS,
       // W4 P20 (Task 1B's three vocabularies, frozen unchecked until Task 1C)
-      AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS]) {
+      AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
+      // W4 P11, P12, P17 to P19 (Task 1G): the census's vocabularies
+      libCensus.CENSUS_PARTS, libCensus.CENSUS_VERDICTS, libCensus.CENSUS_COLUMNS, libCensus.META_FAILURES, libCensus.CENSUS_REASONS, libCensus.CENSUS_WITHHELD]) {
       expect(Object.isFrozen(v)).toBe(true);
     }
     for (const f of Object.values(WRITING_FORMS)) expect(Object.isFrozen(f)).toBe(true);
@@ -12369,5 +12372,194 @@ describe('the subagent meta\'s store side (W4 addendum P17 (c))', () => {
     ['general-purpose', { ok: false, cause: 'absent' }, null],
   ] as const)('decideMetaType(%j, %j) is %j (write once, from the first whole meta)', (stored, read, want) => {
     expect(decideMetaType({ stored, read: read as libPlan.MetaRead })).toBe(want);
+  });
+});
+
+
+// W4 addendum 3.2 and 3.3 (P11, P12, P17 to P19): the census's pure deciders. Each table's rows are the addendum's.
+describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
+  const okLink = (t: string | null): libPlan.MetaRead => ({ ok: true, toolUseId: t, agentType: null });
+  const bad = (cause: libPlan.MetaFailure): libPlan.MetaRead => ({ ok: false, cause });
+  const IMPORTED = true;
+
+  it('the vocabularies are as the brief states them (D-T first; the reasons of both tables)', () => {
+    expect(libCensus.CENSUS_PARTS).toEqual(['R', 'P', 'Q', 'Ad']);
+    expect(libCensus.CENSUS_VERDICTS).toEqual(['L', 'U', 'M', 'X']);
+    expect(libCensus.CENSUS_COLUMNS).toEqual(['D-T', 'D', 'E', 'Ad']);
+    expect(libCensus.CENSUS_REASONS).toEqual([
+      'meta-conflict', 'meta-unread:absent', 'meta-unread:oversized', 'meta-unread:not-regular', 'meta-unread:unreadable', 'meta-unread:malformed',
+      'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable', 'parent-behind', 'parent-copy-unbound', 'parent-untimed',
+      'summary-unreadable']);
+    expect(libCensus.CENSUS_WITHHELD).toEqual(['unentered', 'identity-collision', 'partition-sum']);
+    expect(libCensus.LINK_WINDOW_MS).toBe(900000);
+    expect(libCensus.LINK_DECODE_MAX).toBe(64);
+  });
+
+  it.each([
+    // [hasRow, listed, admissibleMtimes, sinceMs, part]
+    [true, 0, [], 100, 'G'],               // a row and no listed holding
+    [true, 0, [50], 100, 'G'],             // G before Ad
+    [true, 1, [], 100, 'Ad'],              // a stored row whose holding was later refused stays in Ad
+    [true, 2, [50, 200], 100, 'Ad'],
+    [false, 1, [50], 100, 'P'],            // every admissible holding pre-install
+    [false, 2, [50, 99], 100, 'P'],
+    [false, 2, [50, 200], 100, 'Q'],       // one post-install holding
+    [false, 1, [100], 100, 'Q'],           // an mtime equal to the record is post-install
+    [false, 1, [50], null, 'P'],           // no record reads as pre-install
+    [false, 1, [], 100, 'R'],              // every listed holding refused
+    [false, 2, [], null, 'R'],             // R whatever sinceMs is
+  ] as const)('censusPart(row %j, listed %j, mtimes %j, since %j) is %s', (hasRow, listed, admissibleMtimes, sinceMs, want) => {
+    expect(libCensus.censusPart({ hasRow, listed, admissibleMtimes: [...admissibleMtimes], sinceMs })).toBe(want);
+  });
+
+  it.each([
+    // the meta table's P17 (c) column, a row each
+    ['same link, one holding', null, [okLink('t1')], { link: 't1' }],
+    ['same link, several holdings', null, [okLink('t1'), okLink('t1')], { link: 't1' }],
+    ['same link, stored agrees', 't1', [okLink('t1')], { link: 't1' }],
+    ['none named, one holding', null, [okLink(null)], { none: true }],
+    ['none named, several holdings', null, [okLink(null), okLink(null)], { none: true }],
+    ['different links', null, [okLink('t1'), okLink('t2')], { unknown: 'meta-conflict' }],
+    ['a link beside one naming none', null, [okLink('t1'), okLink(null)], { unknown: 'meta-conflict' }],
+    ['changed since stored: another link', 't1', [okLink('t2')], { unknown: 'meta-conflict' }],
+    ['changed since stored: now names none', 't1', [okLink(null)], { unknown: 'meta-conflict' }],
+    ['absent, one holding', null, [bad('absent')], { unknown: 'meta-unread:absent' }],
+    ['oversized, beside a whole one', null, [okLink('t1'), bad('oversized')], { unknown: 'meta-unread:oversized' }],
+    ['a link or not regular', null, [bad('not-regular')], { unknown: 'meta-unread:not-regular' }],
+    ['unreadable, stored link stands in (a) but not (c)', 't1', [bad('unreadable')], { unknown: 'meta-unread:unreadable' }],
+    ['not a JSON object', null, [bad('malformed')], { unknown: 'meta-unread:malformed' }],
+    ['a conflict among whole reads outranks an unreadable one', null, [okLink('t1'), okLink('t2'), bad('absent')], { unknown: 'meta-conflict' }],
+    ['no meta at all is a meta absent', null, [], { unknown: 'meta-unread:absent' }],
+  ] as const)('metaEvidence: %s', (_name, stored, reads, want) => {
+    expect(libCensus.metaEvidence({ stored, reads: [...reads] })).toEqual(want);
+  });
+
+  const MATCH = { outcome: 'match' } as const;
+  const COMPLETE = { outcome: 'none', complete: true } as const;
+  const behind = (cause: 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed') => ({ outcome: 'none', complete: false, cause }) as const;
+  const unmeasured = (cause: 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable') => ({ outcome: 'unmeasured', cause }) as const;
+  it.each([
+    // the parent table's P19 (b) column, a row each, under a link
+    ['no main transcript of the parent', unmeasured('parent-not-stored'), { v: 'M', reason: 'parent-not-stored' }],
+    ['no timed row, so no window', unmeasured('no-timed-row'), { v: 'M', reason: 'no-timed-row' }],
+    ['a candidate matches', MATCH, { v: 'L', reason: null }],
+    ['the decode bound reached', unmeasured('decode-bound'), { v: 'M', reason: 'decode-bound' }],
+    ['a candidate over the decode cap', unmeasured('over-cap'), { v: 'M', reason: 'over-cap' }],
+    ['a candidate undecodable', unmeasured('undecodable'), { v: 'M', reason: 'undecodable' }],
+    ['no match, the window complete', COMPLETE, { v: 'U', reason: null }],
+    ['no match, a holding not read past the window', behind('parent-behind'), { v: 'M', reason: 'parent-behind' }],
+    ['no match, a holding not yet bound', behind('parent-copy-unbound'), { v: 'M', reason: 'parent-copy-unbound' }],
+    ['no match, an untimed tool row left undecided', behind('parent-untimed'), { v: 'M', reason: 'parent-untimed' }],
+  ] as const)('linkVerdict, a link, parent: %s', (_name, parent, want) => {
+    expect(libCensus.linkVerdict({ meta: { link: 't1' }, parent })).toEqual(want);
+  });
+  it.each([
+    [{ none: true }, MATCH, { v: 'X', reason: null }],                         // X only for a meta naming none
+    [{ none: true }, COMPLETE, { v: 'X', reason: null }],
+    [{ none: true }, unmeasured('parent-not-stored'), { v: 'X', reason: null }],
+    [{ unknown: 'meta-conflict' }, MATCH, { v: 'M', reason: 'meta-conflict' }], // an unknown meta is M whatever the parent says
+    [{ unknown: 'meta-unread:absent' }, COMPLETE, { v: 'M', reason: 'meta-unread:absent' }],
+    [{ unknown: 'meta-unread:oversized' }, unmeasured('decode-bound'), { v: 'M', reason: 'meta-unread:oversized' }],
+  ] as const)('linkVerdict(meta %j, parent %j) is %j', (meta, parent, want) => {
+    expect(libCensus.linkVerdict({ meta, parent })).toEqual(want);
+  });
+
+  it.each([
+    ['a', null, { v: 'L', reason: null }],                  // placement measures nothing
+    ['a', 'absent', { v: 'L', reason: null }],
+    ['b', MATCH, { v: 'L', reason: null }],                 // the settled predicate takes the parent side
+    ['b', COMPLETE, { v: 'U', reason: null }],
+    ['b', behind('parent-behind'), { v: 'M', reason: 'parent-behind' }],
+    ['b', unmeasured('over-cap'), { v: 'M', reason: 'over-cap' }],
+    ['b', null, 'unavailable'],                             // the lookup was not run (predicate unsettled)
+    ['c', 'exists', { v: 'L', reason: null }],
+    ['c', 'absent', { v: 'U', reason: null }],
+    ['c', 'unreadable', { v: 'M', reason: 'summary-unreadable' }],
+    ['c', null, 'unavailable'],
+    ['c', 'nonsense', 'unavailable'],
+  ] as const)('workflowVerdict(%s, %j) is %j', (option, ev, want) => {
+    expect(libCensus.workflowVerdict(option, ev as never)).toEqual(want);
+  });
+
+  it('workflowWindow: immediate is t0 +- 15 min, at-end is [tEnd, tEnd + 15 min]', () => {
+    const t0 = 10_000_000;
+    expect(libCensus.workflowWindow(t0, 'immediate')).toEqual([t0 - 900000, t0 + 900000]);
+    expect(libCensus.workflowWindow(t0, 'at-end', 12_000_000)).toEqual([12_000_000, 12_900_000]);
+  });
+
+  it.each([
+    // [part, imported, D-T, D, E, Ad]: the membership table's five rows by four columns
+    ['R', false, true, true, false, false],
+    ['P', false, false, true, false, false],
+    ['Q', false, true, true, true, false],
+    ['Ad', false, true, true, true, true],     // Ad - I, admitted post-install
+    ['Ad', IMPORTED, false, true, true, true], // I, imported pre-install
+  ] as const)('inColumn: part %s imported %j', (part, imported, dt, d, e, ad) => {
+    const got = libCensus.CENSUS_COLUMNS.map((col) => libCensus.inColumn(col, part, imported));
+    expect(got).toEqual([dt, d, e, ad]);
+  });
+  it('inColumn answers false for a column it does not know', () => {
+    expect(libCensus.inColumn('X' as never, 'Ad', false)).toBe(false);
+  });
+
+  it.each([
+    [{ D: 10, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 1 }, true, []],
+    [{ D: 11, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 1 }, false, ['D']],
+    [{ D: 10, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 0 }, false, ['Ad']],
+    [{ D: 9, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 0 }, false, ['D', 'Ad']],
+  ] as const)('censusSums(%j) is ok %j, failing %j', (c, ok, failed) => {
+    expect(libCensus.censusSums(c)).toEqual({ ok, failed });
+  });
+
+  it('unboundExtra: u for a key with a bound holding, u - 1 for one with none (P18 (a))', () => {
+    expect(libCensus.unboundExtra([{ bound: 1, unbound: 1 }, { bound: 0, unbound: 2 }])).toBe(2);
+    expect(libCensus.unboundExtra([])).toBe(0);
+    expect(libCensus.unboundExtra([{ bound: 2, unbound: 0 }, { bound: 0, unbound: 0 }])).toBe(0); // never negative
+    expect(libCensus.unboundExtra([{ bound: 0, unbound: 1 }])).toBe(0);
+  });
+
+  it('shareRange: L / (den + extraLow) to (L + M) / den, and no share for an empty denominator', () => {
+    expect(libCensus.shareRange({ L: 2, M: 1, den: 4, extraLow: 2 })).toEqual({ lo: 2 / 6, hi: 3 / 4 });
+    expect(libCensus.shareRange({ L: 3, M: 0, den: 3, extraLow: 0 })).toEqual({ lo: 1, hi: 1 });
+    expect(libCensus.shareRange({ L: 0, M: 0, den: 0, extraLow: 0 })).toBeNull();
+  });
+
+  it.each([
+    [0, 0, true, []],
+    [1, 0, true, ['unentered']],
+    [0, 2, true, ['identity-collision']],
+    [0, 0, false, ['partition-sum']],
+    [3, 1, false, ['unentered', 'identity-collision', 'partition-sum']],
+  ] as const)('censusWithheld(K %j, collisions %j, sums ok %j) is %j', (K, collisions, sumsOk, want) => {
+    expect(libCensus.censusWithheld({ K, collisions, sumsOk })).toEqual(want);
+  });
+
+  const SHARES = { 'D-T': { lo: 0.9, hi: 0.95 }, D: { lo: 0.8, hi: 0.9 } } as const;
+  it.each([
+    [SHARES, [], 'b', { lo: 0.9, hi: 0.95 }],
+    [SHARES, [], 'c', { lo: 0.9, hi: 0.95 }],
+    [SHARES, [], null, null],                          // no canonical share until the predicate is settled
+    [SHARES, ['unentered'], 'b', null],                // nor while anything is withheld
+    [null, [], 'b', null],
+    [{ D: { lo: 0.8, hi: 0.9 } }, [], 'b', null],      // no D-T range
+  ] as const)('canonicalOf(shares %j, withheld %j, predicate %j) is %j', (shares, withheld, predicate, want) => {
+    expect(libCensus.canonicalOf({ shares: shares as never, withheld: [...withheld], predicate })).toEqual(want);
+  });
+
+  it.each([
+    [[], 'single'],
+    [[['a', 'b']], 'single'],                          // hardlinks are one file row
+    [[['a', 'b'], ['a', 'b']], 'identical'],
+    [[['a', 'b'], ['a', 'b'], ['a', 'b']], 'identical'],
+    [[['a', 'b'], ['a', 'b', 'c']], 'prefix'],         // growing copies
+    [[['a'], ['a', 'b'], ['a', 'b', 'c']], 'prefix'],
+    [[[], ['a', 'b']], 'prefix'],
+    [[['a', 'b', 'c'], ['a', 'b', 'd']], 'fork'],      // a shared prefix, then rows only one holding has
+    [[['a', 'b'], ['a', 'c'], ['a', 'b', 'c']], 'fork'],
+    [[['a', 'b'], ['c', 'd']], 'disjoint'],            // at least one row each, none in common
+    [[['a', 'b'], ['a', 'c'], ['x']], 'disjoint'],     // any pair disjoint is a collision
+    [[['a', 'b'], []], 'prefix'],                      // an empty holding is not disjoint
+  ] as const)('holdingShape(%j) is %s', (lists, want) => {
+    expect(libCensus.holdingShape(lists.map((l) => [...l]))).toBe(want);
   });
 });
