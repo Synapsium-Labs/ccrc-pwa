@@ -13,8 +13,9 @@ import {
   runIdsOf, sidecarsOf, T0, transcriptRows, variantsOf, type AgentRig, type TreeSpec,
 } from './historyAgentFixtures.js';
 import { counters, makeHistoryBox, openStoreRO, plantSession, plantTranscript, recordOpenFlags, runCli, runDriver, runShim, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
+import { userRow } from './historyFixtures.js';
 import { mkTmp, removeTmpFixturesSince, tmpMark } from './tmpHelpers.js';
-import { agentIdOk, capBytes, historyPaths, META_FAILURES, META_MAX_BYTES, parseOpVerbArgs, SCAN_INTERVAL_MS, WRITING_FORMS } from '../../ccd/history/lib.mjs';
+import { agentIdOk, capBytes, historyPaths, lagOfTick, META_FAILURES, META_MAX_BYTES, parseOpVerbArgs, SCAN_INTERVAL_MS, WRITING_FORMS } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
 import { behindStats, candidateFiles, discoverTranscripts, ingestTick, makeIngestCtx, newBudget, readAgentMeta } from '../../ccd/history/sweep.mjs';
 
@@ -201,6 +202,47 @@ describe('what reads a stored short subagent row, and what it holds back (review
   });
 });
 
+describe('a subagent file feeds none of the main lag series (final review I1)', () => {
+  type Ing = { newEntries: number; minNewTsMs: number | null; bytes: number };
+  const lagOf = (ing: Ing): number | null => lagOfTick({ tickStartMs: Date.UTC(2026, 10, 1, 12, 0, 0), newEntries: ing.newEntries, minNewTsMs: ing.minNewTsMs });
+  const rowAt = (tag: number, ts: string): object => userRow({ uuid: `00000000-${tag.toString(16).padStart(4, '0')}-4000-8000-000000000001`, ts, sessionId: PARENT, text: `lag ${tag}` });
+
+  it('an armed tick whose only new rows are a subagent file\'s (a first read, then a stale file\'s growth) leaves the lag at 0, as a main-only tick would', async () => {
+    const rig = await rigOf('ccrc-hist-i1-');
+    const { db, tick } = rig;
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0xe00)] }, SINCE);
+    await tick(noMarker, { scan: true });                        // the parent is stored; the disarmed node reads no subagent file
+    expect(agentRows(db), 'CONTROL: set-up stored no subagent row').toBe(0);
+    // 1. the subagent file's first read: new rows, none of them main's
+    let ing = (await tick(armed, { scan: true })) as Ing;
+    expect(agentKeys(db), 'CONTROL: the armed scan tick read the agent file').toEqual(['a']);
+    expect(ing.bytes, 'CONTROL: the tick read bytes').toBeGreaterThan(0);
+    expect([ing.newEntries, ing.minNewTsMs], 'a subagent\'s first read is no main entry').toEqual([0, null]);
+    expect(lagOf(ing)).toBe(0);
+    // 2. the stale file grows; the next scan tick (up to SCAN_INTERVAL_MS later) resumes it
+    grow(paths['a']!, 0xe01, T0 + 400_000, 3);
+    ing = (await tick(armed, { scan: true })) as Ing;
+    expect(offsetOf(db, paths['a']!), 'CONTROL: the growth was read').toBe(fs.statSync(paths['a']!).size);
+    expect([ing.newEntries, ing.minNewTsMs]).toEqual([0, null]);
+    expect(lagOf(ing)).toBe(0);
+  });
+
+  it('a main file\'s lag is unchanged beside a subagent file\'s: only the main entries are counted, and the main rows\' own time is the minimum', async () => {
+    const rig = await rigOf('ccrc-hist-i1b-');
+    const { tick } = rig;
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0xe10)] }, SINCE);
+    await tick(armed, { scan: true });
+    // the subagent file grows by rows older than the main file's new row, so a min over both would be the subagent's
+    grow(paths['a']!, 0xe11, T0 + 400_000, 2);
+    fs.appendFileSync(mainPathOf(rig, PARENT), `${JSON.stringify(rowAt(0xe12, '2026-11-01T10:05:00.000Z'))}\n`);
+    fs.utimesSync(mainPathOf(rig, PARENT), new Date(T0 + 400_000), new Date(T0 + 400_000));
+    const ing = (await tick(armed, { scan: true })) as Ing;
+    expect(ing.newEntries, 'one main entry; the subagent file\'s two are not counted').toBe(1);
+    expect(ing.minNewTsMs).toBe(Date.UTC(2026, 10, 1, 10, 5, 0));
+    expect(lagOf(ing)).toBe(Date.UTC(2026, 10, 1, 12, 0, 0) - Date.UTC(2026, 10, 1, 10, 5, 0));
+  });
+});
+
 describe('a stored short subagent row under the 90% pause holds none of its parent\'s sidecars back (review 1735, F2; W4 P5)', () => {
   it('the paused twin: armed, a sidecar scan, the store at 90%: the sidecar is stored and the agent offset stays at `at`', async () => {
     const rig = await rigOf('ccrc-hist-f2p-');
@@ -325,12 +367,16 @@ describe('what the agent arm does not enter, and which parents it serves', () =>
 /** The result of one `candidateFiles` call over the rig's store, as a non-scan tick makes it: the paths it would read, in order, every
  *  path its between-scans pass stated, and what the subagent row query did (`queries` runs, `rows` handed back by each). `max` is
  *  ctx.activeStatMax (the per-tick stat cap). */
-function probeActive(rig: AgentRig, o: { max?: number; armedMarker?: boolean } = {}): { read: string[]; stats: string[]; queries: number; rows: number[] } {
+function probeActive(rig: AgentRig, o: { max?: number; armedMarker?: boolean } = {}): { read: string[]; stats: string[]; queries: number; rows: number[]; offProbes: number } {
   const ctx = makeIngestCtx(rig.box.home, rig.box.homes, T0 + 3_600_000, null) as Record<string, unknown>;
   const real = ctx['activeStat'] as (p: string) => unknown;
   const stats: string[] = [];
   ctx['activeStat'] = (p: string): unknown => { stats.push(p); return real(p); };
   if (o.max !== undefined) ctx['activeStatMax'] = o.max;
+  // the history-off probe (an existsSync a tick makes), counted: an unarmed node's active arm must not make it (final review M1)
+  const realOff = ctx['historyOff'] as () => boolean;
+  let offProbes = 0;
+  ctx['historyOff'] = (): boolean => { offProbes += 1; return realOff(); };
   const rows: number[] = [];
   // the db behind a proxy that watches the one statement whose text filters subagent rows (`t.agent_id <> ''`)
   const spy = new Proxy(rig.db, {
@@ -356,7 +402,7 @@ function probeActive(rig: AgentRig, o: { max?: number; armedMarker?: boolean } =
     },
   }) as typeof rig.db;
   const r = candidateFiles(spy, ctx, false, false, null, o.armedMarker ?? true) as { files: Array<{ path: string }> };
-  return { read: r.files.map((f) => f.path), stats, queries: rows.length, rows };
+  return { read: r.files.map((f) => f.path), stats, queries: rows.length, rows, offProbes };
 }
 /** Appends `n` rows (message uuids under `tag`) to a stored file and stamps its mtime at `atMs`, so the next stat reads as changed. */
 function grow(p: string, tag: number, atMs: number, n = 1): void {
@@ -409,6 +455,9 @@ describe('the read cadence (W4 addendum P3, SA10)', () => {
     expect(r.queries, 'an unarmed node runs no subagent row query').toBe(0);
     expect(statsOf(r, a1, a2), 'an unarmed node stats no subagent file').toBe(0);
     expect(probeActive(rig, { max: 4 }).queries, 'CONTROL: armed, the query runs once').toBe(1);
+    // M1 (final review): the unarmed node pays no history-off probe in the active agent arm; armed, the gate asks it once
+    expect(r.offProbes, 'an unarmed node does not probe history-off for the subagent arm').toBe(0);
+    expect(probeActive(rig, { max: 4 }).offProbes, 'CONTROL: armed, the probe runs once').toBe(1);
     // 8. the query is bounded by the room the main files leave: a cap of two stats and two active parents leave none, and one stat
     //    of room beyond the main files hands back at most one row
     expect(probeActive(rig, { max: 2 }).queries, 'no room: no query').toBe(0);
@@ -936,6 +985,14 @@ describe('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
     expect(listersOfSubagents([...files, planted])).toContain('census.mjs listAll');
     expect(listingCalls(planted.text)).toHaveLength(1);
     expect(listersOfSubagents([{ name: 'x.mjs', text: '// the list of `${s}/subagents` is the walk\'s\n * /subagents\n' }]), 'a comment is not a lister').toEqual([]);
+  });
+
+  it('the live row a path names is one statement (the tick\'s withheld count and the import\'s forecast share it), and its bytes-left rule is lib\'s (final review M2)', () => {
+    const sweep = historyModules().find((m) => m.name === 'sweep.mjs')!.text;
+    const rowStatements = codeLines(sweep).filter((l) => l.includes('SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p'));
+    expect(rowStatements, 'the path-row statement is spelled once').toHaveLength(1);
+    // and neither arm re-spells the rule: size minus the cursor is lib's bytesLeftOf alone
+    expect(codeLines(sweep).filter((l) => /Math\.max\(\s*size\s*-\s*Number\(row\.offset\)/.test(l) || /st\.size\s*!==\s*Number\(row\.offset\)/.test(l))).toEqual([]);
   });
 });
 

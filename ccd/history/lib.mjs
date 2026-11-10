@@ -468,8 +468,10 @@ export function agentIdOk(id) {
 /** The levels of the walk, outermost first: the home's projects root, a project, a session, its `subagents/`, a
  *  `workflows/` directory and one run's directory. Plan-chosen words (the census names where a refusal happened). */
 export const AGENT_LEVELS = Object.freeze(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
-/** Why a directory is not entered: a symbolic link, something that is not a directory, a directory that cannot be listed. */
-export const AGENT_DIR_REASONS = Object.freeze(['link', 'not-dir', 'unlistable']);
+/** Why a directory is not entered: a symbolic link, something that is not a directory, a directory that cannot be listed. `unmeasured`
+ *  is the same word's file form (final review M5): a candidate file whose lstat failed for a reason other than its absence (EACCES,
+ *  EIO) has no kind, so it is neither admitted nor refused; it is handed over unentered, and the census counts it into K. */
+export const AGENT_DIR_REASONS = Object.freeze(['link', 'not-dir', 'unlistable', 'unmeasured']);
 /** Why a candidate file is refused, in the order they are tested (decideAgentFile). */
 export const AGENT_FILE_REASONS = Object.freeze(['run-id', 'name', 'link', 'not-regular']);
 
@@ -486,6 +488,15 @@ export function classifyAgentName(name, where) {
   if (meta && agentIdOk(meta[1])) return { role: 'meta', id: meta[1] };
   const t = AGENT_TRANSCRIPT_RE.exec(name);
   return { role: 'candidate', id: t && agentIdOk(t[1]) ? t[1] : null };
+}
+/** The name of an agent's meta companion: the one spelling of `agent-<ID>.meta.json` (AGENT_META_RE reads it back). */
+export function metaNameOf(id) {
+  return `agent-${id}.meta.json`;
+}
+/** The path of an agent's meta: beside its transcript, in the directory `agentFilePath` names, under metaNameOf(id). A pure string
+ *  rule (no I/O): the store side and the census both ask it, and neither spells the meta's name. */
+export function metaPathOf(agentFilePath, id) {
+  return `${agentFilePath.slice(0, agentFilePath.lastIndexOf('/') + 1)}${metaNameOf(id)}`;
 }
 /** Whether the walk enters a directory entry, from its lstat kind and whether it could be listed. A link is never followed. */
 export function decideAgentDir(i) {
@@ -506,6 +517,16 @@ export function decideAgentFile(i) {
 /** The identity of a subagent within its parent session (P1): the Agent tool's `<ID>`, or a workflow agent's `<RUN>/<ID>`. */
 export function agentKey(id, runId) {
   return runId === null ? id : `${runId}/${id}`;
+}
+/** How many bytes of one subagent file are still waiting to be read, the one rule for the tick's withheld count and the dry run's
+ *  forecast (final review M2). `stored` is the live row a path names, `{ dev, ino, offset }`, or null when none stands; `size`, `dev`
+ *  and `ino` are the file's. No row, or a row of another file (device or inode), leaves the whole size waiting; the same file leaves
+ *  the size past its cursor; and a file shorter than its cursor was rewritten or truncated, so it is read again from its start (a
+ *  rescan) and the whole size is waiting. 0 is nothing waiting, an empty file included. */
+export function bytesLeftOf({ stored, size, dev, ino }) {
+  if (stored === null || stored === undefined || stored.dev !== dev || stored.ino !== ino) return size;
+  const offset = Number(stored.offset);
+  return size >= offset ? size - offset : size;
 }
 
 // ── the subagent meta (W4 addendum P17) ───────────────────
@@ -600,7 +621,13 @@ export const CENSUS_REASONS = Object.freeze([
 ]);
 /** Why every share is withheld (3.3, "Uncertainty is shown, never folded"): `K` and `identity_collision` are the addendum's own
  *  names for the unentered-directories population and the disjoint-holdings counter; `partition-sum` is a failed sum. */
-export const CENSUS_WITHHELD = Object.freeze(['K', 'identity_collision', 'partition-sum']);
+export const CENSUS_WITHHELD = Object.freeze(['K', 'identity_collision', 'partition-sum', 'install-record']);
+/** P12's settled predicate and the timing of its evidence (D-8161, act M1, measured on Claude Code 2.1.321): a workflow's launching call
+ *  answers at once with a `tool_result` that reads `Workflow launched in background. Task ID: ...` and a line `Run ID: <runId>`, so
+ *  option (b), the run named in a parent user row, is the predicate and its window is `[t0 - 15 min, t0 + 15 min]` around the run's
+ *  first row (`immediate`); 98 of 98 named samples fell within 15 minutes of it. The one place either constant is spelled. */
+export const CENSUS_PREDICATE = 'b';
+export const CENSUS_RUN_WINDOW = 'immediate';
 /** The content shape of a key's bound holdings (3.1), `none` when no bound holding has a stored row (nothing to compare). */
 export const HOLDING_SHAPES = Object.freeze(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
 /** Why a listed holding of an admitted unit is not bound to the store (3.1, "unbound holdings"; plan-chosen words): `unread` (no row
@@ -719,12 +746,15 @@ export function shareRange({ L, M, den, extraLow }) {
   return { lo: L / (den + extraLow), hi: (L + M) / den };
 }
 
-/** The reasons every share is withheld (3.3): an unentered directory, an identity collision, a failed partition sum. Empty when none. */
-export function censusWithheld({ K, collisions, sumsOk }) {
+/** The reasons every share is withheld (3.3): an unentered directory, an identity collision, a failed partition sum, and an install
+ *  record that is no number (`installRecord` is its milliseconds, `'absent'` or `'damaged'`): with none, every admitted unit reads
+ *  as pre-install and leaves D-T, so a definite share would be a guess. Empty when none. */
+export function censusWithheld({ K, collisions, sumsOk, installRecord }) {
   const out = [];
   if (K > 0) out.push('K');
   if (collisions > 0) out.push('identity_collision');
   if (!sumsOk) out.push('partition-sum');
+  if (typeof installRecord !== 'number') out.push('install-record');
   return out;
 }
 

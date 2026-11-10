@@ -13,7 +13,7 @@
 // alone (the ring case).
 import {
   AGENT_LEVELS, CENSUS_COLUMNS, HOLDING_SHAPES, LINK_DECODE_MAX, LINK_WINDOW_MS, agentKey, blobOverDecodeCap, canonicalOf, censusPart, censusSums,
-  censusWithheld, HOLDING_UNBOUND_CAUSES, holdingShape, inColumn, isPreInstall, linkVerdict, metaEvidence, shareRange, toolUsesOf, unboundExtra,
+  censusWithheld, HOLDING_UNBOUND_CAUSES, metaPathOf, holdingShape, inColumn, isPreInstall, linkVerdict, metaEvidence, shareRange, toolUsesOf, unboundExtra,
   workflowCanonicalVerdict, workflowVerdict, workflowWindow,
 } from './lib.mjs';
 import { blobReadStmts, bodyOf } from './derive.mjs';
@@ -198,10 +198,9 @@ function tally(list, goneList, verdictOf) {
   return t;
 }
 
-const metaPathOf = (path) => path.replace(/\.jsonl$/, '.meta.json');
-
-/** The directory a stored path lies below, among the unentered ones (K): its files are unknown, never absent. */
-const belowAny = (path, dirs) => dirs.some((d) => path.startsWith(`${d}/`));
+/** The unentered entry a stored path lies below, or is (K): its files are unknown, never absent. An unentered entry is a directory, or
+ *  a candidate file whose lstat failed (`unmeasured`), which is the stored path itself. */
+const belowAny = (path, dirs) => dirs.some((d) => path === d || path.startsWith(`${d}/`));
 
 /** A key's bound holdings' entry uuids, one list per live file of its transcript (hardlinks are one file, so one list), for
  *  lib's holdingShape. A key with at most one live file need not read its rows: one that holds any is `single`, else `none`. */
@@ -299,8 +298,9 @@ export function runCensus(db, walk, deps) {
     qParentUnknown: 0,
     lookups,
   };
-  const filePaths = new Set(files.map((f) => f.path));
-  for (const m of metas) if (!filePaths.has(`${m.path.slice(0, m.path.length - '.meta.json'.length)}.jsonl`)) beside.agentMetaOrphan += 1;
+  // a companion is an orphan when no listed candidate names it: lib's metaPathOf is the one rule for which meta a file has
+  const metaPaths = new Set(files.filter((f) => f.id !== null).map((f) => metaPathOf(f.path, f.id)));
+  for (const m of metas) if (!metaPaths.has(m.path)) beside.agentMetaOrphan += 1;
   for (const f of files) if (f.verdict === 'refuse') beside.agentFileRefused[f.reason] = (beside.agentFileRefused[f.reason] ?? 0) + 1;
 
   // each unit's part, and for an admitted one its holdings' state
@@ -361,7 +361,7 @@ export function runCensus(db, walk, deps) {
   for (const u of listed) {
     if (u.part !== 'Ad') continue;
     if (u.kind === 'agent') {
-      const reads = u.holdings.filter((h) => h.id !== null).map((h) => deps.readMeta(metaPathOf(h.path)));
+      const reads = u.holdings.filter((h) => h.id !== null).map((h) => deps.readMeta(metaPathOf(h.path, h.id)));
       const meta = metaEvidence({ stored: u.row.link, reads });
       let parent = null;
       if ('link' in meta) {
@@ -394,7 +394,7 @@ export function runCensus(db, walk, deps) {
   for (const u of listed) if (u.part === 'Ad' && u.verdict.v === 'M') reasons[u.verdict.reason] = (reasons[u.verdict.reason] ?? 0) + 1;
   const sums = censusSums(units);
   const kTotal = K.reduce((n, k) => n + k.n, 0);
-  const withheld = censusWithheld({ K: kTotal, collisions: beside.identityCollision, sumsOk: sums.ok });
+  const withheld = censusWithheld({ K: kTotal, collisions: beside.identityCollision, sumsOk: sums.ok, installRecord: beside.installRecord });
 
   let shares = null;
   if (withheld.length === 0) {

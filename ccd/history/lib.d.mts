@@ -136,7 +136,7 @@ export function agentIdOk(id: unknown): boolean;
 export type AgentLevel = (typeof AGENT_LEVELS)[number];
 export const AGENT_LEVELS: readonly ['root', 'project', 'session', 'subagents', 'workflows', 'run'];
 export type AgentDirReason = (typeof AGENT_DIR_REASONS)[number];
-export const AGENT_DIR_REASONS: readonly ['link', 'not-dir', 'unlistable'];
+export const AGENT_DIR_REASONS: readonly ['link', 'not-dir', 'unlistable', 'unmeasured'];
 export type AgentFileReason = (typeof AGENT_FILE_REASONS)[number];
 export const AGENT_FILE_REASONS: readonly ['run-id', 'name', 'link', 'not-regular'];
 export type AgentName =
@@ -145,9 +145,15 @@ export type AgentName =
   | { role: 'journal' }
   | { role: 'descend' };
 export function classifyAgentName(name: string, where: 'subagents' | 'run'): AgentName;
+/** The name of an agent's meta companion, `agent-<ID>.meta.json`: its one spelling (final review M3). */
+export function metaNameOf(id: string): string;
+/** The path of an agent's meta: in the directory of `agentFilePath`, named by metaNameOf(id). A pure string rule. */
+export function metaPathOf(agentFilePath: string, id: string): string;
 export function decideAgentDir(i: { kind: 'dir' | 'link' | 'file' | 'other'; listable: boolean }): { enter: true } | { enter: false; reason: AgentDirReason };
 export function decideAgentFile(i: { kind: 'file' | 'link' | 'dir' | 'other'; id: string | null; runOk: boolean }): { verdict: 'admit' } | { verdict: 'refuse'; reason: AgentFileReason };
 export function agentKey(id: string, runId: string | null): string;
+/** How many bytes of one subagent file are still waiting: no row or another file's row leaves its size, the same file its size past the cursor, a file shorter than its cursor its whole size (final review M2). */
+export function bytesLeftOf(i: { stored: { dev: bigint | number | null; ino: bigint | number | null; offset: bigint | number } | null; size: number; dev: bigint | number | null; ino: bigint | number | null }): number;
 export const META_MAX_BYTES: 65536;
 /** The meta key that names a subagent's type, measured by act M2 (D-8161). */
 export const AGENT_TYPE_KEY: string;
@@ -188,8 +194,11 @@ export type CensusReason =
   | 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed'
   | 'summary-unreadable' | 'predicate-unsettled' | 'no-run-window';
 export const CENSUS_REASONS: readonly CensusReason[];
-export type CensusWithheldReason = 'K' | 'identity_collision' | 'partition-sum';
+export type CensusWithheldReason = 'K' | 'identity_collision' | 'partition-sum' | 'install-record';
 export const CENSUS_WITHHELD: readonly CensusWithheldReason[];
+/** P12's settled predicate and run window (D-8161, act M1): the one place either is spelled. */
+export const CENSUS_PREDICATE: 'b';
+export const CENSUS_RUN_WINDOW: 'immediate';
 export const LINK_WINDOW_MS: number;
 export const LINK_DECODE_MAX: number;
 export function censusPart(i: { hasRow: boolean; listed: number; admissibleMtimes: number[]; sinceMs: number | null }): CensusPart | 'G';
@@ -216,7 +225,7 @@ export function unboundExtra(keys: Array<{ bound: number; unbound: number }>): n
 export interface ShareRange { lo: number; hi: number }
 /** null for an empty denominator: no share, never a zero. */
 export function shareRange(i: { L: number; M: number; den: number; extraLow: number }): ShareRange | null;
-export function censusWithheld(i: { K: number; collisions: number; sumsOk: boolean }): CensusWithheldReason[];
+export function censusWithheld(i: { K: number; collisions: number; sumsOk: boolean; installRecord: number | 'absent' | 'damaged' }): CensusWithheldReason[];
 export function canonicalOf(i: { shares: Partial<Record<CensusColumn, ShareRange | null>> | null; withheld: readonly string[]; predicate: 'b' | 'c' | null }): ShareRange | null;
 export type HoldingShape = (typeof HOLDING_SHAPES)[number];
 export const HOLDING_SHAPES: readonly ['none', 'single', 'identical', 'prefix', 'fork', 'disjoint'];

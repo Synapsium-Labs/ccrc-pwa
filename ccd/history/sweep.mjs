@@ -47,7 +47,7 @@ import {
   heavyVersionsBetween, passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_READ_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, metaPathOf, bytesLeftOf, CENSUS_PREDICATE, CENSUS_RUN_WINDOW, SIDECAR_READ_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
   SIDECAR_WALK_META, parseSidecarWalk, formatSidecarWalk, emptySidecarWalk, startSidecarWalk, foldWalkCandidates, finishSidecarWalk, walkCandidates,
   parseSidecarScanAt, formatSidecarScanAt, sidecarWrapClose,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
@@ -1864,15 +1864,17 @@ function agentEntry(agents, state, at, runId, runOk, path, c) {
   if (c.role === 'journal') { agents.take({ type: 'companion', ...at, runId, role: 'journal', id: null, path }); return; }
   const l = agentLstat(path);
   if (l.absent === true) return;
-  const kind = l.st === undefined ? 'other' : agentKindOf(l.st);
-  const v = decideAgentFile({ kind, id: c.id, runOk });
+  // An lstat that failed for another reason (EACCES, EIO) measured nothing, so the file is neither admitted nor refused: it is handed
+  // over unentered, at its directory's level, exactly as a directory whose lstat failed is. The census counts it into K and withholds
+  // its shares; it is never a definite refusal (final review M5). A vanished file (ENOENT, ENOTDIR) stays dropped, above.
+  if (l.st === undefined) { agents.take({ type: 'unentered', home: at.home, level: runId === null ? 'subagents' : 'run', reason: 'unmeasured', path }); return; }
+  const v = decideAgentFile({ kind: agentKindOf(l.st), id: c.id, runOk });
   state.taken += 1;
   agents.take({
     type: 'file', ...at, runId, id: c.id, path, verdict: v.verdict, reason: v.verdict === 'refuse' ? v.reason : null,
-    mtimeMs: l.st === undefined ? 0 : Number(l.st.mtimeMs),
     // The census's physical-file and unbound-holding facts (P18): the listing's own lstat, read as bigints so an inode past 2^53
-    // matches the store's; null when that lstat failed (the file's identity is then unmeasured, not 0). `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave.
-    dev: l.st === undefined ? null : l.st.dev, ino: l.st === undefined ? null : l.st.ino, size: l.st === undefined ? 0 : Number(l.st.size),
+    // matches the store's. `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave.
+    mtimeMs: Number(l.st.mtimeMs), dev: l.st.dev, ino: l.st.ino, size: Number(l.st.size),
   });
 }
 
@@ -2048,7 +2050,7 @@ export function readAgentMeta(path) {
  *  counted `agent_meta_conflict`; an incomplete read is counted `agent_meta_unreadable:<cause>`; nothing retries. The type is
  *  written once too, from the field AGENT_TYPE_KEY names. Runs inside bindFile's transaction. */
 function bindAgentMeta(db, transcriptPk, key, filePath) {
-  const read = readAgentMeta(join(dirname(filePath), `agent-${key.slice(key.lastIndexOf('/') + 1)}.meta.json`));
+  const read = readAgentMeta(metaPathOf(filePath, key.slice(key.lastIndexOf('/') + 1)));
   const row = db.prepare('SELECT parent_tool_use_id AS link, agent_type AS type FROM transcripts WHERE transcript_pk = ?').get(transcriptPk);
   const d = decideMetaLink({ stored: row.link, read });
   const type = decideMetaType({ stored: row.type, read });
@@ -5255,12 +5257,6 @@ function tickStmts(db) {
       st.setReadBigInts(true);
       return st;
     })(),
-    // W4 P5 (D-8155): the live row a path names, for the scan arm's count of a withheld file (bytesWaiting).
-    agentPathRow: (() => {
-      const st = db.prepare("SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p JOIN ingest_files f ON f.file_id = p.file_id WHERE p.path = ? AND f.source_key = '' AND f.status = 'live'");
-      st.setReadBigInts(true);
-      return st;
-    })(),
     tickIns: db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, ?, ?, ?)'),
     factless: db.prepare(`SELECT e.cc_session_uuid AS uuid, min(p.path) AS path FROM epochs e
       JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid AND t.agent_id = ''
@@ -5418,7 +5414,9 @@ function scanActiveRows(ctx, rows, seen, budget, room, visit) {
 function activeAgentFiles(db, ctx, seen, budget, parents, room, armed) {
   const files = [];
   let withheld = 0;
-  if (parents.size === 0 || room <= 0) return { files, withheld, complete: true };
+  // Unarmed, decideAgentIngest answers false whatever history-off says, so the probe (an existsSync) is not made: an unarmed node with
+  // an active registered session pays nothing for this arm.
+  if (!armed || parents.size === 0 || room <= 0) return { files, withheld, complete: true };
   const historyOff = ctx.historyOff();
   const base = { form: 'tick', armed, historyOff, admitted: true, parentKnown: true };
   if (agentGate(ctx, { ...base, preInstall: false }) === 'skip') return { files, withheld, complete: true };
@@ -5433,16 +5431,29 @@ function activeAgentFiles(db, ctx, seen, budget, parents, room, armed) {
   return { files, withheld, complete: r.complete };
 }
 
-/** Whether a subagent file holds bytes its stored row has not read: no stored row (`row` null), another file at the path, or a size
- *  that is not the stored offset. Only such a file is counted when the pause withholds it. `st` is a bigint lstat in statActive's shape. */
+/** Whether a subagent file holds bytes its stored row has not read, by lib's bytesLeftOf (the one rule, shared with the import's
+ *  forecast). Only such a file is counted when the pause withholds it. `st` is a bigint lstat in statActive's shape. */
 function bytesWaiting(row, st) {
-  return row === null || st.dev !== row.dev || st.ino !== row.ino || st.size !== Number(row.offset);
+  return bytesLeftOf({ stored: row, size: st.size, dev: st.dev, ino: st.ino }) > 0;
+}
+
+/** The live row a path names, `{ dev, ino, offset }` as bigints: one statement, prepared once per handle. The scan arm's count of a
+ *  withheld file (bytesWaiting) and the import's forecast (agentBytesLeft) both ask it, the forecast on its read-only handle. */
+const AGENT_PATH_ROWS = new WeakMap();
+function agentPathRowOf(db) {
+  let st = AGENT_PATH_ROWS.get(db);
+  if (st === undefined) {
+    st = db.prepare("SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p JOIN ingest_files f ON f.file_id = p.file_id WHERE p.path = ? AND f.source_key = '' AND f.status = 'live'");
+    st.setReadBigInts(true);
+    AGENT_PATH_ROWS.set(db, st);
+  }
+  return st;
 }
 
 /** bytesWaiting for a file the scan walk handed over: its stored row by path, and (only when one stands) one lstat. A vanished
  *  path or a non-regular file has nothing to read. */
 function scanFileWaiting(db, ctx, path) {
-  const row = tickStmts(db).agentPathRow.get(path) ?? null;
+  const row = agentPathRowOf(db).get(path) ?? null;
   if (row === null) return true;
   const st = (ctx.activeStat ?? statActive)(path);
   return st !== null && st.isFile === true && bytesWaiting(row, st);
@@ -5641,8 +5652,12 @@ export async function ingestTick(db, ctx, budget) {
       if (r === null) continue;
       examined.push({ fileId: r.fileId, size: examinedSize(r, ctx.nowMs), mtimeNs: r.mtimeNs, atEof: r.atEof });
       bytes += r.bytes;
-      newEntries += r.newEntries;
-      if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
+      // The tick's lag is the MAIN index's staleness (ticks.lag_ms): a subagent file, resumed only at a scan tick or an active
+      // parent's pass, feeds it neither entries nor time, as firstPending leaves it out of a parent's launch facts.
+      if ((f.agentKey ?? '') === '') {
+        newEntries += r.newEntries;
+        if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
+      }
       if (r.floor !== undefined) { paused = true; complete = false; break; }
     }
     // D-6933: the transcripts' mark is set here, once their half is examined; the sidecar half sets its own.
@@ -7715,16 +7730,13 @@ function agentImportSkipLines(skipped) {
   return lines;
 }
 
-/** How many bytes of one subagent file are still waiting to be ingested: its size, or, when a live row of the same file (device and
- *  inode) holds a cursor, the size past that cursor. A file stored whole waits for none; a vanished path waits for none. `rowOf` is the
- *  path's live row, read as bigints (the shape bytesWaiting reads). */
+/** How many bytes of one subagent file are still waiting to be ingested, by lib's bytesLeftOf (the tick's rule too): its size, or,
+ *  when a live row of the same file (device and inode) holds a cursor, the size past that cursor. A file stored whole waits for
+ *  none; a vanished path waits for none. `rowOf` is the path's live row statement (agentPathRowOf), or null when no store is open. */
 function agentBytesLeft(path, rowOf) {
   let st;
   try { st = lstatSync(path, { bigint: true }); } catch { return 0; }
-  const row = rowOf.get(path);
-  const size = Number(st.size);
-  if (row === undefined || row.dev !== st.dev || row.ino !== st.ino) return size;
-  return Math.max(size - Number(row.offset), 0);
+  return bytesLeftOf({ stored: rowOf === null ? null : rowOf.get(path) ?? null, size: Number(st.size), dev: st.dev, ino: st.ino });
 }
 
 /** `import --agents` without --apply (W4 P6): READ-ONLY, one JSON forecast line, then the words. `files` and `bytes` are what the apply
@@ -7741,11 +7753,7 @@ function importAgentsDryRun(P, homes, out, home) {
     const known = ro === null ? registeredUuids(home) : knownUuids(ro, home);
     const sinceMs = ro === null ? null : installRecordOf(ro);
     const { take, skipped } = agentImportPlan(homes, known, ev, sinceMs);
-    let rowOf = { get: () => undefined };
-    if (ro !== null) {
-      rowOf = ro.prepare("SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p JOIN ingest_files f ON f.file_id = p.file_id WHERE p.path = ? AND f.source_key = '' AND f.status = 'live'");
-      rowOf.setReadBigInts(true);
-    }
+    const rowOf = ro === null ? null : agentPathRowOf(ro);
     let files = 0;
     let bytes = 0;
     for (const e of take) {
@@ -7764,13 +7772,6 @@ function importAgentsDryRun(P, homes, out, home) {
     ro?.close();
   }
 }
-
-/** P12's settled predicate and the timing of its evidence (D-8161, act M1, measured on Claude Code 2.1.321): a workflow's launching call
- *  answers at once with a `tool_result` that reads `Workflow launched in background. Task ID: ...` and a line `Run ID: <runId>`, so
- *  option (b), the run named in a parent user row, is the predicate and its window is `[t0 - 15 min, t0 + 15 min]` around the run's
- *  first row (`immediate`); 98 of 98 named samples fell within 15 minutes of it. The one place either constant is spelled. */
-const CENSUS_PREDICATE = 'b';
-const CENSUS_RUN_WINDOW = 'immediate';
 
 /** Option (c)'s evidence (P12): `<session>/workflows/<runId>.json`, one lstat. 'exists' for a regular file, 'absent' for ENOENT or
  *  ENOTDIR, 'unreadable' for anything else (a link, a directory, a failed lstat). */

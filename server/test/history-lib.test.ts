@@ -66,6 +66,7 @@ import * as libFork from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
+const HISTORY_DIR = join(REPO, 'ccd', 'history');
 
 // lib stays free of I/O: its one import besides node:crypto is an L0 file that imports nothing (W4 addendum P10, the shared arm;
 // the coordinator's ruling in fix round 4, review 1735 F1).
@@ -12222,7 +12223,7 @@ describe('the subagent grammars and identity (W4 addendum P1, P10, P20)', () => 
   it('the grammar constants and vocabularies are as the addendum states them', () => {
     expect(AGENT_ID_MAX).toBe(128);
     expect(AGENT_LEVELS).toEqual(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
-    expect(AGENT_DIR_REASONS).toEqual(['link', 'not-dir', 'unlistable']);
+    expect(AGENT_DIR_REASONS).toEqual(['link', 'not-dir', 'unlistable', 'unmeasured']);
     expect(AGENT_FILE_REASONS).toEqual(['run-id', 'name', 'link', 'not-regular']);
     expect(RUN_ID_RE.source).toBe('^wf_[0-9a-f]{8}-[0-9a-f]{3}$');
     expect([RUN_ID_RE.test('wf_0123abcd-0a1'), RUN_ID_RE.test('wf_0123abcd-0a'), RUN_ID_RE.test('wf_0123ABCD-0a1'), RUN_ID_RE.test('x/wf_0123abcd-0a1')]).toEqual([true, false, false, false]);
@@ -12277,6 +12278,48 @@ describe('the subagent grammars and identity (W4 addendum P1, P10, P20)', () => 
   it('agentKey is <ID> or <RUN>/<ID> (P1)', () => {
     expect(agentKey('x', null)).toBe('x');
     expect(agentKey('x', 'wf_0123abcd-0a1')).toBe('wf_0123abcd-0a1/x');
+  });
+
+  it.each([
+    ['x', 'agent-x.meta.json'],
+    ['a_b-C9', 'agent-a_b-C9.meta.json'],
+  ] as const)('metaNameOf(%j) is %j, and classifyAgentName reads it back as that id\'s companion (final review M3)', (id, name) => {
+    expect(libCensus.metaNameOf(id)).toBe(name);
+    expect(classifyAgentName(name, 'subagents')).toEqual({ role: 'meta', id });
+    expect(classifyAgentName(name, 'run')).toEqual({ role: 'meta', id });
+  });
+
+  it.each([
+    ['/h/projects/s/u/subagents/agent-x.jsonl', 'x', '/h/projects/s/u/subagents/agent-x.meta.json'],
+    ['/h/projects/s/u/subagents/workflows/wf_0123abcd-0a1/agent-y.jsonl', 'y', '/h/projects/s/u/subagents/workflows/wf_0123abcd-0a1/agent-y.meta.json'],
+    ['agent-z.jsonl', 'z', 'agent-z.meta.json'],
+  ] as const)('metaPathOf(%j, %j) is the meta in the same directory: %j', (file, id, want) => {
+    expect(libCensus.metaPathOf(file, id)).toBe(want);
+  });
+
+  it('the meta companion\'s name is spelled in lib.mjs alone: no other history module has a code line naming `.meta.json` (final review M3)', () => {
+    const offenders: string[] = [];
+    for (const f of readdirSync(HISTORY_DIR).filter((n) => n.endsWith('.mjs') && n !== 'lib.mjs')) {
+      readFileSync(join(HISTORY_DIR, f), 'utf8').split('\n').forEach((line, i) => {
+        const code = /^\s*(\/\/|\*|\/\*)/.test(line) ? '' : line.replace(/\s\/\/.*$/, '');
+        if (code.includes('.meta.json')) offenders.push(`${f}:${i + 1}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // [stored row, size, dev, ino, bytes left]: the one rule behind the tick's withheld count and the import's forecast (final review M2)
+  it.each([
+    ['no row: the whole size', null, 100, 1n, 5n, 100],
+    ['no row, an empty file: nothing waits', null, 0, 1n, 5n, 0],
+    ['the same file stored whole: nothing waits', { dev: 1n, ino: 5n, offset: 100n }, 100, 1n, 5n, 0],
+    ['the same file grown: the size past the cursor', { dev: 1n, ino: 5n, offset: 60n }, 100, 1n, 5n, 40],
+    ['the same file SHRUNK below its cursor: it is read again, so its whole size waits', { dev: 1n, ino: 5n, offset: 150n }, 100, 1n, 5n, 100],
+    ['another inode at the path: the whole size', { dev: 1n, ino: 6n, offset: 100n }, 100, 1n, 5n, 100],
+    ['another device: the whole size', { dev: 2n, ino: 5n, offset: 100n }, 100, 1n, 5n, 100],
+    ['a number offset reads as the bigint does', { dev: 1n, ino: 5n, offset: 60 }, 100, 1n, 5n, 40],
+  ] as const)('bytesLeftOf: %s', (_why, stored, size, dev, ino, want) => {
+    expect(libCensus.bytesLeftOf({ stored, size, dev, ino })).toBe(want);
   });
 });
 
@@ -12404,7 +12447,8 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
       'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable', 'parent-behind', 'parent-copy-unbound', 'parent-untimed',
       'summary-unreadable', 'predicate-unsettled', 'no-run-window']);
     expect(libCensus.HOLDING_UNBOUND_CAUSES).toEqual(['unread', 'unreadable', 'replaced', 'shrunk']);
-    expect(libCensus.CENSUS_WITHHELD).toEqual(['K', 'identity_collision', 'partition-sum']);
+    expect(libCensus.CENSUS_WITHHELD).toEqual(['K', 'identity_collision', 'partition-sum', 'install-record']);
+    expect([libCensus.CENSUS_PREDICATE, libCensus.CENSUS_RUN_WINDOW], 'P12\'s settled predicate (D-8161, act M1)').toEqual(['b', 'immediate']);
     expect(libCensus.HOLDING_SHAPES).toEqual(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
     expect(libCensus.LINK_WINDOW_MS).toBe(900000);
     expect(libCensus.LINK_DECODE_MAX).toBe(64);
@@ -12576,13 +12620,22 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
   });
 
   it.each([
-    [0, 0, true, []],
-    [1, 0, true, ['K']],
-    [0, 2, true, ['identity_collision']],
-    [0, 0, false, ['partition-sum']],
-    [3, 1, false, ['K', 'identity_collision', 'partition-sum']],
-  ] as const)('censusWithheld(K %j, collisions %j, sums ok %j) is %j', (K, collisions, sumsOk, want) => {
-    expect(libCensus.censusWithheld({ K, collisions, sumsOk })).toEqual(want);
+    [0, 0, true, 1234, []],
+    [1, 0, true, 1234, ['K']],
+    [0, 2, true, 1234, ['identity_collision']],
+    [0, 0, false, 1234, ['partition-sum']],
+    [3, 1, false, 1234, ['K', 'identity_collision', 'partition-sum']],
+    [0, 0, true, 0, []],                                  // a record of 0 ms is a number: the install record stands
+    [0, 0, true, 'absent', ['install-record']],
+    [0, 0, true, 'damaged', ['install-record']],
+    [2, 0, false, 'absent', ['K', 'partition-sum', 'install-record']],
+  ] as const)('censusWithheld(K %j, collisions %j, sums ok %j, install record %j) is %j', (K, collisions, sumsOk, installRecord, want) => {
+    expect(libCensus.censusWithheld({ K, collisions, sumsOk, installRecord })).toEqual(want);
+  });
+
+  it('the settled predicate and run window are spelled in lib.mjs alone (final review M6)', () => {
+    const holders = readdirSync(HISTORY_DIR).filter((n) => n.endsWith('.mjs') && /(?:const|let|var)\s+CENSUS_(?:PREDICATE|RUN_WINDOW)\b/.test(readFileSync(join(HISTORY_DIR, n), 'utf8')));
+    expect(holders).toEqual(['lib.mjs']);
   });
 
   const SHARES = { 'D-T': { lo: 0.9, hi: 0.95 }, D: { lo: 0.8, hi: 0.9 } } as const;

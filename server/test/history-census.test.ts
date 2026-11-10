@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import {
   agentKeys, agentRig, agentRows, AGENT_T0, armed, callRows, censusOf, counterNames, counterOf, fixtureRows, holdAgainIn, linkOf, membershipsPerEntry,
@@ -479,6 +480,60 @@ describe('SA19 unentered directories, every level (K)', () => {
     } finally { if (dir !== '') fs.chmodSync(dir, 0o755); }
   });
 
+  /** A control unit `c` stored by an armed scan tick, a second file `f` planted beside it unstored; then `unmeasure` makes the lstat of
+   *  both fail for a reason other than absence, and the census is taken. */
+  async function lstatFails(prefix: string, unmeasure: (dir: string) => () => void): Promise<{ report: CensusReport }> {
+    const rig = await rigOf(prefix);
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('c', 0x4311, { meta: {} })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    expect(agentKeys(rig.db), 'CONTROL: c is stored').toEqual(['c']);
+    const dir = path.dirname(paths['c']!);
+    fs.writeFileSync(path.join(dir, 'agent-f.jsonl'), fixtureRows(0x4312, 2).map((r) => `${JSON.stringify(r)}\n`).join(''));
+    const restore = unmeasure(dir);
+    try { return { report: censusOf(rig) }; } finally { restore(); }
+  }
+  const expectUnmeasured = (r: CensusReport): void => {
+    expect(r.K, 'both candidate files could not be measured: unentered at the subagents level').toEqual([{ level: 'subagents', reason: 'unmeasured', n: 2 }]);
+    expect(r.units.R, 'an lstat that failed is no definite refusal').toBe(0);
+    expect(r.beside.agentFileRefused).toEqual({});
+    expect(r.units.G, 'the stored row\'s only holding is unmeasured: unknown, not gone').toEqual({ notFound: 0, unknown: 1 });
+    expect(r.shares, 'and no share is drawn').toBeNull();
+    expect(r.canonical).toBeNull();
+    expect(r.withheld).toEqual(['K']);
+  };
+
+  /** fs.lstatSync made to throw `code` for the paths `match` names, until the returned function restores it (lstatSync is a const export, hence the cast). */
+  const failLstat = (match: RegExp, code: string): (() => void) => {
+    const mutable = fs as unknown as { lstatSync: unknown };
+    const real = mutable.lstatSync as (...a: unknown[]) => unknown;
+    mutable.lstatSync = (p: fs.PathLike, o?: unknown): unknown => {
+      if (match.test(String(p))) throw Object.assign(new Error(`${code}: lstat`), { code, syscall: 'lstat' });
+      return real(p, o);
+    };
+    syncBuiltinESMExports();
+    return () => { mutable.lstatSync = real; syncBuiltinESMExports(); };
+  };
+
+  it('M5 a candidate file whose lstat fails with EACCES (patched lstat) is unmeasured: K gains subagents/unmeasured, no R, the stored row is G unknown', async () => {
+    const { report } = await lstatFails('ccrc-hist-m5-patched-', () => failLstat(/agent-[cf]\.jsonl$/, 'EACCES'));
+    expectUnmeasured(report);
+  });
+
+  it.skipIf(isRoot)('M5 the same through the file system: a listable but non-searchable subagents/ (mode 444, skipped as root)', async () => {
+    let dir = '';
+    try {
+      const { report } = await lstatFails('ccrc-hist-m5-mode-', (d) => { dir = d; fs.chmodSync(d, 0o444); return () => fs.chmodSync(d, 0o755); });
+      expectUnmeasured(report);
+    } finally { if (dir !== '') fs.chmodSync(dir, 0o755); }
+  });
+
+  it('M5 a file that VANISHES between the listing and its lstat (ENOENT) stays dropped: no K, no R', async () => {
+    const { report } = await lstatFails('ccrc-hist-m5-enoent-', () => failLstat(/agent-f\.jsonl$/, 'ENOENT'));
+    expect(report.K).toEqual([]);
+    expect(report.units.R).toBe(0);
+    expect(report.withheld).toEqual([]);
+  });
+
   it('SA19 a session directory that is a link', async () => {
     const { report } = await withK('ccrc-hist-sa19-sesslink-', (rig, { sess }) => {
       fs.mkdirSync(path.join(rig.box.home, 'elsewhere', 'sess'), { recursive: true });
@@ -800,6 +855,26 @@ describe('what the report says of its own inputs', () => {
     c = censusOf(rig);
     expect([c.beside.installRecord, c.units.I], 'a damaged record reads as none, and the report says it is damaged').toEqual(['damaged', 1]);
     expect(formatCensus(c as never).join('\n')).toContain('install record damaged');
+  });
+
+  it('a damaged or an absent install record withholds every share and so the canonical one, naming install-record (final review M4)', async () => {
+    const rig = await rigOf('ccrc-hist-record-withheld-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3911, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4911, { meta: { toolUseId: 'toolu_1' } })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    // CONTROL: with the record standing the shares print and nothing is withheld
+    let c = censusOf(rig);
+    expect([c.withheld, c.shares === null, c.canonical === null]).toEqual([[], false, false]);
+    // a record that is gone, then one that is damaged: without it every admitted unit is read as pre-install, so a share would be a guess
+    for (const [state, put] of [['absent', null], ['damaged', 'abc']] as const) {
+      rig.db.prepare("DELETE FROM meta WHERE k = 'agents_since_ms'").run();
+      if (put !== null) rig.db.prepare("INSERT INTO meta (k, v) VALUES ('agents_since_ms', ?)").run(put);
+      c = censusOf(rig);
+      expect(c.beside.installRecord).toBe(state);
+      expect(c.shares, `${state}: no share`).toBeNull();
+      expect(c.canonical, `${state}: no canonical share, never a definite 0.0%`).toBeNull();
+      expect(c.withheld).toContain('install-record');
+      expect(formatCensus(c as never).join('\n')).toContain('census share withheld: install-record');
+    }
   });
 
   it('a holding whose lstat failed is counted apart (physicalUnmeasured), never as one file with the others', async () => {
