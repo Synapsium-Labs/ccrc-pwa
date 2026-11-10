@@ -4756,6 +4756,22 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     expect(one('hold-invalid', 0)).toContain('correct the input and resend');
     // Row 32, 33.
     expect(one('ambiguous-dispatch')).toContain('dead-dispatch pass');
+    expect(one('ambiguous-dispatch')).toContain('only when its Settings switch is armed');
+    expect(one('ambiguous-dispatch')).toContain('non-blocking `do` item at once');
+    expect(one('registry-unmeasurable')).toContain('only when its Settings switch is armed');
+    expect(one('registry-unmeasurable')).toContain('non-blocking `do` item at once');
+    expect(one('registry-unmeasurable')).not.toContain('mails you either way; on that mail');
+    // The Extending section tells the same refusal story as step 7 and the cap-review-rounds row.
+    {
+      const ext = flat(refs('wave-lifecycle.md')).split('**Extending a reached review cap.**')[1]!.split('**`pr-unmeasurable`')[0]!;
+      expect(ext).not.toContain('`no-review-rounds-door`, or a 404');
+      expect(ext).not.toContain('an older server. In both cases');
+      expect(ext).toContain('`not-found` (404)');
+      expect(ext).toContain('It is not an older server');
+      expect(ext).toContain('lift on the work run');
+      expect(ext).toContain('`wakeOn: update`');
+      expect(ext).toContain('`not-your-programme` and `run-closed`');
+    }
     expect(one('hookstate-unmeasurable')).toContain('three times over about 15 minutes');
     expect(one('status-unmeasurable')).toContain('three times over about 15 minutes');
     // A `planned` run has no `closing` edge: the path is an end request, never a close.
