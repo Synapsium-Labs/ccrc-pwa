@@ -12,6 +12,7 @@ import {
   type HistoryBox,
 } from './historyHelpers.js';
 import { compactionSequence, steeredBlock, userRow, type Row } from './historyFixtures.js';
+import * as ctrMod from '../../deploy/history-counters.mjs';
 import {
   leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth, makePairIndex, secretPairs, cardLine, displayPrefixes,
   parentId, parentRollup, parseBlocks, blockStatus, nodeBlockStatus, gistSha, GIST_MIN, TOPICS_MAX,
@@ -2055,6 +2056,30 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect(p.gist).not.toBe(NODE_GENERIC);
     expectRollupFields(parents[G.generic]!);
     expect(last, 'CONTROL: the group is the tenth, so no other parent is counted for it').toBe(ids[G.generic * 8 + 7]);
+  });
+
+  /** The parity case: ONE derived store, read by BOTH readers of "a node block was asked" (lib's EXACT_RECEIPT_SQL). Derive asked
+   *  exactly the groups whose last child holds an exact receipt, and the spike report's addOn counts exactly those last children. */
+  it('parity: the groups derive took a node verdict for are the last children the spike report counts in addOn; a generic receipt gets neither', () => {
+    const asked = Array.from({ length: GROUPS }, (_, g) => g).filter((g) => exactReceipt(g * 8 + 7));
+    expect(asked, 'CONTROL: eight groups were asked; the generic and the unreceipted one were not').toEqual([0, 1, 2, 3, 4, 6, 7, 8]);
+    // derive's reader: a parent holds a verdict when its status is not ok, or its gist is the block's and not the rollup's
+    const verdict = (g: number): boolean => {
+      const p = parentRow(parents[g]!);
+      return p.status !== 'ok' || p.gist !== rollupOf(parents[g]!).gist;
+    };
+    expect(Array.from({ length: GROUPS }, (_, g) => g).filter(verdict), 'derive: only the exact-receipted last children asked').toEqual(asked);
+    const nodeVerdicts = Object.entries(nodeCounters()).filter(([k]) => k.startsWith('node_status:')).reduce((n, [, v]) => n + v, 0);
+    expect(nodeVerdicts, 'derive counts one verdict per asked group').toBe(asked.length);
+    // the counter's reader, over the very same store
+    const ctr = ctrMod as unknown as Record<string, (...a: never[]) => never> & { openCounterStore: (f: string) => { db: object; close(): void }; spikeReport: (a: object) => Record<string, Record<string, { population: { spans: number } }>> };
+    const rs = ctr.openCounterStore(historyPaths(box.home).dbFile);
+    try {
+      const r = ctr.spikeReport({ db: rs.db, sessions: [ID], sinceMs: T0 - 1, untilMs: Date.now() + 86_400_000 });
+      const sum = (side: string): number => Object.values(r[side]!).reduce((n, f) => n + f.population.spans, 0);
+      expect(sum('perBackend'), 'CONTROL: the report sees all eighty leaves of the store').toBe(N);
+      expect(sum('addOn'), 'the report: the same eight, and not the generic-receipted or the unreceipted last child').toBe(asked.length);
+    } finally { rs.close(); }
   });
 
   /** The node verdict counters: the leaf path's form, under node_ names and the last child's producer. */

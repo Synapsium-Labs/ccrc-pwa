@@ -444,6 +444,7 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
         S('d1', { status: 'ok' }), S('d2', { status: 'ok' }),
         S('u1', { status: 'ok' }), S('u2'),
         S('g1', { status: 'ok' }), S('g2', { status: 'ok' }), S('solo', { status: 'ok' }),
+        S('e1', { status: 'ok' }), S('e2', { status: 'ok' }), S('f1', { status: 'ok' }), S('f2', { status: 'parse-failed' }),
         S('o1', { status: 'ok', model: MODEL_O }), S('o2', { status: 'ok', model: MODEL_O }),
       ] },
       { id: 'base-1', spans: [S('b1', { status: 'ok' }), S('b2', { status: 'ok' })] },
@@ -451,6 +452,8 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
       // the add-on is printed with an EXACT receipt (the leaf's own id); k8, m2 and o2 carry one, and so does solo, which has no parent yet
       { session: 'cohort', leaf: 'k8', ts: T0 + 500 }, { session: 'cohort', leaf: 'm2', ts: T0 + 500 }, { session: 'cohort', leaf: 'o2', ts: T0 + 500 },
       { session: 'cohort', leaf: 'solo', ts: T0 + 500 },
+      // e1 has an exact receipt but is not the last child of its parent; f2 is the last child and has one, but its leaf did not parse
+      { session: 'cohort', leaf: 'e1', ts: T0 + 500 }, { session: 'cohort', leaf: 'f2', ts: T0 + 500 },
       // g2 had only the generic receipt (leaf ''), whose text carries no add-on
       { session: 'cohort', leaf: '', ts: T0 + 500 },
     ] });
@@ -463,13 +466,18 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
     addParent(p, 'P6', ['u1', 'u2']);
     // a receipted last child with only a generic receipt: counted in perBackend, kept out of addOn (solo has a receipt but no parent yet)
     addParent(p, 'P7', ['g1', 'g2']);
+    // an exact-receipted leaf that is not the last child of its parent was not the span the add-on was written for (Step 6's last-child condition)
+    addParent(p, 'P8', ['e1', 'e2']);
+    // an exact-receipted last child whose leaf did not parse is not receipted as newSpan reads it (Step 6's receipted condition)
+    addParent(p, 'P9', ['f1', 'f2']);
     // a baseline span that is the last child of a depth-1 parent is not an add-on span of the cohort
     addParent(p, 'P5', ['b1', 'b2']);
     const r = spike(p);
     // the add-on spans: k8 (the eighth leaf), m2, and the other backend's o2; each is counted in the cohort's figures too
     expect(Object.keys(r).sort()).toEqual(['addOn', 'baseline', 'perBackend']);
-    expect(A(r).population.spans).toBe(8 + 3 + 2 + 2 + 3);
-    expect(A(r).compliance.receipted).toBe(8 + 2 + 2 + 1 + 3);
+    expect(A(r).population.spans).toBe(8 + 3 + 2 + 2 + 3 + 4);
+    expect(A(r).compliance.receipted).toBe(8 + 2 + 2 + 1 + 3 + 3);
+    expect(A(r).population.parseFailed, 'CONTROL: f2 is the parse-failed leaf').toBe(1);
     expect(r.addOn.anthropic.population.spans).toBe(2);
     expect(r.addOn.anthropic.population.notRequested).toBe(0);
     expect(A(r).population.notRequested).toBe(2);

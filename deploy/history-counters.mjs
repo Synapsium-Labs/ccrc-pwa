@@ -31,7 +31,7 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor } from '../ccd/history/lib.mjs';
+import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXACT_RECEIPT_SQL, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor } from '../ccd/history/lib.mjs';
 import { StoreError, blobPlainTextMeasured, openReader, userVersion } from '../ccd/history/store.mjs';
 import { epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
@@ -1118,6 +1118,8 @@ function spikeStmts(db) {
     exact: db.prepare(`SELECT r.ts_ms AS ts_ms, p.ts_source AS ts_source FROM steer_receipts r
       LEFT JOIN spool_receipts p ON p.event_key = r.event_key WHERE r.leaf_id = ? ORDER BY r.ts_ms, r.event_key`),
     exactOfSession: db.prepare("SELECT leaf_id, ts_ms FROM steer_receipts WHERE cc_session_uuid = ? AND leaf_id <> ''"),
+    // O15: lib's EXACT_RECEIPT_SQL, the one predicate for "a node block was asked" that derive reads too (no second spelling here)
+    exactAsked: db.prepare(EXACT_RECEIPT_SQL),
     // O15: is this leaf the LAST child (max ord) of a depth-1 parent, the span a steered group's add-on is written for
     addOnLeaf: db.prepare(`SELECT 1 AS hit FROM node_children nc JOIN nodes p ON p.node_id = nc.node_id
       WHERE nc.child_id = ? AND p.depth = 1 AND nc.ord = (SELECT max(c2.ord) FROM node_children c2 WHERE c2.node_id = nc.node_id) LIMIT 1`),
@@ -1513,9 +1515,11 @@ function compareUnclosed(coh, base) {
  *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text. Returns `{ perBackend,
  *  baseline, addOn }`: `addOn` is the cohort's figures over the spans a W3-4 add-on was printed for (O15), computed by
  *  spikeFigures with the cohort's run words so it reads like the cohort's. Such a span is RECEIPTED (newSpan's `receipted`),
- *  has an EXACT steer receipt (exactReceiptsOf: the leaf's own id, since the generic text carries no add-on and is printed
- *  whenever the card skips), and its leaf is the last child of a depth-1 parent. A span without all three stays out of
- *  `addOn`. Those spans stay in `perBackend` too, and the fixed gates read `perBackend`. `addOn` carries no
+ *  has an EXACT steer receipt (lib's EXACT_RECEIPT_SQL, which derive's node read asks too: the leaf's own id, since the
+ *  generic text carries no add-on and is printed whenever the card skips), and its leaf is the last child of a depth-1
+ *  parent. A span without all three stays out of `addOn`. Those spans stay in `perBackend` too, and the fixed gates read
+ *  `perBackend`. `addOn`'s compliance is the LEAF block's (spikeFigures reads the leaf's status); the node block's verdict is
+ *  carried by the `node_status:*` counters, and `SpikeFigures` has no field for it. `addOn` carries no
  *  `summaryUnclosed.comparison` and no `durationMs.addedP50` or `echoChars.addedP50`: O19 and §10.7's added p50 compare
  *  the cohort with the baseline, over `perBackend` only.
  *  @param {{ db: object, sessions: string[], sinceMs: number, untilMs: number }} a */
@@ -1577,10 +1581,12 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   const perBackend = {};
   const baseline = {};
   const addOn = {};
-  /** O15: a RECEIPTED cohort span (newSpan's `receipted`) with an EXACT receipt (exactReceiptsOf) whose leaf is the last child
-   *  of a depth-1 parent (read-only, from node_children). An unreceipted span, or one with only the generic receipt, was
-   *  never printed an add-on. */
-  const isAddOn = (x) => x.receipted && exactReceiptsOf(s, x).length > 0 && s.addOnLeaf.get(x.leaf.id) !== undefined;
+  /** O15: a RECEIPTED cohort span (newSpan's `receipted`) whose leaf holds an EXACT receipt (s.exactAsked, lib's
+   *  EXACT_RECEIPT_SQL: the same predicate derive's node read asks) and is the last child of a depth-1 parent (read-only, from
+   *  node_children). An unreceipted span, or one with only the generic receipt, was never printed an add-on. Residual, the
+   *  over-count direction: an exact receipt does not prove the printed file carried the add-on (EXACT_RECEIPT_SQL's comment
+   *  says why), so a span can be counted here though nothing was asked. */
+  const isAddOn = (x) => x.receipted && s.exactAsked.get(x.leaf.id) !== undefined && s.addOnLeaf.get(x.leaf.id) !== undefined;
   for (const be of BACKENDS) {
     const pick = (side) => ({ placed: sides[side].placed.filter((x) => x.backend === be), untimed: sides[side].untimed.filter((x) => x.backend === be) });
     const c = pick('cohort');

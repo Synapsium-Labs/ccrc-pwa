@@ -11737,7 +11737,7 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     'node:fs': '{ lstatSync, readFileSync, realpathSync, writeFileSync }',
     'node:path': 'path',
     'node:url': '{ fileURLToPath, pathToFileURL }',
-    '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor }',
+    '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXACT_RECEIPT_SQL, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor }',
     '../ccd/history/store.mjs': '{ StoreError, blobPlainTextMeasured, openReader, userVersion }',
     '../ccd/history/derive.mjs': '{ epochOfUuid, holdingCopyOf }',
     '../ccd/history/recall.mjs': '{ expandEntryBody }',
