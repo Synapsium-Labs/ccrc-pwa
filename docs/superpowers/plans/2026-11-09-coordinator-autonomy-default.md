@@ -1185,8 +1185,9 @@ Test `server/test/measure-autonomy.test.ts`.
 - Nothing yet. Each wave's PR records here what it built, its migration slot where it has one, and its baseline or
   readings.
 
-**Wave A2 (built, not pushed).** `programs.doneWhen` is migration slot 48 (`ALTER TABLE programs ADD COLUMN doneWhen
-TEXT`; re-measure against `origin/main` before the PR, P1). `doneWhenOf` and the two limits are in `shared/ledgers.ts`;
+**Wave A2 (built, not pushed).** `programs.doneWhen` is migration slot 53 (`ALTER TABLE programs ADD COLUMN doneWhen
+TEXT`; it was built at slot 48 and moved to 53 when the branch was rebased onto `origin/main` at 52 (D-8125 at 48, D-8076 at 49,
+D-8077 at 50 and 51, D-8147 at 52) (D-8126); re-measure against `origin/main` before the PR, P1). `doneWhenOf` and the two limits are in `shared/ledgers.ts`;
 `goals pin` and `goals modify` carry the list (refusals `bad-done-when`, `done-when-needs-ruling`); `GET
 /api/programmes/:slug/goals` is exempt-but-authenticated (session or box token) and answers `{ goals, openItems }`;
 `ccrc-api goals show` is behind `goals-read-v1` (the `ROUTES` count word is fifty-nine). The README names the read's two
