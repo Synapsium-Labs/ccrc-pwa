@@ -274,7 +274,7 @@ describe('_accept_first_run_prompts / _answer_two_option_dialog: cursor-line rea
   });
 });
 
-describe('_spawn (wiring): skips /effort injection exactly when login-gated', () => {
+describe('_spawn (wiring): types no /effort keystroke, login-gated or healthy', () => {
   const spawnAgainstPane = (paneText: string): string[] => {
     h.sh(
       // Trailing `; :` because `_spawn`'s own last statement is

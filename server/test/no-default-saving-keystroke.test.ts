@@ -8,6 +8,8 @@
 // a stop, then `s`), the bare `/model` picker, and the `--effort` / `--model` argv flags; only those
 // may appear. The one named exception is `/effort ultracode`, which is not a stored level: it was
 // measured NOT to persist a per-model pin (D-2810) and its apply path confirms it by ack.
+// That exemption rests on D-2810's measurement on an older Claude Code, not on 2.1.321, and is owed a
+// re-measure; only the quoted token is exempt, never the rest of its line.
 //
 // TEXT scan, `no-routing-keystroke-from-server.test.ts`'s admission: it catches the ordinary shape
 // (a quoted or backticked slash command followed by an argument), not a string built from parts.
@@ -25,6 +27,7 @@ export const PLAIN_FORM_RE = /['"`]\/(effort|model)\s+[\w$@{]/;
 /** Where a keystroke is BUILT: a tmux send-keys, the server's inject/prompt, or a literal `-l` text. Prose that merely quotes the command is not. */
 const TYPER_RE = /send-keys|inject|prompt|sendText|\s-l\s/;
 const ALLOWED_RE = /['"`]\/effort ultracode['"`]/;
+const ALLOWED_G = new RegExp(ALLOWED_RE.source, 'g');
 const isCommentLine = (line: string): boolean => /^\s*(#|\/\/|\*|\/\*)/.test(line);
 
 function walk(dir: string, keep: (p: string) => boolean, out: string[] = []): string[] {
@@ -45,8 +48,9 @@ function scan(files: readonly string[]): string[] {
   const hits: string[] = [];
   for (const file of files) {
     readFileSync(file, 'utf8').split('\n').forEach((text, i) => {
-      if (isCommentLine(text) || ALLOWED_RE.test(text)) return;
-      if (PLAIN_FORM_RE.test(text) && TYPER_RE.test(text)) hits.push(`${path.relative(root, file)}:${i + 1}: ${text.trim()}`);
+      if (isCommentLine(text)) return;
+      const rest = text.replace(ALLOWED_G, '');
+      if (PLAIN_FORM_RE.test(rest) && TYPER_RE.test(rest)) hits.push(`${path.relative(root, file)}:${i + 1}: ${text.trim()}`);
     });
   }
   return hits;
@@ -78,5 +82,8 @@ describe('no default-saving /effort <level> or /model <name> keystroke anywhere 
       'tmux send-keys -t "$t" -l "s"',
     ]) expect(PLAIN_FORM_RE.test(ok), ok).toBe(false);
     expect(ALLOWED_RE.test('tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1')).toBe(true);
+    // the exemption is the token, not the line: a plain form beside it still reds
+    const mixed = 'tmux send-keys -t "$t" -l "/effort ultracode" -l "/effort high"';
+    expect(PLAIN_FORM_RE.test(mixed.replace(ALLOWED_G, ''))).toBe(true);
   });
 });

@@ -427,10 +427,9 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
     // Code in token mode against a local proxy, and its config dir holds no
     // claude.ai OAuth at all — so the flag would be refused, or hang the
     // spawn on a handshake that can never complete. `_spawn_start` gates
-    // `rcflag` on `_is_home_able "$wrapper"` for this reason, mirroring
-    // `_spawn_settle`'s `_is_home_able` guard around `_inject_spawn_effort`:
-    // the same "the external backend doesn't take Claude-specific input"
-    // reasoning, gating a different line of the same spawn.
+    // `rcflag` on `_is_home_able "$wrapper"` for this reason, on the same
+    // "the external backend doesn't take Claude-specific input" reasoning that
+    // gates the `--effort` default, a different line of the same spawn.
     //
     // The harness never installs the roster's non-home-able account; this
     // case installs the stub on purpose, the same idiom

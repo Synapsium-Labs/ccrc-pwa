@@ -136,7 +136,6 @@ _session_probe -> _tmux_t
 _session_state -> _sup_fresh
 _spawn_settle -> _accept_first_run_prompts
 _spawn_settle -> _authdead_clear_on_spawn
-_spawn_settle -> _is_anthropic_backend
 _spawn_settle -> _lc_done
 _spawn_settle -> _redrive_after_spawn
 _spawn_settle -> _reg_get

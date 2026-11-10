@@ -554,7 +554,7 @@ describe('a clean spawn clears the marker only when the credential changed, or c
   // measured at all.
   const settle = (id: string, rc: number, pre = ''): string =>
     sh(`${pre} _accept_first_run_prompts() { return ${rc}; }; _tmux() { echo t; };`
-      + ` _inject_spawn_effort() { :; }; _lc_done() { :; }; _spawn_settle ${id} "" || true`);
+      + ` _lc_done() { :; }; _spawn_settle ${id} "" || true`);
 
   const seedOn = (id: string, wrapper: string): void => {
     const reg = path.join(home, '.cc-sessions');
@@ -755,7 +755,7 @@ describe('the carried loop: another session\'s clean spawn on a dead account no 
     sh(`_reg_set s1 wrapper ${dest}`);
 
     // 2. t1, idle on the same dead account, restarts: 2.1.280 reaches rc 0.
-    sh(`_accept_first_run_prompts() { return 0; }; _tmux() { echo t; }; _inject_spawn_effort() { :; };`
+    sh(`_accept_first_run_prompts() { return 0; }; _tmux() { echo t; };`
       + ' _lc_done() { :; }; _spawn_settle t1 "" || true');
     expect(fs.existsSync(marker('claude')), 'the clean spawn kept the marker').toBe(true);
 

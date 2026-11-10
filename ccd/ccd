@@ -1501,7 +1501,7 @@ SPAWN_SETTLE_S=240              # WALL-CLOCK bound on the startup-gate wait, on 
 SPAWN_SETTLE_SUPERVISE_S=1350   # what `cmd_supervise` (systemd ExecStart, no ceiling) RAISES it to.
                                 # A global 240 would make every systemd restart of a large session
                                 # settle unconfirmed — the "700k+-token resumes take minutes between
-                                # gates" case — which suppresses the settle's old /effort keystroke (removed, D-8149) and lights a
+                                # gates" case — which leaves the row flagged unconfirmed and lights a
                                 # warning on a healthy row. Above SPAWN_GATE_TRIES x 2s, so on this
                                 # path the ITERATION cap still fires first and the window is exactly
                                 # today's.
@@ -20224,7 +20224,7 @@ _pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR
   # smallest` is precisely what creates that pane. `_auto_stale_check`'s guard
   # is the same silence one rung earlier. Every OTHER §6.3 stand-down already
   # speaks — `_compact_note … pane-narrow`, `_accept_first_run_prompts`' rc 6 and
-  # `_spawn_settle`'s sentence for it, the settle's old `/effort` keystroke (removed, D-8149)'s stderr, and
+  # `_spawn_settle`'s sentence for it, and
   # `_redrive_after_spawn`'s own `$REG/swap.log` line, whose shape this copies.
   #
   # FLOORED, AND THE FLOOR IS NOT OPTIONAL. This runs on the 5s supervise tick,
@@ -22024,7 +22024,7 @@ _route_unread_note() {   # id field — journal a field whose FILE is on disk bu
   # condition and not `_route_reject_note`'s — those two both got a VALUE and
   # then could not judge it, or judged it bad; here nothing was ever read, so
   # the line names neither bytes nor a count, and says instead that the field is
-  # PRESENT, which is the part an operator needs: the settle's old `/effort` keystroke (removed, D-8149) asks
+  # PRESENT, which is the part an operator needs: `_spawn_start`'s `[[ -e ]]` test on the effort file asks
   # the filesystem, so an unreadable `effort` file still suppresses the box
   # default (`SPAWN_EFFORT`) while contributing no value of its own. Without
   # this line that suppression had no channel at all — the session simply came
@@ -22056,7 +22056,7 @@ _route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
   # into one rc: the field is absent, or its file is there and its bytes could
   # not be read. Absent is silence and always was; present-but-unreadable gets
   # its own line, because it can change behaviour (an unreadable `effort` file
-  # still suppresses `SPAWN_EFFORT` — the settle's old `/effort` keystroke (removed, D-8149) asks the
+  # still suppresses `SPAWN_EFFORT` — `_spawn_start`'s `[[ -e ]]` test asks the
   # filesystem) with nothing anywhere to say so. `_route_unread_note` is the
   # one that tells them apart; both still answer nothing, so fail-closed and
   # every caller's contract are unchanged.
@@ -23330,13 +23330,12 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # writer, `actor=operator-session`; that writer's swap.log `route` line
 # records it.
 #
-# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. the settle's old `/effort` keystroke (removed, D-8149) (the
-# settle's `/effort`) and `_route_apply_now` (`route --apply`, a degraded class
-# among them) journal each `/model` and `/effort` they are about to type in
+# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_route_apply_now` (`route --apply`, a degraded class
+# among them) journals each `/model` and `/effort` it is about to type in
 # `$REG/<id>.typed`, one row `<epoch> <model|effort> <value>`, and a command of
 # the same kind and value within TYPED_MATCH_WINDOW of a row is ccd's. The
 # `routeapplied` stamp cannot serve: the spawn writes it from the composed argv
-# before the settle `/effort` is typed, and `route --apply` rewrites it for
+# before `route --apply` types anything, and `route --apply` rewrites it for
 # fields it never types.
 #
 # THE JOURNAL HAS A FLOOR. Its first row, `<epoch> since`, is written when the
@@ -24514,7 +24513,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     fi
     # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
     # stuck on a human step. No keystroke here could be right, so stop polling and report —
-    # the caller (_spawn) must not chase this with an /effort injection either. Checked LAST,
+    # the caller (_spawn) must not chase this with a redrive either. Checked LAST,
     # after every ready-marker and gate branch above: those match specific, narrow footers
     # ("Enter to confirm" + a gate title, "Bypass Permissions mode", "trust this folder"), so a
     # substring hit for one of THIS check's banners anywhere else in ~50 lines of scrollback — a
@@ -25834,9 +25833,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # OAuth at all — so the flag would be refused, or hang the spawn on a
   # handshake that can never complete. `$wrapper` is already set above (the
   # incomplete-registry guard reads it), so this costs nothing extra to check.
-  # This mirrors `_spawn_settle`'s `_is_home_able` guard around
-  # the settle's old `/effort` keystroke (removed, D-8149): the same "the external backend doesn't take
-  # Claude-specific input" reasoning, gating a different line of the same spawn.
+  # This is the same "the external backend doesn't take
+  # Claude-specific input" reasoning that gates the `--effort` default below, on a different line of the same spawn.
   #
   # PER-SESSION OVERRIDE (task #37, ruling 2026-08-13): a row stamped `rc=off`
   # at creation — `ccd ws-add --no-rc`, the dispatch path's spelling of "this
@@ -25964,8 +25962,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     [[ -n "$rclass" && "$rclass" != default ]] && routeflags="--model $rclass"
     # BACKEND, not placement: the subagent env is Claude Code's own; on another
     # backend the lane's settings.json materialiser owns the subagent (spec
-    # §5.2 "Non-Anthropic lanes"), the settle's keystroke is gated to Anthropic
-    # lanes (`_spawn_settle`), and workflows have no switch — so on such a lane
+    # §5.2 "Non-Anthropic lanes"), the `--effort` flag below is composed on the Anthropic
+    # arm only, and workflows have no switch — so on such a lane
     # `effort` and `workflow` are stamped INERT by field name, and the record
     # says what was not applied rather than pretending.
     if _is_anthropic_backend "$wrapper"; then
@@ -26327,21 +26325,10 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
     6) echo "ccd: $id: pane is under ${READER_MIN_COLS} columns (or its width could not be read), so the startup gates stood down — every spawn is pinned 220x50, so the likely cause is a terminal attached to this session, or a failed pin: widen it (open and close its terminal drawer) and answer any startup prompt." >&2 ;;
   esac
-  # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
-  # (those are the external backends — gpt/Codex today — which don't take it, so the
-  # injection would just error into the prompt box). Keyed on home-ability rather than on the
-  # literal `gpt` since the roster became data — merged from main, whose reasoning stands
-  # unchanged here.
-  #
-  # The RC half of the guard is this branch's, and it is STRICTER than the `!= 2` it replaces:
-  # 2 used to be the only non-zero code, and with 3 and 4 now in the table (§3.1) `!= 2` would
-  # type a slash command at a session that does not exist. `== 0` means inject only into a TUI
-  # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
-  # (rc 2 fails `== 0` too) rather than dropping it.
-  # BACKEND, not placement: this types Claude-specific input into the TUI.
-  # D-2231 — after the effort injection, so its local-command chatter is already
-  # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
-  # (a keystroke there is the swap's job), rc 2 is a login screen.
+  # Nothing is typed into the TUI here: the effort default rides the spawn argv (`_spawn_start`).
+  # D-2231 — the redrive below runs only on a clean landing (`prompt_rc` 0): rc 5 is
+  # hard-blocked (a keystroke there is the swap's job), rc 2 is a login screen, and 3 and 4
+  # mean no TUI we watched come up.
   #
   # UNGATED on home-ability, unlike the `--effort` argv default composed in `_spawn_start` — deliberately:
   # a non-home-able lane never has `_resume_env`'s flag set, so its transcript
@@ -27843,7 +27830,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # runs as the unit's ExecStart with nothing timing it out, and a 700k-token
   # resume legitimately takes minutes between gates. A global SPAWN_SETTLE_S
   # here would make every systemd restart of a large session settle
-  # unconfirmed — suppressing the settle's old /effort keystroke (removed, D-8149) and lighting a warning on a
+  # unconfirmed — leaving the row flagged unconfirmed and lighting a warning on a
   # healthy row.
   #
   # SIGNALLED THE SAME WAY CCD_IN_UNIT IS, one line up, and for the same reason

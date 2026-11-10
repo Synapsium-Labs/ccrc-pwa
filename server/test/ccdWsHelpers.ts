@@ -355,9 +355,8 @@ export const WS_ADD_REAL_SPAWN = `
     #
     # MEASURED both ways on cmd_ws_add through this stub: with the line,
     # 'tmux send-keys -t cc-<id> -l /effort ultracode' is recorded, as it was
-    # before this wave; without it, _inject_spawn_effort stands down and no
-    # /effort keystroke happens at all — silently, since no case here asserts
-    # either way.
+    # before this wave. The settle types no /effort any more (the default
+    # rides the spawn argv), so this line no longer changes what is recorded.
     case "$*" in *pane_active*) [[ -e "\$HOME/pane-up" ]] || return 1; echo "1 200"; return 0 ;; esac
     case "\$1" in
       new-session)  : > "\$HOME/pane-up" ;;
