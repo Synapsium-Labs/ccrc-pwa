@@ -6,7 +6,7 @@
 
 **Architecture:** Reuse the approved take-up and W5b leaf plans. W6 adds a bounded mockup/asset pipeline separate from the sealed reader; W8b uses the existing history/version transport through the one library adapter and a pure bounded diff. W7 reconciles carries, documents the shipped source, runs independent review and records release/deployed evidence.
 
-**Tech Stack:** TypeScript, React 19, Fastify, the existing ccd Python helper, package-local vitest, existing browser harness, `@synapsium-labs/docserver` exactly 1.1.0, existing parse/render and highlight workers. No new runtime dependency.
+**Tech Stack:** TypeScript, React 19, Fastify, the existing ccd Python helper, package-local vitest, existing browser harness, `@synapsium-labs/docserver` exactly 1.1.0, existing parse/render and highlight workers. No new runtime dependency is authorised for A–D by this plan; required extensions need their own reviewed dependency and security decisions.
 
 **Spec:** `docs/superpowers/specs/2026-11-07-native-docs-reader-completion-design.md`; base spec `2026-10-01-native-docs-reader-design.md` §5.6–5.8; rich-docs spec `2026-10-12-rich-docs-reader-and-shared-renderer-design.md` G1/G4/G5/G6/G7 and retirement gate. Read the spec with this plan.
 
@@ -29,6 +29,9 @@
 - Whole changed-file and outward-text privacy scan: actual rc 0, zero hits, including dotted-number shapes. Scan mail/dispatch/PR text before sending, list mail before push and wave-done. No private identities, absolute deployment paths or private security reports in public docs.
 - The first rollout containing W5b-1 is **server-first**, whichever tag contains it. Only after both boxes run it does ordinary ordering resume.
 - Existing approvals are not re-opened. Coordinator calls below are labelled as such. Reserved operator actions stay reserved; no impersonated ticks or device measurements.
+- Required appearance continuity is a final E/F acceptance gate: separately specify, implement and review shared-renderer/consumer support for ccrc's canonical skin/theme catalogue and host-selected visual language. A remains exact 1.1.0; API, catalogue-sharing and compatibility are not approved by this scope record.
+- Recorded operator ruling #1418 keeps outside non-repo folders, variants, large files, PDFs and configured tracker links; #1420 requires private draft-review snapshots with a lifecycle. Full parity plus drafts and side-by-side installed evidence gate final E/F acceptance and retirement. Outside folders need not become Git repositories. These are required follow-ons with scoped designs/leaf plans, not Later/Dropped or work silently assigned to A.
+- Existing per-read/render safety limits remain until a reviewed parity-extension design replaces them. No unsafe blanket cap increase, unauthenticated working-tree read or sandbox/CSP widening is authorised here.
 
 ## Review Focus
 
@@ -54,6 +57,7 @@ Paths below are relative to the repository. Existing-file anchors are symbols/co
 | C1 | 5–7 | Prescan, typed plan, bounded loader and CSP | New `pwa/src/docs/mockup/**`, existing image decisions |
 | C2 | 8–10 | Viewer, reader asset integration, static mockup Export | DocsLeaf, ReaderFrame, DocImage, Export and UI/scan tests |
 | D | 11–14 | Diff/history adapters and reader/lab residue | Reader bridge/policy/frame, lab tests, narrow source scans |
+| Required follow-ons | Separate scoped leaf plans, after A and before final E/F acceptance | Native appearance continuity; #1418 parity and #1420 draft lifecycle | New ownership/claims and reviewed interfaces required; not in A's scope |
 | E | 15–16 | Source-backed carry closure, docs, final review | README, project CLAUDE, current guard/test owners |
 | F | 17 | Release/rollout/evidence/handover receipt | Coordinator ledger only unless a measured defect returns to a worker |
 | Cutover | 18 | Operator receipt | No feature-worker infrastructure edits |
@@ -315,6 +319,7 @@ Add optional callbacks/seed to `ReaderMountInput`: `version?: ReaderVersionSeed`
 
 **Owner:** coordinator plus separately dispatched reviewer. Worker internal reviews are not this gate.
 
+- [ ] Refuse final E/F acceptance until required appearance continuity and #1418/#1420 parity/draft work have scoped specifications/leaf plans, merged reviewed implementations and actual evidence. The existing A–D tasks do not implement those extensions. Record every feature and side-by-side comparison; a Backlog ticket or a requirement paragraph is not closure.
 - [ ] Freeze candidate tip/base and review all remaining-programme PRs plus interaction paths on that exact tree. Use three Opus/high held-out lenses: correctness; spec/security boundaries; reproduction/evidence. Critical/important each receive three Sonnet/high refuters and majority ruling, minor one/advisory. Record actual model/effort; missing/dead lens is unverified. No workflow unless separately authorised.
 - [ ] Verify fingerprint through the server before review, close review with its accepted report, preserve cited report before review-child reclamation. Tip movement means remeasure/review, never accept a stale report. The coordinator does not replace this with its own diff reading.
 - [ ] Resolve every blocking finding with red/green and measured guard row, one fix commit; rerun affected/full gates and fresh exact-tip review as required. Complete changed-file/outward-text scan; no unissued deviation definitions.
@@ -338,8 +343,9 @@ Add optional callbacks/seed to `ReaderMountInput`: `version?: ReaderVersionSeed`
 
 **Owner:** operator for each infrastructure act; coordinator prepares and verifies receipt. This is not permission to touch live docserver units/config, proxy mappings or project roots.
 
-- [ ] Recheck retirement prerequisites: F verified, six sections including vision/promise, all roots safely under projects root, no active session working in a root being moved, required docs/doctor/docs-sw and phone evidence. If any fails, native preview and standalone remain separate and programme says pending.
-- [ ] Operator sequence: denylist condition; safe Git-root moves; remove old `/docs` proxy mapping on every PWA origin **before** any stop; prove native content/ref/draft/auth; update operator preview convention (durable GitHub links unchanged); stop forwarder; stop old docserver, retain history/directory; prove listener closed.
+- [ ] Recheck retirement prerequisites: F verified including required appearance work, all #1418 parity and #1420 draft-lifecycle acceptance rows with merged child evidence, and a side-by-side check finding nothing missing. Cover all six sections, outside non-repo folders, variants, large files, PDFs and configured tracker links. Current Share is not draft-store acceptance. Missing evidence or an unfinished child blocks retirement.
+- [ ] Verify every configured root is served natively under its approved containment/redaction policy, including non-repo folders without mandatory Git conversion. No active session may be working in a root that an independently justified move would affect. Required docs/doctor/docs-sw and phone evidence remain. If any prerequisite fails, keep both previews and report pending.
+- [ ] Operator sequence: denylist condition; only justified safe root moves, preserving existing Git history and without forcing non-repo folders into Git; remove old `/docs` proxy mapping on every PWA origin **before** any stop; prove native content/ref/draft/auth; update operator preview convention (durable GitHub links unchanged); stop forwarder; stop old docserver, retain history/directory; prove listener closed.
 - [ ] Verify outcome without printing private config/secrets. Rollback never serves raw standalone HTML on authenticated app origin. If cutover fails, record exact boundary and keep a safe separately authenticated preview; no hidden infrastructure workaround.
 - [ ] With final receipts committed and all required run/item states measured, mail MERGED/closure before closing the last run. Clear coordinator intent only when the role ends. Final response distinguishes native delivery from standalone retirement, with no “complete” claim ahead of evidence.
 
@@ -356,6 +362,8 @@ Each dispatch includes only wave specifics: programme/spec/plan paths; exact tas
 No new deviation number is defined by this documentation-only plan. At each implementation run opening the coordinator allocates and defines its known departures in the ledger in the same act. The historical class-cap asset reservations (including the base spec's listed-size amendment), conditional Docs mount focus in Task 13 (including its three rich-docs focus sentences), conservative diff limits and serial C/D decomposition are labelled coordinator calls, not historical operator rulings. A departure from an existing normative sentence gets an issued entry before dispatch, not a guessed number.
 
 ## Results
+
+**Entry correction, 2026-11-10:** durable appearance and recorded #1418/#1420 no-feature-loss/draft-lifecycle gates restored. Detailed extension designs and implementation leaf plans remain pending. This amendment does not implement those features, relax safety caps, authorise infrastructure actions or expand adoption run 1532.
 
 Entry work started 2026-11-09 under the eight-hour autonomy mandate; no product implementation or acceptance is claimed. Run 1532 remains planned pending the amended-plan/review/landing entry gate and shared-file ordering. The ledger records the verified #2480 merge and live C16 overlap. The receipt below freezes the finite carry inventory without asserting a fresh audit. Red/green, mutation, independent handoff review, exact-tip CI/queue/full-suite, release/inventory/device and cutover receipts are still execution work; plan publication fills none of those boxes.
 
@@ -384,7 +392,9 @@ Each source is the corresponding completion-design §7 row. `measuredRef` is not
 | Library C114 | not remeasured at entry | open | Existing library programme | Missing mutation coverage and evidence corrections belong to first 1.1.x maintenance work; 1.1.0 CSS measured correct, no proved consumer defect or invented release dependency | Owning task must record exact current evidence and disposition |
 | Highlighting requests/colour divergences | not remeasured at entry | open | Existing library owner; E receipt | Retain accepted divergence or cite actual fix; do not promise a new library implementation | Owning task must record exact current evidence and disposition |
 | Per-job highlight latency | not remeasured at entry | open | Operator-deferred | Retain owner/next-touch trigger, not a new release blocker | Owning task must record exact current evidence and disposition |
-| Hosted expiring links, bundle Export, fullscreen Share, XML colouring restoration, print, large files/PDFs, prototype variants, old-origin state | not remeasured at entry | open | Existing explicit Later/Dropped decisions | Not delivered and not silently added to scope | Owning task must record exact current evidence and disposition |
+| Required appearance continuity | operator request 2026-11-10; no implementation claimed | open | Required follow-on leaf plan; E/F verify | Canonical catalogue, both skins/all palettes/system, lazy/live changes, accessibility and existing geometry budgets | Must ship before final E/F acceptance |
+| #1418 parity and #1420 draft lifecycle | recorded operator ruling 2026-10-25; child tickets still Backlog at 2026-11-10 check | open | Required follow-on spec/leaf plans; E/F and Task 18 verify | Outside non-repo folders, variants, large files, PDFs, configured tracker links, private draft snapshots/lifecycle, side-by-side installed check | Required; old Later/Dropped classification is not a waiver |
+| Other hosted publishing, bundle Export, fullscreen Share, XML colouring restoration, print and old-origin state | not remeasured at entry | open | Existing explicit Later/Dropped decisions, excluding #1418/#1420 | Not delivered; do not confuse general hosting deferral with required private draft-review sharing | Owning task must record exact current evidence and disposition |
 | Desktop mails 17022/17033: reader-mount-steals-focus | C16 worker reported reproduction at `43dfc2a51311f7e587636677998258491668429e`: a 3-second held reader chunk failed all eight first-Tab-stop cases; not independently reproduced by this coordinator | open | D Task 13 explicit focus regression/repair; E Task 15 verifies closure | Held-chunk host-control/next-Tab and preserved no-owner M8.1 cases, two focus mutations, issued D departure and three rich-docs focus amendments in Task 13 | Routed from the previously unimplemented A/next-touch note by entry review 17041; adoption does not claim this fix. Must be resolved with measured evidence before E/F acceptance; no silent acceptance |
 | Desktop mail 17022: unfolded-refusal-name-cut | reported at C16 `43dfc2a51311f7e587636677998258491668429e`; not independently reproduced | open | E / header carry closure | Refused GitHub + unfolded crumbs across the reported narrow-width band; measure name truncation | Preserve peer's report, reproduce and disposition; not a new permission to rewrite desktop A |
 

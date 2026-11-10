@@ -2,7 +2,7 @@
 
 ## In short
 
-Finish the existing Native Docs reader programme, rather than opening another programme or treating the library release as delivery. The remaining work is a finite sequence: adopt the released library and make the diagnostic pages discoverable; deliver the two approved parity runs; implement mockups, assets and safe mockup Export; finish reader history and changes; reconcile the carried fixes; then document, independently review, release, roll out and measure the result.
+Finish the existing Native Docs reader programme, rather than opening another programme or treating the library release as delivery. The existing A–F delivery line needs additional required appearance, parity and draft-lifecycle extension plans before final acceptance; it is not the complete scope without them. The original implementation sequence is: adopt the released library and make the diagnostic pages discoverable; deliver the two approved parity runs; implement mockups, assets and safe mockup Export; finish reader history and changes; reconcile the carried fixes; then document, independently review, release, roll out and measure the result.
 
 **Completion means the released behaviour is verified on the installed build, not merely that a package, plan or PR exists.** Retirement of the old standalone server remains a separate operator-controlled cutover. Until that cutover is proved, both preview surfaces remain available.
 
@@ -19,12 +19,15 @@ flowchart TD
   B1 --> B2["B2: version pages and history loader"]
   B2 --> C["C: mockups, assets and safe Export"]
   C --> D["D: reader history, changes and carried fixes"]
-  D --> E["E: documentation and whole-programme review"]
+  D --> G["All required delivery ready"]
+  A --> R["Required appearance, parity and draft-lifecycle extensions"]
+  R --> G
+  G --> E["E: documentation and whole-programme review"]
   E --> F["F: release, rollout and deployed evidence"]
   F --> DONE["Native delivery verified"]
   DONE --> CUT["Separate operator cutover"]
 ```
-*Figure 1. The remaining delivery line. C and D are serial by coordinator choice because they share reader, image, Export and scan files; D still depends on B2, not on a new library release.*
+*Figure 1. Delivery dependencies, not permission for overlapping workers. C/D remain serial; required appearance and parity/draft extensions need scoped plans after A and must converge before final E/F acceptance.*
 
 | Wave | Existing identity | Deliverable | Entry gate |
 |---|---|---|---|
@@ -33,9 +36,10 @@ flowchart TD
 | B2 | W5b-2 | `at` version pages, version-preserving body links, truthful Share and history loader | B1 merged |
 | C | W6 | Sandboxed HTML mockups, one bounded asset planner, source/download and static mockup Export | B2 merged |
 | D | W8b and reader/lab residue | Version menu, changes since, preferences/marks validation, reader and lab fixes | B2 and C merged, W5h-b already merged |
-| E | W7 | Final source/documentation parity, carried-item closure, whole-programme review | C and D merged |
+| Required extensions | Scoped follow-on leaf plans | Host appearance continuity; #1418 full parity plus #1420 draft-review lifecycle | Plan after A; reviewed implementation/evidence before final E/F acceptance |
+| E | W7 | Final source/documentation parity, carried-item closure, whole-programme review | C/D and required extensions merged and verified |
 | F | W7 release and evidence | Exact released build, installed inventory, browser/device evidence and closure receipt | E accepted, required checks and trusted full-suite green |
-| Cutover | Existing retirement gate | Native preview convention, old proxy/forwarder/server retired safely | F verified and operator explicitly acts |
+| Cutover | Existing retirement gate plus #1418/#1420 | Native preview convention, old proxy/forwarder/server retired safely | F verified, full parity plus draft lifecycle and side-by-side evidence, then operator explicitly acts |
 
 One work run and one independent review run per delivery PR; the coordinator opens the successor before closing the predecessor. C may use two PRs, C1 safety/planner and C2 viewer/Export, at the task boundary in the execution plan. That split does not create a new programme. No overlapping Docs workers are dispatched.
 
@@ -61,6 +65,10 @@ The source of truth is an explicit approval for product choices, shipped source 
 The phone blocks name library build `0079625cc30a`, derived from the enhancement asset, not a Git commit. The 1.1.0 asset build is `6bcf14892e48`. Neither old block measures the new build or after-ready scheduling. The `auto` instrument is retained unchanged for comparability; it is **not a proved upper bound or equivalent measurement of after-ready**. A future switch must name its build, mode and measurement window and apply the existing all-blocks rule without discarding a failure. No new draw switch is required to finish this delivery: on-request is the accepted safe outcome.
 
 ## 3. Boundaries that do not move
+
+**Required scope correction, 2026-11-10:** the operator's recorded 2026-10-25 ruling (#1418) keeps outside non-repo folders, variants, large files, PDFs and configured tracker links; #1420 adds private draft-review sharing with a lifecycle. R-b's dropped parity rows and R-e/RD21's mandatory Git conversion were reopened. Their detailed spec amendments, threat model, scoped implementation plans and side-by-side acceptance remain work, not completed by this envelope. Existing committed Share/Export do not supply the draft store. General hosted publishing is distinct. Do not relax current caps or expose live working trees to unauthenticated readers in place of a reviewed extension design.
+
+**Required appearance continuity, 2026-11-10:** use the same canonical ccrc skin/theme choices and host-selected native visual language. These are requirements, not an approved appearance design. A remains exact 1.1.0 adoption; separately design/review the checked API, catalogue-sharing and compatibility mechanism before implementing the shared-renderer/consumer work. Live-following and hosted Aa ownership are coordinator defaults; reading-local settings remain separate. Both this work and full parity/draft lifecycle gate final E/F acceptance.
 
 The console owns authenticated transport, provenance, path/ref decisions and privileged actions. The public library owns rendering, layout and its checked host protocol.
 
@@ -183,7 +191,9 @@ The execution plan's carry receipt is finite: one row for each group below, sour
 | Library C114 | Existing library programme | Missing mutation coverage and evidence corrections belong to first 1.1.x maintenance work; 1.1.0 CSS measured correct, no proved consumer defect or invented release dependency |
 | Highlighting requests/colour divergences | Existing library owner; E receipt | Retain accepted divergence or cite actual fix; do not promise a new library implementation |
 | Per-job highlight latency | Operator-deferred | Retain owner/next-touch trigger, not a new release blocker |
-| Hosted expiring links, bundle Export, fullscreen Share, XML colouring restoration, print, large files/PDFs, prototype variants, old-origin state | Existing explicit Later/Dropped decisions | Not delivered and not silently added to scope |
+| Required appearance continuity | Required follow-on plan; E/F | Full host catalogue/skin inheritance and native visual language; no mode-only approximation or unreviewed protocol widening |
+| #1418 full parity and #1420 draft lifecycle | Required follow-on spec/leaf plans; E/F and retirement | Outside non-repo folders, variants, large files, PDFs, configured tracker links and private draft-review lifecycle; actual side-by-side installed evidence |
+| Other hosted publishing, bundle Export, fullscreen Share, XML colouring restoration, print and old-origin state | Existing explicit Later/Dropped decisions, excluding #1418/#1420 | Not delivered; the private draft-review store is required, not covered by general hosting deferral |
 
 An unknown current state is not closure. E cannot finish with an unclassified row. A row is either fixed and tested, already fixed with exact evidence, explicitly accepted/deferred by an existing ruling with owner/trigger, or blocked and escalated. A coordinator cannot invent a product waiver to turn a confirmed defect green.
 
@@ -205,10 +215,10 @@ The programme has two explicit end states so neither code completion nor infrast
 
 | End state | Evidence required |
 |---|---|
-| Native delivery verified | A–F accepted and merged, release/inventory measured, required device/browser matrix resolved, no unclassified or blocking carry, final ledger and handover committed |
+| Native delivery verified | A–F plus required appearance/parity/draft extensions accepted and merged, #1418/#1420 child and side-by-side evidence complete, release/inventory and device/browser matrix measured, no unclassified or blocking carry, final ledger/handover committed |
 | Standalone retired | Above plus operator cutover receipt below; old listener closed, native links verified by document content, history retained |
 
-Retirement order remains: check the old denylist condition; move outside project roots only when their sessions are not working there and retain them as Git repositories; remove the old `/docs` proxy mapping on every PWA origin **first**; verify native content/ref/draft/auth rather than status 200; update the operator's preview convention while keeping durable GitHub links; stop the forwarder; stop the old docserver while retaining its directory/history; prove the old listener is closed. The coordinator does not perform those acts. No global instruction or dormant-server configuration edit is part of a feature PR.
+Retirement first requires full parity plus drafts and a side-by-side check finding nothing missing (#1418/#1420); unfinished children or missing evidence block it. Order then remains: check the old denylist condition; perform only independently justified safe root moves while affected sessions are idle, preserving existing Git history and without forcing outside folders into Git; remove the old `/docs` proxy mapping on every PWA origin **first**; verify native content/ref/draft/auth rather than status 200; update the operator's preview convention while keeping durable GitHub links; stop the forwarder; stop the old docserver while retaining its directory/history; prove the old listener is closed. The coordinator does not perform those acts. No global instruction or dormant-server configuration edit is part of a feature PR.
 
 The final report says either “native delivery verified; standalone retirement still awaiting the operator's cutover” or “native delivery verified and standalone retired”, with evidence. It never says the entire programme is complete while a mandatory retirement promise is still open.
 
@@ -239,4 +249,4 @@ This design is an additive completion envelope. The original base spec §5.6–5
 
 ### Later
 
-- Only the explicit accepted/deferred rows in §7. Standalone retirement is separately gated, not dropped. Any new request or defect outside this finite scope needs a recorded disposition rather than silent expansion.
+- Only the explicit accepted/deferred rows in §7, excluding required appearance continuity and #1418/#1420 parity/draft lifecycle. Standalone retirement is separately gated, not dropped. Any new request or defect outside this finite scope needs a recorded disposition rather than silent expansion.
