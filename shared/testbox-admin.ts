@@ -316,6 +316,16 @@ export const TESTBOX_ADMIN_GRAMMAR_MAP: Record<TestboxAdminGrammar, true> = {
   repo: true, true: true,
 };
 
+/** What one field's value is on the wire and into the builder: a scalar (address, port, user, fingerprint, `true`), a
+ *  list of scalars (`prs`), a map KEY to VALUE (`settings`) or a list of repository-row objects (`repos`). The agent
+ *  frame (`TestboxAdminReq.fields`) carries exactly this type, so the frame and the builder cannot drift. */
+export type TestboxAdminFieldValue =
+  | string | number | boolean
+  | readonly (string | number)[]
+  | Readonly<Record<string, string>>
+  | readonly Readonly<Record<string, unknown>>[];
+export type TestboxAdminFields = Readonly<Record<string, TestboxAdminFieldValue>>;
+
 export interface TestboxAdminField {
   readonly flag: string;
   readonly grammar: TestboxAdminGrammar;
@@ -339,7 +349,7 @@ const f = (flag: string, grammar: TestboxAdminGrammar, o: { required?: true; rep
 
 const address = f('--address', 'address', { required: true });
 const port = f('--port', 'port');
-const loginUser = f('--user', 'user');
+const loginUser = f('--login', 'user');
 const connection = { address, port, user: loginUser };
 
 const spec = (
@@ -354,14 +364,14 @@ const spec = (
 export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSubSpec>> = Object.freeze({
   'status': spec({}, { act: null }),
   'read': spec({}, { act: null }),
-  'key': spec({}, { stepUp: true, act: 'connect' }),
-  'probe': spec({ ...connection }, { act: null }),
-  'pin': spec({ ...connection, fingerprint: f('--fingerprint', 'fingerprint', { required: true }) }, { stepUp: true, act: 'confirm-host-key' }),
-  'preflight': spec({ ...connection }, { act: null }),
+  // `key` records the connection (address, port, login) in the state file; every later sub reads it from there.
+  'key': spec({ ...connection }, { stepUp: true, act: 'connect' }),
+  'probe': spec({}, { act: null }),
+  'pin': spec({ fingerprint: f('--fingerprint', 'fingerprint', { required: true }) }, { stepUp: true, act: 'confirm-host-key' }),
+  'preflight': spec({}, { act: null }),
   'connect': spec({
-    ...connection,
-    settings: f('--set', 'setting-box', { repeatable: true }),
-    repos: f('--repo', 'repo', { repeatable: true }),
+    settings: f('--set', 'setting-box', { required: true, repeatable: true }),
+    repos: f('--repo', 'repo', { required: true, repeatable: true }),
   }, { stepUp: true, long: true, act: 'connect' }),
   'settings-fleet': spec({ settings: f('--set', 'setting-fleet', { required: true, repeatable: true }) }, { act: 'settings-fleet' }),
   'settings-box': spec({

@@ -15,7 +15,7 @@ import {
   TESTBOX_RUN_SHAPING, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, TESTBOX_REPO_ROW_MAX_BYTES,
   buildTestboxAdminArgv, fitsTestboxShape, isBoxAddress, isSshPort, isLoginUser, isHostKeyFingerprint, isPrNumber,
   parityArmable, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg, testboxAdminIsLong,
-  type TestboxAdminSub, type TestboxParityRecord,
+  type TestboxAdminSub, type TestboxAdminFields, type TestboxParityRecord,
 } from '../../shared/testbox-admin.js';
 import { parseRepoRow } from '../../shared/testbox.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
@@ -40,8 +40,8 @@ const SUBS = Object.keys(TESTBOX_ADMIN_SUB_MAP) as TestboxAdminSub[];
 
 /** Valid fields for each sub, the smallest call that builds. */
 const MIN: Record<TestboxAdminSub, Record<string, unknown>> = {
-  'status': {}, 'read': {}, 'key': {}, 'probe': { address: '192.0.2.10' }, 'pin': { address: '192.0.2.10', fingerprint: FP },
-  'preflight': { address: '192.0.2.10' }, 'connect': { address: '192.0.2.10' },
+  'status': {}, 'read': {}, 'key': { address: '192.0.2.10' }, 'probe': {}, 'pin': { fingerprint: FP },
+  'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
   'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } }, 'settings-box': { settings: { CCRC_TESTBOX_WORKERS: '3' } },
   'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {},
 };
@@ -111,35 +111,38 @@ describe('the argv builder', () => {
   it('a field the sub does not take is bad-field', () => {
     for (const s of SUBS) refused(s, { ...MIN[s], force: 'true' });
     refused('status', { address: '192.0.2.10' });
-    refused('connect', { address: '192.0.2.10', fingerprint: FP });
-    refused('probe', { address: '192.0.2.10', settings: { CCRC_TESTBOX_RUNS: '2' } });
+    refused('connect', { address: '192.0.2.10', settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] });
+    refused('probe', { address: '192.0.2.10' }); refused('preflight', { port: 22 }); refused('pin', { address: '192.0.2.10', fingerprint: FP });
+    refused('key', { address: '192.0.2.10', fingerprint: FP });
     refused('cancel', { replace: true });
   });
   it('fields that are not a plain object are bad-field', () => {
     for (const bad of [null, undefined, [], 'x', 3, new Map()]) refused('status', bad);
   });
   it('a required field missing is bad-field', () => {
-    refused('probe', {}); refused('pin', { address: '192.0.2.10' }); refused('pin', { fingerprint: FP });
+    refused('key', {}); refused('pin', {});
     refused('settings-fleet', {}); refused('settings-box', {}); refused('connect', {});
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' } }); refused('connect', { repos: [ROW] });
   });
   it('a value with a leading dash, a dot-dot segment, a C0 byte or DEL is bad-field', () => {
     for (const v of ['-oProxyCommand=x', '--help', '-1']) {
-      refused('probe', { address: v });
+      refused('key', { address: v });
       refused('settings-fleet', { settings: { CCRC_TESTBOX_GIT_KEY: v } });
     }
     refused('settings-box', { settings: { CCRC_TESTBOX_ROOT: '/srv/../etc' } });
     refused('settings-box', { settings: { CCRC_TESTBOX_ROOT: '/srv/..' } });
     refused('settings-box', { settings: { CCRC_TESTBOX_ROOT: '~/a/../b' } });
     for (const c of ['\u0000', '\u0001', '\n', '\r', '\t', '\u001f', '\u007f']) {
-      refused('probe', { address: `host${c}x` });
+      refused('key', { address: `host${c}x` });
       refused('settings-fleet', { settings: { CCRC_TESTBOX_DENY_GLOBS: `*.pem${c}*.key` } });
       refused('settings-box', { settings: { CCRC_TESTBOX_ROOT: `/srv/a${c}b` } });
     }
-    expect(build('probe', { address: 'host.invalid' }).ok).toBe(true);
+    expect(build('key', { address: 'host.invalid' }).ok).toBe(true);
   });
   it('each value rides one --name=value word', () => {
+    const k = build('key', { address: 'box.invalid', port: 2222, user: 'root' });
+    expect(k.ok && k.argv.slice(2)).toEqual(['--address=box.invalid', '--port=2222', '--login=root']);
     const r = build('connect', {
-      address: 'box.invalid', port: 2222, user: 'root',
       settings: { CCRC_TESTBOX_EGRESS_ALLOW: 'github.com nodejs.org', CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW],
     });
     expect(r.ok).toBe(true);
@@ -147,7 +150,7 @@ describe('the argv builder', () => {
     const words = r.argv.slice(2);
     for (const w of words) expect(w).toMatch(/^--[a-z-]+=\S.*$/);
     expect(words).toEqual([
-      '--address=box.invalid', '--port=2222', '--user=root', '--set=CCRC_TESTBOX_WORKERS=3',
+      '--set=CCRC_TESTBOX_WORKERS=3',
       '--set=CCRC_TESTBOX_EGRESS_ALLOW=github.com nodejs.org', `--repo=${b64(JSON.stringify(ROW))}`,
     ]);
   });
@@ -197,12 +200,24 @@ describe('the argv builder', () => {
     refused('settings-fleet', { settings: { CCRC_TESTBOX_POLL: '' } });
   });
   it('the connection fields obey their grammars', () => {
-    for (const v of ['192.0.2.10', '2001:db8::1', 'box.example.invalid', 'localhost']) expect(build('probe', { address: v }).ok, v).toBe(true);
-    for (const v of ['192.0.2.10:22', 'root@box.invalid', 'http://box', '[::1]', q(999, 1, 1, 1), 'box..invalid', '', 3, null]) refused('probe', { address: v });
-    expect(build('probe', { address: 'box.invalid', port: '22' }).ok).toBe(true);
-    for (const v of ['0', '65536', '022', 'x', 22.5, -1]) refused('probe', { address: 'box.invalid', port: v });
-    refused('probe', { address: 'box.invalid', user: 'Root' }); refused('probe', { address: 'box.invalid', user: 'a b' });
-    refused('pin', { address: 'box.invalid', fingerprint: 'SHA256:short' });
+    for (const v of ['192.0.2.10', '2001:db8::1', 'box.example.invalid', 'localhost']) expect(build('key', { address: v }).ok, v).toBe(true);
+    for (const v of ['192.0.2.10:22', 'root@box.invalid', 'http://box', '[::1]', q(999, 1, 1, 1), 'box..invalid', '', 3, null]) refused('key', { address: v });
+    expect(build('key', { address: 'box.invalid', port: '22' }).ok).toBe(true);
+    for (const v of ['0', '65536', '022', 'x', 22.5, -1]) refused('key', { address: 'box.invalid', port: v });
+    refused('key', { address: 'box.invalid', user: 'Root' }); refused('key', { address: 'box.invalid', user: 'a b' });
+    refused('pin', { fingerprint: 'SHA256:short' });
+  });
+  it('the builder takes the wire field type TestboxAdminFields as it stands, for every sub', () => {
+    const wire: Record<TestboxAdminSub, TestboxAdminFields> = {
+      'status': {}, 'read': {}, 'key': { address: 'box.invalid', port: 22, user: 'root' }, 'probe': {}, 'pin': { fingerprint: FP },
+      'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
+      'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } },
+      'settings-box': { settings: { CCRC_TESTBOX_RUNS: '2' }, repos: [ROW], whenIdle: true },
+      'cancel': {}, 'parity': { prs: [1, '2'] }, 'repair': {}, 'apply-release': {}, 'disconnect': { replace: true },
+    };
+    for (const s of SUBS) expect(build(s, wire[s]).ok, s).toBe(true);
+    // a list of K=V strings is not a settings map
+    refused('settings-fleet', { settings: ['CCRC_TESTBOX_POLL=1m'] });
   });
   it('a pull request list is whole numbers, unique, at most twenty', () => {
     expect(build('parity', { prs: [12, '40'] })).toEqual({ ok: true, argv: ['testbox-admin', 'parity', '--pr=12', '--pr=40'] });
@@ -224,20 +239,20 @@ describe('the argv builder', () => {
       expect(readTestboxRepoArg(v)).toEqual(parseRepoRow(decoded));
     }
     const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ ...ROW, name: `project-${i}` }));
-    expect(build('connect', { address: 'box.invalid', repos: mk(4) }).ok).toBe(true);
-    refused('connect', { address: 'box.invalid', repos: mk(5) });
-    refused('connect', { address: 'box.invalid', repos: [] });
-    refused('connect', { address: 'box.invalid', repos: [{ ...ROW, extra: 1 }] });
-    refused('connect', { address: 'box.invalid', repos: [{ ...ROW, fetchUrl: 'ftp://x/y' }] });
-    refused('connect', { address: 'box.invalid', repos: [JSON.stringify(ROW)] });
-    refused('connect', { address: 'box.invalid', repos: ROW });
+    expect(build('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: mk(4) }).ok).toBe(true);
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: mk(5) });
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [] });
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [{ ...ROW, extra: 1 }] });
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [{ ...ROW, fetchUrl: 'ftp://x/y' }] });
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [JSON.stringify(ROW)] });
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: ROW });
     const big = { ...ROW, packages: [{ ...ROW.packages[0], commands: Array.from({ length: 40 }, (_, i) => `./node_modules/.bin/vitest-${i}${'x'.repeat(240)}`) }] };
     expect(JSON.stringify(big).length).toBeGreaterThan(TESTBOX_REPO_ROW_MAX_BYTES);
-    refused('connect', { address: 'box.invalid', repos: [big] });
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [big] });
   });
   it('a repository row survives the round trip through its base64url word, multibyte text included', () => {
     const row = { ...ROW, packages: [{ ...ROW.packages[0], commands: ['./bin/prüfen-日本語-\u{1F600}'] }] };
-    const r = build('connect', { address: 'box.invalid', repos: [row] });
+    const r = build('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [row] });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const word = r.argv.find((w) => w.startsWith('--repo='))!.slice(7);
