@@ -936,6 +936,25 @@ describe('the between-scans pass takes a file only after a non-skip verdict, and
     } finally { closeWriter(f.db); }
   });
 
+  it('a file one of whose two paths was already taken this tick is not offered again by its other path (the seen-path half, review 1732 A5)', () => {
+    const f = fixture(true);
+    try {
+      // The spool hints `claude-demo`, whose registered uuid is U, so the hinted half discovers U's files on disk: only p1
+      // stands there, so this tick takes p1 and not p2. The active pass then meets p1 (seen) and must not offer p2.
+      fs.mkdirSync(path.dirname(f.p1), { recursive: true });
+      fs.writeFileSync(f.p1, '');
+      const P = historyPaths(f.home);
+      fs.mkdirSync(P.draining, { recursive: true });
+      fs.writeFileSync(path.join(P.draining, 'claude-demo.1.1.jsonl'), '');
+      const ctx = makeIngestCtx(f.home, [f.home], Date.now(), null) as Record<string, unknown>;
+      const stats: string[] = [];
+      ctx['activeStat'] = (p: string): unknown => { stats.push(p); return statOf(2n); };   // p2 would read as changed
+      const r = candidateFiles(f.db, ctx, false) as { files: Array<{ path: string }> };
+      expect(r.files.map((x) => x.path), 'the hinted path is taken, and the file is not offered again by p2').toEqual([f.p1]);
+      expect(stats, 'neither path is stat\'ed: p1 was taken, and its file with it').toEqual([]);
+    } finally { closeWriter(f.db); }
+  });
+
   /** Counts the executions of the one statement whose text names the registered-uuid join. */
   const spyActiveRows = (db: DatabaseSync): { spy: DatabaseSync; runs: () => number } => {
     let n = 0;

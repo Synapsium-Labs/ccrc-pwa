@@ -791,9 +791,12 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
       return row;
     });
   };
-  // W3-1 (D-8131 history-steer-recall-off-tail-copy, O9 (a); coordinator ruling of 2026-11-09): the hook spells the UUID
-  // grammar twice, the reader's above the anchor and ONE tail copy below it, in `_hook_history_pre`, whose local the
-  // recall-off tail copy reads by bash's dynamic scope. Any third copy, or a copy in any other place, reds.
+  // W3-1 (D-8131 history-steer-recall-off-tail-copy, O9 (a); coordinator ruling of 2026-11-09): the hook makes two
+  // `uuid_re=` assignments, the reader's above the anchor and ONE in the tail below it, in `_hook_history_pre`, whose local
+  // the recall-off tail copy reads by bash's dynamic scope. `uuidCopies` counts `uuid_re=` assignments only: a third one
+  // reds, and so does one in another function or on the other side of the anchor. Other spellings of the grammar (an
+  // inline `=~`, `printf -v`, `+=`, `read`) are not counted, and the hook still spells the grammar inline at its sites on
+  // main, which W3-1 leaves as they are.
   const UUID_PLACES = [{ fn: '_hook_history_card', below: false }, { fn: '_hook_history_pre', below: true }];
   const uuidCopies = (src: string): { l: string; fn: string; below: boolean }[] =>
     placed(src).filter((x) => /(?<![A-Za-z0-9_$])uuid_re=/.test(x.l));

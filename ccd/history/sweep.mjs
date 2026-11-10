@@ -3688,8 +3688,8 @@ export async function bindingPass(home, P, op, args, deps, out) {
  * 22. `markScan`: a due scan is marked done, unless the roster was unreadable;
  * 23. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, on its own slice of the run's ONE budget (D-6974), with a writer token only,
  *     outside the ingest gate, behind its own floor on the home filesystem; a check after a bind runs first, on a slice of its own (D-6975);
- * 24. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
- *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
+ * 24. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/, card/ and steer/ made 0700, a
+ *     link or a file there refused and counted `history_dir_refused:<name>` (card.mjs; W1-B3 Task 5; steer/ W3-1).
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
  *  `periodicCensus` after the tick. `bump` and `countOutside` are counters, not steps. */
