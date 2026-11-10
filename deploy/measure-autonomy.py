@@ -393,18 +393,27 @@ def ccrc_api(args):
         fail(f'the client answered {" ".join(args)} with something that is not JSON')
 
 
+def answer_data(args, key, kinds):
+    """`ccrc_api`, then the answer's `key` member. The client exits 0 on every HTTP answer, a 4xx/5xx `{"ok":false}`
+    body or an `unsupported` refusal included, so a body is data only when it is an object, does not say `ok:false`
+    and carries `key` of the verb's own shape; anything else is refused (exit 2), never read as an empty list (which
+    would show M2 at its target)."""
+    body = ccrc_api(args)
+    if not isinstance(body, dict) or body.get('ok') is False or key not in body or not isinstance(body[key], kinds):
+        why = body.get('error') if isinstance(body, dict) and isinstance(body.get('error'), str) else 'no ' + key
+        fail(f'the client answered {" ".join(args)} with no data: {why[:200]}')
+    return body[key]
+
+
 def pinned_programmes():
     """Slugs of the programmes with a pinned spec, read through `runs list --closed 1` and `goals show`. The list
     includes CLOSED runs (the server answers every active run and the newest closed ones), because a dialog of the
     window can belong to a programme whose runs have all closed since; an open-only list undercounts M2."""
-    runs = ccrc_api(['runs', 'list', '--closed', '1'])
-    if isinstance(runs, dict):
-        runs = runs.get('runs') or []
+    runs = answer_data(['runs', 'list', '--closed', '1'], 'runs', list)
     slugs = sorted({r['program'] for r in runs if isinstance(r, dict) and isinstance(r.get('program'), str) and SLUG_RE.match(r['program'])})
     pinned = []
     for slug in slugs:
-        g = ccrc_api(['goals', 'show', slug])
-        goals = g.get('goals') if isinstance(g, dict) else None
+        goals = answer_data(['goals', 'show', slug], 'goals', (dict, type(None)))
         if isinstance(goals, dict) and isinstance(goals.get('specPath'), str) and goals['specPath']:
             pinned.append(slug)
     return pinned

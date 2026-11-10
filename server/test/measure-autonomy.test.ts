@@ -503,8 +503,8 @@ describe('measure-autonomy transcripts --pinned-from-server', () => {
       `echo "$*" >> '${log}'`,
       'case "$1 $2" in',
       '  "runs list") case "$*" in',
-      '    "runs list --closed 1") echo \'[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"},{"id":3,"program":"pinned-one"},{"id":4,"program":"pinned-closed","state":"closed"}]\' ;;',
-      '    *) echo \'[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"}]\' ;;',
+      '    "runs list --closed 1") echo \'{"runs":[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"},{"id":3,"program":"pinned-one"},{"id":4,"program":"pinned-closed","state":"closed"}]}\' ;;',
+      '    *) echo \'{"runs":[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"}]}\' ;;',
       '  esac ;;',
       '  "goals show") case "$3" in',
       '    pinned-one|pinned-closed) echo \'{"goals":{"program":"pinned-one","specPath":"docs/spec.md","modifications":[]},"openItems":[],"bigCalls":[]}\' ;;',
@@ -537,6 +537,37 @@ describe('measure-autonomy transcripts --pinned-from-server', () => {
     expect(t['dialog']).toMatch(/^count=3 /);   // the unfiltered census is still printed
     const calls = readFileSync(log, 'utf8').trim().split('\n').sort();
     expect(calls).toEqual(['goals show loose-one', 'goals show pinned-closed', 'goals show pinned-one', 'runs list --closed 1']);
+  });
+
+  /** A client that answers `body` to every verb with exit 0, as the real one does for a 4xx/5xx. */
+  const answering = (body: string): string => {
+    const dir = mkTmp('ccrc-autonomy-err-');
+    const bin = path.join(dir, 'ccrc-api');
+    writeFileSync(bin, `#!/bin/sh\ncat <<'EOF'\n${body}\nEOF\n`, { mode: 0o755 });
+    return bin;
+  };
+
+  it.each([
+    ['runs list refused', '{"ok":false,"error":"unauthorized"}', 'runs list'],
+    ['runs list with no runs key', '{"ok":true}', 'runs list'],
+  ])('exits 2 and prints no M2 when %s', (_n, body, verb) => {
+    const r = run(['transcripts', '--root', rootWith(), '--out', mkTmp('ccrc-autonomy-err-out-'), '--pinned-from-server', '--ccrc-api', answering(body)]);
+    expect(r.status, r.stdout).toBe(2);
+    expect(r.stdout).not.toContain('m2:');
+    expect(r.stderr).toContain(verb);
+  });
+
+  it.each([
+    ['ok:false', '{"ok":false,"error":"nope"}'],
+    ['unsupported', '{"error":"unsupported"}'],
+  ])('exits 2 when goals show answers %s', (_n, goalsBody) => {
+    const dir = mkTmp('ccrc-autonomy-err-');
+    const bin = path.join(dir, 'ccrc-api');
+    writeFileSync(bin, ['#!/bin/sh', 'case "$1" in', `  runs) echo '{"runs":[{"id":1,"program":"pinned-one"}]}' ;;`, `  *) echo '${goalsBody}' ;;`, 'esac', ''].join('\n'), { mode: 0o755 });
+    const r = run(['transcripts', '--root', rootWith(), '--out', mkTmp('ccrc-autonomy-err-out-'), '--pinned-from-server', '--ccrc-api', bin]);
+    expect(r.status, r.stdout).toBe(2);
+    expect(r.stdout).not.toContain('m2:');
+    expect(r.stderr).toContain('goals show');
   });
 
   it('refuses any other verb before the client runs', () => {
