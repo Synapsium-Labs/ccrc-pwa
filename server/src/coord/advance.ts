@@ -54,7 +54,7 @@ export type AdvanceReject =
   | { code: 'bad-transition'; from: RunState; to: RunState }
   | { code: 'review-in-flight'; reviewRunId: number }
   | { code: 'ejection-not-merging'; from: RunState }   // D-7619: the route's 409 shape for the one refusal of the landing line
-  | { code: 'cap-concurrency'; limit: number; running: number }
+  | { code: 'cap-concurrency'; limit: number; running: number; detail?: string }  // `detail` is the route's (D-6097)
   // Landing order wave 5f: the line's infrastructure failures keep their recovery remedy, `mayApply` and typed invalid
   // metadata; the three mutation words an advance can meet carry nothing else.
   | ({ code: LandingInfrastructureCode } & Omit<LandingInfrastructureFailure, 'error'>)

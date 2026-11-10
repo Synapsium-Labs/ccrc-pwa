@@ -101,6 +101,16 @@ export const SELF_DISPATCH_DETAIL =
   'a run bound to its own claimant is not dispatched onto its coordinator: send this route with inPlace: true, by, byUuid ' +
   'and the sibling worktree\'s branch to take the wave in place';
 
+/** D-6097 (the operator's ruling of 2026-10-20, spec 3.5 "The refusal words say so"): what a cap refusal says beside its
+ *  numbers. Built once from the frame's own numbers, for the dispatch frame and the advance frame alike: the ruling is
+ *  that a coordinator whose wave is refused does it itself, in place, unless a reason in the coordinator skill applies,
+ *  and then the server mails it when there is room (the `admissionWake` lane, D-6095). */
+export function capConcurrencyDetail(limit: number, running: number): string {
+  return `No room under the concurrency cap (${running} running, limit ${limit}). Do this wave in your own workspace now ` +
+    '(an in-place bind with inPlace: true, and a sibling worktree), unless one of the reasons in the coordinator skill ' +
+    'applies; if one does, end your turn and the server will mail you when there is room.';
+}
+
 /** The run row a dispatch decides on, once it is known to exist. */
 export type DispatchRun = RunRow;
 
@@ -284,7 +294,8 @@ function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
   if (overConcurrency !== null) {
     // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return refused({ ok: false, kind: 'refused', code: 'cap-concurrency',
-      limit: overConcurrency.limit, running: overConcurrency.running });
+      limit: overConcurrency.limit, running: overConcurrency.running,
+      detail: capConcurrencyDetail(overConcurrency.limit, overConcurrency.running) });
   }
   return go(null);
 }

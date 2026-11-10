@@ -14,7 +14,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  decideDispatch, type ActFacts, type AdmitFacts, type BindFacts, type CapsReading, type DispatchDecision,
+  capConcurrencyDetail, decideDispatch, type ActFacts, type AdmitFacts, type BindFacts, type CapsReading, type DispatchDecision,
   type RequestFacts, type ResumeFacts,
 } from '../src/coord/dispatchDecide.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER } from '../src/coord/rundefs.js';
@@ -272,7 +272,20 @@ describe('decideDispatch, the admit step', () => {
   it('gate order: concurrency is the last admission gate', () => {
     const full = caps({ overConcurrency: { limit: 3, running: 3 }, usage: { running: 3 } });
     expect(outcomeOf(decideDispatch(admit([], full, { n: 0 }))))
-      .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 3, running: 3 });
+      .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 3, running: 3, detail: capConcurrencyDetail(3, 3) });
+  });
+  it('D-6097: the cap frame\'s detail carries its own numbers, the in-place bind and the wake mail, and only it and self-dispatch carry one', () => {
+    const d = capConcurrencyDetail(3, 2);
+    expect(d).toContain('3');
+    expect(d).toContain('2 running');
+    expect(d).toContain('inPlace: true');
+    expect(d).toContain('sibling worktree');
+    expect(d).toContain('unless one of the reasons in the coordinator skill applies');
+    expect(d).toContain('the server will mail you when there is room');
+    expect(d).not.toMatch(/wait to be woken/);
+    for (const m of [COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER]) {
+      expect(outcomeOf(decideDispatch(admit([m], caps(), { n: 0 })))).not.toHaveProperty('detail');
+    }
   });
   it('a clean listing goes', () => {
     expect(decideDispatch(admit([], caps(), { n: 0 })).kind).toBe('go');

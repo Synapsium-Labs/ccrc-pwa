@@ -23,6 +23,7 @@ import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import { HOLD_REASON_MAX_CHARS, holdReason, holdReasonVerdict } from '../src/coord/rundefs.js';
 import { REVIEWER_KICKOFF_PREFIX, WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { REVIEW_ROUND_CAP } from '../src/coord/reviewcap.js';
+import { capConcurrencyDetail } from '../src/coord/dispatchDecide.js';
 import {
   MAIL_BODY_MAX_BYTES,
   PROGRAM_SLUG_MAX_CHARS,
@@ -1046,6 +1047,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'paused' });
+    expect(res.json(), 'detail rides only the cap and self-dispatch refusals (D-6097)').not.toHaveProperty('detail');
     expect(calls).toEqual([]);   // nothing spawned, nothing counted
     expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
@@ -1103,7 +1105,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app)).json() as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, refused: 'cap-concurrency', limit: 1, running: 1 });
+    expect(res.json()).toMatchObject({ ok: false, refused: 'cap-concurrency', limit: 1, running: 1, detail: capConcurrencyDetail(1, 1) });
     expect(calls).toEqual([]);
   });
 
@@ -3353,7 +3355,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');   // asleep: a send-back would wake it
     const res = await postAdvance(app, id, SEND_BACK);
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1, detail: capConcurrencyDetail(1, 1) } });
     // The run did not move.
     expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
   });

@@ -8,6 +8,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { appFor, recorder, storedRun, ID_GATE_TOKEN } from './idGateFixture.js';
+import { capConcurrencyDetail } from '../src/coord/dispatchDecide.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const SHA = 'a'.repeat(40);
@@ -85,7 +86,7 @@ describe('POST /api/runs/:id/advance — gate order over the wire (ARCH-33)', ()
     storedRun(coord, { state: 'working', sessionId: 'demo-w2', claimedBy: COORD });
     const res = await post(id, { to: 'working', fingerprint: CLAIM });
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+    expect(res.json()).toEqual({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1, detail: capConcurrencyDetail(1, 1) } });
   });
 
   it('bad-session answers before any re-measurement on a forward edge', async () => {

@@ -55,7 +55,7 @@ import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, reEntersWorking, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { bindRunInPlace, dispatchRun, installAbsentSkill, type DispatchOutcome, type InPlaceOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, noteCapRefusal, type WorkerReading } from './dispatch.js';
-import { capRefusalOf } from './dispatchDecide.js';
+import { capConcurrencyDetail, capRefusalOf } from './dispatchDecide.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
@@ -1913,6 +1913,8 @@ export function registerCoordRoutes(
     if ('reject' in r && r.reject.code === 'cap-concurrency') {
       noteCapRefusal(coord, id, r.reject.limit, r.reject.running);
       announceAdmissionRefusal(coord, id, r.reject.limit, r.reject.running);
+      // D-6097: the same words the dispatch frame carries, from the frame's own numbers.
+      return refuseAdvance(reply, { reject: { ...r.reject, detail: capConcurrencyDetail(r.reject.limit, r.reject.running) } });
     }
     return refuseAdvance(reply, r);
   };
