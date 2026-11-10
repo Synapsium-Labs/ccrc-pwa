@@ -237,9 +237,9 @@ H1 to H6, H14 and H16 turn them into design.
 
 *Table 2b. The operator's three directions to the hardening review.*
 
-**What the review still needs the operator to rule.** Fifteen of the review's choices are the operator's to make.
-This edition is written as if each proposed answer holds, and each stays open until the operator rules. Seven of
-them change what this edition builds, and are listed here. "Waiting on you" lists all fifteen, most important first:
+**What the review still needs the operator to rule.** Sixteen of the review's choices are the operator's to make.
+This edition is written as if each proposed answer holds, and each stays open until the operator rules. Eight of
+them change what this edition builds, and are listed here. "Waiting on you" lists all sixteen, most important first:
 - A box where the server shares a user with fleet sessions caps the ladder at `advise`, and refuses grants, commands
   and learning, unless the operator opts in from Settings with the risk stated (§7.4).
 - Another provider's lane for the Overlord is a privacy decision, made lane by lane (§3.4).
@@ -249,6 +249,8 @@ them change what this edition builds, and are listed here. "Waiting on you" list
 - Replay runs in a disposable replay body that is never designated, so R7's one Overlord stands (§9.5).
 - Where work waits, the portfolio rank is the first sort key: automatic wakes and the release after a reset. When a
   pool will run out, `background` work on it waits (§5.6).
+- The skill-size ratchet caps every skill file, references included. It binds every programme from the day it
+  merges (§11.3).
 
 ## 3. What the Overlord is
 
@@ -883,14 +885,22 @@ Table 3.3.9b applies to it.
 
 - **C49. One role vocabulary, and one continuity mechanism for every long-lived role (C49, H1).**
   - **One table.** One L0 table, `FLEET_ROLES`, names every role: `overlord`, `coordinator`, `worker`, `reviewer`,
-    `auditor`, `replay` and `plain`. Its columns are: long-lived, launch profile, card renderer, compaction
-    instructions and probe set. Continuity, compaction instructions and the launch profile are columns of this
-    table, not three lists. An L0 table imports nothing, so it holds data only. What a role does lives in L1 records
+    `auditor`, `replay` and `plain`. Its columns are: long-lived, the `SessionRole` view, launch profile, card
+    renderer, compaction instructions and probe set. Continuity, compaction instructions and the launch profile are
+    columns of this table, not three lists. An L0 table imports nothing but the kernel's own types, so it holds data
+    only. What a role does lives in L1 records
     keyed by role: `MAIL_PACE` (§6.4) and the renewal triggers (Table 3.3.11b). Each is total over the roles, so a
     role with no row is a compile error.
   - **One reader.** `roleOf(session)` decides a session's role, first match wins (Table 3.3.9a). The tree's
-    `SessionRole` (`coordinator | child`) becomes a view of it. So the roll lane, the card and the renewal lane read one
-    answer, where the tree today has two readings of "coordinator".
+    `SessionRole` (`coordinator | child`) becomes a view of it, one column of the table. So the roll lane, the card and
+    the renewal lane read one answer, where the tree today has two readings of "coordinator".
+  - **An undecided answer is typed.** An unreadable child mark, or a child of a run whose kind is unknown, reads as
+    undecided between `worker` and `reviewer`. A claim or an intent that could not be measured, with no measured yes
+    beside it, reads as undecided between `coordinator` and `plain`. The members of each undecided answer share one
+    `SessionRole` view, so the roll lane and the hook still get one answer.
+  - **`plain` is what the server measures, not what a session was told.** Since D-8142 the hook tells every session
+    the operator creates that it may coordinate from its first turn. `roleOf` still reads such a session as `plain`
+    until it claims a run or declares intent. Its view is `coordinator`, so it is rolled as today.
   - **One of everything else:** `renewalDue`, the renewal lane, `continuity_generations`, `continuity_notes`, the card
     door and the probe verb. The Overlord is a row, not a copy.
   - **Keys.** The Overlord's state is keyed by the identity `overlord`, with term and generation as stamps on rows
@@ -939,7 +949,8 @@ Table 3.3.9b applies to it.
   - **Ordering.** No coordinator renewal starts while the Overlord's generation is outside `active`, and the Overlord's
     goes first. A coordinator's renewal sends its children's questions up, just when the Overlord would be away.
 - **C51. Every session's compaction gets instructions, and every card says something.**
-  - **Instructions by role.** `compactInstructionsFor(role)` is a column of `FLEET_ROLES`, with text for `overlord`,
+  - **Instructions by role.** The compaction instructions are a column of `FLEET_ROLES`, read through
+    `compactInstructionsFor(role)`, with text for `overlord`,
     `coordinator`, `worker`, `reviewer` and `plain`. The auto-compact lane types `/compact` followed by them. The same
     text rides inside `ccrc history`'s W3 PreCompact print (C53): one source, two carriers, and no second PreCompact
     writer.
@@ -1160,7 +1171,7 @@ thresholds are starting values (Table 11.5b).*
   - no running reader, counted from the subagent start and stop events the hook reports;
   - no operator message in the last ten minutes. An open console cannot be the test, because the Overlord is the home
     screen.
-- **Verified as a machine.** `renewalDue` has an exhaustive test over its whole input domain. The model checker, the
+- **Verified as a machine.** `renewalDue` has an exhaustive test over its whole input domain. The model, the
   simulator and the invariant monitor check how generations compose with holds, readiness and restarts (§11.7). Two
   invariants bind this machine directly. A write is accepted only from the current term, generation and key (I5).
   After a crash at any step, the next card lists every unsettled message and open hold (I8).
@@ -1553,7 +1564,8 @@ repository, no git credential and no file on any other session's disk.
     share those (§3.4). The delta cache sits there too. The fallback has no door process, so it uses no launch nonce:
     `ccrc-api` writes the key file at the generation's mint. The deny set is the accident guard (§3.5).
 - **H2. Ports at the edges, and no fact carried by a file on a fleet host.** Each port is an L2 interface declared by
-  its consumer, with a failure contract.
+  its consumer, with a failure contract. `Clock`, `Scheduler` and `Entropy` are the exception: they are declared once,
+  in the clock kernel (K, §11.1), because every context reads them.
   - **`SessionHost`.** The server's renewal, delivery and measuring acts go through it: `renew`, `compact`, `deliver`,
     `contextUsage` and `receipt`. Adapter one is ccd, which alone names tmux. A second adapter is named and not built:
     Claude Code's SDK host, which confirms a clear and a compaction and reports context use with no terminal to type
@@ -2952,7 +2964,9 @@ from a ready Overlord, and a breaker stops the tier when holds keep lapsing.
 - **C24. A busy Overlord is a fault to fix, not a reason to wait.** Its turns are kept short, its reading goes to
   readers (§3.8), and its work arrives as one inbox (§6.8) (C24, H19).
   - **A mail pace of its own.** One L1 table, `MAIL_PACE`, keyed by role, replaces today's two constant pairs, and the
-    Overlord has a row in it. A characterization test pins today's two rows first. Why: today it claims no run, so it
+    Overlord has a row in it. Its row starts at the coordinator's pair, 15 s of idle and 30 s between nudges, because
+    the Overlord, like a coordinator, ends its turn and waits. The lapse measure (M3) moves it. A characterization
+    test pins today's two rows first. Why: today it claims no run, so it
     gets a worker's pace, 60 s of idle and 120 s between nudges. The second hold of any two-minute burst would lapse,
     however short its turns were. Today the pace turns on one fact, whether the session claims an open run. Keying it
     by `roleOf` moves a session with declared coordinator intent and no open run onto the coordinator's pace. That is
@@ -4623,9 +4637,10 @@ builds no stream of its own (H3, H27, H33).
 - **One sequence.** Every act is stamped with one sequence number, in its own transaction. So is every change of a
   request, a hold, a generation, the designation, a grant, the ladder, the readiness word, a proposal, a command or an
   operator message's state.
-- **The sequence has one home.** It is a new append-only table in `coord.db`, `overlord_sequence`: the sequence
-  number, the row's kind and id, its state, the actor and the time. One writer function adds its line inside each
-  stamped transaction. Lines are kept 90 days (Table 11.5b). It ships in W1, with the invariant monitor.
+- **The sequence has one home.** It is a new append-only table in `coord.db`, `overlord_sequence`: the sequence number,
+  the row's kind and id, its state, the actor and the time (the server's wall clock, §11.5). One writer function adds
+  its line inside each stamped transaction. Lines are kept 90 days (Table 11.5b). It ships in W1, with the invariant
+  monitor.
 - **Why not `feed_events`.** Today's feed table is pruned to 2,000 rows, carries titles and bodies, and older builds
   read its `kind`. Stamping it would break each of those, so the sequence is legitimately different from it.
 - **Payloads carry ids, kinds, states and actors only.** Bodies are fetched through the gated reads. No payload carries
@@ -4647,7 +4662,11 @@ A failure that recurs is a case. A case turns the log's repeats into one review,
   Experience stored without a reliable outcome label makes agents worse than no memory (arXiv 2505.16067), so a case
   rests on measured rows.
 - **`practice_cases`** (`coord.db`) has one writer, the case lane. It opens a case when one signature occurs three
-  times in 14 days, or in two programmes. A signature is a typed key of the playbook's trigger table (§9.7).
+  times in 14 days, or twice in different programmes within those 14 days. A signature is a typed key of the
+  playbook's trigger table (§9.7). It occurs once per episode: one run, one arm and one key, live or shadow.
+- **A case consumes its evidence.** Only occurrences after a signature's newest case count towards its next one.
+  W1a counts run-bound occurrences only. A run-less notice leaves no durable row that names a programme, so it
+  waits until the stall watch records one.
 - **A blameless review.** The Overlord writes it as background work (§6.8): a cause class from a fixed list, the
   evidence ids, and one remedy from a ladder. The ladder is a server guard, then a skill change, then a practice entry,
   then nothing. The review is the Overlord's text, rendered as untrusted data.
@@ -4762,9 +4781,10 @@ tested over its whole input domain (§11.7).*
 | `SessionHost` port; ccd adapter over the roll's own verb with a fresh-start flag (`ccd hibernate --roll --fresh`), advertised by its capability word `hibernate-fresh`. It adds no verb | C3, L2 and L3 | n/a | n/a | n/a | W1a | n/a | An older ccd lacks `hibernate-fresh`: the renewal lane does not run, and designation refuses `capability-missing` |
 | ccd, for the `overlord` role: the affinity arm of `_auto_swap_check` stands down, beside the manual-swap pin check, so between renewals only the hard-block rescue moves it (this design adds the stand-down); for a long-lived role, `_route_restore` restores the designated class only once the degraded stamp is older than the hold-down (Table 11.5b), by ccd's own clock; on a reserved account, once either window's figure is past a guest's ceiling by half of what is left of the reserve, ccd moves the guest as it does on a hard block, in the middle of its turn (this design adds it: today the tree moves such a session only behind its idle gate); `ccd keep-awake --state on\|off <id>` sets and clears `.no-hibernate` and `.no-roll` | C1 and C4, ccd | the registry row's route stamp; the two markers | ccd | Each supervise tick and settle | W1 | n/a | An older ccd lacks `keep-awake`: designation refuses `capability-missing` |
 | `Clock`, `Scheduler`, `Entropy` | K, L2; given by L5 | n/a | n/a | n/a | W1a | n/a | n/a |
+| Observed time: an accumulator of monotonic deltas within one process | K, L1 | a column of the row whose timer it bounds | the lane that owns that row | n/a | W1a, with the renewal lane | n/a | n/a |
 | The hook's arms: the anchor slot (`ANCHOR_CARD_MAX_CHARS`), the card arm, the PreCompact arm inside history W3's one print | C3, hook | n/a | n/a | Each start | W1a (PreCompact dark until W0) | n/a | No anchor: today's role card and compaction |
 | The renewal lane, the weekly replay quiz | C3, L4 | `continuity_generations`, probe rows | each its own | Deadlines as columns; weekly | W1a | n/a | Sessions roll and resume as today |
-| The case lane | C5, L4 | `practice_cases` | it | On each signature | W1a (shadow) | n/a | n/a |
+| The case lane | C5, L4 | `practice_cases` | it | A `LANE_SCHEDULE` row on the drift reconciler's cadence, reading durable rows | W1a (shadow) | n/a | n/a |
 | `CallerIdentity` port; today's attribution adapter | C8, L2 and L3 | n/a | n/a | n/a | W1 | n/a | n/a |
 | The door process, with `ccrc-api` inside; the reader types it serves | C5, a fleet-host process ccd starts with each generation, with a one-time launch nonce in its environment | n/a | n/a | One per generation | W1 | n/a | If W0 fails it: a shell that runs only `ccrc-api` (§3.6) |
 | The outbox sender | C6, L4 | the push outbox | it marks sent | Drain, and a boot pass | W1 | n/a | n/a |
@@ -4941,7 +4961,12 @@ The skill is the Overlord's contract: numbered clauses, pinned verbatim by a tes
   within 5k tokens and 25k in all. A size ratchet test caps skill files, from W1a, with caps measured at its merge. A
   cap only goes down, except in a pull request that adds a pinned clause, which may raise that file's cap by the
   clause's bytes and no more. The skill files are every `.md` file under a `ccd/*-skill/` directory. A clause's bytes
-  are the length of its whole numbered line under the contract heading. Growth is measured against the merge base
+  are the UTF-8 bytes of its whole numbered line under the `## The contract` heading, newline included, for clauses
+  numbered past the merge base's highest. A reworded clause earns nothing, and a reference file earns nothing. A
+  `SKILL.md` earns the raise only once its contract has a pinned clause at the merge base. So this skill puts its
+  clauses under that heading, and pins them `1..N` from its first pull request. A skill file that is new in a pull
+  request is capped at its size at that merge. That is how a `SKILL.md` sheds procedures into references, which are
+  read on demand: only the restored `SKILL.md` bears the restore budget. Growth is measured against the merge base
   with `main`, so slack under a cap cannot be refilled. The ratchet stops growth. It does not by itself bring the
   coordinator skill, which is far over the restore budget today, under it.
 - **The constitution rides elsewhere.** The stable text (what it is, each ruling in one line, the anti-goals) is the
@@ -4978,8 +5003,9 @@ The coordinator skill gains three clauses, each pinned verbatim by `coordinator-
   reach the raise and release doors in W3's first step. Until then those doors ignore the fields, as Table 11.1e
   says an older build does, and every row reaches the operator as today.
 - **Its size grows only by its clauses.** The size ratchet test covers the coordinator skill's files too (§11.3). Each
-  pull request that adds one of these clauses may raise the file's cap by that clause's bytes and no more. M31 tracks
-  its bytes.
+  pull request that adds one of these clauses may raise the file's cap by that clause's bytes and no more. A new clause
+  also changes the count word in the skill's prose. Those bytes lie outside the clause's line, so the same pull
+  request offsets them inside the same file. M31 tracks the files' bytes, not their caps.
 
 ### 11.5 Time, rollback and older builds
 
@@ -4989,15 +5015,18 @@ what each older build does (H32).
 - **Times are the server's.** A door takes a duration, such as "first news in two hours", and the server stamps the
   time. The inbox returns the time each row has left. A session never compares an absolute deadline on its own clock.
 - **Ports for time and chance.** New Overlord and continuity code takes `Clock`, `Scheduler` and `Entropy` from the
-  composition root. A single-definition scan goes red on an ambient clock, timer or random call in those contexts. SQL
-  never reads the clock.
+  composition root. A single-definition scan goes red on an ambient clock, timer or random call in the new Overlord
+  and continuity modules. Existing code in those contexts is not rewritten for it. SQL never reads the clock.
 - **Deadlines are durable columns, set once.** Nothing extends one, and no deadline is a timer that lives in one
   process. `followUpAt` is not a deadline: only the follow-up arm re-sets it, after a nudge or a gap.
 - **Two kinds of timer.** A timer that fails towards the operator (a hold's deadline, an expiry, a second push) uses
   the wall clock. A clock that reads earlier than the last stored time is treated as that time. A timer whose expiry
   permits something counts only time the server observed: the veto window, a shadow period, the breaker's half-open
   wait, the hour of `ready` that lifts the breaker's condition on the ladder, and, because their expiry permits a
-  renewal, the renewal hold-off, a generation's least age and the soft renewal budget's six hours.
+  renewal, the renewal hold-off, a generation's least age and the soft renewal budget's six hours. Observed time is
+  one L1 accumulator in the clock kernel, never a second clock: milliseconds the server observed, kept in a stored
+  column and advanced by monotonic deltas within one process, never across a gap. The renewal lane's piece adds it
+  in W1a, because the first three such timers are its own.
 - **The hold-down is ccd's.** ccd is the one writer of the degraded stamp, so the hold-down before it restores the
   designated class runs on ccd's own clock (§3.4, Table 11.5b). The server observes no timer for it.
 - **A fact from another host** is aged from when the server received it.
@@ -5039,7 +5068,7 @@ values too. They are columns of the role table and constants of the card rendere
 | A quarter of the hard cap | The context floor of the idle trigger | W1a | n/a |
 | 30 minutes | The hold-down before ccd restores the designated class | W1 | ccd's clock |
 | Two in an hour | Restarts before the readiness word stops reading `restarting` | W1 | wall |
-| One sweep | How long after boot the word reads `unmeasured` | W1 | wall |
+| One sweep of the readiness lane, whose cadence is a `LANE_SCHEDULE` row added in W1 | How long after boot the word reads `unmeasured` | W1 | wall |
 | 90 days | How long `overlord_sequence` is kept | W1 | wall |
 | 200 notes of 500 characters | The caps on `continuity_notes` for one identity | W1a | n/a |
 | 1,500 characters | The Overlord's part of a relay | W2 | n/a |
@@ -5185,10 +5214,10 @@ only the simulator checks, by running each seed both ways.*
 
 | Tool | What it checks | Wave |
 |---|---|---|
-| A small model in a model checker, written before the code | First the composition of holds, readiness, generations and restarts; then authority and restore | W0; W1 |
+| A small model, explored exhaustively within bounds and written before the code | First the composition of holds, readiness, generations and restarts, with I5's generation part; then authority and restore, where I5's term and act key join | W0; W1 |
 | Stateful property tests over the real L1 deciders | Each machine: exactly once, never lost, monotonic, fails towards the operator | With each machine's wave |
 | Exhaustive tests of first-match deciders, with a monotonicity property | `overlordReadiness`, `itemClassFloor`, `overlordMayAct`, `renewalDue`, `followUpDue`, `mayHold` | With each |
-| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I10 under faults | Skeleton in W1a |
+| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I10 under faults | Skeleton in W1a: the new deciders on the fake ports, with crash and gap injection. The real lanes join once the watcher's runner reads `Clock`. Restore injection joins with the first decider that reads a restore |
 | The invariant monitor on the live sequence, `overlord_sequence` | The same predicates in production, except I9 | W1 |
 | The scenario suite and the replay | The Overlord's behaviour (§9.5) | W3 |
 | Mutation testing of each new L1 decider, with a score floor that only rises | That the tests would catch a broken guard | Daily, from W1a |
@@ -5201,8 +5230,10 @@ only the simulator checks, by running each seed both ways.*
   refusal into an allow.
 - **Every pull request carries its share.** Characterization tests first when code moves, red-first tests for every
   new guard, census updates, and the property tests and simulator scenarios its wave owes.
-- **The plan picks the tools.** Recommended: a TypeScript-bridged model checker, a property-test library and a
-  mutation runner.
+- **The plan picks the tools.** Recommended: a small explicit-state explorer with no dependency for the first
+  model, a property-test library and a mutation runner. The property-test library is chosen with the first machine's
+  wave, W1a's renewal piece. A model checker with a TypeScript bridge earns its dependency only if the explorer's
+  bounds become the limit.
 
 ## 12. Measures of success
 
@@ -5302,9 +5333,9 @@ changed a call from its rev 8 form. §13.1 lists every H call.
 | C46 | Its accounts | shared, a tagged pool, a tagged pool of fenced-off accounts, accounts with a reserved share | Accounts reserved for it, never fenced off, and set centrally: `reservePct` on the account's row of `account_reservations`; the server names the sessions it serves. Those are the designated session, and the replay body while the replay lane runs one. The replay body gets the Overlord's answer for every input of the serviceability answer, the billing fact included, and it waits while no reserved account is under the soft line. One more input to the serviceability answer: no session the reservation does not serve runs Fable there. Every other session is a guest there, whatever its project, class-free ones included, and yields at a line that keeps the reserve free. A guest in a long turn moves mid-turn at a second line, as on a hard block. No new refusal of a placement or a swap, and the pool rule is unchanged. A reservation is accepted only while every agent that places sessions enforces it. The operator sets each reserve; the whole window is rev 8's fenced account | Proposed | H16, and the operator's direction |
 | C47 | What it may read | operator prompts only, everything | Everything the console reads, plus every project's history through an agent op that takes the scope as an argument. Credential stores stay closed. Every read leaves a ledger line, under rate ceilings (Table 11.5b). Mail to or from `overlord` is served only to its recipient or the console | Proposed | H3, H9, H10 |
 | C48 | What it does itself | some small execution, none | None (R12). Its launch profile holds no command, editing, web or workflow tool, and the sandbox check measures that at every start. The server refuses it on run-open and on every other write lane | Proposed | H1, H4, H9, H10 |
-| C49 | How coordinators get the long-life fixes | a copy for coordinators, one mechanism | One role vocabulary, `FLEET_ROLES`, read by one `roleOf(session)`. Launch profile, card renderer, compaction instructions, probe set, renewal triggers and mail pace are its columns. One generations table, one renewal lane, one notes table, one card door and one probe verb | Proposed | H1, H12 |
+| C49 | How coordinators get the long-life fixes | a copy for coordinators, one mechanism | One role vocabulary, `FLEET_ROLES`, read by one `roleOf(session)`. Long-lived, the `SessionRole` view, launch profile, card renderer, compaction instructions and probe set are its columns. Mail pace and the renewal triggers are L1 records keyed by role, each total over `FLEET_ROLES`. One generations table, one renewal lane, one notes table, one card door and one probe verb | Proposed | H1, H12 |
 | C50 | Coordinator renewal | none, the Overlord's triggers, their own | Their own rows of the trigger table: the hard cap, two compactions, a failed probe, a new install, not local, a resumed long conversation, and a wave boundary above a quarter of the hard cap. No coordinator renewal starts while the Overlord's generation is outside `active`. Their doors carry no fence | Proposed | H12, H13 |
-| C51 | Compaction instructions and empty cards | Overlord only, every session | Every session, by role: `compactInstructionsFor(role)` is a column of `FLEET_ROLES`, carried by the typed `/compact` and inside history W3's one print. A card that is never silent. A long-lived role is not served the hook's coordinator role line | Proposed | H1, H11 |
+| C51 | Compaction instructions and empty cards | Overlord only, every session | Every session, by role: the compaction instructions are a column of `FLEET_ROLES`, read through `compactInstructionsFor(role)` and carried by the typed `/compact` and inside history W3's one print. A card that is never silent. A long-lived role is not served the hook's coordinator role line | Proposed | H1, H11 |
 | C52 | Recall and measuring loss for coordinators | none, probes, probes plus quiz plus a judge | Steering on the card and in summaries, clause 23, closed-book probes from its own rows, the replay quiz weekly, and the Overlord as drift judge | Proposed | H15, H37 |
 | C53 | Lossless history | mentioned in passing, the episodic layer | The episodic layer of every long-lived role. Its generations stay one family in history. One PreCompact print, owned by history W3, carries the role's instructions. Leaves are read before transcripts. The chat reads earlier generations through the history reader | Proposed | H14 |
 | C54 | Code graphs | unused, its context, its routing | Routing through history's `touched` and a graph's blast radius, read by readers. The blast radius also fills the request's `expectedPaths`, which the `split-overlaps` check reads. The graphify card is withheld from the Overlord | Proposed | H9, H23 |
@@ -5388,19 +5419,20 @@ flowchart LR
   W6["W6 Propose and report"]
 ```
 *Figure 8. A spike, the continuity wave and seven Overlord waves. W1a needs neither prerequisite. It follows W0,
-and its compaction instructions wait for history W3-1. The prerequisites gate W1, where the Overlord itself begins.
-Nothing in any wave is irreversible.*
+and its compaction instructions wait for history W3-1. Its foundations read nothing W0 measures, so they may land before
+W0 ends: the role table, `MAIL_PACE`, the ports, the ratchet, the simulator's skeleton and the case lane. The
+prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is irreversible.*
 
 | Wave | What it ships |
 |---|---|
 | W0, a spike | It changes nothing that runs: its test-only files ship in the tarball and do nothing. It measures what the design depends on: the hook's cap and the anchor slot; a fresh start as the renewal act, and its time; what a clear or a fresh start does to running readers, queued input and scheduled tasks; whether a compaction rotates the uuid; auto memory, forks, the subagent model, the model-switch hooks and a refused proactive compaction; the door process under a restricted launch (hooks, skills, the permission mode); reader types with no shell; nudge-and-read for the operator's messages; the statusline's token fields; whether the inbox socket can be used with the peer channel closed; a continuity record for each lane; whether its accounts bill Fable to usage credits; how closely the seven-day figure times the Fable share reading tracks the Fable allowance; how ccd picks an account today (no listed order exists yet: that is W1's build); the restart numbers and the first sweep after boot (§6.4); what an account's shared config directory loads into a session; how reliable the typed `/clear` is. It writes the first model of holds, readiness and generations (§11.7). Where the real thing does not exist yet (the renewal verb, probes), it measures the parts with stand-ins, and W1a measures again with the real ones |
-| W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port; the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge; the `MAIL_PACE` table; the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1` |
+| W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port; the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1` |
 | W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the reservation rule, `account_reservations` and ccd's capability word `account-reserve`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the capability word `overlord-v1` |
 | W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups and read-back flags); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; the capability word `overlord-route-v1` |
 | W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow; engagement per programme; the replay body and the scenario suite; the weekly check and the Week page; the handover brief; the capability word `overlord-brief-v1` |
 | W3, step two: answer first | The holds, `mayHold`, retention and the breaker; the inbox's held rows, admission, packets and precedents; `askOrAct`; the answer and escalate doors; the grants door with all of H26, and staging; drills and the outside audit; background work; each kind of answer armed on evidence; the capability word `overlord-answer-v1` |
 | W4, learn | The model and feed reads; the operator-model entries and their feeds; derived basis, candidates and the subject key; the distillation; About you; the privacy controls, and the learning events in the privacy journal; the replay run again, now with the model; the capability word `overlord-learn-v1` |
-| W4b, the playbook | Practice entries, triggers, the door and `practiceFor`; cases and their reviews; coordinator clause 24; the capability word `practice-v1` |
+| W4b, the playbook | Practice entries, the door and `practiceFor` over the trigger table, which started in W1a; cases and their reviews; coordinator clause 24; the capability word `practice-v1` |
 | W5, start and re-kick | The start and re-kick doors; retiring as a proposal; `portfolioFocus`; the capability word `overlord-start-v1` |
 | W6, propose and report | Grant proposals raised by the server; scarcity admission, and rank as the first sort key where work waits; the weekly portfolio packet; the Overlord's proposals about its own procedures; the digest section; the capability word `overlord-propose-v1` |
 
@@ -5530,7 +5562,7 @@ mechanism leaves something open, the row says what is left.
 | Pushes are duplicated or lost | The operator is pinged twice, or never | The reach stamp and an outbox row commit in one transaction. One sender drains the outbox, and sends every unsent row again at boot. Each push carries its row's tag, so a repeat replaces the first on the device |
 | The playbook or its own proposals game the measures | A lesson that helps no one goes live, or it loosens its own bounds | Retiring an entry is automatic, and a widening entry needs the operator's tick. Canary holdouts, and outcomes only from measured rows. An entry expires unless its effect is measured. It may never propose a change to what judges, bounds or authorises it (A14) |
 | Forecasts mislead | The operator plans on a date nobody can meet | Only a seeded Monte Carlo over measured cycle times produces a date; no model and no session does. Each 85% date is sealed and scored, and dates are marked "uncalibrated" when they miss their band |
-| The size of the build | The plan stalls, or ships half a guard | W0 measures before anything depends on it. Each H call is marked shape or tightening, and ships with its wave or one wave after. Each wave ships dark behind a capability word. Every guard ships with the test that goes red without it, and the model checker, the simulator and mutation floors check that the machines compose (§11.7) |
+| The size of the build | The plan stalls, or ships half a guard | W0 measures before anything depends on it. Each H call is marked shape or tightening, and ships with its wave or one wave after. Each wave ships dark behind a capability word. Every guard ships with the test that goes red without it, and the model, the simulator and mutation floors check that the machines compose (§11.7) |
 
 *Table 16a. The risks, and what holds each one.*
 
@@ -5565,7 +5597,7 @@ mechanism leaves something open, the row says what is left.
   C56). This spec names none.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions. D-8125 has merged. The Overlord's W1 starts
   when D-8126 has merged. W0 and W1a do not wait for it.
-- **Fifteen rulings the hardening review needs from you.** Each narrows something you ruled, spends your attention, or
+- **Sixteen rulings the hardening review needs from you.** Each narrows something you ruled, spends your attention, or
   sends data to a second party. They are listed most important first.
   1. **A box where the server and the sessions share a user (H28, §7.4).** The default install is one box. There,
      nothing the server holds is beyond a session's reach. The review's call: on such a box the ladder stops at
@@ -5609,6 +5641,12 @@ mechanism leaves something open, the row says what is left.
   14. **One per server (H3, §3.1).** Is that what "one and only one" means, should you ever run more than one server?
   15. **The price of interrupting you (H34, §6.3).** One Setting weighs the cost of a wrong act against the cost of
       asking. It starts at 1, and a kind of decision with no record always asks.
+  16. **The scope of the skill-size ratchet (H37, §11.3).** The test is built and waits for you. It binds every
+      programme: once it merges, a pull request that grows a skill file fails in the merge queue, unless it adds a
+      pinned clause or puts the new text in a new reference file. Measured on `main` over 14 days, the coordinator
+      skill's `SKILL.md` grew in 17 of its 18 commits, and its largest reference in all 17 of its own. The choice:
+      every skill file, as written here, or `SKILL.md` only, which alone bears the restore budget. Proposed: every
+      skill file, with coordinators told before it merges.
 
 ### Later
 
