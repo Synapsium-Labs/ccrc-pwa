@@ -14,6 +14,7 @@ import { utf8ByteLength } from '../../lib/markdownGuard';
 import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS } from '../../lib/readerLimits';
 import { docLinkTarget } from '../docsLinks';
 import type { DocLinkContextValue } from '../DocLink';
+import type { DocSectionSlug } from '../../../../shared/docs';
 import type { ReaderHiddenChar } from './readerText';
 
 /** A link as the host's classifier of the frame's href yields it (mirrors the library's host-link shape; nothing is
@@ -130,7 +131,8 @@ export function readerPrefsOf(
 }
 
 /** The frame's start watchdog for a document of `bytes` UTF-8 bytes: the Docs parse budget, with no allowance for
- *  Mermaid (the W8a plan's refinement (c): `ready` does not wait for it in on-request mode). */
+ *  Mermaid: `ready` waits for it neither on request (the W8a plan's refinement (c)) nor after `ready` (the library 1.1
+ *  take-up plan, refinement (c)). */
 export function readerWatchdogMs(bytes: number): number {
   return DOCS_PARSE_BUDGET_MS(bytes);
 }
@@ -139,21 +141,74 @@ export function readerWatchdogMs(bytes: number): number {
  *  mount, and only the lab passes it. */
 export type ReaderMountProfile = 'lab-draw';
 
-/** How one mount draws, waits and stores. */
+/** What the reader lab's E17 `mermaid` line read (the take-up plan, refinement (b)), in the lab's own words for that
+ *  line's three outcomes. Mirrors the lab's verdicts; nothing is imported from the lab. */
+export type ReaderE17Reading = 'holds' | 'does-not-hold' | 'not-measured';
+
+/** The reading this build's draw was decided on (the take-up plan, refinement (b)): every block the operator sent reads
+ *  `holds` on its `mermaid` line, or one reads `does not hold`, or none was measured. Two blocks arrived (2026-11-10),
+ *  both from the reader lab's `auto` mode on library build 0079625cc30a, and both are kept:
+ *  block 1: "reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a"
+ *  and "mermaid            does not hold (longest gap 217 ms, all six together; worst single: figure 4, 150 ms)";
+ *  block 2: "reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a"
+ *  and "mermaid            holds (ready; longest gap 192 ms, all six together; worst single: figure 5, 150 ms)".
+ *  The failing block decides: a block that holds never replaces one that does not, and neither is averaged away. A new
+ *  reading is an edit here, its pin in reader-policy.test.ts, and the rich-docs spec's E17 row. */
+export const READER_E17_MERMAID: ReaderE17Reading = 'does-not-hold';
+
+/** The Docs reader's draw for an E17 reading: on open, after `ready`, only when the line holds; otherwise on request, as
+ *  W8a shipped it (the rich-docs spec's `reader-mermaid-on-tap`). */
+export function docsDrawFor(e17: ReaderE17Reading): 'after-ready' | 'on-request' {
+  return e17 === 'holds' ? 'after-ready' : 'on-request';
+}
+
+/** Whose bar a mount has (the take-up plan, refinement (g)): `frame-bar`, the reader frame's own; `host-bar`, ccrc's, with
+ *  the frame's bar off, its top space trimmed and its progress reported. */
+export type ReaderChrome = 'frame-bar' | 'host-bar';
+
+/** A mount asks for ccrc's bar only at the compact width, read as the mount starts (refinement (f)). */
+export function readerChromeFor(compactWidth: boolean): ReaderChrome {
+  return compactWidth ? 'host-bar' : 'frame-bar';
+}
+
+/** How one mount draws, waits, stores, and whose bar it has. */
 export interface ReaderMountPlan {
-  readonly draw: 'auto' | 'on-request';
+  readonly draw: 'auto' | 'on-request' | 'after-ready';
   readonly watchdogMs: number;
   /** Whether the mount is handed the reader's storage port. */
   readonly store: boolean;
+  readonly chrome: ReaderChrome;
 }
 
-/** The one decision: the Docs reader draws Mermaid on request, waits `readerWatchdogMs(bytes)` and keeps reader state;
- *  the reader lab's `lab-draw` draws on open, waits READER_LAB_DRAW_WATCHDOG_MS and keeps none, so the lab stores
- *  nothing. */
-export function readerMountPlan(profile: ReaderMountProfile | undefined, bytes: number): ReaderMountPlan {
+/** The one decision: the Docs reader draws as the E17 reading says (`docsDrawFor`), waits `readerWatchdogMs(bytes)`, keeps
+ *  reader state and has the bar it asked for; the reader lab's `lab-draw` draws on open in the library's `auto` mode
+ *  (where `ready` waits for the figures, so the lab's gap window still times the draw: refinement (d)), waits
+ *  READER_LAB_DRAW_WATCHDOG_MS, keeps nothing and has the frame's own bar, whatever the reading and the bar asked for. */
+export function readerMountPlan(
+  profile: ReaderMountProfile | undefined, bytes: number, chrome: ReaderChrome, e17: ReaderE17Reading,
+): ReaderMountPlan {
   return profile === 'lab-draw'
-    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false }
-    : { draw: 'on-request', watchdogMs: readerWatchdogMs(bytes), store: true };
+    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' }
+    : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome };
+}
+
+/** The reader's tools a host may run without the frame's bar: the library's `DocFrame.command` names, held equal by
+ *  reader-commands.test-d.ts (the quick jump, the reading settings, the contents drawer and a plan's Outline). */
+export type ReaderCommand = 'jump' | 'settings' | 'contents' | 'outline';
+
+const ONE_BAR_TOOLS: readonly ReaderCommand[] = ['jump', 'contents'];
+const ONE_BAR_PLAN_TOOLS: readonly ReaderCommand[] = ['jump', 'contents', 'outline'];
+
+/** The tools the one bar draws, in the frame's own bar's order (refinement (j)): the quick jump and the contents, and a
+ *  plan's Outline on a plans leaf. The reading settings stay the frame's own button (question Q2). */
+export function oneBarTools(section: DocSectionSlug): readonly ReaderCommand[] {
+  return section === 'plans' ? ONE_BAR_PLAN_TOOLS : ONE_BAR_TOOLS;
+}
+
+/** The one bar's title (refinement (h)): the document's first level-1 heading as the library's render read it (the
+ *  frame's own title), else the file name ccrc already shows. */
+export function readerBarTitle(metaTitle: string | null, fileName: string): string {
+  return metaTitle !== null && metaTitle.trim() !== '' ? metaTitle : fileName;
 }
 
 /** Where one body (one `bodyKey`) is. `fallback` and `plain` are terminal for the key: the body stays there until its

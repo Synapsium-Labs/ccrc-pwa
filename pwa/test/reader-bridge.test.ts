@@ -428,7 +428,9 @@ describe('the reader lab profile (reader lab plan, Task 7)', () => {
   });
 
   it('readerMountPlan is the one decision, and only lab-draw maps to drawing on open', () => {
-    expect(readerMountPlan('lab-draw', 100)).toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false });
-    expect(readerMountPlan(undefined, 100)).toEqual({ draw: 'on-request', watchdogMs: readerWatchdogMs(100), store: true });
+    expect(readerMountPlan('lab-draw', 100, 'frame-bar', 'holds'))
+      .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' });
+    expect(readerMountPlan(undefined, 100, 'frame-bar', 'does-not-hold'))
+      .toEqual({ draw: 'on-request', watchdogMs: readerWatchdogMs(100), store: true, chrome: 'frame-bar' });
   });
 });

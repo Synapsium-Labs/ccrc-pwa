@@ -5,13 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
 import { DOC_SECTION_SLUGS } from '../../shared/docs';
 import { DOCS_PARSE_BUDGET_MS } from '../src/lib/markdownLimits';
-import { READER_COPY_WRITE_MAX_BYTES } from '../src/lib/readerLimits';
+import { READER_COPY_WRITE_MAX_BYTES, READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
 import { enumerablePageStorage } from '../src/lib/storage';
 import { replaceFragment } from '../src/lib/router';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import {
-  copyDecision, readerBodyReducer, readerDocKey, readerPrefsOf, readerWatchdogMs, routeReaderLink,
-  type ReaderBodyState, type ReaderLink,
+  copyDecision, docsDrawFor, oneBarTools, READER_E17_MERMAID, readerBarTitle, readerBodyReducer, readerChromeFor,
+  readerDocKey, readerMountPlan, readerPrefsOf, readerWatchdogMs, routeReaderLink,
+  type ReaderBodyState, type ReaderChrome, type ReaderE17Reading, type ReaderLink,
 } from '../src/docs/reader/policy';
 import { THEMES } from '@ccrc/ui';
 import { markHiddenText, READER_FALLBACK_NOTE, READER_SHEET_TEXT } from '../src/docs/reader/readerText';
@@ -358,5 +359,57 @@ describe('markHiddenText', () => {
     expect(markHiddenText(`a${zws}b`, [e(1)], 64)).toEqual({ text: `a${zws}b`, unnamed: 0 });
     expect(markHiddenText(`a${zws}b`, [z(-1)], 64)).toEqual({ text: `a${zws}b`, unnamed: 0 });
     expect(markHiddenText(`a${zws}b${esc}`, [e(1), z(1), e(3)], 64)).toEqual({ text: `a${mz}b${me}`, unnamed: 0 });
+  });
+});
+
+describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Task 3)', () => {
+  const READINGS: readonly ReaderE17Reading[] = ['holds', 'does-not-hold', 'not-measured'];
+  const CHROMES: readonly ReaderChrome[] = ['frame-bar', 'host-bar'];
+
+  it('docsDrawFor draws after ready only when the E17 Mermaid line holds', () => {
+    expect(docsDrawFor('holds')).toBe('after-ready');
+    expect(docsDrawFor('does-not-hold')).toBe('on-request');
+    expect(docsDrawFor('not-measured')).toBe('on-request');
+  });
+
+  it('READER_E17_MERMAID is the reading the operator\'s block gave', () => {
+    expect(READER_E17_MERMAID).toBe('does-not-hold');
+  });
+
+  it('readerMountPlan: the Docs reader draws as the reading says and has the bar it asked for', () => {
+    for (const e17 of READINGS) {
+      for (const chrome of CHROMES) {
+        expect(readerMountPlan(undefined, 100, chrome, e17))
+          .toEqual({ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome });
+      }
+    }
+  });
+
+  it('readerMountPlan: lab-draw draws on open in the auto mode, on the frame\'s own bar, whatever the reading and the bar asked for', () => {
+    for (const e17 of READINGS) {
+      for (const chrome of CHROMES) {
+        expect(readerMountPlan('lab-draw', 100, chrome, e17))
+          .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' });
+      }
+    }
+  });
+
+  it('readerChromeFor: ccrc\'s bar at the compact width, the frame\'s own bar otherwise', () => {
+    expect(readerChromeFor(true)).toBe('host-bar');
+    expect(readerChromeFor(false)).toBe('frame-bar');
+  });
+
+  it('oneBarTools: the quick jump and the contents; a plan\'s Outline on a plans leaf; never the reading settings', () => {
+    for (const section of ['specs', 'product-design', 'conventions'] as const) {
+      expect(oneBarTools(section)).toEqual(['jump', 'contents']);
+    }
+    expect(oneBarTools('plans')).toEqual(['jump', 'contents', 'outline']);
+    for (const section of DOC_SECTION_SLUGS) expect(oneBarTools(section)).not.toContain('settings');
+  });
+
+  it('readerBarTitle: the document\'s first level-1 heading, else the file name', () => {
+    expect(readerBarTitle('Path identity design', 'a.md')).toBe('Path identity design');
+    expect(readerBarTitle(null, 'a.md')).toBe('a.md');
+    expect(readerBarTitle('  ', 'a.md')).toBe('a.md');
   });
 });

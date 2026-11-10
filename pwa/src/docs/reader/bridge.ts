@@ -106,7 +106,7 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     return INERT;
   }
 
-  const plan = readerMountPlan(input.profile, input.bytes);
+  const plan = readerMountPlan(input.profile, input.bytes, 'frame-bar', 'does-not-hold');
   const watchdogMs = plan.watchdogMs;
   let document = withServedVersion(input.document);
   if (document.scan !== undefined && mermaidGate(document.scan.mermaid).inline) {
