@@ -197,6 +197,19 @@ describe('what the agent arm does not enter, and which parents it serves', () =>
     expect(counterNames(rig.db).filter((n) => CENSUS_WALK_FIGURES.some((f) => n.startsWith(f)))).toEqual([]);
   });
 
+  it('a linked project directory keeps its main transcript, and its subagent files are never entered through it (failure table: a link is never followed)', async () => {
+    const rig = await rigOf('ccrc-hist-linkedproj-');
+    plantAgentTree(rig, { slug: '-real', uuid: PARENT, agents: [agent('a', 0x910)] }, SINCE);
+    const projects = path.join(rig.box.homes[0]!, 'projects');
+    fs.symlinkSync('-real', path.join(projects, '-linked'));
+    await rig.tick(armed, { scan: true });
+    const via = (like: string): number =>
+      (rig.db.prepare('SELECT count(*) AS n FROM file_paths WHERE path LIKE ?').get(like) as { n: number }).n;
+    expect(via('%/-linked/%.jsonl'), 'main discovery lists through a linked project directory, as it always did').toBeGreaterThan(0);
+    expect(via('%/-real/%/subagents/%'), 'CONTROL: the subagent file was read through the real directory').toBe(1);
+    expect(via('%/-linked/%/subagents/%'), 'and never through the link').toBe(0);
+  });
+
   it('history-off reads no subagent file (failure row 26)', async () => {
     const rig = await rigOf('ccrc-hist-off-');
     const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x900)] }, SINCE);
