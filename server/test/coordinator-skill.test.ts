@@ -4421,6 +4421,13 @@ describe('the coordinator links every ticketed PR by the repository\'s visibilit
     expect(skill).toContain('never write a tracker id in the repository');
   });
 
+  it('a failed or odd read follows the public rule, in all three places', () => {
+    const say = 'If `linking show` fails or answers anything else, follow the `public` rule.';
+    for (const [where, text] of [['SKILL.md', skill], ['wave-lifecycle.md', lifecycle], ['linear skill', linearSkill]] as const) {
+      expect(text.replace(/\s+/g, ' '), where).toContain(say);
+    }
+  });
+
   it('the landing steps repeat it, and the verbs are ones the closed client table holds', () => {
     expect(lifecycle).toContain('**Link the PR to its ticket, once, before it lands, by the repository\'s visibility.**');
     expect(lifecycle).toContain('ccrc-api linking show');

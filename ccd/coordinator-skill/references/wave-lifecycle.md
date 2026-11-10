@@ -805,7 +805,8 @@ program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
 
 **Link the PR to its ticket, once, before it lands, by the repository's visibility.** When the wave's work is tied to
-a Linear ticket, read `ccrc-api linking show` (`mode`, `teamKey`). `private`: the ticket is in the workspace (a
+a Linear ticket, read `ccrc-api linking show` (`mode`, `teamKey`). If `linking show` fails or
+answers anything else, follow the `public` rule. `private`: the ticket is in the workspace (a
 dispatch's `slug` starts `key-123-`) and the PR body says `Closes KEY-123` when the merge meets the ticket's
 acceptance, `Refs KEY-123` when a live check is owed; Linear's GitHub integration links and closes. `public` or
 `unknown`: the PR is linked from the Linear side with `ccrc-api linear link <REF> --json -` (body

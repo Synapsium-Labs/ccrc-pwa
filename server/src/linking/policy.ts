@@ -51,13 +51,17 @@ export function parseLinkingWrite(body: unknown):
   return { ok: true, write: { teamKey, override: o.override } };
 }
 
-/** The project to measure next: a never-measured one first, then the oldest reading at least 24 h old, else null. */
-export function visibilityDue(rows: readonly { project: string; at: number | null }[], now: number): string | null {
+/** A failed reading is taken again after this long, not after a day: a failure says nothing about the repository. */
+export const VISIBILITY_RETRY_MS = 5 * 60_000;
+
+/** The project to measure next: a never-measured one first, then the oldest reading that is due. A reading is due when it
+ *  is 24 h old, or, if it failed, when it is `VISIBILITY_RETRY_MS` old; else null. */
+export function visibilityDue(rows: readonly { project: string; at: number | null; failed?: boolean }[], now: number): string | null {
   const never = rows.find((r) => r.at === null);
   if (never) return never.project;
   let best: { project: string; at: number } | null = null;
   for (const r of rows) {
-    if (r.at === null || now - r.at < VISIBILITY_MAX_AGE_MS) continue;
+    if (r.at === null || now - r.at < (r.failed === true ? VISIBILITY_RETRY_MS : VISIBILITY_MAX_AGE_MS)) continue;
     if (best === null || r.at < best.at) best = { project: r.project, at: r.at };
   }
   return best ? best.project : null;

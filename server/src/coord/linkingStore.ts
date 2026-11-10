@@ -31,7 +31,14 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
   } else if (row !== undefined && row.visibility !== null && row.slug !== null && row.template !== null && row.measuredAt !== null) {
     measured = { state: 'measured', visibility: row.visibility, slug: row.slug, template: row.template, at: row.measuredAt };
   }
-  return { teamKey, override, measured, mode: linkingMode(override, measured) };
+  // A failed re-read leaves the last good visibility columns in place (`recordReading`), and the rule stays what that
+  // reading made it: one `gh` blip must not turn a measured public project 'unknown' (D-8147). A project that never had a
+  // good reading has no such columns and stays unknown.
+  const ruled: ProjectLinkingWire['measured'] = measured.state === 'failed' && row?.visibility != null && row.slug !== null
+    && row.template !== null
+    ? { state: 'measured', visibility: row.visibility, slug: row.slug, template: row.template, at: measured.at }
+    : measured;
+  return { teamKey, override, measured, mode: linkingMode(override, ruled) };
 }
 
 /** The operator's write: the key and the override, who and when; the reading is left as it is. */
@@ -44,7 +51,7 @@ export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBod
 }
 
 /** The sweep's reading: a measurement writes the visibility, slug and template and clears any failure; a failure writes
- *  its reason and time and keeps the last visibility columns (the mode ignores them while the reading is failed);
+ *  its reason and time and keeps the last visibility columns (the mode keeps ruling by them while the reading is failed);
  *  `unmeasured` clears the reading. The key and override are left as they are. */
 export function recordReading(db: DatabaseSync, project: string, r: ProjectLinkingWire['measured']): void {
   if (r.state === 'measured') {

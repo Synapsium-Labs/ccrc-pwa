@@ -39,16 +39,24 @@ describe('project_linking', () => {
     expect(linkingOf(db, 'project-a').measured).toEqual({ state: 'unmeasured' });
   });
 
-  it('a failed reading keeps the last measured visibility out of the mode', () => {
+  it('a failed reading leaves the mode as the last good reading made it; with no good reading it is unknown', () => {
+    recordReading(db, 'project-z', { state: 'failed', reason: 'gh-failed', at: 250 });
+    expect(linkingOf(db, 'project-z').mode).toBe('unknown');
     recordReading(db, 'project-a', MEASURED);
     recordReading(db, 'project-a', { state: 'failed', reason: 'gh-failed', at: 300 });
     expect(linkingOf(db, 'project-a')).toEqual({
-      teamKey: null, override: null, measured: { state: 'failed', reason: 'gh-failed', at: 300 }, mode: 'unknown',
+      teamKey: null, override: null, measured: { state: 'failed', reason: 'gh-failed', at: 300 }, mode: 'private',
     });
     // The last visibility stays in the row, so the next measurement overwrites it and nothing else has to.
     expect(db.prepare('SELECT visibility FROM project_linking WHERE project = ?').get('project-a')).toEqual({ visibility: 'private' });
     recordReading(db, 'project-a', { ...MEASURED, visibility: 'public', at: 400 });
     expect(linkingOf(db, 'project-a').measured).toMatchObject({ state: 'measured', visibility: 'public', at: 400 });
+  });
+
+  it('a failed re-read of a public project stays public', () => {
+    recordReading(db, 'project-a', { ...MEASURED, visibility: 'public', at: 350 });
+    recordReading(db, 'project-a', { state: 'failed', reason: 'gh-failed', at: 360 });
+    expect(linkingOf(db, 'project-a').mode).toBe('public');
   });
 
   it('linkingAll reads every row in one query', () => {

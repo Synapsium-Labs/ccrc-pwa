@@ -52,7 +52,7 @@ import {
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { measuredIdentity, measuredProjectOf, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { FLEET_ROWS_MAX_AGE_MS, fleetRowsUsable, listProjects, ProjectWalkCache, type CcdResult } from './lifecycle.js';
@@ -80,7 +80,7 @@ import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
-import { linkingMode, trackerIdsIn } from './linking/policy.js';
+import { ticketRefOfBranch, trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
@@ -3138,8 +3138,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       let row: ReturnType<CoordStore['linkingOf']> | undefined;
       try { row = deps.coord.linkingOf(project); } catch { row = undefined; }
       // Only the project's own team's ticket is rewritten: a name like `phase-2` parses as a ticket but is no tracker id.
+      // Anything but a measured or chosen PRIVATE reading (unmeasured and failed ones included) counts as public.
       if (row !== undefined && row.teamKey !== null && plan.ask.ticket.key.toUpperCase() === row.teamKey.toUpperCase()
-        && linkingMode(row.override, row.measured) === 'public') {
+        && row.mode !== 'private') {
         const words = publicTicketSlug(title, plan.ask.ticket, project);
         if (!words.ok) return refuseRoute(reply, words.error);
         slug = words.slug;
@@ -3852,17 +3853,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
   };
 
-  // D-8147: the session's project's linking, for the PR paths: the rule that applies and the team's key. Undefined when
-  // there is no store, the registry could not name the project, or the store could not be read: no linking is applied.
-  const sessionLinking = async (id: string): Promise<{ mode: LinkingMode; teamKey: string | null } | undefined> => {
+  // D-8147: the session's project's linking, for the PR paths: the rule that applies, the team's key and the session's
+  // branch. A project nothing could be read for (no store, the registry names no project, the store failed) is PUBLIC with
+  // no key: the fail-closed rule, so a wrong guess never writes a tracker id.
+  const sessionLinking = async (id: string): Promise<{ mode: LinkingMode; teamKey: string | null; branch: string | null }> => {
     const coord = deps.coord;
-    if (coord === undefined) return undefined;
+    const closed = { mode: 'public' as const, teamKey: null, branch: null };
+    if (coord === undefined) return closed;
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (read.kind !== 'found' || read.record.projectEvidence !== 'measured' || read.record.project === '') return undefined;
+    const project = measuredProjectOf(read);
+    if (project === null) return closed;
     try {
-      const row = coord.linkingOf(read.record.project);
-      return { mode: linkingMode(row.override, row.measured), teamKey: row.teamKey };
-    } catch { return undefined; }
+      const row = coord.linkingOf(project);
+      return { mode: row.mode, teamKey: row.teamKey, branch: read.kind === 'found' ? read.record.branch : null };
+    } catch { return closed; }
   };
 
   app.get('/api/sessions/:id/pr', async (req, reply) => {
@@ -3898,9 +3902,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // D-8147: a PUBLIC project's pull request never names its team's tracker id (Linear links it from its side).
     const linking = await sessionLinking(id);
-    if (linking?.mode === 'public') {
+    if (linking.mode !== 'private') {
       const ids = trackerIdsIn(`${body.title}\n${body.body}`, linking.teamKey);
       if (ids.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids });
+      // The branch is pushed to the repository too: a head branch named for the team's ticket is refused, and said so.
+      const ref = linking.branch === null ? null : ticketRefOfBranch(linking.branch, linking.teamKey);
+      if (ref !== null) return refuseRoute(reply, 'tracker-id-public', { ids: [ref], in: 'branch' });
     }
     const b64 = Buffer.from(body.body, 'utf8').toString('base64');
     const argv = CCD_ARGV.prOpen(id, body.title, b64, body.draft === true);

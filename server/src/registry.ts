@@ -1730,3 +1730,11 @@ export function isCleanRecord(rec: SessionRecord): boolean {
     && rec.browserMcp !== 'unreadable'
     && rec.limitWait !== 'unreadable';
 }
+
+/** The project a registry read names, or null when it names none: the record was not found, or `.project` did not read as
+ *  measured (absent, unreadable, or empty). The one place a consumer outside the radar decides on `projectEvidence`
+ *  (the linking standard's reads, D-8147). */
+export function measuredProjectOf(read: SingleRead): string | null {
+  if (read.kind !== 'found' || read.record.projectEvidence !== 'measured' || read.record.project === '') return null;
+  return read.record.project;
+}

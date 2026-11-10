@@ -17,6 +17,7 @@ import { LINKING_TEMPLATE_PATH } from '../../../../shared/linking';
 import type { ProjectRow } from '../../../../shared/api';
 import { ResultLine, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { api } from '../../lib/api';
+import { loadProjects } from '../../fleet/useProjectRows';
 import { apiErrorText } from '../../lib/refusalWords';
 
 /** The card's words. Short labels only; the sentences a refusal says are `LINKING_REFUSAL_TEXT`'s. */
@@ -175,7 +176,7 @@ export function ProjectLinkingCard(): ReactNode {
 
   useEffect(() => {
     let live = true;
-    api.projects().then(
+    loadProjects().then(
       (r) => { if (live) setRead({ kind: 'read', rows: r.projects }); },
       () => { if (live) setRead({ kind: 'failed' }); },
     );

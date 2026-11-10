@@ -470,7 +470,8 @@ describe('Build 7 nouns', () => {
 
   // Landing order wave 5a (4b F5). `SessionRecord.projectEvidence` says how `.project` read, and `project` stays a display
   // default (the id) when it did not measure. One reader decides on it, `radarRowsOf`: a second reader would be a second
-  // rule for which rows join a project. The writer is `registry.ts`'s `buildRecord`.
+  // rule for which rows join a project. The writer is `registry.ts`'s `buildRecord`, which also hosts `measuredProjectOf`, the one
+  // other decision on it (D-8147: the linking reads name the project a registry read measured).
   describe('SessionRecord.projectEvidence has one reader (landing order wave 5a, 4b F5)', () => {
     it("is on a code line only in registry.ts, which writes it, and radar.ts's radarRowsOf, which reads it", () => {
       const NAMED = /\bprojectEvidence\b/;
@@ -802,7 +803,8 @@ describe('Build 7 nouns', () => {
     // Programme ledgers (plan PL2): `ledgersStore.ts` is `store.ts`'s ledger SQL moved out of the god-file (ARCH-01), so it holds the handle for the
     // same reason `store.ts` does; it names it by `import type`, as `tx.ts` does, and every function takes it as an argument.
     // D-8125: `reviewCapStore.ts` is the review-cap SQL moved out of `store.ts` the same way (`ledgersStore.ts`' idiom).
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts']);
+    // D-8147: `linkingStore.ts` is the project-linking SQL, in `reviewCapStore.ts`'s idiom.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

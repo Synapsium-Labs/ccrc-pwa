@@ -967,6 +967,10 @@ describe('the worker skill: the Linear section links by the repository\'s visibi
     expect(linear).toContain('`teamKey`');
   });
 
+  it('a failed or odd read follows the public rule', () => {
+    expect(linear).toContain('If `linking show` fails or answers anything else, follow the `public` rule.');
+  });
+
   it('it states both arms and both keywords', () => {
     for (const w of ['`private`', '`public` or `unknown`', 'a dispatch\'s `slug` starts `key-123-`', '`Related: KEY-123`',
       '`Closes KEY-123`', '`Refs KEY-123`', '`Closes #<n>`', '`Refs #<n>`', 'ccrc-api linear link <REF> --json -',

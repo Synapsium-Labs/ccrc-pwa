@@ -41,8 +41,12 @@ describe('draftPr and the linking standard', () => {
   it('a public or unknown project\'s draft names no tracker id', () => {
     // The branch here names the ticket (a workspace made before the standard); the draft adds nothing of its own.
     for (const mode of ['public', 'unknown'] as const) {
-      expect(draftPr(line(), null, { mode, teamKey: 'KEY' })).toEqual(draftPr(line(), null));
-      expect(draftPr(line(), null, { mode, teamKey: 'KEY' }).body).not.toContain('Refs');
+      const d = draftPr(line(), null, { mode, teamKey: 'KEY' });
+      expect(d.title).toBe(draftPr(line(), null).title);
+      expect(d.body).not.toContain('Refs');
+      // the footer names neither the workspace id nor the branch: both can carry the ticket
+      expect(d.body).not.toMatch(/key-123/i);
+      expect(d.body).toContain('Opened from ccrc (→ `main`).');
     }
   });
 

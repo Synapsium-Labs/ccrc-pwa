@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../src/lib/apiError';
 import { accountRefusedText, addRefusalText, classifyAddError, type AddRefusal } from '../src/fleet/workspaceAddWords';
+import { LINKING_REFUSAL_TEXT, apiErrorText } from '../src/lib/refusalWords';
 import { NAME_REFUSALS, NAME_REFUSAL_TEXT } from '../../shared/slug';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -20,6 +21,7 @@ describe('classifyAddError reads status and word', () => {
     ['400 bad-wrapper', err(400, { ok: false, error: 'bad-wrapper' }), { kind: 'bad-wrapper' }],
     ['400 bad-slug', err(400, { ok: false, error: 'bad-slug' }), { kind: 'bad-slug' }],
     ['409 slug-taken', err(409, { ok: false, error: 'slug-taken' }), { kind: 'slug-taken' }],
+    ['409 ticket-slug-public', err(409, { ok: false, error: 'ticket-slug-public' }), { kind: 'ticket-slug-public' }],
     ['409 account-refused', err(409, { ok: false, error: 'account-refused', reason: 'lane-a:auth-dead' }), { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false }],
     ['409 account-refused without a reason', err(409, { ok: false, error: 'account-refused' }), { kind: 'account-refused', reason: 'refused', leftBehind: false }],
     ['409 account-refused that left a worktree behind', err(409, { ok: false, error: 'account-refused', reason: 'lane-a:pool=pool-b', leftBehind: true }), { kind: 'account-refused', reason: 'lane-a:pool=pool-b', leftBehind: true }],
@@ -45,12 +47,29 @@ describe('classifyAddError reads status and word', () => {
   });
 });
 
+describe('a public project\'s ticket-only name says its fixed sentence', () => {
+  it('the workspace sheet shows LINKING_REFUSAL_TEXT, not the generic status line', () => {
+    const r = classifyAddError(err(409, { ok: false, error: 'ticket-slug-public' }));
+    expect(addRefusalText(r, ctx)).toBe(LINKING_REFUSAL_TEXT['ticket-slug-public']);
+    expect(addRefusalText(r, { ...ctx, dismissed: true })).toBe(LINKING_REFUSAL_TEXT['ticket-slug-public']);
+  });
+});
+
+describe('the PR sheet\'s tracker-id-public sentence', () => {
+  it('names the ids in the title and body, or the branch when the branch carries them', () => {
+    expect(apiErrorText(err(409, { ok: false, error: 'tracker-id-public', ids: ['KEY-123'] }))).toContain('remove KEY-123 from the title and body');
+    const branch = apiErrorText(err(409, { ok: false, error: 'tracker-id-public', ids: ['KEY-123'], in: 'branch' }));
+    expect(branch).toContain("branch is named for KEY-123");
+    expect(branch).not.toContain('title and body');
+  });
+});
+
 describe('addRefusalText', () => {
   const every: AddRefusal[] = [
     { kind: 'bad-request' }, { kind: 'bad-project' }, { kind: 'name-too-long' },
     ...NAME_REFUSALS.map((reason): AddRefusal => ({ kind: 'bad-name', reason })),
     { kind: 'bad-name', reason: null },
-    { kind: 'id-too-long' }, { kind: 'bad-wrapper' }, { kind: 'bad-slug' }, { kind: 'slug-taken' },
+    { kind: 'id-too-long' }, { kind: 'bad-wrapper' }, { kind: 'bad-slug' }, { kind: 'slug-taken' }, { kind: 'ticket-slug-public' },
     { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false },
     { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true },
     { kind: 'unsupported', needs: 'ws-title-v1' }, { kind: 'unsupported', needs: 'ws-wrapper-v1' }, { kind: 'unsupported', needs: null },
@@ -150,7 +169,7 @@ describe('addRefusalText for a sheet that is gone', () => {
   const every: AddRefusal[] = [
     { kind: 'bad-request' }, { kind: 'bad-project' }, { kind: 'name-too-long' }, { kind: 'id-too-long' },
     ...NAME_REFUSALS.map((reason): AddRefusal => ({ kind: 'bad-name', reason })),
-    { kind: 'bad-name', reason: null }, { kind: 'bad-wrapper' }, { kind: 'bad-slug' }, { kind: 'slug-taken' },
+    { kind: 'bad-name', reason: null }, { kind: 'bad-wrapper' }, { kind: 'bad-slug' }, { kind: 'slug-taken' }, { kind: 'ticket-slug-public' },
     { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false },
     { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true },
     { kind: 'unsupported', needs: 'ws-title-v1' }, { kind: 'unsupported', needs: 'ws-wrapper-v1' }, { kind: 'unsupported', needs: null },

@@ -371,8 +371,13 @@ const LINKING_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>
   /** The PR sheet: "This repository is public: remove KEY-123 from the title and body. Link the ticket from Linear instead." */
   'tracker-id-public': (body) => {
     const ids = Array.isArray(body['ids']) ? body['ids'].filter((i): i is string => typeof i === 'string' && /^[A-Z][A-Z0-9_]{0,15}-\d{1,9}$/.test(i)) : [];
-    return ids.length === 0 ? null
-      : `This repository is public: remove ${ids.join(', ')} from the title and body. Link the ticket from Linear instead.`;
+    if (ids.length === 0) return null;
+    // The head branch carries the id (the workspace was named before the project was known to be public): no edit of the
+    // sheet fixes it, so the sentence says what does.
+    if (body['in'] === 'branch') {
+      return `This repository is public and this workspace's branch is named for ${ids.join(', ')}, so ccrc will not open the pull request. Add a new workspace named in words and move the work there.`;
+    }
+    return `This repository is public: remove ${ids.join(', ')} from the title and body. Link the ticket from Linear instead.`;
   },
 };
 

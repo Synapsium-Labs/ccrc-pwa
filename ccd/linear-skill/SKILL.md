@@ -153,7 +153,7 @@ printf '%s\n' '{"body":"Ready for review: the fix is on the branch named in the 
 ```
 
 Link a pull request you opened to its ticket by the repository's visibility. Read it first: `linking show` answers
-this project's `mode` (`private`, `public` or `unknown`) and `teamKey`.
+this project's `mode` (`private`, `public` or `unknown`) and `teamKey`. If `linking show` fails or answers anything else, follow the `public` rule.
 
 ```bash
 ~/.local/bin/ccrc-api linking show | jq -r '.mode, .teamKey'

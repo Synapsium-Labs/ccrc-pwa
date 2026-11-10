@@ -308,7 +308,8 @@ and never loop on it.
 
 **Link every pull request for ticketed work, by the repository's visibility.**
 Read it first: `~/.local/bin/ccrc-api linking show` answers this project's
-`mode` and `teamKey`. `private`: name the ticket in the workspace (a dispatch's
+`mode` and `teamKey`. If `linking show` fails or answers
+anything else, follow the `public` rule. `private`: name the ticket in the workspace (a dispatch's
 `slug` starts `key-123-`), write `Related: KEY-123` in commits and
 `Closes KEY-123` (the merge meets the acceptance) or `Refs KEY-123` (a live
 check is owed) in the PR body; Linear's GitHub integration links and closes.

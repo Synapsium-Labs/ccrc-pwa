@@ -7,13 +7,13 @@ import type { AttributionRead } from '../coord/openRun.js';
 import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
-import type { SingleRead } from '../registry.js';
+import { measuredProjectOf, type SingleRead } from '../registry.js';
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import type { CcdArgv } from '../ccdargv.js';
 import type { CcdResult } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import { withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
-import { linkingMode, parseLinkingWrite } from './policy.js';
+import { parseLinkingWrite } from './policy.js';
 
 export interface LinkingRouteOpts {
   /** The coordination store, or undefined on a server without one (a test, a script): the write answers `unavailable`. */
@@ -93,10 +93,8 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     if (read.kind === 'unlistable' || read.kind === 'unmeasurable') {
       return refuseRoute(reply, 'registry-unmeasurable', { detail: 'the caller\'s registry record could not be read: transient' });
     }
-    if (read.kind !== 'found' || read.record.projectEvidence !== 'measured' || read.record.project === '') {
-      return refuseRoute(reply, 'no-project', { detail: 'the registry record names no project' });
-    }
-    const project = read.record.project;
+    const project = measuredProjectOf(read);
+    if (project === null) return refuseRoute(reply, 'no-project', { detail: 'the registry record names no project' });
     const row = coord.linkingOf(project);
     const answer: LinkingShowAnswer = { ok: true, project, ...row };
     return answer;
@@ -116,7 +114,7 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     if (coord === undefined || opts.runCcd === undefined) return refuseRoute(reply, 'unavailable');
     const row = coord.linkingOf(project);
     if (row.teamKey === null) return refuseRoute(reply, 'no-team-key');
-    const mode = linkingMode(row.override, row.measured);
+    const mode = row.mode;
     if (mode === 'unknown') return refuseRoute(reply, 'repo-unmeasured');
     if (mode === 'public') return refuseRoute(reply, 'repo-public');
     if (!ccdCan(opts.fleetState?.(), 'prTemplate')) return refuseRoute(reply, 'unsupported');

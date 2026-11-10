@@ -428,7 +428,9 @@ export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null, linking?: Dra
   if (commits.length > 0) {
     parts.push(['## Commits', ...commits.map((c) => `- ${c.sha.slice(0, 7)} ${c.subject}`)].join('\n'));
   }
-  parts.push(`Opened from ccrc workspace \`${line.id}\` (\`${line.branch}\` → \`${line.baseShort}\`).`);
+  // A project that is not private names neither the workspace id nor the branch: both can carry the team's ticket (D-8147).
+  if (linking !== undefined && linking.mode !== 'private') parts.push(`Opened from ccrc (→ \`${line.baseShort}\`).`);
+  else parts.push(`Opened from ccrc workspace \`${line.id}\` (\`${line.branch}\` → \`${line.baseShort}\`).`);
   // NEVER empty: an empty --body suppresses the repo's PR template entirely,
   // and ccd refuses one for that reason.
   return { title, body: parts.join('\n\n') + '\n' };

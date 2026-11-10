@@ -177,6 +177,7 @@ describe('ccd pr-template (D-8147)', () => {
     setup();
     expect(run('--project "a b" --team KEY').stderr).toMatch(/bad project/);
     expect(run('--project ../x --team KEY').stderr).toMatch(/bad project/);
+    for (const bad of ['..', '.', '.hidden', '-x']) expect(run(`--project ${bad} --team KEY`).stderr, bad).toMatch(/bad project/);
     expect(h.ghCalls()).toEqual([]);
   });
 

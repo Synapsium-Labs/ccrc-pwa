@@ -61,6 +61,18 @@ describe('a named create from a ticket and the linking standard', () => {
     expect((res.json() as { slug: string }).slug).toBe('key-123-fix-the-login-flow');
   });
 
+  it("an unmeasured project's ticket create is treated as public (no key-123 in the branch)", async () => {
+    const res = await create(LINK, null);
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { slug: string }).slug).toBe('fix-the-login-flow');
+  });
+
+  it("a project whose reading failed with nothing good before it is treated as public too", async () => {
+    coord.recordLinkingReading('project-a', { state: 'failed', reason: 'timeout', at: 5 });
+    const res = await create(LINK, null);
+    expect((res.json() as { slug: string }).slug).toBe('fix-the-login-flow');
+  });
+
   it('a plain name on a public project is untouched', async () => {
     const res = await create('quiet basin', 'public');
     expect((res.json() as { slug: string }).slug).toBe('quiet-basin');

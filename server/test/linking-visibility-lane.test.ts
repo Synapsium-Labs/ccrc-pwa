@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { VisibilityLane } from '../src/linking/visibilityLane.js';
-import { VISIBILITY_MAX_AGE_MS } from '../src/linking/policy.js';
+import { VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS } from '../src/linking/policy.js';
 import type { ProjectLinkingWire } from '../../shared/linking.js';
 import type { CcdResult } from '../src/coord/ports.js';
 
@@ -45,9 +45,9 @@ describe('the visibility lane (D-8147)', () => {
     const r = rig(() => ran(false, '{"reason":"rate-limit"}\n'));
     await r.lane.tick(['project-a'], NOW);
     expect(r.rows.get('project-a')).toEqual({ state: 'failed', reason: 'rate-limit', at: NOW });
-    await r.lane.tick(['project-a'], NOW + HOUR);
+    await r.lane.tick(['project-a'], NOW + 60_000);
     expect(r.calls).toHaveLength(1);
-    await r.lane.tick(['project-a'], NOW + VISIBILITY_MAX_AGE_MS);
+    await r.lane.tick(['project-a'], NOW + VISIBILITY_RETRY_MS);   // a failure is retried in minutes, not a day
     expect(r.calls).toHaveLength(2);
   });
 

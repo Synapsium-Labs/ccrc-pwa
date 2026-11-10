@@ -2,7 +2,7 @@
 // Neutral examples only: KEY-123, project-a.
 import { describe, it, expect } from 'vitest';
 import {
-  VISIBILITY_MAX_AGE_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue,
+  VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue,
 } from '../src/linking/policy.js';
 import type { ProjectLinkingWire } from '../../shared/linking.js';
 
@@ -89,5 +89,13 @@ describe('visibilityDue', () => {
       { project: 'b', at: now - 3 * VISIBILITY_MAX_AGE_MS },
       { project: 'n', at: null },
     ], now)).toBe('n');
+  });
+
+  it('a failed reading is due again after minutes, not a day', () => {
+    expect(visibilityDue([{ project: 'a', at: now - VISIBILITY_RETRY_MS + 1, failed: true }], now)).toBeNull();
+    expect(visibilityDue([{ project: 'a', at: now - VISIBILITY_RETRY_MS, failed: true }], now)).toBe('a');
+    expect(VISIBILITY_RETRY_MS).toBeLessThan(3_600_000);
+    // a good reading of the same age is not due
+    expect(visibilityDue([{ project: 'a', at: now - VISIBILITY_RETRY_MS }], now)).toBeNull();
   });
 });

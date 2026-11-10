@@ -11693,7 +11693,7 @@ cmd_repo_visibility() {   # ccd repo-visibility --project <p>  (D-8147)
   # One `gh api repos/{slug}` read: the repository's visibility and default branch, plus whether the main checkout holds
   # the pull request template. rc 0 and one JSON line on an answer; rc 1 and {"reason":...} on a failure. Read-only.
   [[ $# -eq 2 && $1 == --project ]] || die "usage: ccd repo-visibility --project <p>"
-  [[ "$2" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  _ws_project_valid "$2" || die "bad project"
   local main="$PROJECTS_ROOT/$2" slug meta vis branch tmpl=absent
   slug=$(_gh_repo_slug "$main") || { printf '{"reason":"no-remote"}\n'; return 1; }
   meta=$(_gh_repo_meta "$slug") || { printf '{"reason":"%s"}\n' "$meta"; return 1; }
@@ -11711,7 +11711,7 @@ cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
   # public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a refusal. The temp worktree is
   # a dot name under $PROJECTS_ROOT (the project walk skips it) and is removed on every path.
   [[ $# -eq 4 && $1 == --project && $3 == --team ]] || die "usage: ccd pr-template --project <p> --team <KEY>"
-  [[ "$2" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  _ws_project_valid "$2" || die "bad project"
   [[ "$4" =~ ^[A-Z][A-Z0-9_]{0,15}$ ]] || die "bad team key"
   local main="$PROJECTS_ROOT/$2" team=$4 slug meta vis def rows rc reason
   slug=$(_gh_repo_slug "$main") || { printf '{"reason":"no-remote"}\n'; return 1; }

@@ -36,7 +36,7 @@ export class VisibilityLane {
       const known = coord.linkingAll();
       const rows = projects.map((project) => {
         const m = known.get(project)?.measured;
-        return { project, at: m === undefined || m.state === 'unmeasured' ? null : m.at };
+        return { project, at: m === undefined || m.state === 'unmeasured' ? null : m.at, failed: m?.state === 'failed' };
       });
       const due = visibilityDue(rows, now);
       if (due === null) return;

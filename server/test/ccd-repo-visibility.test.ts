@@ -67,6 +67,9 @@ describe('ccd repo-visibility (D-8147)', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/bad project/);
     expect(h.run(`${GH_STUB} cmd_repo_visibility --project ../x`).stderr).toMatch(/bad project/);
+    for (const bad of ['..', '.', '.hidden', '-x']) {
+      expect(h.run(`${GH_STUB} cmd_repo_visibility --project ${bad}`).stderr, bad).toMatch(/bad project/);
+    }
     expect(h.ghCalls()).toEqual([]);
   });
 

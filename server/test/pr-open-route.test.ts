@@ -22,7 +22,7 @@ function seed(): void {
   const worktree = path.join(home, 'w');
   mkdirSync(worktree);
   for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', worktree], ['project', 'project-a'],
-    ['workspace', 'key-123-fix'], ['branch', 'ws/key-123-fix'], ['base', 'origin/main']]) {
+    ['workspace', 'key-123-fix'], ['branch', 'ws/quiet-basin'], ['base', 'origin/main']]) {
     writeFileSync(path.join(reg, `project-a-key-123-fix.${f}`), v!);
   }
 }
@@ -71,7 +71,11 @@ describe('GET /api/sessions/:id/pr and the linking standard', () => {
     coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'test', 1);
     expect(await draftBody()).toContain('Refs KEY-123');
     coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 2);
-    expect(await draftBody()).not.toContain('Refs');
+    const publicBody = await draftBody();
+    expect(publicBody).not.toContain('Refs');
+    // the footer names neither the workspace id nor the branch, both of which can carry the ticket
+    expect(publicBody).not.toMatch(/key-123/i);
+    expect(publicBody).toContain('Opened from ccrc');
   });
 });
 
@@ -101,10 +105,31 @@ describe('POST /api/sessions/:id/pr and the linking standard', () => {
     expect(sentToCcd()).toBe(true);
   });
 
-  it("an unknown project's PR is sent (the operator's own text)", async () => {
+  it("an unmeasured project's PR naming KEY-123 is refused (nothing measured is public)", async () => {
     coord.setLinking('project-a', { teamKey: 'KEY', override: null }, 'test', 1);
     const res = await open('Fix the login', 'Closes KEY-123\n');
-    expect(res.statusCode).toBe(200);
-    expect(sentToCcd()).toBe(true);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'tracker-id-public', ids: ['KEY-123'] });
+    expect(sentToCcd()).toBe(false);
+  });
+
+  it("a failed reading with a last good public one stays public", async () => {
+    coord.setLinking('project-a', { teamKey: 'KEY', override: null }, 'test', 1);
+    coord.recordLinkingReading('project-a', { state: 'measured', visibility: 'public', slug: 'owner/repo', template: 'absent', at: 5 });
+    coord.recordLinkingReading('project-a', { state: 'failed', reason: 'timeout', at: 6 });
+    const res = await open('Fix the login', 'Closes KEY-123\n');
+    expect(res.statusCode).toBe(409);
+    expect(sentToCcd()).toBe(false);
+  });
+
+  it("a head branch named for the team's ticket is refused on a public project, and said to be the branch", async () => {
+    writeFileSync(path.join(home, '.cc-sessions', 'project-a-key-123-fix.branch'), 'ws/key-123-fix');
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 1);
+    const res = await open('Fix the login', 'Closes #12\n');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'tracker-id-public', ids: ['KEY-123'], in: 'branch' });
+    expect(sentToCcd()).toBe(false);
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'test', 2);
+    expect((await open('Fix the login', 'Closes #12\n')).statusCode).toBe(200);
   });
 });
