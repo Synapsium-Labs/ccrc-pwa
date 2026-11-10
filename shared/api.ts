@@ -14227,6 +14227,10 @@ export const TESTBOX_ADMIN_CAP = 'testbox-admin-v1';
  *  one (`unsupported`, `fleetFailed`, `outcome-unknown`, `bad-request`). */
 export const TESTBOX_ADMIN_ROUTE_REFUSALS = ['testbox-admin-refused', 'parity-required'] as const;
 export type TestboxAdminRouteRefusal = (typeof TESTBOX_ADMIN_ROUTE_REFUSALS)[number];
+/** Whether a word is one of the test box admin routes' refusals, for the coord kebab census (derived, never re-spelled). */
+export function isTestboxAdminRouteRefusal(s: string): s is TestboxAdminRouteRefusal {
+  return (TESTBOX_ADMIN_ROUTE_REFUSALS as readonly string[]).includes(s);
+}
 
 /** The sentence `parity-required` carries in `detail` (it names no value): the words the card draws beside the disabled switch. */
 export const TESTBOX_PARITY_REQUIRED_SENTENCE = 'Turns on after the parity check passes.';

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { isReviewRoundsRefusal } from '../../shared/refusal.js';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -1054,6 +1054,10 @@ describe('the rejection table is total, in both directions', () => {
         // precondition refused, never a `refused` or `reject.code` (the route answers the gate's word). Admitted through
         // the exported guard, derived from `ARCHIVE_GATES`, never NOT_CODES.
         || isArchiveGateKebab(tok)
+        // THE TEST BOX CONNECT (D-8166): the switch route in `coord/routes.ts` refuses `on` with `parity-required` until a
+        // passing, current parity record exists. It IS a route refusal, sent through `refuseRoute` at the status
+        // `shared/refusal.ts` gives it. Admitted through L0's own guard, derived from `TESTBOX_ADMIN_ROUTE_REFUSALS`, never NOT_CODES.
+        || isTestboxAdminRouteRefusal(tok)
         // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
         // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
         // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
