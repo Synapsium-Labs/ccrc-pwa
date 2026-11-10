@@ -1,6 +1,6 @@
 # The test box, connected from the console
 
-**Spec** · 2026-11-07 · Status: draft rev 1 · Owner: the coordinator · Related:
+**Spec** · 2026-11-07 · Status: approved 2026-11-10 (D-8166) · Owner: the coordinator · Related:
 `docs/superpowers/specs/2026-10-28-test-box-design.md` (the test box; this is one of its waves),
 `docs/superpowers/plans/2026-10-29-test-box.md` (TB12 to TB14, the hand install this replaces),
 `docs/superpowers/specs/2026-10-25-box-settings-view-design.md` (its D5, amended here for the test box rows),
@@ -31,7 +31,8 @@ This wave puts all of that behind one card:
 - **Upgrades follow the fleet release**, as tool sync already does; installer-level changes are applied the same way.
 
 The server still never reaches the test box. The fleet agent starts one new fixed `ccrc` verb, and that verb runs
-SSH on the fleet host. Section 5 lists the choices only the operator can make, each with a recommendation.
+SSH on the fleet host. Section 5 lists the choices only the operator could make. The operator ruled all sixteen on
+2026-11-10, each as recommended (D-8166), and chose the operator's existing spare box as the first box to connect.
 
 ## 1. Measured
 
@@ -128,7 +129,7 @@ By width (feedback rule: every width):
 
 ### 2.3 ccrc's SSH access
 
-ccrc reaches the box with a key pair it makes itself (recommended in C1).
+ccrc reaches the box with a key pair it makes itself (C1, ruled 2026-11-10).
 
 - The verb makes an ed25519 pair, create-only, private half 0600 at `~/.ccrc/testbox-admin.key`. It never replaces a
   key it did not make, as `approvalsign.ts` does not (M19). The private half never leaves the fleet host, never
@@ -143,8 +144,9 @@ ccrc reaches the box with a key pair it makes itself (recommended in C1).
 - ssh's stderr stays on the fleet host. The card gets a closed reason code, as `cmd_rollout`'s role check reports
   ssh's own failures.
 
-If the operator chooses a pasted key or a password instead (C1), it follows the accounts path: step-up, a byte check,
-a request-local buffer sent as the op's stdin only, zeroed after, never in argv, a log or an answer.
+C1's ruling leaves out a pasted key and a one-time password, so the card has no field for either and no secret
+credential reaches the browser. Should either ever be added, it follows the accounts path: step-up, a byte check, a
+request-local buffer sent as the op's stdin only, zeroed after, never in argv, a log or an answer.
 
 ### 2.4 Install over that access
 
@@ -202,7 +204,7 @@ Writes go through one verb and are checked by the reader that already reads them
 - The answer is measured again, never echoed: the route answers from the setting the verb re-reads.
 - The snapshot stays a display. No write reads `box-settings.json` as an authority.
 
-The target is a choice (C12). The recommendation is a ccrc-owned overlay, `~/.ccrc/testbox.env`, on the
+The target is C12's ruling: a ccrc-owned overlay, `~/.ccrc/testbox.env`, on the
 `exposure.env` precedent: `ccrc.env` stays the operator's file, the verb refuses to write a key `ccrc.env` already
 sets, and Disconnect can remove the overlay whole. The one reader, its generated library and the settings census learn
 the overlay in the same work.
@@ -244,7 +246,7 @@ box file. Today that path is reached only by a full staging re-run (M3).
 
 ### 2.9 Disconnect, Replace, Repair and upgrades
 
-- **Disconnect** turns the switch off first, then removes what C6 chooses. The recommendation: on the box, stop and
+- **Disconnect** turns the switch off first, then removes what C6's ruling names: on the box, stop and
   disable the service, remove the push key line, the service token and ccrc's access line; on the fleet host, remove
   the token, the push key, the overlay, the host key pin and the parity record. The box is then to be rebuilt, never
   reused (test box spec §2.0).
@@ -253,8 +255,8 @@ box file. Today that path is reached only by a full staging re-run (M3).
 - **Repair** re-pushes the installed release, verified again on the fleet host, and re-runs the installer from it
   with the current box file. It never changes the tag.
 - **Upgrades.** Releases and tools keep following the fleet through tool sync, automatically after a gated update (M20).
-  A release whose installer changes units, drop-ins or the firewall needs a root re-run; C7 chooses whether that runs
-  automatically after tool sync or is offered on the card as **Apply release to box**.
+  A release whose installer changes units, drop-ins or the firewall needs a root re-run; under C7's ruling it is
+  offered on the card as **Apply release to box**, never run automatically after tool sync.
 
 ### 2.10 The ledger
 
@@ -320,7 +322,8 @@ says what each control removes.
 
 ## 4. Decisions
 
-These follow from the ruling and from the code. Section 5 holds the choices only the operator can make.
+These follow from the ruling and from the code. Section 5 holds the choices only the operator could make, all ruled
+on 2026-11-10.
 
 | # | Decision | Chosen, and why |
 |---|---|---|
@@ -338,28 +341,33 @@ These follow from the ruling and from the code. Section 5 holds the choices only
 
 ## 5. Decisions for the operator
 
-| # | Decision | Options | Recommendation |
+The operator ruled on 2026-11-10 (D-8166): all sixteen decisions as recommended, the recommended option each time.
+The first box connected is the operator's existing spare box; nothing in code or docs names it, and any installer's
+prepared box (2.12) takes the same path. No decision here is still waiting on the operator.
+
+| # | Decision | Options | Recommendation and ruling |
 |---|---|---|---|
-| C1 | The credential ccrc uses to reach the box | (a) ccrc makes a key pair and the card shows the one public line to add on the box; (b) the operator pastes an existing private key; (c) a one-time root password, used to install a ccrc key and then discarded | **(a)**: no secret ever enters the browser, the wire or a log, and it works on any provider that allows one line in `authorized_keys` |
-| C2 | Root or a sudo user | (a) root, key only; (b) a named user with passwordless sudo; (c) either, chosen on the card | **(c), root by default**: the installer needs full root either way, so passwordless sudo grants no less; some providers forbid root login |
-| C3 | Keep SSH access after install | (a) keep the key, restricted with `from=`, removed on Disconnect; (b) remove it after Connect and use only the test service channel, which then needs root-side frames; (c) keep it, with a card control to drop it and re-add it when needed | **(a)**: settings edits, repair, Replace and Disconnect all need root; giving the service a root path would widen what a run-adjacent process can do |
-| C4 | How the box is reached | (a) a private network the fleet host shares with the box (a tailnet, a VPN or a provider's private network); (b) the public internet with TLS added to the service | **(a)**: the service has no TLS today (M21) and the firewall and ACL already assume a private network; (b) is a new design |
-| C5 | How box settings are written | (a) over ssh as root, re-running the installed installer; (b) a new service frame and a root-side applier on the box | **(a)**: the service stays unprivileged and its polkit rule is not widened |
-| C6 | What Disconnect removes | (a) fleet side only; (b) fleet side, plus the box's service, token, push key line and ccrc's access line; (c) (b) plus a wipe of the box's data | **(b)**: nothing paired is left on either side, and the box is rebuilt anyway |
-| C7 | Upgrades | (a) automatic: tool sync as today, and an installer re-run after it when the release changes units or the firewall; (b) tool sync automatic, installer re-run offered on the card; (c) both offered | **(b)**: tool sync is already automatic and safe; a root re-run restarts the service and reloads the firewall, so the operator picks the moment |
-| C8 | Parity scope and expiry | (a) the five most recent merged PRs per repository, re-required on Connect, Replace and run-shaping edits; (b) the full 20-PR set plus a tmpfs repeat; (c) (a), also expiring on every release | **(a)**: it runs in minutes from a button; a release roll is already caught by the version check |
-| C9 | A changed host key | (a) block every act until the operator confirms the new fingerprint; (b) accept it automatically inside a Replace; (c) accept silently on the private network | **(a), with (b) inside Replace**: Replace already shows the fingerprint for confirmation, so nothing is accepted unseen |
-| C10 | Preparing the disk | (a) a prerequisite Connect only checks; (b) ccrc formats a named device | **(a)**: formatting is destructive and the device differs per provider |
-| C11 | Joining the private network | (a) a prerequisite Connect only checks; (b) ccrc enrolls the box with an auth key the operator gives | **(a)**: the auth key is a secret that must not stay on the box, and enrollment differs per network |
-| C12 | Where fleet-side writes land | (a) a ccrc-owned overlay file, refusing a key `ccrc.env` already sets; (b) edit `ccrc.env` in place, keeping the operator's lines | **(a)**: `ccrc.env` stays the operator's file, Disconnect removes the overlay whole, and `exposure.env` is the precedent |
-| C13 | Box settings edits during runs | (a) only when no run is in progress, with "Apply when idle"; (b) at once, cancelling runs that fall back locally | **(a)**: no session loses a run to a settings change |
-| C14 | Step-up | (a) for Connect, Replace, Disconnect and key acts only; (b) for every test box write | **(a)**: the account gate's split; plain value edits need a signed-in session only |
-| C15 | Who supplies the repository row | (a) the operator fills it on the card, with name and fetch URL offered from the fleet's own repositories; (b) a row file in each repository; (c) by hand on the box | **(a)**: ccrc names no repository, and the card can prefill what the fleet already knows |
-| C16 | What **Run parity** runs | (a) each repository row's pull-request legs, with its checkout path and test command prefilled from the fleet's own repositories, plus the test box spec §6 fixtures (git state, socket, workers) as required legs; (b) the pull-request legs only | **(a)**: §6 counts the fixtures as part of parity, and dropping them would arm a box on less proof than the hand path asked for. A run needs `gh` signed in on the fleet host; without it, parity refuses with a code |
+| C1 | The credential ccrc uses to reach the box | (a) ccrc makes a key pair and the card shows the one public line to add on the box; (b) the operator pastes an existing private key; (c) a one-time root password, used to install a ccrc key and then discarded | **(a)**: no secret ever enters the browser, the wire or a log, and it works on any provider that allows one line in `authorized_keys`. Ruled 2026-11-10: as recommended |
+| C2 | Root or a sudo user | (a) root, key only; (b) a named user with passwordless sudo; (c) either, chosen on the card | **(c), root by default**: the installer needs full root either way, so passwordless sudo grants no less; some providers forbid root login. Ruled 2026-11-10: as recommended |
+| C3 | Keep SSH access after install | (a) keep the key, restricted with `from=`, removed on Disconnect; (b) remove it after Connect and use only the test service channel, which then needs root-side frames; (c) keep it, with a card control to drop it and re-add it when needed | **(a)**: settings edits, repair, Replace and Disconnect all need root; giving the service a root path would widen what a run-adjacent process can do. Ruled 2026-11-10: as recommended |
+| C4 | How the box is reached | (a) a private network the fleet host shares with the box (a tailnet, a VPN or a provider's private network); (b) the public internet with TLS added to the service | **(a)**: the service has no TLS today (M21) and the firewall and ACL already assume a private network; (b) is a new design. Ruled 2026-11-10: as recommended |
+| C5 | How box settings are written | (a) over ssh as root, re-running the installed installer; (b) a new service frame and a root-side applier on the box | **(a)**: the service stays unprivileged and its polkit rule is not widened. Ruled 2026-11-10: as recommended |
+| C6 | What Disconnect removes | (a) fleet side only; (b) fleet side, plus the box's service, token, push key line and ccrc's access line; (c) (b) plus a wipe of the box's data | **(b)**: nothing paired is left on either side, and the box is rebuilt anyway. Ruled 2026-11-10: as recommended |
+| C7 | Upgrades | (a) automatic: tool sync as today, and an installer re-run after it when the release changes units or the firewall; (b) tool sync automatic, installer re-run offered on the card; (c) both offered | **(b)**: tool sync is already automatic and safe; a root re-run restarts the service and reloads the firewall, so the operator picks the moment. Ruled 2026-11-10: as recommended |
+| C8 | Parity scope and expiry | (a) the five most recent merged PRs per repository, re-required on Connect, Replace and run-shaping edits; (b) the full 20-PR set plus a tmpfs repeat; (c) (a), also expiring on every release | **(a)**: it runs in minutes from a button; a release roll is already caught by the version check. Ruled 2026-11-10: as recommended |
+| C9 | A changed host key | (a) block every act until the operator confirms the new fingerprint; (b) accept it automatically inside a Replace; (c) accept silently on the private network | **(a), with (b) inside Replace**: Replace already shows the fingerprint for confirmation, so nothing is accepted unseen. Ruled 2026-11-10: as recommended |
+| C10 | Preparing the disk | (a) a prerequisite Connect only checks; (b) ccrc formats a named device | **(a)**: formatting is destructive and the device differs per provider. Ruled 2026-11-10: as recommended |
+| C11 | Joining the private network | (a) a prerequisite Connect only checks; (b) ccrc enrolls the box with an auth key the operator gives | **(a)**: the auth key is a secret that must not stay on the box, and enrollment differs per network. Ruled 2026-11-10: as recommended |
+| C12 | Where fleet-side writes land | (a) a ccrc-owned overlay file, refusing a key `ccrc.env` already sets; (b) edit `ccrc.env` in place, keeping the operator's lines | **(a)**: `ccrc.env` stays the operator's file, Disconnect removes the overlay whole, and `exposure.env` is the precedent. Ruled 2026-11-10: as recommended |
+| C13 | Box settings edits during runs | (a) only when no run is in progress, with "Apply when idle"; (b) at once, cancelling runs that fall back locally | **(a)**: no session loses a run to a settings change. Ruled 2026-11-10: as recommended |
+| C14 | Step-up | (a) for Connect, Replace, Disconnect and key acts only; (b) for every test box write | **(a)**: the account gate's split; plain value edits need a signed-in session only. Ruled 2026-11-10: as recommended |
+| C15 | Who supplies the repository row | (a) the operator fills it on the card, with name and fetch URL offered from the fleet's own repositories; (b) a row file in each repository; (c) by hand on the box | **(a)**: ccrc names no repository, and the card can prefill what the fleet already knows. Ruled 2026-11-10: as recommended |
+| C16 | What **Run parity** runs | (a) each repository row's pull-request legs, with its checkout path and test command prefilled from the fleet's own repositories, plus the test box spec §6 fixtures (git state, socket, workers) as required legs; (b) the pull-request legs only | **(a)**: §6 counts the fixtures as part of parity, and dropping them would arm a box on less proof than the hand path asked for. A run needs `gh` signed in on the fleet host; without it, parity refuses with a code. Ruled 2026-11-10: as recommended |
 
 ### 5.1 Calls the author made
 
-These settle questions a builder raised. None changes what the operator sees, and each can be overturned.
+These settle questions a builder raised. None changes what the operator sees, and each can be overturned. The
+2026-11-10 ruling (D-8166) left them as written.
 
 - **The `from=` address.** The access line shown at step 2 uses the fleet host's source address for the box's resolved
   address (the route lookup). Step 3 compares it with the box's `SSH_CONNECTION`. If they differ, the card says to
@@ -411,3 +419,8 @@ These settle questions a builder raised. None changes what the operator sees, an
 - The parity tool's new default scope and how it writes the record.
 - The ledger's retention and the coord.db migration.
 - The README section and the lifecycle rows.
+
+## 8. Numbers
+
+- D-8166: the operator's rulings of 2026-11-10 on C1 to C16, all as recommended. Its definition line is in
+  `docs/superpowers/plans/2026-11-10-test-box-connect-ruled.md`.
