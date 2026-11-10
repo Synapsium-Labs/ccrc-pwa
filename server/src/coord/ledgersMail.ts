@@ -1,5 +1,5 @@
 // Programme ledgers (plan PL4): the words of the mail an operator's tick queues to the programme's coordinator.
-// L4 delivery, context Coordination. Text only: it reads an item, decides nothing and writes nothing (the route queues it,
+// L1 pure, context Coordination. Text only: it reads an item, decides nothing and writes nothing (the route queues it,
 // in the tick's own transaction, through `insertSystemMailTx`).
 //
 // What it may say (spec §5): the item's title, its kind, the operator's answer and a standing instruction. A `secret` item
@@ -62,6 +62,26 @@ export function endRequestAskMail(
     '{"byId":"<your id>","byUuid":"<your uuid>"}',
     'JSON',
     'A withdraw tells the asker. After the operator has acted, a withdraw changes nothing.',
+  ].join('\n');
+  return { subject: title.join(''), body: cutBytes(body) };
+}
+
+/** The notice a living coordinator gets when ccrc would close one of its runs, refused, and holds the item for the grace
+ *  (spec 2026-11-04 §12.2, tell-and-hold). It names the item, as `endRequestAskMail` does, because the held item is on no
+ *  list the coordinator can read: without the id it cannot withdraw it. `why` is ccrc's own sentence, not session text. */
+export function closeRefusedAskMail(
+  r: { itemId: number; runId: number; runName: string; why: string; graceSeconds: number },
+): { subject: string; body: string } {
+  const head = `close refused: item ${r.itemId}: run ${r.runId}`;
+  let title = [...head];
+  while (title.length > 0 && bytesOf(title.join('')) > MAIL_SUBJECT_MAX_BYTES) title = title.slice(0, -1);
+  const body = [
+    `ccrc would close run ${r.runId} (${r.runName}) on its own, but refused: ${r.why}`,
+    `The operator sees nothing for ${r.graceSeconds} seconds. If you can handle the run, start it or close it, or withdraw the item with your identity in the body:`,
+    `"$API" items withdraw ${r.itemId} --json - <<JSON`,
+    '{"byId":"<your id>","byUuid":"<your uuid>"}',
+    'JSON',
+    'After the operator has acted, a withdraw changes nothing.',
   ].join('\n');
   return { subject: title.join(''), body: cutBytes(body) };
 }

@@ -326,7 +326,8 @@ describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch 
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('DEAD_COORDINATOR_LANE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', 'server/src/deadCoordinator.ts', DEFINER]);
+    // D-8077: `runClose.ts` names it as the crash row's arm in `RUN_CLOSE_ROW_SWITCH` (a reader, no write).
+    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', 'server/src/coord/runClose.ts', 'server/src/deadCoordinator.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
@@ -954,3 +955,47 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
       .toEqual([`ccd/ccd-entry.py: ${writer}`]);
   });
 });
+
+
+// THE RUN-CLOSE LANE'S NEVER-STARTED GROUP (D-8077; spec 2026-11-04 §12.3, the ruled plan's W1). APPENDED, for the reason the
+// blocks above state. Rows E1 and E1r SHIP SHADOWED: until the operator arms the group they record "would warn" and "would
+// close" and reach no abandon arm. The marker is the operator's to touch by hand (Settings, Advanced), so no line of shell names
+// it and its one TS holder by name is its definer, an L0 file that reaches no `node:` module and so cannot write it.
+describe('the run-close lane’s never-started switch has no writer in the tree (D-8077)', () => {
+  const NAME = 'runs-expire-never-started';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder by name is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant are the definer and the lane’s decider, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('RUNS_EXPIRE_NEVER_STARTED_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/runClose.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// D-8077: the child marker's one QUESTION, `runBelongsTo`, is defined once, in `shared/runBelongs.ts`, and the run-close lane asks it.
+// (The marker's READER, `childMarkOf`, moves into the same file with the PWA half of D-8077, and its one-definer test with it.)
+describe('the child marker’s question is defined once (D-8077)', () => {
+  it('one definer of runBelongsTo', () => {
+    const files = [...ALL, ...bashRoots.flatMap(() => [] as string[])];
+    const definesBelongs = [...files, ...pwaSources()].filter((f) => /\bexport (?:const|function) runBelongsTo\b/.test(stallCode(f))).map(rel);
+    expect(definesBelongs).toEqual(['shared/runBelongs.ts']);
+  });
+});
+
+function pwaSources(): string[] {
+  const root = path.join(ccrcRoot, 'pwa', 'src');
+  const walk = (d: string): string[] => readdirSync(d).flatMap((e) => {
+    const p = path.join(d, e);
+    return statSync(p).isDirectory() ? walk(p) : (/\.(ts|tsx)$/.test(p) ? [p] : []);
+  });
+  return walk(root);
+}

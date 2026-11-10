@@ -49,6 +49,11 @@ export const COLLECT_LOOSE_LIVE_MARKER = 'collect-loose-live';
 export const NESTED_RESCUE_LIVE_MARKER = 'nested-rescue-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
+/** `$REG/runs-expire-never-started`: arms the run-close lane's never-started group (D-8077; spec 2026-11-04 §12): row E1, a
+ *  planned programme quiet for 72 hours after a warning, and row E1r, a planned review of finished work. Absent, the lane
+ *  records "would warn" and "would close" and acts on nothing. No writer in the tree: since Task 26 the operator arms the group from
+ *  Advanced (`run-close-never-started-choice`), and this marker is only an emergency override that arms it whatever that row says. */
+export const RUNS_EXPIRE_NEVER_STARTED_MARKER = 'runs-expire-never-started';
 /** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
  *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
 export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
@@ -210,6 +215,11 @@ export const SWITCHES = {
     owner: 'C5', meaning: 'The dead-coordinator lane acts: a programme whose coordinator is gone is ended.',
     writer: 'hand-only',
   },
+  [RUNS_EXPIRE_NEVER_STARTED_MARKER]: {
+    storage: { marker: RUNS_EXPIRE_NEVER_STARTED_MARKER }, default: 'absent: shadow, the lane records what it would warn and close',
+    owner: 'C5', meaning: 'The run-close lane closes never-started waves in a quiet programme.',
+    writer: 'hand-only',
+  },
   [NESTED_RESCUE_LIVE_MARKER]: {
     storage: { marker: NESTED_RESCUE_LIVE_MARKER }, default: 'absent: shadow, a nested repository is refused and the audit names what the arm would rescue',
     owner: 'C4', meaning: 'Rung 9 rescues a nested repository into the attic instead of refusing a tree that holds one.',
@@ -292,6 +302,16 @@ export const SWITCHES = {
     storage: { setting: 'dispatch_abandon_settings.choice' }, default: 'on', owner: 'C5',
     meaning: 'The server abandons a run whose dispatch never came back and mails its coordinator: on, or off (D-7319).',
     writer: 'POST /api/coord/dispatch-abandon',
+  },
+  'run-close-never-started-choice': {
+    storage: { setting: 'run_close_settings.neverStarted' }, default: 'shadow', owner: 'C5',
+    meaning: 'The run-close lane\'s never-started group (rows E1 and E1r): off, shadow (it records what it would close) or on (D-8077). A standing runs-expire-never-started marker is an emergency override that arms it.',
+    writer: 'POST /api/coord/run-close',
+  },
+  'run-close-claimant-crashed-choice': {
+    storage: { setting: 'run_close_settings.claimantCrashed' }, default: 'shadow', owner: 'C5',
+    meaning: 'The crash row of the run-close lane (a claimant that crashed): off, shadow or on (D-8077). A standing dead-coordinator-lane-live marker is an emergency override that arms it.',
+    writer: 'POST /api/coord/run-close',
   },
   [SCOPE_SWEEP_LIVE_MARKER]: {
     storage: { marker: SCOPE_SWEEP_LIVE_MARKER }, default: 'absent: shadow, the sweep records what it would stop',

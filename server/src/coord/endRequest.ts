@@ -15,7 +15,7 @@ import { askGraceSeconds, askNotifyAt } from '../askwindow.js';
 import { refuseRoute } from '../refuse.js';
 import { END_REQUEST_REFUSALS, LEDGER_ROUTE_REFUSALS, type EndRequestRefusal } from '../../../shared/refusal.js';
 import { TERMINAL_RUN_STATES, type RunState, type StuckReason } from '../../../shared/api.js';
-import { ITEM_TEXT_MAX, ITEM_TITLE_MAX, endRunAction, outsideDocLink } from '../../../shared/ledgers.js';
+import { ITEM_TEXT_MAX, ITEM_TITLE_MAX, endRunAction, itemRunName, outsideDocLink } from '../../../shared/ledgers.js';
 import type { CoordStore, RunRow } from './store.js';
 import { coordinatorOfRun, workerOfRun } from './bindingReads.js';
 import { endRequestAskMail } from './ledgersMail.js';
@@ -74,14 +74,8 @@ export function endRequestDecide(f: EndRequestFacts): EndRequestDecision {
   return { kind: 'raise', heldUntil: askNotifyAt(f.now), line: 'Its coordinator did not answer' };
 }
 
-/** The run's name as the console says it on a row: its own title, else the programme's, and the wave in words. The same
- *  words as `runRowName` in the console, spelled again here because the server writes the item's title. */
-export function endRequestRunName(run: Pick<RunRow, 'program' | 'programTitle' | 'runTitle' | 'wave' | 'waveOf' | 'kind'>): string {
-  const own = typeof run.runTitle === 'string' && run.runTitle.trim() !== '' ? run.runTitle : null;
-  const programme = own ?? (run.programTitle.trim() !== '' ? run.programTitle : run.program);
-  const wave = run.waveOf === null ? `wave ${run.wave}` : `wave ${run.wave} of ${run.waveOf}`;
-  return `${programme} · ${run.kind === 'review' ? `review of wave ${run.wave}` : wave}`;
-}
+/** The run's name as the console says it on a row (`itemRunName`, shared with the refused-close items the lane raises). */
+export const endRequestRunName = itemRunName;
 
 /** The item's title, cut to `ITEM_TITLE_MAX` characters on a code-point boundary. */
 export const endRequestTitle = (run: Parameters<typeof endRequestRunName>[0]): string =>

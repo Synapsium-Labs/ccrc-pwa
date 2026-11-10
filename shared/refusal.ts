@@ -46,6 +46,7 @@ import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, Accou
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
+import type { RunCloseRefusal } from './run-close.js';
 import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
 
@@ -197,6 +198,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | QuestionDoorRefusal
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
   | DispatchAbandonRefusal
+  // The run-close switch door (D-8077, Task 26): its two words of its own, a lane held by a pause and a registry that would not list.
+  | RunCloseRefusal
   // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
   | ItemMoveRefusal | LedgerRouteRefusal
   // The coordinator's review-rounds door (D-8125): its two words of its own.
@@ -355,6 +358,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The dead-dispatch switch door (D-7319): CHOSEN, not measured — a new word. 503, the status the other `-unreadable`
   // words answer: the switch's one row could not be read, which is the box's fault and not the operator's.
   'state-unreadable': 503,
+  // The run-close switch door (D-8077, Task 26): CHOSEN, not measured — new words. 409 for a pause the operator can lift, 503 for a registry
+  // the box could not list, the status the other unreadable words answer.
+  'coordination-paused': 409, 'registry-unread': 503,
   // The programme ledgers' coordinator routes (plan PL3): CHOSEN, not measured — new words. 403 for a coordinator acting
   // outside its programme (the family of `not-owner` and `not-parent`), 400 for what the caller sent (the spec path and
   // the In short copy), and an item move's four words from `shared/ledgers.ts`: 404 for an item that is not there, 409 for

@@ -51,7 +51,7 @@ const fixture = async () => {
   const deps = { ...base, monotonicMs: () => clock, cfg, coord, tmux: new Tmux(run), viewers: { isVisible: () => false } };
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
   watcher.useCoordSerialiser({ withSweepAbandon: (c, fn) => fn((runId, claimedBy, stillCrashed) =>
-    closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy, stillCrashed })) });
+    closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy, stillStuck: stillCrashed })) });
   for (const [f, v] of Object.entries({ uuid: `u-${COORD}`, wrapper: 'claude', project: 'demo', workdir: `/w/${COORD}`,
     started: '1', supervised: String(Math.floor(T0 / 1000)) })) writeFileSync(path.join(reg, `${COORD}.${f}`), v);
   const stalled = (ageMs: number): number => {

@@ -113,7 +113,7 @@ const fixture = async (opts: {
         return fn((runId, crashedId, stillCrashed) => {
           abandons += 1;
           if (opts.abandonThrowsAt === abandons) throw new Error('database or disk is full');
-          return closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillCrashed });
+          return closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillStuck: stillCrashed });
         });
       } });
     }

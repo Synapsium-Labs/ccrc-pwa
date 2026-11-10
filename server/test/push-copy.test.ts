@@ -26,6 +26,7 @@ import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/update
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { UNTOLD_SUBJECT_PREFIX } from '../src/coord/untold.js';
+import { RUN_CLOSE_WARNING_PREFIX } from '../src/coord/runCloseLane.js';
 import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallFailedSubject, stallOrphanESubject } from '../src/coord/stall.js';
 
 /** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
@@ -1139,6 +1140,26 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(w.coord!.feedEvents(10).map((e) => e.runId)).toEqual([run.id, run.id, run.id]);
     });
 
+    it('a lane close (causedBy sweep, expired:*) is recorded into the log and the feed, never pushed (D-8077)', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const log = new NotifyLog(path.join(await dir(), 'n.json'));
+      await log.load();
+      const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();                  // priming
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.setSession(run.id, 'cc-a');
+      w.coord!.advance(run.id, 'dispatched', 'coordinator');
+      w.coord!.advance(run.id, 'failed', 'sweep', 'expired:never-started');
+      await w.tick();
+      // Filtered to the run lane's own tags: an unrelated lane (a disk notice on a full box) may push in the same tick.
+      expect(sent.map((p) => p.tag).filter((t) => t?.startsWith('run-'))).toEqual([`run-${run.id}-dispatched`]);
+      expect(w.coord!.feedEvents(10).map((e) => e.title).filter((t) => t.startsWith('▸'))).toEqual(['▸ dispatched › ccrc-pwa', '▸ failed › ccrc-pwa']);
+    });
+
     it('never pushes or records a NON-transition row on a bound run', async () => {
       // wave 2 review, minor 1. `recordRunEvent` writes a row whose fromState
       // and toState are both the run's CURRENT state — the skill preflight is
@@ -1762,6 +1783,14 @@ describe('the stall watch on the phone — pushNewMail\'s stall classes', () => 
     mail('operator', 'cc-b', 'cc-b', `${UNTOLD_SUBJECT_PREFIX} 2 runs`);
     await w.tick();
     // Filtered to the mail lane's own tag: an unrelated lane (a disk notice on a full box) may push in the same tick.
+    expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
+    expect(log.seq).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a run-close warning (runs closing:) is recorded, never pushed (D-8077)', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-b', 'cc-b', `${RUN_CLOSE_WARNING_PREFIX} programme-a`);
+    await w.tick();
     expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
     expect(log.seq).toBeGreaterThanOrEqual(1);
   });

@@ -101,7 +101,7 @@ export function approvalDecision(r: ApprovalRow): { kind: DigestLineKind; at: nu
   return null;
 }
 
-export type DigestBuilt = Pick<DigestAnswer, 'totals' | 'byCoordinator' | 'lines' | 'drift'>;
+export type DigestBuilt = Pick<DigestAnswer, 'totals' | 'byCoordinator' | 'lines' | 'drift' | 'closes'>;
 
 /** The digest over `[dayStartMs, dayEndMs)`: one line per coordinator decision, in time order (ties by table, then
  *  id), the totals, and each coordinator's count. Pure over the store's reads. `ageEndMs` is where a drift line's age
@@ -147,7 +147,30 @@ export function buildDigest(store: WatcherCoordPort, dayStartMs: number, dayEndM
   const byCoordinator = [...per].map(([coordinator, decisions]) => ({ coordinator, decisions }))
     .sort((a, b) => b.decisions - a.decisions || a.coordinator.localeCompare(b.coordinator));
   const drift = driftSection(store, dayEndMs, ageEndMs);
-  return { ok: true, digest: { totals, byCoordinator, lines, ...(drift ? { drift } : {}) } };
+  const closes = closesSection(store, dayStartMs, dayEndMs);
+  return { ok: true, digest: { totals, byCoordinator, lines, ...(drift ? { drift } : {}), ...(closes ? { closes } : {}) } };
+}
+
+/** The words each lane row's close is told in. A sweep close with no detail is the crash row's or the dead-dispatch lane's. */
+const CLOSE_ROW_WORDS: Readonly<Record<string, string>> = {
+  'expired:never-started': 'never started',
+  'expired:review-orphaned': 'review of finished work',
+};
+
+/** The run-close lane's line (D-8077): "ccrc closed 7 stuck runs (5 never started, 2 review of finished work)", or none when
+ *  the sweep closed nothing in the window. An unreadable table leaves it out, as the drift section does. */
+function closesSection(store: WatcherCoordPort, fromMs: number, toMs: number): DigestBuilt['closes'] | null {
+  let rows: { detail: string | null; n: number }[];
+  try { rows = store.sweepClosesBetween(fromMs, toMs); } catch { return null; }
+  const per = new Map<string, number>();
+  for (const r of rows) {
+    const word = r.detail === null ? 'another reason' : CLOSE_ROW_WORDS[r.detail.split(' ')[0]!] ?? 'another reason';
+    per.set(word, (per.get(word) ?? 0) + r.n);
+  }
+  const total = [...per.values()].reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+  const parts = [...per].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([w, n]) => `${n} ${w}`);
+  return { total, line: `ccrc closed ${total} stuck ${total === 1 ? 'run' : 'runs'} (${parts.join(', ')})` };
 }
 
 /** The drift section (D-5923): the findings open at the window's end, never counted into `decisions`. An unreadable
@@ -166,15 +189,17 @@ function driftSection(store: WatcherCoordPort, dayEndMs: number, ageEndMs: numbe
 
 /** The one `coord` push (spec §10): a title with the count, a body that names what was decided (never empty,
  *  D-5302), one tag per day so a repeat replaces, and the deep link to that day's digest screen. */
-export function digestPushCopy(day: string, t: DigestTotals, driftOpen = 0): { title: string; body: string; tag: string; url: string } {
+export function digestPushCopy(day: string, t: DigestTotals, driftOpen = 0, closesLine: string | null = null): { title: string; body: string; tag: string; url: string } {
   const parts = [
     [t.answers, 'answered'], [t.allows, 'allowed'], [t.denies, 'denied'], [t.handOvers, 'handed over'], [t.lapses, 'lapsed'],
   ].filter(([n]) => (n as number) > 0).map(([n, w]) => `${n} ${w}`);
   // D-5923: drift is named only when there is some, and never counts as a decision.
   if (driftOpen > 0) parts.push(`${driftOpen} out of step`);
+  // D-8077: the run-close lane's closes, in one line of their own after the decisions.
+  const closes = closesLine === null ? '' : ` — ${closesLine}`;
   return {
     title: `Coordinators decided ${t.decisions} ${t.decisions === 1 ? 'thing' : 'things'} in your name`,
-    body: `${parts.join(' · ')} — tap to review and correct`,
+    body: `${parts.join(' · ')}${closes} — tap to review and correct`,
     tag: `digest-${day}`,
     url: `/digest?day=${day}`,
   };

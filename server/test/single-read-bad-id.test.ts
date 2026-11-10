@@ -153,7 +153,7 @@ describe('every absence-acting caller holds on bad-id (spec §2.3)', () => {
     const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
     watcher.useCoordSerialiser({ withSweepAbandon: (c, fn) => fn((runId, crashedId, stillCrashed) =>
       closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep',
-        { claimedBy: crashedId, stillCrashed })) });
+        { claimedBy: crashedId, stillStuck: stillCrashed })) });
     const id = storedRun(coord, { state: 'working', sessionId: WORKER, claimedBy: BAD });
     // A journal history for --actor. Folded into `absent`, an unlisted claimant WITH history reads
     // CRASHED (one with none reads unmeasured on its own), so this is the input on which the arms part.

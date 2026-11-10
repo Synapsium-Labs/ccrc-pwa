@@ -328,7 +328,8 @@ describe('the scanner is looking at something', () => {
     // no box token.
     // 67 since D-8075's `GET /api/programmes` (spec 2026-11-04 §11.6): session-gated, NOT EXEMPT, no box token.
     // 68 since D-8076's `POST /api/runs/:id/end-request`: a box-token machine lane IN EXEMPT (box token and attribution, no cookie).
-    expect(scanRoutes('coord/routes.ts').length).toBe(68);
+    // 70 since `GET`/`POST /api/coord/run-close` (D-8077, the run-close lanes' three-state control): session-gated, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(70);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -568,7 +569,9 @@ describe('the scanner is looking at something', () => {
     // count stays 118, the exempt-HTTP count 71 -> 72.
     // 195 since D-8076's `POST /api/runs/:id/end-request`: a box-token lane IN EXEMPT: the HTTP half 191 -> 192, the exempt-HTTP count 72 -> 73.
     // 197 since D-8076's `POST /api/items/:id/act` and `/decline`: the operator's two, session-gated and NOT EXEMPT: the HTTP half 192 -> 194, the gated count 118 -> 120, the exempt count stays 73.
-    expect(ROUTES.length).toBe(197);
+    // 199 since `GET`/`POST /api/coord/run-close` (D-8077), session-gated and NOT EXEMPT, no box token: the HTTP half 194 -> 196, the
+    // gated count 120 -> 122, the exempt-HTTP count stays 73.
+    expect(ROUTES.length).toBe(199);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -597,6 +600,7 @@ describe('the scanner is looking at something', () => {
       'GET /api/coord/dispatch-abandon', 'POST /api/coord/dispatch-abandon',
       'GET /api/coord/scope-sweep', 'POST /api/coord/scope-sweep',
       'GET /api/coord/delegation-adopt', 'POST /api/coord/delegation-adopt',
+      'GET /api/coord/run-close', 'POST /api/coord/run-close',
       'POST /api/sessions/:id/prompt', 'GET /ws/fleet', 'GET /ws/pty/:id',
       'POST /api/auth/login', 'POST /api/auth/logout', 'GET /api/auth/status',
       // Task 8's four, which split TWO ways under the gate: the register pair is
@@ -737,7 +741,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 197 scanned + the static wildcard when the bundle is built.
+    // 199 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1432,7 +1436,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 194 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 196 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1496,7 +1500,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 194 HTTP routes, not the 73 exempt.
+          //    is not itself flag-aware — the assertion that covers all 196 HTTP routes, not the 73 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

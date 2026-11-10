@@ -544,7 +544,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/coord/stall-watch` (stall-watch settings wave 1), `POST /api/coord/collect-lane`
   (child-reclamation wave 10, which also refuses `live` while sign-in is dark), `POST /api/coord/review-cap`
   (D-6795, the operator's lift of the review-round cap for one work run), `POST /api/coord/dispatch-abandon` (D-7319, the
-  operator's switch on abandoning a dispatch that never came back), `POST /api/coord/scope-sweep` (D-7994, the
+  operator's switch on abandoning a dispatch that never came back), `POST /api/coord/run-close` (D-8077, the operator's
+  three-state control over the run-close lanes, which also refuses `on` while coordination is paused), `POST /api/coord/scope-sweep` (D-7994, the
   operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
   operator's Settings row for the automatic coordinator roll), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
   switch that arms a deliberate stop's pane-scope stop), `POST /api/coord/delegation-adopt` (D-8112, the operator's switch

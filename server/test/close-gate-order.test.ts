@@ -64,7 +64,7 @@ function fixture(opts: { failCcd?: boolean; verbs?: string[] } = {}) {
 const fp = (over: Record<string, unknown> = {}) => ({ branchTip: SHA, prNumber: null, prPhase: 'none', handoffCommit: SHA, ...over });
 /** A close body that skips `verifyDone` (D-49): a failed close, with a well-formed fingerprint. */
 const failedBody = (over: Record<string, unknown> = {}) => ({ fingerprint: fp(), final: true, state: 'failed', ...over });
-const STILL: SweepCloseGuard = { claimedBy: CRASHED, stillCrashed: async () => null };
+const STILL: SweepCloseGuard = { claimedBy: CRASHED, stillStuck: async () => null };
 
 describe('closeRun runs its gates in a fixed order (ARCH-35): the request', () => {
   it('a missing run is unknown-run', async () => {
@@ -242,7 +242,7 @@ describe('closeRun’s abandon arm', () => {
     const f = fixture();
     const id = f.planned();
     f.coord.db.prepare("UPDATE runs SET sessionId = 'a/b' WHERE id = ?").run(id);
-    const revived: SweepCloseGuard = { claimedBy: CRASHED, stillCrashed: async () => ({ kind: 'remeasured', why: 'alive' }) };
+    const revived: SweepCloseGuard = { claimedBy: CRASHED, stillStuck: async () => ({ kind: 'remeasured', why: 'alive' }) };
     expect(await closeRun(f.deps, id, { intent: 'abandon' }, 'sweep', revived))
       .toEqual({ ok: false, kind: 'sweep-stopped', stop: { kind: 'remeasured', why: 'alive' }, fleetAct: null });
     expect(await closeRun(f.deps, id, { intent: 'abandon' }, 'operator'))
@@ -263,7 +263,7 @@ describe('closeRun’s abandon arm', () => {
     const f = fixture({ verbs: [] });
     const id = f.working();
     let asked = 0;
-    const revived: SweepCloseGuard = { claimedBy: CRASHED, stillCrashed: async () => { asked += 1; return { kind: 'remeasured', why: 'alive' }; } };
+    const revived: SweepCloseGuard = { claimedBy: CRASHED, stillStuck: async () => { asked += 1; return { kind: 'remeasured', why: 'alive' }; } };
     expect(await closeRun(f.deps, id, { intent: 'abandon' }, 'sweep', revived)).toEqual({ ok: false, kind: 'unsupported' });
     expect(asked).toBe(0);
   });
@@ -272,7 +272,7 @@ describe('closeRun’s abandon arm', () => {
     const f = fixture();
     const id = f.working();
     expect(f.coord.reclaimProgram(id, HEIR, 1, null)).toMatchObject({ ok: true });
-    const revived: SweepCloseGuard = { claimedBy: CRASHED, stillCrashed: async () => ({ kind: 'remeasured', why: 'alive' }) };
+    const revived: SweepCloseGuard = { claimedBy: CRASHED, stillStuck: async () => ({ kind: 'remeasured', why: 'alive' }) };
     expect(await closeRun(f.deps, id, { intent: 'abandon' }, 'sweep', revived))
       .toEqual({ ok: false, kind: 'sweep-stopped', stop: { kind: 'remeasured', why: 'alive' }, fleetAct: null });
     expect(f.calls).toEqual([]);
@@ -282,7 +282,7 @@ describe('closeRun’s abandon arm', () => {
     const f = fixture({ failCcd: true });
     const id = f.working();
     let asked = 0;
-    const guard: SweepCloseGuard = { claimedBy: CRASHED, stillCrashed: async () => { asked += 1; return null; } };
+    const guard: SweepCloseGuard = { claimedBy: CRASHED, stillStuck: async () => { asked += 1; return null; } };
     expect(await closeRun(f.deps, id, { intent: 'abandon' }, 'sweep', guard)).toEqual({ ok: false, kind: 'fleetFailed', stderr: 'boom' });
     expect(asked, 'once, before the act').toBe(1);
     expect(okRun(f.coord.run(id))!.state).toBe('working');
@@ -292,7 +292,7 @@ describe('closeRun’s abandon arm', () => {
     const f = fixture();
     const id = f.working();
     let n = 0;
-    const guard: SweepCloseGuard = { claimedBy: CRASHED, stillCrashed: async () => {
+    const guard: SweepCloseGuard = { claimedBy: CRASHED, stillStuck: async () => {
       n += 1;
       if (n === 1) return null;
       expect(f.coord.reclaimProgram(id, HEIR, 1, null)).toMatchObject({ ok: true });

@@ -32,7 +32,7 @@ export function isDriftLaneTag(v: string): boolean {
 
 export interface DriftLaneDeps {
   readonly coord: Pick<CoordStore, 'driftOpenRuns' | 'driftOutstandingDeliveries' | 'driftAwaitingReview'
-    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'bindingsOf' | 'run'
+    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'bindingsOf' | 'run' | 'runCloseChoice'
     | 'recordDriftPass' | 'markDriftPushed' | 'markDriftShadowed'>;
   /** The reclaim ladder's verdict for one claimant (`measureClaimant`, bound by the watcher): no second vocabulary. */
   readonly measure: (id: string, at: number) => Promise<ClaimantReading>;
@@ -107,7 +107,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
   if (!after.ok) { d.warn(`ccrc-server: sweepDrift could not re-read its findings (${after.detail}) — no push this pass`); return; }
   const plan = chooseDriftPushes({
     rows: after.rows, tableWasEmpty, armed: d.names.includes(DRIFT_PUSH_LIVE_MARKER),
-    deadCoordinatorArmed: deadCoordinatorLaneArmed(d.names),
+    deadCoordinatorArmed: deadCoordinatorLaneArmed(d.names, d.coord.runCloseChoice('claimant-crashed')),
     told: {
       quietRuns: new Set(told.rows.filter((t) => t.arm === 'quiet').map((t) => t.runId)),
       stuckDeliveries: new Set(told.rows.filter((t) => t.arm === 'mail-stuck').map((t) => t.key)),

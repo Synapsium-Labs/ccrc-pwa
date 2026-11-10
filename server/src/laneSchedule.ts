@@ -165,6 +165,9 @@ export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
 export const RUN_STUCK_SWEEP_MS = 60_000;
 /** The runs-closed notice's drain (D-8073): a minute, as the stuck verdict's pass. */
 export const RUN_UNTOLD_SWEEP_MS = 60_000;
+/** The run-close lane's pass (D-8077, rows E1 and E1r): a minute, the dead-coordinator lane's own sibling cadence. DERIVED from
+ *  it by reference (`CHILD_RECLAIM_SWEEP_MS`), never a second literal: R7's budget is "per pass" and a pass is that throttle. */
+export const RUN_CLOSE_SWEEP_MS = CHILD_RECLAIM_SWEEP_MS;
 
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
@@ -179,7 +182,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -315,6 +318,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'runStuck', cadenceMs: RUN_STUCK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   // The runs-closed notice (D-8073, spec §11.7): one pass at a time; its pass catches its own failure, so no warnKey.
   { name: 'runUntold', cadenceMs: RUN_UNTOLD_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  // The run-close lane (D-8077, spec 2026-11-04 §12; the ruled plan's W1): one pass at a time, on the dead-coordinator lane's
+  // own cadence by reference. It starts in shadow, writes the `closes` map the screen counts down on, and closes only once the
+  // operator arms its group. Its pass catches its own failure, so no warnKey.
+  {
+    name: 'runClose', cadenceMs: RUN_CLOSE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'its R7 budget is per pass, and a pass is the destructive lanes\' shared one-minute throttle' },
+  },
 ];
 
 export function laneRow(name: string): LaneRow {

@@ -423,7 +423,7 @@ const deadRig = async () => {
     abandon: (runId, crashedId, still): Promise<CloseOutcome> => {
       abandoned.push(runId);
       return closeRun({ coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd }, runId, { intent: 'abandon' }, 'sweep',
-        { claimedBy: crashedId, stillCrashed: still });
+        { claimedBy: crashedId, stillStuck: still });
     },
   });
   const r = coord.openRun({ program: 'alpha', title: 'alpha', project: 'demo', wave: 1, waveOf: 2, claimedBy: CRASHED });

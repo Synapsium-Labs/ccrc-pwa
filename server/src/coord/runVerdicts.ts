@@ -9,6 +9,7 @@
 // `closes` is a map of its own (A57): the run-close lane writes it whole, on each of its passes, and `replace` never touches
 // it, so the two clocks never fight. `of` joins the two as it reads, and a run missing from the map reads `closes: null`.
 import type { RunStuck, RunWaitsOn } from '../../../shared/api.js';
+import type { RunCloseReading } from '../../../shared/run-close.js';
 
 /** One open run's answers from the pass. `waitsOn` is absent when the table gives none (`unknown`, `done`, `failed`). */
 export interface RunVerdict {
@@ -23,6 +24,12 @@ export interface RunVerdicts {
   replace(answers: ReadonlyMap<number, RunVerdict>, programmes: ReadonlyMap<string, boolean>): void;
   /** Swap the run-close lane's clocks, whole. Has no caller until the run-close lane lands. */
   setCloses(closes: ReadonlyMap<number, NonNullable<RunStuck['closes']>>): void;
+  /** What the run-close lane read on its last pass, for the Advanced rows' would-close lists (Task 26); null before its first. */
+  setReading(reading: RunCloseReading | null): void;
+  /** The crash row's would-close list, written by the dead-coordinator lane (its own pass, its own clock); null clears it. `reading` joins it
+   *  under `claimant-crashed`, and the run-close lane's `setReading` never touches it. */
+  setCrashReading(group: NonNullable<RunCloseReading['groups']['claimant-crashed']> | null, at: number): void;
+  reading(): RunCloseReading | null;
   of(id: number): RunVerdict | null;
   ofProgramme(slug: string): boolean | null;
   all(): ReadonlyMap<number, RunVerdict>;
@@ -32,11 +39,19 @@ export function createRunVerdicts(): RunVerdicts {
   let answers: ReadonlyMap<number, RunVerdict> = new Map();
   let programmes: ReadonlyMap<string, boolean> = new Map();
   let closes: ReadonlyMap<number, NonNullable<RunStuck['closes']>> = new Map();
+  let reading: RunCloseReading | null = null;
+  let crash: { at: number; group: NonNullable<RunCloseReading['groups']['claimant-crashed']> } | null = null;
   const joined = (id: number, v: RunVerdict): RunVerdict =>
     v.stuck === null ? v : { ...v, stuck: { ...v.stuck, closes: closes.get(id) ?? null } };
   return {
     replace(a, p) { answers = new Map(a); programmes = new Map(p); },
     setCloses(c) { closes = new Map(c); },
+    setReading(r) { reading = r; },
+    setCrashReading(group, at) { crash = group === null ? null : { at, group }; },
+    reading() {
+      if (crash === null) return reading;
+      return { at: reading?.at ?? crash.at, groups: { ...reading?.groups, 'claimant-crashed': crash.group } };
+    },
     of(id) { const v = answers.get(id); return v === undefined ? null : joined(id, v); },
     ofProgramme(slug) { return programmes.get(slug) ?? null; },
     all() { return new Map([...answers].map(([id, v]) => [id, joined(id, v)] as const)); },
