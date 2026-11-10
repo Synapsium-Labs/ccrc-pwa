@@ -443,9 +443,16 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
         S('m1', { status: 'ok' }), S('m2', { status: 'ok' }), S('z1'),
         S('d1', { status: 'ok' }), S('d2', { status: 'ok' }),
         S('u1', { status: 'ok' }), S('u2'),
+        S('g1', { status: 'ok' }), S('g2', { status: 'ok' }), S('solo', { status: 'ok' }),
         S('o1', { status: 'ok', model: MODEL_O }), S('o2', { status: 'ok', model: MODEL_O }),
       ] },
       { id: 'base-1', spans: [S('b1', { status: 'ok' }), S('b2', { status: 'ok' })] },
+    ], receipts: [
+      // the add-on is printed with an EXACT receipt (the leaf's own id); k8, m2 and o2 carry one, and so does solo, which has no parent yet
+      { session: 'cohort', leaf: 'k8', ts: T0 + 500 }, { session: 'cohort', leaf: 'm2', ts: T0 + 500 }, { session: 'cohort', leaf: 'o2', ts: T0 + 500 },
+      { session: 'cohort', leaf: 'solo', ts: T0 + 500 },
+      // g2 had only the generic receipt (leaf ''), whose text carries no add-on
+      { session: 'cohort', leaf: '', ts: T0 + 500 },
     ] });
     addParent(p, 'P1', k);
     addParent(p, 'P2', ['m1', 'm2']);
@@ -454,13 +461,15 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
     addParent(p, 'P4', ['o1', 'o2']);
     // an unreceipted last child was never printed, so it carried no add-on: counted in perBackend, kept out of addOn
     addParent(p, 'P6', ['u1', 'u2']);
+    // a receipted last child with only a generic receipt: counted in perBackend, kept out of addOn (solo has a receipt but no parent yet)
+    addParent(p, 'P7', ['g1', 'g2']);
     // a baseline span that is the last child of a depth-1 parent is not an add-on span of the cohort
     addParent(p, 'P5', ['b1', 'b2']);
     const r = spike(p);
     // the add-on spans: k8 (the eighth leaf), m2, and the other backend's o2; each is counted in the cohort's figures too
     expect(Object.keys(r).sort()).toEqual(['addOn', 'baseline', 'perBackend']);
-    expect(A(r).population.spans).toBe(8 + 3 + 2 + 2);
-    expect(A(r).compliance.receipted).toBe(8 + 2 + 2 + 1);
+    expect(A(r).population.spans).toBe(8 + 3 + 2 + 2 + 3);
+    expect(A(r).compliance.receipted).toBe(8 + 2 + 2 + 1 + 3);
     expect(r.addOn.anthropic.population.spans).toBe(2);
     expect(r.addOn.anthropic.population.notRequested).toBe(0);
     expect(A(r).population.notRequested).toBe(2);

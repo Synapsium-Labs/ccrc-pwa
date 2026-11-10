@@ -1511,9 +1511,13 @@ function compareUnclosed(coh, base) {
 
 /** The spike report (spec §7.5; plan Task 1D). `db` is a read handle (openCounterStore's); `sessions` are `ccrc_id`s;
  *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text. Returns `{ perBackend,
- *  baseline, addOn }`: `addOn` is the cohort's figures over the RECEIPTED spans whose leaf is the last child of a depth-1 parent
- *  (O15, W3-4's add-on spans; an unreceipted one was never printed, so it carried no add-on and stays out), computed by spikeFigures with the cohort's run words so it reads like the cohort's. Those spans
- *  stay in `perBackend` too, and the fixed gates read `perBackend`.
+ *  baseline, addOn }`: `addOn` is the cohort's figures over the spans a W3-4 add-on was printed for (O15), computed by
+ *  spikeFigures with the cohort's run words so it reads like the cohort's. Such a span is RECEIPTED (newSpan's `receipted`),
+ *  has an EXACT steer receipt (exactReceiptsOf: the leaf's own id, since the generic text carries no add-on and is printed
+ *  whenever the card skips), and its leaf is the last child of a depth-1 parent. A span without all three stays out of
+ *  `addOn`. Those spans stay in `perBackend` too, and the fixed gates read `perBackend`. `addOn` carries no
+ *  `summaryUnclosed.comparison` and no `durationMs.addedP50` or `echoChars.addedP50`: O19 and §10.7's added p50 compare
+ *  the cohort with the baseline, over `perBackend` only.
  *  @param {{ db: object, sessions: string[], sinceMs: number, untilMs: number }} a */
 export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   if (!Array.isArray(sessions) || sessions.length === 0 || !sessions.every((x) => typeof x === 'string' && x !== '')) throw new TypeError('spikeReport: sessions are ccrc ids');
@@ -1573,9 +1577,10 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   const perBackend = {};
   const baseline = {};
   const addOn = {};
-  /** O15: a RECEIPTED cohort span (newSpan's `receipted`, the one receipt rule) whose leaf is the last child of a depth-1 parent
-   *  (read-only, from node_children). An unreceipted one was never printed, so it carried no add-on. */
-  const isAddOn = (x) => x.receipted && s.addOnLeaf.get(x.leaf.id) !== undefined;
+  /** O15: a RECEIPTED cohort span (newSpan's `receipted`) with an EXACT receipt (exactReceiptsOf) whose leaf is the last child
+   *  of a depth-1 parent (read-only, from node_children). An unreceipted span, or one with only the generic receipt, was
+   *  never printed an add-on. */
+  const isAddOn = (x) => x.receipted && exactReceiptsOf(s, x).length > 0 && s.addOnLeaf.get(x.leaf.id) !== undefined;
   for (const be of BACKENDS) {
     const pick = (side) => ({ placed: sides[side].placed.filter((x) => x.backend === be), untimed: sides[side].untimed.filter((x) => x.backend === be) });
     const c = pick('cohort');
