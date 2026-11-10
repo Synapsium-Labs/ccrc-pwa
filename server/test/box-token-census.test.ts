@@ -304,7 +304,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // D-8141: POST /api/linear/proxy/issues/:id/links, a box-token lane: sixty-three machine lanes in all.
   'sixty-three',
   // D-8076: POST /api/runs/:id/end-request, a plain requireMailToken lane in the ledgers file: sixty-four machine lanes in all.
-  'sixty-four'];
+  'sixty-four',
+  // D-8147: GET /api/linking, a box-token lane in the linking file: sixty-five machine lanes in all.
+  'sixty-five'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps, withFakeClock } from './helpers.js';
@@ -28,7 +29,7 @@ describe('the watcher feeds the visibility lane the walked project list', () => 
     };
     const base = testDeps(home, run);
     const deps = withFakeClock({ ...base, cfg: { ...base.cfg, projectsRoot: path.join(home, 'projects') }, coord });
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'repo-visibility')).toEqual([['repo-visibility', '--project', 'project-new']]));
     await vi.waitFor(() => expect(coord.linkingOf('project-new').mode).toBe('public'));

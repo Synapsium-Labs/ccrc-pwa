@@ -281,7 +281,8 @@ describe('the closed route table', () => {
     // Fifty-nine since `runs.review-rounds` (the coordinator's review-cap extension, D-8125).
     // Sixty since `linear.link` (D-8141).
     // Sixty-one since `runs.end-request` (D-8076, the runs rebuild's wave B6).
-    expect(keys).toHaveLength(61);
+    // Sixty-two since `linking.show` (D-8147).
+    expect(keys).toHaveLength(62);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -295,7 +296,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
