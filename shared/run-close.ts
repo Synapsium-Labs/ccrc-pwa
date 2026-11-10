@@ -11,7 +11,10 @@ import type { MarkerState } from './api.js';
  *  and E5 (a coordinator removed or stopped by a person, a session name reused by a later run) arm together as the claimant-gone
  *  group (D-8078). */
 export const RUN_CLOSE_GROUPS = ['never-started', 'claimant-crashed', 'claimant-gone'] as const;
-export type RunCloseGroup = (typeof RUN_CLOSE_GROUPS)[number];
+/** TEMPORARY, B8 PR-1 only: the PWA's word tables are `Record<RunCloseGroup, string>` and `Record<RunCloseWhy, string>`, and the
+ *  consolidation path guard bars a pwa/ path from a diff that touches shared/switches.ts. Until the PWA half lands (the next PR, which
+ *  restores `(typeof RUN_CLOSE_GROUPS)[number]` here) the type is the wide `string`, so the PWA still typechecks with its tables as they are. */
+export type RunCloseGroup = string;
 export const isRunCloseGroup = (v: unknown): v is RunCloseGroup => typeof v === 'string' && (RUN_CLOSE_GROUPS as readonly string[]).includes(v);
 
 /** The three stored choices. */
@@ -37,7 +40,7 @@ export type RunCloseHeld = (typeof RUN_CLOSE_HELD)[keyof typeof RUN_CLOSE_HELD];
 export type RunCloseState = RunCloseChoice | 'held';
 
 /** Why a run the lane reads would close once the group is on (the spec's reasons, one per row of the lane). */
-export const RUN_CLOSE_WHY = {
+export const RUN_CLOSE_WHY: Readonly<Record<'neverStarted' | 'reviewOfClosed' | 'laterReview' | 'claimantCrashed' | 'claimantGone' | 'claimantStopped' | 'nameReused', string>> = {
   neverStarted: 'never-started',
   reviewOfClosed: 'review-of-closed',
   laterReview: 'later-review',
@@ -49,8 +52,10 @@ export const RUN_CLOSE_WHY = {
   claimantStopped: 'claimant-stopped',
   /** E5: its session name now belongs to a later run. */
   nameReused: 'name-reused',
-} as const;
-export type RunCloseWhy = (typeof RUN_CLOSE_WHY)[keyof typeof RUN_CLOSE_WHY];
+};
+/** TEMPORARY, B8 PR-1 only: wide for the reason above (so is the annotation on RUN_CLOSE_WHY); the next PR restores `as const` and
+ *  `(typeof RUN_CLOSE_WHY)[keyof typeof RUN_CLOSE_WHY]`. */
+export type RunCloseWhy = string;
 
 /** A run the group would close, and when: `at` is the moment its time runs out (epoch ms). */
 export interface RunCloseWould { readonly runId: number; readonly program: string; readonly why: RunCloseWhy; readonly at: number }
