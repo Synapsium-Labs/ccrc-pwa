@@ -468,10 +468,9 @@ export function agentIdOk(id) {
 /** The levels of the walk, outermost first: the home's projects root, a project, a session, its `subagents/`, a
  *  `workflows/` directory and one run's directory. Plan-chosen words (the census names where a refusal happened). */
 export const AGENT_LEVELS = Object.freeze(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
-/** Why a directory is not entered: a symbolic link, something that is not a directory, a directory that cannot be listed. `unmeasured`
- *  is the same word's file form (final review M5): a candidate file whose lstat failed for a reason other than its absence (EACCES,
- *  EIO) has no kind, so it is neither admitted nor refused; it is handed over unentered, and the census counts it into K. */
-export const AGENT_DIR_REASONS = Object.freeze(['link', 'not-dir', 'unlistable', 'unmeasured']);
+/** Why a directory is not entered: a symbolic link, something that is not a directory, a directory that cannot be listed. A candidate
+ *  file whose lstat failed other than by absence (final review M5) makes its containing directory `unlistable`: K counts directories alone. */
+export const AGENT_DIR_REASONS = Object.freeze(['link', 'not-dir', 'unlistable']);
 /** Why a candidate file is refused, in the order they are tested (decideAgentFile). */
 export const AGENT_FILE_REASONS = Object.freeze(['run-id', 'name', 'link', 'not-regular']);
 

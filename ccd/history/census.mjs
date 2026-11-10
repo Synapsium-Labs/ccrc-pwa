@@ -198,9 +198,8 @@ function tally(list, goneList, verdictOf) {
   return t;
 }
 
-/** The unentered entry a stored path lies below, or is (K): its files are unknown, never absent. An unentered entry is a directory, or
- *  a candidate file whose lstat failed (`unmeasured`), which is the stored path itself. */
-const belowAny = (path, dirs) => dirs.some((d) => path === d || path.startsWith(`${d}/`));
+/** The directory a stored path lies below, among the unentered ones (K): its files are unknown, never absent. */
+const belowAny = (path, dirs) => dirs.some((d) => path.startsWith(`${d}/`));
 
 /** A key's bound holdings' entry uuids, one list per live file of its transcript (hardlinks are one file, so one list), for
  *  lib's holdingShape. A key with at most one live file need not read its rows: one that holds any is `single`, else `none`. */

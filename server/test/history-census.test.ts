@@ -493,10 +493,10 @@ describe('SA19 unentered directories, every level (K)', () => {
     try { return { report: censusOf(rig) }; } finally { restore(); }
   }
   const expectUnmeasured = (r: CensusReport): void => {
-    expect(r.K, 'both candidate files could not be measured: unentered at the subagents level').toEqual([{ level: 'subagents', reason: 'unmeasured', n: 2 }]);
+    expect(r.K, 'the first candidate file could not be measured: its subagents/ is unentered, once (K counts directories), and not listed further').toEqual([{ level: 'subagents', reason: 'unlistable', n: 1 }]);
     expect(r.units.R, 'an lstat that failed is no definite refusal').toBe(0);
     expect(r.beside.agentFileRefused).toEqual({});
-    expect(r.units.G, 'the stored row\'s only holding is unmeasured: unknown, not gone').toEqual({ notFound: 0, unknown: 1 });
+    expect(r.units.G, 'the stored row\'s only holding lies below the unentered directory: unknown, not gone').toEqual({ notFound: 0, unknown: 1 });
     expect(r.shares, 'and no share is drawn').toBeNull();
     expect(r.canonical).toBeNull();
     expect(r.withheld).toEqual(['K']);
@@ -514,7 +514,7 @@ describe('SA19 unentered directories, every level (K)', () => {
     return () => { mutable.lstatSync = real; syncBuiltinESMExports(); };
   };
 
-  it('M5 a candidate file whose lstat fails with EACCES (patched lstat) is unmeasured: K gains subagents/unmeasured, no R, the stored row is G unknown', async () => {
+  it('M5 a candidate file whose lstat fails with EACCES (patched lstat) makes its subagents/ unentered: K gains subagents/unlistable once, no R, the stored row is G unknown', async () => {
     const { report } = await lstatFails('ccrc-hist-m5-patched-', () => failLstat(/agent-[cf]\.jsonl$/, 'EACCES'));
     expectUnmeasured(report);
   });
@@ -525,6 +525,25 @@ describe('SA19 unentered directories, every level (K)', () => {
       const { report } = await lstatFails('ccrc-hist-m5-mode-', (d) => { dir = d; fs.chmodSync(d, 0o444); return () => fs.chmodSync(d, 0o755); });
       expectUnmeasured(report);
     } finally { if (dir !== '') fs.chmodSync(dir, 0o755); }
+  });
+
+  it('M5 entries handed over before the failure stay handed over: a file sorted before the failing one is still a unit, and only the later one is cut off', async () => {
+    const { report } = await lstatFails('ccrc-hist-m5-before-', () => failLstat(/agent-f\.jsonl$/, 'EACCES'));
+    expect(report.K).toEqual([{ level: 'subagents', reason: 'unlistable', n: 1 }]);
+    expect(report.units, 'c was handed over before f failed: it is a unit, not a gone row').toMatchObject({ D: 1, Ad: 1, R: 0, G: { notFound: 0, unknown: 0 } });
+    expect(report.withheld).toEqual(['K']);
+  });
+
+  it('M5 in a workflow run directory the cut is the run directory: level run, unlistable, and the files before it stay', async () => {
+    const rig = await rigOf('ccrc-hist-m5-run-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [], runs: [{ id: RUN, agents: [agent('a', 0x4321, { meta: {} }), agent('z', 0x4322, { meta: {} })] }] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    const restore = failLstat(/agent-z\.jsonl$/, 'EIO');
+    let report: CensusReport;
+    try { report = censusOf(rig); } finally { restore(); }
+    expect(report.K).toEqual([{ level: 'run', reason: 'unlistable', n: 1 }]);
+    expect(report.units, 'agent a was handed over before z failed; z\'s stored row lies below the cut directory').toMatchObject({ R: 0, G: { notFound: 0, unknown: 1 } });
+    expect(report.withheld).toEqual(['K']);
   });
 
   it('M5 a file that VANISHES between the listing and its lstat (ENOENT) stays dropped: no K, no R', async () => {

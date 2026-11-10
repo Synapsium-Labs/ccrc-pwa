@@ -1833,7 +1833,7 @@ function walkAgentProject(agents, state, stop, home, slug, names) {
     for (const name of inSub) {
       if (agentCut(agents, state, stop)) return false;
       const c = classifyAgentName(name, 'subagents');
-      if (c.role !== 'descend') { agentEntry(agents, state, at, null, true, `${sub}/${name}`, c); continue; }
+      if (c.role !== 'descend') { if (!agentEntry(agents, state, at, null, true, `${sub}/${name}`, c)) break; continue; }
       const wf = `${sub}/${name}`;   // the name classifyAgentName answered `descend` for: lib's grammar spells it once
       const runs = agentEnter(agents, home, 'workflows', wf, listSorted(wf));
       if (runs === null) continue;
@@ -1844,7 +1844,7 @@ function walkAgentProject(agents, state, stop, home, slug, names) {
         const runOk = RUN_ID_RE.test(run);
         for (const rn of inRun) {
           if (agentCut(agents, state, stop)) return false;
-          agentEntry(agents, state, at, run, runOk, `${dir}/${rn}`, classifyAgentName(rn, 'run'));
+          if (!agentEntry(agents, state, at, run, runOk, `${dir}/${rn}`, classifyAgentName(rn, 'run'))) break;
         }
       }
     }
@@ -1860,14 +1860,18 @@ function agentCut(agents, state, stop) {
  *  opened here), and a transcript candidate is lstat'ed and ruled by lib's decideAgentFile. A candidate that vanished between
  *  the listing and its lstat is dropped. `runId` is the run directory's name, or null in `subagents/`. */
 function agentEntry(agents, state, at, runId, runOk, path, c) {
-  if (c.role === 'meta') { agents.take({ type: 'companion', ...at, runId, role: 'meta', id: c.id, path }); return; }
-  if (c.role === 'journal') { agents.take({ type: 'companion', ...at, runId, role: 'journal', id: null, path }); return; }
+  if (c.role === 'meta') { agents.take({ type: 'companion', ...at, runId, role: 'meta', id: c.id, path }); return true; }
+  if (c.role === 'journal') { agents.take({ type: 'companion', ...at, runId, role: 'journal', id: null, path }); return true; }
   const l = agentLstat(path);
-  if (l.absent === true) return;
-  // An lstat that failed for another reason (EACCES, EIO) measured nothing, so the file is neither admitted nor refused: it is handed
-  // over unentered, at its directory's level, exactly as a directory whose lstat failed is. The census counts it into K and withholds
-  // its shares; it is never a definite refusal (final review M5). A vanished file (ENOENT, ENOTDIR) stays dropped, above.
-  if (l.st === undefined) { agents.take({ type: 'unentered', home: at.home, level: runId === null ? 'subagents' : 'run', reason: 'unmeasured', path }); return; }
+  if (l.absent === true) return true;
+  // An lstat that failed for another reason (EACCES, EIO) measured nothing, so the file is neither admitted nor refused (final review
+  // M5, recast: the addendum's K counts directories alone). The CONTAINING directory is handed over unentered, `unlistable`, as a
+  // directory that cannot be searched is, and the caller stops listing it; entries already handed over stay handed over. A vanished
+  // file (ENOENT, ENOTDIR) stays dropped, above. Answers false when the directory was cut.
+  if (l.st === undefined) {
+    agents.take({ type: 'unentered', home: at.home, level: runId === null ? 'subagents' : 'run', reason: 'unlistable', path: path.slice(0, path.lastIndexOf('/')) });
+    return false;
+  }
   const v = decideAgentFile({ kind: agentKindOf(l.st), id: c.id, runOk });
   state.taken += 1;
   agents.take({
@@ -1876,6 +1880,7 @@ function agentEntry(agents, state, at, runId, runOk, path, c) {
     // matches the store's. `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave.
     mtimeMs: Number(l.st.mtimeMs), dev: l.st.dev, ino: l.st.ino, size: Number(l.st.size),
   });
+  return true;
 }
 
 /** `<home>/projects/*\/<uuid>.jsonl` for every wanted uuid, across the rostered homes the shim passed. Paths come
@@ -5450,13 +5455,11 @@ function agentPathRowOf(db) {
   return st;
 }
 
-/** bytesWaiting for a file the scan walk handed over: its stored row by path, and (only when one stands) one lstat. A vanished
- *  path or a non-regular file has nothing to read. */
-function scanFileWaiting(db, ctx, path) {
-  const row = agentPathRowOf(db).get(path) ?? null;
-  if (row === null) return true;
-  const st = (ctx.activeStat ?? statActive)(path);
-  return st !== null && st.isFile === true && bytesWaiting(row, st);
+/** bytesWaiting for a file the scan walk handed over (`e`, an admitted file entry): its stored row by path against the walk's own
+ *  size, device and inode, ruled by lib's bytesLeftOf for every case: an unstored file waits with its size, so an unstored empty
+ *  one waits for nothing. */
+function scanFileWaiting(db, e) {
+  return bytesLeftOf({ stored: agentPathRowOf(db).get(e.path) ?? null, size: e.size, dev: e.dev, ino: e.ino }) > 0;
 }
 
 /** One admitted subagent file's gate (W4 P3, P5, P6, P15 (b)), the one place both arms ask decideAgentIngest: 'read' when it is
@@ -5557,7 +5560,7 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null, ar
         form: 'tick', armed, historyOff, admitted: e.verdict === 'admit',
         preInstall: isPreInstall(e.mtimeMs, sinceMs), parentKnown: known.has(e.uuid),
       });
-      if (gate === 'paused' && scanFileWaiting(db, ctx, e.path)) agentsWithheld += 1;
+      if (gate === 'paused' && scanFileWaiting(db, e)) agentsWithheld += 1;
       if (gate === 'read' && !seen.has(e.path)) {
         seen.add(e.path);
         files.push({ path: e.path, uuid: e.uuid, home: e.home, agentKey: agentKey(e.id, e.runId), runId: e.runId });

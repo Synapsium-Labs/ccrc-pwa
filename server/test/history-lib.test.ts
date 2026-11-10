@@ -12223,7 +12223,7 @@ describe('the subagent grammars and identity (W4 addendum P1, P10, P20)', () => 
   it('the grammar constants and vocabularies are as the addendum states them', () => {
     expect(AGENT_ID_MAX).toBe(128);
     expect(AGENT_LEVELS).toEqual(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
-    expect(AGENT_DIR_REASONS).toEqual(['link', 'not-dir', 'unlistable', 'unmeasured']);
+    expect(AGENT_DIR_REASONS).toEqual(['link', 'not-dir', 'unlistable']);
     expect(AGENT_FILE_REASONS).toEqual(['run-id', 'name', 'link', 'not-regular']);
     expect(RUN_ID_RE.source).toBe('^wf_[0-9a-f]{8}-[0-9a-f]{3}$');
     expect([RUN_ID_RE.test('wf_0123abcd-0a1'), RUN_ID_RE.test('wf_0123abcd-0a'), RUN_ID_RE.test('wf_0123ABCD-0a1'), RUN_ID_RE.test('x/wf_0123abcd-0a1')]).toEqual([true, false, false, false]);

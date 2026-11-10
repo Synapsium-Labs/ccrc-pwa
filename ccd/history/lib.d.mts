@@ -136,7 +136,7 @@ export function agentIdOk(id: unknown): boolean;
 export type AgentLevel = (typeof AGENT_LEVELS)[number];
 export const AGENT_LEVELS: readonly ['root', 'project', 'session', 'subagents', 'workflows', 'run'];
 export type AgentDirReason = (typeof AGENT_DIR_REASONS)[number];
-export const AGENT_DIR_REASONS: readonly ['link', 'not-dir', 'unlistable', 'unmeasured'];
+export const AGENT_DIR_REASONS: readonly ['link', 'not-dir', 'unlistable'];
 export type AgentFileReason = (typeof AGENT_FILE_REASONS)[number];
 export const AGENT_FILE_REASONS: readonly ['run-id', 'name', 'link', 'not-regular'];
 export type AgentName =

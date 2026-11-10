@@ -570,6 +570,20 @@ describe('the pause order (W4 addendum P5, SA11)', () => {
     expect(counterOf(rig.db, 'capture_paused_agents_at_cap'), 'active arm, bytes waiting').toBe(2);
   });
 
+  it('a scan tick at 90% counts an unstored EMPTY subagent file as nothing withheld, and an unstored non-empty one once: the forecast\'s rule (final review M2)', async () => {
+    const rig = await rigOf('ccrc-hist-p90-empty-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('e', 0xb95, { n: 0 })] }, SINCE);
+    expect(fs.statSync(paths['e']!).size, 'CONTROL: the file is empty').toBe(0);
+    await rig.tick(armed, { scan: true, storeAt: 0.9 });
+    expect(counterNames(rig.db), 'an unstored empty file has nothing to read').not.toContain('capture_paused_agents_at_cap');
+    const g = path.join(path.dirname(paths['e']!), 'agent-g.jsonl');
+    fs.writeFileSync(g, fixtureRows(0xb96, 2).map((r) => `${JSON.stringify(r)}\n`).join(''));
+    fs.utimesSync(g, new Date(T0 + 300_000), new Date(T0 + 300_000));
+    await rig.tick(armed, { scan: true, storeAt: 0.9 });
+    expect(counterOf(rig.db, 'capture_paused_agents_at_cap'), 'CONTROL: an unstored file with bytes is counted, once for the tick').toBe(1);
+    expect(agentRows(rig.db), 'and the pause read neither').toBe(0);
+  });
+
   it('the active pass is paused too: an active parent\'s grown subagent file is withheld at 90%, its parent is read', async () => {
     const rig = await rigOf('ccrc-hist-p90-act-');
     const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0xc00)] }, SINCE);
