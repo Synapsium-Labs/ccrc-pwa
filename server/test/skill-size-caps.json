@@ -1,18 +1,9 @@
 {
   "files": {
-    "ccd/coordinator-skill/SKILL.md": 55376,
-    "ccd/coordinator-skill/references/delegated-worktrees.md": 1819,
-    "ccd/coordinator-skill/references/ledger-template.md": 1746,
-    "ccd/coordinator-skill/references/mail-envelope.md": 11987,
-    "ccd/coordinator-skill/references/peer-protocol.md": 8207,
-    "ccd/coordinator-skill/references/resume.md": 10081,
-    "ccd/coordinator-skill/references/review-brief.md": 1415,
-    "ccd/coordinator-skill/references/review-panel.md": 7916,
-    "ccd/coordinator-skill/references/routing-matrix.md": 14554,
-    "ccd/coordinator-skill/references/wave-lifecycle.md": 153434,
+    "ccd/coordinator-skill/SKILL.md": 55860,
     "ccd/history-skill/SKILL.md": 10677,
-    "ccd/linear-skill/SKILL.md": 10841,
-    "ccd/reviewer-skill/SKILL.md": 14273,
-    "ccd/worker-skill/SKILL.md": 33348
+    "ccd/linear-skill/SKILL.md": 11354,
+    "ccd/reviewer-skill/SKILL.md": 15068,
+    "ccd/worker-skill/SKILL.md": 35212
   }
 }

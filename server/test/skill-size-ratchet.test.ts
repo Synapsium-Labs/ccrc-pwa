@@ -1,14 +1,19 @@
-// The skill-size ratchet: every shipped skill file (every .md under a ccd/*-skill directory)
-// is capped in bytes. A cap only falls, except in a pull request that appends a pinned contract
-// clause to a SKILL.md, which may raise that SKILL.md's cap by that clause's whole line in bytes.
+// The skill-size ratchet: every shipped SKILL.md (ccd/*-skill/SKILL.md) is capped in bytes, and its
+// contract must end inside the part of the file a compaction keeps.
+//
+// Why. After a compaction Claude Code re-attaches only the start of a loaded skill (its documentation
+// gives the first 5,000 tokens of each). The skill then still looks loaded, so a compacted session
+// keeps whatever came first and silently loses the rest. A SKILL.md's contract is what must survive.
 //
 // The rules are:
-//   R1: every skill file has a cap, and every cap names a skill file;
+//   R1: every SKILL.md has a cap, and every cap names a SKILL.md;
 //   R2: each file is at or under its cap (print the entry to lower when under);
 //   R3: a cap new on this branch must equal its file's size at HEAD;
 //   R4: a cap the merge-base holds may rise by at most the file's clause allowance;
-//   R5: a file the merge-base holds may grow by at most the file's clause allowance.
-// Without origin/main, only R1 and R2 run, with a printed notice.
+//   R5: a file the merge-base holds may grow by at most the file's clause allowance;
+//   R6: the contract is the file's first section, the notice that tells a session how to see a cut
+//       stands before it, and the contract ends within CONTRACT_BUDGET_BYTES of the file's start.
+// Without origin/main, only R1, R2 and R6 run, with a printed notice.
 //
 // A clause's bytes are the UTF-8 bytes of its whole numbered line, number and newline included,
 // for every line numbered past the merge-base's highest clause in the SKILL.md's `## The contract`
@@ -16,10 +21,13 @@
 // skills that already have pinned clauses have suites that check `1..N` with no gaps, so a
 // numbered contract line is what counts as a pinned clause.
 //
+// Reference files (every other .md of a skill) are not capped: they are read on demand and are never
+// re-attached, so the restore budget does not apply to them. Text that does not belong in a SKILL.md
+// goes there.
+//
 // Lower a cap by editing skill-size-caps.json down to the size the R2 lowered message prints.
-// Raise a cap only by the bytes of the clause line a pull request appends.
-// Text that fits neither goes in a new reference file: a new file's cap is its size (R3), and a
-// reference is read on demand, so it costs nothing when a compaction restores the skill.
+// Raise a cap only by the bytes of the clause line a pull request appends. R6 has no raise: a clause
+// that pushes the contract past the budget needs shorter clauses, or less text before the contract.
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
@@ -33,7 +41,12 @@ type Base = { caps: Caps | 'absent'; sizes: Sizes };
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CAPS = 'server/test/skill-size-caps.json';
-const SKILL_FILE = /^ccd\/[^/]+-skill\/.+\.md$/;
+const SKILL_FILE = /^ccd\/[^/]+-skill\/SKILL\.md$/;
+// 5,000 tokens at 3.2 bytes a token. These files measure about 4.0 bytes a token on a public tokenizer;
+// Claude's own is not measured here and counts more tokens for the same text, so the bound leans short.
+const CONTRACT_BUDGET_BYTES = 16_000;
+const CONTRACT_HEADING = '## The contract';
+const CUT_NOTICE = 'load this skill again';
 
 function readCaps(text: string): Caps {
   const parsed = JSON.parse(text) as unknown;
@@ -106,8 +119,8 @@ function judge(
       continue;
     }
     if (size > cap) {
-      failures.push(`${file}: ${size} bytes, capped at ${cap}. Shorten the file, or move the new text into a new `
-        + 'reference file, which takes a cap equal to its size. Only a new pinned clause raises a SKILL.md\'s cap.');
+      failures.push(`${file}: ${size} bytes, capped at ${cap}. Shorten the file, or move the new text into a `
+        + 'reference file, which has no cap. Only a new pinned clause raises a SKILL.md\'s cap.');
     } else if (size < cap) {
       lowered.push(`${file}: ${size} bytes, under its cap of ${cap}. Lower its entry to "${file}": ${size}`);
     }
@@ -133,6 +146,25 @@ function judge(
     }
   }
   return { failures, lowered };
+}
+
+/** R6. What is wrong with where a SKILL.md's contract sits, or [] when nothing is. A file with no contract passes. */
+function contractPlace(file: string, text: string): string[] {
+  const at = text.indexOf(`${CONTRACT_HEADING}\n`);
+  if (at === -1) return [];
+  const out: string[] = [];
+  const firstSection = text.search(/^## /m);
+  if (firstSection !== at) out.push(`${file}: a section stands before the contract. The contract is the first section`);
+  if (!text.slice(0, at).includes(CUT_NOTICE)) {
+    out.push(`${file}: the notice before the contract no longer says "${CUT_NOTICE}". A compacted session has no way to see the cut`);
+  }
+  const next = text.indexOf('\n## ', at + CONTRACT_HEADING.length);
+  const end = Buffer.byteLength(next === -1 ? text : text.slice(0, next + 1));
+  if (end > CONTRACT_BUDGET_BYTES) {
+    out.push(`${file}: the contract ends ${end} bytes in, past the ${CONTRACT_BUDGET_BYTES} a compaction keeps. `
+      + 'Shorten the clauses, or the text before the contract');
+  }
+  return out;
 }
 
 function skillFiles(): string[] {
@@ -196,7 +228,7 @@ describe('the clause allowance', () => {
   it('a numbered line outside the contract section earns nothing', () => {
     expect(clauseAllowance(F, doc(one), `${doc(one)}2. another step\n`)).toBe(0);
   });
-  it('a reference file, and a SKILL.md new on this branch, earn nothing', () => {
+  it('a file that is not a SKILL.md, and a SKILL.md new on this branch, earn nothing', () => {
     expect(clauseAllowance(R, doc(one), doc(one, two))).toBe(0);
     expect(clauseAllowance(F, null, doc(one, two))).toBe(0);
   });
@@ -256,16 +288,52 @@ describe('the ratchet rules', () => {
     expect(judge({ [F]: 100 }, { [F]: 90 }, at({ [F]: 100 }, { [F]: 80 }), {}).failures)
       .toEqual([expect.stringContaining(`${F}: grew by 10`)]);
   });
-  it('a reference earns nothing from its SKILL.md\'s clause', () => {
+  it('a second capped file earns nothing from another file\'s clause', () => {
     expect(judge({ [R]: 110 }, { [R]: 110 }, at({ [R]: 100 }, { [R]: 100 }), { [F]: 50 }).failures)
       .toHaveLength(2);
   });
-  it('a split passes: the SKILL.md shrinks and the new reference starts at its size', () => {
-    expect(judge({ [F]: 60, [R]: 40 }, { [F]: 60, [R]: 40 }, at({ [F]: 100 }, { [F]: 100 }), {}))
+  it('a split passes: the SKILL.md shrinks, and the reference it sheds into has no cap', () => {
+    expect(judge({ [F]: 60 }, { [F]: 60 }, at({ [F]: 100 }, { [F]: 100 }), {}))
       .toEqual({ failures: [], lowered: [] });
+    expect(SKILL_FILE.test(R)).toBe(false);
   });
   it('without a merge-base only R1 and R2 run', () => {
     expect(judge({ [F]: 120 }, { [F]: 100 }, null, {}).failures).toEqual([]);
+  });
+});
+
+describe('R6: the contract sits where a compaction keeps it', () => {
+  const NOTICE = 'If you cannot see a later section, load this skill again.\n\n';
+  const skill = (before: string, clauses: string, after = '## Steps\n\nrest\n'): string =>
+    `---\nname: x\n---\n\n# Title\n\n${before}## The contract\n\n${clauses}\n${after}`;
+
+  it('a contract that is the first section, behind the notice and inside the budget, passes', () => {
+    expect(contractPlace(F, skill(NOTICE, one + two))).toEqual([]);
+  });
+  it('a file with no contract section passes: it has nothing to keep', () => {
+    expect(contractPlace(F, '---\nname: x\n---\n\n# Title\n\n## Steps\n\nrest\n')).toEqual([]);
+  });
+  it('a section in front of the contract fails', () => {
+    expect(contractPlace(F, skill(`${NOTICE}## Who you are\n\ntext\n\n`, one)))
+      .toEqual([expect.stringContaining('a section stands before the contract')]);
+  });
+  it('a contract with no notice before it fails: a compacted session could not see the cut', () => {
+    expect(contractPlace(F, skill('', one))).toEqual([expect.stringContaining('load this skill again')]);
+  });
+  it('a contract that ends one byte past the budget fails, and one that ends on it passes', () => {
+    const fits = (pad: number): string => skill(NOTICE, `${line(1, 'x'.repeat(pad))}`);
+    const endOf = (text: string): number => Buffer.byteLength(text.slice(0, text.indexOf('\n## Steps') + 1));
+    const base = endOf(fits(0));
+    const exact = fits(CONTRACT_BUDGET_BYTES - base);
+    expect(endOf(exact)).toBe(CONTRACT_BUDGET_BYTES);
+    expect(contractPlace(F, exact)).toEqual([]);
+    expect(contractPlace(F, fits(CONTRACT_BUDGET_BYTES - base + 1)))
+      .toEqual([expect.stringContaining(`ends ${CONTRACT_BUDGET_BYTES + 1} bytes in`)]);
+  });
+  it('counts bytes, not characters, and a contract that ends the file counts to its end', () => {
+    const wide = skill(NOTICE, line(1, '’'.repeat(6000)), '');
+    expect(contractPlace(F, wide)).toEqual([expect.stringContaining('past the')]);
+    expect(contractPlace(F, skill(NOTICE, line(1, 'x'.repeat(6000)), ''))).toEqual([]);
   });
 });
 
@@ -274,10 +342,10 @@ describe('the tree', () => {
   const sizes = Object.fromEntries(skillFiles().map((f) => [f, readFileSync(path.join(REPO, f)).length]));
   const COORD = 'ccd/coordinator-skill/SKILL.md';
 
-  it('the corpus is every .md under a ccd/*-skill directory, and it is not blind', () => {
+  it('the corpus is every SKILL.md under a ccd/*-skill directory, never a reference, and it is not blind', () => {
     const files = skillFiles();
-    for (const f of [COORD, 'ccd/worker-skill/SKILL.md', 'ccd/reviewer-skill/SKILL.md',
-      'ccd/coordinator-skill/references/wave-lifecycle.md']) expect(files).toContain(f);
+    for (const f of [COORD, 'ccd/worker-skill/SKILL.md', 'ccd/reviewer-skill/SKILL.md']) expect(files).toContain(f);
+    expect(files).not.toContain('ccd/coordinator-skill/references/wave-lifecycle.md');
     expect(files.every((f) => SKILL_FILE.test(f))).toBe(true);
   });
 
@@ -293,6 +361,20 @@ describe('the tree', () => {
     const allowance = Object.fromEntries(Object.keys(sizes).map((f) =>
       [f, clauseAllowance(f, base.texts[f] ?? null, readFileSync(path.join(REPO, f), 'utf8'))]));
     expect(judge(caps, sizes, base, allowance).failures.join('\n')).toBe('');
+  });
+
+  it('every SKILL.md with a contract keeps it first, behind the notice, and inside the budget', () => {
+    const failures = Object.keys(sizes).flatMap((f) => contractPlace(f, readFileSync(path.join(REPO, f), 'utf8')));
+    expect(failures.join('\n')).toBe('');
+    // not blind: the three skills with a pinned contract are among the files judged, and each has one
+    for (const f of [COORD, 'ccd/worker-skill/SKILL.md', 'ccd/reviewer-skill/SKILL.md']) {
+      expect(readFileSync(path.join(REPO, f), 'utf8')).toContain(`${CONTRACT_HEADING}\n`);
+    }
+  });
+
+  it('red: the real coordinator skill with its notice taken out fails', () => {
+    const text = readFileSync(path.join(REPO, COORD), 'utf8');
+    expect(contractPlace(COORD, text.replace(CUT_NOTICE, 'carry on'))).toEqual([expect.stringContaining(CUT_NOTICE)]);
   });
 
   it('red: one byte past the real coordinator cap fails', () => {
