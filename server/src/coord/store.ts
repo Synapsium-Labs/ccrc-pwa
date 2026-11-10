@@ -993,6 +993,7 @@ interface RunRowDb {
   runTitle: string | null;
   closedBy: string | null;
   closeDetail: string | null;
+  inPlace: number | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -1013,7 +1014,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail, r.inPlace';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -3882,6 +3883,30 @@ export class CoordStore {
     ).run(workspace, branch, resumed ? 1 : 0, at, runId);
   }
 
+  /**
+   * D-6096 (fleet-capacity W1-4b): the IN-PLACE bind. A coordinator whose wave the concurrency cap refused takes that wave as
+   * the run's own worker, in a sibling worktree on `branch`: `planned` -> `dispatched` -> `working` in ONE transaction (the
+   * machine has no `planned` -> `working` edge and is not widened), the run's session the claimant (through `bindSession`,
+   * the one writer of that column), `branch` the sibling worktree's, `resumed` 0 and `inPlace` 1.
+   *
+   * `dispatchedAt` IS LEFT NULL, and that is the point: an in-place run starts no process, so `capsUsage().running` and the
+   * stale-run predicate's `activeRunWorkers` (both read `dispatchedAt IS NOT NULL`) charge it to neither cap. `workspace` is
+   * left null too: the sibling worktree is not a registry workspace. Two `run_events` rows, one per hop, both detail
+   * `in-place`; the admission stamp is cleared by the hops (`advanceInner`).
+   *
+   * The first hop is taken BEFORE any column is written, so a run not `planned` (or not a work run) refuses
+   * `bad-transition` with nothing changed. The caller (`bindRunInPlace`, `dispatch.ts`) has already decided WHO may bind.
+   */
+  bindInPlace(runId: number, sessionId: string, branch: string): AdvanceResult {
+    return tx(this.db, () => {
+      const first = this.advanceInner(runId, 'dispatched', 'coordinator', 'in-place');
+      if (!first.ok) return first;
+      this.bindSession(runId, sessionId);
+      this.db.prepare('UPDATE runs SET branch = ?, resumed = 0, inPlace = 1 WHERE id = ?').run(branch, runId);
+      return this.advanceInner(runId, 'working', 'coordinator', 'in-place');
+    });
+  }
+
   /** `runs.prLineage`, written once at close from a `.prhistory` read
    *  (`coord/prhistory.ts`). Stored as JSON (spec:92-95's fold), never
    *  reconstructed lazily on read — the same "store the render, don't defer
@@ -5223,6 +5248,8 @@ export class CoordStore {
       // stored word outside the three is no `closedBy`; the detail is the redacted form.
       closedBy: isRunClosedBy(row.closedBy) ? row.closedBy : null,
       closeDetail: row.closeDetail === null ? null : redactCommand(row.closeDetail),
+      // Migration 52 (D-6096): present exactly for a run its coordinator took in place, absent for every other.
+      ...(row.inPlace === 1 ? { inPlace: true } : {}),
     };
   }
 
