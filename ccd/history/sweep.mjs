@@ -5247,7 +5247,13 @@ function tickStmts(db) {
     // agent key and run id. Stored holdings only: a file with no row waits for a scan tick. Its text carries no json_each-and-DENSE_RANK
     // join of activeRows' own, and its filter is the other way round (`<>`), so activeRows stays the one statement of that shape.
     activeAgentRows: (() => {
-      const st = db.prepare(`SELECT f.file_id AS fileId, f.dev AS dev, f.ino AS ino, f.offset AS offset, f.size AS size, f.mtime_ns AS mtimeNs, p.path AS path, t.cc_session_uuid AS uuid, t.agent_id AS agentKey, t.workflow_run_id AS runId FROM transcripts t JOIN ingest_files f ON f.transcript_pk = t.transcript_pk JOIN file_paths p ON p.file_id = f.file_id WHERE t.cc_session_uuid IN (SELECT value FROM json_each(?)) AND t.agent_id <> '' AND f.source_key = '' AND f.status = 'live' ORDER BY f.mtime_ns DESC, f.file_id, p.path`);
+      const st = db.prepare(`SELECT f.file_id AS fileId, f.dev AS dev, f.ino AS ino, f.offset AS offset, f.size AS size, f.mtime_ns AS mtimeNs, p.path AS path, t.cc_session_uuid AS uuid, t.agent_id AS agentKey, t.workflow_run_id AS runId FROM transcripts t JOIN ingest_files f ON f.transcript_pk = t.transcript_pk JOIN file_paths p ON p.file_id = f.file_id WHERE t.cc_session_uuid IN (SELECT value FROM json_each(?)) AND t.agent_id <> '' AND f.source_key = '' AND f.status = 'live' ORDER BY f.mtime_ns DESC, f.file_id, p.path LIMIT ?`);
+      st.setReadBigInts(true);
+      return st;
+    })(),
+    // W4 P5 (D-8155): the live row a path names, for the scan arm's count of a withheld file (bytesWaiting).
+    agentPathRow: (() => {
+      const st = db.prepare("SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p JOIN ingest_files f ON f.file_id = p.file_id WHERE p.path = ? AND f.source_key = '' AND f.status = 'live'");
       st.setReadBigInts(true);
       return st;
     })(),
@@ -5352,60 +5358,35 @@ function statActive(path) {
  *  `complete` false. lib's decideActiveRead rules each file: a vanished path or a link is skipped silently (the hint and
  *  the scan own it), anything else changed is taken. */
 function activeFiles(db, ctx, seen, budget) {
+  // The per-tick stat cap, read here and nowhere else: activeAgentFiles gets what this pass leaves of it, as `room`.
+  const cap = ctx.activeStatMax ?? ACTIVE_STAT_MAX;
   const uuids = [...registeredUuids(ctx.home)];
   // No registered uuid: no row can name one, so the statement is not run (review 1065 F10).
-  if (uuids.length === 0) return { files: [], complete: true, statted: 0 };
+  if (uuids.length === 0) return { files: [], complete: true, room: cap };
   const files = [];
+  const r = scanActiveRows(ctx, tickStmts(db).activeRows.all(JSON.stringify(uuids)), seen, budget, cap, (row, home) => {
+    files.push({ path: row.path, uuid: row.uuid, home });
+  });
+  return { files, complete: r.complete, room: cap - r.statted };
+}
+
+/** The one iteration of the between-scans passes over a list of recorded rows (activeFiles' main rows, activeAgentFiles' subagent rows),
+ *  in the list's order: one file per `fileId`, the first path under a rostered home's `projects/` that a stat measures (review 1065
+ *  F4: a path that vanished or is no regular file leaves the file's next path to be offered); a path already taken this tick
+ *  (`seen`) is neither stat'ed nor counted, and takes its file's other paths with it. At most `room` lstats; before each the budget
+ *  is asked, and a spent one ends the pass with `complete` false. lib's decideActiveRead rules each file, and `visit(row, home, stat)`
+ *  is called for each one it says to read. Answers `{ complete, statted }`. */
+function scanActiveRows(ctx, rows, seen, budget, room, visit) {
   const stat = ctx.activeStat ?? statActive;
-  const max = ctx.activeStatMax ?? ACTIVE_STAT_MAX;
   const fileIds = new Set();
   let statted = 0;
-  for (const row of tickStmts(db).activeRows.all(JSON.stringify(uuids))) {
+  for (const row of rows) {
     if (fileIds.has(row.fileId)) continue;
     const home = ctx.homes.find((h) => row.path.startsWith(`${h}/projects/`));
     if (home === undefined) continue;
     if (seen.has(row.path)) { fileIds.add(row.fileId); continue; }   // taken this tick already: the file's other paths are not offered
-    if (statted >= max) break;
-    if (budget !== null && !budgetLeft(budget)) return { files, complete: false, statted };
-    statted += 1;
-    const verdict = decideActiveRead({
-      row: { dev: row.dev, ino: row.ino, offset: Number(row.offset), size: row.size === null ? null : Number(row.size), mtimeNs: row.mtimeNs },
-      stat: stat(row.path),
-      nowMs: ctx.nowMs,
-      tornStaleMs: TORN_STALE_MS,
-    });
-    // The file is taken only after a verdict that measured it: a first path that vanished or is no regular file ('skip') leaves
-    // the file's next path to be offered (review 1065 F4).
-    if (verdict !== 'skip') fileIds.add(row.fileId);
-    if (verdict === 'read') files.push({ path: row.path, uuid: row.uuid, home });
-  }
-  return { files, complete: true, statted };
-}
-
-/** W4 P3 (D-8152), the between-scans pass for subagent files: the stored holdings of the subagents of the uuids whose main file
- *  `activeFiles` took this tick (`parents`), stated with what is left of the per-tick stat cap after the tick's main files (`room`,
- *  so main files take precedence), each by its first path that a stat measures, ruled by lib's decideActiveRead and then by
- *  decideAgentIngest (form 'tick', so the marker, history-off and the 90% pause reach it as they reach the scan tick's agent arm).
- *  A subagent file with no row waits for a scan tick. A file the pause alone withholds is counted in `withheld`, which ingestTick
- *  turns into one count of the tick. The parent is known by construction: a taken main file belongs to a registered uuid, which is
- *  knownUuids' registry half. */
-function activeAgentFiles(db, ctx, seen, budget, parents, room, armed) {
-  const files = [];
-  let withheld = 0;
-  let complete = true;
-  if (parents.size === 0 || room <= 0) return { files, withheld, complete };
-  const stat = ctx.activeStat ?? statActive;
-  const sinceMs = installRecordOf(db);
-  const historyOff = ctx.historyOff();
-  const fileIds = new Set();
-  let statted = 0;
-  for (const row of tickStmts(db).activeAgentRows.all(JSON.stringify([...parents]))) {
-    if (fileIds.has(row.fileId)) continue;
-    const home = ctx.homes.find((h) => row.path.startsWith(`${h}/projects/`));
-    if (home === undefined) continue;
-    if (seen.has(row.path)) { fileIds.add(row.fileId); continue; }
     if (statted >= room) break;
-    if (budget !== null && !budgetLeft(budget)) { complete = false; break; }
+    if (budget !== null && !budgetLeft(budget)) return { complete: false, statted };
     statted += 1;
     const st = stat(row.path);
     const verdict = decideActiveRead({
@@ -5414,15 +5395,53 @@ function activeAgentFiles(db, ctx, seen, budget, parents, room, armed) {
       nowMs: ctx.nowMs,
       tornStaleMs: TORN_STALE_MS,
     });
+    // The file is taken only after a verdict that measured it: a first path that vanished or is no regular file ('skip') leaves
+    // the file's next path to be offered (review 1065 F4).
     if (verdict !== 'skip') fileIds.add(row.fileId);
-    if (verdict !== 'read') continue;
-    const gate = agentGate(ctx, {
-      form: 'tick', armed, historyOff, admitted: true, preInstall: isPreInstall(Number(st.mtimeNs / 1_000_000n), sinceMs), parentKnown: parents.has(row.uuid),
-    });
-    if (gate === 'paused') withheld += 1;
-    if (gate === 'read') files.push({ path: row.path, uuid: row.uuid, home, agentKey: row.agentKey, runId: row.runId });
+    if (verdict === 'read') visit(row, home, st);
   }
-  return { files, withheld, complete };
+  return { complete: true, statted };
+}
+
+/** W4 P3 (D-8152), the between-scans pass for subagent files: the stored holdings of the subagents of the uuids whose main file
+ *  `activeFiles` took this tick (`parents`), stated with what is left of the per-tick stat cap after the tick's main files (`room`,
+ *  so main files take precedence) through the same iteration as the main files', each then ruled by decideAgentIngest (form 'tick', so
+ *  the marker, history-off and the 90% pause reach it as they reach the scan tick's agent arm). Nothing about subagents happens on
+ *  an unarmed node or under history-off: the gate is asked once before the query, and only 'read' and 'paused' go on. A subagent file
+ *  with no row waits for a scan tick. A file the pause alone withholds, and that has bytes to read, is counted in `withheld`, which
+ *  ingestTick turns into one count of the tick. The parent is known by construction: a taken main file belongs to a registered uuid,
+ *  which is knownUuids' registry half. */
+function activeAgentFiles(db, ctx, seen, budget, parents, room, armed) {
+  const files = [];
+  let withheld = 0;
+  if (parents.size === 0 || room <= 0) return { files, withheld, complete: true };
+  const historyOff = ctx.historyOff();
+  const base = { form: 'tick', armed, historyOff, admitted: true, parentKnown: true };
+  if (agentGate(ctx, { ...base, preInstall: false }) === 'skip') return { files, withheld, complete: true };
+  const sinceMs = installRecordOf(db);
+  // LIMIT room: the rows are ordered newest first, and no more than `room` files can be stat'ed. A file held under several paths
+  // counts one row per path, so such a tick may stat fewer than `room` of them; the next scan tick lists the rest.
+  const r = scanActiveRows(ctx, tickStmts(db).activeAgentRows.all(JSON.stringify([...parents]), room), seen, budget, room, (row, home, st) => {
+    const gate = agentGate(ctx, { ...base, preInstall: isPreInstall(Number(st.mtimeNs / 1_000_000n), sinceMs) });
+    if (gate === 'paused' && bytesWaiting(row, st)) withheld += 1;
+    if (gate === 'read') files.push({ path: row.path, uuid: row.uuid, home, agentKey: row.agentKey, runId: row.runId });
+  });
+  return { files, withheld, complete: r.complete };
+}
+
+/** Whether a subagent file holds bytes its stored row has not read: no stored row (`row` null), another file at the path, or a size
+ *  that is not the stored offset. Only such a file is counted when the pause withholds it. `st` is a bigint lstat in statActive's shape. */
+function bytesWaiting(row, st) {
+  return row === null || st.dev !== row.dev || st.ino !== row.ino || st.size !== Number(row.offset);
+}
+
+/** bytesWaiting for a file the scan walk handed over: its stored row by path, and (only when one stands) one lstat. A vanished
+ *  path or a non-regular file has nothing to read. */
+function scanFileWaiting(db, ctx, path) {
+  const row = tickStmts(db).agentPathRow.get(path) ?? null;
+  if (row === null) return true;
+  const st = (ctx.activeStat ?? statActive)(path);
+  return st !== null && st.isFile === true && bytesWaiting(row, st);
 }
 
 /** One admitted subagent file's gate (W4 P3, P5, P6, P15 (b)), the one place both arms ask decideAgentIngest: 'read' when it is
@@ -5495,7 +5514,7 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null, ar
     if (!a.complete) complete = false;
     else {
       // W4 P3: after the main files, in what the per-tick stat cap leaves them, for the parents whose main file was just taken.
-      const g = activeAgentFiles(db, ctx, seen, budget, new Set(a.files.map((f) => f.uuid)), (ctx.activeStatMax ?? ACTIVE_STAT_MAX) - a.statted, armed);
+      const g = activeAgentFiles(db, ctx, seen, budget, new Set(a.files.map((f) => f.uuid)), a.room, armed);
       take(g.files, false);
       agentsWithheld += g.withheld;
       if (!g.complete) complete = false;
@@ -5515,7 +5534,7 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null, ar
         form: 'tick', armed, historyOff, admitted: e.verdict === 'admit',
         preInstall: isPreInstall(e.mtimeMs, sinceMs), parentKnown: known.has(e.uuid),
       });
-      if (gate === 'paused') agentsWithheld += 1;
+      if (gate === 'paused' && scanFileWaiting(db, ctx, e.path)) agentsWithheld += 1;
       if (gate === 'read' && !seen.has(e.path)) {
         seen.add(e.path);
         files.push({ path: e.path, uuid: e.uuid, home: e.home, agentKey: agentKey(e.id, e.runId), runId: e.runId });
