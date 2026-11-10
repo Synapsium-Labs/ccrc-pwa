@@ -469,7 +469,7 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
 
   it.skipIf(!HAS_FLOCK)('a long act\'s parent sets the user bus before the spawn, though the agent gives the verb HOME, PATH and LANG only', () => {
     const h = fixture();
-    const r = sh(h, SRC('linux') + 'unset XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; _tba_run_connect() { :; }; _svc_run_detached() { printf "%s|%s\\n" "${XDG_RUNTIME_DIR-unset}" "${DBUS_SESSION_BUS_ADDRESS-unset}" >"$HOME/bus-seen"; }; _tba_main connect --repo="$1" --from pwa; echo "rc=$?"', [VERB, rowArg(ROW)]);
+    const r = sh(h, SRC('linux') + 'unset XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; _tba_run_connect() { :; }; _svc_run_detached() { printf "%s|%s\\n" "${XDG_RUNTIME_DIR-unset}" "${DBUS_SESSION_BUS_ADDRESS-unset}" >"$HOME/bus-seen"; }; _tba_main connect "--set=CCRC_TESTBOX_RUN_TMPDIR=/tmp/x" --repo="$1" --from pwa; echo "rc=$?"', [VERB, rowArg(ROW)]);
     expect(r.out, r.out + r.err).toMatch(/rc=0\n$/);
     const seen = readFileSync(join(h.home, 'bus-seen'), 'utf8');
     expect(seen).toMatch(/^\/run\/user\/\d+\|unix:path=\/run\/user\/\d+\/bus\n$/);
