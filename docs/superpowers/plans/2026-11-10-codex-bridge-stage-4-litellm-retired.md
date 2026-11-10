@@ -278,11 +278,16 @@ copy from the user site. The publisher has not imported it since Stage 1, and `-
 - Test: `server/test/ccrc-account-codex-add.test.ts`
 
 **Interfaces:**
-- Produces: a sign-in on a `direct` lane runs the probe's `--check` through Task 2's interpreter and is not refused
-  `codex-runtime-absent`. A `litellm` lane's sign-in is unchanged.
+- Produces: `_codex_probe_python <id> [<how a direct lane's refusal ends>]`, the one owner of "which interpreter
+  runs this lane's probe", which Task 2's `_models_probe_codex_env` and `_acct_install_codex` both ask. A sign-in on
+  a `direct` lane checks under the system `python3` and is not refused `codex-runtime-absent`; with no usable
+  `python3` it is refused `codex-check-unrun`, an existing code, so the console needs no new word. A `litellm`
+  lane's sign-in is unchanged.
 
-- [ ] **Step 1: Write the failing tests.** "a sign-in on a direct lane with no runtime completes"; "a sign-in on a
-  litellm lane with no runtime is refused `codex-runtime-absent`, as before".
+- [ ] **Step 1: Write the failing tests.** "a direct lane with no runtime checks the sign-in under the system
+  python3 and installs it"; "a direct lane with a runtime on the box still checks under the system python3"; "a
+  direct lane with no usable python3 is `codex-check-unrun`, never told to build a runtime, and nothing is sent".
+  The existing "no runtime is `codex-runtime-absent`" case holds for a `litellm` lane, unchanged.
 - [ ] **Step 2: Run them and see them fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the tests and see them pass.**
@@ -345,15 +350,11 @@ Waits for ruling 3.
 - [ ] **Step 4: Run the tests and see them pass.**
 - [ ] **Step 5: Commit.**
 
-### Task 10: status says there is no runtime, and that none is needed
+### Task 10: status says there is no runtime
 
-**Files:**
-- Modify: `ccd/ccrc` (`_codex_cmd_status`)
-- Test: `server/test/ccrc-codex-bridge.test.ts`
-
-- [ ] **Step 1: Write the failing test.** "status on a direct lane with no runtime prints `runtime: none (no lane
-  needs one)` and `--json` carries `runtime.generation: null`".
-- [ ] **Step 2 to 5:** fail, implement, pass, commit.
+Not needed, measured while building Task 9: `ccrc codex status <id>` already prints `runtime absent` and its
+`--json` carries `runtime.generation: null` when no runtime resolves. Whether the box needs one is the doctor's
+line (Task 5).
 
 ## The cutover runbook (the operator's steps, not tasks)
 
@@ -404,9 +405,10 @@ reported in the pull request that met it.
 
 ## Where things stand
 
-**Done:** Task 0 (#2572), Task 1 (#2569) and Task 2. In review: Task 3 (#2573) and Task 4 (#2575).
+**Done:** Task 0 (#2572), Task 1 (#2569), Task 2 (#2586), Task 3 (#2573), Task 4 (#2575) and Task 6.
+In review: Task 5 (#2588) and Task 9 (#2593, then #2590).
 
-**Needs before it starts:** nothing for Tasks 5 and 6. Task 7 waits for ruling 3. Wave 4b waits for wave
+**Needs before it starts:** nothing else in wave 4a but Task 7's ruling. Task 7 waits for ruling 3. Wave 4b waits for wave
 4a on `main`. R1 to R5 are the operator's.
 
 **Open questions for the operator:** the six rulings above, most important first: 2 (the verdict), 1 (the order of

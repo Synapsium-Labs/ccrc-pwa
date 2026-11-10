@@ -11305,7 +11305,11 @@ _acct_install_codex() {   # <id> <what-still-stands>
     || _acct_refuse 1 no-credential "the sign-in left no folder at $src, so there is nothing to install. $stands"
   _codex_row "$id" >&2 \
     || _acct_refuse 1 lane-unreadable "lane $id's codex row could not be read, so the sign-in has nowhere to go. $stands"
-  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=''
+  # The check runs under the interpreter this lane's probe runs under: the
+  # system python3 for a direct lane, which needs no runtime (Stage 4, Task 6),
+  # the runtime's for any other.
+  py="$(_codex_probe_python "$id" "Nothing was sent to the provider.")" \
+    || _acct_refuse 1 codex-check-unrun "the new sign-in could not be checked on this box: this lane's check runs under the system python3, and none it can use was found (the reason is on stderr), which says nothing of the sign-in, so it was not installed. 'ccrc doctor' names what is missing. $stands"
   [ -n "$py" ] \
     || _acct_refuse 1 codex-runtime-absent "this box has no Codex runtime, so the new sign-in could not be checked: nothing was sent to the provider and it was not installed. 'ccrc install' builds the runtime; sign in again after it. $stands"
   ( CHATGPT_TOKEN_DIR="$src"; CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"; CCRC_CODEX_PYTHON="$py"
@@ -11766,8 +11770,28 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 # remedy that is not its own. NO ROSTER FILE AT ALL (rc 3, the final review's
 # residual round) is refused too, `roster-absent` with the install remedy, for
 # the same reason: its word and remedy are the ones this operator needs.
+# THE INTERPRETER A CODEX LANE'S PROBE RUNS UNDER, on stdout (codex-bridge
+# Stage 4, Tasks 2 and 6). ONE owner for the two callers that run the probe's
+# program: the hourly catalogue fetch (`_models_probe_codex_env`, below) and
+# the check of a new sign-in (`_acct_install_codex`).
+#   - A `direct` lane: the system python3 its bridge runs under
+#     (`_codex_python`, 3.9 or later). With none usable, that function's own
+#     line, ending as `$2` says, and rc 1.
+#   - Any other lane, one whose mode cannot be read included: the LiteLLM
+#     runtime's (`ccgpt-runtime python`), or nothing when none resolves, rc 0
+#     either way: each caller words that absence itself.
+_codex_probe_python() {   # <id> [<how a direct lane's refusal ends>]
+  local mode
+  mode="$(_codex_lane_mode "$1" 2>/dev/null)" || mode=''
+  if [ "$mode" = direct ]; then
+    _codex_python "${2:-Nothing was probed.}"
+    return
+  fi
+  "$(_codex_runtime_cli)" python 2>/dev/null || :
+}
+
 _models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say; 1, roster-absent, for no roster file; 1 for a direct lane with no usable python3
-  local kind=0 mode
+  local kind=0
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) ;;
@@ -11781,12 +11805,7 @@ _models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex ro
   esac
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
-  mode="$(_codex_lane_mode "$1" 2>/dev/null)" || mode=''
-  if [ "$mode" = direct ]; then
-    CCRC_CODEX_PYTHON="$(_codex_python "Nothing was probed.")" || return 1
-  else
-    CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
-  fi
+  CCRC_CODEX_PYTHON="$(_codex_probe_python "$1")" || return 1
   export CCRC_CODEX_PYTHON
   CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
   export CCRC_MODELS_AUTH_LIB
