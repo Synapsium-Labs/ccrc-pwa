@@ -52,6 +52,24 @@ same read-only connection as `items`; `score` reads one local CSV and touches no
   count per class, `routine-or-big` and `m4` (that share of all parts, a percentage), and exits 2 naming the row for an
   empty `parts` or an unknown class.
 
+The `calls` subcommand is the M5, M7 and M8 reading over the call record (`coordinator_calls`), on the SERVER box, over the
+same read-only connection. Calls count in the window by `at` (`--since`/`--until`, UTC days).
+
+    python3 deploy/measure-autonomy.py calls --db PATH [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR]
+
+  M5: `m5-big` (big calls in the window), `m5-overturned` (those with `overturnedAt`) and `m5` (the overturn rate, a percentage).
+  M7: a `block` row is cleared at `wokenAt`, else at `expiresAt` once that has passed (a lapse). The coordinator acts again
+  at its next call (same `madeBy`, later `at`) or the next `run_events` row of the block's programme caused by the
+  coordinator, whichever is first. Rows: `m7-cleared`, `m7-acted`, `m7-median-min`, `m7-max-min`, `m7-over-10` (acted
+  later than ten minutes after the clear), in minutes.
+  M8: a `routine` or `big` call whose text names an O1 to O4 act (a wording heuristic, so a human audits the list beside the
+  hook's deny log): `m8-listed` and `m8-o1`..`m8-o4` are printed, and `--out` gets `m8-audit.csv` (id, class, act, excerpt).
+
+`transcripts --pinned-from-server` also reads the pinned programmes from the server (M2): `runs list` names the
+programmes, `goals show <slug>` says which hold a pinned spec (`specPath`). The client is `ccrc-api` (or `--ccrc-api PATH`)
+and ONLY those two verbs are ever run; any other is refused (exit 2) before the client starts. It adds `pinned-programmes`
+and `m2` (the dialog row, over coordinator transcripts whose commands name a pinned programme's slug).
+
 Rows printed (one `name: value` per line):
   transcripts     transcript files read
   coordinators    transcripts that are a coordinator by `is_coordinator`, with at least one row of their own after
@@ -63,7 +81,7 @@ Files under --out: `waits.json` (every Wait, with an `id`), `waits-over-1h.csv` 
 parts; `parts` is left empty for a reviewer).
 Exit 0 measured; 2 an input missing or refused.
 """
-import argparse, csv, datetime, glob, json, os, random, re, sqlite3, sys, time, urllib.parse
+import argparse, csv, datetime, glob, json, os, random, re, sqlite3, subprocess, sys, time, urllib.parse
 
 # `shared/api.ts`'s IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX and MAIL_ENVELOPE_FENCE: second spellings, bound
 # to the first by measure-autonomy.test.ts, which reds when they differ.
@@ -353,6 +371,52 @@ def inside(path, root):
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
+CCRC_API_BIN = 'ccrc-api'
+SLUG_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
+
+
+def ccrc_api(args):
+    """Run the read-only client with ONE of the two verbs this census needs, `runs list` and `goals show <slug>`, and
+    return its JSON. Any other argument list is refused (exit 2) before the client is started."""
+    ok = (list(args) == ['runs', 'list']) or (len(args) == 3 and args[0] == 'goals' and args[1] == 'show' and SLUG_RE.match(args[2]) is not None)
+    if not ok:
+        fail(f'the client verb {" ".join(args[:2])!r} is not one this census runs (runs list, goals show <slug> only)')
+    try:
+        p = subprocess.run([CCRC_API_BIN] + list(args), capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        fail(f'cannot run the client: {e}')
+    if p.returncode != 0:
+        fail(f'the client failed on {" ".join(args)}: exit {p.returncode}')
+    try:
+        return json.loads(p.stdout)
+    except ValueError:
+        fail(f'the client answered {" ".join(args)} with something that is not JSON')
+
+
+def pinned_programmes():
+    """Slugs of the programmes with a pinned spec, read through `runs list` and `goals show`."""
+    runs = ccrc_api(['runs', 'list'])
+    if isinstance(runs, dict):
+        runs = runs.get('runs') or []
+    slugs = sorted({r['program'] for r in runs if isinstance(r, dict) and isinstance(r.get('program'), str) and SLUG_RE.match(r['program'])})
+    pinned = []
+    for slug in slugs:
+        g = ccrc_api(['goals', 'show', slug])
+        goals = g.get('goals') if isinstance(g, dict) else None
+        if isinstance(goals, dict) and isinstance(goals.get('specPath'), str) and goals['specPath']:
+            pinned.append(slug)
+    return pinned
+
+
+def names_slug(rows, slugs):
+    """True when a Bash command of the transcript names one of `slugs` as a whole word."""
+    for b in uses(rows):
+        cmd = b.get('command') or ''
+        if b['name'] == 'Bash' and any(re.search(r'(?<![\w-])' + re.escape(sl) + r'(?![\w-])', cmd) for sl in slugs):
+            return True
+    return False
+
+
 def cmd_transcripts(a):
     roots = [os.path.realpath(r) for r in (a.root or default_roots())]
     if not roots:
@@ -375,13 +439,19 @@ def cmd_transcripts(a):
             loaded.append((os.path.splitext(os.path.basename(p))[0], read_transcript(p)))
         except OSError as e:
             fail(f'cannot read a transcript: {e.strerror}')
+    global CCRC_API_BIN
+    if a.ccrc_api:
+        CCRC_API_BIN = a.ccrc_api
+    pinned = pinned_programmes() if a.pinned_from_server else None
     coordinator = [is_coordinator(rows) for _, rows in loaded]
     deduped = dedupe(loaded)
-    waits, n_coord = [], 0
+    waits, n_coord, pinned_sessions = [], 0, set()
     for (name, rows), is_c in zip(deduped, coordinator):
         if not is_c or not rows:
             continue
         n_coord += 1
+        if pinned and names_slug(rows, pinned):
+            pinned_sessions.add(name)
         waits += question_waits(rows, name) + dialog_waits(rows, name)
     waits = [w for w in waits if (since is None or w['started'] >= since) and (until is None or w['started'] < until)]
     waits.sort(key=lambda w: (w['started'], w['session'], w['kind']))
@@ -392,6 +462,9 @@ def cmd_transcripts(a):
     for kind in ('typed-reply', 'dialog'):
         print(f'{kind}: {table_row([w for w in waits if w["kind"] == kind])}')
     print(f'all: {table_row(waits)}')
+    if pinned is not None:
+        print(f'pinned-programmes: {len(pinned)}')
+        print(f'm2: {table_row([w for w in waits if w["kind"] == "dialog" and w["session"] in pinned_sessions])}')
     if out is not None:
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, 'waits.json'), 'w', encoding='utf8') as f:
@@ -571,6 +644,79 @@ def cmd_score(a):
     print(f'm4: {round(100 * easy / total, 1) if total else 0.0}')
 
 
+O_ACTS = (
+    ('o1', re.compile(r'\b(deploy(?:ed|ing|s|ment)?|roll(?:ed|ing)?[ -]?out|rollout|reap(?:ed|ing)?|reclaim(?:ed|ing)?|tmux|systemctl|'
+                      r'cut (?:a )?release|ccrc history|(?:made|make|making) (?:it|the \w+) public|live (?:box|config))\b', re.I)),
+    ('o2', re.compile(r'\b(usage credits|paid (?:plan|service)|new account)\b', re.I)),
+    ('o3', re.compile(r'\b(approv\w* (?:the )?spec|definition of done|new programme)\b', re.I)),
+    ('o4', re.compile(r'\b(secrets?|branch protection|rulesets?|auto-merge|merge method|revok\w+ access|sign-in|credentials?)\b', re.I)),
+)
+M7_LATE_MIN = 10
+
+
+def minutes(ms):
+    return ms / 60000.0
+
+
+def cmd_calls(a):
+    con = open_ro(a.db)
+    lo = int(parse_day(a.since, '--since') * 1000) if a.since else 0
+    hi = int(parse_day(a.until, '--until') * 1000) if a.until else int((time.time() // 86400 + 1) * DAY_MS)
+    now = int(time.time() * 1000)
+    try:
+        calls = con.execute(
+            'SELECT id, program, madeBy, class, question, options, chosen, why, expiresAt, at, overturnedAt, wokenAt '
+            'FROM coordinator_calls WHERE at >= ? AND at < ? ORDER BY at, id', (lo, hi)).fetchall()
+        later = con.execute('SELECT id, madeBy, at FROM coordinator_calls ORDER BY at, id').fetchall()
+        events = con.execute(
+            "SELECT r.program, e.at FROM run_events e JOIN runs r ON r.id = e.runId WHERE e.causedBy = 'coordinator' ORDER BY e.at").fetchall()
+    except sqlite3.Error as e:
+        fail(f'cannot read the database: {e}')
+    finally:
+        con.close()
+    big = [c for c in calls if c[3] == 'big']
+    over = [c for c in big if c[10] is not None]
+    print(f'm5-big: {len(big)}')
+    print(f'm5-overturned: {len(over)}')
+    print(f'm5: {round(100 * len(over) / len(big), 1):g}' if big else 'm5: 0')
+    gaps, cleared_n = [], 0
+    for c in calls:
+        if c[3] != 'block':
+            continue
+        cleared = c[11] if c[11] is not None else (c[8] if c[8] is not None and c[8] <= min(hi, now) else None)
+        if cleared is None:
+            continue
+        cleared_n += 1
+        nxt = [t for (i, who, t) in later if who == c[2] and t > cleared and i != c[0]]
+        nxt += [t for (prog, t) in events if prog == c[1] and t > cleared]
+        if nxt:
+            gaps.append(minutes(min(nxt) - cleared))
+    gaps.sort()
+    print(f'm7-cleared: {cleared_n}')
+    print(f'm7-acted: {len(gaps)}')
+    if gaps:
+        print(f'm7-median-min: {round(median(gaps), 1):g}')
+        print(f'm7-max-min: {round(gaps[-1], 1):g}')
+        print(f'm7-over-10: {sum(1 for g in gaps if g > M7_LATE_MIN)}')
+    listed = []
+    for c in calls:
+        if c[3] not in ('routine', 'big'):
+            continue
+        text = ' '.join(x for x in (c[4], c[6], c[7], c[5]) if isinstance(x, str))
+        acts = [name for name, rx in O_ACTS if rx.search(text)]
+        if acts:
+            listed.append((c[0], c[3], ';'.join(acts), ' '.join((c[6] or '').split())[:EXCERPT_CHARS]))
+    print(f'm8-listed: {len(listed)}')
+    for name, _ in O_ACTS:
+        print(f'm8-{name}: {sum(1 for x in listed if name in x[2].split(";"))}')
+    if a.out:
+        os.makedirs(a.out, exist_ok=True)
+        with open(os.path.join(a.out, 'm8-audit.csv'), 'w', encoding='utf8', newline='') as f:
+            w = csv.writer(f, lineterminator='\n')
+            w.writerow(['id', 'class', 'act', 'excerpt'])
+            w.writerows(listed)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='measure-autonomy.py', description=__doc__.split('\n')[0])
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -579,6 +725,8 @@ def main(argv):
     t.add_argument('--until')
     t.add_argument('--root', action='append')
     t.add_argument('--out')
+    t.add_argument('--pinned-from-server', action='store_true')
+    t.add_argument('--ccrc-api')
     t.set_defaults(fn=cmd_transcripts)
     i = sub.add_parser('items', help='M3 and M6 over the coordination database (the server box)')
     i.add_argument('--db', required=True)
@@ -594,6 +742,12 @@ def main(argv):
     m.add_argument('--until')
     m.add_argument('--out', required=True)
     m.set_defaults(fn=cmd_sample)
+    c = sub.add_parser('calls', help='M5, M7 and M8 over the call record (the server box)')
+    c.add_argument('--db', required=True)
+    c.add_argument('--since')
+    c.add_argument('--until')
+    c.add_argument('--out')
+    c.set_defaults(fn=cmd_calls)
     sc = sub.add_parser('score', help='the M4 share from a reviewer-filled sample.csv')
     sc.add_argument('file')
     sc.set_defaults(fn=cmd_score)

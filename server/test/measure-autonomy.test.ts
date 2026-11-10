@@ -3,7 +3,7 @@
 // subcommands, never by import.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMailNudge } from '../src/coord/envelope.js';
@@ -401,5 +401,158 @@ describe('measure-autonomy sample and score', () => {
     const r = run(['score', scoreFile('5,decision,t,w,\n')]);
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('5');
+  });
+});
+
+// ── calls: M5, M7 and M8 over the call record, and --pinned-from-server for M2 (D-8126, plan Task A10-1) ──
+function callsDb(): string {
+  const dbPath = path.join(mkTmp('ccrc-autonomy-calls-'), 'coord.db');
+  const db = openCoordDb(dbPath);
+  db.prepare('INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?)').run('alpha', 'Alpha', T('2026-10-01T00:00:00Z'), 'active');
+  const runId = Number(db.prepare('INSERT INTO runs (program, wave, project, state, openedAt) VALUES (?, 1, ?, ?, ?)')
+    .run('alpha', 'demo', 'dispatched', T('2026-11-02T10:00:00Z')).lastInsertRowid);
+  const call = db.prepare(
+    'INSERT INTO coordinator_calls (program, runId, madeBy, class, question, options, chosen, why, reversible, wakeOn, expiresAt, at, overturnedAt, wokenAt) ' +
+    'VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1, ?, ?, ?, ?, ?)');
+  const at = (iso: string): number => T(iso);
+  // nine big calls (two overturned) and a tenth that is also an M8 hit: ten in the window, 2 overturned
+  for (let i = 0; i < 9; i++) {
+    call.run('alpha', runId, 'coord-1', 'big', null, `chose option ${i}`, 'because', null, null, at('2026-11-03T09:00:00Z') + i * 60_000,
+      i < 2 ? at('2026-11-04T09:00:00Z') : null, null);
+  }
+  call.run('alpha', runId, 'coord-1', 'big', 'May the work switch to usage credits?', 'switched to usage credits', 'cheaper', null, null,
+    at('2026-11-03T16:00:00Z'), null, null);
+  // a big call before the window, overturned: not counted
+  call.run('alpha', runId, 'coord-1', 'big', null, 'old choice', 'because', null, null, at('2026-10-01T09:00:00Z'), at('2026-10-02T09:00:00Z'), null);
+  // a block woken at 12:00; its coordinator's next call is at 12:04 (M7 = 4 minutes)
+  call.run('alpha', runId, 'coord-2', 'block', null, 'wait for the review', 'the review is pending', 'condition:review-done',
+    at('2026-11-04T09:00:00Z'), at('2026-11-03T11:00:00Z'), null, at('2026-11-03T12:00:00Z'));
+  call.run('alpha', runId, 'coord-2', 'routine', null, 'carried on with the next task', 'plain', null, null, at('2026-11-03T12:04:00Z'), null, null);
+  // a block that lapsed at 14:00 (no wake): the programme's run moves at 14:10 (M7 = 10 minutes)
+  call.run('alpha', runId, 'coord-3', 'block', null, 'wait for the build', 'the build is running', 'condition:build',
+    at('2026-11-03T14:00:00Z'), at('2026-11-03T13:00:00Z'), null, null);
+  db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy) VALUES (?, ?, ?, ?, ?)')
+    .run(runId, at('2026-11-03T14:10:00Z'), 'dispatched', 'closing', 'coordinator');
+  // M8: a routine call whose text names an operator-only act (the deploy, O1)
+  call.run('alpha', runId, 'coord-1', 'routine', null, 'deployed the server to the live box', 'it was ready', null, null, at('2026-11-03T15:00:00Z'), null, null);
+  db.close();
+  return dbPath;
+}
+const callsRun = (args: string[] = []) =>
+  run(['calls', '--db', callsDb(), '--since', '2026-11-02', '--until', '2026-11-16', ...args]);
+
+describe('measure-autonomy calls', () => {
+  it('reads M5 as 20% when 2 of 10 big calls in the window were overturned', () => {
+    const r = callsRun();
+    expect(r.status, r.stderr).toBe(0);
+    const t = rows(r.stdout);
+    expect(t['m5-big']).toBe('10');
+    expect(t['m5-overturned']).toBe('2');
+    expect(t['m5']).toBe('20');
+  });
+
+  it('reads M7 from a woken block to the coordinator\'s next call, and a lapsed block to the run event', () => {
+    const t = rows(callsRun().stdout);
+    expect(t['m7-cleared']).toBe('2');
+    expect(t['m7-acted']).toBe('2');
+    expect(t['m7-median-min']).toBe('7');   // 4 and 10 minutes
+    expect(t['m7-max-min']).toBe('10');
+    expect(t['m7-over-10']).toBe('0');
+  });
+
+  it('lists the calls whose text names an O1 to O4 act for a human to audit, and writes them under --out only', () => {
+    const out = mkTmp('ccrc-autonomy-m8-');
+    const r = callsRun(['--out', out]);
+    expect(r.status, r.stderr).toBe(0);
+    const t = rows(r.stdout);
+    expect(t['m8-listed']).toBe('2');
+    const csv = readFileSync(path.join(out, 'm8-audit.csv'), 'utf8').trim().split('\n');
+    expect(csv[0]).toBe('id,class,act,excerpt');
+    expect(csv).toHaveLength(3);
+    expect(csv.some((l) => /,routine,o1,/.test(l))).toBe(true);
+    expect(csv.some((l) => /,big,o2,/.test(l))).toBe(true);
+  });
+
+  it('opens the database read-only and refuses a missing one without creating it', () => {
+    const missing = path.join(mkTmp('ccrc-autonomy-none-'), 'none.db');
+    const r = run(['calls', '--db', missing]);
+    expect(r.status).toBe(2);
+    expect(existsSync(missing)).toBe(false);
+  });
+});
+
+describe('measure-autonomy transcripts --pinned-from-server', () => {
+  const jsonl = (rowsIn: object[]): string => rowsIn.map((r) => JSON.stringify(r)).join('\n') + '\n';
+  /** A coordinator transcript on `slug` that opens one dialog and has it answered after `mins` minutes. */
+  const coordOn = (slug: string, mins: number): string => jsonl([
+    { type: 'assistant', uuid: `${slug}-1`, timestamp: '2026-11-02T09:00:00.000Z', message: { id: `${slug}-m1`, role: 'assistant', stop_reason: 'tool_use', content: [
+      { type: 'tool_use', id: 's', name: 'Skill', input: { skill: 'ccrc-coordinator' } },
+      { type: 'tool_use', id: 'b', name: 'Bash', input: { command: `ccrc-api runs open --program ${slug} --wave 1` } },
+      { type: 'tool_use', id: 'g', name: 'Bash', input: { command: `ccrc-api goals show ${slug}` } }] } },
+    { type: 'assistant', uuid: `${slug}-2`, timestamp: '2026-11-02T09:10:00.000Z', message: { id: `${slug}-m2`, role: 'assistant', stop_reason: 'tool_use', content: [
+      { type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Which layout?' }] } }] } },
+    { type: 'user', uuid: `${slug}-3`, timestamp: new Date(Date.parse('2026-11-02T09:10:00Z') + mins * 60_000).toISOString(),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'q', content: 'first' }] } },
+  ]);
+  const stubDir = (): { dir: string; bin: string; log: string } => {
+    const dir = mkTmp('ccrc-autonomy-stub-');
+    const bin = path.join(dir, 'ccrc-api');
+    const log = path.join(dir, 'calls.log');
+    writeFileSync(bin, [
+      '#!/bin/sh',
+      `echo "$*" >> '${log}'`,
+      'case "$1 $2" in',
+      '  "runs list") echo \'[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"},{"id":3,"program":"pinned-one"}]\' ;;',
+      '  "goals show") case "$3" in',
+      '    pinned-one) echo \'{"goals":{"program":"pinned-one","specPath":"docs/spec.md","modifications":[]},"openItems":[],"bigCalls":[]}\' ;;',
+      '    *) echo \'{"goals":{"program":"loose-one","specPath":null,"modifications":[]},"openItems":[],"bigCalls":[]}\' ;;',
+      '  esac ;;',
+      '  *) echo "unexpected verb" >&2; exit 9 ;;',
+      'esac', '',
+    ].join('\n'), { mode: 0o755 });
+    return { dir, bin, log };
+  };
+  const rootWith = (): string => {
+    const dir = mkTmp('ccrc-autonomy-pin-');
+    for (const [name, body] of [['pinned-one', coordOn('pinned-one', 30)], ['loose-one', coordOn('loose-one', 45)]] as const) {
+      const sub = path.join(dir, name);
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(path.join(sub, `${name}.jsonl`), body);
+    }
+    return dir;
+  };
+
+  it('counts M2 over the pinned programmes only, reading the list through goals show and runs list', () => {
+    const { bin, log } = stubDir();
+    const out = mkTmp('ccrc-autonomy-pin-out-');
+    const r = run(['transcripts', '--root', rootWith(), '--out', out, '--pinned-from-server', '--ccrc-api', bin]);
+    expect(r.status, r.stderr).toBe(0);
+    const t = rows(r.stdout);
+    expect(t['pinned-programmes']).toBe('1');
+    expect(t['m2']).toMatch(/^count=1 /);
+    expect(t['m2']).toContain('hours=0.5');
+    expect(t['dialog']).toMatch(/^count=2 /);   // the unfiltered census is still printed
+    const calls = readFileSync(log, 'utf8').trim().split('\n').sort();
+    expect(calls).toEqual(['goals show loose-one', 'goals show pinned-one', 'runs list']);
+  });
+
+  it('refuses any other verb before the client runs', () => {
+    const { bin, log } = stubDir();
+    const py = [
+      'import importlib.util, sys',
+      `spec = importlib.util.spec_from_file_location('ma', ${JSON.stringify(SCRIPT)})`,
+      'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+      `m.CCRC_API_BIN = ${JSON.stringify(bin)}`,
+      'for verb in (["mail", "send"], ["runs", "open"], ["goals", "pin", "x"], ["goals", "show"], ["runs", "list", "--all"]):',
+      '    try:',
+      '        m.ccrc_api(verb)',
+      '    except SystemExit as e:',
+      '        assert e.code == 2, (verb, e.code)',
+      '    else:',
+      '        raise AssertionError(verb)',
+    ].join('\n');
+    const r = spawnSync('python3', ['-I', '-c', py], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(log)).toBe(false);
   });
 });
