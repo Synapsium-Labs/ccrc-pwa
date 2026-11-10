@@ -162,6 +162,25 @@ describe.skipIf(!PY)('the error table (codex-bridge spec §2.4)', () => {
     for (const l of lines) expectRow(l, { status: 529, etype: 'overloaded_error' });
   });
 
+  // Codex 0.166.0 added this code and gives it "the same retry advice as ordinary overloads" (openai/codex
+  // codex-rs/protocol/src/error.rs at rust-v0.167.0, PolicyCapacityUnavailable). The backend sends it as an HTTP 503
+  // and in a `response.failed` (codex-api/src/api_bridge.rs, codex-api/src/sse/responses_error.rs). Its name ends in
+  // `unavailable` and begins with `policy`: it is the overload row, never the unavailable row and never a refusal.
+  it('policy_capacity_unavailable is the overload row: 529, retried, and never a policy refusal', async () => {
+    const lines = await run([
+      http(503, { error: { code: 'policy_capacity_unavailable', message: 'later' } }),
+      failed({ code: 'policy_capacity_unavailable' }),
+    ]);
+    for (const l of lines) {
+      expectRow(l, { status: 529, etype: 'overloaded_error' });
+      expect(l.error.kind).toBe('overloaded');
+      expect(l.error.code).toBe('policy_capacity_unavailable');
+    }
+    const [sets] = await run([{ op: 'sets' }]);
+    expect(sets.OVERLOAD_CODES).toEqual(['flex_unavailable', 'policy_capacity_unavailable', 'server_is_overloaded']);
+    expect(sets.POLICY_CODES).not.toContain('policy_capacity_unavailable');
+  });
+
   it('an unknown failed code, a 500 and a Cloudflare 403 are 503 api_error', async () => {
     const lines = await run([
       failed({ code: 'a_code_nobody_mapped', message: 'm' }),

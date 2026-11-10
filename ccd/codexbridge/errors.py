@@ -50,8 +50,9 @@ TRANSIENT_RATE_CODES = frozenset({"rate_limit_exceeded", "slow_down"})
 INELIGIBLE_CODES = frozenset({"usage_not_included"})
 # A policy refusal (D-6411; api_bridge.rs:120-171, responses_error.rs:26-103).
 POLICY_CODES = frozenset({"cyber_policy", "bio_policy", "invalid_prompt", "misalignment_policy_violation"})
-# The upstream is overloaded.
-OVERLOAD_CODES = frozenset({"server_is_overloaded", "flex_unavailable"})
+# The upstream is overloaded. `policy_capacity_unavailable` is capacity, not a refusal: Codex gives it "the same
+# retry advice as ordinary overloads" (codex-rs/protocol/src/error.rs at rust-v0.167.0; added in rust-v0.166.0).
+OVERLOAD_CODES = frozenset({"server_is_overloaded", "flex_unavailable", "policy_capacity_unavailable"})
 
 ALL_CODES = (OVERFLOW_CODES | QUOTA_CODES | USAGE_LIMIT_TYPES | TRANSIENT_RATE_CODES | INELIGIBLE_CODES | POLICY_CODES
              | OVERLOAD_CODES)
