@@ -1282,6 +1282,7 @@ describe('the slot\'s chain has a deadline (review 1391 A-3)', () => {
       coord, bus: new Bus(), now: () => NOW0 + 1, presenceOf: () => 'alive', gate: () => ({ pass: true }) as never, ccrcDir,
       registerSecret: () => 'unregistered', retireSecret: () => {}, slotWaitMs: 100,
       withAbandon: (async () => { throw new Error('no abandon hold in this rig'); }) as never, sendClose: ((reply: unknown) => reply) as never,
+      authEnabled: false, sessionAuth: () => ({ pass: true }) as never, mailToken: () => null,
     });
     const file = operatorSecretPath(ccrcDir, 'prog-a', 'api-key');
     let open!: () => void;

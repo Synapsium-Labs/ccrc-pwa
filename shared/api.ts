@@ -2032,6 +2032,10 @@ export type SkillState = 'present' | 'absent' | 'unmeasurable';
  *  `ccd skill-ensure`, or `failed` when the verb failed, answered nothing readable, or ran out its deadline. */
 export type SkillInstall = 'installed' | 'converged' | 'failed';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const SKILL_INSTALL_MAP: Record<SkillInstall, true> = { installed: true, converged: true, failed: true };
+export const SKILL_INSTALLS: readonly SkillInstall[] = Object.keys(SKILL_INSTALL_MAP) as SkillInstall[];
+
 /** Presentational only, and keyed BY the type so the compiler keeps it total —
  *  a member added to the union with no key here is a compile error, which is
  *  what makes the derived list below trustworthy. */
@@ -7100,7 +7104,7 @@ export interface RunSummary {
    *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
    *  `FLEET_PROTO` is not bumped. */
   runTitle?: string | null;
-  /** D-6096 (migration 52): `true` for a run its coordinator took IN PLACE, as the run's own worker, in a sibling worktree
+  /** D-6096 (migration 53): `true` for a run its coordinator took IN PLACE, as the run's own worker, in a sibling worktree
    *  (`POST /api/runs/:id/dispatch` with `inPlace: true`). Such a run starts no process, takes no concurrency slot and is
    *  never closed through its coordinator's workspace. ABSENT for every other run, and on an older server. ADDITIVE;
    *  `FLEET_PROTO` is not bumped. */

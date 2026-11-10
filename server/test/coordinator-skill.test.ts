@@ -4840,6 +4840,8 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     expect(one('cap-review-rounds')).toContain('runs review-rounds');
     expect(one('cap-review-rounds')).toContain('`coord-lift-off`');
     expect(one('cap-review-rounds')).toContain('open the review once');
+    // The extension section carries the same one-open rule for `coord-lift-off`.
+    expect(flat(refs('wave-lifecycle.md'))).toContain('open the review once, now, and never again; the refusal raises the ask');
     expect(one('cap-review-rounds')).toContain('`cap-not-reached`');
     expect(one('cap-review-rounds')).toContain('`no-review-rounds-door`');
     expect(one('cap-review-rounds')).toContain('A 404 `not-found` is a wrong id or a run that is not a work run');

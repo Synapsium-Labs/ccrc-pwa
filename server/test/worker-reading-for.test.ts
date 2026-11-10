@@ -58,7 +58,7 @@ describe('workerReadingFor (D-6094)', () => {
   });
 
   it('a stopped, archived or hibernated row reads gone, before any pane read', async () => {
-    for (const extra of [{ stopped: '1700000000 pane' }, { archived: '1700000000' }, { hibernated: '1700000000' }]) {
+    for (const extra of [{ stopped: '1700000000 pane' }, { archived: '1700000000' }, { hibernated: '1700000000' }] as Record<string, string>[]) {
       const b = await box({ extra });
       expect(await workerReadingFor(b.deps, b.rec)).toBe('gone');
     }

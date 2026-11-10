@@ -172,7 +172,7 @@ describe('a self-claimed run: what the characterization pinned, and what D-6096 
 
 describe('the column and the store call (D-6096)', () => {
   it('the migration is one nullable column and nothing else', () => {
-    const entry = MIGRATIONS[51]!;
+    const entry = MIGRATIONS[52]!;
     expect(entry).toMatch(/ALTER TABLE runs ADD COLUMN inPlace INTEGER;/);
     expect(entry.replace(/--.*$/gm, '').match(/ALTER TABLE|CREATE |NOT NULL|CHECK|DEFAULT/g)).toEqual(['ALTER TABLE']);
     const b = build();

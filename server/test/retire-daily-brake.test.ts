@@ -43,7 +43,7 @@ describe('the admit step no longer refuses on a daily count', () => {
       usage: { running: 0, dispatchedIn24h: CAP_MAX * 4 },
       overConcurrency: null,
     } as unknown as CapsReading;
-    const facts: AdmitFacts = { step: 'admit', names: [], caps: () => reading };
+    const facts: AdmitFacts = { step: 'admit', names: [], caps: () => reading, liveResume: false };
     expect(decideDispatch(facts).kind).toBe('go');
   });
 });

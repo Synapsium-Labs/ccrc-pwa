@@ -3354,7 +3354,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { w, id } = await parkedAtFullCap(home);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');   // asleep: a send-back would wake it
-    const res = await postAdvance(app, id, SEND_BACK);
+    const res = await postAdvance(w.app, id, SEND_BACK);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
     // A send-back's refusal carries no in-place-bind `detail`: the run is bound to the worker, not `planned`.
@@ -3368,7 +3368,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const { w, id } = await parkedAtFullCap(home);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
     const mailBefore = (w.coord.db.prepare('SELECT count(*) AS c FROM mail').get() as { c: number }).c;
-    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(409);
+    expect((await postAdvance(w.app, id, SEND_BACK)).statusCode).toBe(409);
     expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
     const stamp = w.coord.admissionStampOf(id)!;
     expect(stamp.since).not.toBeNull();
@@ -3379,7 +3379,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     expect((w.coord.db.prepare('SELECT count(*) AS c FROM mail').get() as { c: number }).c).toBe(mailBefore);
     // The refusal that is retried keeps the oldest stamp and moves the newest.
     await new Promise((r) => setTimeout(r, 5));
-    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(409);
+    expect((await postAdvance(w.app, id, SEND_BACK)).statusCode).toBe(409);
     const again = w.coord.admissionStampOf(id)!;
     expect(again.since).toBe(stamp.since);
     expect(again.lastRefusedAt!).toBeGreaterThan(stamp.lastRefusedAt!);
@@ -3389,17 +3389,17 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { w, id } = await parkedAtFullCap(home);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
-    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(409);
+    expect((await postAdvance(w.app, id, SEND_BACK)).statusCode).toBe(409);
     expect(w.coord.admissionStampOf(id)!.since).not.toBeNull();
     w.coord.setCaps({ maxConcurrentWorkers: 5 });
-    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(200);
+    expect((await postAdvance(w.app, id, SEND_BACK)).statusCode).toBe(200);
     expect(w.coord.admissionStampOf(id)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
   });
 
   it('a send-back of a worker that reads live advances on a full fleet (D-6093: nothing starts, so nothing is charged)', async () => {
     const home = mkTmp('ccrc-runs-');
     const { w, id } = await parkedAtFullCap(home);
-    const res = await postAdvance(app, id, SEND_BACK);
+    const res = await postAdvance(w.app, id, SEND_BACK);
     expect(res.statusCode).toBe(200);
     expect(okRun(w.coord.run(id))!.state).toBe('working');
   });
@@ -3408,7 +3408,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { w, id } = await parkedAtFullCap(home);
     rmSync(path.join(home, '.cc-sessions', 'demo-reentry.uuid'), { force: true });   // the row no longer lists
-    const res = await postAdvance(app, id, SEND_BACK);
+    const res = await postAdvance(w.app, id, SEND_BACK);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
     expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
@@ -3419,7 +3419,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const { w, id } = await parkedAtFullCap(home);
     w.coord.setCaps({ maxConcurrentWorkers: 5 });
     rmSync(path.join(home, '.cc-sessions', 'demo-reentry.uuid'), { force: true });   // would be unmeasurable if it were read
-    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(200);
+    expect((await postAdvance(w.app, id, SEND_BACK)).statusCode).toBe(200);
   });
 
   it('a send-back to a sleeping worker advances when the one slot is held by a 6-day run whose worker is gone (D-6094: the advance route and dispatch agree on one reading)', async () => {
@@ -3428,7 +3428,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const { w, id } = await parkedAtFullCap(home, watcher);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');   // asleep: charged unless the slot is free
     w.coord.db.prepare("UPDATE runs SET dispatchedAt = ? WHERE program = 'other'").run(Date.now() - 6 * 24 * 60 * 60 * 1000);
-    const res = await postAdvance(app, id, SEND_BACK);   // 'demo-blocker' has no registry row: its worker is gone
+    const res = await postAdvance(w.app, id, SEND_BACK);   // 'demo-blocker' has no registry row: its worker is gone
     expect(res.statusCode).toBe(200);
     expect(okRun(w.coord.run(id))!.state).toBe('working');
   });
@@ -3438,7 +3438,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const { w, id } = await parkedAtFullCap(home);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
     w.coord.db.prepare("UPDATE runs SET dispatchedAt = ? WHERE program = 'other'").run(Date.now() - 6 * 24 * 60 * 60 * 1000);
-    const res = await postAdvance(app, id, SEND_BACK);
+    const res = await postAdvance(w.app, id, SEND_BACK);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
   });
@@ -3447,7 +3447,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { w, id } = await parkedAtFullCap(home);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
-    const res = await postAdvance(app, id, SEND_BACK);
+    const res = await postAdvance(w.app, id, SEND_BACK);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
     expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');

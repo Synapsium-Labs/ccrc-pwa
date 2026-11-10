@@ -54,7 +54,8 @@ import { BASE_ONLY_MERGE, doneRunOf, verifyDone, type DoneClaim } from './finger
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, reEntersWorking, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { bindRunInPlace, dispatchRun, installAbsentSkill, type DispatchOutcome, type InPlaceOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, noteCapRefusal, type WorkerReading } from './dispatch.js';
+import { bindRunInPlace, dispatchRun, type DispatchOutcome, type InPlaceOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, noteCapRefusal, type WorkerReading } from './dispatch.js';
+import { installAbsentSkill } from './skillInstall.js';
 import { capRefusalOf } from './dispatchDecide.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
