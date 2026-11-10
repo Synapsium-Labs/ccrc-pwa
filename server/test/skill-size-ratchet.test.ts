@@ -18,6 +18,8 @@
 //
 // Lower a cap by editing skill-size-caps.json down to the size the R2 lowered message prints.
 // Raise a cap only by the bytes of the clause line a pull request appends.
+// Text that fits neither goes in a new reference file: a new file's cap is its size (R3), and a
+// reference is read on demand, so it costs nothing when a compaction restores the skill.
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
@@ -104,7 +106,8 @@ function judge(
       continue;
     }
     if (size > cap) {
-      failures.push(`${file}: ${size} bytes, capped at ${cap}. Lower it or add a clause.`);
+      failures.push(`${file}: ${size} bytes, capped at ${cap}. Shorten the file, or move the new text into a new `
+        + 'reference file, which takes a cap equal to its size. Only a new pinned clause raises a SKILL.md\'s cap.');
     } else if (size < cap) {
       lowered.push(`${file}: ${size} bytes, under its cap of ${cap}. Lower its entry to "${file}": ${size}`);
     }
