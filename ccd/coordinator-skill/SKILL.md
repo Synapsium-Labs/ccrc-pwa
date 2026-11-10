@@ -44,7 +44,8 @@ are on before you act. Read it again after a compaction, which keeps none of the
 
 - `references/wave-steps.md`: the steps of a wave, in order. Read it before the first
   dispatch of a program.
-- `references/wave-lifecycle.md`: each step in full, with every call and every refusal.
+- `references/wave-lifecycle.md`: the index of the steps in full. Each step is a file of
+  its own beside it, with every call and every refusal: read the one for your step.
 - `references/api.md`: how to call the API through `ccrc-api`, and what each refusal
   means.
 - `references/cross-project.md`: a wave that runs in another project than the
