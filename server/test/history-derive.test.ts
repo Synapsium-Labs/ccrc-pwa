@@ -2949,7 +2949,7 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     expect(cursor(), 'and the cursor moves past it').toBeGreaterThanOrEqual(entryOf(main.boundaryUuids[0]!));
   }, 240_000);
 
-  it('SA27 forked copies of one subagent transcript, and a true conflict: every row stored, transcript_forked counted, each leaf from the copy holding its boundary, one entry with one variant', async () => {
+  it('SA27 forked copies of one subagent transcript, and a true conflict: every row stored, transcript_forked counted, each leaf from the copy holding its boundary, one entry with two entry_variants rows (one per body, nothing dropped)', async () => {
     const rig = await rigOf('ccrc-hist-sa27-');
     const text = (tag: number) => (k: number): string => fixtureSummaryText(k + tag);
     const shared = seqOf(1, 0xc01, { summaryText: text(100) });

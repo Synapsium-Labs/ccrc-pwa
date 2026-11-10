@@ -613,7 +613,7 @@ function parentStmts(db) {
       leafAt: db.prepare('SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0 AND rowid <= ?'),
       exists: db.prepare('SELECT 1 AS x FROM nodes WHERE node_id = ?'),
       node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, capped FROM nodes WHERE node_id = ?'),
-      /** The node path's carried-copy set: every OTHER node of the session, at any depth (the leaf path's priorGists is depth 0),
+      /** The node path's carried-copy set: every OTHER node of the session's MAIN transcripts (D-8169), at any depth (the leaf path's priorGists is depth 0),
        *  stored BEFORE the parent (a lower rowid; spec §7.4 item 5 says an earlier gist). Bind (session_pk, node_id, the parent's rowid). */
       // D-8169 (history-w4-main-gists-main-only): MAIN nodes only, as priorGists. A parent's transcript_pk is its first child's (createParent), a main
       // transcript, so the inner join keeps every main leaf and parent this statement reads today; W3-4's bound (`rowid < ?`) is unchanged.
@@ -678,7 +678,7 @@ const UNREADABLE = Object.freeze({ read: 'unreadable' });
  *  child is a depth-0 leaf holding an EXACT receipt (lib's EXACT_RECEIPT_SQL: a steer_receipts row whose leaf_id is the
  *  child's id, the coordinator's ruling of 2026-11-10; the generic variant never carries the add-on). The child's stored
  *  summary is read as leafFields reads it (textOf), redacted whole with the current pairs, parsed, and the node block
- *  selected by the parent's id; nodeBlockStatus judges it on its id and gist alone, with every node of the session stored
+ *  selected by the parent's id; nodeBlockStatus judges it on its id and gist alone, with every MAIN-transcript node of the session (D-8169) stored
  *  BEFORE this parent (a lower rowid than `beforeRowid`, any depth) as the carried copies.
  *  Answers one of three, never a bare null:
  *  - `{ read: 'not-asked' }`: the last child is no exact-receipted depth-0 leaf (a depth-2 parent's last child is a parent
@@ -708,8 +708,8 @@ function steeredNodeOf(db, ictx, budget, { id, sessionPk, lastChildId, beforeRow
     withTx(db, 'NORMAL', () => { bump(db, 'node_parse_crash'); });
     return UNREADABLE;
   }
-  // The carried-copy set is read only for a block whose gist can reach that arm of nodeBlockStatus (it is every node of the
-  // session stored before this parent, the parents included: a last child that carries the previous parent's block forward is
+  // The carried-copy set is read only for a block whose gist can reach that arm of nodeBlockStatus (it is every MAIN-transcript node of the
+  // session (D-8169) stored before this parent, the parents included: a last child that carries the previous parent's block forward is
   // a carried copy).
   const reaches = sel.block !== null && typeof sel.block.gist === 'string' && sel.block.gist.trim().length >= GIST_MIN;
   const prior = reaches ? new Set(ps.otherGists.all(sessionPk, id, beforeRowid).map((r) => gistSha(r.gist))) : new Set();
@@ -776,7 +776,7 @@ function createParent(db, ictx, childIds, depth, budget, pass) {
   // sibling a later batch rewrites) must not have the parent's GIST_MAX or TOPIC_CHARS cut land inside a value (spec §6.3
   // caps rule 6, SE1; D-4610 (history-reroll-from-redacted-children)).
   // Only a depth-1 parent can carry a node block: its last child is a leaf.
-  // Nothing is stored yet, so the carried copies are every stored node (a rowid below the bound that no row reaches).
+  // Nothing is stored yet, so the carried copies are every stored main-transcript node (D-8169; a rowid below the bound that no row reaches).
   const r = depth === 1
     ? parentFields(db, ictx, budget, {
       id, sessionPk: first.session_pk, kids: kids.map((k) => redactedRollup(ictx, k.rollup)), lastChildId: childIds[childIds.length - 1],
@@ -970,7 +970,7 @@ function parentReroller(db, ictx, onlyIfChanged = false, runBudget = null) {
     if (kids.length === 0) return false;
     const self = storedNode(db, id);
     // Depth-1 parents only: a depth-2 parent's last child is no leaf, and steeredNodeOf answers not-asked for it. The carried
-    // copies are the nodes stored before this parent (a lower rowid), as at createParent every node then stored.
+    // copies are the main-transcript nodes (D-8169) stored before this parent (a lower rowid), as at createParent every such node then stored.
     const read = parentFields(db, ictx, budget, {
       id, sessionPk: self.row.session_pk, kids, lastChildId: kidIds[kidIds.length - 1], beforeRowid: s.rowidOf.get(id).r,
     });
