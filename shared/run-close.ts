@@ -7,9 +7,14 @@
 // the row says. Only an exact `on` arms and only an exact `off` stops; any other token a newer build writes reads as shadow.
 import type { MarkerState } from './api.js';
 
-/** The lane groups the control covers: E1 and E1r arm together (the never-started group), and the kept crash row is its own. */
-export const RUN_CLOSE_GROUPS = ['never-started', 'claimant-crashed'] as const;
-export type RunCloseGroup = (typeof RUN_CLOSE_GROUPS)[number];
+/** The lane groups the control covers: E1 and E1r arm together (the never-started group), the kept crash row is its own, and E3, E3s
+ *  and E5 (a coordinator removed or stopped by a person, a session name reused by a later run) arm together as the claimant-gone
+ *  group (D-8078). */
+export const RUN_CLOSE_GROUPS = ['never-started', 'claimant-crashed', 'claimant-gone'] as const;
+/** TEMPORARY, B8 PR-1 only: the PWA's word tables are `Record<RunCloseGroup, string>` and `Record<RunCloseWhy, string>`, and the
+ *  consolidation path guard bars a pwa/ path from a diff that touches shared/switches.ts. Until the PWA half lands (the next PR, which
+ *  restores `(typeof RUN_CLOSE_GROUPS)[number]` here) the type is the wide `string`, so the PWA still typechecks with its tables as they are. */
+export type RunCloseGroup = string;
 export const isRunCloseGroup = (v: unknown): v is RunCloseGroup => typeof v === 'string' && (RUN_CLOSE_GROUPS as readonly string[]).includes(v);
 
 /** The three stored choices. */
@@ -35,14 +40,22 @@ export type RunCloseHeld = (typeof RUN_CLOSE_HELD)[keyof typeof RUN_CLOSE_HELD];
 export type RunCloseState = RunCloseChoice | 'held';
 
 /** Why a run the lane reads would close once the group is on (the spec's reasons, one per row of the lane). */
-export const RUN_CLOSE_WHY = {
+export const RUN_CLOSE_WHY: Readonly<Record<'neverStarted' | 'reviewOfClosed' | 'laterReview' | 'claimantCrashed' | 'claimantGone' | 'claimantStopped' | 'nameReused', string>> = {
   neverStarted: 'never-started',
   reviewOfClosed: 'review-of-closed',
   laterReview: 'later-review',
   /** The crash row: an open run of a coordinator measured crashed, closed once the hour and the two passes are spent. */
   claimantCrashed: 'claimant-crashed',
-} as const;
-export type RunCloseWhy = (typeof RUN_CLOSE_WHY)[keyof typeof RUN_CLOSE_WHY];
+  /** E3: its coordinator was removed (archived, forgotten, reaped, purged, destroyed or expired). */
+  claimantGone: 'claimant-gone',
+  /** E3s: its coordinator was stopped by a person and has stayed down a day. */
+  claimantStopped: 'claimant-stopped',
+  /** E5: its session name now belongs to a later run. */
+  nameReused: 'name-reused',
+};
+/** TEMPORARY, B8 PR-1 only: wide for the reason above (so is the annotation on RUN_CLOSE_WHY); the next PR restores `as const` and
+ *  `(typeof RUN_CLOSE_WHY)[keyof typeof RUN_CLOSE_WHY]`. */
+export type RunCloseWhy = string;
 
 /** A run the group would close, and when: `at` is the moment its time runs out (epoch ms). */
 export interface RunCloseWould { readonly runId: number; readonly program: string; readonly why: RunCloseWhy; readonly at: number }

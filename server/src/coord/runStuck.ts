@@ -41,6 +41,9 @@ export interface PersonFacts {
   readonly hibernatedAt: number | null;
   readonly substrate: { readonly at: number; readonly text: string } | null;
   readonly archivedAt?: number | null;
+  /** A coordinator's stop was a PERSON's: the journal's newest deliberate act is a `stop` with a declared person's surface
+   *  (`deadCoordinatorStoppedByPerson`). Read by `closeRowOf` alone, for E3s. Absent reads false. */
+  readonly stoppedByPerson?: boolean;
 }
 
 export type PersonReading = 'gone' | 'asleep' | 'uncertain' | 'alive';
@@ -162,6 +165,12 @@ export interface RunStuckFacts {
   readonly reviewOpen: boolean | null;
   /** The stuck run a planned run waits behind (the pass's second phase), or null. */
   readonly behind: number | null;
+  /** E5's condition (D-8078): the run started, and its session's `.child` marker names another run (`runBelongsTo`'s predicate
+   *  alone, run ids only, no generation test). `times.nameReusedAt` is then the later run's dispatch. Absent reads false. */
+  readonly nameReused?: boolean;
+  /** E5 only: the journal records a reap or purge of the run's session after the run's dispatch, so the old workspace's unpushed
+   *  work is accounted for (the ruled W2: otherwise that fact is unmeasured and the lane lists the run). Absent reads false. */
+  readonly nameReusedClear?: boolean;
   readonly times: StoredTimes;
 }
 
@@ -188,6 +197,12 @@ function ownerGone(f: RunStuckFacts, nowMs: number): RunStuck | null | 'unknown'
     const since = stuckSince(cause, 'owner-gone', f.times);
     if (since === null) return 'unknown';
     if (nowMs - since >= OWNER_GONE_AFTER_MS) return verdictOf('owner-gone', cause, since);
+  }
+  // E5 (D-8078): the run's session name now belongs to a later run. There is no worker to lose, so no grace.
+  if (f.state !== 'planned' && f.nameReused === true) {
+    const since = stuckSince('name-reused', 'owner-gone', f.times);
+    if (since === null) return 'unknown';
+    return verdictOf('owner-gone', 'name-reused', since);
   }
   if (f.state !== 'planned' && f.worker !== null && claimantReading(f.worker, f.workerJournal) === 'gone') {
     const cause = stuckCause(f.worker, f.workerJournal ?? noJournal, 'worker');
@@ -227,6 +242,26 @@ export function runStuck(f: RunStuckFacts, nowMs: number): RunStuck | null {
     return verdictOf('never-started', null, f.times.openedAt);
   }
   return null;
+}
+
+/** The journal acts that remove a coordinator on purpose and are not a person's stop (E3, G2 (a)). `reclaim` is a hand-over, not a
+ *  removal, and `hibernate` is sleep: neither is here. */
+const E3_REMOVAL_ACTS: readonly string[] = ['archive', 'forget', 'purge', 'destroy', 'reap', 'expire'];
+
+/** The run-close lane row a stuck verdict also fits (D-8078; spec §7's table, A57): E3 for a coordinator removed (a journaled
+ *  removal, or the registry's archive stamp), E3s for one a person stopped, E5 for a reused session name. `null` for every other
+ *  verdict, E4's worker causes and a plain or unattributed stop included. The lane reads this, so a stuck reason and a close can
+ *  never disagree. */
+export function closeRowOf(f: RunStuckFacts, v: RunStuck | null): 'claimant-gone' | 'claimant-stopped' | 'name-reused' | null {
+  if (v === null || v.reason !== 'owner-gone') return null;
+  const j = f.claimantJournal;
+  switch (v.cause) {
+    case 'name-reused': return 'name-reused';
+    case 'coordinator-archived': case 'coordinator-forgotten': return 'claimant-gone';
+    case 'coordinator-removed': return j !== null && j.kind === 'deliberate' && E3_REMOVAL_ACTS.includes(j.act) ? 'claimant-gone' : null;
+    case 'coordinator-stopped': return f.claimant?.stoppedByPerson === true ? 'claimant-stopped' : null;
+    default: return null;
+  }
 }
 
 /** WHO HAS THE NEXT MOVE (§7, A29). Absent for `unknown`, `done` and `failed`. */

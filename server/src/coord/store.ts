@@ -56,7 +56,12 @@ import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
 import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
 import type { DispatchAbandonRead } from './deadDispatch.js';
 import type { DispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
-import { runCloseChoiceOf, type RunCloseChoice, type RunCloseGroup } from '../../../shared/run-close.js';
+import { isRunCloseGroup, runCloseChoiceOf, type RunCloseChoice, type RunCloseGroup } from '../../../shared/run-close.js';
+
+/** The `run_close_settings` column each group's choice lives in. */
+const RUN_CLOSE_GROUP_FIELD: Readonly<Record<RunCloseGroup, 'neverStarted' | 'claimantCrashed' | 'claimantGone'>> = {
+  'never-started': 'neverStarted', 'claimant-crashed': 'claimantCrashed', 'claimant-gone': 'claimantGone',
+};
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
@@ -4367,7 +4372,7 @@ export class CoordStore {
   /** Every open run, as the lane reads it, in id order. */
   runCloseRuns(): LaneRun[] {
     const rows = this.db.prepare(
-      'SELECT id, program, wave, kind, state, reviews, claimedBy, sessionId, openedAt, dispatchStartedAt, lastDispatchAttemptAt ' +
+      'SELECT id, program, wave, kind, state, reviews, claimedBy, sessionId, openedAt, dispatchStartedAt, lastDispatchAttemptAt, project, branch ' +
       `FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
     ).all() as Record<string, unknown>[];
     return rows.map((r) => ({
@@ -4377,6 +4382,7 @@ export class CoordStore {
       sessionId: (r.sessionId as string | null) ?? null, openedAt: driftInt(r.openedAt, 'runs openedAt'),
       dispatchStartedAt: driftIntOrNull(r.dispatchStartedAt ?? null, 'runs dispatchStartedAt'),
       lastDispatchAttemptAt: driftIntOrNull(r.lastDispatchAttemptAt ?? null, 'runs lastDispatchAttemptAt'),
+      project: String(r.project), branch: (r.branch as string | null) ?? null,
     }));
   }
 
@@ -4432,14 +4438,14 @@ export class CoordStore {
   // ── the run-close lanes' arming (D-8077; spec 2026-11-04 §12.3; Task 26) ────────────────────────────────────
   /** `run_close_settings` (migration 49), read: both groups' choices (a lost row, or a token this build does not know, reads
    *  shadow, which arms nothing) and the write time; `unreadable` with the driver's detail when the read failed. Never throws. */
-  runCloseSetting(): { kind: 'row'; neverStarted: RunCloseChoice; claimantCrashed: RunCloseChoice; updatedAt: number | null }
+  runCloseSetting(): { kind: 'row'; neverStarted: RunCloseChoice; claimantCrashed: RunCloseChoice; claimantGone: RunCloseChoice; updatedAt: number | null }
     | { kind: 'unreadable'; detail: string } {
     try {
-      const r = this.db.prepare('SELECT neverStarted, claimantCrashed, CAST(updatedAt AS TEXT) AS updatedText FROM run_close_settings WHERE id = 1')
-        .get() as { neverStarted: unknown; claimantCrashed: unknown; updatedText: unknown } | undefined;
+      const r = this.db.prepare('SELECT neverStarted, claimantCrashed, claimantGone, CAST(updatedAt AS TEXT) AS updatedText FROM run_close_settings WHERE id = 1')
+        .get() as { neverStarted: unknown; claimantCrashed: unknown; claimantGone: unknown; updatedText: unknown } | undefined;
       const at = r !== undefined && typeof r.updatedText === 'string' ? Number(r.updatedText) : NaN;
       return { kind: 'row', neverStarted: runCloseChoiceOf(r?.neverStarted), claimantCrashed: runCloseChoiceOf(r?.claimantCrashed),
-        updatedAt: Number.isSafeInteger(at) ? at : null };
+        claimantGone: runCloseChoiceOf(r?.claimantGone), updatedAt: Number.isSafeInteger(at) ? at : null };
     } catch (err) {
       return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
     }
@@ -4448,14 +4454,14 @@ export class CoordStore {
   /** One group's choice. An unreadable row reads shadow: a doubt arms nothing (the lane's callers also keep their markers). */
   runCloseChoice(group: RunCloseGroup): RunCloseChoice {
     const s = this.runCloseSetting();
-    return s.kind === 'row' ? (group === 'never-started' ? s.neverStarted : s.claimantCrashed) : runCloseChoiceOf(null);
+    return s.kind === 'row' ? s[RUN_CLOSE_GROUP_FIELD[group]] : runCloseChoiceOf(null);
   }
 
   /** The switch's one writer, called only by `POST /api/coord/run-close`: an upsert of the one row's group column. */
   setRunCloseChoice(group: RunCloseGroup, choice: RunCloseChoice, at: number): void {
-    const col = group === 'never-started' ? 'neverStarted' : 'claimantCrashed';
+    const col = RUN_CLOSE_GROUP_FIELD[group];
     this.db.prepare(
-      `INSERT INTO run_close_settings (id, neverStarted, claimantCrashed, updatedAt) VALUES (1, 'shadow', 'shadow', ?) ` +
+      `INSERT INTO run_close_settings (id, neverStarted, claimantCrashed, claimantGone, updatedAt) VALUES (1, 'shadow', 'shadow', 'shadow', ?) ` +
       `ON CONFLICT(id) DO UPDATE SET ${col} = ?, updatedAt = ?`,
     ).run(at, choice, at);
   }
@@ -4472,11 +4478,11 @@ export class CoordStore {
 
   /** How many (run, reason) refusals each group met at or after `sinceMs`. */
   runCloseRefusalCounts(sinceMs: number): Record<RunCloseGroup, number> {
-    const out: Record<RunCloseGroup, number> = { 'never-started': 0, 'claimant-crashed': 0 };
+    const out: Record<RunCloseGroup, number> = { 'never-started': 0, 'claimant-crashed': 0, 'claimant-gone': 0 };
     try {
       const rows = this.db.prepare('SELECT groupName, COUNT(*) AS n FROM run_close_refusals WHERE at >= ? GROUP BY groupName')
         .all(sinceMs) as { groupName: string; n: unknown }[];
-      for (const r of rows) if (r.groupName === 'never-started' || r.groupName === 'claimant-crashed') out[r.groupName] = driftInt(r.n, 'refusals n');
+      for (const r of rows) if (isRunCloseGroup(r.groupName)) out[r.groupName] = driftInt(r.n, 'refusals n');
     } catch { /* an unreadable tally reads zero */ }
     return out;
   }

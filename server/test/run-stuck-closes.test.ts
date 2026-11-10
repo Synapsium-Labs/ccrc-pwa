@@ -12,7 +12,9 @@ import { DEAD_COORDINATOR_JOURNAL_TRUSTED } from '../src/deadCoordinator.js';
 import { createRunVerdicts } from '../src/coord/runVerdicts.js';
 import { runStuckPass } from '../src/coord/runStuckPass.js';
 import { createRunCloseMemory, runClosePass } from '../src/coord/runCloseLane.js';
-import type { ClaimantVerdict } from '../src/coord/reclaim.js';
+import type { ChildMarkRead } from '../../shared/runBelongs.js';
+import { measureClaimant, measureClaimantHeld, type ClaimantVerdict } from '../src/coord/reclaim.js';
+import { abandonRefusal } from '../src/coord/close.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -220,5 +222,228 @@ describe('the reader joins two clocks and keeps them apart', () => {
     for (let i = 0; i < 7; i += 1) { await s.lane(); s.clock.now += 9 * 60_000; }
     await s.stuck();
     for (const id of [e1, e1r]) expect(s.verdicts.of(id)!.stuck, `run ${id}`).not.toBeNull();
+  });
+});
+
+// ── B8 (D-8078): rows E3, E3s and E5 read through the verdict ─────────────────────────────────────────────────────────────────────
+// The lane takes its candidates from the stuck verdict's own answer, so these run both passes over a real registry, a real journal
+// and a real store, and read what the screen reads: `stuck` with `closes`.
+type Who = 'live' | 'archived' | 'stopped' | 'stopped-substrate' | 'substrate' | 'worker-stopped';
+const WORKER = 'demo-worker-w1';
+const NEWER = 'demo-worker-w2';
+
+const setupGone = (o: { coord: Who; surface?: string | null; marker?: boolean; stopAgo?: number }) => {
+  const home = mkTmp('ccrc-stuck-gone-');
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  const write = (id: string, extra: Record<string, string>): void => {
+    const fields: Record<string, string> = { wrapper: 'claude', project: 'demo', workdir: `/w/${id}`, uuid: `u-${id}`, started: '1', workspace: id, branch: `ws/${id}`, base: 'origin/main', ...extra };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  };
+  const stopAt = (T - (o.stopAgo ?? 30 * H)) / 1000;
+  const coordFields: Record<Who, Record<string, string>> = {
+    live: {},
+    archived: { archived: String((T - 49 * D) / 1000), supervised: String((T - 7200_000) / 1000) },
+    stopped: { stopped: `${stopAt} ${o.surface ?? 'pwa'}` },
+    'stopped-substrate': { stopped: `${stopAt} ${o.surface ?? 'pwa'}`, substrate: `${(T - H) / 1000} could not reach tmux` },
+    substrate: { archived: String((T - 49 * D) / 1000), substrate: `${(T - H) / 1000} could not reach tmux` },
+    'worker-stopped': {},
+  };
+  write(COORD, coordFields[o.coord]);
+  write(WORKER, o.coord === 'worker-stopped' ? { stopped: `${(T - 30 * H) / 1000} pwa` } : {});
+  write(NEWER, {});
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const verdicts = createRunVerdicts();
+  const clock = { now: T };
+  const panes: Record<string, SessionVerdict> = {
+    [COORD]: o.coord === 'live' ? { verdict: 'live' } : { verdict: 'gone' }, [WORKER]: o.coord === 'worker-stopped' ? { verdict: 'gone' } : { verdict: 'gone' }, [NEWER]: { verdict: 'live' },
+  };
+  const marks: Record<string, ChildMarkRead> = {};
+  const stuck = () => runStuckPass({
+    coord, io: localIO, cfg: testDeps(home).cfg, tmux: { sessionVerdict: async (id) => panes[id] ?? { verdict: 'gone' } }, verdicts,
+    journalTrust: async () => ({ hold: null, trust: DEAD_COORDINATOR_JOURNAL_TRUSTED }), now: () => clock.now, claimantBusyAt: () => null,
+    childMark: async (sid) => marks[sid] ?? { kind: 'none' },
+  });
+  const memory = createRunCloseMemory();
+  const names: { list: string[] } = { list: o.marker === true ? ['runs-expire-coordinator-gone'] : [] };
+  const live = new Set<string>();
+  const lane = () => runClosePass({
+    coord, verdicts, memory, now: () => clock.now, registryNames: async () => names.list,
+    measure: async (id) => (live.has(id) || (id === COORD && o.coord === 'live') ? ALIVE : DEAD),
+    claimantBusyAt: () => null, branchFacts: async () => ({ readAt: clock.now, openPr: false, unpushed: false }),
+    childMark: async (sid) => marks[sid] ?? { kind: 'none' }, branchOpenPr: async () => false, serial: null,
+    abandonRefusal: (runId) => abandonRefusal(coord, runId),
+  });
+  const journal = (act: string, id: string, at: number, surface: string | null, gen = 1): void => {
+    coord.db.prepare(
+      'INSERT INTO lifecycle_events (uid, gen, at, ingestedAt, act, outcome, sessionId, decJson, raw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(`${at}.${gen}.1`, String(1_790_000_000_000_000_000n + BigInt(gen)), at, at, act, 'done', id, surface === null ? null : JSON.stringify({ surface }), '{}');
+  };
+  const startedRun = (program: string, wave: number, sessionId: string | null): number => {
+    const r = coord.openRun({ program, title: `Lane ${wave}`, project: 'demo', wave, waveOf: 3, claimedBy: COORD });
+    if (!('id' in r)) throw new Error('fixture openRun refused');
+    coord.db.prepare("UPDATE runs SET openedAt = ?, state = 'working', sessionId = ?, branch = 'ws/old', dispatchedAt = ? WHERE id = ?").run(T - 40 * D, sessionId, T - 39 * D, r.id);
+    return r.id;
+  };
+  const cfg = testDeps(home).cfg;
+  const tmux = { sessionVerdict: async (id: string): Promise<SessionVerdict> => panes[id] ?? { verdict: 'gone' } };
+  return { coord, verdicts, clock, stuck, lane, journal, startedRun, panes, marks, names, live, cfg, tmux };
+};
+
+describe('E3 reads a removed coordinator (the registry\'s archive stamp, the journal\'s removals)', () => {
+  it('a run of an archived coordinator reads owner-gone, coordinator-archived, and counts the first pass plus 1 h', async () => {
+    const s = setupGone({ coord: 'archived' });
+    const id = s.startedRun('programme-a', 1, WORKER);
+    s.coord.db.prepare("UPDATE runs SET state = 'working' WHERE id = ?").run(id);
+    await s.stuck(); await s.lane();
+    const t0 = s.clock.now;
+    expect(s.verdicts.of(id)!.stuck).toMatchObject({ reason: 'owner-gone', cause: 'coordinator-archived', closes: { at: t0 + H, armed: false } });
+    await passesFor(s, 30 * 60_000);
+    await s.stuck();
+    expect(s.verdicts.of(id)!.stuck!.closes).toEqual({ at: t0 + H, armed: false });
+  });
+
+  it('a substrate stamp on the claimant holds E3, E3s and the crash row, with no close and no closes', async () => {
+    const s = setupGone({ coord: 'substrate' });
+    const id = s.startedRun('programme-a', 1, WORKER);
+    await s.stuck(); await s.lane();
+    expect(s.verdicts.of(id)!.stuck).toBeNull();
+    expect(s.verdicts.of(id)!.closeRow).toBeUndefined();
+    expect(s.verdicts.reading()?.groups['claimant-gone']).toEqual({ would: [], named: [] });
+  });
+
+  it('a substrate stamp on a stopped claimant holds E3s too, and the crash row reads the stamp as doubt, not a crash', async () => {
+    const s = setupGone({ coord: 'stopped-substrate' });
+    s.journal('stop', COORD, T - 30 * H, 'pwa');
+    const id = s.startedRun('programme-a', 1, WORKER);
+    await s.stuck(); await s.lane();
+    expect(s.verdicts.of(id)!.stuck).toBeNull();
+    expect(s.verdicts.of(id)!.closeRow).toBeUndefined();
+    expect(s.verdicts.reading()?.groups['claimant-gone']).toEqual({ would: [], named: [] });
+    // The crash row (the dead-coordinator lane's sweep and its act-time re-measure) reads through `measureClaimantHeld`.
+    const archived = setupGone({ coord: 'substrate' });
+    const deps = { coord: archived.coord, io: localIO, cfg: archived.cfg, tmux: archived.tmux };
+    expect((await measureClaimant(deps, COORD, T)).state).toBe('dead');
+    expect((await measureClaimantHeld(deps, COORD, T)).state).toBe('unmeasurable');
+    const plain = setupGone({ coord: 'archived' });
+    expect((await measureClaimantHeld({ coord: plain.coord, io: localIO, cfg: plain.cfg, tmux: plain.tmux }, COORD, T)).state).toBe('dead');
+  });
+
+  it('a live worker under a gone coordinator has closes null and is named busy-worker', async () => {
+    const s = setupGone({ coord: 'archived' });
+    const id = s.startedRun('programme-a', 1, WORKER);
+    s.panes[WORKER] = { verdict: 'live' };
+    s.live.add(WORKER);
+    await s.stuck(); await s.lane();
+    expect(s.verdicts.of(id)!.stuck).toMatchObject({ reason: 'owner-gone', cause: 'coordinator-archived', closes: null });
+    expect(s.verdicts.reading()?.groups['claimant-gone']?.named).toEqual([{ runId: id, program: 'programme-a', why: 'busy-worker' }]);
+  });
+
+  it('65, 66 and 83 stay on E1 with hours and E3 gives them no closes (o2)', async () => {
+    const s = setupGone({ coord: 'archived' });
+    const ids = [1, 2].map((w) => {
+      const r = s.coord.openRun({ program: 'programme-a', title: `Lane ${w}`, project: 'demo', wave: w, waveOf: 3, claimedBy: COORD });
+      if (!('id' in r)) throw new Error('fixture openRun refused');
+      s.coord.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(T - 60 * D, r.id);
+      return r.id;
+    });
+    await s.stuck(); await s.lane();
+    for (const id of ids) {
+      expect(s.verdicts.of(id)!.stuck, `run ${id}`).toMatchObject({ reason: 'owner-gone', closes: { at: T + 72 * H, armed: false } });
+      expect(s.verdicts.of(id)!.closeRow, `run ${id}`).toBe('claimant-gone');
+    }
+    expect(s.coord.runCloseAnchors('claimant-gone').size).toBe(0);
+    expect(s.verdicts.reading()?.groups['claimant-gone']).toEqual({ would: [], named: [] });
+  });
+});
+
+describe('E3s reads a coordinator a person stopped', () => {
+  it('a stop with a person\'s surface counts the first pass plus 24 h, and activity leaves it there', async () => {
+    const s = setupGone({ coord: 'stopped', surface: 'pwa' });
+    s.journal('stop', COORD, T - 30 * H, 'pwa');
+    const id = s.startedRun('programme-a', 1, WORKER);
+    await s.stuck(); await s.lane();
+    const t0 = s.clock.now;
+    expect(s.verdicts.of(id)!.stuck).toMatchObject({ reason: 'owner-gone', cause: 'coordinator-stopped', closes: { at: t0 + 24 * H, armed: false } });
+    s.coord.db.prepare("INSERT INTO mail (fromId, fromUuid, toId, runId, kind, subject, body, at, artifacts) VALUES (?, 'u', 'w', ?, 'status', 's', 'b', ?, '[]')").run(WORKER, id, t0 + 60_000);
+    await passesFor(s, 20 * 60_000);
+    await s.stuck();
+    expect(s.verdicts.of(id)!.stuck!.closes).toEqual({ at: t0 + 24 * H, armed: false });
+  });
+
+  it('a stop by a swap, a supervisor, an OOM policy or maintenance (no declared surface) carries a verdict and no closes', async () => {
+    const s = setupGone({ coord: 'stopped', surface: 'ccd' });
+    s.journal('stop', COORD, T - 30 * H, 'none');
+    const id = s.startedRun('programme-a', 1, WORKER);
+    await s.stuck(); await s.lane();
+    expect(s.verdicts.of(id)!.stuck).toMatchObject({ reason: 'owner-gone', cause: 'coordinator-stopped', closes: null });
+    expect(s.verdicts.of(id)!.closeRow).toBeUndefined();
+  });
+
+  it('a stop the journal does not record at all is no person\'s stop: no closes', async () => {
+    const s = setupGone({ coord: 'stopped' });
+    const id = s.startedRun('programme-a', 1, WORKER);
+    await s.stuck(); await s.lane();
+    expect(s.verdicts.of(id)!.stuck).toMatchObject({ reason: 'owner-gone', closes: null });
+    expect(s.verdicts.of(id)!.closeRow).toBeUndefined();
+  });
+});
+
+describe('E5 reads a reused session name', () => {
+  it('a run whose session now belongs to a later run reads owner-gone, name-reused, since the later run\'s dispatch, and closes the next pass', async () => {
+    const s = setupGone({ coord: 'live' });
+    const old = s.startedRun('programme-a', 1, WORKER);
+    const later = s.startedRun('programme-a', 2, WORKER);
+    s.coord.db.prepare('UPDATE runs SET dispatchedAt = ? WHERE id = ?').run(T - 3 * D, later);
+    s.marks[WORKER] = { kind: 'child', runId: later };
+    s.journal('reap', WORKER, T - 3 * D + 60_000, 'pwa');
+    s.panes[WORKER] = { verdict: 'live' };
+    await s.stuck(); await s.lane();
+    expect(s.verdicts.of(old)!.stuck).toMatchObject({ reason: 'owner-gone', cause: 'name-reused', since: T - 3 * D, closes: { at: T, armed: false } });
+    // the later run owns the name: it is not E5 itself
+    expect(s.verdicts.of(later)!.stuck).toBeNull();
+  });
+
+  it('without a reap or purge after the dispatch the unpushed work is unmeasured: the verdict stands and nothing closes', async () => {
+    const s = setupGone({ coord: 'live' });
+    const old = s.startedRun('programme-a', 1, WORKER);
+    const later = s.startedRun('programme-a', 2, WORKER);
+    s.coord.db.prepare('UPDATE runs SET dispatchedAt = ? WHERE id = ?').run(T - 3 * D, later);
+    s.marks[WORKER] = { kind: 'child', runId: later };
+    s.panes[WORKER] = { verdict: 'live' };
+    await s.stuck(); await s.lane();
+    expect(s.verdicts.of(old)!.stuck).toMatchObject({ reason: 'owner-gone', cause: 'name-reused', closes: null });
+    expect(s.verdicts.reading()?.groups['claimant-gone']?.named).toEqual([{ runId: old, program: 'programme-a', why: 'unmeasured' }]);
+  });
+
+  it('a marker naming the run itself, an earlier run, or none is no reuse; an unreadable marker is doubt', async () => {
+    for (const mark of [{ kind: 'none' }, { kind: 'unreadable' }] as const) {
+      const s = setupGone({ coord: 'live' });
+      const id = s.startedRun('programme-a', 1, WORKER);
+      s.marks[WORKER] = mark;
+      s.panes[WORKER] = { verdict: 'live' };
+      await s.stuck();
+      expect(s.verdicts.of(id)!.stuck, mark.kind).toBeNull();
+    }
+    const s = setupGone({ coord: 'live' });
+    const id = s.startedRun('programme-a', 1, WORKER);
+    s.panes[WORKER] = { verdict: 'live' };
+    s.marks[WORKER] = { kind: 'child', runId: id };
+    await s.stuck();
+    expect(s.verdicts.of(id)!.stuck).toBeNull();
+    s.marks[WORKER] = { kind: 'child', runId: id - 1 };
+    await s.stuck();
+    expect(s.verdicts.of(id)!.stuck).toBeNull();
+  });
+});
+
+describe('every run the lane lists has a verdict (B8 rows)', () => {
+  it('E3 and E5 runs the lane lists read a stuck verdict with closes', async () => {
+    const s = setupGone({ coord: 'archived' });
+    const e3 = s.startedRun('programme-a', 1, WORKER);
+    await s.stuck(); await s.lane();
+    const listed = [...(s.verdicts.reading()?.groups['claimant-gone']?.would ?? [])].map((w) => w.runId);
+    expect(listed).toEqual([e3]);
+    for (const id of listed) expect(s.verdicts.of(id)!.stuck, `run ${id}`).not.toBeNull();
   });
 });

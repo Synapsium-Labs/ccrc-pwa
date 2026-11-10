@@ -1,0 +1,7 @@
+{
+  "file": "server/src/watch.ts",
+  "maxDelta": 60,
+  "d": "D-8078",
+  "reason": "the claimant-gone rows' wiring beside the run-close lane's: the stuck pass reads a session's child marker, and the lane reads a pull request by the run's own branch (Task 28); +1 net code line on top of D-8077's +59; the deciders are in coord/ files, only the wiring is here",
+  "added": "2026-11-09"
+}

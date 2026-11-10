@@ -13,7 +13,7 @@ import {
 } from '../../../shared/run-close.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { COORDINATOR_PAUSE_MARKER, RECLAIM_PAUSE_MARKER } from './rundefs.js';
-import { RUN_CLOSE_ROW_SWITCH } from './runClose.js';
+import { RUN_CLOSE_ROWS, RUN_CLOSE_ROW_GROUP, RUN_CLOSE_ROW_SWITCH, type RunCloseRow } from './runClose.js';
 
 /** The seven days the rows count closes and refusals over. */
 export const RUN_CLOSE_TALLY_MS = 7 * 24 * 3_600_000;
@@ -22,6 +22,7 @@ export const RUN_CLOSE_TALLY_MS = 7 * 24 * 3_600_000;
 const GROUP_MARKER: Readonly<Record<RunCloseGroup, string>> = {
   'never-started': RUN_CLOSE_ROW_SWITCH['never-started'],
   'claimant-crashed': RUN_CLOSE_ROW_SWITCH['claimant-crashed'],
+  'claimant-gone': RUN_CLOSE_ROW_SWITCH['claimant-gone'],
 };
 
 /** Why every row is held, or null. A registry that would not list holds, because a raised pause cannot be ruled out. */
@@ -67,12 +68,15 @@ export const DISPATCH_ABANDON_CLOSE_DETAIL = 'dispatch-abandon:never-came-back';
  *  `expired:review-orphaned`); a sweep close with no detail is the crash row's; the dead-dispatch lane stores `dispatch-abandon:` and belongs to no group. */
 export function runCloseGroupOfDetail(detail: string | null): RunCloseGroup | null {
   if (detail === null) return 'claimant-crashed';
-  return detail.startsWith('expired:') ? 'never-started' : null;
+  // The lane names the row that closed a run (`expired:<row>`); the row says which group's close it was.
+  if (!detail.startsWith('expired:')) return null;
+  const row = detail.slice('expired:'.length).split(' ')[0] ?? '';
+  return (RUN_CLOSE_ROWS as readonly string[]).includes(row) ? RUN_CLOSE_ROW_GROUP[row as RunCloseRow] : 'never-started';
 }
 
 /** The sweep's closes grouped by detail (`CoordStore.sweepClosesBetween`) folded into the groups' counts. */
 export function closedByGroup(rows: readonly { detail: string | null; n: number }[]): Record<RunCloseGroup, number> {
-  const out: Record<RunCloseGroup, number> = { 'never-started': 0, 'claimant-crashed': 0 };
+  const out: Record<RunCloseGroup, number> = { 'never-started': 0, 'claimant-crashed': 0, 'claimant-gone': 0 };
   for (const r of rows) {
     const g = runCloseGroupOfDetail(r.detail);
     if (g !== null) out[g] += r.n;

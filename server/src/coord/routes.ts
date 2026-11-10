@@ -2835,8 +2835,8 @@ export function registerCoordRoutes(
     const view = runCloseViewOf({
       names,
       choices: setting.kind === 'row'
-        ? { 'never-started': setting.neverStarted, 'claimant-crashed': setting.claimantCrashed }
-        : { 'never-started': 'shadow', 'claimant-crashed': 'shadow' },
+        ? { 'never-started': setting.neverStarted, 'claimant-crashed': setting.claimantCrashed, 'claimant-gone': setting.claimantGone }
+        : { 'never-started': 'shadow', 'claimant-crashed': 'shadow', 'claimant-gone': 'shadow' },
       updatedAt: setting.kind === 'row' ? setting.updatedAt : null,
       reading: watcher?.runVerdicts.reading() ?? null,
       closed7d: closedByGroup(coord.sweepClosesBetween(since, now + 1)),
@@ -2858,7 +2858,7 @@ export function registerCoordRoutes(
     const body = req.body as { group?: unknown; choice?: unknown } | null | undefined;
     if (typeof body !== 'object' || body === null || Array.isArray(body) || Object.keys(body).sort().join() !== 'choice,group'
       || !isRunCloseGroup(body.group) || !isRunCloseChoice(body.choice)) {
-      return refuseRoute(reply, 'bad-request', { detail: "the body is {group:'never-started'|'claimant-crashed', choice:'off'|'shadow'|'on'} and nothing else" });
+      return refuseRoute(reply, 'bad-request', { detail: "the body is {group:'never-started'|'claimant-crashed'|'claimant-gone', choice:'off'|'shadow'|'on'} and nothing else" });
     }
     const { group, choice } = body;
     const before = await runCloseNow(coord);

@@ -137,7 +137,7 @@ import {
 } from './coord/delegation-model.js';
 import { claimExpiry, claimVerdictOf, type LivenessProbe } from './coord/claims.js';
 import { rowStanding, type RowStandingFacts } from './sessionReading.js';
-import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
+import { claimantMeasuredDead, measureClaimant, measureClaimantHeld } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
 import {
@@ -166,7 +166,7 @@ import { createRunVerdicts, type RunVerdicts } from './coord/runVerdicts.js';
 import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
-import { readBranchFacts } from './coord/runCloseFacts.js';
+import { readBranchFacts, readBranchOpenPr } from './coord/runCloseFacts.js';
 import { abandonRefusal } from './coord/close.js';
 import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
@@ -5944,9 +5944,11 @@ export class FleetWatcher {
       registryNames: async () => selected,
       freshRegistryNames: () => this.runCloseActNames(),
       measure: (id) => measureClaimant({ coord, io, cfg, tmux: this.deps.tmux }, id, Date.now()),
+      measureHeld: (id) => measureClaimantHeld({ coord, io, cfg, tmux: this.deps.tmux }, id, Date.now()),
       claimantBusyAt: this.claimantBusyAt,
       branchFacts: (sid) => readBranchFacts({ runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => Date.now() }, sid),
       childMark: (sid) => this.childMarkFor(sid),
+      branchOpenPr: (project, branch) => readBranchOpenPr({ runCcd: this.deps.runCcd, fleetState: this.deps.fleetState }, project, branch),
       abandonRefusal: (runId) => abandonRefusal(coord, runId),
       serial: this.deadCoordinatorSerial,
     }));
@@ -5965,7 +5967,7 @@ export class FleetWatcher {
     await this.runLane('runStuck', () => runStuckPass({
       coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, verdicts: this.runVerdicts,
       journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()),
-      now: () => Date.now(), claimantBusyAt: this.claimantBusyAt,
+      now: () => Date.now(), claimantBusyAt: this.claimantBusyAt, childMark: (sid) => this.childMarkFor(sid),
     }));
   }
 
@@ -6098,7 +6100,7 @@ export class FleetWatcher {
     for (const id of ids) {
       const at = Date.now();
       measuredAt.set(id, at);
-      measured.set(id, await measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, at));
+      measured.set(id, await measureClaimantHeld({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, at));
     }
     const dead = ids.filter((id) => claimantMeasuredDead(measured.get(id)!));
     let journalOf: (id: string) => DeadCoordinatorJournal;

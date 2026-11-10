@@ -23,7 +23,7 @@ import { isMarkerState } from '../../shared/api.js';
 import { sqlStatementsIn, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import {
   ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
-  DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
+  DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
@@ -87,7 +87,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(PANE_SCOPE_STOP_LIVE_MARKER).toBe('pane-scope-stop-live');
     // Delegation PR7 (W5-X1): the adoption marker; since PR8b (D-8112) written by a ccd verb behind a route, read by the lane.
     expect(DELEGATION_ADOPT_MARKER).toBe('delegation-adopt');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER].sort());
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
@@ -117,6 +117,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'dispatch-abandon-choice': 'dispatch_abandon_settings.choice',
       'run-close-never-started-choice': 'run_close_settings.neverStarted',
       'run-close-claimant-crashed-choice': 'run_close_settings.claimantCrashed',
+      'run-close-claimant-gone-choice': 'run_close_settings.claimantGone',
     });
   });
 
@@ -144,6 +145,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'dispatch-abandon-choice': 'POST /api/coord/dispatch-abandon',
       'run-close-never-started-choice': 'POST /api/coord/run-close',
       'run-close-claimant-crashed-choice': 'POST /api/coord/run-close',
+      'run-close-claimant-gone-choice': 'POST /api/coord/run-close',
     });
   });
 
@@ -196,8 +198,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 40 rows: 34 markers and 6 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([40, 34, 6]);
+  it('the table has 42 rows: 35 markers and 7 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([42, 35, 7]);
   });
 
   it('D-8077: runs-expire-never-started is C5\'s, absent means shadow, and nothing in the tree writes it', () => {
@@ -209,6 +211,16 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches([RUNS_EXPIRE_NEVER_STARTED_MARKER])[RUNS_EXPIRE_NEVER_STARTED_MARKER]).toBe('set');
     expect(readSwitches([DEAD_COORDINATOR_LANE_LIVE_MARKER])[RUNS_EXPIRE_NEVER_STARTED_MARKER]).toBe('clear');
     expect(readSwitches(null)[RUNS_EXPIRE_NEVER_STARTED_MARKER]).toBe('unmeasurable');
+  });
+
+  it('D-8078: runs-expire-coordinator-gone is C5\'s, absent means shadow, and nothing in the tree writes it', () => {
+    const row = SWITCHES[RUNS_EXPIRE_COORDINATOR_GONE_MARKER];
+    expect(row.owner).toBe('C5');
+    expect(row.writer).toBe('hand-only');
+    expect(row.default).toMatch(/^absent: shadow/);
+    expect(readSwitches([RUNS_EXPIRE_COORDINATOR_GONE_MARKER])[RUNS_EXPIRE_COORDINATOR_GONE_MARKER]).toBe('set');
+    expect(readSwitches([RUNS_EXPIRE_NEVER_STARTED_MARKER])[RUNS_EXPIRE_COORDINATOR_GONE_MARKER]).toBe('clear');
+    expect(readSwitches(null)[RUNS_EXPIRE_COORDINATOR_GONE_MARKER]).toBe('unmeasurable');
   });
 
   it('D-7902: the pane-scope stop switch is C2\'s, absent means shadow, its writer is the Settings route, and it sits before the test box row', () => {

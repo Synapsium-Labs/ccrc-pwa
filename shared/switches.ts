@@ -54,6 +54,11 @@ export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
  *  records "would warn" and "would close" and acts on nothing. No writer in the tree: since Task 26 the operator arms the group from
  *  Advanced (`run-close-never-started-choice`), and this marker is only an emergency override that arms it whatever that row says. */
 export const RUNS_EXPIRE_NEVER_STARTED_MARKER = 'runs-expire-never-started';
+/** `$REG/runs-expire-coordinator-gone`: arms the run-close lane's claimant-gone group (D-8078; spec 2026-11-04 §12): row E3 (a
+ *  coordinator removed), row E3s (a coordinator stopped by a person) and row E5 (a session name reused by a later run). Absent,
+ *  the lane records "would close" and acts on nothing. No writer in the tree: the operator arms the group from Advanced
+ *  (`run-close-claimant-gone-choice`), and this marker is only an emergency override that arms it whatever that row says. */
+export const RUNS_EXPIRE_COORDINATOR_GONE_MARKER = 'runs-expire-coordinator-gone';
 /** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
  *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
 export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
@@ -220,6 +225,11 @@ export const SWITCHES = {
     owner: 'C5', meaning: 'The run-close lane closes never-started waves in a quiet programme.',
     writer: 'hand-only',
   },
+  [RUNS_EXPIRE_COORDINATOR_GONE_MARKER]: {
+    storage: { marker: RUNS_EXPIRE_COORDINATOR_GONE_MARKER }, default: 'absent: shadow, the lane records what it would close',
+    owner: 'C5', meaning: 'The run-close lane closes the runs of a coordinator that was removed or stopped by a person, and runs whose session name a later run reuses.',
+    writer: 'hand-only',
+  },
   [NESTED_RESCUE_LIVE_MARKER]: {
     storage: { marker: NESTED_RESCUE_LIVE_MARKER }, default: 'absent: shadow, a nested repository is refused and the audit names what the arm would rescue',
     owner: 'C4', meaning: 'Rung 9 rescues a nested repository into the attic instead of refusing a tree that holds one.',
@@ -311,6 +321,11 @@ export const SWITCHES = {
   'run-close-claimant-crashed-choice': {
     storage: { setting: 'run_close_settings.claimantCrashed' }, default: 'shadow', owner: 'C5',
     meaning: 'The crash row of the run-close lane (a claimant that crashed): off, shadow or on (D-8077). A standing dead-coordinator-lane-live marker is an emergency override that arms it.',
+    writer: 'POST /api/coord/run-close',
+  },
+  'run-close-claimant-gone-choice': {
+    storage: { setting: 'run_close_settings.claimantGone' }, default: 'shadow', owner: 'C5',
+    meaning: 'The claimant-gone group of the run-close lane (rows E3, E3s and E5): off, shadow (it records what it would close) or on (D-8078). A standing runs-expire-coordinator-gone marker is an emergency override that arms it.',
     writer: 'POST /api/coord/run-close',
   },
   [SCOPE_SWEEP_LIVE_MARKER]: {
