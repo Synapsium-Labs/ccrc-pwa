@@ -958,6 +958,18 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     visit(root);
     return out.sort();
   };
+  /** What a tree listing cannot see: a write that only reached the WAL moves a counter or a meta row, or the -wal file's size. */
+  const storeState = (box: HistoryBox): { counters: Record<string, number>; meta: unknown[]; walBytes: number } => {
+    const ro = openStoreRO(box);
+    try {
+      const wal = `${historyPaths(box.home).dbFile}-wal`;
+      return {
+        counters: counters(box),
+        meta: ro.prepare('SELECT k, v FROM meta ORDER BY k').all(),
+        walBytes: fs.existsSync(wal) ? fs.statSync(wal).size : 0,
+      };
+    } finally { ro.close(); }
+  };
   const storedAgents = (box: HistoryBox): number => { const ro = openStoreRO(box); try { return agentRows(ro); } finally { ro.close(); } };
   const sizeOf = (p: string): number => fs.statSync(p).size;
   const REMEDY = 'run `ccrc history import --apply` first';
@@ -971,12 +983,14 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     expect(agentRows(rig.db), 'a tick takes no pre-install file').toBe(0);
     closeWriter(rig.db);
     const before = treeState(rig.box);
+    const storeBefore = storeState(rig.box);
     const r = op(rig.box, 'import', '--agents');
     expect(r.code, r.stderr).toBe(0);
     expect(forecastOf(r.stdout)).toMatchObject({
       files: 1, bytes: sizeOf(paths['a']!), skipped: { 'parent-unconfirmed': 0, 'parent-unknown': 1, 'post-install': 0, refused: 0 },
     });
     expect(treeState(rig.box), 'a dry run writes nothing: no byte, no mtime').toEqual(before);
+    expect(storeState(rig.box), 'nor a counter, a meta row or a WAL byte').toEqual(storeBefore);
     expect(storedAgents(rig.box)).toBe(0);
   });
 
@@ -991,7 +1005,7 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     expect(r.code, r.stderr).toBe(0);
     const bytes = sizeOf(a.paths['a']!);
     expect(forecastOf(r.stdout)).toEqual({
-      files: 1, bytes, storeBytesLow: Math.round(bytes * 0.4), storeBytesHigh: Math.round(bytes * 0.55), pauseAtBytes: 0.9 * capBytes(1),
+      files: 1, bytes, storeBytesLow: Math.round(bytes * 0.4), storeBytesHigh: Math.round(bytes * 0.55), pauseAtBytes: Math.ceil(0.9 * capBytes(1)),
       skipped: { 'parent-unconfirmed': 1, 'parent-unknown': 1, 'post-install': 1, refused: 1 },
     });
     expect(r.stdout, 'the pause bound is said in words').toContain(`the apply stops once the store reaches ${Math.ceil(0.9 * capBytes(1))} bytes (90% of the cap)`);
@@ -1027,6 +1041,8 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     closeWriter(rig.db);
     const r = op(rig.box, 'import', '--agents', '--apply');
     expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, 'the apply says what it did not take, by reason').toContain('history-sweep: skipped by reason: parent-unconfirmed 0, parent-unknown 0, post-install 1, refused 0\n');
+    expect(r.stdout, 'and no remedy when no parent waits').not.toContain(REMEDY);
     const ro = openStoreRO(rig.box);
     try {
       expect(agentKeys(ro)).toEqual(['a', `${RUN}/b`]);
@@ -1046,7 +1062,10 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     const dry = op(rig.box, 'import', '--agents');
     expect(forecastOf(dry.stdout)).toMatchObject({ files: 0, skipped: { 'parent-unconfirmed': 1, 'parent-unknown': 0 } });
     expect(dry.stdout).toContain(REMEDY);
-    expect(op(rig.box, 'import', '--agents', '--apply').code).toBe(0);
+    const first = op(rig.box, 'import', '--agents', '--apply');
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.stdout, 'the apply names the skip').toContain('history-sweep: skipped by reason: parent-unconfirmed 1, parent-unknown 0, post-install 0, refused 0\n');
+    expect(first.stdout, 'and the remedy').toContain(REMEDY);
     expect(storedAgents(rig.box), 'the wider map does not admit it').toBe(0);
     expect(op(rig.box, 'import', '--apply').code).toBe(0);   // confirms the parent's epoch: knownUuids now holds it
     expect(forecastOf(op(rig.box, 'import', '--agents').stdout)).toMatchObject({ files: 1, skipped: { 'parent-unconfirmed': 0 } });
@@ -1087,7 +1106,7 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     expect(r.stdout).not.toContain('the scheduled ticks resume it by cursor');
     expect(storedAgents(box)).toBe(0);
     expect(counters(box)['capture_paused_agents_at_cap']).toBe(1);
-    expect(forecastOf(op(box, 'import', '--agents').stdout)).toMatchObject({ pauseAtBytes: 0.9 * capBytes(1) });
+    expect(forecastOf(op(box, 'import', '--agents').stdout)).toMatchObject({ pauseAtBytes: Math.ceil(0.9 * capBytes(1)) });
   });
 
   it('CONTROL: one byte under 90% the same import writes the row and counts nothing', async () => {
@@ -1108,5 +1127,40 @@ describe('the import writing form: import --agents [--apply] (W4 addendum P6, SA
     const plain = runDriver(box, { sizeBytes: capBytes(1) }, ['--op', 'import', '--apply']);
     expect(plain.code, plain.stderr).toBe(0);
     expect(plain.stdout, 'a plain import counts no agent pause').not.toContain('agents-paused-at-cap');
+    expect(plain.stdout, 'and keeps its own message').toContain('the scheduled ticks resume it by cursor');
+    expect(plain.stdout).not.toContain('re-run import --agents --apply');
+  });
+
+  it('P5: the 90% pause is the --agents form\'s alone: a plain import at 90% of the cap ingests its main transcript, says no agent pause and counts none', async () => {
+    const box = await capBox('ccrc-hist-p90m-');
+    const r = runDriver(box, { sizeBytes: Math.ceil(0.9 * capBytes(1)) }, ['--op', 'import', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toContain('agents-paused-at-cap');
+    expect(r.stdout).not.toContain('ingest stopped');
+    const ro = openStoreRO(box);
+    try {
+      expect(mainRows(ro), 'main capture goes on to the cap').toEqual([{ uuid: PARENT, entries: 2 }]);
+    } finally { ro.close(); }
+    expect(counters(box)['capture_paused_agents_at_cap'] ?? 0).toBe(0);
+  });
+
+  it('the forecast counts what is still waiting: a file stored whole is neither counted nor sized, a grown one counts its growth, an unstored one its size', async () => {
+    const rig = await rigOf('ccrc-hist-left-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [pre('a', 0x1060)] }, SINCE);
+    closeWriter(rig.db);
+    expect(forecastOf(op(rig.box, 'import', '--agents').stdout)).toMatchObject({ files: 1, bytes: sizeOf(paths['a']!) });
+    expect(op(rig.box, 'import', '--agents', '--apply').code).toBe(0);
+    expect(forecastOf(op(rig.box, 'import', '--agents').stdout), 'stored whole: nothing waits').toMatchObject({ files: 0, bytes: 0, storeBytesLow: 0, storeBytesHigh: 0 });
+    // one more row appended, the mtime kept before the install record; and a second agent file, not yet stored
+    const stored = sizeOf(paths['a']!);
+    fs.appendFileSync(paths['a']!, fixtureRows(0x1061, 1).map((row) => `${JSON.stringify(row)}\n`).join(''));
+    const t = new Date(T0 - 60_000);
+    fs.utimesSync(paths['a']!, t, t);
+    const grown = sizeOf(paths['a']!) - stored;
+    const second = path.join(path.dirname(paths['a']!), 'agent-b.jsonl');
+    fs.writeFileSync(second, fixtureRows(0x1062, 2).map((row) => `${JSON.stringify(row)}\n`).join(''));
+    fs.utimesSync(second, t, t);
+    expect(grown).toBeGreaterThan(0);
+    expect(forecastOf(op(rig.box, 'import', '--agents').stdout)).toMatchObject({ files: 2, bytes: grown + sizeOf(second) });
   });
 });

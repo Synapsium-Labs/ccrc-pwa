@@ -7678,15 +7678,48 @@ function agentImportSkip(e, known, ev, sinceMs) {
   return ev.has(e.uuid) ? 'parent-unconfirmed' : 'parent-unknown';
 }
 
-/** The remedy the dry run prints when a file's parent is named by evidence only (`parent-unconfirmed` above 0), with its two exceptions
+/** The remedy printed when a file's parent is named by evidence only (`parent-unconfirmed` above 0), with its two exceptions
  *  (review 1731 F9): at main, mapRegistryUuid answers `skipped` in the first (D-4297) and `refused` in the second. */
 const AGENT_IMPORT_REMEDY = 'history-sweep: run `ccrc history import --apply` first: it confirms these parents\' epochs, and `import --agents --apply` then admits their subagent files. '
   + 'It does not when the same id already holds the uuid as an unconfirmed epoch, or another family holds it confirmed; those files stay parent-unconfirmed';
 
-/** `import --agents` without --apply (W4 P6): READ-ONLY, one JSON forecast line, then the words. `files` and `bytes` are the pre-install
- *  files of known parents the apply would take, `storeBytesLow` and `storeBytesHigh` that size at §9.3's two ratios, `pauseAtBytes` the
- *  90% bound the apply stops at, and `skipped` the files it would not take, by reason. `home` is the pass's (knownUuids' registry half);
- *  a missing store has no epochs, so only the registry names a known parent. */
+/** The walk's subagent files, split by agentImportSkip into those `import --agents` takes (`take`) and the count of those it does not,
+ *  by reason (`skipped`): the one plan the dry run forecasts and the apply runs. */
+function agentImportPlan(homes, known, ev, sinceMs) {
+  const take = [];
+  const skipped = { 'parent-unconfirmed': 0, 'parent-unknown': 0, 'post-install': 0, refused: 0 };
+  for (const e of agentImportEntries(homes)) {
+    const why = agentImportSkip(e, known, ev, sinceMs);
+    if (why === null) take.push(e); else skipped[why] += 1;
+  }
+  return { take, skipped };
+}
+
+/** The lines the apply says about what it did not take, by reason, and the remedy when a parent waits on a plain `import --apply`. */
+function agentImportSkipLines(skipped) {
+  const lines = [`history-sweep: skipped by reason: ${Object.entries(skipped).map(([k, n]) => `${k} ${n}`).join(', ')}`];
+  if (skipped['parent-unconfirmed'] > 0) lines.push(AGENT_IMPORT_REMEDY);
+  return lines;
+}
+
+/** How many bytes of one subagent file are still waiting to be ingested: its size, or, when a live row of the same file (device and
+ *  inode) holds a cursor, the size past that cursor. A file stored whole waits for none; a vanished path waits for none. `rowOf` is the
+ *  path's live row, read as bigints (the shape bytesWaiting reads). */
+function agentBytesLeft(path, rowOf) {
+  let st;
+  try { st = lstatSync(path, { bigint: true }); } catch { return 0; }
+  const row = rowOf.get(path);
+  const size = Number(st.size);
+  if (row === undefined || row.dev !== st.dev || row.ino !== st.ino) return size;
+  return Math.max(size - Number(row.offset), 0);
+}
+
+/** `import --agents` without --apply (W4 P6): READ-ONLY, one JSON forecast line, then the words. `files` and `bytes` are what the apply
+ *  would still read: the pre-install files of known parents, an unstored file whole and a stored one past its cursor (a file stored
+ *  whole is neither counted nor sized). `storeBytesLow` and `storeBytesHigh` are that size at §9.3's two ratios, `pauseAtBytes` the
+ *  size at which the apply stops (the 90% share of the cap, rounded up as decideAgentsPause's >= reads it), and `skipped` the files it
+ *  would not take, by reason. `home` is the pass's (knownUuids' registry half); a missing store has no epochs, so only the registry
+ *  names a known parent. */
 function importAgentsDryRun(P, homes, out, home) {
   let ro = null;
   try { if (statSync(P.dbFile).size > 0) ro = openReader(P.dbFile); } catch { ro = null; }
@@ -7694,38 +7727,47 @@ function importAgentsDryRun(P, homes, out, home) {
     const ev = importEvidence(ro, P);
     const known = ro === null ? registeredUuids(home) : knownUuids(ro, home);
     const sinceMs = ro === null ? null : installRecordOf(ro);
-    const skipped = { 'parent-unconfirmed': 0, 'parent-unknown': 0, 'post-install': 0, refused: 0 };
+    const { take, skipped } = agentImportPlan(homes, known, ev, sinceMs);
+    let rowOf = { get: () => undefined };
+    if (ro !== null) {
+      rowOf = ro.prepare("SELECT f.dev AS dev, f.ino AS ino, f.offset AS offset FROM file_paths p JOIN ingest_files f ON f.file_id = p.file_id WHERE p.path = ? AND f.source_key = '' AND f.status = 'live'");
+      rowOf.setReadBigInts(true);
+    }
     let files = 0;
     let bytes = 0;
-    for (const e of agentImportEntries(homes)) {
-      const why = agentImportSkip(e, known, ev, sinceMs);
-      if (why !== null) { skipped[why] += 1; continue; }
-      let size;
-      try { size = lstatSync(e.path).size; } catch { continue; }   // gone since the walk: nothing to take
+    for (const e of take) {
+      const left = agentBytesLeft(e.path, rowOf);
+      if (left === 0) continue;
       files += 1;
-      bytes += size;
+      bytes += left;
     }
-    const pauseAtBytes = AGENTS_PAUSE_SHARE * capBytes(capOf(capText(P.cap)).gb);
+    const pauseAtBytes = Math.ceil(AGENTS_PAUSE_SHARE * capBytes(capOf(capText(P.cap)).gb));
     out(JSON.stringify({
       files, bytes, storeBytesLow: Math.round(bytes * AGENTS_STORE_RATIO_LOW), storeBytesHigh: Math.round(bytes * AGENTS_STORE_RATIO_HIGH), pauseAtBytes, skipped,
     }));
-    out(`history-sweep: the apply stops once the store reaches ${Math.ceil(pauseAtBytes)} bytes (${AGENTS_PAUSE_SHARE * 100}% of the cap): re-run it to resume`);
+    out(`history-sweep: the apply stops once the store reaches ${pauseAtBytes} bytes (${AGENTS_PAUSE_SHARE * 100}% of the cap): re-run it to resume`);
     if (skipped['parent-unconfirmed'] > 0) out(AGENT_IMPORT_REMEDY);
   } finally {
     ro?.close();
   }
 }
 
-/** `import --agents --apply` (W4 P6): the operator's import of the subagent files written before capture began. Each file the walk's
- *  agent arm hands over is ruled by decideAgentIngest, form 'import' (agentGate, the tick's own asker): a pre-install file of a parent in
- *  `knownUuids`, literally the tick's admitted set and never importEvidence's wider map (D-8157). It reads no arming marker (D-8158) and
- *  maps nothing. The 90% pause is importFile's, per window (importRoom with agents, armed: true), and ends the import with the files left
- *  for a re-run. A main transcript and a sidecar are never touched. */
+/** `import --agents --apply` (W4 P6): the operator's import of the subagent files written before capture began. The plan (agentImportPlan)
+ *  holds the pre-install files of parents in `knownUuids`, literally the tick's admitted set and never importEvidence's wider map (D-8157),
+ *  ruled by decideAgentIngest, form 'import'; each is asked again through agentGate (the tick's own asker) with history-off, just before it
+ *  is read. It says what it did not take, by reason, and the remedy for a parent that waits on a plain `import --apply`. It reads no arming
+ *  marker (D-8158) and maps nothing.
+ *  The 90% pause does NOT reach the per-file decider: agentGate reads `ctx.agentsPause`, which the op context never sets, so every file is
+ *  asked with `pause: null`. The pause reaches the import as importFile's stop, per window (importRoom with agents, armed: true, then
+ *  decideAgentsPause), counted and said with the act that resumes it. That route stays: a per-file pause would turn a stop the operator is
+ *  told about into a silent skip. A main transcript and a sidecar are never touched. */
 async function importAgentsApply(db, ctx, P, args) {
   const known = knownUuids(db, ctx.home);
   const sinceMs = installRecordOf(db);
+  const { take, skipped } = agentImportPlan(ctx.homes, known, importEvidence(db, P), sinceMs);
+  for (const line of agentImportSkipLines(skipped)) ctx.out(line);
   const ends = [];
-  for (const e of agentImportEntries(ctx.homes)) {
+  for (const e of take) {
     const gate = agentGate(ctx, {
       form: 'import', armed: false, historyOff: existsSync(P.off), admitted: e.verdict === 'admit',
       preInstall: isPreInstall(e.mtimeMs, sinceMs), parentKnown: known.has(e.uuid),
