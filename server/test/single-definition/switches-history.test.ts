@@ -572,7 +572,9 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W4 P20 (Task 1B's vocabularies, joined here by Task 1C): the walk's levels, and why a directory or a candidate file is refused.
     'AGENT_LEVELS', 'AGENT_DIR_REASONS', 'AGENT_FILE_REASONS',
     // W4 P11, P12, P17 to P19 (Task 1G): the census's vocabularies and the metas' failure words.
-    'CENSUS_PARTS', 'CENSUS_VERDICTS', 'CENSUS_COLUMNS', 'META_FAILURES', 'CENSUS_REASONS', 'CENSUS_WITHHELD'] as const;
+    'CENSUS_PARTS', 'CENSUS_VERDICTS', 'CENSUS_COLUMNS', 'META_FAILURES', 'CENSUS_REASONS', 'CENSUS_WITHHELD', 'HOLDING_SHAPES',
+    // the census's link window and decode bound: the window literal lives once, in lib.
+    'LINK_WINDOW_MS', 'LINK_DECODE_MAX'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];

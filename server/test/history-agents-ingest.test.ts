@@ -14,7 +14,7 @@ import {
 } from './historyAgentFixtures.js';
 import { counters, makeHistoryBox, openStoreRO, plantSession, plantTranscript, recordOpenFlags, runCli, runDriver, runShim, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
 import { mkTmp, removeTmpFixturesSince, tmpMark } from './tmpHelpers.js';
-import { agentIdOk, capBytes, historyPaths, META_MAX_BYTES, parseOpVerbArgs, SCAN_INTERVAL_MS, WRITING_FORMS } from '../../ccd/history/lib.mjs';
+import { agentIdOk, capBytes, historyPaths, META_FAILURES, META_MAX_BYTES, parseOpVerbArgs, SCAN_INTERVAL_MS, WRITING_FORMS } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
 import { behindStats, candidateFiles, discoverTranscripts, ingestTick, makeIngestCtx, newBudget, readAgentMeta } from '../../ccd/history/sweep.mjs';
 
@@ -799,6 +799,16 @@ describe('readAgentMeta (W4 addendum P17)', () => {
     fs.symlinkSync(path.join(dir, 'ok.json'), path.join(dir, 'link.json'));
     expect(readAgentMeta(path.join(dir, 'link.json')), 'a link').toEqual({ ok: false, cause: 'not-regular' });
     expect(readAgentMeta(put('over.json', `{"pad":"${'x'.repeat(META_MAX_BYTES)}"}`))).toEqual({ ok: false, cause: 'oversized' });
+  });
+  it('every cause readAgentMeta can answer is in META_FAILURES, and every META_FAILURES word is one it answers (the census spells them in a reason)', () => {
+    // scan the reader's own body: each `cause: <expr>` (a literal or a ternary chain of literals) up to its closing brace
+    const src = fs.readFileSync(path.join(__dirname, '../../ccd/history/sweep.mjs'), 'utf8');
+    const start = src.indexOf('export function readAgentMeta(');
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    const exprs = [...body.matchAll(/cause:\s*([^}]*)\}/g)].map((m) => m[1]!);
+    const causes = new Set(exprs.flatMap((e) => [...e.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]!)));
+    expect(exprs.length, 'CONTROL: the scan found the reader\'s causes').toBeGreaterThanOrEqual(8);
+    expect([...causes].sort()).toEqual([...META_FAILURES].sort());
   });
   it('a file of exactly META_MAX_BYTES is read, one byte more is oversized', () => {
     const dir = dirOf();

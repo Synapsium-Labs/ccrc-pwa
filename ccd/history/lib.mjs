@@ -596,8 +596,11 @@ export const CENSUS_REASONS = Object.freeze([
   'parent-behind', 'parent-copy-unbound', 'parent-untimed',
   'summary-unreadable',
 ]);
-/** Why every share is withheld (3.3, "Uncertainty is shown, never folded"). */
-export const CENSUS_WITHHELD = Object.freeze(['unentered', 'identity-collision', 'partition-sum']);
+/** Why every share is withheld (3.3, "Uncertainty is shown, never folded"): `K` and `identity_collision` are the addendum's own
+ *  names for the unentered-directories population and the disjoint-holdings counter; `partition-sum` is a failed sum. */
+export const CENSUS_WITHHELD = Object.freeze(['K', 'identity_collision', 'partition-sum']);
+/** The content shape of a key's bound holdings (3.1), `none` when no bound holding has a stored row (nothing to compare). */
+export const HOLDING_SHAPES = Object.freeze(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
 /** The link search's window (P4, P12 (b)): 15 minutes either side of its anchor; and the most candidates decoded for one search. */
 export const LINK_WINDOW_MS = 15 * 60 * 1000;
 export const LINK_DECODE_MAX = 64;
@@ -661,23 +664,22 @@ export function workflowVerdict(option, ev) {
 
 /** The window a run's parent rows are searched in (3.2, "Option (b)'s lookup" step 2; the predicate and its timing settled by act M1,
  *  D-8161): `immediate`, `[t0 - 15 min, t0 + 15 min]` with `t0` the run's first timed row; `at-end`, `[tEnd, tEnd + 15 min]` with
- *  `tEnd` its last. The literal lives here once. */
+ *  `tEnd` its last. null when the anchor is not a finite number (the run has no timed row): no window, which the caller reads as
+ *  `no-timed-row`, an `M`, never a `U`. The literal lives here once. */
 export function workflowWindow(t0, runWindow, tEnd) {
-  if (runWindow === 'at-end') return [tEnd, tEnd + LINK_WINDOW_MS];
-  return [t0 - LINK_WINDOW_MS, t0 + LINK_WINDOW_MS];
+  const anchor = runWindow === 'at-end' ? tEnd : t0;
+  if (!Number.isFinite(anchor)) return null;
+  return runWindow === 'at-end' ? [anchor, anchor + LINK_WINDOW_MS] : [anchor - LINK_WINDOW_MS, anchor + LINK_WINDOW_MS];
 }
 
-const IN_COLUMN = Object.freeze({
-  'D-T': Object.freeze({ R: true, P: false, Q: true, Ad: true, I: false }),
-  D: Object.freeze({ R: true, P: true, Q: true, Ad: true, I: true }),
-  E: Object.freeze({ R: false, P: false, Q: true, Ad: true, I: true }),
-  Ad: Object.freeze({ R: false, P: false, Q: false, Ad: true, I: true }),
-});
+// 3.3's membership table, by column: the units each denominator holds, `I` being the imported part of `Ad`. Keyed by CENSUS_COLUMNS, so a
+// column added there without a row here fails when the module loads.
+const IN_COLUMN_OF = { 'D-T': 'R Q Ad', D: 'R P Q Ad I', E: 'Q Ad I', Ad: 'Ad I' };
+const IN_COLUMN = Object.freeze(Object.fromEntries(CENSUS_COLUMNS.map((c) => [c, Object.freeze(new Set(IN_COLUMN_OF[c].split(' ')))])));
 /** Whether a unit of `part` is in a column's denominator (3.3's membership table). `imported` splits `Ad` into `Ad - I` and `I`. */
 export function inColumn(column, part, imported) {
-  const row = IN_COLUMN[column];
-  if (row === undefined) return false;
-  return row[part === 'Ad' && imported ? 'I' : part] === true;
+  const members = IN_COLUMN[column];
+  return members !== undefined && members.has(part === 'Ad' && imported ? 'I' : part);
 }
 
 /** Whether both partitions hold: `D = R + P + Q + Ad` and `Ad = L + U + M + X`. `failed` names the sums that do not. */
@@ -704,23 +706,26 @@ export function shareRange({ L, M, den, extraLow }) {
 /** The reasons every share is withheld (3.3): an unentered directory, an identity collision, a failed partition sum. Empty when none. */
 export function censusWithheld({ K, collisions, sumsOk }) {
   const out = [];
-  if (K > 0) out.push('unentered');
-  if (collisions > 0) out.push('identity-collision');
+  if (K > 0) out.push('K');
+  if (collisions > 0) out.push('identity_collision');
   if (!sumsOk) out.push('partition-sum');
   return out;
 }
 
-/** The canonical share (P11, P12): `D-T`'s range, or null while the predicate is unsettled (`predicate` null), while anything is
- *  withheld, or when there is no share or no `D-T` range. `shares` is the printed ranges by column. */
+/** The canonical share (P11, P12): `D-T`'s range, or null while the predicate is unsettled (`predicate` null) or is not one the
+ *  addendum rules (`a` is not chosen and measures nothing), while anything is withheld, or when there is no share or no `D-T`
+ *  range. `shares` is the printed ranges by column. */
 export function canonicalOf({ shares, withheld, predicate }) {
-  if (predicate === null || withheld.length > 0 || shares === null) return null;
+  if ((predicate !== 'b' && predicate !== 'c') || withheld.length > 0 || shares === null) return null;
   return shares['D-T'] ?? null;
 }
 
-/** The content shape of a key's bound holdings (3.1), from each holding's ordered entry uuids in the store. `disjoint` (two holdings
+/** The content shape of a key's bound holdings (3.1), from each holding's ordered entry uuids in the store. `none` when no holding has
+ *  a stored row (no bound holding, or only empty ones: nothing to compare). `disjoint` (two holdings
  *  of at least one row each and no row in common: an identity collision) outranks the rest; then `identical`; a chain of prefixes
  *  is `prefix` (growing copies); anything else shares rows and is a `fork`. Hardlinks are one file row, so one list: `single`. */
 export function holdingShape(lists) {
+  if (lists.every((l) => l.length === 0)) return 'none';
   if (lists.length <= 1) return 'single';
   for (let i = 0; i < lists.length; i += 1) {
     for (let j = i + 1; j < lists.length; j += 1) {

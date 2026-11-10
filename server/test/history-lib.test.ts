@@ -278,7 +278,7 @@ describe('the vocabularies are frozen, and each holds what the spec names', () =
       // W4 P20 (Task 1B's three vocabularies, frozen unchecked until Task 1C)
       AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
       // W4 P11, P12, P17 to P19 (Task 1G): the census's vocabularies
-      libCensus.CENSUS_PARTS, libCensus.CENSUS_VERDICTS, libCensus.CENSUS_COLUMNS, libCensus.META_FAILURES, libCensus.CENSUS_REASONS, libCensus.CENSUS_WITHHELD]) {
+      libCensus.CENSUS_PARTS, libCensus.CENSUS_VERDICTS, libCensus.CENSUS_COLUMNS, libCensus.META_FAILURES, libCensus.CENSUS_REASONS, libCensus.CENSUS_WITHHELD, libCensus.HOLDING_SHAPES]) {
       expect(Object.isFrozen(v)).toBe(true);
     }
     for (const f of Object.values(WRITING_FORMS)) expect(Object.isFrozen(f)).toBe(true);
@@ -12390,7 +12390,8 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
       'meta-conflict', 'meta-unread:absent', 'meta-unread:oversized', 'meta-unread:not-regular', 'meta-unread:unreadable', 'meta-unread:malformed',
       'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable', 'parent-behind', 'parent-copy-unbound', 'parent-untimed',
       'summary-unreadable']);
-    expect(libCensus.CENSUS_WITHHELD).toEqual(['unentered', 'identity-collision', 'partition-sum']);
+    expect(libCensus.CENSUS_WITHHELD).toEqual(['K', 'identity_collision', 'partition-sum']);
+    expect(libCensus.HOLDING_SHAPES).toEqual(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
     expect(libCensus.LINK_WINDOW_MS).toBe(900000);
     expect(libCensus.LINK_DECODE_MAX).toBe(64);
   });
@@ -12486,6 +12487,20 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
     expect(libCensus.workflowWindow(t0, 'immediate')).toEqual([t0 - 900000, t0 + 900000]);
     expect(libCensus.workflowWindow(t0, 'at-end', 12_000_000)).toEqual([12_000_000, 12_900_000]);
   });
+  it.each([
+    [null, 'immediate', undefined],               // a run with no timed row has no window: no-timed-row, an M, never a U
+    [Number.NaN, 'immediate', undefined],
+    [Number.POSITIVE_INFINITY, 'immediate', undefined],
+    [10_000_000, 'at-end', undefined],            // at-end needs tEnd
+    [10_000_000, 'at-end', null],
+    [null, 'at-end', Number.NaN],
+  ] as const)('workflowWindow(%j, %s, %j) is null (a non-finite anchor has no window)', (t0, runWindow, tEnd) => {
+    expect(libCensus.workflowWindow(t0, runWindow, tEnd)).toBeNull();
+  });
+  it('workflowWindow(at-end) ignores t0, and immediate ignores tEnd', () => {
+    expect(libCensus.workflowWindow(null, 'at-end', 5_000_000)).toEqual([5_000_000, 5_900_000]);
+    expect(libCensus.workflowWindow(5_000_000, 'immediate', null)).toEqual([4_100_000, 5_900_000]);
+  });
 
   it.each([
     // [part, imported, D-T, D, E, Ad]: the membership table's five rows by four columns
@@ -12497,6 +12512,13 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
   ] as const)('inColumn: part %s imported %j', (part, imported, dt, d, e, ad) => {
     const got = libCensus.CENSUS_COLUMNS.map((col) => libCensus.inColumn(col, part, imported));
     expect(got).toEqual([dt, d, e, ad]);
+  });
+  it('inColumn has a row for every column CENSUS_COLUMNS names, and every part of the table is decided', () => {
+    for (const col of libCensus.CENSUS_COLUMNS) for (const part of libCensus.CENSUS_PARTS) {
+      expect(typeof libCensus.inColumn(col, part, false), `${col} ${part}`).toBe('boolean');
+    }
+    // the table is derived from CENSUS_COLUMNS in lib: a column without a membership row fails when the module loads
+    expect(readFileSync(LIB, 'utf8')).toMatch(/Object\.fromEntries\(CENSUS_COLUMNS\.map\(/);
   });
   it('inColumn answers false for a column it does not know', () => {
     expect(libCensus.inColumn('X' as never, 'Ad', false)).toBe(false);
@@ -12526,10 +12548,10 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
 
   it.each([
     [0, 0, true, []],
-    [1, 0, true, ['unentered']],
-    [0, 2, true, ['identity-collision']],
+    [1, 0, true, ['K']],
+    [0, 2, true, ['identity_collision']],
     [0, 0, false, ['partition-sum']],
-    [3, 1, false, ['unentered', 'identity-collision', 'partition-sum']],
+    [3, 1, false, ['K', 'identity_collision', 'partition-sum']],
   ] as const)('censusWithheld(K %j, collisions %j, sums ok %j) is %j', (K, collisions, sumsOk, want) => {
     expect(libCensus.censusWithheld({ K, collisions, sumsOk })).toEqual(want);
   });
@@ -12539,15 +12561,18 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
     [SHARES, [], 'b', { lo: 0.9, hi: 0.95 }],
     [SHARES, [], 'c', { lo: 0.9, hi: 0.95 }],
     [SHARES, [], null, null],                          // no canonical share until the predicate is settled
-    [SHARES, ['unentered'], 'b', null],                // nor while anything is withheld
+    [SHARES, [], 'a', null],                           // (a) is not chosen and measures nothing
+    [SHARES, ['K'], 'b', null],                // nor while anything is withheld
     [null, [], 'b', null],
     [{ D: { lo: 0.8, hi: 0.9 } }, [], 'b', null],      // no D-T range
   ] as const)('canonicalOf(shares %j, withheld %j, predicate %j) is %j', (shares, withheld, predicate, want) => {
-    expect(libCensus.canonicalOf({ shares: shares as never, withheld: [...withheld], predicate })).toEqual(want);
+    expect(libCensus.canonicalOf({ shares: shares as never, withheld: [...withheld], predicate: predicate as never })).toEqual(want);
   });
 
   it.each([
-    [[], 'single'],
+    [[], 'none'],                                      // no bound holding
+    [[[]], 'none'],
+    [[[], []], 'none'],                                // no stored rows to compare
     [[['a', 'b']], 'single'],                          // hardlinks are one file row
     [[['a', 'b'], ['a', 'b']], 'identical'],
     [[['a', 'b'], ['a', 'b'], ['a', 'b']], 'identical'],
