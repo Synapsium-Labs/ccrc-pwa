@@ -477,10 +477,38 @@ Every guard ships with a test that goes red when the guard is removed or weakene
 - The written spec, with D18 to D27, accepted by the operator on 2026-10-15. At acceptance, the measured windows
   moved from the class registry to a sibling file (§2.7).
 
+### Built (as of 2026-11-10)
+
+- Stages 0 to 2 are merged. The measured windows are applied, every caller reads credentials through the one auth
+  library, and the bridge serves on the backend route.
+- Both lanes of the reference fleet run `direct` since 2026-10-27. The Stage 2 plan
+  (`docs/superpowers/plans/2026-10-22-codex-bridge-stage-2-bridge.md`) records the first live step and both switches.
+- The watch of §2.8 ended on 2026-11-03. Its result is not recorded yet.
+- Stage 3 and Stage 4 are not built. Stage 4 has a plan:
+  `docs/superpowers/plans/2026-11-10-codex-bridge-stage-4-litellm-retired.md`.
+
 ### Waiting on you
 
 - The trial sign-in, which decides whether Stage 3 can start and which account its lane uses.
-- Review of each stage's plan, starting with Stage 0's measured windows.
+- The watch's verdict for each lane, and the other rulings the Stage 4 plan lists.
+- Review of each stage's plan: Stage 4's now, and Stage 3's once the trial has run.
+
+### The Sign in with ChatGPT pages, read again on 2026-11-10
+
+Stage 3 builds from the pages as they read when its plan is written, and from the trial's recordings. What a second
+reading found:
+
+- **The terms were re-issued, effective 2026-11-04.** The sentences §2.2 quotes stand, with "or entity" added to the
+  first ("another application or entity"). The new text adds obligations that do not bear on a local tool's plan
+  usage, and says the implementation may be monitored.
+- **The preview refuses more request fields than §2.2's table names**: also `background`, `conversation`,
+  `max_tool_calls`, `moderation`, `multi_agent`, `prompt`, `safety_identifier`, `top_logprobs` and `truncation`.
+- **A local tool registers no client in advance.** Its first sign-in asks as a dynamic client and is issued a client
+  id bound to that user.
+- **The pages document no device-code flow.** A sign-in returns to a loopback callback on `127.0.0.1`. §2.6's
+  paste-the-callback verb and `ccrc auth import` cover a box with no browser.
+- **The `…_not_enabled` error names of §2.2 are not in the pages.** The eligibility refusal they list is
+  `subscription_sharing_user_not_eligible`.
 
 ### Later
 
