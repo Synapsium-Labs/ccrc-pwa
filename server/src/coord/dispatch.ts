@@ -327,7 +327,7 @@ export type WorkerReading = 'busy' | 'idle' | 'gone' | 'unmeasured';
  *  over `activeRunWorkers`. A worker is read once, and only for a run older than `STALE_RUN_COUNTED_MS`. A reading that
  *  throws is `unmeasured`. Absent port: every run counts. Reads, consumes nothing. */
 export async function countedRuns(
-  coord: CoordStore, workerReading: DispatchRunDeps['workerReading'], now: number = Date.now(),
+  coord: Pick<CoordStore, 'activeRunWorkers'>, workerReading: DispatchRunDeps['workerReading'], now: number = Date.now(),
 ): Promise<number> {
   const rows = coord.activeRunWorkers();
   if (workerReading === undefined) return rows.length;

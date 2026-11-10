@@ -12,7 +12,7 @@ import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { clearSender } from '../inject/send.js';
 import { assembleFleet, fleetNow } from '../fleet.js';
-import { liveWordFor, turnReadDeps, turnVerdictFor, workerReadingFor } from '../turnverdict.js';
+import { liveWordFor, turnReadDeps, turnVerdictFor, workerReadingOfId } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -652,12 +652,7 @@ export function registerCoordRoutes(
   const paneLive = async (rec: SessionRecord): Promise<boolean> => (await liveWordFor(turnReads, rec)).ok;
   // D-6094 (temporary, deleted at W3-4): a run's worker reading for the stale-run predicate, over the same registry row
   // read `sessionReadsLive` makes; a row the registry lists as absent is gone, anything unreadable is `unmeasured`.
-  const workerReading = async (sessionId: string): Promise<WorkerReading> => {
-    const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
-    if (read.kind === 'absent') return 'gone';
-    if (read.kind !== 'found' || measuredIdentity(read.record) === null || read.record.lifecycleUnmeasured.length > 0) return 'unmeasured';
-    return workerReadingFor(turnReads, read.record);
-  };
+  const workerReading = (sessionId: string): Promise<WorkerReading> => workerReadingOfId(turnReads, sessionId);
   /** D-6095: the feed row of a refusal by the cap, one per refusal (`lastRefusedAt` is in its once-only key, so a refusal
    *  that is retried is a new row and a replay of the same one is not). Record-only: the operator is not pushed for a wait
    *  the lane will end. The stamp and the journal line were written inside the serialiser (`noteCapRefusal`). */

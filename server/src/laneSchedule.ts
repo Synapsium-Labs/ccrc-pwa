@@ -166,6 +166,11 @@ export const RUN_STUCK_SWEEP_MS = 60_000;
 /** The runs-closed notice's drain (D-8073): a minute, as the stuck verdict's pass. */
 export const RUN_UNTOLD_SWEEP_MS = 60_000;
 
+/** The admission wake's lane (D-6095): a coordinator the concurrency cap refused is mailed when the cap has room, at most
+ *  `WAKE_BURST` a window. Its cadence IS the wake budget's window (`WAKE_WINDOW_MS`, `coord/wakeBudget.ts`), declared here for the
+ *  reason `STOP_DONE_SWEEP_MS` is (the L0 table imports no L1 file); `admission-wake.test.ts` pins the two equal. */
+export const ADMISSION_WAKE_SWEEP_MS = 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -179,7 +184,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold';
+  | 'admissionWake' | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -252,6 +257,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'blockWakes', cadenceMs: STALL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'STALL_SWEEP_MS', reason: 'a block wake needs no finer beat than the sweep it was split from' },
   },
+  // The admission wake (D-6095): mails refused coordinators when the cap has room. One pass at a time; it catches its own
+  // failure with its own sentence, so no warnKey. Its beat is the wake budget's window (pinned equal in admission-wake.test.ts):
+  // the lane wakes at most WAKE_BURST coordinators a window, so a finer beat buys nothing.
+  { name: 'admissionWake', cadenceMs: ADMISSION_WAKE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'asks', cadenceMs: ASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },

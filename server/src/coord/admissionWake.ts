@@ -1,5 +1,5 @@
 // L1, pure (D-6095; fleet-capacity W1-4; spec §3.5 "The server wakes waiting coordinators"). WHICH refused coordinators the
-// `admissionWake` lane mails at this pass: none while the cap has no room, then the oldest ELIGIBLE refusal of each programme,
+// `admissionWake` lane mails at this pass: none while the cap has no room, then the oldest ELIGIBLE refusal of each programme (one round a pass),
 // the programmes taken round-robin from the one served longest ago, and no more than the wake budget admits.
 //
 // The budget is `wakeAdmit` over a list of the LANE'S OWN (`recentWakes`), `WAKE_BURST` per `WAKE_WINDOW_MS`, both read by
@@ -7,7 +7,7 @@
 // is hibernated, is the mail lane's and is charged once, there. Nothing here reads a clock, a store or the registry; the
 // lane gathers `waiters` (`CoordStore.admissionWaiters`, which lists eligible waiters only: a woken one is skipped until it is
 // refused again, so it never blocks the next one in its programme) and `room`.
-import { WAKE_WINDOW_MS, wakeAdmit } from './wakeBudget.js';
+import { wakeAdmitMany } from './wakeBudget.js';
 
 /** One refused run waiting for the cap, as `CoordStore.admissionWaiters` lists it. `sendBack`: a refused send-back of a
  *  parked run, not a refused dispatch. */
@@ -33,39 +33,31 @@ export interface AdmissionWakeChoice {
 
 /**
  * `room`: free concurrency slots, a figure the lane measured without consuming a freed-slot admit. At most `room` waiters
- * are chosen. Programmes are taken round-robin, one waiter per programme per round, starting from the programme served
- * longest ago (a programme never served first; ties by the oldest waiting refusal, then by name).
+ * are chosen. Programmes are taken round-robin, one waiter per programme per pass, starting from the programme served
+ * longest ago (a programme never served has time 0, so goes first; ties by the oldest waiting refusal, then by name).
  */
 export function admissionWakeChoice(
   waiters: readonly AdmissionWaiter[], room: number, recentWakes: readonly number[], now: number,
   servedAt: ReadonlyMap<string, number> = new Map(),
 ): AdmissionWakeChoice {
-  let recent = recentWakes.filter((t) => now - t < WAKE_WINDOW_MS);
   const served = new Map(servedAt);
-  const chosen: AdmissionWaiter[] = [];
   const queues = new Map<string, AdmissionWaiter[]>();
   for (const x of [...waiters].sort((a, b) => a.since - b.since || a.runId - b.runId)) {
     const q = queues.get(x.program);
     if (q === undefined) queues.set(x.program, [x]); else q.push(x);
   }
   const order = [...queues.keys()].sort((a, b) =>
-    (served.get(a) ?? Number.NEGATIVE_INFINITY) - (served.get(b) ?? Number.NEGATIVE_INFINITY)
+    (served.get(a) ?? 0) - (served.get(b) ?? 0)
     || queues.get(a)![0]!.since - queues.get(b)![0]!.since || (a < b ? -1 : a > b ? 1 : 0));
-  let full = room <= 0;
-  while (!full && chosen.length < room) {
-    let tookOne = false;
-    for (const program of order) {
-      if (chosen.length >= room) break;
-      const q = queues.get(program)!;
-      if (q.length === 0) continue;
-      const r = wakeAdmit(recent, now, 'auto');
-      recent = r.recent;
-      if (!r.admit) { full = true; break; }
-      chosen.push(q.shift()!);
-      served.set(program, now);
-      tookOne = true;
-    }
-    if (!tookOne) break;
+  // ONE ROUND a pass: at most one waiter per programme, so a programme with many waiters is served at the lane's cadence
+  // and two coordinators of one programme never race for the same free slot in one pass.
+  const heads = order.slice(0, Math.max(0, room)).map((program) => ({ program, head: queues.get(program)![0]! }));
+  const budget = wakeAdmitMany(recentWakes, now, heads.length);
+  const chosen: AdmissionWaiter[] = [];
+  for (const { program, head } of heads.slice(0, budget.admitted)) {
+    chosen.push(head);
+    served.set(program, now);
   }
+  const recent = budget.recent;
   return { chosen, recent, served };
 }

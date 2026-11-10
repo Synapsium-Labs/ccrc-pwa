@@ -15,7 +15,7 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, fleetNow } from './fleet.js';
 import type { FleetWatcherView } from './coord/ports.js';
-import type { SessionRecord } from './registry.js';
+import { measuredIdentity, readSessionRecord, type SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { liveStateReaderOver, readLiveStateMeasured } from './livestate.js';
 import { readTurnMarkMeasured } from './turnmark.js';
@@ -175,4 +175,17 @@ export async function workerReadingFor(d: TurnReadDeps, rec: SessionRecord): Pro
   const mark = await turnMarkFor(d, rec);
   if (!mark.ok) return 'unmeasured';
   return mark.bg === 0 && mark.crons === 0 ? 'idle' : 'busy';
+}
+
+/**
+ * D-6094, D-6095 (TEMPORARY with `workerReadingFor`): a worker's reading by SESSION ID, over the registry row read for it.
+ * A row the registry lists as absent is `gone`; a row that cannot be read, has no measured identity or an unmeasured
+ * lifecycle field is `unmeasured`; otherwise `workerReadingFor`. The one spelling the stale-run predicate's port
+ * (`coord/routes.ts`) and the `admissionWake` lane's room count (`watch.ts`) both take.
+ */
+export async function workerReadingOfId(d: TurnReadDeps, sessionId: string): Promise<'busy' | 'idle' | 'gone' | 'unmeasured'> {
+  const read = await readSessionRecord(d.io, d.cfg, sessionId);
+  if (read.kind === 'absent') return 'gone';
+  if (read.kind !== 'found' || measuredIdentity(read.record) === null || read.record.lifecycleUnmeasured.length > 0) return 'unmeasured';
+  return workerReadingFor(d, read.record);
 }

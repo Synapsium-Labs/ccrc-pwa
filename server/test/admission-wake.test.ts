@@ -5,7 +5,7 @@
 // The characterization commit pinned, green on the base, that a refused dispatch wrote nothing and the run stayed
 // `planned`; the stamp's block below flips exactly the rows that changed (the stamp and the journal line). A refusal
 // still sends no mail: the wake is the lane's, when the cap has room.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
@@ -14,8 +14,13 @@ import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from '../src/
 import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
 import { admissionWakeChoice, type AdmissionWaiter } from '../src/coord/admissionWake.js';
-import { WAKE_BURST, WAKE_WINDOW_MS } from '../src/coord/wakeBudget.js';
-import { testDeps } from './helpers.js';
+import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany } from '../src/coord/wakeBudget.js';
+import { testDeps, withFakeClock } from './helpers.js';
+import { FleetWatcher } from '../src/watch.js';
+import { Bus } from '../src/bus.js';
+import { laneRow } from '../src/laneSchedule.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const PROJECT = 'demo';
@@ -206,6 +211,11 @@ describe('the decider: admissionWakeChoice', () => {
     expect(admissionWakeChoice([w(3, 'c', 3)], 3, c.recent, NOW + WAKE_WINDOW_MS).chosen).toHaveLength(1);
   });
 
+  it('a programme with several waiters is served one a pass', () => {
+    const c = admissionWakeChoice([w(1, 'a', 10), w(2, 'a', 11), w(3, 'a', 12)], 5, [], NOW);
+    expect(ids(c)).toEqual([1]);
+  });
+
   it('it never wakes more than the room', () => {
     expect(ids(admissionWakeChoice([w(1, 'a', 1), w(2, 'b', 2)], 1, [], NOW))).toHaveLength(1);
   });
@@ -213,5 +223,193 @@ describe('the decider: admissionWakeChoice', () => {
   it('a woken waiter does not block the next in its programme (the store lists eligible waiters only)', () => {
     const c = admissionWakeChoice([w(2, 'a', 20)], 1, [], NOW);
     expect(ids(c)).toEqual([2]);
+  });
+});
+
+describe('the lane row', () => {
+  it('admissionWake is one row: the wake budget\'s window, one pass at a time, the monotonic clock', () => {
+    const row = laneRow('admissionWake');
+    expect(row.cadenceMs).toBe(WAKE_WINDOW_MS);   // the L0 table declares its own figure; this holds the two equal
+    expect(row.flight).toBe('skip');
+    expect(row.clock).toBe('mono');
+  });
+});
+
+describe('the lane: refused coordinators are woken when the cap has room (D-6095)', () => {
+  const T0 = Date.parse('2026-11-10T10:00:00Z');
+  const MIN = 60_000;
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(T0); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  async function lane() {
+    const f = fixture();
+    const runner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
+    const notifyLog = new NotifyLog(path.join(f.home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const deps = { ...testDeps(f.home, runner), coord: f.coord, notifyLog };
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(f.home, 'state-cache.json')));
+    await w.tick();   // primes; the registry directory exists and lists
+    const sweep = async (at: number, names: readonly string[] | null = []): Promise<void> => {
+      vi.setSystemTime(at);
+      await w.sweepAdmissionWake(names);
+    };
+    f.coord.setCaps({ maxConcurrentWorkers: 5 });
+    const wakeMail = () => f.coord.db.prepare(
+      "SELECT m.id, m.toId, m.subject, m.fromId, d.state FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.subject LIKE 'capacity:%' ORDER BY m.id",
+    ).all() as unknown as { id: number; toId: string; subject: string; fromId: string; state: string }[];
+    /** A refused planned run: stamped at `at`. */
+    let wave = 0;
+    const refused = (program: string, claimedBy: string, at: number): number => {
+      const o = f.coord.openRun({ program, title: program, project: PROJECT, wave: ++wave, waveOf: 9, claimedBy });
+      if (!('id' in o)) throw new Error('fixture openRun refused');
+      f.coord.stampAdmissionWait(o.id, at);
+      return o.id;
+    };
+    return { ...f, w, sweep, wakeMail, refused };
+  }
+
+  it('a refusal followed by a freed slot sends one mail, to the claimant, from the operator role, and marks the run woken', async () => {
+    const l = await lane();
+    l.coord.setCaps({ maxConcurrentWorkers: 2 });
+    const id = l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toMatchObject([{ toId: 'coord-a', fromId: 'operator', subject: `capacity: room for run ${id}` }]);
+    expect(l.coord.admissionStampOf(id)!.wokenAt).toBe(T0);
+    expect(l.coord.runEvents(id).map((e) => e.detail)).toContainEqual(expect.stringMatching(/^admission-woken:/));
+    const stamp = l.coord.admissionStampOf(id)!;
+    expect(l.coord.hasNotice('coord', 'coord-a', `admission-wake:${id}:${stamp.lastRefusedAt}`)).toBe(true);
+  });
+
+  it('a send-back waiter is mailed with its own subject', async () => {
+    const l = await lane();
+    l.coord.setCaps({ maxConcurrentWorkers: 2 });
+    const id = l.holder('prog-a');
+    expect(l.coord.advance(id, 'working', 'test').ok).toBe(true);
+    expect(l.coord.advance(id, 'awaiting-review', 'test').ok).toBe(true);
+    l.coord.stampAdmissionWait(id, T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room to send back run ${id}`]);
+  });
+
+  it('the same refusal is mailed once, however many passes run', async () => {
+    const l = await lane();
+    l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    await l.sweep(T0 + MIN);
+    await l.sweep(T0 + 2 * MIN);
+    expect(l.wakeMail()).toHaveLength(1);
+  });
+
+  it('a woken coordinator refused again is woken again at the next free slot', async () => {
+    const l = await lane();
+    const id = l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    l.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked'").run();   // the first mail was read
+    l.coord.stampAdmissionWait(id, T0 + 10);
+    await l.sweep(T0 + MIN);
+    expect(l.wakeMail()).toHaveLength(2);
+  });
+
+  it('no room (the cap is full of busy-or-recent runs) wakes nobody', async () => {
+    const l = await lane();
+    l.coord.setCaps({ maxConcurrentWorkers: 1 });
+    l.holder('other');
+    l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toEqual([]);
+  });
+
+  it('two programmes waiting are served alternately, and a third wake inside one window waits for the next', async () => {
+    const l = await lane();
+    l.refused('prog-a', 'coord-a', T0 - 5 * MIN);
+    l.refused('prog-a', 'coord-a', T0 - 4 * MIN);
+    l.refused('prog-b', 'coord-b', T0 - 3 * MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail().map((m) => m.toId).sort()).toEqual(['coord-a', 'coord-b']);   // one per programme, not a twice
+    await l.sweep(T0 + 1000);
+    expect(l.wakeMail()).toHaveLength(WAKE_BURST);   // the third waits: the window is full
+    await l.sweep(T0 + WAKE_WINDOW_MS);
+    expect(l.wakeMail()).toHaveLength(3);
+  });
+
+  it('the oldest refusal in a programme goes first, and a woken waiter does not block the next', async () => {
+    const l = await lane();
+    const old = l.refused('prog-a', 'coord-a', T0 - 5 * MIN);
+    const newer = l.refused('prog-a', 'coord-a', T0 - 2 * MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${old}`]);
+    await l.sweep(T0 + WAKE_WINDOW_MS);
+    expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${old}`, `capacity: room for run ${newer}`]);
+  });
+
+  it('a run dispatched or abandoned since its refusal is not mailed', async () => {
+    const l = await lane();
+    const a = l.refused('prog-a', 'coord-a', T0 - MIN);
+    const b = l.refused('prog-b', 'coord-b', T0 - MIN);
+    expect(l.coord.advance(a, 'failed', 'operator', 'abandon:x').ok).toBe(true);
+    l.coord.markDispatched(b, 'b-worker', 'b-ws', 'ws/b', false);
+    expect(l.coord.advance(b, 'dispatched', 'test').ok).toBe(true);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toEqual([]);
+  });
+
+  it('the pause, mail-disabled or an unlistable registry sends nothing', async () => {
+    const l = await lane();
+    l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0, ['coordinator-paused']);
+    await l.sweep(T0 + MIN, ['mail-disabled']);
+    await l.sweep(T0 + 2 * MIN, null);
+    expect(l.wakeMail()).toEqual([]);
+    await l.sweep(T0 + 3 * MIN, []);
+    expect(l.wakeMail()).toHaveLength(1);
+  });
+
+  it('the lane never records into the shared wake list or asks the watcher for a wake', async () => {
+    const l = await lane();
+    const admit = vi.spyOn(l.w, 'admitWake');
+    l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toHaveLength(1);
+    expect(admit).not.toHaveBeenCalled();
+    expect((l.w as unknown as { wakeRecent: number[] }).wakeRecent).toEqual([]);
+  });
+
+  it('an admission wake mail is an ordinary queued delivery, which the mail lane (and its wake budget) delivers to a hibernated coordinator', async () => {
+    const l = await lane();
+    l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toMatchObject([{ toId: 'coord-a', state: 'queued' }]);
+  });
+
+  it('A8-3: the wake also marks the coordinator\'s live capacity block woken, once, and only a capacity block', async () => {
+    const l = await lane();
+    const park = (wakeOn: string): number => l.coord.insertCall('prog-a', 'coord-a', {
+      class: 'block', runId: null, question: null, options: null, chosen: 'waiting for a slot', why: 'w', reversible: true,
+      wakeOn: wakeOn as never,
+    }, 'b1', T0 - MIN);
+    const cap = park('capacity');
+    const disk = park('disk');
+    l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toHaveLength(1);
+    expect(l.coord.callById(cap)!.wokenAt).toBe(T0);
+    expect(l.coord.callById(disk)!.wokenAt).toBeNull();
+    expect(l.coord.liveBlocksOf('coord-a', T0 + 1).map((r) => r.id)).toEqual([disk]);
+    await l.sweep(T0 + MIN);
+    expect(l.wakeMail()).toHaveLength(1);
+    expect(l.coord.callById(cap)!.wokenAt).toBe(T0);
+  });
+});
+
+describe('wakeAdmitMany: the lane\'s own window, one wakeAdmit at a time', () => {
+  it('takes what wakeAdmit would take, and hands back the pruned list', () => {
+    const NOW = 10 * WAKE_WINDOW_MS;
+    const one = wakeAdmit([], NOW, 'auto');
+    expect(wakeAdmitMany([], NOW, 1)).toEqual({ admitted: 1, recent: one.recent });
+    expect(wakeAdmitMany([], NOW, 5).admitted).toBe(WAKE_BURST);
+    expect(wakeAdmitMany([NOW - WAKE_WINDOW_MS - 1, NOW - 1], NOW, 0)).toEqual({ admitted: 0, recent: [NOW - 1] });
+    const input = [NOW - 1];
+    wakeAdmitMany(input, NOW, 2);
+    expect(input).toEqual([NOW - 1]);
   });
 });
