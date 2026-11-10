@@ -129,7 +129,7 @@ const CONTRACT = [
   // Landing-order wave 3e (spec §5.7) rewrote its landing sentence: the route comes from the rules of the repository,
   // route Q keeps its spelling and words, a direct route spells exactly one method flag, and --admin is
   // never used (spec §11, ruling 5 of 2026-10-25).
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. This session never passes `--admin` to gh and never makes a GitHub API merge or enqueue call; its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only, as `references/wave-lifecycle.md` §5b says (D-8124). It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train\'s own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing passes `--admin` outside that door or updates the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is read: a transient refusal (a 5xx, a timeout, a rate limit) is class P3 and is retried with backoff, while a rule GitHub enforces is a stop, never retried with another method, with `--admin` or with `--auto`. This session never passes `--admin` to gh and never makes a GitHub API merge or enqueue call; its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only, as `references/wave-lifecycle.md` §5b says (D-8124). It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train\'s own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing passes `--admin` outside that door or updates the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
@@ -3690,7 +3690,10 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(CONTRACT[14]).toContain('On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it');
     expect(CONTRACT[14]).toContain('never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch`');
     expect(CONTRACT[14]).toContain('exactly one method flag from the method set and never `--admin`');
-    expect(CONTRACT[14]).toContain('This session never passes `--admin` to gh and never makes a GitHub API merge or enqueue call; its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only, as `references/wave-lifecycle.md` §5b says (D-8124).');
+    expect(CONTRACT[14]).toContain('a transient refusal (a 5xx, a timeout, a rate limit) is class P3 and is retried with backoff');
+    expect(CONTRACT[14]).toContain('its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only');
+    expect(CONTRACT[14]).not.toContain('never retried. `--admin`');
+    expect(CONTRACT[14]).not.toContain('until that authority answers');
     expect(CONTRACT[14]).not.toContain('approval licence');
   });
 
@@ -4570,6 +4573,12 @@ describe('references/decision-procedure.md (D-8126, wave A5 task 3)', () => {
     for (const s of order) { const i = t.indexOf(s); expect(i, s).toBeGreaterThan(at); at = i; }
     expect(t).toContain('coord-lift-off');
     expect(t).toContain('cap-not-reached');
+    // The door's refusals agree with SKILL.md step 5: an older server is no-review-rounds-door (P4), not-found is a wrong
+    // or non-work id to re-read, and the other two are not retried.
+    expect(t).toMatch(/`no-review-rounds-door`: an older server[^]*That is P4; record it with `wakeOn: update`/);
+    expect(t).toMatch(/`not-found` \(404\): the id is wrong, or it is not a work run[^]*It is not an older server\. Re-read the id with `runs list`/);
+    expect(t).toMatch(/`not-your-programme` and `run-closed`: not retried/);
+    expect(t).not.toContain('`not-found` from an older server');
   });
 });
 
@@ -4604,7 +4613,9 @@ describe('the coordinator skill: every stop gets its recovery or its class (D-81
     expect(e).toContain('P3');
     expect(e).toContain('backoff');
     expect(e).toContain('`ccrc-api calls record`');
-    expect(e).toContain('`wakeOn: time:<epoch>`');
+    expect(e).toContain('`wakeOn: time:<epoch ms>`');
+    expect(e).toContain('`class: block`');
+    expect(e).toContain('MILLISECONDS');
     expect(e).toContain('say so in the turn');
     expect(e).toContain('nothing is invented and nothing is done by hand');
     expect(e).toContain('references/decision-procedure.md');
@@ -4634,7 +4645,10 @@ describe('the coordinator skill: every stop gets its recovery or its class (D-81
     expect(s).toContain('references/decision-procedure.md');
     expect(s).toContain('`coord-lift-off`');
     expect(s).toContain('`cap-not-reached`');
-    expect(s).toContain('`no-review-rounds-door` and a 404 mean an older server, a block of class P4');
+    expect(s).toContain('`no-review-rounds-door` (the local refusal when the cap file lacks');
+    expect(s).toContain('means an older server, a block of class P4');
+    expect(s).toContain('`not-found` (a 404) means the id is wrong or not a work run');
+    expect(s).not.toContain('a 404 mean an older server');
     expect(s).toContain('`not-your-programme`');
     expect(s).toContain('`run-closed`');
     expect(s).toContain('`not-found`');
@@ -4766,6 +4780,10 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     expect(one('cap-review-rounds')).toContain('runs review-rounds');
     expect(one('cap-review-rounds')).toContain('`coord-lift-off`');
     expect(one('cap-review-rounds')).toContain('`cap-not-reached`');
+    expect(one('cap-review-rounds')).toContain('`no-review-rounds-door`');
+    expect(one('cap-review-rounds')).toContain('A 404 `not-found` is a wrong id or a run that is not a work run');
+    expect(one('cap-review-rounds')).toContain('`not-your-programme` and `run-closed` are not retried');
+    expect(one('cap-review-rounds')).not.toContain('A 404 is a block of class P4');
     // Row 11.
     expect(one('unknown-item')).toContain('`runs items-list`');
     expect(one('item-terminal')).toContain('no-op');

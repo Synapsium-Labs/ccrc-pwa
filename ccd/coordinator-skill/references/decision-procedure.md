@@ -153,7 +153,11 @@ The door’s refusals:
 - `coord-lift-off`: the operator has switched coordinator lifts off. Lifting stays the operator’s for that run; the
   thread parks behind the server’s existing ask and other threads continue.
 - `cap-not-reached`: nothing to lift. Open the review.
-- `not-found` from an older server without the door: that is P4; record it with `wakeOn: update`.
+- `no-review-rounds-door`: an older server without the door (the local refusal when the cap file lacks
+  `review-rounds-v1`). That is P4; record it with `wakeOn: update`.
+- `not-found` (404): the id is wrong, or it is not a work run (a review run's id, which the report arrives on, is the
+  usual mistake). It is not an older server. Re-read the id with `runs list` and lift on the work run's id.
+- `not-your-programme` and `run-closed`: not retried. Re-read the run and your claim.
 
 ## Physically blocked, and the self-healing tried first
 
@@ -175,7 +179,7 @@ condition clears.
   Headroom returning wakes it.
 - **P3. An external service is down** (GitHub, Linear, the ccrc server, a package registry). Retry with backoff and
   jitter: 1, 2, 4, 8, 15 and 30 minutes, then every 30 minutes. Clause 7 forbids polling inside a turn, so each retry
-  is a `block` call with `wakeOn: time:<epoch>`, and the lane schedule mails you at that time. Meanwhile work every
+  is a `class: block` call with `wakeOn: time:<epoch ms>` (epoch MILLISECONDS, not seconds; the server refuses a time not in the future or more than 7 days out), and the lane schedule mails you at that time. Meanwhile work every
   thread that does not need the service. Nothing is done by hand in the service’s place. On `rate-limited`, wait as
   the answer says and never loop. After 4 hours raise one non-blocking `do` item naming the service, and keep a
   30-minute time wake until the service answers or the operator ticks the item. When the ccrc server itself is down,
