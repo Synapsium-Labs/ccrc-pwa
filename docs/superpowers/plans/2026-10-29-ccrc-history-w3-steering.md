@@ -187,7 +187,7 @@ All test paths are under `server/test/`. The rows are in build order: W3-4 comes
 - Every PR that grows `ccd/session-hook.sh` runs `GROWTH_CHECK=1` growth-check in its gate. A waiver counts only once it is committed.
 - Every W3 PR that edits `ccd/session-hook.sh` (W3-1, W3-2 and W3-3) runs the tail rule's PR-time check in its gate (Task 1C Step 4). It is a gate command, not a committed test, so it binds W3's own edits and retires with W3.
 - Every PR runs `deviation-refs` after `git fetch origin main`, plus `dtbd`, `citations` and `anchors`.
-- A W3 PR that adds a `server/test/history-*.test.ts` file also adds it to `ci.yml`'s node-floor Test list (`ci-pipeline.test.ts` pins that list), and so claims `.github/workflows/ci.yml` whole; the claims rule serialises it with W4. W3-1 added its three new files under a coordinator grant. W3-2, W3-3 and W3-4 add none as planned.
+- A W3 PR that adds a `server/test/history-*.test.ts` file also adds it to `ci.yml`'s node-floor Test list (`ci-pipeline.test.ts` pins that list), and so claims `.github/workflows/ci.yml` whole; the claims rule serialises it with W4. W3-1 added its two, `history-steer.test.ts` and `history-counters.test.ts`, under a coordinator grant. W3-2, W3-3 and W3-4 add none as planned.
 
 **Predecessor contracts:**
 - W3-4 needs W3-1 merged, for its `composeSteerFile`. It merges and is released with W3-1 before the cohort (O15). It does not wait for W3-2: during the cohort no breaker exists, for leaf or add-on spans, and the safety is the operator's watch (Task 1E, act 4) and the removal of `steer-on/<id>`.
