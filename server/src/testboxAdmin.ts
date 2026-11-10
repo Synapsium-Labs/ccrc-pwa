@@ -11,7 +11,7 @@ import {
 import type { RouteRefusal } from '../../shared/refusal.js';
 import {
   TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_SUBS, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, buildTestboxAdminArgv, isHostKeyFingerprint,
-  isTestboxAdminSub, parityArmable, readTestboxAdminStatus, testboxAdminIsLong,
+  isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, testboxAdminIsLong, testboxAdminNeedsStepUp,
   type TestboxAct, type TestboxActOutcome, type TestboxAdminCode, type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub,
 } from '../../shared/testbox-admin.js';
 import { boundedStdinSpawn } from '../../shared/spawn.mjs';
@@ -226,8 +226,8 @@ export type SwitchRefusal = Extract<Decision, { kind: 'refuse' }>;
  * The switch's parity gate (spec §2.8, T9): the fleet's `status`, asked FRESH (never the lane's cache), and `parityArmable` over
  * its record, its pin and its box file. `null` when the record lets the switch arm. A fleet without the connect surface (no
  * `testbox-admin-v1` cap, no ops port, an agent that does not carry the op) is `unsupported`; a status that did not come back is
- * the read's own refusal. `stale` is `false` here: the status does not carry the verb's `parity_stale` mark, and
- * `ccd testbox-remote --state on` refuses it (`parityRefusedByCcd`), so the second layer decides what this one cannot see.
+ * the read's own refusal. The verb's `parity_stale` mark rides the status (`parityStale`), so an edit and its undo, which return the
+ * box file's digest to the record's, still refuse here as `ccd testbox-remote --state on` does (`parityRefusedByCcd`).
  */
 export async function switchOnGate(
   ops: Pick<TestboxAdminOps, 'run'> | undefined, fleetState: Pick<FleetState, 'ccdVerbs'> | undefined,
@@ -237,7 +237,7 @@ export async function switchOnGate(
   }
   const s = await readAdminStatus(ops);
   if (!s.ok) return s.d;
-  if (parityArmable(s.status.parity, { fingerprint: s.status.fingerprint, boxFileSha256: s.status.boxFileSha256, stale: false })) return null;
+  if (parityArmable(s.status.parity, parityCurrentOf(s.status))) return null;
   return { kind: 'refuse', word: 'parity-required', extra: { detail: TESTBOX_PARITY_REQUIRED_SENTENCE }, audit: 'refused', code: 'parity-required' };
 }
 
@@ -306,10 +306,11 @@ export function registerTestboxAdminRoutes(app: FastifyInstance, deps: TestboxAd
   });
 
   app.post('/api/testbox/admin/:sub', credentialBodyRoute(BODY_LIMIT), async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
-    // The sub is a PATH parameter, so the gate can ask the right step-up of it before any body is read.
+    // The sub is a PATH parameter, so the gate can ask the right step-up of it before the body is checked. A body that names a
+    // setting that guards secrets (`testboxAdminNeedsStepUp`) asks for it too: the body is read only to ask MORE of the caller.
     const raw = (req.params as { sub?: unknown }).sub;
     const sub = isTestboxAdminSub(raw) && raw !== 'status' ? raw : null;
-    const g = deps.gate(req, reply, { cap: TESTBOX_ADMIN_CAP, stepUp: sub !== null && TESTBOX_ADMIN_SUBS[sub].stepUp });
+    const g = deps.gate(req, reply, { cap: TESTBOX_ADMIN_CAP, stepUp: sub !== null && testboxAdminNeedsStepUp(sub, fieldsOf(req)) });
     if (!g.pass) return reply;
     if (sub === null) return refuseRoute(reply, 'bad-request');
     const fields = fieldsOf(req);

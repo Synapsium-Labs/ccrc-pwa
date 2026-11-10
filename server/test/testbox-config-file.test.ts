@@ -250,12 +250,14 @@ describe('a change to the box file is applied by a re-run: one reload and one re
     expect(r.code, r.stderr).toBe(0);
     const calls = sysLog(F.b).slice(n).map((a) => a.join(' ')).filter((l) => l.startsWith('systemctl '));
     // nftables.service runs already, so its enable --now starts nothing (no flush); the load step reloads the file and
-    // re-adds the running units' cgroups (D-7568), and the service restarts once.
+    // re-adds the running units' cgroups (D-7568), and the service restarts once (enabled again first, and the egress timer started:
+    // a box that was unpaired and paired anew keeps its marker, so a re-run must leave both enabled).
     expect(calls).toEqual([
       'systemctl daemon-reload', 'systemctl enable --now nftables.service',
       ...['tailscaled', 'systemd-resolved', 'systemd-timesyncd', 'ccrc-testbox', 'ccrc-testbox-tools'].map((u) => `systemctl show -P ControlGroup ${u}.service`),
       'systemctl start --no-block ccrc-testbox-egress.service',
-      'systemctl restart ccrc-testbox.service', 'systemctl start ccrc-testbox-egress.service',
+      'systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer', 'systemctl restart ccrc-testbox.service',
+      'systemctl start ccrc-testbox-egress.timer', 'systemctl start ccrc-testbox-egress.service',
     ]);
     expect(sysLog(F.b).slice(n).map((a) => a.join(' ')).filter((l) => l.startsWith('[nftables.service]'))).toEqual([]);
     expect(dropIns(F.b)).toEqual(expectedDropIns(v));

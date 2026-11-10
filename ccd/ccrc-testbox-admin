@@ -108,7 +108,7 @@ _tba_fields() {   # <sub>
     pin) printf '%s\n' '--fingerprint fingerprint 1 0' ;;
     connect) printf '%s\n' '--set setting-box 1 1' '--repo repo 1 1' ;;
     settings-fleet) printf '%s\n' '--set setting-fleet 1 1' ;;
-    settings-box) printf '%s\n' '--set setting-box 1 1' '--repo repo 0 1' '--when-idle true 0 0' ;;
+    settings-box) printf '%s\n' '--set setting-box 1 1' '--when-idle true 0 0' ;;
     parity) printf '%s\n' '--pr pr 0 1' ;;
     disconnect) printf '%s\n' '--replace true 0 0' ;;
     *) return 1 ;;
@@ -628,7 +628,7 @@ _tba_status_snapshot() {
   fi
 }
 _tba_status() {
-  local addr login lj fp fj hk sha sj mt mj connected=false addrset=false
+  local addr login lj fp fj hk sha sj mt mj pst connected=false addrset=false
   addr="$(_tba_state_get address 2>/dev/null)"
   [ -z "$addr" ] || addrset=true
   [ "$(_tba_state_get connected 2>/dev/null)" != 1 ] || connected=true
@@ -643,10 +643,11 @@ _tba_status() {
   sha="$(_tba_state_get box_sha256 2>/dev/null)"
   if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then sj="\"$sha\""; else sj=null; fi
   _tba_status_snapshot
+  [ -z "$(_tba_state_get parity_stale 2>/dev/null)" ] && pst=false || pst=true
   mt="$(_tba_state_get box_marker_tag 2>/dev/null)"
   if [[ "$mt" =~ ^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$ ]]; then mj="\"$mt\""; else mj=null; fi
-  printf '{"v":1,"connected":%s,"addressSet":%s,"login":%s,"fingerprint":%s,"hostKey":"%s","boxFileSha256":%s,"act":%s,"boxSettings":%s,"boxSettingsAt":%s,"installedTag":%s,"parity":%s,"endedActs":%s}\n' \
-    "$connected" "$addrset" "$lj" "$fj" "$hk" "$sj" "$(_tba_status_act)" "$TBA_SNAP_ROWS" "$TBA_SNAP_AT" "$mj" "$(_tba_status_parity)" "$(_tba_status_ended)"
+  printf '{"v":1,"connected":%s,"addressSet":%s,"login":%s,"fingerprint":%s,"hostKey":"%s","boxFileSha256":%s,"act":%s,"boxSettings":%s,"boxSettingsAt":%s,"installedTag":%s,"parity":%s,"parityStale":%s,"endedActs":%s}\n' \
+    "$connected" "$addrset" "$lj" "$fj" "$hk" "$sj" "$(_tba_status_act)" "$TBA_SNAP_ROWS" "$TBA_SNAP_AT" "$mj" "$(_tba_status_parity)" "$pst" "$(_tba_status_ended)"
 }
 
 # ── the access key, the host key and the preflight (TC4; spec §2.2 steps 2 and 3, §2.3, §2.4 step 1) ───────────────
@@ -812,20 +813,55 @@ _tba_run_probe() {
   _tba_ok "\"fingerprint\":\"$fp\""
 }
 
-# pin --fingerprint=<fp> — probe again; the pin is written only when the box still presents the confirmed key.
+# `_tba_pin_hostspec <port> <address>...` -> the known-hosts host field: each name once, `[name]:port` off port 22,
+# joined by commas (ssh's own list syntax). The push dials the listen address, an IP literal (`_tba_cx_listen_ok`), while every act
+# dials the address as typed, which may be a host name, so the pin holds both: strict checking then finds an entry whichever the
+# connection names.
+_tba_pin_hostspec() {
+  local port="$1" a out="" seen=" "
+  shift
+  for a in "$@"; do
+    [ -n "$a" ] || continue
+    case "$seen" in *" ${a,,} "*) continue ;; esac
+    seen="$seen${a,,} "
+    [ "$port" = 22 ] || a="[$a]:$port"
+    out="${out:+$out,}$a"
+  done
+  printf '%s' "$out"
+}
+# `_tba_pin_write <host field> <key line>` — the pin, by a temp and a rename at 0600. rc 1 when it cannot be placed.
+_tba_pin_write() {
+  local tmp="$TBA_PIN.tmp.$$"
+  _tmp_guard "$tmp"
+  ( umask 077; printf '%s %s\n' "$1" "$2" >"$tmp" ) 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$TBA_PIN" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+}
+# `_tba_pin_cover <address>` — the pin also names this address (Connect's listen address: the one the push's git URL carries), under
+# the same key. The box's own key is what the pin already holds, so no new trust is made. rc 0 when it already did or now does.
+_tba_pin_cover() {
+  local line hosts kt kb ip
+  [ -s "$TBA_PIN" ] || return 1
+  IFS= read -r line <"$TBA_PIN" || [ -n "$line" ] || return 1
+  read -r hosts kt kb _ <<<"$line"
+  [ -n "$hosts" ] && [ "$kt" = ssh-ed25519 ] && [[ "$kb" =~ ^[A-Za-z0-9+/=]+$ ]] || return 1
+  ip="$(_tba_pin_hostspec "$TBA_PORT" "$1")"
+  case ",$hosts," in *",$ip,"*) return 0 ;; esac
+  _tba_pin_write "$hosts,$ip" "$kt $kb"
+}
+
+# pin --fingerprint=<fp> — probe again; the pin is written only when the box still presents the confirmed key. It names the address
+# as typed and, when that is a host name, the IP literal it resolves to.
 _tba_run_pin() {
-  local want="" w kl fp hostspec tmp
+  local want="" w kl fp hostspec ip
   for w in "$@"; do case "$w" in --fingerprint=*) want="${w#*=}" ;; esac; done
   _tba_conn || { _tba_refuse "$TBA_CODE"; return 0; }
   kl="$(_tba_scan "$TBA_ADDR" "$TBA_PORT")" || { _tba_refuse unreachable; return 0; }
   fp="$(_tba_fp_of_keyline "$kl")"
   _tba_is_fingerprint "$fp" || { _tba_refuse unreachable; return 0; }
   [ "$fp" = "$want" ] || { _tba_refuse fingerprint-mismatch; return 0; }
-  if [ "$TBA_PORT" = 22 ]; then hostspec="$TBA_ADDR"; else hostspec="[$TBA_ADDR]:$TBA_PORT"; fi
-  tmp="$TBA_PIN.tmp.$$"
-  _tmp_guard "$tmp"
-  ( umask 077; printf '%s %s\n' "$hostspec" "$kl" >"$tmp" ) 2>/dev/null || { rm -f -- "$tmp"; echo "$PROG: cannot write the pin" >&2; return 1; }
-  mv -f -- "$tmp" "$TBA_PIN" 2>/dev/null || { rm -f -- "$tmp"; echo "$PROG: cannot place the pin" >&2; return 1; }
+  ip="$(_tba_resolve_ip "$TBA_ADDR")" || ip=""
+  hostspec="$(_tba_pin_hostspec "$TBA_PORT" "$TBA_ADDR" "$ip")"
+  _tba_pin_write "$hostspec" "$kl" || { echo "$PROG: cannot write the pin" >&2; return 1; }
   _tba_state_write "fingerprint=$fp" hostkey_changed= || { echo "$PROG: cannot write the state file" >&2; return 1; }
   _tba_ok "\"fingerprint\":\"$fp\""
 }
@@ -1064,7 +1100,7 @@ process.stdin.on("data", (c) => (s += c)).on("end", () => {
   process.exit(1);
 });' 2>/dev/null
 }
-# `_tba_rows_save` — the rows of CX_REPOS (the ones Connect or Apply just installed) into ~/.ccrc/testbox-rows, replacing the
+# `_tba_rows_save` — the rows of CX_REPOS (the ones Connect just installed: no other act takes a row) into ~/.ccrc/testbox-rows, replacing the
 # rows of the same names and keeping the others, by a temp and a rename at 0600. Parity runs THESE rows' fetch URL and command
 # head on this host, never what the box holds: root on the box edits its own files (spec §2.11, no way back from the box).
 _tba_rows_save() {
@@ -1179,6 +1215,9 @@ _tba_cx_precheck() {
   for key in "${TBA_PAIRING_KEYS[@]}"; do _tba_ccrc_env_names "$key" && named+=("$key"); done
   if [ "${#named[@]}" -gt 0 ]; then TBA_CODE=pairing-keys-in-ccrc-env; TBA_CODE_KEYS="${named[*]}"; return 1; fi
   [ -f "$TBA_KEY" ] || { TBA_CODE=no-access-key; return 1; }
+  # A key already at the push key's path is adopted only when ccrc made it: said now, before the release is fetched or the box touched.
+  _tba_cx_push_key_path
+  if [ -e "$CX_GIT_KEY" ] || [ -L "$CX_GIT_KEY" ]; then _tba_push_key_ours "$CX_GIT_KEY" || { TBA_CODE=foreign-key; return 1; }; fi
   _tba_cx_args "$@" || { TBA_CODE=box-value-refused; return 1; }
   CX_BOXENV="$(umask 077 && mktemp "${TMPDIR:-/tmp}/ccrc-tba-box.XXXXXXXX")" || { TBA_CODE=box-value-refused; return 1; }
   _tmp_guard "$CX_BOXENV"
@@ -1253,17 +1292,33 @@ _tba_cx_copy() {
   [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" copy-failed; return 1; }
 }
 
-# The push key: made once, create-only, at CCRC_TESTBOX_GIT_KEY (0600); only its public half leaves this host.
-_tba_cx_push_key() {
-  local dir t b
+# 0 iff <file> is a push key ccrc made: a regular file (never a link) whose own comment is the push key's. ssh-keygen reads the comment
+# from the private key itself. A key at the push key's path that fails this is the operator's (a hand-paired box's, or a personal
+# key): Connect never adopts it and Disconnect never removes it (spec M19, C12, M18).
+_tba_push_key_ours() {
+  local line re="^256 SHA256:[A-Za-z0-9+/]{43} $TBA_PUSH_KEY_COMMENT \\(ED25519\\)\$"
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  line="$(ssh-keygen -lf "$1" 2>/dev/null | head -n 1)"
+  [[ "$line" =~ $re ]]
+}
+# `_tba_cx_push_key_path` -> CX_GIT_KEY, the push key's path on this host: the setting's value (the overlay's, else the default).
+_tba_cx_push_key_path() {
   _tb_load host >/dev/null 2>&1 || :
   CX_GIT_KEY="$(_tba_home_path "${TBK[CCRC_TESTBOX_GIT_KEY]:-~/.ccrc/testbox-push.key}")"
-  if [ ! -e "$CX_GIT_KEY" ]; then
+}
+# The push key: made once, create-only, at CCRC_TESTBOX_GIT_KEY (0600); only its public half leaves this host. A file already there is
+# reused only when ccrc made it (its comment, `_tba_push_key_ours`); any other is refused `foreign-key`, never adopted.
+_tba_cx_push_key() {
+  local dir t b
+  _tba_cx_push_key_path
+  if [ -e "$CX_GIT_KEY" ] || [ -L "$CX_GIT_KEY" ]; then
+    _tba_push_key_ours "$CX_GIT_KEY" || { TBA_CODE=foreign-key; return 1; }
+  else
     dir="$(umask 077 && mktemp -d "$TBA_DIR/pushkey.XXXXXXXX")" || return 1
     _tba_rm_on_exit "$dir"
     (umask 077; ssh-keygen -q -t ed25519 -N '' -C "$TBA_PUSH_KEY_COMMENT" -f "$dir/k" >/dev/null 2>&1) || { rm -rf -- "$dir"; return 1; }
     chmod 600 "$dir/k" 2>/dev/null
-    ln -- "$dir/k" "$CX_GIT_KEY" 2>/dev/null || { rm -rf -- "$dir"; [ -e "$CX_GIT_KEY" ] || return 1; }
+    ln -- "$dir/k" "$CX_GIT_KEY" 2>/dev/null || { rm -rf -- "$dir"; [ -e "$CX_GIT_KEY" ] || return 1; _tba_push_key_ours "$CX_GIT_KEY" || { TBA_CODE=foreign-key; return 1; }; }
     rm -rf -- "$dir"
   fi
   # `ssh-keygen -y` prints the public half, with the key's comment on newer OpenSSH; the line sent is type, key, our comment.
@@ -1301,7 +1356,7 @@ _tba_cx_settings() {
   PF_FATAL=""
   _tba_box_tcp "$(_tba_deadline)" $hp
   [ "$PF_RC" = 0 ] || { _tba_cx_fail "$PF_RC" no-egress; return 1; }
-  _tba_cx_push_key || { TBA_CODE="pair-failed"; return 1; }
+  _tba_cx_push_key || { TBA_CODE="${TBA_CODE:-pair-failed}"; return 1; }
   _tba_cx_put_box "$CX_BOXENV"
   [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
   _tba_cx_put_rows "$CX_STG" || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
@@ -1364,6 +1419,9 @@ _tba_cx_pair() {
   port="${CX_VAL[LISTEN]##*:}"
   # The service and the push both answer on the listen address only (the precheck holds it equal to the address ccrc reached).
   url_host="${CX_LISTEN_HOST:-$TBA_ADDR}"; git_host="$url_host"
+  # The push's ssh reads the pin and dials that address (an IP literal): the pin must name it, or strict checking refuses every push
+  # when the box was typed as a host name.
+  _tba_pin_cover "$url_host" || { TBA_CODE="pair-failed"; return 1; }
   if _tba_is_ipv6 "$url_host"; then url_host="[$url_host]"; git_host="[$git_host]"; fi
   _tba_overlay_put "CCRC_TESTBOX_URL=http://$url_host:$port" "CCRC_TESTBOX_TOKEN_FILE=${TBK[CCRC_TESTBOX_TOKEN_FILE]:-~/.ccrc/testbox.token}" \
     "CCRC_TESTBOX_GIT_URL_BASE=ssh://${CX_VAL[PUSH]}@$git_host:$TBA_PORT/" "CCRC_TESTBOX_GIT_KEY=${TBK[CCRC_TESTBOX_GIT_KEY]:-~/.ccrc/testbox-push.key}" \
@@ -1711,12 +1769,12 @@ _tba_sb_wait() {
     sleep "$poll"
   done
 }
-# Phases `settings` then `install`: the new box file and the new rows land, and the installed installer is re-run. A
+# Phases `settings` then `install`: the new box file lands, and the installed installer is re-run (the installed rows stay). A
 # refused or failed install puts the old box file back (best effort). TBA_CODE on rc 1.
 _tba_sb_apply() {
-  local nm k sha oldsha old="" args=(--reapply) oldok=0 rc=0 stale=0 line oldtmp
+  local k sha oldsha old="" oldok=0 rc=0 stale=0 line oldtmp
   local -A oldv=()
-  CX_STG=""; TBA_CODE=""
+  TBA_CODE=""
   _tba_phase settings
   _tba_cx_out cat -- "$TBA_BOX_ENV_PATH"
   case "$CX_RC" in 97|255) _tba_cx_fail "$CX_RC" unreachable; return 1 ;; 0) old="$CX_OUT"; oldok=1 ;; esac
@@ -1724,16 +1782,8 @@ _tba_sb_apply() {
   _tba_cx_merge "$old" && _tba_cx_check_box "$CX_BOXENV" || { TBA_CODE=box-value-refused; return 1; }
   _tba_cx_put_box "$CX_BOXENV"
   [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
-  if [ "${#CX_REPOS[@]}" -gt 0 ]; then
-    _tba_cx_out mktemp -d
-    { [ "$CX_RC" = 0 ] && [[ "$CX_OUT" =~ ^/[A-Za-z0-9._/-]+$ ]]; } || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
-    CX_STG="$CX_OUT"
-    _tba_cx_put_rows "$CX_STG" || { _tba_cx_fail "$CX_RC" box-value-refused; _tba_cx_unstage; return 1; }
-    for nm in "${CX_NAMES[@]}"; do args+=(--repos "$CX_STG/rows/$nm.json"); done
-  fi
   _tba_phase install
-  _tba_cx_reapply "${args[@]}" || rc=1
-  _tba_cx_unstage
+  _tba_cx_reapply --reapply || rc=1
   if [ "$rc" != 0 ]; then
     if [ "$oldok" = 1 ] && [ -n "$old" ]; then
       oldtmp="$(umask 077 && mktemp "${TMPDIR:-/tmp}/ccrc-tba-old.XXXXXXXX")" && {
@@ -1754,11 +1804,11 @@ _tba_sb_apply() {
   _tba_state_write "box_sha256=$sha" "box_root=${CX_VAL[ROOT]}" "box_tools=${CX_VAL[TOOLS]}" || :
   if [ "$stale" = 1 ]; then _tba_state_write parity_stale=1 || :
   else _tba_parity_rebind "$oldsha" "$sha"; fi
-  _tba_rows_save || :
   ( _tba_read_snapshot ) >/dev/null 2>&1 || :
   return 0
 }
-# settings-box --set=KEY=VALUE... [--repo=<row>...] [--when-idle=true]
+# settings-box --set=KEY=VALUE... [--when-idle=true]. It takes no repository row: a row's command head runs on the fleet host in
+# parity, so only a step-up Connect puts one on the fleet host's record (`_tba_rows_save`).
 # Always a detached act (`_tba_is_long`). Without --when-idle the parent refuses `runs-in-progress` at once, from its precheck (one
 # read of the fleet's status, within the parent's bound), and the unit looks once more before it writes; with --when-idle the unit
 # waits (phase `wait`) for no run in progress, up to the deadline, and `cancel` ends it.
@@ -1967,35 +2017,59 @@ _tba_run_parity() {
   fi
 }
 
+# `_tba_overlay_get <KEY>` -> the value the ccrc-owned overlay holds for the key (its last such line), rc 1 when it holds none.
+_tba_overlay_get() {
+  local line v="" found=1
+  [ -f "$CCRC_TESTBOX_OVERLAY_FILE" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "$1="*) v="${line#*=}"; found=0 ;; esac
+  done <"$CCRC_TESTBOX_OVERLAY_FILE"
+  [ "$found" = 0 ] || return 1
+  printf '%s' "$v"
+}
 # ── disconnect [--replace=true] ────────────────────────────────────────────────────────────────────────────────────────
-# The switch goes off first. On the box, while the pin still matches the box's host key: the installed installer's --unpair
-# (when the box has one: a Connect refused in the installer's first phase left none, and there is nothing to unpair), then ccrc's
-# access line out of the login user's authorized_keys by a temp and a rename, last. THE LINE COMES OUT WHATEVER THE UNPAIR DID: it
-# is root-capable, and a box that cannot unpair is the very one that must not keep it. On the fleet host (always): the token, the
-# push key pair, the overlay, the pin, the parity record, the snapshot and the state file's connection. The access key pair is
-# kept, so the next Connect shows the same line. Three answers after the fleet side is clean: `box-side-skipped` (the box was not
-# reached, or its host key was not trusted: ccrc touched nothing there), `unpair-failed` (the box was reached and its unpair, or
-# the removal of the line, did not finish: the operator finishes it by hand) and ok. --replace only changes the act the ledger
-# records. A connection that was set but never Connected (an address, a placed line, a pin) is undone the same way.
+# A pairing ccrc made is taken apart, and one it did not make is left alone (spec M18, M19, C12). The pairing is the operator's
+# when `ccrc.env` names any of the four pairing keys (a box paired by hand, TB12 to TB14): then the switch, the box's service, the
+# token and the push key, wherever the hand setup put them, are not touched, and neither is the overlay. What is always ccrc's own is
+# the access line it asked the operator to add and the connection it recorded, so those are removed in either case.
+#
+# A pairing the card made: the switch goes off first. On the box, while the pin still matches the box's host key: the installed
+# installer's --unpair (when the box has one: a Connect refused in the installer's first phase left none, and there is nothing to
+# unpair), then ccrc's access line out of the login user's authorized_keys by a temp and a rename, last. THE LINE COMES OUT WHATEVER
+# THE UNPAIR DID: it is root-capable, and a box that cannot unpair is the very one that must not keep it. On the fleet host: the token
+# and the push key pair, but ONLY the paths the overlay names (what Connect wrote there) and a push key only when it carries ccrc's
+# own comment, never a path read from `ccrc.env` or a key ccrc did not make; then the overlay. In both cases the pin, the parity
+# record, the snapshot and the state file's connection go. The access key pair is kept, so the next Connect shows the same line.
+# Three answers after the fleet side is clean: `box-side-skipped` (the box was not reached, or its host key was not trusted: ccrc
+# touched nothing there), `unpair-failed` (the box was reached and its unpair, or the removal of the line, did not finish: the operator
+# finishes it by hand) and ok. --replace only changes the act the ledger records. A connection that was set but never Connected (an
+# address, a placed line, a pin) is undone the same way.
 _tba_run_disconnect() {
-  local tokf keyf skipped=0 unpaired=1 hasbox=0 f inst
+  local tokf="" keyf="" skipped=0 unpaired=1 hasbox=0 hand=0 key inst
   _tba_short_lock || return 0
-  _tba_ccd testbox-remote --state off >/dev/null 2>&1 || { echo "$PROG: the test box switch could not be lowered, so nothing was removed" >&2; return 1; }
-  _tb_load host >/dev/null 2>&1 || :
-  tokf="$(_tba_home_path "${TBK[CCRC_TESTBOX_TOKEN_FILE]:-~/.ccrc/testbox.token}")"
-  keyf="$(_tba_home_path "${TBK[CCRC_TESTBOX_GIT_KEY]:-~/.ccrc/testbox-push.key}")"
+  # An unmeasurable ccrc.env counts as naming the keys: nothing is removed that might be the operator's.
+  for key in "${TBA_PAIRING_KEYS[@]}"; do _tba_ccrc_env_names "$key" && hand=1; done
+  if [ "$hand" = 0 ]; then
+    _tba_ccd testbox-remote --state off >/dev/null 2>&1 || { echo "$PROG: the test box switch could not be lowered, so nothing was removed" >&2; return 1; }
+    tokf="$(_tba_overlay_get CCRC_TESTBOX_TOKEN_FILE)" && tokf="$(_tba_home_path "$tokf")" || tokf=""
+    keyf="$(_tba_overlay_get CCRC_TESTBOX_GIT_KEY)" && keyf="$(_tba_home_path "$keyf")" || keyf=""
+  else
+    _tba_log "disconnect: the settings file names pairing keys; the pairing, the switch and its files are left alone"
+  fi
   if _tba_conn; then
     hasbox=1
     if [ -s "$TBA_PIN" ] && [ -f "$TBA_KEY" ] && [ "$(_tba_state_get hostkey_changed 2>/dev/null)" != 1 ] \
        && _tba_hostkey_guard "$TBA_ADDR" "$TBA_PORT" >/dev/null; then
-      inst="$(_tba_box_tools)/release/installed/deploy/testbox/install.sh"
-      _tba_cx_out sh -c 'exec bash "$@" 2>&1' sh "$inst" --unpair
-      case "$CX_RC" in
-        0) ;;
-        97|255) skipped=1 ;;   # the box did not answer: nothing was reached
-        127) _tba_log "disconnect: the box has no installer to unpair with" ;;   # nothing was ever installed there
-        *) _tba_log "disconnect: the box's unpair did not finish (rc $CX_RC)"; unpaired=0 ;;
-      esac
+      if [ "$hand" = 0 ]; then
+        inst="$(_tba_box_tools)/release/installed/deploy/testbox/install.sh"
+        _tba_cx_out sh -c 'exec bash "$@" 2>&1' sh "$inst" --unpair
+        case "$CX_RC" in
+          0) ;;
+          97|255) skipped=1 ;;   # the box did not answer: nothing was reached
+          127) _tba_log "disconnect: the box has no installer to unpair with" ;;   # nothing was ever installed there
+          *) _tba_log "disconnect: the box's unpair did not finish (rc $CX_RC)"; unpaired=0 ;;
+        esac
+      fi
       if [ "$skipped" = 0 ]; then
         _tba_cx_out sh -c 'set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; [ -f "$f" ] || exit 0; t=$(mktemp "$h/.ssh/.ccrc-ak.XXXXXXXX"); cp -p -- "$f" "$t"; { grep -v -e " ccrc-testbox-admin\$" "$f" || [ $? -eq 1 ]; } >"$t"; mv -f -- "$t" "$f"' sh "$TBA_LOGIN"
         case "$CX_RC" in
@@ -2008,11 +2082,12 @@ _tba_run_disconnect() {
       skipped=1
     fi
   fi
-  for f in "$tokf" "$keyf"; do
-    [ -f "$f" ] || [ -L "$f" ] || continue
-    rm -f -- "$f"
-  done
-  rm -f -- "$CCRC_TESTBOX_OVERLAY_FILE" "$TBA_PIN" "$TBA_PARITY" "$TBA_SNAPSHOT" "$TBA_CANCEL" "$TBA_ROWS"
+  if [ -n "$tokf" ] && { [ -f "$tokf" ] || [ -L "$tokf" ]; }; then rm -f -- "$tokf"; fi
+  if [ -n "$keyf" ] && { [ -e "$keyf" ] || [ -L "$keyf" ]; }; then
+    if _tba_push_key_ours "$keyf"; then rm -f -- "$keyf"; else _tba_log "disconnect: the key at the push key's path was not made by ccrc and is kept"; fi
+  fi
+  [ "$hand" = 1 ] || rm -f -- "$CCRC_TESTBOX_OVERLAY_FILE"
+  rm -f -- "$TBA_PIN" "$TBA_PARITY" "$TBA_SNAPSHOT" "$TBA_CANCEL" "$TBA_ROWS"
   _tba_state_write connected= address= port= login= source= fingerprint= box_sha256= box_marker_tag= box_root= box_tools= hostkey_changed= parity_stale= \
     || { echo "$PROG: cannot write the state file" >&2; return 1; }
   ( cmd_settings --write ) >/dev/null 2>&1 || :

@@ -275,6 +275,32 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin probe and pin (D-8166, TC4)', (
     expect(spawnSync('ssh-keygen', ['-F', `[${ADDR}]:2222`, '-f', h.pin], { encoding: 'utf8' }).status).toBe(0);
   });
 
+  it('pin names a host name and the IP address it resolves to, so the push (which dials the listen address, an IP literal) finds an entry under strict checking', () => {
+    const NAME = 'testbox.invalid';
+    for (const port of ['22', '2222']) {
+      const h = fixture();
+      // the system's resolver, as the verb asks it
+      writeFileSync(join(h.home, 'fakes', 'getent'), `#!/bin/sh\nif [ "$1" = ahosts ] && [ "$2" = ${NAME} ]; then echo "${ADDR} STREAM ${NAME}"; exit 0; fi\nexit 2\n`, { mode: 0o755 });
+      const k = hostKey(h);
+      h.env['FAKE_SSH_KEYSCAN_OUT'] = scanOut(k, port === '22' ? NAME : `[${NAME}]:${port}`);
+      writeState(h, [`address=${NAME}`, `port=${port}`, 'login=root']);
+      expect(json(verb(h, 'pin', `--fingerprint=${k.fp}`))).toEqual({ ok: true, fingerprint: k.fp });
+      const field = port === '22' ? `${NAME},${ADDR}` : `[${NAME}]:${port},[${ADDR}]:${port}`;
+      expect(readFileSync(h.pin, 'utf8')).toBe(`${field} ${k.type} ${k.b64}\n`);
+      // ssh finds the key whichever way the connection names the box
+      for (const host of [port === '22' ? NAME : `[${NAME}]:${port}`, port === '22' ? ADDR : `[${ADDR}]:${port}`]) {
+        expect(spawnSync('ssh-keygen', ['-F', host, '-f', h.pin], { encoding: 'utf8' }).status, host).toBe(0);
+      }
+    }
+    // an IP literal is named once
+    const g = fixture();
+    const k = hostKey(g);
+    g.env['FAKE_SSH_KEYSCAN_OUT'] = scanOut(k);
+    KEYED(g);
+    verb(g, 'pin', `--fingerprint=${k.fp}`);
+    expect(readFileSync(g.pin, 'utf8')).toBe(`${ADDR} ${k.type} ${k.b64}\n`);
+  });
+
   it('the status reads the pin as pinned and the recorded fingerprint', () => {
     const h = fixture();
     const k = hostKey(h);

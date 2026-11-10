@@ -206,6 +206,39 @@ describe('every admin route is session-only and takes the account gate first (D-
   });
 });
 
+describe('a change to the secret deny list needs the step-up although settings-fleet does not (D-8166, C14)', () => {
+  const DENY = { settings: { CCRC_TESTBOX_DENY_GLOBS: '*.none' } };
+  it('a session with no fresh step-up is refused step-up-required for the deny list, whatever else rides with it, and nothing runs', async () => {
+    const r = await openApp();
+    const stale = await login(r.app);
+    for (const settings of [DENY.settings, { CCRC_TESTBOX_POLL: '1m', ...DENY.settings }]) {
+      const res = await post(r, 'settings-fleet', { fields: { settings } }, stale);
+      expect(res.statusCode, JSON.stringify(settings)).toBe(REFUSAL_STATUS['step-up-required']);
+      expect(res.json()).toMatchObject({ ok: false, error: 'step-up-required' });
+    }
+    expect(r.calls).toEqual([]);
+    expect(r.rows()).toEqual([]);
+    // a plain value edit still needs a session only
+    r.stub('settings-fleet', { out: { ok: true, settings: [] } });
+    expect((await post(r, 'settings-fleet', { fields: MIN['settings-fleet'] }, stale)).statusCode).toBe(200);
+  });
+  it('with a fresh step-up the change goes through', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('settings-fleet', { out: { ok: true, settings: [{ key: 'CCRC_TESTBOX_DENY_GLOBS', set: true }] } });
+    expect((await post(r, 'settings-fleet', { fields: DENY }, cookie)).statusCode).toBe(200);
+    expect(r.calls.map((c) => c.sub)).toEqual(['settings-fleet', 'status']);   // the act, then the re-read status
+  });
+  it('a settings-box that carries repository rows is a 400: only a step-up Connect names a row', async () => {
+    const r = await openApp();
+    const cookie = await login(r.app);
+    const res = await post(r, 'settings-box', { fields: { ...MIN['settings-box'], repos: [ROW] } }, cookie);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(r.calls).toEqual([]);
+  });
+});
+
 describe('the body is {fields} only and passes the builder before any op (T3)', () => {
   it('a field off its grammar is 400 and runs no op', async () => {
     const r = await openApp();

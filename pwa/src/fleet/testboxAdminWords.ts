@@ -61,7 +61,7 @@ export const TESTBOX_CONNECT_TEXT = {
   sourceHint: 'A box behind a NAT or on a second network sees another address than this host uses. Its ssh log names it. Leave blank otherwise.',
   startOver: 'Start over',
   startingOver: 'Starting over…',
-  startOverWhy: 'Start over removes ccrc\'s access line from the box (when ccrc can reach it) and forgets the address, the host key and the connection here. The access key is kept.',
+  startOverWhy: 'Start over takes this connection apart: it turns the switch off, stops the test service on the box and removes the token and push key ccrc made, takes ccrc\'s access line off the box (when ccrc can reach it), and forgets the address, the host key and the connection here. The access key is kept. A pairing you made by hand, with its keys in the settings file, is not touched: only ccrc\'s access line and the connection here go.',
   startedOver: 'Started over.',
   keyLineLabel: 'Public access line',
   copy: 'Copy',

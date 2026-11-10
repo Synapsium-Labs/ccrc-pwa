@@ -49,8 +49,8 @@
 #      file, the running tailnet client's, resolver's and time client's cgroups added to its sets, the address sets
 #      asked for), then the service and the egress timer enabled and started, and the installed marker
 #      (<etc>/installed: the tag and the box file's sha256) written.
-# A re-run with the installed marker present changes nothing when the box file's sha256 and the tag are the marker's;
-# otherwise it runs phase 5 again, reloads the firewall and the system manager, restarts the service, refreshes the
+# A re-run with the installed marker present changes nothing when the box file's sha256 and the tag are the marker's and the
+# push user holds the key named by --push-key; otherwise it runs phase 5 again, reloads the firewall and the system manager, restarts the service, refreshes the
 # egress sets and records the new tag and sha256.
 #
 # Two more modes run from the installed tree (<tools>/release/installed) and from nowhere else (D-8166):
@@ -317,7 +317,17 @@ if [ "$MODE" = reapply ]; then
     [ "${ROW_FILES[$i]}" -ef "$REPOS/${ROW_NAMES[$i]}.json" ] || cmp -s -- "${ROW_FILES[$i]}" "$REPOS/${ROW_NAMES[$i]}.json" || same_rows=0
   done
 fi
-if [ "$FORCE" = 0 ] && [ -n "$MARK_TAG" ] && [ "$MARK_TAG" = "$A_REL" ] && [ "$MARK_SHA" = "$BOX_SHA" ] && [ "$same_rows" = 1 ]; then
+# A first-install run is also asked to install a key: with the marker, the tag and the box file all the same, the box is current only
+# when the key it holds IS that key. An unpaired box keeps its marker (--unpair never removes it) and holds no key, so a re-pair with
+# the same tag and a byte-identical box file would otherwise read "nothing to do" and leave the new key out (every push refused) and the
+# service and the egress timer disabled.
+same_key=1
+if [ "$MODE" = install ]; then
+  inst_line=$(head -n 1 -- "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys" 2>/dev/null) || inst_line=''
+  [[ $inst_line =~ ^restrict,command=\"[^\"]*\"[[:space:]]+(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa)[[:space:]]+([A-Za-z0-9+/]+=*)([[:space:]].*)?$ ]] \
+    && [ "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}" = "$PUSH_KEY" ] || same_key=0
+fi
+if [ "$FORCE" = 0 ] && [ -n "$MARK_TAG" ] && [ "$MARK_TAG" = "$A_REL" ] && [ "$MARK_SHA" = "$BOX_SHA" ] && [ "$same_rows" = 1 ] && [ "$same_key" = 1 ]; then
   say "$A_REL is installed and the box file is unchanged; nothing to do"
   exit 0
 fi
@@ -489,7 +499,10 @@ _sys systemctl enable --now nftables.service || fail "cannot start nftables.serv
 if [ -z "$MARK_TAG" ]; then
   _sys systemctl enable --now ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot start the test service"
 else
+  # Enabled again here: a box that was unpaired (`--unpair` disables both) and paired anew keeps its marker, and must start at boot.
+  _sys systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot enable the test service"
   _sys systemctl restart ccrc-testbox.service || fail "cannot restart the test service"
+  _sys systemctl start ccrc-testbox-egress.timer || fail "cannot start the egress timer"
 fi
 _sys systemctl start ccrc-testbox-egress.service || say "the egress sets were not all filled; ccrc-testbox-egress.timer tries again"
 printf 'release\t%s\nbox-sha256\t%s\n' "$A_REL" "$BOX_SHA" > "$WORK/installed"

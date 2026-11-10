@@ -14,7 +14,8 @@ import {
   TESTBOX_ACTS, TESTBOX_ACT_OUTCOMES, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRING_KEYS,
   TESTBOX_PAIRED_BOX_KEYS, TESTBOX_RUN_SHAPING, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, TESTBOX_REPO_ROW_MAX_BYTES,
   buildTestboxAdminArgv, fitsTestboxShape, isBoxAddress, isPrivateNetworkAddress, isSshPort, isLoginUser, isHostKeyFingerprint, isPrNumber,
-  parityArmable, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg, testboxAdminIsLong,
+  TESTBOX_STEP_UP_SETTINGS, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg,
+  testboxAdminIsLong, testboxAdminNeedsStepUp,
   type TestboxAdminSub, type TestboxAdminFields, type TestboxParityRecord,
 } from '../../shared/testbox-admin.js';
 import { parseRepoRow } from '../../shared/testbox.js';
@@ -69,6 +70,21 @@ describe('the sub table', () => {
   });
   it('step-up is exactly key, pin, connect and disconnect', () => {
     expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp).sort()).toEqual(['connect', 'disconnect', 'key', 'pin']);
+  });
+  it('a call needs the step-up when its sub does, or when settings-fleet changes the setting that guards secrets (the deny list), whatever else the body holds', () => {
+    expect([...TESTBOX_STEP_UP_SETTINGS]).toEqual(['CCRC_TESTBOX_DENY_GLOBS']);
+    for (const s of SUBS) expect(testboxAdminNeedsStepUp(s, {}), s).toBe(TESTBOX_ADMIN_SUBS[s].stepUp);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { settings: { CCRC_TESTBOX_POLL: '1m' } })).toBe(false);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { settings: { CCRC_TESTBOX_DENY_GLOBS: '*.none' } })).toBe(true);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { settings: { CCRC_TESTBOX_POLL: '1m', CCRC_TESTBOX_DENY_GLOBS: '*.pem' } })).toBe(true);
+    // a body that is no fields object asks for nothing more (the route refuses it by its own check)
+    for (const bad of [null, undefined, 'x', [], { settings: null }, { settings: ['CCRC_TESTBOX_DENY_GLOBS'] }]) expect(testboxAdminNeedsStepUp('settings-fleet', bad)).toBe(false);
+    expect(testboxAdminNeedsStepUp('settings-box', { settings: { CCRC_TESTBOX_DENY_GLOBS: '*.pem' } })).toBe(false);
+  });
+  it('settings-box takes no repository row: only a step-up Connect may put a command head on the fleet host\'s record', () => {
+    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-box'].fields).sort()).toEqual(['settings', 'whenIdle']);
+    refused('settings-box', { settings: { CCRC_TESTBOX_WORKERS: '2' }, repos: [ROW] });
+    expect(build('connect', { settings: { CCRC_TESTBOX_WORKERS: '2' }, repos: [ROW] }).ok).toBe(true);
   });
   it('the long subs are connect, parity, repair, apply-release and settings-box: the box apply outruns a short sub\'s bound, so it always detaches', () => {
     expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].long).sort()).toEqual(['apply-release', 'connect', 'parity', 'repair', 'settings-box']);
@@ -234,7 +250,7 @@ describe('the argv builder', () => {
       'status': {}, 'read': {}, 'key': { address: 'box.invalid', port: 22, user: 'root' }, 'probe': {}, 'pin': { fingerprint: FP },
       'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
       'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } },
-      'settings-box': { settings: { CCRC_TESTBOX_RUNS: '2' }, repos: [ROW], whenIdle: true },
+      'settings-box': { settings: { CCRC_TESTBOX_RUNS: '2' }, whenIdle: true },
       'cancel': {}, 'parity': { prs: [1, '2'] }, 'repair': {}, 'apply-release': {}, 'disconnect': { replace: true },
     };
     for (const s of SUBS) expect(build(s, wire[s]).ok, s).toBe(true);
@@ -248,7 +264,7 @@ describe('the argv builder', () => {
     expect(build('parity', { prs: Array.from({ length: 20 }, (_, i) => i + 1) }).ok).toBe(true);
   });
   it('a repository row is base64url JSON that parseRepoRow takes, at most four, each at most 8 KiB', () => {
-    const r = build('settings-box', { settings: { CCRC_TESTBOX_RUNS: '2' }, repos: [ROW, { ...ROW, name: 'project-b' }] });
+    const r = build('connect', { settings: { CCRC_TESTBOX_RUNS: '2' }, repos: [ROW, { ...ROW, name: 'project-b' }] });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const reposWords = r.argv.filter((w) => w.startsWith('--repo='));
@@ -520,6 +536,20 @@ describe('the status reader', () => {
 
 describe('the parity gate', () => {
   const cur = { fingerprint: FP, boxFileSha256: SHA, stale: false };
+  it('the stale mark rides the status (parityStale), read as false when absent and set only when true, and every consumer feeds it to the gate', () => {
+    const old = read(STATUS);
+    expect(old.ok && old.value.parityStale).toBeUndefined();
+    const stale = read({ ...STATUS, parity: PARITY, parityStale: true });
+    expect(stale.ok && stale.value.parityStale).toBe(true);
+    const clear = read({ ...STATUS, parity: PARITY, parityStale: false });
+    expect(clear.ok && clear.value.parityStale).toBeUndefined();
+    expect(read({ ...STATUS, parityStale: 'yes' }).ok).toBe(false);
+    // the digest and the pin still match the record (an edit and its undo), and the mark alone makes it unarmable
+    const s = { fingerprint: FP, boxFileSha256: SHA };
+    expect(parityArmable(PARITY, parityCurrentOf(s))).toBe(true);
+    expect(parityArmable(PARITY, parityCurrentOf({ ...s, parityStale: false }))).toBe(true);
+    expect(parityArmable(PARITY, parityCurrentOf({ ...s, parityStale: true }))).toBe(false);
+  });
   it('parityArmable is false with no record, a failed record, a stale mark, a moved fingerprint or a moved box file sha256, and true only when all match', () => {
     expect(parityArmable(null, cur)).toBe(false);
     expect(parityArmable({ ...PARITY, result: 'fail' }, cur)).toBe(false);

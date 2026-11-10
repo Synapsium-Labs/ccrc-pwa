@@ -17,13 +17,13 @@
 // row runs a fixed bash program; values are its arguments.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import {
-  TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRED_BOX_KEYS, TESTBOX_RUN_SHAPING, parityArmable, readTestboxAdminStatus,
+  TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRED_BOX_KEYS, TESTBOX_RUN_SHAPING, parityArmable, parityCurrentOf, readTestboxAdminStatus,
 } from '../../shared/testbox-admin.js';
 
 removeTmpFixturesEachTest();
@@ -160,6 +160,15 @@ function stdinOfLast(h: Home, needle: string): string | null {
     }
   }
   return null;
+}
+
+/** A real ed25519 private key at the path, with the comment (the push key ccrc makes carries `ccrc-testbox-push`; a person's does not). */
+function keygen(file: string, comment: string): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  rmSync(file, { force: true });
+  const r = spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', comment, '-f', file], { encoding: 'utf8' });
+  expect(r.status, r.stderr).toBe(0);
+  rmSync(`${file}.pub`, { force: true });
 }
 
 /** The access key and the pin the way earlier steps leave them, and a connection the connect act recorded. */
@@ -330,16 +339,19 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     expect(stateText(h)).not.toContain('b'.repeat(64));
   });
 
-  it('settings-box with new rows stages them on the box and passes them to --reapply', () => {
+  it('settings-box takes no repository row: a row sent to it is a usage error, nothing is recorded and the box is not asked', () => {
+    // A row's command head runs on the fleet host in parity, and a box setting edit needs no step-up: only Connect names a row.
     const h = fixture();
     connectedTo(h);
-    expect(box(h, [...WORDS([`--repo=${rowArg(ROW)}`])])).toEqual({ ok: true });
-    expect(JSON.parse(stdinOfLast(h, 'mkdir')!).name).toBe('project-a');
-    const all = cmds(h);
-    const inst = all.filter((c) => c.includes('install.sh')).slice(-1)[0]!;
-    expect(inst).toContain(`--reapply --repos ${STG}/rows/project-a.json`);
-    // the staging directory is removed once the installer has run
-    expect(all.findIndex((c) => c.includes('rm -rf'))).toBeGreaterThan(all.findIndex((c) => c.includes('install.sh')));
+    const before = stateText(h);
+    for (const words of [[...WORDS([`--repo=${rowArg(ROW)}`])], [`--repo=${rowArg({ ...ROW, packages: [{ ...ROW.packages[0], commands: ['npx attacker-pkg'] }] })}`, '--set=CCRC_TESTBOX_WORKERS=2']]) {
+      const r = verb(h, 'settings-box', ...words, '--from', 'pwa');
+      expect(r.rc, r.out + r.err).toBe(2);
+      expect(r.err).toContain('--repo');
+    }
+    expect(stateText(h)).toBe(before);
+    expect(sshCalls(h)).toEqual([]);
+    expect(existsSync(join(h.home, '.ccrc', 'testbox-rows'))).toBe(false);
   });
 
   it('settings-box takes only the keys the card changed: the box\'s current file is read and the keys put into it, every other line kept', () => {
@@ -372,11 +384,6 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
       expect(box(g, [word]), word).toMatchObject({ ok: false, code: 'box-value-refused' });
       expect(cmds(g).filter((c) => c.includes('cmp -s') || c.includes('install.sh')), word).toEqual([]);
     }
-    // a row whose mirror is under /root is refused before the box is asked
-    const m = fixture();
-    connectedTo(m);
-    expect(box(m, ['--set=CCRC_TESTBOX_WORKERS=3', `--repo=${rowArg({ ...ROW, mirrorPath: '/root/x.git' })}`])).toEqual({ ok: false, code: 'box-value-refused' });
-    expect(sshCalls(m)).toEqual([]);
     // not connected
     const n = fixture();
     expect(box(n, [...WORDS()])).toEqual({ ok: false, code: 'not-connected' });
@@ -428,14 +435,14 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     expect(lastAct(w)).toMatchObject({ outcome: 'ok', code: null });
   });
 
-  it('settings-box with new rows records them on the fleet host, merged by name, for parity', () => {
+  it('a settings-box leaves the fleet host\'s record of the rows as it is', () => {
     const h = fixture();
     connectedTo(h);
     const rows = join(h.home, '.ccrc', 'testbox-rows');
-    writeFileSync(rows, 'other https://testbox.invalid/other.git server ./node_modules/.bin/vitest\nproject-a https://old.invalid/a.git server old\n');
-    expect(box(h, [...WORDS([`--repo=${rowArg(ROW)}`])])).toEqual({ ok: true });
-    expect(readFileSync(rows, 'utf8')).toBe(`other https://testbox.invalid/other.git server ./node_modules/.bin/vitest\nproject-a ${ROW.fetchUrl} server ./node_modules/.bin/vitest\n`);
-    // a settings-box with no row touches none
+    const text = 'other https://testbox.invalid/other.git server ./node_modules/.bin/vitest\nproject-a https://old.invalid/a.git server old\n';
+    writeFileSync(rows, text);
+    expect(box(h, [...WORDS()])).toEqual({ ok: true });
+    expect(readFileSync(rows, 'utf8')).toBe(text);
     const g = fixture();
     connectedTo(g);
     expect(box(g, [...WORDS()])).toEqual({ ok: true });
@@ -570,7 +577,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
       const st = status(h);
       expect(st.ok, JSON.stringify(st)).toBe(true);
       if (!st.ok) return false;
-      return parityArmable(st.value.parity, { fingerprint: st.value.fingerprint, boxFileSha256: st.value.boxFileSha256, stale: false });
+      return parityArmable(st.value.parity, parityCurrentOf(st.value));
     };
     expect(armable()).toBe(true);
     // CCRC_TESTBOX_RETENTION shapes no run
@@ -587,6 +594,19 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     expect(box(h, [...WORDS(['--set=CCRC_TESTBOX_WORKERS=4'])])).toEqual({ ok: true });
     expect(stateText(h)).toMatch(/^parity_stale=1$/m);
     expect(readFileSync(h.parity, 'utf8')).toBe(before);
+    expect(armable()).toBe(false);
+    expect(status(h).ok && (status(h) as { value: { parityStale?: boolean } }).value.parityStale).toBe(true);
+    // the box file returns to the digest the record names (the fake box answers its one old file, so this edit rebuilds the first
+    // edit's file) and the mark stands: the digest alone would read pass, the status carries the mark so no reader does
+    expect(box(h, [...WORDS(['--set=CCRC_TESTBOX_RETENTION=48h'])])).toEqual({ ok: true });
+    const back = status(h);
+    expect(back.ok).toBe(true);
+    if (back.ok) {
+      expect(back.value.boxFileSha256).toBe(JSON.parse(before).boxFileSha256);
+      expect(parityArmable(back.value.parity, { fingerprint: back.value.fingerprint, boxFileSha256: back.value.boxFileSha256, stale: false })).toBe(true);
+      expect(back.value.parityStale).toBe(true);
+    }
+    expect(stateText(h)).toMatch(/^parity_stale=1$/m);
     expect(armable()).toBe(false);
     // a later non-shaping edit does not bring a stale record back
     expect(box(h, [...WORDS(['--set=CCRC_TESTBOX_RETENTION=72h'])])).toEqual({ ok: true });
@@ -800,7 +820,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin disc
   function paired(h: Home, extra: string[] = []): void {
     connectedTo(h, extra);
     writeFileSync(h.token, 'f'.repeat(64), { mode: 0o600 });
-    writeFileSync(h.push, 'PRIVATE KEY BYTES\n', { mode: 0o600 });
+    keygen(h.push, 'ccrc-testbox-push');
     writeFileSync(h.overlay, 'CCRC_TESTBOX_URL=http://10.0.0.9:7443\nCCRC_TESTBOX_TOKEN_FILE=~/.ccrc/testbox.token\nCCRC_TESTBOX_GIT_URL_BASE=ssh://ccrc-tb-push@10.0.0.9:22/\nCCRC_TESTBOX_GIT_KEY=~/.ccrc/testbox-push.key\nCCRC_TESTBOX_POLL=45s\n', { mode: 0o600 });
     writeFileSync(h.parity, '{"v":1}\n', { mode: 0o600 });
     writeFileSync(h.snapshot, '{"at":1,"boxFileSha256":"' + SHA + '","settings":[]}\n', { mode: 0o600 });
@@ -847,6 +867,68 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin disc
     expect(gc[1]).toContain('authorized_keys');
     expect(existsSync(g.token)).toBe(false);
     expect(existsSync(g.pin)).toBe(false);
+  });
+
+  it('disconnect removes only the paths the overlay names, and a push key only when it carries ccrc\'s own comment', () => {
+    // The overlay names the default paths (Connect wrote them). A hand-placed token and key elsewhere, and a key at the push key's
+    // path that a person made (another comment), are not ccrc's to delete.
+    const h = fixture();
+    paired(h);
+    keygen(h.push, 'someone@laptop');
+    const other = join(h.home, 'hand', 'push.key');
+    keygen(other, 'ccrc-testbox-push');
+    expect(json(verb(h, 'disconnect', '--from', 'pwa'))).toEqual({ ok: true });
+    expect(existsSync(h.token)).toBe(false);
+    expect(existsSync(h.push), 'a key ccrc did not make is kept').toBe(true);
+    expect(existsSync(other), 'a path the overlay does not name is never touched').toBe(true);
+    expect(readFileSync(h.lg, 'utf8')).toContain('was not made by ccrc and is kept');
+    // an overlay that names no path leaves both default files alone
+    const g = fixture();
+    paired(g);
+    writeFileSync(g.overlay, 'CCRC_TESTBOX_POLL=45s\n', { mode: 0o600 });
+    expect(json(verb(g, 'disconnect', '--from', 'pwa'))).toEqual({ ok: true });
+    expect(existsSync(g.token)).toBe(true);
+    expect(existsSync(g.push)).toBe(true);
+  });
+
+  it('a pairing made by hand (ccrc.env names a pairing key) is left alone: no switch, no unpair, no token, key or overlay removed; the access line and the connection go', () => {
+    const h = fixture();
+    paired(h);
+    // the hand setup's own paths, outside ~/.ccrc, one of them a person's ssh key
+    const handToken = join(h.home, 'hand', 'token');
+    const handKey = join(h.home, 'hand', 'id_ed25519');
+    mkdirSync(path.dirname(handToken), { recursive: true });
+    writeFileSync(handToken, 'e'.repeat(64), { mode: 0o600 });
+    keygen(handKey, 'person@laptop');
+    writeFileSync(h.ccrcEnv, `CCRC_TESTBOX_URL=http://10.0.0.9:7443\nCCRC_TESTBOX_TOKEN_FILE=${handToken}\nCCRC_TESTBOX_GIT_URL_BASE=ssh://ccrc-tb-push@10.0.0.9:22/\nCCRC_TESTBOX_GIT_KEY=${handKey}\n`);
+    const envBefore = readFileSync(h.ccrcEnv);
+    const overlayBefore = readFileSync(h.overlay);
+    const r = verb(h, 'disconnect', '--from', 'pwa');
+    expect(json(r), r.out + r.err).toEqual({ ok: true });
+    // the switch is not lowered and the box is not unpaired: the one box call is the removal of ccrc's own access line
+    expect(ops(h).filter((c) => c[0] === 'ccd')).toEqual([]);
+    const all = cmds(h);
+    expect(all).toHaveLength(1);
+    expect(all[0]).toContain('authorized_keys');
+    expect(all.some((c) => c.includes('--unpair'))).toBe(false);
+    // the operator's files, ccrc.env and ccrc's own overlay are as they were
+    expect(readFileSync(handToken, 'utf8')).toBe('e'.repeat(64));
+    expect(existsSync(handKey)).toBe(true);
+    expect(existsSync(h.token) && existsSync(h.push), 'even the files at the default paths: the pairing is not ccrc\'s').toBe(true);
+    expect(readFileSync(h.ccrcEnv).equals(envBefore)).toBe(true);
+    expect(readFileSync(h.overlay).equals(overlayBefore)).toBe(true);
+    // what is ccrc's own goes: the pin, the parity record, the snapshot and the connection
+    for (const f of [h.pin, h.parity, h.snapshot]) expect(existsSync(f), f).toBe(false);
+    expect(stateText(h)).not.toMatch(/^(address|connected)=/m);
+    expect(existsSync(h.key)).toBe(true);
+    expect(readFileSync(h.lg, 'utf8')).toContain('left alone');
+    // one named key is enough, and a key ccrc.env sets empty counts (it is named)
+    const g = fixture();
+    paired(g);
+    writeFileSync(g.ccrcEnv, 'CCRC_TESTBOX_GIT_KEY=\n');
+    expect(json(verb(g, 'disconnect', '--from', 'pwa'))).toEqual({ ok: true });
+    expect(ops(g).filter((c) => c[0] === 'ccd')).toEqual([]);
+    expect(existsSync(g.token) && existsSync(g.push) && existsSync(g.overlay)).toBe(true);
   });
 
   it('a Connect refused in the installer\'s first phase left no installed tree: disconnect removes the access line, and the answer is ok', () => {

@@ -1176,4 +1176,36 @@ describe('the installer: --unpair removes the pairing and nothing else (D-8166, 
     const again = await reapply(b);
     expect([again.code, again.stderr.trim()]).toEqual([1, 'ccrc-testbox-install: refused: the push user holds no installed key (the box is unpaired); nothing was written']);
   });
+
+  it('a re-pair at the same tag with a byte-identical box file installs the key it is given and enables the service again (Start over, then Connect)', async () => {
+    const AK = path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys');
+    expect(readFileSync(AK, 'utf8')).toBe('');
+    const key = (n: string): string => `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${n.repeat(43)} ccrc-testbox-push`;
+    // The unpaired box holds the marker (--unpair keeps it), the same tag and the same box file, and no key.
+    writeFileSync(b.pushKey, `${key('N')}\n`);
+    const n = sysLog(b).length;
+    const r = await install(b, { staging: W.staging });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('nothing to do');
+    expect(readFileSync(AK, 'utf8')).toContain(`${key('N').split(' ').slice(0, 2).join(' ')}\n`);
+    const l = lines(b).slice(n).filter((x) => x.startsWith('systemctl '));
+    expect(l).toContain('systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer');
+    expect(l).toContain('systemctl restart ccrc-testbox.service');
+    expect(l).toContain('systemctl start ccrc-testbox-egress.timer');
+    expect(l.indexOf('systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer')).toBeLessThan(l.indexOf('systemctl restart ccrc-testbox.service'));
+    // the same key again is current: nothing to do
+    const same = await install(b, { staging: W.staging });
+    expect([same.code, same.stderr]).toEqual([0, expect.stringContaining('nothing to do')]);
+    // another key (a new pairing) is not: the push user's one key is replaced
+    writeFileSync(b.pushKey, `${key('M')}\n`);
+    const other = await install(b, { staging: W.staging });
+    expect(other.code, other.stderr).toBe(0);
+    expect(other.stderr).not.toContain('nothing to do');
+    const ak = readFileSync(AK, 'utf8');
+    expect(ak).toContain(key('M').split(' ').slice(0, 2).join(' '));
+    expect(ak).not.toContain(key('N').split(' ')[1]!);
+    // and --reapply works again, so Repair is not stranded
+    const re = await reapply(b, ['--force']);
+    expect(re.code, re.stderr).toBe(0);
+  });
 });

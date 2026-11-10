@@ -22,7 +22,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, Skeleton, TextInput } from '@ccrc/ui';
-import { parityArmable, TESTBOX_ADMIN_PHASES, TESTBOX_BOX_KEYS, TESTBOX_REPO_ROWS_MAX, fitsTestboxShape, isBoxAddress, isLoginUser, isPrivateNetworkAddress, isSshPort,
+import { parityArmable, parityCurrentOf, TESTBOX_ADMIN_PHASES, TESTBOX_BOX_KEYS, TESTBOX_REPO_ROWS_MAX, fitsTestboxShape, isBoxAddress, isLoginUser, isPrivateNetworkAddress, isSshPort,
   type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub, type TestboxPhasedSub } from '../../../shared/testbox-admin';
 import type { TestboxAdminResult, TestboxEventRow } from '../../../shared/api';
 import { parseRepoRow } from '../../../shared/testbox';
@@ -126,7 +126,7 @@ function parityWord(s: TestboxAdminStatus): 'none' | 'pass' | 'fail' | 'stale' {
   const p = s.parity;
   if (p === null) return 'none';
   if (p.result === 'fail') return 'fail';
-  return parityArmable(p, { fingerprint: s.fingerprint, boxFileSha256: s.boxFileSha256, stale: false }) ? 'pass' : 'stale';
+  return parityArmable(p, parityCurrentOf(s)) ? 'pass' : 'stale';
 }
 
 export interface TestBoxConnectProps {
@@ -245,8 +245,10 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
     return landed;
   };
 
-  /** Start over: Disconnect, from a connection that is recorded but was never Connected (an abandoned or refused one). It removes
-   *  ccrc's access line from the box when ccrc can reach it, and forgets the address, the host key and the connection here. */
+  /** Start over: Disconnect, from a connection that is recorded but was never Connected (an abandoned or refused one). It takes the
+   *  connection apart as Disconnect does (the switch off, the box's unpair, the token and push key ccrc made, ccrc's access line) and
+   *  forgets the address, the host key and the connection here; a pairing made by hand (its keys in `ccrc.env`) is left as it is, and
+   *  only the access line and the connection go. `T.startOverWhy` says both. */
   const startOver = async (): Promise<void> => {
     setChecking(true);
     try {

@@ -7217,7 +7217,8 @@ disk and never joins a network.
 
 **The card's six steps.** With no box connected the card says what a test box is for and offers **Connect a test box**.
 Connect, Replace, Disconnect and the access-key acts need a recent step-up; a plain settings edit needs a signed-in
-session only. With sign-in off the card says sign-in is required rather than offer a button that cannot work.
+session only, except `CCRC_TESTBOX_DENY_GLOBS`: the list of untracked files a remote run's snapshot never carries to the
+box guards secrets, so a change to it asks for the step-up too. With sign-in off the card says sign-in is required rather than offer a button that cannot work.
 
 1. **The address.** The box's address (an IP literal or a name such as `testbox.invalid`), its ssh port (default 22) and
    its login user (default `root`). Nothing is sent to the box. The box sits on a **private network** with the fleet
@@ -7232,10 +7233,11 @@ session only. With sign-in off the card says sign-in is required rather than off
    ccrc arrive from another address than the fleet host's route says, and refuses a key whose `from=` is not the one it
    sees; only the box can say which, so **Show the access line again** takes the address the box sees (its ssh log names
    it) and puts it in the line. Once an address is recorded the card keeps **Show the access line again** and **Start
-   over** (a Disconnect that also removes ccrc's access line when the box can be reached) beside the current step, so a
+   over** (a Disconnect: see below) beside the current step, so a
    refused login, a mistyped address or a reloaded tab never needs a shell.
 3. **Check the box.** ccrc connects once and shows the box's host key fingerprint; confirm it against the provider's
-   console and the key is pinned. The read-only preflight then lists each prerequisite with a pass or the reason it
+   console and the key is pinned, under the address as typed and, for a host name, the IP address it resolves to (the push
+   dials the listen address, an IP literal, and strict host checking needs an entry for it). The read-only preflight then lists each prerequisite with a pass or the reason it
    failed (the release host must be reachable from the box; the npm upstream is the installer's own setting, typed at
    the next step, so Connect tries it from the box before it writes a file there); **Check again** repeats it, and
    nothing on the box has changed.
@@ -7278,8 +7280,12 @@ controls again.
 - **Replace** is Disconnect of the old box followed by Connect of a new address, in one flow, with the new fingerprint
   shown for confirmation at step 3. Runs on the old box finish or fall back locally.
 - **Disconnect** turns the switch off first. On the box it stops and disables the service and removes the push-key
-  line, the service token and ccrc's access line; on the fleet host it removes the token, the push key, the overlay,
-  the host key pin and the parity record. It wipes no data: the box is then rebuilt, never reused. ccrc's own access
+  line, the service token and ccrc's access line; on the fleet host it removes the token and the push key (only the paths
+  the overlay names, which Connect wrote, and a push key only when it carries ccrc's own comment), the overlay,
+  the host key pin and the parity record. A box paired by hand, whose pairing keys sit in `ccrc.env`, is not ccrc's to take
+  apart: Disconnect and **Start over** then leave the switch, the box's service, the token and the push key (wherever the hand
+  setup put them) as they are, and remove only ccrc's access line and the connection recorded here; Connect likewise refuses
+  a push key at the push key's path that ccrc did not make (`foreign-key`) rather than adopt it. It wipes no data: the box is then rebuilt, never reused. ccrc's own access
   key stays on the fleet host. The access line comes out whatever the box's own unpair did, whenever the pin still
   matches the box (it is root-capable, and a box that cannot unpair is the one that must not keep it). Three answers
   follow a clean fleet side: done; `box-side-skipped` (ccrc did not touch the box: it did not answer, or its host key
@@ -7295,7 +7301,8 @@ controls again.
 A changed host key blocks every act but **Confirm** (and Disconnect) until the new fingerprint is confirmed; a failed
 install and a lost access key each show one line with what happened and the one control that resolves it. Parity is
 required again after Connect, Replace and a change to a setting that shapes runs (workers, runs, memory, swap, CPU quota,
-the run temp directory and tmpfs); a release roll does not expire it, and neither does a change to any other box setting:
+the run temp directory and tmpfs), and it stays required when such a setting is changed back, since the mark the change set
+is cleared only by a passing parity (the status carries it, so the card shows it and offers **Run parity**); a release roll does not expire it, and neither does a change to any other box setting:
 the record follows the box file's new digest, so a passed parity stays armable.
 Every act writes one row to the ledger (the `testbox_events` table), and the card shows the last ten acts on a wide
 screen and one on a phone. The verb's state holds one act, and the server writes a long act's row from what it reads

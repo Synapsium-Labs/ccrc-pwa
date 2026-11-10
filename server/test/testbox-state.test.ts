@@ -110,6 +110,15 @@ describe('testboxBlock: the connect surface rides the block as one optional fiel
     expect(adminOfBlock(b)).toBe(NOT_CONNECTED_ADMIN);
     expect(adminOfStatus({ ...admin, connected: false, hostKey: 'none' })).toMatchObject({ connected: false, hostKey: 'none' });
   });
+
+  it('a passing record that still matches the pin and the box file reads pass, and stale once the status carries the stale mark', () => {
+    const rec: NonNullable<TestboxAdminStatus['parity']> = {
+      v: 1, result: 'pass', prs: [], fixtures: [], release: 'v0.0.900', toolsKey: 'k', fingerprint: fp, boxFileSha256: 'a'.repeat(64), at: 1,
+    };
+    expect(adminOfStatus({ ...admin, parity: rec }).parity).toBe('pass');
+    expect(adminOfStatus({ ...admin, parity: rec, parityStale: false }).parity).toBe('pass');
+    expect(adminOfStatus({ ...admin, parity: rec, parityStale: true }).parity).toBe('stale');
+  });
 });
 
 describe('runsCounts: the last 24 hours over two day files (D-7445)', () => {

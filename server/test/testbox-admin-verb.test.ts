@@ -241,7 +241,7 @@ describe('the bash argument check is the twin of buildTestboxAdminArgv (D-8166)'
     { sub: 'connect', fields: { settings: { CCRC_TESTBOX_EGRESS_ALLOW: 'github.com nodejs.org', CCRC_TESTBOX_TMPFS: 'on', CCRC_TESTBOX_ROOT: '/srv/box' }, repos: [ROW, { ...ROW, name: 'project-b' }] } },
     { sub: 'settings-fleet', fields: { settings: { CCRC_TESTBOX_POLL: '45s', CCRC_TESTBOX_DENY_GLOBS: '*.pem .env $HOME %h' } } },
     { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_WORKERS: '4' } } },
-    { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_WORKERS: '4' }, repos: [ROW], whenIdle: true } },
+    { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_WORKERS: '4' }, whenIdle: true } },
     { sub: 'parity', fields: {} }, { sub: 'parity', fields: { prs: [12, 345] } },
     { sub: 'disconnect', fields: {} }, { sub: 'disconnect', fields: { replace: true } },
   ];

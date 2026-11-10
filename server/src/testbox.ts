@@ -15,7 +15,7 @@
 import type { TestboxHostMeasure, TestboxOpReply } from '../../shared/agent-protocol.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
 import { readSwitches, TESTBOX_REMOTE_LIVE_MARKER } from '../../shared/switches.js';
-import { parityArmable, type TestboxActState, type TestboxAdminStatus } from '../../shared/testbox-admin.js';
+import { parityArmable, parityCurrentOf, type TestboxActState, type TestboxAdminStatus } from '../../shared/testbox-admin.js';
 import {
   parseRunsLine, TESTBOX_TOOLS, type StatusAnswer, type TestboxFallbackId, type TestboxState, type TestboxTool,
 } from '../../shared/testbox.js';
@@ -71,12 +71,13 @@ export const NOT_CONNECTED_ADMIN: TestboxBlockAdmin = Object.freeze({ connected:
 /** The block's admin, or {@link NOT_CONNECTED_ADMIN} for one with none (skew in both directions). */
 export const adminOfBlock = (b: { readonly admin?: TestboxBlockAdmin }): TestboxBlockAdmin => b.admin ?? NOT_CONNECTED_ADMIN;
 
-/** The block's admin from a `status` the lane read. `stale` is not in the status: a record that passed but no longer matches the
- *  pin or the box file reads `stale` here, and the fleet's own `parity_stale` mark is `ccd testbox-remote`'s to refuse. */
+/** The block's admin from a `status` the lane read. A record that passed but no longer matches the pin or the box file, or whose
+ *  `parity_stale` mark is set (the status carries it as `parityStale`: an edit and its undo leave the digest as the record's and the
+ *  mark standing), reads `stale` here, so the card offers Run parity. */
 export function adminOfStatus(s: TestboxAdminStatus): TestboxBlockAdmin {
   const p = s.parity;
   const parity = p === null ? 'none' : p.result === 'fail' ? 'fail'
-    : parityArmable(p, { fingerprint: s.fingerprint, boxFileSha256: s.boxFileSha256, stale: false }) ? 'pass' : 'stale';
+    : parityArmable(p, parityCurrentOf(s)) ? 'pass' : 'stale';
   return { connected: s.connected, hostKey: s.hostKey, act: s.act, parity };
 }
 

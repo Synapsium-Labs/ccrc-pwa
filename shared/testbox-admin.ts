@@ -273,7 +273,7 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'busy': 'Another test box act is already running; wait for it to end or cancel it.',
   'unsupported-os': 'This computer is not a system the test box can be connected from.',
   'no-access-key': 'ccrc has not made its access key yet; make it first.',
-  'foreign-key': 'The access key file was not made by ccrc, so ccrc will not use or replace it.',
+  'foreign-key': 'A key file ccrc would use (its access key, or the push key at the push key setting\'s path) was not made by ccrc, so ccrc will not use, replace or remove it.',
   'unreachable': 'The box did not answer on that address and port in time.',
   'auth-refused': 'The box refused the access key; check that the line was added for the login user, and that its from address is the one the box sees ccrc connect from.',
   'host-key-unknown': 'The box has no pinned host key yet; check its fingerprint and confirm it.',
@@ -406,9 +406,10 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
     repos: f('--repo', 'repo', { required: true, repeatable: true }),
   }, { stepUp: true, long: true, act: 'connect' }),
   'settings-fleet': spec({ settings: f('--set', 'setting-fleet', { required: true, repeatable: true }) }, { act: 'settings-fleet' }),
+  // No repository rows: parity runs the command head of a row on the fleet host as the fleet user, and only a step-up Connect may
+  // name one. A box setting edit needs no step-up (C14), so it must not be able to put a row on the fleet host's record.
   'settings-box': spec({
     settings: f('--set', 'setting-box', { required: true, repeatable: true }),
-    repos: f('--repo', 'repo', { repeatable: true }),
     whenIdle: f('--when-idle', 'true'),
   }, { long: true, act: 'settings-box' }),
   'cancel': spec({}, { act: 'cancel' }),
@@ -417,6 +418,22 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
   'apply-release': spec({}, { long: true, act: 'apply-release' }),
   'disconnect': spec({ replace: f('--replace', 'true') }, { stepUp: true, act: 'disconnect' }),
 } satisfies Record<TestboxAdminSub, TestboxAdminSubSpec>);
+
+/** The fleet-host settings whose change needs the passkey step-up although `settings-fleet` does not (C14 rules a plain value
+ *  edit needs a signed-in session only): the one that guards secrets. `CCRC_TESTBOX_DENY_GLOBS` names the untracked files a
+ *  remote run's snapshot never carries to the box (spec Goal 2, §2.11), so a session that can widen it can push a `.env` or a
+ *  private key to the machine where pull-request code runs. */
+export const TESTBOX_STEP_UP_SETTINGS: readonly string[] = Object.freeze(['CCRC_TESTBOX_DENY_GLOBS']);
+
+/** Whether this call needs the step-up: its sub's row says, or it changes a setting in {@link TESTBOX_STEP_UP_SETTINGS}.
+ *  `fields` is the body's own (checked or not: a body that names such a key asks for the step-up whatever else is wrong with it). */
+export function testboxAdminNeedsStepUp(sub: TestboxAdminSub, fields: unknown): boolean {
+  if (TESTBOX_ADMIN_SUBS[sub].stepUp) return true;
+  if (sub !== 'settings-fleet' || typeof fields !== 'object' || fields === null || Array.isArray(fields)) return false;
+  const settings = (fields as Record<string, unknown>)['settings'];
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return false;
+  return TESTBOX_STEP_UP_SETTINGS.some((k) => Object.hasOwn(settings, k));
+}
 
 /** Whether `v` is a sub in the union. */
 export function isTestboxAdminSub(v: unknown): v is TestboxAdminSub {
@@ -654,6 +671,10 @@ export interface TestboxAdminStatus {
    *  switches the installed tree without rewriting it, so a running release other than this one needs **Apply release**. */
   installedTag: string | null;
   parity: TestboxParityRecord | null;
+  /** The verb's `parity_stale` mark: a run-shaping box setting changed since the record was written, whatever the box file's digest
+   *  reads now (an edit and its undo return the digest to the record's and leave the mark set). Absent from a hand-built status and
+   *  from an older verb's (read as false); the reader sets it only when true. */
+  parityStale?: boolean;
   /** The acts that ended before `act` began, oldest first, at most six. The verb's state holds one act, and the lane writes a
    *  long act's ledger row from what it reads at its own pace, so an act that began and ended between two passes (or while the
    *  server was down) is seen here and still gets its row (spec §2.10). Absent from a hand-built status (read as none). */
@@ -662,6 +683,12 @@ export interface TestboxAdminStatus {
 
 /** What the gate compares the record with: the pin, the box file and the stale mark, as the status reports them. */
 export interface TestboxParityCurrent { fingerprint: string | null; boxFileSha256: string | null; stale: boolean }
+
+/** What {@link parityArmable} compares the record with, as a status reports it: the pin, the box file's digest and the stale mark.
+ *  The one place the three consumers (the switch gate, the block's admin, the card) take it from, so none can leave the mark out. */
+export function parityCurrentOf(s: Pick<TestboxAdminStatus, 'fingerprint' | 'boxFileSha256' | 'parityStale'>): TestboxParityCurrent {
+  return { fingerprint: s.fingerprint, boxFileSha256: s.boxFileSha256, stale: s.parityStale === true };
+}
 
 /** Whether a parity record lets the switch arm: it passed and still matches the pin and the box file, and no run-shaping
  *  edit has marked it stale (spec §2.8). */
@@ -806,12 +833,13 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
   let raw: unknown;
   try { raw = JSON.parse(json); } catch { return { ok: false, reason: 'not JSON' }; }
   try {
-    // `installedTag` and `endedActs` were added after the first status shape: a status without one (an older verb) reads as
-    // null and as none.
+    // `installedTag`, `endedActs` and `parityStale` were added after the first status shape: a status without one (an older verb)
+    // reads as null, as none and as not stale.
     const o = exact(raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? { ...(!Object.hasOwn(raw, 'installedTag') ? { installedTag: null } : {}), ...(!Object.hasOwn(raw, 'endedActs') ? { endedActs: [] } : {}), ...(raw as Obj) } : raw, 'status', [
+      ? { ...(!Object.hasOwn(raw, 'installedTag') ? { installedTag: null } : {}), ...(!Object.hasOwn(raw, 'endedActs') ? { endedActs: [] } : {}),
+          ...(!Object.hasOwn(raw, 'parityStale') ? { parityStale: false } : {}), ...(raw as Obj) } : raw, 'status', [
       'v', 'connected', 'addressSet', 'login', 'fingerprint', 'hostKey', 'boxFileSha256', 'act', 'boxSettings',
-      'boxSettingsAt', 'installedTag', 'parity', 'endedActs',
+      'boxSettingsAt', 'installedTag', 'parity', 'parityStale', 'endedActs',
     ]);
     if (!Array.isArray(o['endedActs']) || o['endedActs'].length > 6) refuse('endedActs', 'not a list of at most six');
     if (o['v'] !== 1) refuse('v', 'not 1');
@@ -839,6 +867,7 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
         boxSettingsAt: orNull(o['boxSettingsAt'], (x) => int(x, 'boxSettingsAt')),
         installedTag: orNull(o['installedTag'], (x) => (typeof x === 'string' && RELEASE_TAG_RE.test(x) ? x : refuse('installedTag', 'not a release tag'))),
         parity: orNull(o['parity'], (x) => parityRecord(x, 'parity')),
+        ...(bool(o['parityStale'], 'parityStale') ? { parityStale: true } : {}),
         endedActs: (o['endedActs'] as unknown[]).map((x, i) => actState(x, `endedActs[${i}]`)),
       },
     };

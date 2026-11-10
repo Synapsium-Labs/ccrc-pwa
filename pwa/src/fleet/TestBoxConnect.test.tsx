@@ -462,6 +462,19 @@ describe('step 6: parity', () => {
     expect(button(T.runParity)).toBeInTheDocument();
   });
 
+  it('a record that still matches the pin and the box file but whose stale mark is set (an edit and its undo) says parity must run again, with Run parity on the card', async () => {
+    fakeFleet(connected({ parity: record('pass'), parityStale: true }));
+    await mount();
+    expect(screen.getByText(T.parityStale)).toBeInTheDocument();
+    expect(button(T.runParity)).toBeInTheDocument();
+    cleanup();
+    // the same record with no mark is a pass: no Run parity
+    fakeFleet(connected({ parity: record('pass') }));
+    await mount();
+    expect(screen.getByText(T.parityPassed)).toBeInTheDocument();
+    expect(within(flow()).queryByRole('button', { name: T.runParity })).toBeNull();
+  });
+
   it('a gh-signed-out failure says why', async () => {
     fakeFleet(connected({ act: connectAct({ sub: 'parity', outcome: 'failed', phase: 'legs', code: 'gh-signed-out', phases: [] }) }));
     await mount();
@@ -703,6 +716,9 @@ describe('coming back to a connection that is recorded and never Connected (D-81
     expect(button(T.showLineAgain)).toBeInTheDocument();
     expect(button(T.startOver)).toBeInTheDocument();
     expect(screen.getByText(T.startOverWhy)).toBeInTheDocument();
+    // the sentence says what the act does: the switch, the box's service, ccrc's own token and key, the access line, and that a hand
+    // pairing is left as it is
+    for (const part of ['switch off', 'token and push key ccrc made', 'access line', 'The access key is kept', 'by hand', 'not touched']) expect(T.startOverWhy, part).toContain(part);
     cleanup();
     fakeFleet(baseStatus({ addressSet: true, connected: true, hostKey: 'pinned', fingerprint: FP }));
     await mount();

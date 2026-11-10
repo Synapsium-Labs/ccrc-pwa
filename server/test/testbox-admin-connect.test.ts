@@ -329,6 +329,47 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     expect(readdirSync(join(h.home, '.ccrc')).filter((n) => n.startsWith('pushkey.'))).toEqual([]);
   });
 
+  it('a key at the push key\'s path that ccrc did not make is never adopted: foreign-key from the parent, before anything is fetched or written', () => {
+    for (const comment of ['person@laptop', '']) {
+      const h = fixture();
+      connectedTo(h);
+      const g = spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', comment, '-f', h.push], { encoding: 'utf8' });
+      expect(g.status, g.stderr).toBe(0);
+      const before = readFileSync(h.push);
+      const r = verb(h, 'connect', ...WORDS(), '--from', 'pwa');
+      expect(json(r), r.out + r.err).toEqual({ ok: false, code: 'foreign-key' });
+      expect(readFileSync(h.push).equals(before), 'the key is left as it was').toBe(true);
+      expect(sshCalls(h)).toEqual([]);
+      expect(readFileSync(h.state, 'utf8')).not.toContain('act_id=');
+      expect(existsSync(h.overlay) || existsSync(h.token)).toBe(false);
+    }
+    // a link, even to a key of ccrc's own, is not a file ccrc made
+    const l = fixture();
+    connectedTo(l);
+    const real = join(l.home, 'real.key');
+    expect(spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'ccrc-testbox-push', '-f', real], { encoding: 'utf8' }).status).toBe(0);
+    symlinkSync(real, l.push);
+    expect(json(verb(l, 'connect', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: false, code: 'foreign-key' });
+  });
+
+  it('the pair phase makes the pin name the listen address too (a box typed as a host name), under the same key', () => {
+    const NAME = 'testbox.invalid';
+    const h = fixture();
+    writeFileSync(join(h.home, 'fakes', 'getent'), `#!/bin/sh\nif [ "$1" = ahosts ] && [ "$2" = ${NAME} ]; then echo "${ADDR} STREAM ${NAME}"; exit 0; fi\nexit 2\n`, { mode: 0o755 });
+    const g = verb(h, 'key', `--address=${NAME}`);
+    expect(json(g)['ok'], g.out + g.err).toBe(true);
+    // a pin an older build wrote: the typed name only
+    writeFileSync(h.pin, `${NAME} ssh-ed25519 AAAA\n`, { mode: 0o600 });
+    const a = act(h, WORDS());
+    expect(a.rc, a.out + a.err).toBe(0);
+    expect(lastAct(h).outcome).toBe('ok');
+    expect(readFileSync(h.pin, 'utf8')).toBe(`${NAME},${ADDR} ssh-ed25519 AAAA\n`);
+    expect(readFileSync(h.overlay, 'utf8')).toContain(`CCRC_TESTBOX_GIT_URL_BASE=ssh://ccrc-tb-push@${ADDR}:22/\n`);
+    // a second Connect leaves the pin as it is
+    act(h, WORDS());
+    expect(readFileSync(h.pin, 'utf8')).toBe(`${NAME},${ADDR} ssh-ed25519 AAAA\n`);
+  });
+
   it('the four pairing keys land in testbox.env and ccrc.env is byte-identical', () => {
     const h = fixture();
     connectedTo(h);

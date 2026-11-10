@@ -77,13 +77,14 @@ const realCcd = (h: CcdHarness, argvs: string[][]): Runner => (_cmd, args) => ne
 
 /** The connect surface's `status` as the switch gate reads it (TC13): what the fake ops port answers. `armable` is a passing
  *  record that matches the pin and the box file `seedPassingParity` wrote; `none` has no record; `mismatch` has a pass for
- *  another box file; `no-op` is an agent that does not carry the op; `absent` is a server with no ops port at all. */
-type AdminMode = 'armable' | 'none' | 'mismatch' | 'no-op' | 'unanswered' | 'absent';
+ *  another box file; `marked-stale` is a record that matches both and a status that carries the verb's `parityStale` mark (an edit
+ *  and its undo); `no-op` is an agent that does not carry the op; `absent` is a server with no ops port at all. */
+type AdminMode = 'armable' | 'none' | 'mismatch' | 'marked-stale' | 'no-op' | 'unanswered' | 'absent';
 const PIN = `SHA256:${'A'.repeat(43)}`;
 const BOX_SHA = 'a'.repeat(64);
 const adminStatus = (mode: AdminMode): TestboxAdminStatus => ({
   v: 1, connected: true, addressSet: true, login: 'root', fingerprint: PIN, hostKey: 'pinned', boxFileSha256: BOX_SHA, act: null,
-  boxSettings: null, boxSettingsAt: null, installedTag: null,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, ...(mode === 'marked-stale' ? { parityStale: true } : {}),
   parity: mode === 'none' ? null : {
     v: 1, result: 'pass', prs: [], fixtures: [], release: 'v0.0.900', toolsKey: 'k', fingerprint: PIN,
     boxFileSha256: mode === 'mismatch' ? 'b'.repeat(64) : BOX_SHA, at: 1,
@@ -222,9 +223,17 @@ describe('POST /api/testbox/switch: on needs a passing parity record (D-8166, sp
     expect(s.argvs).toEqual([]);
   });
 
+  it('on with a status that carries the stale mark is refused by the gate itself, though the record still matches the pin and the box file', async () => {
+    const s = await setup({ admin: 'marked-stale' });
+    const r = await post(s.app, '/api/testbox/switch', { on: true });
+    expect([r.statusCode, r.json()]).toEqual([409, PARITY_REQUIRED]);
+    expect(s.argvs).toEqual([]);
+    expect(existsSync(s.marker)).toBe(false);
+  });
+
   it('on with a record the verb marked stale is refused by ccd and answers parity-required, not a fleet failure', async () => {
     const s = await setup({ admin: 'armable' });
-    // The status carries no stale mark; ccd reads `parity_stale` in the verb's state file, and its refusal is the answer.
+    // A status without the mark (an older verb): ccd reads `parity_stale` in the verb's state file, and its refusal is the answer.
     writeFileSync(path.join(s.h.home, '.ccrc', 'testbox-admin.state'), `fingerprint=${PIN}\nbox_sha256=${BOX_SHA}\nparity_stale=1\n`);
     const r = await post(s.app, '/api/testbox/switch', { on: true });
     expect([r.statusCode, r.json()]).toEqual([409, PARITY_REQUIRED]);
