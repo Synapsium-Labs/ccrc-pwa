@@ -13405,24 +13405,45 @@ _codex_bridge_dir()  { printf '%s' "$CCRC_HERE/codexbridge"; }
 # absolute path on stdout, rc 0. rc 1 with one line: `python-absent` when there
 # is none, or it does not say its version; `python-too-old` below 3.9, the
 # package's floor. The version is asked of the interpreter itself, isolated.
-_codex_python() {
-  local py v maj min
+# `$1` is how that line ends, for a caller that has not stopped or started
+# anything yet; with none it ends as it always has.
+_codex_python() {   # [<how the refusal ends>]
+  local py v maj min tail="${1:-Nothing was started.}"
   if ! py="$(command -v python3 2>/dev/null)" || [ -z "$py" ]; then
-    _codex_say python-absent "python3 is not on PATH, and a direct lane runs the bridge under the system python3 (3.9 or later). Install it, or put it on PATH, then re-run. Nothing was started."
+    _codex_say python-absent "python3 is not on PATH, and a direct lane runs the bridge under the system python3 (3.9 or later). Install it, or put it on PATH, then re-run. $tail"
     return 1
   fi
   case "$py" in /*) ;; *) py="$(cd "${py%/*}" 2>/dev/null && pwd)/${py##*/}" ;; esac
   v="$("$py" -I -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)" || v=''
   if ! [[ "$v" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
-    _codex_say python-absent "$py did not say its version, so whether it can run the bridge (3.9 or later) cannot be told. Fix that interpreter, then re-run. Nothing was started."
+    _codex_say python-absent "$py did not say its version, so whether it can run the bridge (3.9 or later) cannot be told. Fix that interpreter, then re-run. $tail"
     return 1
   fi
   maj="${BASH_REMATCH[1]}"; min="${BASH_REMATCH[2]}"
   if [ "$maj" -lt 3 ] || { [ "$maj" -eq 3 ] && [ "$min" -lt 9 ]; }; then
-    _codex_say python-too-old "$py is Python $v, and the bridge needs 3.9 or later. Install a newer python3 on PATH, then re-run. Nothing was started."
+    _codex_say python-too-old "$py is Python $v, and the bridge needs 3.9 or later. Install a newer python3 on PATH, then re-run. $tail"
     return 1
   fi
   printf '%s\n' "$py"
+}
+
+# The interpreter the tiers of <mode> run: the current LiteLLM runtime's for a
+# `litellm` lane, the system python3 (`_codex_python`) for a `direct` one. rc 0
+# when it resolves; rc 1 with one line (`runtime-absent`, `python-absent` or
+# `python-too-old`) that ends as `$2` says. ONE OWNER for the two callers that
+# need the answer before they act: the start verb, and the switch, which asks
+# it of the INCOMING mode before it stops a tier (`_codex_cmd_switch`, 1b).
+_codex_mode_interpreter() {   # <litellm|direct> [<how the refusal ends>]
+  local py tail="${2:-Nothing was started.}"
+  if [ "$1" = litellm ]; then
+    py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=''
+    if [ -z "$py" ] || [ ! -x "$py" ]; then
+      _codex_say runtime-absent "no LiteLLM runtime is current on this box ('ccgpt-runtime python' answered none). Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run. $tail"
+      return 1
+    fi
+    return 0
+  fi
+  _codex_python "$tail" >/dev/null
 }
 
 # The bridge package's identity: sha256 over the sorted `<name> <sha256>` lines
@@ -15216,7 +15237,7 @@ _codex_stop_lane() {   # <id> -> rc 0 + "litellm <word>, shim <word>, bridge <wo
 #   then started from the new runtime.env, under this start's lock, before the
 #   readiness wait.
 _codex_cmd_start() {   # <id>
-  local id d py tier q via pid out h limit t0 rekey=0 w mode up kt mine others waitfor mq retired='' rpid=''
+  local id d tier q via pid out h limit t0 rekey=0 w mode up kt mine others waitfor mq retired='' rpid=''
   local -A tq=() tv=() tp=() th=()
   _codex_row "${1:-}" || exit $?
   id="$CX_ID"
@@ -15279,15 +15300,7 @@ _codex_cmd_start() {   # <id>
   fi
   # THE INTERPRETER: the LiteLLM runtime for a litellm lane; for a direct lane
   # the system python3 (`_codex_python`, 3.9 or later), and no runtime at all.
-  if [ "$mode" = litellm ]; then
-    py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=''
-    if [ -z "$py" ] || [ ! -x "$py" ]; then
-      _codex_say runtime-absent "no LiteLLM runtime is current on this box ('ccgpt-runtime python' answered none). Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run. Nothing was started."
-      exit 1
-    fi
-  else
-    _codex_python >/dev/null || exit 1
-  fi
+  _codex_mode_interpreter "$mode" || exit 1
   _codex_runtime_env_ensure "$id" || exit 1
   # Read at once, in this shell (Task 4's hazard 3): the ensure's own answer.
   case "$CX_ENV_ACTION" in created|replaced) rekey=1 ;; esac
@@ -15595,6 +15608,13 @@ _codex_cmd_switch() {   # <id> <litellm|direct>
       exit 0
     fi
   fi
+  # 1b. THE INCOMING MODE'S INTERPRETER, asked before any tier is stopped. The
+  # start at step 5 needs it, and a switch that learned only there that it was
+  # missing had already stopped the outgoing tiers and recorded the mode: the
+  # lane was down, and on a box whose LiteLLM runtime is gone the way back to
+  # `litellm` took a serving `direct` lane with it. Refused here, nothing is
+  # stopped and nothing is written.
+  _codex_mode_interpreter "$to" "Nothing was stopped or written: $id is still a $from lane." || exit 1
   # 2. THE OUTGOING SET, front first: `_codex_other_tiers` answers in start
   # order, so it is walked reversed.
   outgoing="$(_codex_other_tiers "$to")" || exit 1
