@@ -3335,6 +3335,17 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
   });
 
+  it('characterization (D-6095): a cap-refused send-back writes no journal row and sends no mail; the run keeps its state', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
+    const before = w.coord.runEvents(id).length;
+    const mailBefore = (w.coord.db.prepare('SELECT count(*) AS c FROM mail').get() as { c: number }).c;
+    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(409);
+    expect(w.coord.runEvents(id)).toHaveLength(before);
+    expect((w.coord.db.prepare('SELECT count(*) AS c FROM mail').get() as { c: number }).c).toBe(mailBefore);
+  });
+
   it('a send-back of a worker that reads live advances on a full fleet (D-6093: nothing starts, so nothing is charged)', async () => {
     const home = mkTmp('ccrc-runs-');
     const { w, id } = await parkedAtFullCap(home);
