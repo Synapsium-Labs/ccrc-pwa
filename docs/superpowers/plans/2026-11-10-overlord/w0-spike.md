@@ -554,7 +554,9 @@ with 15 scenarios, 24 switches for readings the text had left open, and 14 plant
 must catch. A second round, in `round-two/` beside it, covers authority, restore, requests, commands, the push budget
 and playbook entries with six small machines. A third round, in `round-three-deciders/` and
 `round-three-accounts-privacy/`, enumerates every decider table over its whole domain and models the reservation
-arithmetic, the operator's messages and the privacy rules. The spec's later editions wrote each round's findings in.
+arithmetic, the operator's messages and the privacy rules. A fourth, in `round-four-oversight/`, models the evidence
+behind each gate, the decision model and the judges, and computes what each kind of trust takes to earn. The spec's
+later editions wrote each round's findings in.
 This task writes no new model. It re-runs them against the merged edition and records W0-27.
 
 **Files:**

@@ -15,6 +15,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The second model check's fixes: 38 findings in authority, restore, requests and pushes; I11 and I12 | #2538 | merged |
 | spec | The third round's fixes: 80 findings from an audit of every decider table and a model of accounts, privacy and joint faults; I13 | #2539 | merged |
 | spec | The seams of the four follow-ups closed: 29 restatements brought into line, the door gate order completed | #2542 | merged |
+| spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | in review |
 | W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | The skill-size ratchet | #2530 (draft); plan `w1a-skill-ratchet.md` | built. Waits for the operator's ruling on its scope |
@@ -53,7 +54,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 - **No D-numbers are defined yet.** The spec defines none, and the plans name each recorded decision
   `D-TBD-<slug>`. The programme mints real numbers through the ledger door when its run opens, and replaces each
   slug in the same act. Until then the plans cannot merge: `server/test/dtbd.test.ts` fails on a concrete slug.
-- **The spec was verified in three rounds.** The first model covers the hold, readiness, generation and push machines:
+- **The spec was verified in four rounds.** The first model covers the hold, readiness, generation and push machines:
   1.86 million states over 15 scenarios, 24 readings the text had left unsettled, and one design fault. #2529 writes
   each settled reading into the spec. The second covers authority, restore, requests, commands, the push budget and
   playbook entries: 2.07 million states over 73 runs and 38 findings, one a blocker (a restore that lost acts read
@@ -63,7 +64,16 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   decider table over its whole domain: total, ordered safely, monotonic, and agreeing with its restatements. The
   other models the reservation arithmetic, the operator's messages, the privacy rules and the joint cases of a
   restore. Together they made 80 findings, and #2539 writes them in. A last reader went through every line the
-  follow-ups changed and found 29 passages that still stated an old rule. #2542 closes them.
+  follow-ups changed and found 29 passages that still stated an old rule. #2542 closes them. The fourth round models
+  what judges the Overlord and how trust is earned: 32 findings, written in by #2543.
+- **Trust is slow to earn at the starting values, and the spec now says how slow.** The fourth round computed what
+  each gate takes (the spec's Table 9.5b). A kind of answer leaves shadow after 30 answers if the operator examines
+  every accept, and about 300 if two in five. A routine answer given alone needs 59 clean blind answers in its cell
+  at a `lambda` of 1. So the Overlord mostly briefs and recommends for its first months. The dials are the
+  operator's, in rulings 8 and 15.
+- **A cell for an answer of class none is the fleet's.** The model's fix scoped a cell to one programme, which put
+  about 470 questions between a programme and its first routine answer. #2543 scopes it to the fleet, and keeps a
+  grant's scope for an answer under a grant. This is the operator's to overturn.
 - **On a reserved account the Overlord's load reads its reserve.** The third round found that guests at their
   ceiling held a reserved account near the Overlord's soft line, so it left with most of its reserve unspent. The
   model's fix lowered the guests' ceiling from 58% of the account to 30%. The operator had ruled that a fenced
@@ -71,7 +81,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 - **The ask-or-act example was wrong by three.** At the starting weights a routine answer needs about sixty blind
   answers with none overturned, not about twenty. Ruling 15 now carries the figure, and the figure at a setting
   of 3.
-- **Calls in #2538 and #2539 are the operator's to overturn.** #2539's description lists eleven more. In #2538: A
+- **Calls in #2538 and #2539 are the operator's to overturn.** #2539's description lists eleven more, and #2543's eight. In #2538: A
   renewal voids a staged act. After a boot the rung is capped at `advise`, not `chat`, until a witness answers. The
   Overlord cannot drop a request that waits on the operator.
 - **The operator's directions to the hardening review** are recorded in the spec's §2: built to run in containers; a

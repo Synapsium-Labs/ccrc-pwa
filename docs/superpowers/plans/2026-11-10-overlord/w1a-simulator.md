@@ -825,6 +825,7 @@ W1 (the invariant monitor reuses `Invariant` and `SequenceLine`, and the real-la
 6. **Round two's machines.** A second model, in `round-two/` of the research directory, covers authority, restore,
    requests, commands, the push budget and playbook entries. Its whole matrix runs in about 15 seconds.
    Recommendation: it moves under the test tree with W1's authority and restore model, where Table 11.7b places it,
-   not in this piece. This piece's monitor and scenarios name I1 to I13: the spec's later editions added I11 (only
-   the operator widens authority), I12 (every open request has a follow-up time) and I13 (a restore un-wipes nothing
-   and reuses no id).
+   not in this piece. This piece's monitor and scenarios name I1 to I16: the spec's later editions added I11 (only
+   the operator widens authority), I12 (every open request has a follow-up time), I13 (a restore un-wipes nothing
+   and reuses no id), I14 (the server narrows when it must), I15 (an agreement counts once, and only honestly) and
+   I16 (a judge causes no effect).
