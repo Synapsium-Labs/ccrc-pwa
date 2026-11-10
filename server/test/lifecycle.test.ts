@@ -1141,7 +1141,11 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-steer-files', 'history-replay-out',
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
-      'testbox-token', 'testbox-push-key', 'testbox-times', 'testbox-runs-log',
+      'testbox-token', 'testbox-push-key',
+      // Test box connect (D-8166): the files `ccrc testbox-admin` owns.
+      'testbox-admin-key', 'testbox-known-hosts', 'testbox-overlay', 'testbox-admin-state', 'testbox-box-settings',
+      'testbox-parity', 'testbox-admin-lock', 'testbox-admin-log',
+      'testbox-times', 'testbox-runs-log',
       // D-7857: the carry dedupe sweep's record.
       'carry-dedupe-record',
     ]);
@@ -1158,8 +1162,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       const c = by(n);
       expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
       expect(c!.root.startsWith(root), `${n}'s root`).toBe(true);
-      expect([c!.pattern, c!.collector]).toEqual(['O', null]);
-      expect(c!.ruling).toContain('removed by hand when the test box is retired');
+      // D-8166: the connect verb writes and collects both (testbox-lifecycle-rows.test.ts holds the words).
+      expect([c!.pattern, c!.ruling]).toEqual(['O', null]);
+      expect(c!.collector).toContain('ccrc testbox-admin disconnect');
     }
     const times = by('testbox-times');
     expect(times, 'shared/lifecycle.ts declares no testbox-times class').toBeTruthy();
