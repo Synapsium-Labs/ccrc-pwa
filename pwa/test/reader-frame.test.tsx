@@ -725,6 +725,31 @@ describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
     expect(h.mountFn).toHaveBeenCalledTimes(1);
   });
 
+  it('a phone turned sideways keeps the one bar: a frame mounted with ccrc\'s bar still publishes it after the slot asks for the frame\'s own', async () => {
+    // Refinement (f): the bar that was mounted decides the head for the frame's life. Turned before ready, the frame
+    // publishes at ready; turned after ready, it re-publishes through the new slot.
+    const h1 = harness();
+    const p1 = vi.fn<(bar: ReaderBar | null) => void>();
+    const r1 = render(slotted(h1, 'host-bar', p1));
+    const i1 = await ready(h1);
+    r1.rerender(slotted(h1, 'frame-bar', p1));
+    act(() => { i1.onReady(); });
+    expect(lastBar(p1)).not.toBeNull();
+    expect(lastBar(p1)).toBeDefined();
+    cleanup();
+    const h2 = harness();
+    const p2 = vi.fn<(bar: ReaderBar | null) => void>();
+    const r2 = render(slotted(h2, 'host-bar', p2));
+    const i2 = await ready(h2);
+    act(() => { i2.onReady(); });
+    const before = lastBar(p2);
+    expect(before).not.toBeNull();
+    const p3 = vi.fn<(bar: ReaderBar | null) => void>();
+    r2.rerender(slotted(h2, 'frame-bar', p3));
+    expect(lastBar(p3)).toBe(before);
+    expect(h2.mountFn).toHaveBeenCalledTimes(1);
+  });
+
   it('the Docs screen asks for ccrc\'s bar under the compact width and for the frame\'s own above it', async () => {
     const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
     atWidth(412);
