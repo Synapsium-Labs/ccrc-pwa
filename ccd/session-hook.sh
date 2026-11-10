@@ -3344,6 +3344,9 @@ case "$event" in
     # Children and kill-switched sessions get nothing; a held coordinator still gets its roster. Unarmed (no `coordinator-roster-card-live` marker) it
     # only appends the card to a size-capped shadow log the operator can read; armed, it sets CARD_ROSTER.
     ROSTER_CARD_MAX_CHARS=2048
+    # D-8126: the fixed autonomy line, a constant of this file (no server byte reaches it); the jq program places it after
+    # the header and counts it inside $max, so surplus runs collapse before it ever does.
+    ROSTER_AUTONOMY_LINE='ccrc-autonomy: before asking the operator, read your goals (`ccrc-api goals show <slug>`), decide, record (`ccrc-api calls record`), continue; stop only for an operator-only act or a physical block (coordinator clause 21).'
     # The jq program: keeps this coordinator's non-terminal runs, one line each, then an "awaiting you" line, all
     # clipped to $max (surplus runs collapse into a "+N more" line). Every interpolated field goes through `s`
     # (strings: a safe charset, 40 chars) or `n` (integers: a non-number reads 0), so no server byte injects prose.
@@ -3354,8 +3357,8 @@ ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n
         ([$r[] | select(.state == "awaiting-review") | "review #\(.id | n)"] + [$r[] | select((.health.mailParked | n) > 0) | "parked mail #\(.id | n) (\(.health.mailParked | n))"]) as $w |
         ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f |
         "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h |
-        (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
-        ([$h] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end'
+        (reduce $l[] as $x ({o: [], n: 0}; if ([$h, $a] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
+        ([$h, $a] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end'
     _hook_roster_card() {
       local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
       CARD_ROSTER=""
@@ -3363,7 +3366,7 @@ ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n
       [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 0
       body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
       card=$(jq -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
-        --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) "$ROSTER_PROGRAM" <<<"$body" 2>/dev/null) || return 0
+        --arg a "$ROSTER_AUTONOMY_LINE" --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) "$ROSTER_PROGRAM" <<<"$body" 2>/dev/null) || return 0
       [ -n "$card" ] || return 0
       if [ -e "$REG/coordinator-roster-card-live" ]; then
         CARD_ROSTER="$card"

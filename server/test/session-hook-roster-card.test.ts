@@ -212,3 +212,40 @@ describe('D4: unarmed, the card is a shadow record only', () => {
     expect(fs.statSync(shadow()).size).toBe(300 * 1024);
   });
 });
+
+describe('D-8126: the roster card carries the fixed autonomy line', () => {
+  beforeEach(arm);
+  const LINE = 'ccrc-autonomy: before asking the operator, read your goals (`ccrc-api goals show <slug>`), decide, record (`ccrc-api calls record`), continue; stop only for an operator-only act or a physical block (coordinator clause 21).';
+
+  it('puts the line after the header and before the first run', () => {
+    fakeApi(list(run_('', { id: 41 }), run_('', { id: 42 })));
+    const r = rosterOf(hook('compact')).split('\n');
+    expect(r[0]).toMatch(/^ccrc-roster:/);
+    expect(r[1]).toBe(LINE);
+    expect(r[2]).toMatch(/^#41 /);
+  });
+
+  it('keeps the line and the cap with forty runs: the runs collapse first', () => {
+    fakeApi(list(...Array.from({ length: 40 }, (_v, i) => run_('', { id: 200 + i, program: 'a-long-programme-slug-for-the-cap' }))));
+    const card = rosterOf(hook('compact'));
+    expect(card.length).toBeLessThanOrEqual(ROSTER_MAX - 64);
+    expect(card).toContain(LINE);
+    expect(card).toMatch(/\+\d+ more open runs/);
+  });
+
+  it('a run field carrying the line text neither duplicates nor alters it', () => {
+    fakeApi(list(run_('', { id: 43, program: LINE, sessionId: LINE })));
+    const card = rosterOf(hook('compact'));
+    expect(card.split(LINE).length - 1, 'the exact line appears once; the sanitiser strips the spaces from a field').toBe(1);
+    expect(card.split('\n').filter((l) => l.startsWith('ccrc-autonomy: ')).length).toBe(1);
+    expect(card).toContain(LINE);
+  });
+
+  it('a coordinator with no open runs gets no card, and a child gets nothing', () => {
+    fakeApi(list(run_('', { claimedBy: 'project-z-other' })));
+    expect(hook('compact')).not.toContain('ccrc-autonomy');
+    fs.writeFileSync(path.join(reg(), `${ID}.child`), 'run-a\n');
+    fakeApi(list(run_('')));
+    expect(hook('compact')).not.toContain('ccrc-autonomy');
+  });
+});
