@@ -55,6 +55,11 @@ are on before you act. Read it again after a compaction, which keeps none of the
   `review-brief.md`, `review-panel.md`, `peer-protocol.md`, `ledger-template.md` and
   `delegated-worktrees.md`.
 
+The steps and the API section stood in this file once, and some references still
+name them so. "SKILL.md step 6" is step 6 of `references/wave-steps.md`. SKILL.md's
+"How to call the API" is `references/api.md`, and its section on a wave that crosses
+into another project is `references/cross-project.md`.
+
 ## Notes on the contract
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
