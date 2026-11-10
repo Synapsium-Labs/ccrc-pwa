@@ -1020,10 +1020,11 @@ _tba_cx_push_key() {
   CX_PUSH_PUB="$t $b $TBA_PUSH_KEY_COMMENT"
 }
 
-# The box file on the box, as root, by a temp and a rename (root's, 0600 until the installer gives it the service user's
-# group); a file already byte-identical is left alone (its group and mode stay as the installer set them). CX_RC.
+# The box file on the box, as root, by a temp and a rename. A new file is root's, 0600, until the installer gives it the service user's group; a file
+# already there keeps its owner, group and mode (so a refused or failed install, and the restore of the old file, never
+# leave the service user unable to read it); a byte-identical file is left alone. CX_RC.
 _tba_cx_put_box() {   # <local file>
-  _tba_cx_out sh -c 'umask 077; p=$1; d=$(dirname "$p"); install -d -m 0755 -o root -g root "$d" && t=$(mktemp "$d/.ccrc.env.XXXXXXXX") && { cat >"$t" && if [ -f "$p" ] && cmp -s "$t" "$p"; then rm -f "$t"; else chmod 600 "$t" && chown root:root "$t" && mv -f "$t" "$p"; fi; } || { rm -f -- "$t"; exit 1; }' sh "$TBA_BOX_ENV_PATH" <"$1"
+  _tba_cx_out sh -c 'umask 077; p=$1; d=$(dirname "$p"); install -d -m 0755 -o root -g root "$d" && t=$(mktemp "$d/.ccrc.env.XXXXXXXX") && { cat >"$t" && if [ -f "$p" ] && cmp -s "$t" "$p"; then rm -f "$t"; else { if [ -f "$p" ]; then chown --reference="$p" "$t" && chmod --reference="$p" "$t"; else chmod 600 "$t" && chown root:root "$t"; fi; } && mv -f "$t" "$p"; fi; } || { rm -f -- "$t"; exit 1; }' sh "$TBA_BOX_ENV_PATH" <"$1"
 }
 # The row files beside a staging directory on the box (`<dir>/rows/<name>.json`). CX_RC of the last one.
 _tba_cx_put_rows() {   # <box directory>

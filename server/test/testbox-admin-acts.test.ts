@@ -303,6 +303,9 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     expect(putCmd).toContain('mktemp');
     expect(putCmd).toContain('mv -f');
     expect(putCmd).toContain('chown root:root');
+    // a file already on the box keeps its owner, group and mode, so a refused install never leaves it unreadable to the service
+    expect(putCmd).toContain('chown --reference="$p" "$t"');
+    expect(putCmd).toContain('chmod --reference="$p" "$t"');
     const inst = cmds(h).filter((c) => c.includes('install.sh')).slice(-1)[0]!;
     expect(inst).toContain(`${TOOLS}/release/installed/deploy/testbox/install.sh --reapply`);
     expect(inst).not.toContain('--force');
@@ -425,6 +428,10 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     expect(json(r)).toEqual({ ok: false, code: 'install-refused' });
     expect(readFileSync(h.lg, 'utf8')).toContain(line);
     expect(stdinOfLast(h, 'cmp')).toBe(OLD_BOX.replace(/\\n/g, '\n'));
+    // both puts (the new file, then the old one back) keep the existing file's owner, group and mode
+    const puts = cmds(h).filter((c) => c.includes('cmp -s'));
+    expect(puts).toHaveLength(2);
+    for (const c of puts) expect(c).toContain('chown --reference="$p" "$t"');
     expect(stateText(h)).not.toMatch(/^parity_stale=/m);
     expect(stateText(h)).toContain('b'.repeat(64));
   });
