@@ -465,7 +465,8 @@
 
 /* — the compact and one-bar heads (the phone-header and library 1.1 take-up plans). `docsHeadWords#headLayoutFor`
    is the sole layout policy; DocsHead renders its answer. The rules key on classes, never viewport width: a phone-born
-   one bar persists on widening, while a desk-born reader keeps the full head. Listings keep their own rules above.
+   one bar persists on widening, while a desk-born reader keeps its frame's own bar: the full head at a desk width,
+   option 1's row once narrowed. Listings keep their own rules above.
    The row is back (`.docs-back`), two lines naming where and what, Share and Export as icons (`.docs-action`, as in the
    full header, given a whole tap's width here), and Page details (`.docs-more`); the panel under it holds the crumbs,
    the truth line and the link actions, closed until Page details opens it. While the tree slot is not `ok` the head is
@@ -533,9 +534,10 @@
    --bg-page as the row does (design/audit.mjs registers `.docs-title` and `.docs-tool` there); an open `.docs-title`
    paints its own pressed ground and ink and is measured on it; the dot and the line paint fills and set no ink. No
    transition and no opacity: nothing here moves or fades. — */
-/* The bar is its own stacking context, so the reading line (z-index -1 inside it) paints over the bar's ground and
-   divider but under its controls, and a focused control's inset ring stays whole along the bottom edge. */
-.docs-one-bar .docs-compact-bar { position: relative; isolation: isolate; }
+.docs-one-bar .docs-compact-bar { position: relative; }
+/* The reading line paints over the bar's divider and over an open title's pressed ground; a keyboard-focused control
+   is lifted over the line, so its inset ring stays whole along the bar's bottom edge. */
+.docs-one-bar .docs-compact-bar :focus-visible { position: relative; z-index: 1; }
 .docs-title {
   flex: 1 1 auto; min-width: 0; min-height: var(--tap-min);
   display: flex; flex-direction: column; justify-content: center;
@@ -559,7 +561,7 @@
 }
 .docs-read {
   position: absolute; inset-inline-start: 0; inset-block-end: -1px; block-size: 2px;
-  background: var(--accent); pointer-events: none; z-index: -1;
+  background: var(--accent); pointer-events: none;
 }
 /* "Formatting…" lies over the frame's host instead of taking a line above it, so the frame does not move when the
    reader is ready. It paints the page's own ground, so its registered ink (.doc-formatting, on --bg-page) holds there. */

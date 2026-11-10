@@ -17,7 +17,7 @@
 //     gives way first), and the badge is inside the title;
 //   - a bar mounted at 412 keeps its tools when the phone turns or the window widens;
 //   - on a text leaf, where no reader is drawn, option 1's row stays and its Page details opens the truth line.
-// At 599 the head is still the row; at 600 and wider it is the full head, which desk-nav Part B (D-8101) makes one row
+// At 599 a ready reader still draws the one bar; at 600 and wider, for a frame mounted there, it is the full head, which desk-nav Part B (D-8101) makes one row
 // (back, the crumbs, the actions) over one dense truth line: the title's figure and the head's height at 1280 under a
 // mouse, the row on one line, the crumbs giving way before any action's words, the words hidden under the container
 // query with each action keeping its name, no sideways scroll, and a touch laptop (1280 x 800 and a phone turned
@@ -162,8 +162,8 @@ async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME, contentC
  *  came up: the figure is about the reader page. One re-open on a fallback, D-7958: the reader's start watchdog (2 s for a
  *  small document) can pass on a loaded runner, so a `fallback` re-navigates the same page once, and says so on the
  *  console; a second `fallback`, a timeout and every other outcome throw as before. */
-async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise<OpenedApp> {
-  const app = await openView(view, tree, leaf);
+async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME, doc = DOC): Promise<OpenedApp> {
+  const app = await openView(view, tree, leaf, 'markdown', doc);
   const url = `${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}`;
   const start = async (): Promise<unknown> => {
     await app.page.goto(url, { waitUntil: 'load' });
@@ -361,7 +361,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
           const hit = document.elementFromPoint((b.left + b.right) / 2, Math.max(read.top, out.bottom - 1) + 0.25);
           line.style.pointerEvents = '';
           return {
-            lineOnTop: hit === line,
+            lineOnTop: hit === line, hitInFocused: hit !== null && a.contains(hit),
             focused: a.className || a.getAttribute('aria-label'), outline: `${cs.outlineStyle} ${cs.outlineWidth} offset ${cs.outlineOffset}`,
             box: { top: b.top, bottom: b.bottom }, outlineBox: out, read: { top: read.top, bottom: read.bottom, left: read.left, right: read.right },
             readOverBox: read.top < b.bottom && read.bottom > b.top && read.left < b.right && read.right > b.left,
@@ -370,18 +370,37 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
         }));
       }
       console.log(`L11-FIGURE refined 412x915 focus-ring ${JSON.stringify(rings)}`);
-      for (const ring of rings as { focused: string; lineOnTop: boolean }[]) {
+      const seen = rings as { focused: string; lineOnTop: boolean; hitInFocused: boolean; readOverOutline: boolean }[];
+      expect(seen.map((r) => r.focused), 'Tab reaches the title, then the first tool').toEqual(['docs-title', 'docs-tool']);
+      for (const ring of seen) {
+        expect(ring.readOverOutline, `${ring.focused}: the probe point lies where the line and the ring overlap`).toBe(true);
         expect(ring.lineOnTop, `${ring.focused}: the reading line paints under the focused control's ring`).toBe(false);
+        expect(ring.hitInFocused, `${ring.focused}: the focused control paints over the line there`).toBe(true);
       }
+      // Opened with a pointer (no keyboard ring), the title paints its pressed ground; the line stays drawn over it.
+      await page.locator('.docs-one-bar .docs-title').click();
+      await page.waitForFunction(() => document.querySelector('.docs-one-bar .docs-title')?.getAttribute('aria-expanded') === 'true');
+      const pressed = await page.evaluate(() => {
+        const t = document.querySelector<HTMLElement>('.docs-one-bar .docs-title')!;
+        const line = document.querySelector<HTMLElement>('.docs-one-bar .docs-read')!;
+        const b = t.getBoundingClientRect();
+        const r = line.getBoundingClientRect();
+        line.style.pointerEvents = 'auto';
+        const hit = document.elementFromPoint((b.left + b.right) / 2, r.top + 1);
+        line.style.pointerEvents = '';
+        return { focusVisible: t.matches(':focus-visible'), lineOnTop: hit === line, ground: getComputedStyle(t).backgroundColor };
+      });
+      console.log(`L11-FIGURE refined 412x915 pressed-title ${JSON.stringify(pressed)}`);
+      expect(pressed.focusVisible, 'a pointer opened it: no keyboard ring').toBe(false);
+      expect(pressed.lineOnTop, 'the reading line stays drawn over an open title\'s pressed ground').toBe(true);
     });
   }, 120_000);
 
   it("412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons", async () => {
-    const app = await openView({ ...PHONE, skin: REFINED }, HEADED_TREE, NAME, 'markdown', HEADED_DOC);
+    const app = await openLeaf({ ...PHONE, skin: REFINED }, HEADED_TREE, NAME, HEADED_DOC);
     try {
       const { page } = app;
-      await page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`, { waitUntil: 'load' });
-      await page.waitForSelector('.docs-head.docs-one-bar', { timeout: 90_000 });
+      await page.waitForSelector('.docs-head.docs-one-bar', { timeout: 30_000 });
       const handle = await page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
       const frame = (await handle?.contentFrame())!;
       const tocOpen = (): Promise<boolean> => frame.evaluate(() => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') === true);
