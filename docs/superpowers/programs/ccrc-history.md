@@ -86,7 +86,29 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-10, 16:25Z
+## Current checkpoint — 2026-11-10, 17:50Z
+
+This supersedes the earlier 2026-11-10 checkpoints below where they differ; the current route and the definition of
+done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, the cohort's start and O11's
+amendment".
+
+- **The W3 cohort is running.** The operator finished act 3 at 16:57:50Z. The coordinator re-measured item 135 and
+  confirmed it. The session node runs release v0.0.1070, installed at 13:10:46Z. The Anthropic-lane session runs
+  Claude Code 2.1.322 and the gateway-lane session 2.1.319; their ids stay off the repo. Each session carries a
+  no-roll and a no-hibernate marker, so neither rolls or wakes onto another Claude Code build. Act 4's watch is the
+  operator's. The cohort ends at O2's bound: 20 receipted main compactions per backend, or 2026-11-17 16:57Z.
+- **O11 is amended by the operator (2026-11-10).** A ccrc release on a cohort node no longer splits the cohort or
+  restarts its sample count. Fleet deploys continue during the cohort. Each release that changes the steering surface
+  is recorded with its time, and act 5's report gives the figures before and after it beside the pooled figures. A
+  Claude Code version change on a cohort session still splits the cohort. Releases recorded so far: none on the node
+  since the cohort started.
+- **W1-l is met.** The operator's rebuild drill passed: no unexplained row across families, epochs, receipts,
+  redaction pairs, recall rows and steer rows, and the store id is equal. The coordinator cross-checked it against the
+  journal. Do-item 111 waits for the operator's tick. W1-b stays open, re-measured over the week ending 2026-11-15.
+- **W4-2 is in review.** Its wave-done reached the coordinator at `02647c0f1` (#2563), with the required checks green
+  on that head. Run 1754 is at awaiting-review, and review run 1757 reads it.
+
+### Checkpoint of 2026-11-10, 16:25Z
 
 This supersedes the earlier 2026-11-10 checkpoints below where they differ; the current route and the definition of
 done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, W4-1's reviews and landing".
@@ -275,11 +297,88 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | #2503 | **merged** 2026-11-10 02:32Z as `0d61d1075` at head `9cd2b8d6a` (run 1714, done; reviews 1726, 1728, 1731, 1735, 1737 and 1739; fix rounds 1 to 5; review cap lifted by the operator, item 133); accepted with the coordinator's note of six build-time corrections (CP-71 met) |
 | 28 | W3-4: the parent add-on and steered node gists (W3 plan Task 4), the other half of the cohort's release (O15) | fleet | #2540 | **merged** 2026-11-10 07:59Z as `6dd3c93b3` at head `07f064f41` (run 1738, done; reviews 1741, 1742, 1743 and 1744; three fix rounds; review cap lifted by the operator, item 134); no D-number written; released with W3-1 in v0.0.1065 |
 | 29 | W4-1: the subagent walk, ingest, the pause order, the marker gate, the import form and the census (W4 plan group W4-1) | fleet | #2554 | **merged** 2026-11-10 16:21Z as `b9731a15a` at head `6fc0ef99b` (run 1745, done; reviews 1749, 1750 and 1752; two fix rounds); defines D-8151 to D-8163; number 8164 unwritten |
-| 30 | W4-2: subagent leaves on their own chain, with no receipt and no card (W4 plan Task 2) | fleet | — | **dispatched** 2026-11-10 16:22Z (run 1754); block of numbers 8168 to 8171 (8168 for `history-w4-sa27-in-w4-2`, 8169 to 8171 held) |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort is the operator's (item 135, returned 14:53Z: no session armed yet); focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 **merged** (#2554, wave 29); W4-2 building (wave 30); no node armed; B4 live still required |
+| 30 | W4-2: subagent leaves on their own chain, with no receipt and no card (W4 plan Task 2) | fleet | #2563 | **in review**: wave-done at `02647c0f1` (run 1754, awaiting-review; review run 1757); block of numbers 8168 to 8171 (8168 for `history-w4-sa27-in-w4-2`, 8169 for `history-w4-main-gists-main-only`, 8170 and 8171 held) |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; focused steering spike and per-backend operator arming retained |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 **merged** (#2554, wave 29); W4-2 in review (#2563, wave 30); no node armed; B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-10, the cohort's start and O11's amendment
+
+**O11 is amended (the operator, 2026-11-10).** The ruling, verbatim: "a ccrc release on a cohort node does not split
+the cohort or restart its sample count. Each release that changes the steering surface (ccd/history/**,
+deploy/history-counters.mjs, or the steer/history/PreCompact parts of ccd/session-hook.sh) is recorded with its time,
+and act 5's report gives the figures before and after it beside the pooled figures. A Claude Code version change on a
+cohort session still splits (the per-session roll hold prevents it). Fleet deploys continue during the cohort."
+- It replaces the release-tag half of O11: the cohort's start tag is still recorded, but a later tag no longer splits
+  the range or restarts O2's sample. The Claude Code half stands as ruled on 2026-11-08.
+- It also replaces the coordinator's request in item 135's return (14:53Z) to keep the node on v0.0.1070 for the
+  cohort.
+- O11's last bullet is not touched: no W3-2 or W3-3 release is rolled onto a node while a `steer-on/<id>` marker stands.
+  Neither is built yet, and both wait on act 5's report and the O4 bars.
+- The coordinator records each release from the node's install record (`~/.ccrc/installed` and the kept version
+  trees), in this section of each ledger update. A node's move counts as a steering-surface release when the diff
+  between its old and new build touches those paths. For `ccd/session-hook.sh` it counts only when the changed lines
+  are in the hook's steer, history or PreCompact parts.
+- The W3 plan's O11 statement, its O11 row, its version-split paragraph and its act 5 row now carry the amendment.
+
+Releases since the cohort's tag, as measured at 17:45Z:
+
+| release | published | steering surface | on the session node |
+|---|---|---|---|
+| v0.0.1070 | 12:05Z | the cohort's start tag | installed 13:10:46Z, before the cohort started |
+| v0.0.1071 | 13:51Z | not changed (skills, a spec, CI) | no |
+| v0.0.1072 | 16:23Z | changed: W4-1 (#2554), five files under `ccd/history/` | no |
+| v0.0.1073 | 17:37Z | not changed since v0.0.1072 (skills, docs) | no |
+
+No release has reached the node since the cohort started. Any build after v0.0.1070 that reaches it carries W4-1's
+change, so its arrival is recorded as a steering-surface release. W4-2's release, once #2563 lands, adds `derive.mjs`.
+
+**The cohort started (item 135).** The operator finished act 3 at 16:57:50Z and ticked the item at 16:58:53Z. The
+coordinator re-measured and confirmed it at 17:00:24Z:
+- The session node runs v0.0.1070 (`fb106808a`), which carries W3-1 and W3-4 and no other W3 PR (O11, O15).
+- The Anthropic-lane session runs Claude Code 2.1.322 and the gateway-lane session 2.1.319. Their ids stay off the
+  repo.
+- The roll hold is a no-roll and a no-hibernate marker on each session.
+- Both `steer-on/<id>` markers are regular files. The steering switches are absent, and W2's live state is clean: no
+  recall-off file, no headless run, no freeze.
+- Doctor's history check reads FAIL `mode-wrong`, because the `steer-on` directory is mode 0775 where 0700 is wanted.
+  The hook's gate checks only that a marker is a regular file and not a link, so steering is unaffected. The chmod is
+  the operator's.
+
+The cohort ends at O2's bound: 20 receipted main compactions per backend, or 2026-11-17 16:57Z. Act 4's watch reads
+`history-counters.mjs spike` over the armed range every 15 minutes, for cut shapes.
+
+**W1-l is met (item 86).** The operator's drill rebuilt the store from a copy of the node's journal in a scratch home
+and compared it with the live store by O35's columns. Result: PASS. Families, epochs, spool receipts, redaction
+pairs, recall rows and steer rows are equal, and the store id is equal.
+- The coordinator cross-checked the journal: its family verdicts, redaction pairs and unconfirmed epochs match the
+  drill's figures.
+- `family_gen_absent` reads 1 live and none rebuilt. It is a join that the journal does not carry, so a rebuild cannot
+  restore it.
+- The other counters that differ are ingest, card and derive counters, which a rebuild recounts (spec section 8.4).
+
+Do-item 111 waits for the operator's tick. After W1-l, W1-b is W1's only row left to re-measure: over the week ending
+2026-11-15.
+
+**#2562 merged** (the ledger after W4-1) at 16:57:59Z as `ee550587c`.
+
+**W4-2's questions (mail 17227), ruled in 17228.**
+- Q1: an armed build that has W4-1 but not W4-2 can store a subagent boundary below the leaves cursor, and after W4-2
+  that boundary is never derived, short of a rebuild. Ruled (a): accept it, with no new state and no rescan; the task
+  note states the rule. For the arming runbook: no node is armed on a build without W4-2.
+- Q2: `priorGists` and `otherGists` would read across chains. Ruled (b): number 8169, `history-w4-main-gists-main-only`, which W4-2's PR defines.
+  Both read main transcripts only, and W3-4's lower-rowid bound is kept. Numbers 8170 and 8171 stay held.
+
+**W4-2's wave-done (17236) at `02647c0f1`.** The required checks were green on that head.
+- The first CI attempt had one red, in server shard 11 of 12: an install test hit vitest's 20 s timeout. That test is
+  outside the PR, and it passed when the failed jobs were re-run with no commit between.
+- The worker reports two departures from the plan's text, both corrected in the tests:
+  - SA27 pins two `entry_variants` rows where the plan and the addendum say one. The store's conflict arm keeps both
+    bodies.
+  - SA9 needs two rows, with the main transcript present and absent, because a present main copy masks the card
+    mutant.
+- Run 1754 moved to awaiting-review, and review run 1757 reads the branch.
 
 ### Latest rulings and evidence — 2026-11-10, W4-1's reviews and landing
 
