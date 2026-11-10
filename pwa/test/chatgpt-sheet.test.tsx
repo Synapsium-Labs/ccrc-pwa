@@ -196,6 +196,17 @@ describe('OpenAI has no method step (spec §7.2 steps 1–4)', () => {
     expect(alertText()).toContain('Nothing was added');
     expect(alertText()).not.toContain(PLANTED);
   });
+
+  it('says a fleet host with no python3 for the lane cannot take it, and never names a runtime to build', async () => {
+    const b = fakeBox();
+    b.client.accountAdd.mockRejectedValue(refusal(409, 'lane-act-refused', { verbCode: 'codex-python-absent' }));
+    sheet(b);
+    await start();
+    expect(alertText()).toContain('no python3 at 3.9 or later');
+    expect(alertText()).toContain('Nothing was added');
+    expect(alertText()).not.toContain('ccgpt-runtime');
+    expect(alertText()).not.toContain(PLANTED);
+  });
 });
 
 describe("a folder an earlier lane left (spec §5, G20): Use what's there on a ChatGPT lane", () => {

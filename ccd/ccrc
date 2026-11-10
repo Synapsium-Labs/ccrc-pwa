@@ -7808,13 +7808,14 @@ _acct_check_add() {   # <check-add's arguments> -> ACCT_PLAN, or exits
 
 # ── THE CODEX ARM OF `add` (spec §7.2 step 3, G2, G20; accounts plan Task A24; D-5519) ─────────────────────────────
 # ccrc owns this lane, so `add` makes it where a roster edit used to. `_acct_codex_pick` measures what `check-add`
-# judges: a Codex runtime, two ports neither the roster nor a listener holds, and a folder name no
+# judges: a python3 the lane can run under, two ports neither the roster nor a listener holds, and a folder name no
 # earlier lane used. The caller holds the placement lock, so two adds never draw one pair. The folder is a name only:
 # the auth library makes it at the first sign-in, so an abandoned add leaves none. The six random hex digits are what
 # keep a re-added id from ever meeting an old lane's sign-in.
 #
-# NO RUNTIME IS BUILT HERE: a build takes minutes of pip under a verb a sheet is waiting on. `ccrc install` builds one
-# only for a lane the roster names, so the first lane on a box needs `ccgpt-runtime build`, which reads no roster.
+# A NEW LANE IS A `direct` LANE (the operator's ruling of 2026-11-10; Stage 4, Task 7): its bridge, probe, usage poll
+# and sign-in run under the system python3, so that is what an add asks for. It never asks for the LiteLLM runtime
+# and never builds one.
 : "${CCRC_ACCOUNT_CODEX_PORT_BASE:=14100}"   # the harness's knob; below every kernel's ephemeral range
 ACCT_CODEX_PORT_SPAN=200
 ACCT_CODEX_ARGS=()
@@ -7822,8 +7823,8 @@ _acct_codex_pick() {   # <id> -> ACCT_CODEX_ARGS, or refuses
   local id="$1" base="$CCRC_ACCOUNT_CODEX_PORT_BASE" p=0 rc=0 rand="" held=""
   local -a free=()
   ACCT_CODEX_ARGS=()
-  "$(_codex_runtime_cli)" python >/dev/null 2>&1 \
-    || _acct_refuse 1 codex-runtime-absent "this box has no Codex runtime, so a ChatGPT lane has nothing to run on. Run 'ccgpt-runtime build' (pip, a few minutes), then add the lane again: no build runs under this verb, and 'ccrc install' builds one only for a lane the roster already names. Nothing was written."
+  _codex_python >/dev/null 2>&1 \
+    || _acct_refuse 1 codex-python-absent "this box has no python3 at 3.9 or later on PATH, and a ChatGPT lane runs under it. Install one (or put it on PATH), then add the lane again. Nothing was written."
   [[ "$base" =~ ^[0-9]{4,5}$ ]] \
     || _acct_refuse 2 bad-port-base "CCRC_ACCOUNT_CODEX_PORT_BASE must be a TCP port of four or five digits. Nothing was written."
   held="$(jq -r '[.accounts[]? | .exec? | objects | (.proxyPort?, .litellmPort?) | numbers] | map(tostring) | join(" ")' "$(_acct_roster_path)" 2>/dev/null)" \
