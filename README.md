@@ -2159,9 +2159,12 @@ discovery list — its public catalogue is large, so you
 lane whose `exec.kind` is not `codex`: only a codex lane declares the `authDir` its probe reads, so a codex
 registry anywhere else fails its probe (`no-token-dir`, or `runtime-absent` when its secrets file sets
 `CHATGPT_TOKEN_DIR`) on every hourly refresh (a registry that already exists is left as it is). On a codex lane
-`ccrc-models-probe` runs under the isolated runtime's interpreter with that lane's own
-`exec.authDir` and no default. It reads the credential through the auth library and never refreshes it, and it
-refuses with the remedy first — `ccrc install` when no runtime is current, `ccrc update` when the library is
+`ccrc-models-probe` runs with that lane's own `exec.authDir` and no default, under the isolated runtime's
+interpreter on a `litellm` lane and under the system `python3` (3.9 or later, the one its bridge runs under) on a
+`direct` lane, which therefore needs no runtime for its catalogue. It reads the credential through the auth
+library and never refreshes it, and it
+refuses with the remedy first — `ccrc install` when a `litellm` lane has no current runtime, a newer `python3` when
+a `direct` lane has none it can use (`python-absent`, `python-too-old`), `ccrc update` when the library is
 missing (`auth-library-absent`), `ccrc codex login <id>` when the authDir holds no credential or one that needs a
 sign-in, and `ccrc doctor` for a file it cannot use (`credential-unusable`; after a `config-error`, `ccrc update`
 and then the login). An expired token is `token-expired`: no request is made and the catalogue is kept, because

@@ -46,8 +46,11 @@ already need no runtime. These still do:
 | 2 | The usage poll's interpreter | `deploy/systemd/ccrc-codex-usage@.service`, `ExecStart=%h/.ccrc/runtime/codex/current/bin/python -I ...` | Every poll fails to exec and the lane's limits row goes stale |
 | 3 | The runtime build at install | `ccd/ccrc#_inst_codex_runtime`, gated on `exec.kind`, never on the mode | It builds a runtime nobody uses |
 | 4 | The doctor and its fix | `ccd/ccrc-doctor-checks#_dr_cx_runtime`, `#_dr_cx_bins`, `#_fix_codex` steps 2 and 3 | FAIL `no isolated LiteLLM runtime is current`, so `ccrc update` exits 3; `--fix` rebuilds it |
-| 5 | `litellm.yaml` kept current | the refresh arm of `ccd/ccrc#_models_box_sub`, `#_models_litellm` | The lane's refresh row fails |
-| 6 | Adding or re-signing a lane | `ccd/ccrc#_acct_codex_pick` and `#_acct_install_codex` refuse `codex-runtime-absent`; `deploy/account-op.mjs#addedEntry` writes no `bridge` key | A new lane cannot be added, and when it can it is a `litellm` lane |
+| 5 | The sign-in's install check | `ccd/ccrc#_acct_install_codex` runs the probe's `--check` on the runtime's interpreter | A lane cannot be signed in again |
+| 6 | Adding a lane | `ccd/ccrc#_acct_codex_pick` and `#_acct_install_codex` refuse `codex-runtime-absent`; `deploy/account-op.mjs#addedEntry` writes no `bridge` key | A new lane cannot be added, and when it can it is a `litellm` lane |
+
+Not on the list, measured while building Task 5: the hourly render of a lane's `litellm.yaml` needs no runtime. It
+is a pure render, so it keeps running on a `direct` lane and a switch back still finds the file current.
 
 Facts the tasks rest on:
 
@@ -180,23 +183,27 @@ same owner. Tests: two cases in `server/test/ccrc-codex-bridge.test.ts`.
 
 **Interfaces:**
 - Consumes: `_codex_python` (the system `python3` at 3.9 or later, absolute path, rc 1 with one line).
-- Produces: `CCRC_CODEX_PYTHON` is the runtime's interpreter when one resolves, else the system `python3`. Empty only
-  when neither resolves.
+- Produces: on a `direct` lane `CCRC_CODEX_PYTHON` is the system `python3`, and with none usable the lane library's
+  own `python-absent` or `python-too-old` line is the refusal, ending "Nothing was probed.". On a `litellm` lane, and
+  on a lane whose mode cannot be read, it is the runtime's interpreter, empty when none resolves, as before.
 
-The choice is mode-blind on purpose: the program is the same under either interpreter, a box with a runtime keeps
-today's path byte for byte, and no mode has to be readable at this point.
+The choice follows the lane's mode, and that changed while this task was built. The first draft took the runtime's
+interpreter whenever one resolved and fell back otherwise. Two things spoke against it. The probe's tests hold, on
+purpose, that a `litellm` lane never falls back to an interpreter the runtime did not resolve. And a `direct` lane
+that keeps using the runtime's interpreter until the day the runtime is removed would meet its new path only on that
+day. By mode, a `litellm` lane is unchanged, and a `direct` lane runs its probe under the system `python3` from the
+first rollout, a week before the runtime leaves (R3).
 
-- [ ] **Step 1: Write the failing tests.** In a fixture with `runtime: false` and a `direct` lane: "the hourly
-  refresh on a direct lane probes with the system python3 when no runtime resolves" (the row is clean and the
-  catalogue is written); "with a runtime, the probe still runs on the runtime's interpreter" (the fake runtime
-  python records its argv); "with neither, the probe refuses `python-absent`, never `runtime-absent`".
+- [ ] **Step 1: Write the failing tests** in `ccrc-models.test.ts`, on a `direct` lane: "a direct codex lane with no
+  runtime probes under the system python3: the catalogue is written"; "a direct codex lane with a runtime on the box
+  still probes under the system python3, never the runtime's"; "a direct codex lane with no usable python3 refuses
+  python-absent, and nothing is probed".
 - [ ] **Step 2: Run them and see them fail** (`runtime-absent` today).
-- [ ] **Step 3: Implement.** In `_models_probe_codex_env`, when `ccgpt-runtime python` answers nothing, take
-  `_codex_python`'s answer with its refusal silenced. In `_fetch_codex_lane`, the empty-interpreter refusal becomes
-  `python-absent`, naming both remedies.
-- [ ] **Step 4: Run the tests and see them pass**, with `models-probe.test.ts`'s existing "handed no interpreter"
-  case re-pinned to the new word.
-- [ ] **Step 5: Commit.**
+- [ ] **Step 3: Implement.** `_models_probe_codex_env` reads the lane's mode and, for `direct`, takes
+  `_codex_python "Nothing was probed."`. `_fetch_codex_lane` is unchanged but for its header.
+- [ ] **Step 4: Run the tests and see them pass.** The existing `litellm` cases, "handed no interpreter it refuses
+  runtime-absent" among them, pass unchanged.
+- [ ] **Step 5: Commit**, with the README's sentence on the probe's interpreter.
 
 ### Task 3: the usage poll runs on the system `python3`
 
@@ -249,31 +256,33 @@ copy from the user site. The publisher has not imported it since Stage 1, and `-
 
 **Interfaces:**
 - Consumes: Task 4's `codex-modes` op.
-- Produces: with no lane in `litellm` mode, the runtime row reads `ok: no codex lane runs in litellm mode, so no
-  LiteLLM runtime is needed` whether or not one is present, and `--fix` builds none and renders no `litellm.yaml`.
+- Produces: with no lane in `litellm` mode, the runtime row asks nothing of the runtime and the check's line reads
+  `runtime not needed (no codex lane runs in litellm mode)`, whether or not one is present, and `--fix` neither
+  checks nor builds one. When the modes cannot be told, the row and the fix are the ones they always were.
+  `_dr_cx_bins` is unchanged: `ccgpt-runtime` is still one of the five executables every install places.
 
-- [ ] **Step 1: Write the failing tests.** "direct lanes only, no runtime: the codex check is green"; "direct lanes
-  only, `--fix` runs no build"; "one litellm lane and no runtime: FAIL as today"; "the modes cannot be read: the
-  row is WARN `could not tell`, never ok".
+- [ ] **Step 1: Write the failing tests.** The runtime row alone, with the question answered by table and a
+  `ccgpt-runtime` whose `check` answers `absent`: no lane in `litellm` mode gives no finding and never asks the
+  runtime; a lane in `litellm` mode, and "cannot tell", each give the FAIL it always was. The fix: with no lane in
+  `litellm` mode a refused runtime is neither checked nor rebuilt; "cannot tell" rebuilds as before; and the fix
+  refuses when the question is not loaded.
 - [ ] **Step 2: Run them and see them fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the tests and see them pass.**
 - [ ] **Step 5: Commit.**
 
-### Task 6: a `direct` lane's refresh and sign-in ask nothing of the runtime
+### Task 6: a `direct` lane's sign-in asks nothing of the runtime
 
 **Files:**
-- Modify: `ccd/ccrc` (the refresh arm of `_models_box_sub`, `_acct_install_codex`)
-- Test: `server/test/ccrc-models.test.ts`, `server/test/ccrc-account-codex-add.test.ts`
+- Modify: `ccd/ccrc` (`_acct_install_codex`)
+- Test: `server/test/ccrc-account-codex-add.test.ts`
 
 **Interfaces:**
-- Produces: on a `direct` lane the hourly refresh renders `litellm.yaml` only while a runtime resolves (so a switch
-  back still finds it current), and skips it by name when none does. A sign-in on a `direct` lane runs the probe's
-  `--check` through Task 2's interpreter and renders no `litellm.yaml`.
+- Produces: a sign-in on a `direct` lane runs the probe's `--check` through Task 2's interpreter and is not refused
+  `codex-runtime-absent`. A `litellm` lane's sign-in is unchanged.
 
-- [ ] **Step 1: Write the failing tests.** "the hourly refresh on a direct lane with no runtime renders no
-  litellm.yaml and its row is clean"; "with a runtime it renders as today"; "a sign-in on a direct lane with no
-  runtime completes".
+- [ ] **Step 1: Write the failing tests.** "a sign-in on a direct lane with no runtime completes"; "a sign-in on a
+  litellm lane with no runtime is refused `codex-runtime-absent`, as before".
 - [ ] **Step 2: Run them and see them fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the tests and see them pass.**
@@ -395,9 +404,9 @@ reported in the pull request that met it.
 
 ## Where things stand
 
-**Done:** Task 1.
+**Done:** Task 0 (#2572), Task 1 (#2569) and Task 2. In review: Task 3 (#2573) and Task 4 (#2575).
 
-**Needs before it starts:** nothing for Task 0 and Tasks 2 to 6. Task 7 waits for ruling 3. Wave 4b waits for wave
+**Needs before it starts:** nothing for Tasks 5 and 6. Task 7 waits for ruling 3. Wave 4b waits for wave
 4a on `main`. R1 to R5 are the operator's.
 
 **Open questions for the operator:** the six rulings above, most important first: 2 (the verdict), 1 (the order of

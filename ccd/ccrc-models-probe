@@ -181,8 +181,12 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # when its secrets file set one.
 # This arm is handed three values and reads nothing else:
 #   CHATGPT_TOKEN_DIR     the row's own exec.authDir, under $HOME;
-#   CCRC_CODEX_PYTHON     the interpreter `ccgpt-runtime python` resolved (the
-#                         isolated runtime), empty when none resolves;
+#   CCRC_CODEX_PYTHON     the interpreter the lane library resolved: the
+#                         isolated runtime's (`ccgpt-runtime python`) for a
+#                         `litellm` lane, empty when none resolves; the system
+#                         python3 for a `direct` lane (codex-bridge Stage 4),
+#                         which is refused by the lane library itself when it
+#                         has none, before this arm runs;
 #   CCRC_MODELS_AUTH_LIB  the placed auth library (`ccrc`'s `_codex_auth_lib`),
 #                         a probe-specific name, so the runtime interpreter's
 #                         LiteLLM patch, which arms on CCRC_CODEX_AUTH_LIB, is

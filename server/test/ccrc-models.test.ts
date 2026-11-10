@@ -1706,6 +1706,64 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     expect(poisonRan(), 'an inherited interpreter ran').toBe(false);
   });
 
+  // codex-bridge Stage 4, Task 2: a `direct` lane's probe runs under the system python3, the interpreter its bridge
+  // runs under, so the lane needs no LiteLLM runtime for its catalogue. The program is the same one, stdlib plus the
+  // auth library, under -I. A `litellm` lane is unchanged: the case above still holds for it.
+  /** A direct codex lane, signed in and initialised, and a `python3` on its PATH that is the probe's stand-in for the
+   *  program on stdin (`-I -`) and the real interpreter for everything else (its version, the auth library). */
+  async function directLane(): Promise<{ standIn: string; rec: string }> {
+    const [pa, la] = await freePorts(2);
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts, codexRow('codex-a', pa!, la!, { bridge: 'direct' })] });
+    plantCodexBins(home);
+    plantLaneAuth(home, 'codex-a');
+    const pr = probeRuntime(home, CODEX_RAW);
+    const standIn = join(home, 'probe-stand-in');
+    fs.writeFileSync(standIn, pr.python, { mode: 0o755 });
+    fs.writeFileSync(join(home, '.local', 'bin', 'python3'),
+      `#!/bin/sh\nif [ "$#" -eq 2 ] && [ "$1" = -I ] && [ "$2" = - ]; then exec '${standIn}' "$@"; fi\nexec '${pythonOrSkip()!}' "$@"\n`,
+      { mode: 0o755 });
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    return { standIn, rec: pr.rec };
+  }
+  const catalogueOf = (id: string): { models: unknown[] } =>
+    JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', `${id}.json`), 'utf8')) as { models: unknown[] };
+
+  it('a direct codex lane with no runtime probes under the system python3: the catalogue is written', async () => {
+    const { standIn, rec } = await directLane();
+    const poison = poisonPathLitellm();
+    const r = run(['models', 'refresh', 'codex-a'], { CCRC_CODEX_PYTHON: poison });
+    expect(rowsOf(r)).toMatchObject([{ id: 'codex-a', probe: 'codex', ok: true }]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(probeArgv0(rec)).toEqual([standIn]);
+    expect(catalogueOf('codex-a').models).toHaveLength(9);
+    expect(probeRuntimeCalls(rec).map((c) => c.env['CHATGPT_TOKEN_DIR'])).toEqual([authDirOf(home, 'codex-a')]);
+    expect(poisonRan(), 'an inherited interpreter ran').toBe(false);
+  });
+
+  it('a direct codex lane with a runtime on the box still probes under the system python3, never the runtime\'s', async () => {
+    const { standIn, rec } = await directLane();
+    const other = probeRuntime(join(home, 'runtime-side'), CODEX_RAW);
+    plantFakeRuntime(home, { python: other.python });
+    const r = run(['models', 'refresh', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(probeArgv0(rec)).toEqual([standIn]);
+    expect(fs.existsSync(join(other.rec, 'argv0')), 'the runtime\'s interpreter ran the probe').toBe(false);
+  });
+
+  it('a direct codex lane with no usable python3 refuses python-absent, and nothing is probed', async () => {
+    const { rec } = await directLane();
+    // Silent when asked its version: `_codex_python` cannot tell whether it runs the bridge, or the probe.
+    fs.writeFileSync(join(home, '.local', 'bin', 'python3'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const r = run(['models', 'refresh', 'codex-a']);
+    expect(r.code).toBe(1);
+    const [row] = rowsOf(r);
+    expect(row).toMatchObject({ id: 'codex-a', probe: 'codex', ok: false });
+    expect(/python-absent: .*Nothing was probed\./.test(String(row!['reason'])), 'the python-absent refusal').toBe(true);
+    expect(/runtime-absent/.test(String(row!['reason'])), 'a direct lane was told to build a runtime').toBe(false);
+    expect(fs.existsSync(join(rec, 'argv0')), 'the probe ran').toBe(false);
+  });
+
   // codex-bridge Stage 1, Task 7: the probe no longer tests the file's existence itself; the auth library, loaded by
   // the runtime interpreter from the CCRC_MODELS_AUTH_LIB `_models_probe_codex_env` exports, reads the lane `absent`.
   // So the interpreter does run now, and what binds is that nothing was asked and nothing was written.
