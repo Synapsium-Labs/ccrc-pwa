@@ -827,6 +827,8 @@ export function selectBlock(i: { blocks: readonly Block[]; kind: 'leaf' | 'node'
 export type BlockStatus = 'ok' | 'degraded' | 'invalid' | 'absent' | 'not-requested';
 export function blockStatus(i: { receipt: boolean; block: Block | null; idMismatch: boolean; priorGistShas: ReadonlySet<string> }):
   { status: BlockStatus; reason: BlockReason | null };
+/** The one predicate for "a node block was asked": a steer_receipts row whose leaf_id is the parent's last child. Bind that id. */
+export const EXACT_RECEIPT_SQL: string;
 export function nodeBlockStatus(i: { block: Block | null; idMismatch: boolean; priorGistShas: ReadonlySet<string> }):
   { status: Exclude<BlockStatus, 'not-requested'>; reason: BlockReason | null };
 export function summaryParts(text: string): { bodyStart: number; opens: number; unclosed: boolean; analysisSurvives: boolean };

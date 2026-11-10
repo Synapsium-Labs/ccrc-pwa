@@ -6696,8 +6696,17 @@ export function blockStatus({ receipt, block, idMismatch, priorGistShas }) {
   return { status: 'ok', reason: null };
 }
 
+/** The ONE predicate for "a node block was asked" (spec §7.4 item 2 and §7.1; W3 steering plan Task 4, with the coordinator's
+ *  ruling of 2026-11-10): a parent's last child holds an EXACT receipt, a steer_receipts row whose leaf_id is that child's id
+ *  (the generic variant never carries the add-on). Bind the child's id; a row answers `{ hit: 1 }`, no row answers undefined.
+ *  Derive (the node read) and the spike report (the add-on spans) both read this text, and neither has a second spelling.
+ *  Residual, disclosed and not built: an exact receipt does not prove that the printed file carried the add-on, because a
+ *  slot may not have been final when the file was minted. The parent can then be stored absent, and the span counted in
+ *  addOn, though nothing was asked. That is the over-count direction. */
+export const EXACT_RECEIPT_SQL = 'SELECT 1 AS hit FROM steer_receipts WHERE leaf_id = ? LIMIT 1';
+
 /** A node block's verdict (§7.4 item 5 on the node path; W3 steering plan Task 4): blockStatus's rules with the
- *  receipt arm gone (the caller read the block off a receipted leaf) and the topics and refs arms gone, because §6.3 says a
+ *  receipt arm gone (the caller read the block off a last child that holds an exact receipt, EXACT_RECEIPT_SQL) and the topics and refs arms gone, because §6.3 says a
  *  steered node gist replaces only the parent's gist, so a missing topics or refs line cannot degrade it. The order
  *  is blockStatus's: no block is absent, a short or carried gist is invalid, a wrong id is degraded, else ok. */
 export function nodeBlockStatus({ block, idMismatch, priorGistShas }) {
