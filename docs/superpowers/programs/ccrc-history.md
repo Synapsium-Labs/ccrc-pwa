@@ -292,13 +292,22 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 - **Item 133, the review cap on run 1714.** The coordinator's fourth review open was refused at the cap on 2026-11-09 at
   21:55Z, and item 133 asked the operator to lift it. The operator used Lift cap at 22:45Z without ticking the item, so
   the coordinator withdrew it as done. The lift stands for the run: the fifth review's open, on 2026-11-10, was not refused.
-- **W3-4's build questions (run 1738, 2026-11-10).** The worker's guard audit found no file outside the W3-4 row.
+- **W3-4's build questions (run 1738, 2026-11-10).** The worker's guard audit found no file outside the W3-4 row. Each
+  question was ruled from the spec and the plan, on the worker's recommended option.
   - Ask 342, the stored status of a depth-1 parent under a steered node block: the coordinator ruled the proposed
     rule from §7.4 and Task 4. A parent's block is read only when its last child, the leaf whose compaction carried the
     add-on, has a steer receipt. Its status is then `ok` (the exact id and a gist of 40 or more characters, not a
     carried copy; the gist replaced), `degraded` (a wrong id; the gist replaced, the data kept), `invalid` (a short or
     carried gist; the rollup gist kept) or `absent` (no block; the rollup gist kept). A parent whose last child has no
     receipt is written as in W1, the rollup gist with status `ok`. The kind stays `condensed` in every case.
+  - Ask 343, the re-roll: one node reader serves `createParent` and `parentReroller`, so a steered gist, redacted
+    again under the current pairs, survives a re-roll with its status recomputed, and a rebuild derives the same gist.
+    §6.3 makes parents deterministic and rebuildable; a reader on one path only would give a re-roll and a rebuild
+    different answers.
+  - Ask 344, a compose failure: in the card step a composer throw turns the steer prediction into a skip, so
+    `decideCardFile`'s skip arm removes any standing steer file (the card's lifecycle, D-8128), and the count is
+    `steer_compose_failed`, not `card_skipped`. That keeps Task 4's rule 3 true, that the hook then prints the generic
+    text, and no stale file prints (O22's `stale-print`). The card's own prediction is unaffected.
 - **#2510's landing.** The landing verdict read route Q (the merge queue, squash, never admin). The coordinator enqueued
   #2510 with `--match-head-commit f794eab9e` at 01:14Z. The server's merged mail arrived this time (it had not for
   #1876).
