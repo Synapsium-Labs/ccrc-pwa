@@ -85,4 +85,9 @@ describe('the fleet pins ride every launch kind (D-8173)', () => {
     install(); seed('project-a-calm-mesa', { wrapper: 'ccrc-codex' });
     expectPins(spawnBoth('project-a-calm-mesa'));
   });
+  it('the pin literal is the one spelling a binary read backed (a respelling needs a new read)', () => {
+    const m = /^FLEET_SPAWN_PINS='([^']*)'$/m.exec(ccdSource());
+    expect(m).not.toBeNull();
+    expect(JSON.parse(m![1]!)).toStrictEqual(PINS);
+  });
 });

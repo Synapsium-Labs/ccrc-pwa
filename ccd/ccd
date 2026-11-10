@@ -25682,6 +25682,15 @@ _browser_spawn_compose() {   # id launchflags -> sets BROWSER_SPAWN_FLAGS; write
 # the two merged. Every lane execs Claude Code with the same flags, so it composes on every row, like the account file.
 # IT FAILS OPEN, for the account composer's reason (it is on every swap's path): a base that cannot be read or merged
 # spawns with the flags as they were and warns.
+# SPELLING EVIDENCE (a read of the Claude Code binary's strings and settings schema, never a live probe; builds 2.1.306,
+# 2.1.321 and 2.1.322 carry all three keys, 2.1.306 being the oldest on the fleet's disk, so that is the floor read):
+#   `autoContinueAtUsageLimit` and `idleCompaction` are optional booleans in the schema (the same helper as
+#   `autoScrollEnabled`); `idleCompaction` reads "Set to false to stop ... Defaults to true".
+#   `crossSessionInbound` is an enum of 'accept' | 'hold' | 'refuse' ("'refuse' opts this session out"), declared
+#   `.optional().catch(void 0)`, so even an unknown spelling falls back to unset and never invalidates the file.
+# An older build that does not know a key ignores it. A pin this file never writes any other way is why the test pins the
+# literal (`ccd-spawn-fleet-pins.test.ts`): a respelling must come with a new binary read, since a schema-invalid value
+# makes Claude Code skip the WHOLE settings source (the deny rules ride the same one).
 # FOLLOW-UP, NOT HERE: once the pin is watched working live, the four screen-read holds that exist only because the
 # native wait could be armed are deleted (`_pane_auto_continue_armed` D-2229, the mail sweep's hold D-2369, the rescue
 # near-wait `_rescue_armed`, the stale-Enter check `_auto_stale_check`).

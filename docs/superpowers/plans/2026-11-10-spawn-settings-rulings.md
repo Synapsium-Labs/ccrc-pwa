@@ -25,6 +25,10 @@ Three of the operator's 2026-11-10 rulings (session host research, section 6.1) 
 - **A session with no account room parks until the operator acts.** Before the pin, Claude Code's own wait-then-continue re-sent the turn at the reset. With it off, nothing in ccd re-sends that turn: `_rescue_check` types nothing, the no-room `_rescuewait` closes `clear` once the home account resets (no swap fires, the target is the home wrapper), and `_watchdog_resume_here` restarts in place only when the operator recorded `choice=wait` through `ccd limit-wait`. A fleet that hits the five-hour ceiling unattended therefore sits idle after the reset until someone taps "Wait until reset" on each session. This is what the ruling says ("the operator's options come only when no account has room"); an automatic in-place restart at the reset (for example `_watchdog_resume_here` without `choice=wait`) is NOT part of this change and is left as an open question for the operator.
 - **The five-hour near-reset wait can no longer open.** Rule b of `_rescue_check` (`_rescue_armed`) keys on Claude Code's own auto-continue footer, which the pin removes, so every near-reset block now swaps instead of waiting a few minutes. Expect more rescue swaps and more herd/spread pressure until the holds are deleted and the spread is re-measured.
 
+## Evidence for the three spellings (review finding, verified)
+
+A read of the Claude Code binary's strings and settings schema (no live probe). Builds 2.1.306, 2.1.321 and 2.1.322 carry all three keys; 2.1.306 is the oldest on the fleet's disk, so it is the floor read. `autoContinueAtUsageLimit` and `idleCompaction` are optional booleans (same schema helper as `autoScrollEnabled`). `crossSessionInbound` is an enum of accept, hold and refuse, declared `.optional().catch(void 0)`: an unknown spelling falls back to unset instead of invalidating the file. An older build ignores a key it does not know. The pins stay in the one `--settings` (a separate source buys nothing given the read), and a test pins the literal so a respelling needs a new read.
+
 ## Tasks
 
 - [x] T1. Test first, red: every launch kind (top-level, routed, child, codex-lane wrapper) carries the three keys with the ruled values in its one `--settings`, on both spawn lines.
@@ -32,3 +36,4 @@ Three of the operator's 2026-11-10 rulings (session host research, section 6.1) 
 - [x] T3. The older byte-exact argv suites clear the pins in their harness, as they pin the browser default.
 - [x] T4. Leave the follow-up comment at each of the four holds.
 - [x] T5. Review: state both consequences above plainly in the plan and the README (no new restart mechanism; that needs an operator ruling).
+- [x] T6. Review: bundle-read evidence and version floor recorded in the ccd comment and here; a test pins the literal.
