@@ -204,6 +204,17 @@ export interface GoalsView {
     id: number; at: number; text: string; ruling: string | null;
     itemId: number | null; pr: number | null; merged: boolean;
   }[];
+  /** The stored definition of done (D-8126): optional on the type, always sent by the server;
+   *  null when none is stored. */
+  doneWhen?: readonly string[] | null;
+}
+
+/** What a coordinator or the console reads of one programme (`GET /api/programmes/:slug/goals`, D-8126): the pin with its
+ *  modifications and stored definition of done, and the programme's items still waiting on the operator, each by `id`, `kind`,
+ *  `title` and `neededBy` only. Never an item's `why`, `how`, `answer` or `note`, nor a secret's slot or state. */
+export interface GoalsRead {
+  goals: GoalsView;
+  openItems: { id: number; kind: ItemKind; title: string; neededBy: NeededBy }[];
 }
 
 export interface WaitingView {
@@ -381,6 +392,25 @@ export function isSpecPath(p: string): boolean {
     && p.endsWith('.md')
     && !p.includes('..')
     && !p.includes('//');
+}
+
+/** The definition of done's bounds (D-8126). */
+export const DONE_WHEN_MAX_ITEMS = 12;
+export const DONE_WHEN_ITEM_MAX = 2000;
+
+/** A programme's definition of done: 1 to 12 strings, each trimmed to 1 to 2,000 characters.
+ *  Anything else is refused with a detail naming both limits. */
+export function doneWhenOf(raw: unknown): { ok: true; doneWhen: string[] } | { ok: false; detail: string } {
+  const detail = `doneWhen must be an array of 1 to ${DONE_WHEN_MAX_ITEMS} strings, each 1 to ${DONE_WHEN_ITEM_MAX} characters`;
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > DONE_WHEN_MAX_ITEMS) return { ok: false, detail };
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') return { ok: false, detail };
+    const t = v.trim();
+    if (t.length < 1 || t.length > DONE_WHEN_ITEM_MAX) return { ok: false, detail };
+    out.push(t);
+  }
+  return { ok: true, doneWhen: out };
 }
 
 /** "Recently cleared" keeps seven days (spec D13). */

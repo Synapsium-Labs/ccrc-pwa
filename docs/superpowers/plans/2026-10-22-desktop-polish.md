@@ -3243,6 +3243,18 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit; item 1's before and after times are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
+### Task C19: the browser shards at their job limit (D-8167) — now
+
+**Routing:** band 1. **Needs:** nothing. The `browser-pwa` job block of `.github/workflows/ci.yml` only; another programme's claim holds the file, and its coordinator consented to this block on 10 November.
+
+**Why.** In the merge queue, `browser (pwa) 1/2` was cancelled at its 20-minute job limit while its tests were still passing: queue runs 42800106251 and 42805912574 for #2535, and the groups for #2549 and #2551, on 10 November. Over a day of green queue runs both shards took 14 to 19 minutes, where the job's comment (D-7746) expected about nine. A loaded runner tips one over, whichever PR is in the group.
+
+**The change.** The job's matrix goes from two shards to three; `timeout-minutes` stays 20, since a longer limit is not the fix. The comment records the measured per-file times, the expected time per shard and the margin. Every reader of the matrix follows (`server/test/ci-pipeline.test.ts`, the merge-queue census, any shard helper), red first where it is a guard. If one file alone keeps a shard over about 12 minutes, the worker mails the numbers before going further; no test file is split in this task.
+
+- **D-8167** - `browser-shards-at-job-limit`: Task C19, issued on 2026-11-10. The browser suite's two queue shards ran at 14 to 19 minutes against a 20-minute job limit and were cancelled under load; it runs in three shards under the same limit. Any departure is named by slug in `c19.md` as it is found.
+
+**Acceptance.** Three browser shards run and pass on the PR or in the queue, each one's time recorded in the PR body and in `c19.md` with the before times. **Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

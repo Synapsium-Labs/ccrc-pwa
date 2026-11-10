@@ -369,15 +369,15 @@ describe('the spec pin and the modifications (plan PL2)', () => {
   it('goalsFor on a programme with no pin reads nulls and an empty list', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
-    expect(s.goalsFor('prog-a')).toEqual({ program: 'prog-a', specPath: null, inShort: null, inShortAt: null, modifications: [] });
-    expect(s.goalsFor('prog-z')).toEqual({ program: 'prog-z', specPath: null, inShort: null, inShortAt: null, modifications: [] });
+    expect(s.goalsFor('prog-a')).toEqual({ program: 'prog-a', specPath: null, inShort: null, inShortAt: null, doneWhen: null, modifications: [] });
+    expect(s.goalsFor('prog-z')).toEqual({ program: 'prog-z', specPath: null, inShort: null, inShortAt: null, doneWhen: null, modifications: [] });
   });
 
   it('setSpecPin replaces the pin and its In short copy, and stamps the time', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
-    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'First summary.', NOW);
-    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'Second summary.', NOW + 5);
+    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'First summary.', NOW, null);
+    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'Second summary.', NOW + 5, null);
     expect(s.goalsFor('prog-a')).toMatchObject({
       specPath: 'docs/superpowers/specs/2026-11-01-x-design.md', inShort: 'Second summary.', inShortAt: NOW + 5 });
   });
@@ -508,5 +508,38 @@ describe('the item\u2019s action, hold and new moves (D-8076, spec 10)', () => {
     s.db.prepare('UPDATE operator_items SET action = ? WHERE id = ?').run('{"verb":"close-refused"}', id);
     expect(s.itemById(id)).toMatchObject({ id, action: null });
     expect(() => s.openEndRequestOf(1)).not.toThrow();
+  });
+});
+
+describe('the stored definition of done (D-8126)', () => {
+  const SPEC = 'docs/superpowers/specs/2026-11-01-x-design.md';
+  it('setSpecPin stores a list, goalsFor reads it, a re-pin with null keeps it', () => {
+    const s = mk();
+    s.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'Prog A', 1, 'active')").run();
+    s.setSpecPin('prog-a', SPEC, 'First.', NOW, ['x']);
+    expect(s.goalsFor('prog-a').doneWhen).toEqual(['x']);
+    s.setSpecPin('prog-a', SPEC, 'Second.', NOW + 1, null);
+    expect(s.goalsFor('prog-a')).toMatchObject({ inShort: 'Second.', doneWhen: ['x'] });
+    s.setSpecPin('prog-a', SPEC, 'Third.', NOW + 2, ['y', 'z']);
+    expect(s.goalsFor('prog-a').doneWhen).toEqual(['y', 'z']);
+  });
+
+  it('setDoneWhen replaces the list and touches nothing else', () => {
+    const s = mk();
+    s.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'Prog A', 1, 'active')").run();
+    s.setSpecPin('prog-a', SPEC, 'Summary.', NOW, ['x']);
+    s.setDoneWhen('prog-a', ['a', 'b'], NOW + 9);
+    expect(s.goalsFor('prog-a')).toMatchObject({ specPath: SPEC, inShort: 'Summary.', inShortAt: NOW, doneWhen: ['a', 'b'] });
+  });
+
+  it('a programme with no list, no row, or a corrupted value reads null, never a throw', () => {
+    const s = mk();
+    s.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'Prog A', 1, 'active')").run();
+    expect(s.goalsFor('prog-a').doneWhen).toBeNull();
+    expect(s.goalsFor('prog-z').doneWhen).toBeNull();
+    for (const bad of ['not json', '"one"', '[]', '[1]', '[""]', JSON.stringify(Array(13).fill('a'))]) {
+      s.db.prepare('UPDATE programs SET doneWhen = ? WHERE slug = ?').run(bad, 'prog-a');
+      expect(s.goalsFor('prog-a').doneWhen, bad).toBeNull();
+    }
   });
 });

@@ -72,13 +72,13 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The sixty-two box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *  2. The sixty-three box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
  *     ledgers' coordinator lanes) plus `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084) and, from update-management W4,
  *     `ccd-update-sync.timer`; none of them has a cookie jar and never
- *     will. All sixty-five CHECK the box token (`checkMailToken`), and the mail pair
+ *     will. All sixty-six CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -468,6 +468,12 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'box-token machine lane, box token and attribution checked. A session asks the operator to end a run it cannot close: the ' +
     "run's coordinator, its worker or the worker of a review run of it (403 `not-yours` for anyone else, by the attributed " +
     'claimant and never by project). It only asks; the act is the operator\'s and no session can reach it'],
+  ['GET /api/programmes/:slug/goals',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, D-8126), the same shape as `GET /api/runs` and for the same reason: the PWA's " +
+    'console reads a programme\'s goals with a session, and a coordinator reads the pin, its definition of done and the open ' +
+    'items COOKIELESS from the fleet host through `ccrc-api goals show`. The route\'s own `onRequest` (coord/ledgersRoutes.ts) ' +
+    'requires a live session OR a valid box token before anything is read, so nothing is published to the tailnet that was not ' +
+    'before; it carries no ownership check, and an item it lists is cut to id, kind, title and neededBy'],
   ['POST /api/programmes/:slug/spec',
     'box-token machine lane, box token and attribution checked. The coordinator pins the operator-approved spec and the copy of ' +
     'its In short to its own programme (`isSpecPath` bounds the path)'],
@@ -969,8 +975,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the sixty-two box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — sixty-five in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the sixty-three box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — sixty-six in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

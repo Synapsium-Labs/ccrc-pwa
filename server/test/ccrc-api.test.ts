@@ -219,6 +219,8 @@ describe('the closed route table', () => {
     [['goals', 'pin', 'prog-a'], 'POST', '/api/programmes/prog-a/spec'],
     [['goals', 'modify', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications'],
     [['goals', 'merged', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications/merged'],
+    // The goals read (autonomy-default wave A2, D-8126): the pin, `doneWhen` and the open items, behind `goals-read-v1`.
+    [['goals', 'show', 'prog-a'], 'GET', '/api/programmes/prog-a/goals'],
     // The thirteen Linear rows (D-7669, #1444; `link` since D-8141): every one derives the pane's identity into its query, so each runs in a pane.
     [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces'],
     [['linear', 'teams'], 'GET', '/api/linear/proxy/teams'],
@@ -282,7 +284,8 @@ describe('the closed route table', () => {
     // Sixty since `linear.link` (D-8141).
     // Sixty-one since `runs.end-request` (D-8076, the runs rebuild's wave B6).
     // Sixty-two since `linking.show` (D-8147).
-    expect(keys).toHaveLength(62);
+    // Sixty-three since `goals.show` (autonomy-default wave A2, D-8126).
+    expect(keys).toHaveLength(63);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -296,7 +299,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -460,7 +463,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['items', 'raise', 'prog-a', '--json', '-'], ['items', 'list', 'prog-a', '--byId', 'demo-ws', '--byUuid', 'u-demo-ws'],
       ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
       ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],
-      ['goals', 'merged', 'prog-a', '--json', '-'],
+      ['goals', 'merged', 'prog-a', '--json', '-'], ['goals', 'show', 'prog-a'],
       ['linear', 'workspaces'], ['linear', 'teams', '--workspace', 'ws-a'], ['linear', 'issue', 'AAA-12'],
       ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
@@ -481,6 +484,71 @@ describe('the four claimant rows send the question door family, and refuse local
     const withFile = await sendAll();
     expect(without).toHaveLength(rows.length);
     expect(withFile).toEqual(without);
+  });
+});
+
+describe('goals show is gated on goals-read-v1 the way the claimant rows are gated on questions-v1 (D-8126)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+
+  it('the row is a GET of the programme\'s goals that takes an id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'goals.show');
+    expect(row).toBeDefined();
+    expect([row!.method, row!.path, row!.needsId, row!.query, row!.family]).toEqual(['GET', '/api/programmes/{id}/goals', true, [], null]);
+  });
+
+  it('the server advertises goals-read-v1', () => {
+    expect(SERVER_CAPS).toContain('goals-read-v1');
+  });
+
+  it('sends GET with the box token header and prints the body, with a current file listing the word', async () => {
+    writeCaps();
+    reply = { code: 200, body: '{"ok":true,"goals":null,"openItems":[]}' };
+    const r = await run(['goals', 'show', 'prog-a']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('{"ok":true,"goals":null,"openItems":[]}');
+    expect(seen).toEqual([{ method: 'GET', url: '/api/programmes/prog-a/goals', auth: TOKEN, body: '' }]);
+  });
+
+  it('a current cap file without goals-read-v1 refuses unsupported, exit 2, and sends nothing', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'));
+    const r = await run(['goals', 'show', 'prog-a']);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'unsupported']);
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file listing no words refuses unsupported too', async () => {
+    writeCaps([]);
+    const r = await run(['goals', 'show', 'prog-a']);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'unsupported']);
+    expect(seen).toEqual([]);
+  });
+
+  it('an absent cap file sends', async () => {
+    await run(['goals', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/goals']);
+  });
+
+  it('a stale cap file (181 s) sends, even one that omits the word', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'), nowS() - 181);
+    await run(['goals', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/goals']);
+  });
+
+  it('the other goals rows are not gated by the goals word', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'));
+    await run(['goals', 'pin', 'prog-a', '--json', '-'], '{"byId":"coord-a-demo","byUuid":"u"}');
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/spec']);
+  });
+
+  it('an id that is not SAFE_RE-plain is refused bad-id and nothing is sent', async () => {
+    writeCaps();
+    const r = await run(['goals', 'show', '../x']);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'bad-id']);
+    expect(seen).toEqual([]);
   });
 });
 
