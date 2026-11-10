@@ -419,7 +419,8 @@ _tba_ssh_class() {
 # rides it and nothing else); ssh's stderr is read for a code and dropped. rc is the command's, and 255 sets
 # TBA_SSH_CODE to a closed code. rc 97 with TBA_SSH_CODE `not-connected` or `no-access-key` when ccrc has no
 # connection or no key to use. Under a sudo login every command is `sudo -n --` prefixed; each word is quoted for the
-# box's shell with `printf %q`.
+# box's shell with `printf %q`. TBA_SSH_NOSUDO=1 drops the prefix for the one read that sudo's environment reset would
+# empty (the preflight's `SSH_CONNECTION`).
 # shellcheck disable=SC2034  # TBA_SSH_CODE is read by the subs that call this (later tasks)
 _tba_ssh() {
   TBA_SSH_CODE=""
@@ -430,14 +431,17 @@ _tba_ssh() {
   _tba_is_user "${login:=root}" || { TBA_SSH_CODE=not-connected; return 97; }
   [ -f "$TBA_KEY" ] || { TBA_SSH_CODE=no-access-key; return 97; }
   dl="$(_tba_deadline)"
-  [ "$login" = root ] || cmd="sudo -n -- "
+  [ "$login" = root ] || [ "${TBA_SSH_NOSUDO:-0}" = 1 ] || cmd="sudo -n -- "
   for w in "$@"; do cmd="$cmd$(printf '%q' "$w") "; done
   err="$(mktemp "${TMPDIR:-/tmp}/ccrc-tba-ssh.XXXXXXXX")" || return 97
   _tmp_guard "$err"
   LC_ALL=C ssh -p "$port" -i "$TBA_KEY" \
     -o "UserKnownHostsFile=$TBA_PIN" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
     -o "ConnectTimeout=$dl" "$login@$addr" "${cmd% }" 2>"$err" || rc=$?
-  if [ "$rc" -eq 255 ]; then TBA_SSH_CODE="$(_tba_ssh_class "$err")"; fi
+  if [ "$rc" -eq 255 ]; then
+    TBA_SSH_CODE="$(_tba_ssh_class "$err")"
+    [ "$TBA_SSH_CODE" != host-key-changed ] || _tba_state_write hostkey_changed=1 || :
+  fi
   rm -f -- "$err"
   return "$rc"
 }
@@ -494,6 +498,305 @@ _tba_status() {
   if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then sj="\"$sha\""; else sj=null; fi
   printf '{"v":1,"connected":%s,"addressSet":%s,"login":%s,"fingerprint":%s,"hostKey":"%s","boxFileSha256":%s,"act":%s,"boxSettings":null,"boxSettingsAt":null,"parity":%s}\n' \
     "$connected" "$addrset" "$lj" "$fj" "$hk" "$sj" "$(_tba_status_act)" "$(_tba_status_parity)"
+}
+
+# ── the access key, the host key and the preflight (TC4; spec §2.2 steps 2 and 3, §2.3, §2.4 step 1) ───────────────
+# The comment the key carries: the only mark by which ccrc knows a key file is its own.
+TBA_KEY_COMMENT=ccrc-testbox-admin
+# The oldest systemd that reads `NFTSet=` in a unit (the egress filter the test service installs); a number, compared whole.
+TBA_SYSTEMD_MIN=255
+# CCRC_TESTBOX_ROOT's and CCRC_TESTBOX_TOOLS_DIR's defaults (`_tb_box_table`), used until a connect records the box's own.
+# shellcheck disable=SC2088  # the literal `~/` is the box's own to expand
+TBA_BOX_ROOT_DEFAULT='~/.ccrc/testbox'
+TBA_BOX_TOOLS_DEFAULT=/opt/ccrc-testbox/tools
+# CCRC_TESTBOX_REGISTRY_UPSTREAM's default: the npm upstream the egress check reaches for.
+TBA_NPM_DEFAULT=https://registry.npmjs.org
+
+# `_tba_resolve_ip <address>` -> an IP literal for it (a host name is resolved by the system's resolver), rc 1 if none.
+_tba_resolve_ip() {
+  local v="${1-}" ip=""
+  if _tba_is_ipv4 "$v" || _tba_is_ipv6 "$v"; then printf '%s' "$v"; return 0; fi
+  ip="$(getent ahosts "$v" 2>/dev/null | awk 'NR==1{print $1}')"
+  { _tba_is_ipv4 "$ip" || _tba_is_ipv6 "$ip"; } || return 1
+  printf '%s' "$ip"
+}
+# `_tba_src_of <address>` -> the fleet host's source address for that box: `ip -o route get`'s `src`. The seam: a test puts
+# a fake `ip` first on PATH.
+_tba_src_of() {
+  local ip line re='(^|[[:space:]])src[[:space:]]+([0-9A-Fa-f:.]+)' src
+  ip="$(_tba_resolve_ip "${1-}")" || return 1
+  line="$(ip -o route get "$ip" 2>/dev/null | head -n 1)"
+  [[ "$line" =~ $re ]] || return 1
+  src="${BASH_REMATCH[2]}"
+  { _tba_is_ipv4 "$src" || _tba_is_ipv6 "$src"; } || return 1
+  printf '%s' "$src"
+}
+# `_tba_pub_parts` -> TBA_PUB_TYPE, TBA_PUB_B64 from the access key's public half; rc 1 when it is missing, or its
+# comment is not ours (a key this verb did not make is never used, replaced or listed).
+_tba_pub_parts() {
+  local t b c rest
+  TBA_PUB_TYPE=""; TBA_PUB_B64=""
+  [ -f "$TBA_KEY.pub" ] || return 1
+  read -r t b c rest <"$TBA_KEY.pub" || [ -n "$t" ] || return 1
+  [ "$t" = ssh-ed25519 ] && [[ "$b" =~ ^[A-Za-z0-9+/=]+$ ]] && [ "$c" = "$TBA_KEY_COMMENT" ] && [ -z "$rest" ] || return 1
+  TBA_PUB_TYPE="$t"; TBA_PUB_B64="$b"
+}
+# `_tba_pair_ok` -> rc 0 iff the public half names the private half: `ssh-keygen -y` derives the public key from the private
+# one, and its type and base64 must equal the file's. (Needs TBA_PUB_TYPE/TBA_PUB_B64 from `_tba_pub_parts`.)
+_tba_pair_ok() {
+  local t b
+  read -r t b _ < <(ssh-keygen -y -f "$TBA_KEY" 2>/dev/null) || [ -n "$t" ] || return 1
+  [ -n "$t" ] && [ "$t" = "$TBA_PUB_TYPE" ] && [ "$b" = "$TBA_PUB_B64" ]
+}
+_tba_access_line() {   # <from address> -> the line the box's authorized_keys takes
+  printf 'from="%s",restrict %s %s %s' "$1" "$TBA_PUB_TYPE" "$TBA_PUB_B64" "$TBA_KEY_COMMENT"
+}
+# The same line as a JSON string's content: its two double quotes escaped.
+_tba_access_line_json() { local l; l="$(_tba_access_line "$1")"; printf '%s' "${l//\"/\\\"}"; }
+# `_tba_conn` -> TBA_ADDR, TBA_PORT, TBA_LOGIN from the state file; rc 1 (and TBA_CODE not-connected) with none.
+_tba_conn() {
+  TBA_ADDR="$(_tba_state_get address 2>/dev/null)"; TBA_PORT="$(_tba_state_get port 2>/dev/null)"
+  _tba_is_address "$TBA_ADDR" || { TBA_CODE=not-connected; return 1; }
+  _tba_is_port "${TBA_PORT:=22}" || { TBA_CODE=not-connected; return 1; }
+  TBA_LOGIN="$(_tba_state_get login 2>/dev/null)"; : "${TBA_LOGIN:=root}"
+}
+# `_tba_scan <address> <port>` -> the ed25519 key the box presents, as `<type> <base64>`, rc 1 when it presents none.
+# ssh-keyscan's own lines (its comments) go nowhere.
+_tba_scan() {
+  local out dl line t b
+  dl="$(_tba_deadline)"
+  out="$(ssh-keyscan -T "$dl" -p "$2" -t ed25519 "$1" 2>/dev/null)" || :
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    read -r _ t b _ <<<"$line"
+    [ "$t" = ssh-ed25519 ] && [[ "$b" =~ ^[A-Za-z0-9+/=]+$ ]] || continue
+    printf '%s %s' "$t" "$b"; return 0
+  done <<<"$out"
+  return 1
+}
+# `_tba_fp_of_keyline <type base64>` / `_tba_fp_of_file <file>` -> the SHA256 fingerprint ssh-keygen prints.
+_tba_fp_of_keyline() { printf 'x %s\n' "$1" | ssh-keygen -lf - 2>/dev/null | awk '{print $2; exit}'; }
+_tba_fp_of_file() { ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2; exit}'; }
+# The pinned host key stands guard for every act but status, probe, pin and disconnect: when the box presents another
+# key than the pin, the act answers host-key-changed (and the status says so). A box that cannot be scanned is left to
+# the act's own ssh, whose strict checking says the same in its own words.
+_tba_hostkey_guard() {   # <address> <port> -> rc 0 go on, rc 1 refused (answered)
+  local pinfp now kl nowfp
+  [ -s "$TBA_PIN" ] || return 0
+  pinfp="$(_tba_fp_of_file "$TBA_PIN")"
+  _tba_is_fingerprint "$pinfp" || return 0
+  kl="$(_tba_scan "$1" "$2")" || return 0
+  nowfp="$(_tba_fp_of_keyline "$kl")"
+  if [ "$nowfp" != "$pinfp" ]; then _tba_state_write hostkey_changed=1 || :; _tba_refuse host-key-changed; return 1; fi
+  [ -z "$(_tba_state_get hostkey_changed 2>/dev/null)" ] || _tba_state_write hostkey_changed= || :
+  return 0
+}
+
+# key --address=<a> [--port=<n>] [--login=<user>] — record the connection; make the access key once; answer its line.
+_tba_run_key() {
+  local w address="" port=22 login=root src dir
+  for w in "$@"; do
+    case "$w" in --address=*) address="${w#*=}" ;; --port=*) port="${w#*=}" ;; --login=*) login="${w#*=}" ;; esac
+  done
+  # The key is made under the lock: two calls at once (a double-submitted card) must not each place half a pair. A host
+  # without flock goes on without it; the pair check below still refuses a mismatched pair.
+  local lrc=0
+  _tba_lock || lrc=$?
+  if [ "$lrc" = 1 ]; then _tba_refuse busy; return 0; fi
+  if [ -e "$TBA_KEY" ] || [ -L "$TBA_KEY" ]; then
+    _tba_pub_parts || { _tba_refuse foreign-key; return 0; }
+    _tba_pair_ok || { _tba_refuse foreign-key; return 0; }
+  elif [ -e "$TBA_KEY.pub" ] || [ -L "$TBA_KEY.pub" ]; then
+    # A public half with no private half answers a line nothing can use. Ours (by its comment) is replaced; any other is not.
+    _tba_pub_parts || { _tba_refuse foreign-key; return 0; }
+    rm -f -- "$TBA_KEY.pub" 2>/dev/null || { _tba_refuse foreign-key; return 0; }
+  fi
+  if [ "$(_tba_state_get address 2>/dev/null)" = "$address" ] && [ "$(_tba_state_get port 2>/dev/null)" = "$port" ]; then
+    _tba_hostkey_guard "$address" "$port" || return 0
+  fi
+  src="$(_tba_src_of "$address")" || { _tba_refuse unreachable; return 0; }
+  if [ ! -e "$TBA_KEY" ]; then
+    [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") || { echo "$PROG: cannot make $TBA_DIR" >&2; return 1; }
+    # Made in a private temp directory and linked into place, so a half-written key is never at the key's path and an
+    # existing key is never replaced (`ln` refuses; `mv` would not). ssh-keygen's output is dropped: the private half
+    # is never printed.
+    dir="$(umask 077 && mktemp -d "$TBA_DIR/key.XXXXXXXX")" || { echo "$PROG: cannot make a temporary directory" >&2; return 1; }
+    _tba_rm_on_exit "$dir"
+    if ! (umask 077; ssh-keygen -q -t ed25519 -N '' -C "$TBA_KEY_COMMENT" -f "$dir/k" >/dev/null 2>&1); then
+      rm -rf -- "$dir"; echo "$PROG: ssh-keygen could not make the access key" >&2; return 1
+    fi
+    chmod 600 "$dir/k" 2>/dev/null
+    if ! ln -- "$dir/k.pub" "$TBA_KEY.pub" 2>/dev/null; then rm -rf -- "$dir"; echo "$PROG: cannot place the access key" >&2; return 1; fi
+    if ! ln -- "$dir/k" "$TBA_KEY" 2>/dev/null; then rm -f -- "$TBA_KEY.pub"; rm -rf -- "$dir"; echo "$PROG: cannot place the access key" >&2; return 1; fi
+    rm -rf -- "$dir"
+  fi
+  _tba_pub_parts || { _tba_refuse foreign-key; return 0; }
+  _tba_pair_ok || { _tba_refuse foreign-key; return 0; }
+  _tba_state_write "address=$address" "port=$port" "login=$login" || { echo "$PROG: cannot write the state file" >&2; return 1; }
+  _tba_ok "\"line\":\"$(_tba_access_line_json "$src")\""
+}
+# A path to remove when the shell exits (a temp directory the verb made).
+_tba_rm_on_exit() { _exit_add "rm -rf -- $(printf '%q' "$1")"; }
+
+# probe — the fingerprint the box presents now. Never writes the pin.
+_tba_run_probe() {
+  local kl fp
+  _tba_conn || { _tba_refuse "$TBA_CODE"; return 0; }
+  kl="$(_tba_scan "$TBA_ADDR" "$TBA_PORT")" || { _tba_refuse unreachable; return 0; }
+  fp="$(_tba_fp_of_keyline "$kl")"
+  _tba_is_fingerprint "$fp" || { _tba_refuse unreachable; return 0; }
+  _tba_ok "\"fingerprint\":\"$fp\""
+}
+
+# pin --fingerprint=<fp> — probe again; the pin is written only when the box still presents the confirmed key.
+_tba_run_pin() {
+  local want="" w kl fp hostspec tmp
+  for w in "$@"; do case "$w" in --fingerprint=*) want="${w#*=}" ;; esac; done
+  _tba_conn || { _tba_refuse "$TBA_CODE"; return 0; }
+  kl="$(_tba_scan "$TBA_ADDR" "$TBA_PORT")" || { _tba_refuse unreachable; return 0; }
+  fp="$(_tba_fp_of_keyline "$kl")"
+  _tba_is_fingerprint "$fp" || { _tba_refuse unreachable; return 0; }
+  [ "$fp" = "$want" ] || { _tba_refuse fingerprint-mismatch; return 0; }
+  if [ "$TBA_PORT" = 22 ]; then hostspec="$TBA_ADDR"; else hostspec="[$TBA_ADDR]:$TBA_PORT"; fi
+  tmp="$TBA_PIN.tmp.$$"
+  _tmp_guard "$tmp"
+  ( umask 077; printf '%s %s\n' "$hostspec" "$kl" >"$tmp" ) 2>/dev/null || { rm -f -- "$tmp"; echo "$PROG: cannot write the pin" >&2; return 1; }
+  mv -f -- "$tmp" "$TBA_PIN" 2>/dev/null || { rm -f -- "$tmp"; echo "$PROG: cannot place the pin" >&2; return 1; }
+  _tba_state_write "fingerprint=$fp" hostkey_changed= || { echo "$PROG: cannot write the state file" >&2; return 1; }
+  _tba_ok "\"fingerprint\":\"$fp\""
+}
+
+# ── preflight: one row per check, read-only on the box ─────────────────────────────────────────────────────────
+# `_tba_pfx <command word>...` -> PF_OUT (its stdout), PF_RC. ssh's own failure (rc 255) or a missing connection or key
+# (rc 97) sets PF_FATAL to the closed code, and the preflight answers that code instead of rows.
+_tba_pfx() {
+  local tmp
+  PF_OUT=""; PF_RC=0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ccrc-tba-pf.XXXXXXXX")" || { PF_FATAL=unreachable; PF_RC=255; return 0; }
+  _tmp_guard "$tmp"
+  _tba_ssh "$@" >"$tmp" || PF_RC=$?
+  PF_OUT="$(head -c 65536 "$tmp")"
+  rm -f -- "$tmp"
+  case "$PF_RC" in 255|97) PF_FATAL="${TBA_SSH_CODE:-unreachable}" ;; esac
+  return 0
+}
+_tba_pf_row() {   # <check> <code or empty> -> appends the row, and the failed code to PF_FAILS
+  local cj=null ok=true
+  if [ -n "${2-}" ]; then cj="\"$2\""; ok=false; fi
+  PF_ROWS="${PF_ROWS:+$PF_ROWS,}{\"check\":\"$1\",\"ok\":$ok,\"code\":$cj}"
+  [ -z "${2-}" ] || PF_FAILS=$(( PF_FAILS + 1 ))
+}
+# One value of /etc/os-release without sourcing it: the last `KEY=` line, its quotes stripped.
+_tba_osrel() {   # <KEY> <text>
+  local line v=""
+  while IFS= read -r line; do case "$line" in "$1="*) v="${line#*=}" ;; esac; done <<<"$2"
+  v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
+  printf '%s' "$v"
+}
+_tba_url_hostport() {   # <url> -> `host port` (https 443, http 80), rc 1 for anything that is not a plain origin
+  local o scheme rest hp host port re='^([^:]*|\[[0-9A-Fa-f:.]+\]):([0-9]+)$'
+  o="$(_upd_url_origin "${1-}")" || return 1
+  case "$o" in https://*) scheme=https; rest="${o#https://}" ;; http://*) scheme=http; rest="${o#http://}" ;; *) return 1 ;; esac
+  hp="${rest%%/*}"
+  if [[ "$hp" =~ $re ]]; then host="${BASH_REMATCH[1]}"; port="${BASH_REMATCH[2]}"
+  else host="$hp"; port=443; [ "$scheme" = https ] || port=80; fi
+  host="${host#[}"; host="${host%]}"
+  [ -n "$host" ] && [[ "$host" != *[[:space:]]* ]] && _tba_is_port "$port" || return 1
+  printf '%s %s' "$host" "$port"
+}
+
+# preflight — the checks of §2.4 step 1; none changes the box (the commands are a closed list of reads), none formats a
+# disk or joins a network (C10, C11).
+_tba_run_preflight() {
+  local PF_FATAL="" PF_OUT PF_RC PF_ROWS="" PF_FAILS=0
+  local login mine v want have n dl root tools base up hp sc cli srv line code exp fixline tag inst pass addr_ok=0
+  _tba_conn || { _tba_refuse "$TBA_CODE"; return 0; }
+  login="$TBA_LOGIN"
+  if [ ! -s "$TBA_PIN" ]; then _tba_refuse host-key-unknown; return 0; fi
+  _tba_hostkey_guard "$TBA_ADDR" "$TBA_PORT" || return 0
+  dl="$(_tba_deadline)"; [ "$dl" -le 30 ] || dl=30
+
+  # login: root, or a sudo that works without a password
+  if [ "$login" = root ]; then
+    _tba_pfx id -u; [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+    code=""; [ "$PF_RC" = 0 ] && [ "$PF_OUT" = 0 ] || code=no-root
+  else
+    _tba_pfx true; [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+    code=""; [ "$PF_RC" = 0 ] || code=no-sudo
+  fi
+  _tba_pf_row login "$code"
+
+  # the distribution release equals the fleet host's
+  _tba_pfx cat /etc/os-release; [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+  mine="$(head -c 65536 "${TBA_OS_RELEASE:-/etc/os-release}" 2>/dev/null)"
+  want="$(_tba_osrel ID "$mine")-$(_tba_osrel VERSION_ID "$mine")"
+  have="$(_tba_osrel ID "$PF_OUT")-$(_tba_osrel VERSION_ID "$PF_OUT")"
+  code=""; { [ "$PF_RC" = 0 ] && [ "$want" != "-" ] && [ "$have" = "$want" ]; } || code=os-mismatch
+  _tba_pf_row os "$code"
+
+  # systemd new enough for NFTSet=
+  _tba_pfx systemctl --version; [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+  n=""; line="${PF_OUT%%$'\n'*}"
+  [[ "$line" =~ ^systemd[[:space:]]+([0-9]+) ]] && n="${BASH_REMATCH[1]}"
+  code=""; { [ "$PF_RC" = 0 ] && [ -n "$n" ] && [ "$n" -ge "$TBA_SYSTEMD_MIN" ]; } || code=systemd-too-old
+  _tba_pf_row systemd "$code"
+
+  # nftables
+  _tba_pfx nft --version; [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+  code=""; [ "$PF_RC" = 0 ] || code=no-nftables
+  _tba_pf_row nftables "$code"
+
+  # CCRC_TESTBOX_ROOT's parent: XFS with reflink=1 (nearest existing directory, read with xfs_info)
+  root="$(_tba_state_get box_root 2>/dev/null)"; : "${root:=$TBA_BOX_ROOT_DEFAULT}"
+  _tba_pfx sh -c 'p=$1; case $p in "~/"*) p=$HOME/${p#"~/"};; esac; d=$(dirname "$p"); while [ ! -d "$d" ]; do d=$(dirname "$d"); done; m=$(findmnt -n -o TARGET -T "$d" 2>/dev/null) || m=$d; xfs_info "$m"' sh "$root"
+  [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+  code=""; { [ "$PF_RC" = 0 ] && [[ "$PF_OUT" == *"reflink=1"* ]]; } || code=not-xfs-reflink
+  _tba_pf_row storage "$code"
+
+  # the address the box saw ccrc connect to is an IP literal, and the access line's from= is the address it saw ccrc
+  # connect from. sudo's environment reset would empty SSH_CONNECTION, so this one read is not under sudo.
+  TBA_SSH_NOSUDO=1 _tba_pfx sh -c 'printf %s "$SSH_CONNECTION"'; [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+  sc="$PF_OUT"; cli=""; srv=""
+  read -r cli _ srv _ <<<"$sc"
+  code=""
+  if [ "$PF_RC" = 0 ] && { _tba_is_ipv4 "$srv" || _tba_is_ipv6 "$srv"; } && { _tba_is_ipv4 "$cli" || _tba_is_ipv6 "$cli"; }; then addr_ok=1
+  else code="address-not-ip"; fi
+  _tba_pf_row address "$code"
+  fixline=""; code=""
+  if [ "$addr_ok" = 0 ]; then code="address-not-ip"   # nothing to compare the from= address with
+  else
+    exp="$(_tba_src_of "$TBA_ADDR")" || exp=""
+    if [ "$exp" != "$cli" ]; then
+      code=from-mismatch
+      _tba_pub_parts && fixline="$(_tba_access_line_json "$cli")"
+    fi
+  fi
+  _tba_pf_row from "$code"
+
+  # egress: a TCP connect, within the deadline, to the release host and the npm upstream (no tool installed on the box)
+  base="$(_upd_release_base)" || base=""
+  tools="$(_tba_state_get box_tools 2>/dev/null)"; : "${tools:=$TBA_BOX_TOOLS_DEFAULT}"
+  up="$TBA_NPM_DEFAULT"
+  code=""
+  for v in "$base" "$up"; do
+    hp="$(_tba_url_hostport "$v")" || { code=no-egress; continue; }
+    # shellcheck disable=SC2086  # hp is `host port`, split on purpose
+    _tba_pfx timeout "$dl" bash -c 'exec 3<>"/dev/tcp/$1/$2"' bash $hp
+    [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+    [ "$PF_RC" = 0 ] || code=no-egress
+  done
+  _tba_pf_row egress "$code"
+
+  # no installed release with another tag
+  tag=""
+  if _box_build_fields >/dev/null 2>&1; then tag="${BOX_BUILD[4]:-}"; fi
+  _tba_pfx readlink -- "$tools/release/installed"; [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
+  inst="${PF_OUT##*/}"
+  code=""; { [ -z "$inst" ] || { [ -n "$tag" ] && [ "$inst" = "$tag" ]; }; } || code=other-release
+  _tba_pf_row release "$code"
+
+  pass=false; [ "$PF_FAILS" -gt 0 ] || pass=true
+  _tba_ok "\"pass\":$pass,\"checks\":[$PF_ROWS]${fixline:+,\"line\":\"$fixline\"}"
 }
 
 # ── the dispatch ────────────────────────────────────────────────────────────────────────────────────────────────

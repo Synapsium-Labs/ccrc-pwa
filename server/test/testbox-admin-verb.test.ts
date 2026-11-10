@@ -561,9 +561,10 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
     const h = fixture();
     let r = sh(h, SRC('linux') + '_tba_run_probe() { _tba_ok \'"fingerprint":"x"\'; }; _tba_main probe', [VERB]);
     expect(r.out).toBe('{"ok":true,"fingerprint":"x"}\n');
-    r = sh(h, SRC('linux') + '_tba_main probe; echo "rc=$?"', [VERB]);
+    // `read` is built by a later task (TC8); until then it is a usage error, never half-run
+    r = sh(h, SRC('linux') + '_tba_main read; echo "rc=$?"', [VERB]);
     expect(r.rc).toBe(2);
-    expect(r.err).toContain('probe is not built in this release');
+    expect(r.err).toContain('read is not built in this release');
     expect(existsSync(h.state)).toBe(false);
   });
 
