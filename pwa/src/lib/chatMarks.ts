@@ -100,14 +100,15 @@ export type MarkRun =
 const WORD = /[\p{L}\p{M}\p{N}_]/u;
 const isWordPoint = (cp: number | undefined): boolean => cp !== undefined && WORD.test(String.fromCodePoint(cp));
 
-/** Whether the character starting at `at` is a word character; `false` at the end. */
-function wordAfter(text: string, at: number): boolean {
+/** Whether the character starting at `at` is a word character; `false` at the end. With `wordBefore`, the one boundary of
+ *  a name: the name grammar and the message evidence reader (`chatRepoEvidence.ts`, Task C21 review 1758 F6) both ask it. */
+export function wordAfter(text: string, at: number): boolean {
   return isWordPoint(text.codePointAt(at));
 }
 
 /** Whether the character ending just before `at` is a word character, a surrogate pair read whole; `false` at the
  *  start. */
-function wordBefore(text: string, at: number): boolean {
+export function wordBefore(text: string, at: number): boolean {
   if (at <= 0) return false;
   const pair = at >= 2 && /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(text.slice(at - 2, at));
   return isWordPoint(text.codePointAt(pair ? at - 2 : at - 1));
@@ -134,8 +135,28 @@ const DOC = /docs\/[A-Za-z0-9._/-]*\.md/y;
 export const GITHUB_OWNER_PATTERN = '[A-Za-z0-9-]+';
 export const GITHUB_REPO_PATTERN = '[A-Za-z0-9._-]+';
 /** A PR that names its repository (Task C21, D-8172): `owner/repo#12`. Tried only where a document path may start, so it is
- *  never the tail of a path or a host (`x/a/b#1`, `github.com/a/b#1`). */
+ *  never the tail of a path or a host (`x/a/b#1`, `github.com/a/b#1`), and refused where it reads as a path or a slash pair
+ *  of prose rather than a repository (`notQualified`). */
 const QUALIFIED_PR = new RegExp(`(${GITHUB_OWNER_PATTERN})/(${GITHUB_REPO_PATTERN})#(\\d{1,6})`, 'y');
+
+/** The file extensions a qualified name's repository may not end in (`src/lib/x.ts#12` is a path and a line, not a PR; Task C21
+ *  review 1758 F3). Lower case, compared in lower case after the last dot. */
+export const FILE_EXTENSIONS: readonly string[] = [
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'md', 'mdx', 'yml', 'yaml', 'json', 'sh', 'py', 'txt', 'html', 'css', 'toml', 'sql',
+  'log', 'csv', 'lock',
+];
+
+/** Whether `owner/repo#n` is refused as a qualified name (review 1758 F3): its repository ends in a `FILE_EXTENSIONS` entry, its
+ *  owner or repository is all digits or one character (`1/2#3`, `24/7#1`, `abc1234/x#5`), or both are upper case only
+ *  (`TCP/IP#4`, `N/A#1`, `I/O#5`). What is left follows GitHub's own `owner/repo#n` notation without knowing that the repository
+ *  exists, so a prose pair such as `client/server#1` still reads as one (spec R15). */
+function notQualified(owner: string, repo: string): boolean {
+  const dot = repo.lastIndexOf('.');
+  if (dot >= 0 && FILE_EXTENSIONS.includes(repo.slice(dot + 1).toLowerCase())) return true;
+  const slight = (seg: string): boolean => seg.length === 1 || /^\d+$/.test(seg);
+  const upper = (seg: string): boolean => !/[a-z]/.test(seg) && /[A-Z]/.test(seg);
+  return slight(owner) || slight(repo) || (upper(owner) && upper(repo));
+}
 const PR = /#(\d{1,6})/y;
 const RUN = /(?:run|review)\s+(\d+)/iy;
 const ITEM = /item\s+(\d+)/iy;
@@ -162,7 +183,7 @@ function nameAt(text: string, at: number): { mark: Mark; end: number } | null {
     }
   }
   m = pathOk ? stickyAt(QUALIFIED_PR, text, at) : null;
-  if (m && !wordAfter(text, at + m[0].length)) {
+  if (m && !wordAfter(text, at + m[0].length) && !notQualified(m[1]!, m[2]!)) {
     return { mark: { kind: 'pr', id: m[3]!, text: m[0], repo: `${m[1]!}/${m[2]!}` }, end: at + m[0].length };
   }
   for (const [re, kind] of KEYWORDS) {
@@ -450,6 +471,18 @@ export function markRuns(text: string, context?: LabelContext): readonly MarkRun
   });
   plainUpTo(text.length);
   return runs;
+}
+
+/** The qualified PR names (`owner/repo#12`) in `text`, in order, exactly as `markRuns` would mark them: one walk, one grammar
+ *  and one boundary, so the message evidence reader (`chatRepoEvidence.ts`) counts as evidence only what is a name (review 1758
+ *  F6). Read over a whole message's raw text, code spans and link targets included. */
+export function qualifiedNames(text: string): { readonly repo: string; readonly id: string }[] {
+  const out: { repo: string; id: string }[] = [];
+  walkNames(text, (_at, name) => {
+    if (name.mark.repo !== undefined) out.push({ repo: name.mark.repo, id: name.mark.id });
+    return name.end;
+  });
+  return out;
 }
 
 /** Where `text`'s recognised names stand, in order: the names `markRuns` would mark, for text the plugin draws no marks

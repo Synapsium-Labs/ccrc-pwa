@@ -103,12 +103,122 @@ describe('a PR or commit opens the repository the message means (Task C21, D-817
     expect(links(text, HOME)).toEqual([['4c677d328', null]]);
   });
 
-  it('a repository the console\'s grammar refuses links nowhere, and tells no bare name', () => {
+  it('a repository the console\'s grammar refuses links nowhere, and leaves the bare name beside it as text', () => {
     expect(links('--org-b/project-b#12 merged', HOME)).toEqual([['--org-b/project-b#12', null]]);
-    expect(links('-x/y#12 and #12', HOME)).toEqual([['-x/y#12', null], ['#12', issue('org-a/project-a', 12)]]);
+    // An unreadable qualified name is an unknown repository for its number: the bare #12 beside it stays text (review 1758 F1).
+    expect(links('--org-b/project-b#12 and #12', HOME)).toEqual([['--org-b/project-b#12', null], ['#12', null]]);
     const said = messageRepos('a/..#5');
     const mark: Mark = { kind: 'pr', id: '5', text: 'a/..#5', repo: 'a/..' };
     expect(refHref(mark, HOME, said)).toBeNull();
+  });
+});
+
+// Fix round 1 (review 1758): where the code cannot tell, the answer is text.
+describe('fix round 1: the evidence reader\'s edges (Task C21, review 1758)', () => {
+  it('F1: a GitHub address in any case is read, and one the grammar refuses is an unknown repository', () => {
+    const rows: [string, string | null][] = [
+      ['#12 GitHub.com/o/r', null],
+      ['#12 GITHUB.COM/O/R/pull/12', issue('O/R', 12)],
+      ['#12 https://Github.com/o/r/pull/12', issue('o/r', 12)],
+      ['#12 github.com/o_o/r/pull/12', null],
+      ['#12 github.com/o/-r/pull/12', null],
+      ['#3 github.com/o/repo.git.git/pull/3', null],
+      // An unknown repository with no number still names a repository other than home (rule 3a).
+      ['#12 github.com/o_o/r', null],
+      // A host that only ends in github.com is no GitHub address.
+      ['#12 my-github.com/org-b/project-b/pull/12', issue('org-a/project-a', 12)],
+      ['#12 x.github.com/org-b/project-b/pull/12', issue('org-a/project-a', 12)],
+    ];
+    for (const [text, href] of rows) expect(links(text, HOME), text).toEqual([[text.split(' ')[0], href]]);
+  });
+
+  it('F2: the SSH form, the API, raw and archive hosts and gh --repo name a repository; an API page and a gh pr command are evidence', () => {
+    const rows: [string, string | null][] = [
+      ['#12 git@github.com:o/r.git', null],
+      ['#12 api.github.com/repos/o/r/pulls/12', issue('o/r', 12)],
+      ['#12 api.github.com/repos/o/r', null],
+      ['#12 raw.githubusercontent.com/o/r/main/x', null],
+      ['#12 codeload.github.com/o/r/tar.gz/main', null],
+      ['#12 gh pr view 12 --repo o/r', issue('o/r', 12)],
+      ['#12 gh pr view 12 -R o/r', issue('o/r', 12)],
+      ['#12 gh issue view 12 --repo=o/r', issue('o/r', 12)],
+      ['#13 gh pr view 12 --repo o/r', null],
+      ['#12 gh pr list --repo o/r', null],
+      ['#12 gh pr view 12 --repo "o/r"', issue('o/r', 12)],
+      ['#12 in o/r', issue('org-a/project-a', 12)],
+    ];
+    for (const [text, href] of rows) expect(links(text, HOME), text).toEqual([[text.split(' ')[0], href]]);
+  });
+
+  it('F2: a gh command\'s repository flag stops at its command\'s end', () => {
+    expect(links('#12: gh pr view 12; echo --repo o/r', HOME)).toEqual([['#12', issue('org-a/project-a', 12)]]);
+  });
+
+  // F3: the review's lists, each row resolved in a home-only session. A qualified name follows GitHub's own notation without
+  // checking that the repository exists, so a prose pair can still link (R15); a path, a digit or one-character pair, an
+  // upper-case pair and a file extension do not.
+  it('F3: which slash pairs before #n are qualified names', () => {
+    const link: [string, string][] = [
+      ['src/thing#12', issue('src/thing', 12)],
+      ['and/or#3', issue('and/or', 3)],
+      ['client/server#1', issue('client/server', 1)],
+      ['pwa/test#12', issue('pwa/test', 12)],
+      ['server/src#12', issue('server/src', 12)],
+      ['foo-bar/baz.qux#9', issue('foo-bar/baz.qux', 9)],
+    ];
+    for (const [text, href] of link) expect(links(text, HOME), text).toEqual([[text, href]]);
+    const text = [
+      'TCP/IP#4', '1/2#3', '24/7#1', 'I/O#5', 'N/A#1', 'src/lib/x.ts#12', 'config/app.yml#3', 'notes/a.md#2', 'v1.0/x#2',
+      'docs/foo.md#12', 'https://example.com/a/b#12', './a/b#12', '~/a/b#12', 'a_b/c#3', 'x/a/b#1', 'a/b#12abc',
+    ];
+    for (const t of text) expect(links(t, HOME).filter(([, href]) => href !== null), t).toEqual([]);
+    // A one-character repository is no qualified name, so a SHA before a slash reads as the commit it was on main.
+    expect(links('abc1234/x#5', HOME)).toEqual([['abc1234', 'https://github.com/org-a/project-a/commit/abc1234']]);
+  });
+
+  it('F3: the evidence reader refuses what the grammar refuses', () => {
+    expect(links('config/app.yml#3 then #3', HOME)).toEqual([['#3', issue('org-a/project-a', 3)]]);
+    expect(links('see docs/plan.md#12 and #5', HOME)).toEqual([['#5', issue('org-a/project-a', 5)]]);
+  });
+
+  it('F4: both readers trim a qualified name\'s trailing dots the same way', () => {
+    expect(links('#3 org-b/project-b..#3', HOME))
+      .toEqual([['#3', issue('org-b/project-b', 3)], ['org-b/project-b..#3', issue('org-b/project-b', 3)]]);
+    expect(links('org-b/project-b.#12', HOME)).toEqual([['org-b/project-b.#12', issue('org-b/project-b', 12)]]);
+  });
+
+  it('F6: only a name is evidence: a qualified name or a page number the boundary does not end counts for nothing', () => {
+    expect(links('owner-b/repo-b#12x then #12', HOME)).toEqual([['#12', issue('org-a/project-a', 12)]]);
+    expect(links('\u00e9owner-b/repo-b#12 then #12', HOME)).toEqual([['#12', issue('org-a/project-a', 12)]]);
+    // A host the name boundary does not start (a letter before it) is no address at all.
+    expect(links('#12 \u00e9github.com/o/r/pull/12', HOME)).toEqual([['#12', issue('org-a/project-a', 12)]]);
+    // The page still names its repository, so the bare #12 beside it is text under rule 3a.
+    expect(links('github.com/owner-b/repo-b/pull/12x and #12', HOME)).toEqual([['#12', null]]);
+  });
+
+  it('F9: a www. address is evidence', () => {
+    expect(links('Merged #7, see https://www.github.com/org-b/project-b/pull/7', HOME)).toEqual([['#7', issue('org-b/project-b', 7)]]);
+  });
+
+  // F5: generous budgets, so load cannot flake them; a quadratic trim or a scan of every address per commit name takes seconds.
+  it('F5: the reader is linear on a long dot run and over 1 MiB of addresses', () => {
+    let t = performance.now();
+    messageRepos(`github.com/o/${'.'.repeat(400_000)}x and github.com/o/r${'.'.repeat(400_000)}`);
+    expect(performance.now() - t).toBeLessThan(2000);
+    const line = 'see https://github.com/org-b/project-b/pull/123 and org-c/project-c#45, ';
+    const mib = line.repeat(Math.ceil((1 << 20) / line.length));
+    t = performance.now();
+    const said = messageRepos(mib);
+    expect(performance.now() - t).toBeLessThan(3000);
+    expect([...said.named].sort()).toEqual(['org-b/project-b', 'org-c/project-c']);
+  });
+
+  it('F5: a commit name asks only the addresses that share its prefix', () => {
+    const shas = Array.from({ length: 20_000 }, (_, i) => (0x1000000 + i).toString(16) + 'abc');
+    const said = messageRepos(shas.map((sha) => `github.com/org-b/project-b/commit/${sha}`).join('\n'));
+    const t = performance.now();
+    for (const sha of shas) expect(refHref({ kind: 'commit', id: sha, text: sha }, HOME, said)?.href).toContain('/org-b/project-b/');
+    expect(performance.now() - t).toBeLessThan(3000);
   });
 });
 
@@ -192,6 +302,9 @@ describe('claimsRunElsewhere: does this session coordinate work in another repos
     expect(claimsRunElsewhere('sess-a', 'org-a/project-a', [run({ project: 'project-x' })], projects)).toBe(true);
     expect(claimsRunElsewhere('sess-a', 'org-a/project-a', [run({ project: 'project-unknown' })], projects)).toBe(true);
     expect(claimsRunElsewhere('sess-a', 'org-a/project-a', [run({})], null)).toBe(true);
+    // With no home repository, no claimed open run can be shown to be home.
+    expect(claimsRunElsewhere('sess-a', null, [run({ project: 'project-x' })], projects)).toBe(true);
+    expect(claimsRunElsewhere('sess-a', null, [run({})], projects)).toBe(true);
   });
 
   it('a closed run, or another session\'s, does not count', () => {

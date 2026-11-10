@@ -7,6 +7,19 @@ import { act, cleanup, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { ChatEvent, ProjectRow, RunSummary } from '../../shared/api';
 
+/** Each time a name is resolved: a name the chat draws again asks `refHref` again (review 1758 F9). */
+const resolved = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../src/lib/chatRefs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/chatRefs')>();
+  return {
+    ...real,
+    refHref: (...args: Parameters<typeof real.refHref>) => {
+      resolved.count += 1;
+      return real.refHref(...args);
+    },
+  };
+});
+
 vi.mock('react-virtuoso', async () => {
   const React = await import('react');
   return {
@@ -66,6 +79,20 @@ describe('the session screen tells the chat whether its session coordinates work
     mount();
     expect(link()).toBeNull();
     act(() => useFleetStore.setState({ runs: [run(1, {}), run(2, { project: 'project-b', state: 'done' })] }));
+    expect(link()).toBe('https://github.com/org-a/project-a/issues/512');
+  });
+
+  // The one-boolean selector (review 1758 F9): a runs frame that changes no run id and not the answer, here another session's
+  // run moving on, re-renders no name.
+  it('a runs frame of another session re-renders no name', () => {
+    const other = (state: RunSummary['state']): RunSummary => run(2, { project: 'project-b', claimedBy: 'lane-b:project-b', state });
+    act(() => useFleetStore.setState({ projects: PROJECTS, runs: [run(1, {}), other('working')] }));
+    mount();
+    expect(link()).toBe('https://github.com/org-a/project-a/issues/512');
+    expect(resolved.count).toBeGreaterThan(0);
+    resolved.count = 0;
+    act(() => useFleetStore.setState({ runs: [run(1, {}), other('awaiting-review')] }));
+    expect(resolved.count).toBe(0);
     expect(link()).toBe('https://github.com/org-a/project-a/issues/512');
   });
 

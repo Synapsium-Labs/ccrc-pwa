@@ -3263,7 +3263,7 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 - **D-8172** - `chat-ref-repository-from-the-message`: Task C21, issued on 2026-11-10. A PR or commit name in chat opens the repository its message means, or stays text, instead of always the session's home repository; the message's evidence is read at render time (`chatRepoEvidence.ts`), and the session's runs elsewhere are one boolean on the chat's context (`claimsRunElsewhere`).
 
-**Acceptance.** The cases in `chat-repo-refs.test.ts`, `chat-links.test.tsx`, `message-bubble.test.tsx` and `chat-repo-session.test.tsx` pass, each guard red under its mutant; a single-repository session's plain `#123` links as before. **Rollback.** A plain revert.
+**Acceptance.** The cases in `chat-repo-refs.test.ts`, `chat-links.test.tsx`, `message-bubble.test.tsx` and `chat-repo-session.test.tsx` pass, and every mutant of the chosen set is killed (`c21.md` records the set and the count); a single-repository session's plain `#123` links as before. **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)
 

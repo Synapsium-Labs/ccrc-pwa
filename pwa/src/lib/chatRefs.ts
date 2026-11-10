@@ -13,13 +13,12 @@
 // repository (`owner/repo#12`) opens it; a bare name opens the one repository its own message names for it
 // (`chatRepoEvidence.ts`), and none where it names two; else it opens the home repository only when the message names no other
 // repository and the session claims no open run elsewhere (`claimsRunElsewhere`); else it stays text.
-import { parseGithubRepo } from '../../../shared/projectAdd';
 import { repoLabel, type ProjectRow, type RunSummary } from '../../../shared/api';
 import { docHref, sessionBranchRef } from '../docs/docsLinks';
 import { claimedRunsOf } from '../fleet/runWords';
 import { itemPath } from '../ledgers/ledgerWords';
 import type { Mark } from './chatMarks';
-import { repoKey, type MessageRepos } from './chatRepoEvidence';
+import { readRepo, repoKey, reposFor, type MessageRepos } from './chatRepoEvidence';
 import { runsRunHref } from './routes';
 
 /** What a session's chat knows to resolve a name: its project's measured repository slug (`repoLabel`: null unless the repo is
@@ -35,8 +34,8 @@ export interface ChatRefContext {
 }
 
 /** Whether session `sessionId` claims an open run (`claimedRunsOf`, the coordinator-side reader: `claimedBy`, not closed by
- *  `isRunClosed`) whose project's repository is not `homeRepo` (Task C21, rule 3b). A run whose project has no `named` repository, or that no project row names, counts as
- *  elsewhere, and so does every claimed open run before the console has read its projects (`projects === null`): what cannot
+ *  `isRunClosed`) whose project's repository is not `homeRepo` (Task C21, rule 3b). A run whose project has no `named` repository,
+ *  one `repoKey` cannot read, or that no project row names, counts as elsewhere, and so does every claimed open run before the console has read its projects (`projects === null`): what cannot
  *  be shown to be home is not home. */
 export function claimsRunElsewhere(
   sessionId: string,
@@ -47,7 +46,8 @@ export function claimsRunElsewhere(
   const home = homeRepo === null ? null : repoKey(homeRepo);
   return claimedRunsOf(runs, sessionId).some((run) => {
     const slug = repoLabel(projects?.find((p) => p.name === run.project)?.repo);
-    return home === null || slug === null || repoKey(slug) !== home;
+    const key = slug === null ? null : repoKey(slug);
+    return key === null || key !== home;
   });
 }
 
@@ -67,33 +67,22 @@ function heldOrLarge(id: string, known: ReadonlySet<number>): number | null {
 }
 
 /** The GitHub page of `mark` in repository `slug`, or null when the console's one GitHub grammar refuses the slug
- *  (`parseGithubRepo`, review 1586 A1): the address is built from the owner and name it read, never from the slug as written. */
+ *  (`readRepo`: `parseGithubRepo` after the one trailing-dot trim; review 1586 A1, review 1758 F4): the address is built from
+ *  the owner and name it read, never from the slug as written. */
 function githubPage(slug: string | null, mark: Mark): RefTarget | null {
-  const gh = slug === null ? null : parseGithubRepo(slug);
+  const gh = slug === null ? null : readRepo(slug);
   if (gh === null) return null;
   const where = mark.kind === 'pr' ? 'issues' : 'commit';
   return { href: `https://github.com/${gh.owner}/${gh.repo}/${where}/${mark.id}`, external: true };
 }
 
-/** The repositories `said` names for a bare PR or commit mark, by key: the pages of its number, or the commit addresses where
- *  one SHA is a prefix of the other. */
-function saidFor(mark: Mark, said: MessageRepos): ReadonlyMap<string, string> {
-  if (mark.kind === 'pr') return said.numbers.get(Number(mark.id)) ?? new Map();
-  const sha = mark.id.toLowerCase();
-  const out = new Map<string, string>();
-  for (const c of said.commits) {
-    if ((c.sha.startsWith(sha) || sha.startsWith(c.sha)) && !out.has(c.key)) out.set(c.key, c.slug);
-  }
-  return out;
-}
-
 /** Task C21's rule for a PR or commit mark, first that applies wins: (1) the repository its name says; (2) the one repository
- *  its message names for it, or text where it names two; (3) text, where the message names a repository other than the home
- *  one or the session claims an open run elsewhere; (4) the home repository. */
+ *  its message names for it, or text where it names two or one it cannot read; (3) text, where the message names a repository
+ *  other than the home one (an unknown one included) or the session claims an open run elsewhere; (4) the home repository. */
 function repoPage(mark: Mark, ctx: ChatRefContext, said: MessageRepos): RefTarget | null {
   if (mark.repo !== undefined) return githubPage(mark.repo, mark);
-  const named = saidFor(mark, said);
-  if (named.size > 0) return named.size === 1 ? githubPage([...named.values()][0]!, mark) : null;
+  const named = [...reposFor(mark, said).values()];
+  if (named.length > 0) return named.length === 1 && named[0]!.kind === 'named' ? githubPage(named[0]!.slug, mark) : null;
   const home = ctx.repo === null ? null : repoKey(ctx.repo);
   if (home === null || ctx.runsElsewhere || [...said.named].some((k) => k !== home)) return null;
   return githubPage(ctx.repo, mark);

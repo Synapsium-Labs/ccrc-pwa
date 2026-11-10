@@ -299,6 +299,15 @@ describe('a PR or commit opens the repository the message means (Task C21, D-817
     ]);
   });
 
+  it('two code spans naming two repositories for one number each open their own (review 1758 F9)', () => {
+    const { container } = assistant('See `owner-b/repo-b#12` and `owner-c/repo-c#12`.', CROSS);
+    expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['owner-b/repo-b#12', 'https://github.com/owner-b/repo-b/issues/12'],
+      ['owner-c/repo-c#12', 'https://github.com/owner-c/repo-c/issues/12'],
+    ]);
+    expect(container.querySelectorAll('.msg-assist a > code')).toHaveLength(2);
+  });
+
   it('a whole code span holding owner/repo#n links there', () => {
     const { container } = assistant('See `owner-b/repo-b#12`.', CROSS);
     expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual(['https://github.com/owner-b/repo-b/issues/12']);
