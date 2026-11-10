@@ -31,8 +31,10 @@ import { isRecord } from '../lib/wire';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, UNCONFIRMED_TEXT, useResultLine } from './settingsText';
 import { TestBoxConnect } from './TestBoxConnect';
+import { TestBoxManage } from './TestBoxManage';
 import { TESTBOX_CONNECT_TEXT } from './testboxAdminWords';
 import type { TestboxBlock, TestboxPoll } from './useTestboxView';
+import type { BoxSettingRow } from '../../../shared/api';
 
 /** The wide band's query: the width at which the shell's other wide layouts start (`tokens.css`'s 1600). */
 export const TESTBOX_WIDE_QUERY = '(min-width: 1600px)';
@@ -129,7 +131,15 @@ function useBand(): TestboxBand {
   return !desk ? 'phone' : wide ? 'wide' : 'laptop';
 }
 
-export function TestBoxSection({ poll }: { poll: TestboxPoll }): ReactNode {
+export interface TestBoxSectionProps {
+  poll: TestboxPoll;
+  /** The fleet host's own settings rows (the Settings page's nodes), for the connected card's Settings; null when not reported. */
+  fleetRows?: readonly BoxSettingRow[] | null;
+  /** A fleet-side settings save landed: the page re-reads its nodes. */
+  onFleetChanged?: () => void;
+}
+
+export function TestBoxSection({ poll, fleetRows = null, onFleetChanged }: TestBoxSectionProps): ReactNode {
   const { view, failure } = poll;
   const card = SETTINGS_CARDS.automation.testbox;
   const band = useBand();
@@ -138,7 +148,7 @@ export function TestBoxSection({ poll }: { poll: TestboxPoll }): ReactNode {
       {failure === 'not-configured' ? (
         <p className="settings-note">{COLLECT_SECTION_TEXT.notAvailable}</p>
       ) : view !== null && view.block !== null ? (
-        <TestboxBody block={view.block} stale={failure !== null} poll={poll} band={band} />
+        <TestboxBody block={view.block} stale={failure !== null} poll={poll} band={band} fleetRows={fleetRows} onFleetChanged={onFleetChanged} />
       ) : view !== null ? (
         <p className="settings-note">{T.unpolled}</p>
       ) : failure !== null ? (
@@ -158,7 +168,9 @@ function refusalText(err: unknown): string {
   return detail ?? apiErrorText(err);
 }
 
-function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale: boolean; poll: TestboxPoll; band: TestboxBand }): ReactNode {
+function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
+  block: TestboxBlock; stale: boolean; poll: TestboxPoll; band: TestboxBand; fleetRows: readonly BoxSettingRow[] | null; onFleetChanged?: () => void;
+}): ReactNode {
   const now = useNow(30_000);
   const [switching, setSwitching] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -168,6 +180,10 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
   const admin = block.admin;
   const flow = admin !== undefined && (!admin.connected || admin.parity !== 'pass');
   const waitsForParity = admin !== undefined && admin.parity !== 'pass' && block.switch !== 'on';
+  // A Replace's disconnect landed: the flow that mounts next opens at step 1 (TC16, spec §2.9).
+  const [replacing, setReplacing] = useState(false);
+  // The box runs a release other than the fleet host's: **Apply release to box** is offered (C7). Unmeasured says nothing.
+  const releaseDiffers = box !== null && block.host?.release != null && block.host.release !== box.release;
 
   const flip = (on: boolean): void => {
     if (switching) return;
@@ -221,7 +237,11 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
   return (
     <>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{T.stale}</p>}
-      {flow && <TestBoxConnect band={band} onChanged={poll.reload} />}
+      {flow && <TestBoxConnect band={band} onChanged={poll.reload} begin={replacing} />}
+      {admin?.connected === true && (
+        <TestBoxManage band={band} onChanged={poll.reload} onReplaced={() => setReplacing(true)} fleetRows={fleetRows} onFleetChanged={onFleetChanged}
+          releaseDiffers={releaseDiffers} runsInProgress={box?.runs.inProgress ?? 0} />
+      )}
       <div className="testbox-head" data-testbox="head">
         <div className="testbox-switch" data-testbox="switch">
           <RadioFieldset<'on' | 'off'>

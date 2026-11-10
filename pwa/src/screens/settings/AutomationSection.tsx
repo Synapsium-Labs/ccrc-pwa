@@ -22,6 +22,7 @@ import { RollIdleSection } from '../../fleet/RollIdleSection';
 import { PaneScopeStopSection } from '../../fleet/PaneScopeStopSection';
 import { BrowserToolsSection } from '../../fleet/BrowserToolsSection';
 import { TestBoxSection } from '../../fleet/TestBoxSection';
+import { fleetRowsOf } from '../../fleet/testboxAdminWords';
 import { BackupSection } from '../../fleet/BackupSection';
 import { TranscriptWorkSection } from '../../fleet/TranscriptWorkSection';
 import type { SettingsView } from './SettingsDataProvider';
@@ -44,7 +45,7 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
       <DelegationAdoptSection poll={view.delegationAdopt} />
       <BackupSection />
       <TranscriptWorkSection />
-      <TestBoxSection poll={view.testbox} />
+      <TestBoxSection poll={view.testbox} fleetRows={fleetRowsOf(view.updates.view?.nodes)} onFleetChanged={view.updates.reload} />
     </>
   );
 }

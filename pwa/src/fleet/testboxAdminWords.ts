@@ -11,10 +11,12 @@
 //   * `BOX_SETTING_FAMILIES` and `BOX_SETTING_DEFAULTS`: the box's 28 settings in the four folded families of step 4 and the
 //     defaults the form starts from; `pwa/test/testbox-admin-words.test.ts` holds the defaults to `ccd/testbox-knobs`.
 import {
-  TESTBOX_ACT_MAP, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_BOX_KEYS, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, isBoxAddress,
-  type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus,
+  TESTBOX_ACT_MAP, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, isBoxAddress,
+  type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus, type TestboxAdminSub,
 } from '../../../shared/testbox-admin';
-import { TESTBOX_PARITY_REQUIRED_SENTENCE } from '../../../shared/api';
+import { TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type NodeWire } from '../../../shared/api';
+import type { TestboxEventRow } from '../../../shared/api';
+import { boxSettingsOf } from './boxSettingsWords';
 
 /** The preflight's one code that carries a corrected access line (`fixLine`), spelled once. */
 export const FROM_MISMATCH: TestboxAdminCode = 'from-mismatch';
@@ -277,3 +279,143 @@ export function actWord(act: string): string {
 
 /** The fleet's repository, as the card offers it: GitHub's https form of a slug `_gh_repo_slug` measured (`owner/name`). */
 export const GIT_HOST_BASE = 'https://github.com/';
+
+// ---------------------------------------------------------------------------------------------------------------
+// The connected card (D-8166, TC16; spec §2.2 "Connected" and "Blocked", §2.6, §2.7, §2.9, §2.10).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The class of a folded family of settings, in the connect flow and the connected card alike. */
+export const TESTBOX_FAMILY_FOLD = 'settings-release-fold testbox-family';
+
+/** A ledger time to the minute, UTC. */
+export const utcMinuteAt = (at: number): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
+/** One ledger row as one line: its minute, the act in words, its outcome, and a closed code's sentence. No address, no secret:
+ *  a row carries none (spec §2.10). */
+export function ledgerLine(e: TestboxEventRow): string {
+  return `${utcMinuteAt(e.at)} ${actWord(e.act)} ${e.outcome}${e.code === null ? '' : ` ${codeSentence(e.code)}`}`;
+}
+
+export const TESTBOX_MANAGE_TEXT = {
+  stateLabel: 'Connection',
+  addressLabel: 'Address',
+  addressSet: 'set',
+  hostKeyLabel: 'Pinned host key',
+  hostKeyNone: 'not pinned',
+  hostKeyChanged: 'changed, not confirmed',
+  lastAct: 'Last act',
+  noActs: 'No acts yet.',
+  recent: 'Recent acts',
+  settings: 'Settings',
+  settingsClose: 'Close settings',
+  repair: 'Repair',
+  repairing: 'Repairing…',
+  replace: 'Replace',
+  disconnect: 'Disconnect',
+  applyRelease: 'Apply release to box',
+  applyingRelease: 'Applying…',
+  applyReleaseWhy: 'The box runs a different release than this fleet host. Applying it re-runs the installer from the release the box already holds.',
+  // blocked lines, one control each
+  blockedHostKey: 'The box presented a different host key than the one ccrc pinned, so every act is held. Confirm the new fingerprint, or disconnect.',
+  showNewFingerprint: 'Show the new fingerprint',
+  newFingerprintLabel: 'Host key fingerprint the box presents now',
+  confirmNewFingerprint: 'Confirm',
+  blockedAccess: 'ccrc can no longer log in to the box with its access key.',
+  showAccessLine: 'Show the access line',
+  accessWhere: "Add this line to the login user's authorized_keys on the box, then check it.",
+  accessIntro: 'Type the box address again: the card never keeps it. The key itself is unchanged.',
+  accessChecked: 'ccrc can log in to the box again.',
+  checkAccess: 'Check it',
+  blockedFailed: (what: string, sentence: string) => `${what} failed. ${sentence}`,
+  tryAgain: 'Try again',
+  // settings
+  settingsIntro: 'Only the values you change are sent. A value that is only shown as set keeps its setting until you type a new one.',
+  boxHead: 'On the box',
+  fleetHead: 'On this fleet host',
+  keepSet: 'Leave blank to keep',
+  shownSet: 'set',
+  shownNotSet: 'not set',
+  shownRefused: 'refused by its check',
+  shownUnmeasured: 'not measured',
+  shownDefault: 'default',
+  fleetNone: 'The fleet host has not reported its settings yet.',
+  boxNone: 'The box has not reported its settings yet.',
+  setInCcrcEnv: 'Set in ccrc.env',
+  pairingHead: 'Pairing',
+  pairingNote: 'Made by Connect, Replace and Disconnect only.',
+  pairingSet: 'set',
+  pairingNotSet: 'not set',
+  save: 'Save',
+  saving: 'Saving…',
+  saved: 'Saved. The values shown are what the fleet host and the box read back.',
+  nothingChanged: 'Nothing has changed.',
+  parityAgain: 'A run-shaping change means parity must run again before the switch turns on.',
+  runsNote: 'Runs are in progress on the box. A change to the box waits until none is.',
+  applyWhenIdle: 'Apply when idle',
+  waiting: 'Waiting until the box is idle.',
+  cancel: 'Cancel',
+  cancelled: 'Cancelled.',
+  // the sheet
+  replaceTitle: 'Replace the test box',
+  disconnectTitle: 'Disconnect the test box',
+  confirmReplace: 'Replace',
+  confirmDisconnect: 'Disconnect',
+  removedHead: 'This removes',
+  removedBox: 'On the box: the test service is stopped and disabled, and the push key line, the service token and the line ccrc added to authorized_keys are removed.',
+  removedFleet: 'On the fleet host: the token, the push key, the settings file ccrc wrote, the host key pin and the parity record are removed.',
+  keptHead: 'This keeps',
+  kept: "ccrc's own access key, so the next Connect shows the same line. Nothing on the box's disk is wiped.",
+  switchOff: 'The switch is turned off first. Runs in progress finish, or fall back to this host.',
+  rebuild: 'Rebuild the box rather than reuse it.',
+  replaceThen: 'Then you connect the new box, and parity must pass again.',
+  disconnected: 'Disconnected.',
+  boxSideSkipped: 'The fleet side is clean. The box could not be reached, so its side was left as it is.',
+  sheetCancel: 'Cancel',
+} as const;
+
+/** What blocks the connected card, in the order they win: a changed host key (C9), a lost access key, a failed act. */
+export type TestboxBlocked =
+  | { readonly kind: 'host-key' }
+  | { readonly kind: 'access' }
+  | { readonly kind: 'failed'; readonly sub: TestboxAdminSub; readonly phase: string | null; readonly code: string | null };
+
+/** The act subs whose failure the connected card shows as a blocked line (connect and parity belong to the flow). */
+const FAILURE_SUBS: ReadonlySet<string> = new Set(['repair', 'apply-release', 'settings-box', 'settings-fleet', 'disconnect']);
+const ACCESS_CODES: ReadonlySet<string> = new Set(['no-access-key', 'auth-refused']);
+
+/** One blocked line for a status, or null: read from the status the verb wrote, never inferred. */
+export function blockedOf(status: TestboxAdminStatus): TestboxBlocked | null {
+  if (status.hostKey === 'changed') return { kind: 'host-key' };
+  const act = status.act;
+  if (act === null || act.outcome !== 'failed') return null;
+  if (act.code !== null && ACCESS_CODES.has(act.code)) return { kind: 'access' };
+  if (!FAILURE_SUBS.has(act.sub)) return null;
+  return { kind: 'failed', sub: act.sub, phase: act.phase, code: act.code };
+}
+
+/** A setting row as the settings panel shows it: the text, and the value the input starts from. A value the card was never
+ *  sent (a path, an address or a list: the verb's display classes) starts blank, which means "keep". */
+export interface ManageRowLine { readonly shown: string; readonly original: string }
+
+export function manageRowLine(row: BoxSettingRow | undefined): ManageRowLine {
+  const M = TESTBOX_MANAGE_TEXT;
+  if (row === undefined) return { shown: M.shownUnmeasured, original: '' };
+  if (row.state === 'unmeasured') return { shown: M.shownUnmeasured, original: '' };
+  if (row.state === 'refused') return { shown: M.shownRefused, original: '' };
+  if ('value' in row && typeof row.value === 'string') return { shown: row.from === 'default' ? `${row.value} (${M.shownDefault})` : row.value, original: row.value };
+  return { shown: row.from === 'default' || row.from === 'empty' ? M.shownNotSet : M.shownSet, original: '' };
+}
+
+/** The fleet host's own settings rows, from the nodes the Settings page already polls: the first node whose role runs the
+ *  test box lane and whose box settings were read. Null when there is none, so the panel says so and offers no guess. */
+export function fleetRowsOf(nodes: readonly NodeWire[] | null | undefined): readonly BoxSettingRow[] | null {
+  for (const n of nodes ?? []) {
+    if (n.role !== 'fleet' && n.role !== 'both') continue;
+    const read = boxSettingsOf(n);
+    if (typeof read !== 'string' && read.state === 'ok') return read.doc.settings;
+  }
+  return null;
+}
+
+/** The twelve fleet-host keys the card edits, in the contract's order, in one folded family. */
+export const FLEET_EDIT_KEYS: readonly string[] = TESTBOX_FLEET_EDITABLE;

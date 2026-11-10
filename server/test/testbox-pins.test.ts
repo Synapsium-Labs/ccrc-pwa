@@ -334,6 +334,7 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'server/test/testbox-parity.test.ts', 'server/test/testbox-remote-gate.test.ts',
     'agent/test/testbox-admin-op.test.ts', 'server/test/testbox-admin-routes.test.ts',
     'pwa/src/fleet/testboxAdminWords.ts', 'pwa/src/fleet/TestBoxConnect.tsx', 'pwa/src/fleet/TestBoxConnect.test.tsx', 'pwa/test/testbox-admin-words.test.ts',
+    'pwa/src/fleet/TestBoxManage.test.tsx', 'pwa/browser/testbox-manage.browser.test.ts',
   ];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,

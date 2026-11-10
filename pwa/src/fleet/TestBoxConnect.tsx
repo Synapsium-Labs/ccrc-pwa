@@ -23,7 +23,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, Skeleton, TextInput } from '@ccrc/ui';
 import { parityArmable, TESTBOX_ADMIN_PHASES, TESTBOX_BOX_KEYS, TESTBOX_REPO_ROWS_MAX, fitsTestboxShape, isBoxAddress, isLoginUser, isSshPort,
-  type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub } from '../../../shared/testbox-admin';
+  type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub, type TestboxPhasedSub } from '../../../shared/testbox-admin';
 import type { TestboxAdminResult, TestboxEventRow } from '../../../shared/api';
 import { parseRepoRow } from '../../../shared/testbox';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
@@ -32,7 +32,7 @@ import { ApiError, api } from '../lib/api';
 import { testboxRouteText } from '../lib/refusalWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import {
-  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
+  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, TESTBOX_FAMILY_FOLD, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
   codeSentence, listenFor, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
@@ -107,15 +107,19 @@ export interface TestBoxConnectProps {
   stepUpDeps?: StepUpDeps;
   /** Tests only: the cadence while a long act runs. */
   runningPollMs?: number;
+  /** Start at step 1 with no "Connect a test box" tap first: Replace has just removed the old box (TC16, spec §2.9). */
+  begin?: boolean;
 }
 
-export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs }: TestBoxConnectProps): ReactNode {
+export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, begin = false }: TestBoxConnectProps): ReactNode {
   const admin = useTestboxAdmin({ runningPollMs });
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
   const line = useResultLine();
   const status = admin.status;
 
-  const [begun, setBegun] = useState(false);
+  const [begun, setBegun] = useState(begin);
+  // A Replace that lands while this flow is already mounted (a connected box whose parity has not passed) opens step 1 too.
+  useEffect(() => { if (begin) setBegun(true); }, [begin]);
   const [seen, setSeen] = useState<TestboxStepSeen>({});
   const [conn, setConn] = useState({ address: '', port: '22', login: 'root' });
   const [addressDone, setAddressDone] = useState(false);
@@ -129,7 +133,8 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs }: T
   const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no');
 
   const step = status === null ? 1 : (!status.addressSet && addressDone ? 2 : stepOf(status, seen));
-  const started = begun || (status !== null && (status.addressSet || status.act !== null));
+  // A box just disconnected is a card with nothing set up: its last act is not a setup in progress (TC16).
+  const started = begun || (status !== null && (status.addressSet || (status.act !== null && status.act.sub !== 'disconnect')));
 
   // The fleet's own repositories, offered once step 4 is first shown. A failed read offers nothing; the fields stay typeable.
   const offered = useRef(false);
@@ -322,7 +327,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs }: T
           <div className="testbox-connect-body">
             <p className="settings-note">{T.settingsIntro}</p>
             {BOX_SETTING_FAMILIES.map((f) => (
-              <details key={f.id} className="settings-release-fold testbox-family" data-family={f.id} open={f.id === 'network'}>
+              <details key={f.id} className={TESTBOX_FAMILY_FOLD} data-family={f.id} open={f.id === 'network'}>
                 <summary className="settings-note">{f.title}</summary>
                 <div className="testbox-form">
                   {f.keys.map((key) => (
@@ -453,7 +458,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs }: T
 }
 
 /** A state sentence with the act's button at its end (laptop and wide), or under it (phone). */
-function StateLine({ band, text, children }: { band: Band; text: string; children?: ReactNode }): ReactNode {
+export function StateLine({ band, text, children }: { band: Band; text: string; children?: ReactNode }): ReactNode {
   return (
     <div className="testbox-connect-stateline" data-testbox="connect-state" data-band={band}>
       <p className="settings-note testbox-connect-text">{text}</p>
@@ -462,17 +467,26 @@ function StateLine({ band, text, children }: { band: Band; text: string; childre
   );
 }
 
-function Field({ label, value, onChange, error, placeholder }: {
+export function Field({ label, value, onChange, error, placeholder, now, disabled, footnote, setting }: {
   label: string; value: string; onChange: (v: string) => void; error: string | null; placeholder?: string;
+  /** What the setting reads now, beside its name (the connected card's settings). */
+  now?: string;
+  disabled?: boolean;
+  /** One note under a disabled field (why it cannot be edited). */
+  footnote?: string | null;
+  /** The setting's key, for the connected card's rows. */
+  setting?: string;
 }): ReactNode {
   const id = useId();
   const errId = `${id}-err`;
   return (
-    <div className="testbox-field">
+    <div className="testbox-field" data-setting={setting}>
       <label htmlFor={id} className="settings-note">{label}</label>
-      <TextInput id={id} value={value} placeholder={placeholder} autoComplete="off" spellCheck={false}
+      {now !== undefined && <span className="settings-note testbox-setting-now" data-testbox="setting-now">{now}</span>}
+      <TextInput id={id} value={value} placeholder={placeholder} autoComplete="off" spellCheck={false} disabled={disabled}
         aria-invalid={error === null ? undefined : true} aria-describedby={error === null ? undefined : errId}
         onChange={(e) => onChange(e.target.value)} />
+      {footnote !== undefined && footnote !== null && <p className="settings-note" data-testbox="ccrc-env-note">{footnote}</p>}
       {error !== null && <p id={errId} className={SETTINGS_AMBER_NOTE} role="status">{error}</p>}
     </div>
   );
@@ -505,7 +519,7 @@ function AddressStep({ conn, setConn, size, onNext }: {
 }
 
 /** A long act's phases, each with its time once done, `running` while it runs and the failing one marked. */
-function Phases({ sub, act }: { sub: 'connect' | 'parity'; act: NonNullable<TestboxAdminStatus['act']> }): ReactNode {
+export function Phases({ sub, act }: { sub: TestboxPhasedSub; act: NonNullable<TestboxAdminStatus['act']> }): ReactNode {
   const order = TESTBOX_ADMIN_PHASES[sub];
   const done = new Map(act.phases.map((p) => [p.name, p.ms]));
   return (
