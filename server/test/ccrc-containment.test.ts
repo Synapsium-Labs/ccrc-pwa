@@ -442,7 +442,9 @@ describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ..
     expect(offenders, `ghContainedEnv called with the parent's env bare at ${offenders.join(', ')}`).toEqual([]);
   });
 
-  it('`...process.env, HOME: home` appears only at the three ccd/ccgpt-runtime spawns of the ccrc-install-*.test.ts family', () => {
+  // Two since codex-bridge Stage 4, Task 3: the third was `ccrc-install-units.test.ts`'s check that the usage unit's
+  // interpreter was the one `ccgpt-runtime python` answers, and the unit no longer names a runtime interpreter.
+  it('`...process.env, HOME: home` appears only at the two ccd/ccgpt-runtime spawns of the ccrc-install-*.test.ts family', () => {
     const counts: Record<string, string[]> = {};
     for (const f of FILES) {
       const src = read(f);
@@ -455,8 +457,8 @@ describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ..
       expect(counts[f]!.length, `${f}: ${counts[f]!.join(', ')}`).toBe(0);
     }
     const familyAt = INSTALL_FAMILY.flatMap((f) => counts[f]!);
-    expect(familyAt.length, familyAt.join(', ')).toBe(3);
-    // The three survivors run the GPT lane's binary, never ccd/ccrc.
+    expect(familyAt.length, familyAt.join(', ')).toBe(2);
+    // The two survivors run the GPT lane's binary, never ccd/ccrc.
     for (const loc of familyAt) {
       const [f, lineText] = loc.split(':');
       const line = Number(lineText);

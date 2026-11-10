@@ -92,7 +92,8 @@ venv's own python (falling back to a bare `python3`) because the real
 `litellm` package it hard-imports is virtualenv-installed, not on the
 system interpreter. This file imported LiteLLM's `Authenticator` the same
 way until codex-bridge Stage 1 Task 7, and the systemd unit's own `ExecStart`
-runs it under the Codex runtime's interpreter, `-I`. It imports nothing of
+ran it under the Codex runtime's interpreter until Stage 4 (Task 3); it now runs
+it under the system python3, `-I`. It imports nothing of
 LiteLLM now: the lane's credential is READ through ccrc's auth library (below),
 which is standard library only, so any `python3` of 3.9 or later runs it.
 
