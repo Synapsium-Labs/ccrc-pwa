@@ -2453,6 +2453,29 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (groupName, runId, why)
   );
   `,
+  // ── 52: user_version 51 -> 52 ─────────────────────────────────────────────
+  // The linking standard (D-8147): `project_linking` holds, per project, the operator's Linear team key and visibility
+  // override (`teamKey`, `override`, with who and when) and the last reading of the repository's GitHub visibility (`visibility`,
+  // the repository `slug`, whether the pull request `template` file is present, a `failReason` when the reading failed and
+  // when it was taken). The writers are `linkingStore.ts`'s `setLinking` (the operator) and `recordReading` (the PR sweep),
+  // both through `CoordStore`; which rule applies is `linking/policy.ts`'s `linkingMode` and is never stored.
+  //
+  // A NEW TABLE, nothing an older build trips on: it opens a file at `user_version 52` by rule 3 (it warns, reads as-is
+  // and migrates nothing) and never touches a table it does not know. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 51 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE project_linking (
+    project     TEXT NOT NULL PRIMARY KEY,
+    teamKey     TEXT,
+    override    TEXT CHECK (override IN ('private','public')),
+    setBy       TEXT, setAt INTEGER,
+    visibility  TEXT CHECK (visibility IN ('public','private','internal')),
+    slug        TEXT, template TEXT CHECK (template IN ('present','absent')),
+    failReason  TEXT, measuredAt INTEGER
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

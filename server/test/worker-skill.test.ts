@@ -956,3 +956,30 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
       .toBeUndefined();
   });
 });
+
+describe('the worker skill: the Linear section links by the repository\'s visibility (D-8147)', () => {
+  const linear = skill.slice(skill.indexOf('\n## Linear\n'), skill.indexOf('\n## When something is wrong')).replace(/\s+/g, ' ');
+
+  it('the Linear section reads the rule with ccrc-api linking show', () => {
+    expect(linear).toContain('**Link every pull request for ticketed work, by the repository\'s visibility.**');
+    expect(linear).toContain('~/.local/bin/ccrc-api linking show');
+    expect(linear).toContain('`mode`');
+    expect(linear).toContain('`teamKey`');
+  });
+
+  it('a failed or odd read follows the public rule', () => {
+    expect(linear).toContain('If `linking show` fails or answers anything else, follow the `public` rule.');
+  });
+
+  it('it states both arms and both keywords', () => {
+    for (const w of ['`private`', '`public` or `unknown`', 'a dispatch\'s `slug` starts `key-123-`', '`Related: KEY-123`',
+      '`Closes KEY-123`', '`Refs KEY-123`', '`Closes #<n>`', '`Refs #<n>`', 'ccrc-api linear link <REF> --json -',
+      'never write a tracker id in the repository', 'ask, and do not guess one']) {
+      expect(linear, w).toContain(w);
+    }
+  });
+
+  it('it names no tracker id of this repository', () => {
+    expect(linear).not.toMatch(new RegExp(`\\b${['CCRC', 'P'].join('')}-[0-9]`));
+  });
+});

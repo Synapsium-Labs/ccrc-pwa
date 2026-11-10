@@ -44,6 +44,7 @@
 import type { ClaimRefusal } from './box-token.js';
 import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
+import type { LinkingRefusal } from './linking.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { RunCloseRefusal } from './run-close.js';
@@ -219,7 +220,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The lease doors (delegation broker wave 5 PR8): their words and statuses are declared once, `api.ts#LEASE_DOOR_REFUSALS`.
   | LeaseDoorRefusal
   // The adoption switch's door (delegation broker wave 5 PR8b, D-8113): declared once, `delegation-adopt.ts#DELEGATION_ADOPT_REFUSALS`.
-  | DelegationAdoptRefusal;
+  | DelegationAdoptRefusal
+  // The linking standard's words (D-8147): declared once, `linking.ts#LINKING_REFUSALS`, each with its status below.
+  | LinkingRefusal;
 
 /** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
  *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
@@ -242,6 +245,15 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   ...LEASE_DOOR_REFUSALS,
   // The adoption switch's door (D-8113): three new words, CHOSEN, each with its status in `DELEGATION_ADOPT_REFUSALS`.
   ...DELEGATION_ADOPT_REFUSALS,
+  // The linking standard (D-8147): CHOSEN, not measured, new words. 400 for what the operator can retype (a team key or an
+  // override the grammar refuses), 404 for a project the box does not know, 409 for a request the project's state refuses
+  // now (the repository is public, nothing is measured yet, the template is there, no key is set, a tracker id or a
+  // ticket slug would reach a public repository).
+  'bad-team-key': 400, 'bad-override': 400, 'no-project': 404,
+  'repo-public': 409, 'repo-unmeasured': 409, 'template-exists': 409, 'no-team-key': 409, 'tracker-id-public': 409,
+  'ticket-slug-public': 409, 'override-private-public': 409,
+  // 502: the template pull request's ccd act failed (a fetch, a push or a create), with ccd's stderr beside the word.
+  'template-failed': 502,
   // 400
   'bad-request': 400, 'bad-tag': 400, 'bad-kind': 400, 'bad-account-id': 400, 'bad-attachment': 400,
   'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400,

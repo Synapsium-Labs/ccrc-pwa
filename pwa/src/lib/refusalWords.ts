@@ -6,6 +6,7 @@ import type {
 } from '../../../shared/api';
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
+import type { LinkingRefusal } from '../../../shared/linking';
 import type { RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
@@ -282,6 +283,9 @@ const API_ERROR_TEXT: Record<string, string> = {
   // sentence, where the session id is in scope anyway.
   'not-configured': 'This box does not run coordination — there is no mail store to queue a kickoff into.',
   'registry-unmeasurable': 'The session registry could not be read, so this box cannot say whether that session exists.',
+  // D-8147: the pull request and the workspace create answer it when the project's linking or the branch's commits could
+  // not be read, which the rule needs before it can say nothing carries a ticket id; the linking routes, with no store.
+  unavailable: 'This box could not do that just now, so nothing was changed or sent. Try again in a minute.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a
@@ -314,9 +318,17 @@ export const isRegistryUnmeasurable = (err: unknown): boolean =>
  *  bare message stays the floor. */
 export function apiErrorText(err: unknown): string {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
+    const code = (err.body as { error?: unknown }).error;
+    // The linking standard's words speak before any stderr (D-8147): `template-failed` carries the box's own text beside
+    // its word, and that text is never shown, only the word's fixed sentence.
+    if (typeof code === 'string' && !Object.hasOwn(API_ERROR_TEXT, code)) {
+      const named = Object.hasOwn(LINKING_NAMED_TEXT, code) ? LINKING_NAMED_TEXT[code]!(err.body as Record<string, unknown>) : null;
+      if (named !== null) return named;
+      const linking = refusalText(err, LINKING_REFUSAL_TEXT);
+      if (linking !== null) return linking;
+    }
     const stderr = (err.body as { stderr?: unknown }).stderr;
     if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
-    const code = (err.body as { error?: unknown }).error;
     if (code === 'pool-mismatch') {
       const { accountPool, projectPool } = err.body as {
         accountPool?: unknown;
@@ -339,6 +351,59 @@ export function apiErrorText(err: unknown): string {
   }
   return err instanceof Error ? err.message : String(err);
 }
+
+/**
+ * The linking standard's refusals (D-8147; `LINKING_REFUSALS`, `shared/linking.ts`) in the operator's words, one fixed
+ * sentence per word; the box's own text never reaches the screen. A `Record`, so a word the list gains without a sentence
+ * is a compile error. `apiErrorText` falls back to it, so the PR sheet, the workspace sheet and the Settings card say the
+ * same sentence for the same word.
+ */
+export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
+  'bad-team-key': 'That is not a Linear team key. A team key starts with a capital letter and has up to 16 capital letters, digits or underscores, like KEY.',
+  'bad-override': 'The server did not accept that visibility. Choose Automatic, Private or Public.',
+  'no-project': 'The server does not know that project. Reload the list and try again.',
+  'repo-public': 'This repository is public, so it takes no ticket id and no template pull request. Nothing was opened.',
+  'repo-unmeasured': "ccrc has not read this repository's visibility yet. Try again in a few minutes.",
+  'template-exists': 'This repository already has a pull request template. Nothing was opened.',
+  'no-team-key': "Set this project's Linear team key first, then open the template pull request.",
+  'tracker-id-public': 'This repository is public: remove the ticket id from the title and body. Link the ticket from Linear instead.',
+  'ticket-slug-public': 'This repository is public, so a workspace name cannot be just a ticket id. Name the workspace in words.',
+  'template-failed': 'The template pull request could not be opened. Nothing was changed. Try again.',
+  'override-private-public': 'GitHub reads this repository as public, so it cannot be set to Private: a private rule would write ticket ids into a public repository. Choose Automatic or Public.',
+};
+
+/** The words the linking POST routes answer beside the fixed table (D-8147): not in `LINKING_REFUSAL_TEXT`, because
+ *  `bad-request` belongs to the upload and kickoff translators, which read `apiErrorText`'s output as a key. The Settings
+ *  card and the add-project sheet read them through `linkingErrorText`. */
+export const LINKING_ROUTE_TEXT: Readonly<Record<'write-failed' | 'bad-request', string>> = {
+  'write-failed': 'The server could not save that. Nothing was changed. Try again.',
+  'bad-request': 'The server did not accept that request. Reload the page and try again.',
+};
+
+/** A linking route's failure in words: the route words first, then every other refusal's sentence. */
+export const linkingErrorText = (err: unknown): string => refusalText(err, LINKING_ROUTE_TEXT) ?? apiErrorText(err);
+
+/** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
+ *  code). `null`: the answer did not carry it, so the fixed sentence above is what is said. */
+const LINKING_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {
+  /** The PR sheet: "This repository is public: remove KEY-123 from the title and body. Link the ticket from Linear instead." */
+  'tracker-id-public': (body) => {
+    const ids = Array.isArray(body['ids']) ? body['ids'].filter((i): i is string => typeof i === 'string' && /^[A-Z][A-Z0-9_]{0,15}-\d{1,9}$/.test(i)) : [];
+    if (ids.length === 0) return null;
+    // The head branch carries the id (the workspace was named before the project was known to be public): no edit of the
+    // sheet fixes it, so the sentence says what does.
+    const unread = body['mode'] === 'unknown';
+    if (body['in'] === 'branch') {
+      if (unread) return `ccrc has not read this repository's visibility yet, and this workspace's branch carries ${ids.join(', ')}, so it will not open the pull request. Try again in a few minutes, or set the visibility in Settings.`;
+      return `This repository is public and this workspace's branch is named for ${ids.join(', ')}, so ccrc will not open the pull request. Add a new workspace named in words and move the work there.`;
+    }
+    if (body['in'] === 'commits') {
+      return `${unread ? "ccrc has not read this repository's visibility yet, and a" : 'This repository is public and a'} commit on this branch names ${ids.join(', ')}, so ccrc will not open the pull request. Reword that commit first.`;
+    }
+    if (unread) return `ccrc has not read this repository's visibility yet, so ${ids.join(', ')} stays out of the pull request. Try again in a few minutes, or set the visibility in Settings.`;
+    return `This repository is public: remove ${ids.join(', ')} from the title and body. Link the ticket from Linear instead.`;
+  },
+};
 
 /**
  * `POST /api/sessions/:id/kickoff`'s own refusals (wave-4 review, MINOR 3,

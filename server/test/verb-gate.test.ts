@@ -150,6 +150,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   prLanding: ['x', [{ id: 'x', pr: 1 }]],
   // Landing order wave 5c: `prStatePr`'s pr number is checked (`PR_NUMBER_RE`), so the default probe `'x'` would throw at load.
   prStatePr: ['x', 1],
+  // D-8147: `prTemplate` checks the team key against Linear's upper-case grammar, so the default probe `'x'` would throw at load.
+  prTemplate: ['x', 'KEY'],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather

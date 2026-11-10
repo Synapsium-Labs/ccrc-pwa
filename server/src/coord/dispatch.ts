@@ -553,6 +553,7 @@ export async function dispatchRun(
   // two calls fired together both read the same `planned` row (`coord-decide.test.ts`).
   const req = decideDispatch({ step: 'request', read: coord.run(id), brief, items, route, slug, intents,
     held: (project, keys) => coord.heldLandingIntents(project, keys),
+    linking: (project) => { try { const l = coord.linkingOf(project); return { mode: l.mode, teamKey: l.teamKey }; } catch { return null; } },
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
   const { run, body, itemTitles, routeFields: plannedRoute, routeDefaulted, childSlug, intentKeys, hold } = req.plan;

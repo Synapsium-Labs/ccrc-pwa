@@ -1492,7 +1492,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the sixty-four machine lanes the
+liveness gate reads the shipped sha out of it), the sixty-five machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -3584,6 +3584,31 @@ branch with an upstream and opens the PR; both are disabled while the session wo
 shows its title and checks with **Open on GitHub**, **Copy link** and **Refresh**; for a merged one it offers
 **Archive now** — ccrc never archives on merge — and, once archived, **Restore** or **Clean up…**. There is no
 merge button in any state: merging is a review decision, and the diff is on GitHub.
+
+### Linking PRs to Linear
+
+Every project's pull requests reach their Linear ticket by one of two rules, chosen from the repository's GitHub
+visibility. A **private** repository (or one the operator marks private) carries the ticket id: in the branch name
+(`ws/key-123-…`), in the PR body (`Closes KEY-123` when the merge meets the ticket's acceptance, `Refs KEY-123` when a
+live check is still owed) and in commits (`Related: KEY-123`); Linear's GitHub integration links and closes from those.
+A **public** repository never carries a tracker id anywhere: the PR is linked from the Linear side with `ccrc-api
+linear link <REF> --url …`, and its body cites the ticket's GitHub mirror issue (`Closes #n` or `Refs #n`). The PR sheet
+refuses a public project's title or body that names the project's own team key, and says which id to remove.
+
+The inputs are set in the console. **Settings → Security → Project linking** has one row per project: its **Team key**
+(the Linear team's key, such as `KEY`; empty clears it), the repository's **visibility** as ccrc last read it ("Private,
+read 3h ago", "Not read yet", "Couldn't read: …") with an **override** (Automatic, Private or Public) that wins over the
+reading, and whether the repository has `.github/pull_request_template.md`. For a private project with a key and no
+template the row offers **Open a template PR**: after a confirmation that names the repository and the file, ccrc opens
+a pull request on a branch of its own that adds the template. It is only ever the operator's tap, and nothing is pushed
+to the default branch. The **Add a project** sheet takes the same two things when a project is made: an optional team key
+and, for a clone, an unchecked **Open a PR adding the linking template**; a repository ccrc has not read yet says to
+open the template from the Settings row a few minutes later.
+
+ccrc reads visibility itself (`ccd repo-visibility`, one `gh api` call a project, on the PR sweep, at most one project a
+pass) and keeps a reading for a day. A repository nothing has measured is treated as public for every act that would
+write a tracker id, so a wrong guess never leaks one. Sessions read the answer with `ccrc-api linking show` (mode, team
+key, override and the reading); the worker and coordinator skills and `ccrc-linear` state the rule by that mode.
 
 ## Attention, notifications and answering
 

@@ -90,6 +90,8 @@ import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
+import { VisibilityLane } from './linking/visibilityLane.js';
+import { ProjectWalkCache, listProjects } from './lifecycle.js';
 import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
@@ -1065,6 +1067,9 @@ export class FleetWatcher {
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
+  /** D-8147: one repository-visibility reading per PR pass at most. */
+  private readonly visibilityLane = new VisibilityLane(() => this.deps);
+  private readonly projectWalk = new ProjectWalkCache();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -8420,6 +8425,17 @@ export class FleetWatcher {
     await this.runLane('pr', () => this.prPass(fleet), anyPending);
   }
 
+  /** The visibility lane's tick over EVERY listed project (the root walk and the registry's), not only those with a workspace
+   *  session: a project just added has none, and it must still be read (D-8147). Never throws. */
+  private async measureVisibility(records: readonly { project: string; workdir: string }[], now: number): Promise<void> {
+    try {
+      const listed = await listProjects(this.deps.io, this.deps.cfg, records, this.projectWalk);
+      await this.visibilityLane.tick([...new Set(listed.projects.map((p) => p.name))], now);
+    } catch (e) {
+      console.warn(`ccrc-server: visibility project list failed (${e instanceof Error ? e.message.slice(0, 120) : 'unknown'})`);
+    }
+  }
+
   private async prPass(fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
     // A refused row is never in `records`: no pr-state, no prStates key (it omits).
@@ -8519,6 +8535,7 @@ export class FleetWatcher {
         if (!proved.ok) console.warn(`ccrc-server: train prover of ${project} failed (${failureDetail(proved)})`);
       }
     }
+    void this.measureVisibility(records, now);   // D-8147: never awaited, never throws
     this.sweepMerged(records);
     this.sweepLanding(records);
   }

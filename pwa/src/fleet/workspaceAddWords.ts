@@ -11,6 +11,7 @@ import { ApiError } from '../lib/apiError';
 import { isRecord } from '../lib/wire';
 import { accountLabel } from '../lib/accounts';
 import type { RosterWire } from '../../../shared/api';
+import { LINKING_REFUSAL_TEXT } from '../lib/refusalWords';
 import { NAME_REFUSAL_TEXT, isNameRefusal, workspaceId, type NameRefusal } from '../../../shared/slug';
 
 /** The `ccd caps` tokens a 501 `unsupported` names in `needs`. */
@@ -30,6 +31,8 @@ export type AddRefusal =
   | { kind: 'bad-wrapper' }
   | { kind: 'bad-slug' }
   | { kind: 'slug-taken' }
+  /** A public project's ticket-only name (D-8147): nothing was created; the sentence is `LINKING_REFUSAL_TEXT`'s. */
+  | { kind: 'ticket-slug-public' }
   /**
    * ccd's own `<lane>:<why>`, kept whole: the sentence is built from its two halves. `leftBehind` is the server's
    * reading of ccd's EXIST clause: the refusal came after the worktree and branch were made, so they remain with no
@@ -63,6 +66,7 @@ export function classifyAddError(err: unknown): AddRefusal {
   }
   if (err.status === 409) {
     if (word === 'slug-taken') return { kind: 'slug-taken' };
+    if (word === 'ticket-slug-public') return { kind: 'ticket-slug-public' };
     if (word === 'account-refused') {
       return {
         kind: 'account-refused',
@@ -166,6 +170,7 @@ export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
     case 'slug-taken': return ctx.slug === null
       ? 'A workspace with that name already exists. Open it from the board, or change the name. Your text is kept.'
       : `${workspaceId(ctx.project, ctx.slug)} already exists. Open it from the board, or change the name. Your text is kept.`;
+    case 'ticket-slug-public': return LINKING_REFUSAL_TEXT['ticket-slug-public'];
     case 'account-refused': return r.leftBehind
       // ccd's own remedy for what it left (`cmd_ws_add`): adopt the worktree and branch onto a working account. A retry
       // of the same name reads `slug-taken`, because the slug is on disk though no row names it, so that is said too.

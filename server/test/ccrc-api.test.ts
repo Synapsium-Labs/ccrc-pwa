@@ -233,11 +233,14 @@ describe('the closed route table', () => {
     [['linear', 'update', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12'],
     [['linear', 'comment', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/comments'],
     [['linear', 'link', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/links'],
+    // The linking standard's read (D-8147): the pane's own project's team key, override and measured visibility. The identity
+    // rides the query, as the Linear rows' does, so it runs in a pane.
+    [['linking', 'show'], 'GET', '/api/linking'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
-      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || (args[0] === 'runs' && args[1] === 'review-rounds');
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'runs' && args[1] === 'review-rounds');
     if (paned) plantPane('demo-ws');
     await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -278,7 +281,8 @@ describe('the closed route table', () => {
     // Fifty-nine since `runs.review-rounds` (the coordinator's review-cap extension, D-8125).
     // Sixty since `linear.link` (D-8141).
     // Sixty-one since `runs.end-request` (D-8076, the runs rebuild's wave B6).
-    expect(keys).toHaveLength(61);
+    // Sixty-two since `linking.show` (D-8147).
+    expect(keys).toHaveLength(62);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -292,7 +296,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -461,7 +465,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
       ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
-      ['linear', 'link', 'AAA-12', '--json', '-'],
+      ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');

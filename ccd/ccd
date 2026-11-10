@@ -5747,6 +5747,24 @@ _gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated 
   esac
 }
 
+# D-8147: one `gh api repos/{slug}` read -> "<visibility>\t<default_branch>" on stdout; on failure prints ONE word
+# (`_gh_fail_reason`'s, or `unavailable` for a timeout) and returns non-zero. Bounded by `_plat_timeout`.
+_gh_repo_meta() {   # slug -> "<visibility>\t<default_branch>"
+  local errf out rc err
+  errf=$(_plat_mktemp)
+  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh api "repos/$1" --jq '[.visibility,.default_branch]|@tsv' 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 124 )); then printf '%s\n' unavailable; return 1; fi
+  if (( rc != 0 )); then _gh_fail_reason "$err"; return 1; fi
+  printf '%s\n' "$out"
+}
+
+# D-8147: the pull request template's path in a main checkout, the one definition `pr-state` and `repo-visibility` read.
+_pr_template_rel() { printf '%s\n' ".github/pull_request_template.md"; }   # the path inside a checkout
+_pr_template_file() {   # main -> the path (present or not)
+  printf '%s/%s\n' "$1" "$(_pr_template_rel)"
+}
+
 _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
                   # the answer object instead and returns non-zero. NEVER
                   # partially prints.
@@ -9174,11 +9192,13 @@ pr-admin-merge
 pr-landing
 pr-open
 pr-state
+pr-template
 pr-train-prove
 prefer
 project-add
 project-pool
 reclaim-pause
+repo-visibility
 route
 start
 stop
@@ -11660,12 +11680,124 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
     fi
   fi
   tmpl=""
-  [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
+  local tmplf; tmplf=$(_pr_template_file "$main")
+  [[ -f "$tmplf" ]] && tmpl=$(cat "$tmplf")
   # The train proof (D-7362) under the verb's budget (`_PR_TRAIN_DEADLINE`,
   # none when this is called on its own), keeping what it proves.
   _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
     "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
+}
+
+cmd_repo_visibility() {   # ccd repo-visibility --project <p>  (D-8147)
+  # One `gh api repos/{slug}` read: the repository's visibility and default branch, plus whether the main checkout holds
+  # the pull request template. rc 0 and one JSON line on an answer; rc 1 and {"reason":...} on a failure. Read-only.
+  [[ $# -eq 2 && $1 == --project ]] || die "usage: ccd repo-visibility --project <p>"
+  _ws_project_valid "$2" || die "bad project"
+  local main="$PROJECTS_ROOT/$2" slug meta vis branch tmpl=absent
+  slug=$(_gh_repo_slug "$main") || { printf '{"reason":"no-remote"}\n'; return 1; }
+  meta=$(_gh_repo_meta "$slug") || { printf '{"reason":"%s"}\n' "$meta"; return 1; }
+  [[ "$meta" == *$'\t'* ]] || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  vis=${meta%%$'\t'*}; branch=${meta#*$'\t'}
+  case "$vis" in public|private|internal) ;; *) printf '{"reason":"bad-answer"}\n'; return 1 ;; esac
+  [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  [[ -f "$(_pr_template_file "$main")" ]] && tmpl=present
+  printf '{"slug":"%s","visibility":"%s","defaultBranch":"%s","template":"%s"}\n' "$slug" "$vis" "$branch" "$tmpl"
+}
+
+cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
+  # A branch and a pull request that add the pull request template to a PRIVATE repository, on the operator's tap. Fixed
+  # arity. Never a push to the default branch (the one ref it creates is `refs/heads/ccrc/linking-template`, created and
+  # never moved), refused on a public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a
+  # refusal. Every write happens on GitHub through `gh api`: ccd writes no object, ref or file in any checkout (`_gh_api` only keeps
+  # a `_plat_mktemp` stderr scratch file for the length of one call and removes it).
+  [[ $# -eq 4 && $1 == --project && $3 == --team ]] || die "usage: ccd pr-template --project <p> --team <KEY>"
+  _ws_project_valid "$2" || die "bad project"
+  [[ "$4" =~ ^[A-Z][A-Z0-9_]{0,15}$ ]] || die "bad team key"
+  local main="$PROJECTS_ROOT/$2" team=$4 slug meta vis def rows rc reason tip
+  slug=$(_gh_repo_slug "$main") || { printf '{"reason":"no-remote"}\n'; return 1; }
+  meta=$(_gh_repo_meta "$slug") || { printf '{"reason":"%s"}\n' "$meta"; return 1; }
+  vis=${meta%%$'\t'*}; def=${meta#*$'\t'}
+  [[ "$meta" == *$'\t'* && "$def" =~ ^[A-Za-z0-9._/-]+$ ]] || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  case "$vis" in private|internal) ;; public) printf '{"reason":"repo-public"}\n'; return 1 ;; *) printf '{"reason":"bad-answer"}\n'; return 1 ;; esac
+  # An open PR from the branch is answered, not duplicated.
+  rows=$(_gh_pr_list "$slug" ccrc/linking-template); rc=$?
+  if (( rc != 0 )); then reason="${rows##*\"reason\":\"}"; printf '{"reason":"%s"}\n' "${reason%%\"*}"; return 1; fi
+  _gh_rows_ok "$rows" || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  if printf '%s' "$rows" | python3 -c 'import json, sys
+sys.exit(0 if any(r.get("state") == "OPEN" for r in json.load(sys.stdin)) else 1)'; then printf '%s\n' "$rows"; return 0; fi
+  # The tip is read once and the template is looked for AT that sha, so the two reads cannot straddle a push to $def.
+  tip=$(_gh_api "repos/$slug/git/ref/heads/$def" --jq .object.sha); rc=$?
+  (( rc == 0 )) || die "could not read $def on GitHub (${tip:-not-found}) — nothing was created"
+  [[ "$tip" =~ ^[0-9a-f]{40,64}$ ]] || die "could not read $def on GitHub (bad-answer) — nothing was created"
+  reason=$(_gh_api "repos/$slug/contents/$(_pr_template_rel)?ref=$tip" --jq .path); rc=$?
+  if (( rc == 0 )); then printf '{"reason":"template-exists"}\n'; return 1; fi
+  (( rc == 2 )) || die "could not read the template on $def ($reason) — nothing was created"
+  _pr_template_open "$slug" "$def" "$team" "$tip"
+}
+
+# One `gh api` call under the GitHub timeout: stdout on rc 0; rc 2 and nothing when GitHub answers 404; rc 1 and ONE
+# reason word (`_gh_fail_reason`'s, `unavailable` for a timeout, `forbidden` for a non-rate-limit 403, `conflict` for a 409 or
+# "already exists", `rejected` for any other 422) otherwise. The linking verbs' only GitHub reader/writer.
+_gh_api() {   # gh-api-args... -> stdout
+  local errf out rc err
+  errf=$(_plat_mktemp)
+  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh api "$@" 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 0 )); then printf '%s\n' "$out"; return 0; fi
+  if (( rc == 124 )); then printf '%s\n' unavailable; return 1; fi
+  case "$err" in *"HTTP 404"*|*"Not Found"*) return 2 ;; esac
+  # Two writes' refusals that `_gh_fail_reason` would misname for a write: a 403 that is not a rate limit is a missing
+  # permission (it would read `rate-limit`), and a 422 "already exists" / 409 is a concurrent run having got there first
+  # (it would read `error`). Reads and rate-limit 403s still go through `_gh_fail_reason`.
+  case "$err" in
+    *"rate limit"*) ;;
+    *"HTTP 403"*) printf '%s\n' forbidden; return 1 ;;
+  esac
+  case "$err" in
+    *"already exists"*|*"HTTP 409"*) printf '%s\n' conflict; return 1 ;;
+    *"HTTP 422"*) printf '%s\n' rejected; return 1 ;;
+  esac
+  _gh_fail_reason "$err"; return 1
+}
+
+_pr_template_open() {   # slug default-branch team default-tip -> the PR rows on stdout; returns (never dies)
+  # GITHUB-SIDE CREATION. ccd's only commit writer is the reclaim region's `_ws_reclaim_commit_tree` (its callers are
+  # pinned), so this builds no commit: it asks GitHub to create the branch at the default branch's tip and to put the
+  # template file on it, then opens the PR. A branch left by an earlier try (the PR was closed unmerged, or `gh pr create`
+  # failed) is reused, never recreated: it holds the template, so only the PR is opened. A branch without the template
+  # gets the file put on it (a commit on ccrc's own branch, never on the default branch).
+  local slug=$1 def=$2 team=$3 tip=$4 br=ccrc/linking-template rows rc reason out have=0 rel
+  rel=$(_pr_template_rel)
+  out=$(_gh_api "repos/$slug/git/ref/heads/$br" --jq .object.sha); rc=$?
+  if (( rc == 2 )); then
+    out=$(_gh_api -X POST "repos/$slug/git/refs" -f ref="refs/heads/$br" -f sha="$tip" --jq .ref) \
+      || { echo "pr-template: could not create $br ($out) — nothing was opened" >&2; return 1; }
+  elif (( rc != 0 )); then echo "pr-template: could not read $br ($out) — nothing was opened" >&2; return 1
+  else
+    out=$(_gh_api "repos/$slug/contents/$rel?ref=$br" --jq .path); rc=$?
+    case $rc in 0) have=1 ;; 2) ;; *) echo "pr-template: could not read $br ($out) — nothing was opened" >&2; return 1 ;; esac
+  fi
+  if (( have == 0 )); then
+    local content
+    content=$(printf '%s\n' \
+      "<!-- Linking: name this PR's Linear ticket so Linear links it and acts on merge. -->" \
+      "<!-- Closes $team-<n> when merging this PR meets the ticket's acceptance; Refs $team-<n> when a live check is still owed. -->" \
+      "Closes $team-" "" "## Summary" "" "## Test plan" | base64 | tr -d '\n')
+    out=$(_gh_api -X PUT "repos/$slug/contents/$rel" -f message="Add a pull request template that names the Linear ticket" \
+      -f content="$content" -f branch="$br" --jq .commit.sha) \
+      || { echo "pr-template: could not put the template on $br ($out) — nothing was opened" >&2; return 1; }
+  fi
+  _plat_timeout "$PR_GH_TIMEOUT" gh pr create --repo "$slug" --head "$br" --base "$def" \
+    --title "Add a pull request template that names the Linear ticket" \
+    --body "Adds the pull request template, so each PR names its Linear ticket." >/dev/null \
+    || { echo "pr-template: gh pr create failed — $br is on GitHub, but no PR was opened" >&2; return 1; }
+  rows=$(_gh_pr_list "$slug" "$br"); rc=$?
+  if (( rc != 0 )); then
+    reason="${rows##*\"reason\":\"}"; echo "pr-template: the PR was opened, but reading it back failed (${reason%%\"*})" >&2; return 1
+  fi
+  _gh_rows_ok "$rows" || { echo "pr-template: the PR was opened, but gh answered something that is not a list of PRs" >&2; return 1; }
+  printf '%s\n' "$rows"
 }
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]
@@ -47542,11 +47674,13 @@ case "${1:-}" in
   pr-state)  shift; cmd_pr_state "$@" ;;
   pr-landing) shift; cmd_pr_landing "$@" ;;
   pr-train-prove) shift; cmd_pr_train_prove "$@" ;;
+  repo-visibility) shift; cmd_repo_visibility "$@" ;;
+  pr-template) shift; cmd_pr_template "$@" ;;
   docs-index) shift; cmd_docs_index "$@" ;;
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

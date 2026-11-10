@@ -179,6 +179,23 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('dispatch-refused:fleetFailed candidates=');
   });
 
+  it("D-8147: a slug carrying the team's ticket is refused in a public project before any ws-add, and goes in a private one", async () => {
+    const h = await harness({ ccd: { ok: true, stderr: '' }, slug: 'key-12-fix-login', after: [{ id: 'demo-key-12-fix-login', held: null, spawnRc: 0 }] });
+    h.coord.setLinking(PROJECT, { teamKey: 'KEY', override: 'public' }, 'd', 1);
+    const out = await h.dispatch();
+    expect(out).toMatchObject({ ok: false, kind: 'bad-request', detail: expect.stringContaining('KEY-12') });
+    expect(h.ccdCalls().some((c) => c[0] === 'ws-add')).toBe(false);
+    expect(okRun(h.coord.run(h.runId))).toMatchObject({ state: 'planned', sessionId: null });
+    // a store that cannot be read refuses too, instead of going on keyless
+    vi.spyOn(h.coord, 'linkingOf').mockImplementation(() => { throw new Error('db locked'); });
+    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'registry-unmeasurable' });
+    expect(h.ccdCalls().some((c) => c[0] === 'ws-add')).toBe(false);
+    vi.restoreAllMocks();
+    h.coord.setLinking(PROJECT, { teamKey: 'KEY', override: 'private' }, 'd', 2);
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    h.cleanup();
+  });
+
   it('and ADOPTS the named one when that is what the killed ws-add left', async () => {
     const h = await harness({ ccd: { ok: false, killed: true, stderr: '' }, slug: 'task-42',
                               after: [{ id: 'demo-task-42', held: null, spawnRc: 4 }] });

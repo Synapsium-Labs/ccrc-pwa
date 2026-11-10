@@ -293,7 +293,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     appearance: ['Layout and theme'],
     notifications: ['Push notifications', 'Release announcements'],
     automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
-    security: ['Sign-in gate', 'Box token', 'Linear'],
+    security: ['Sign-in gate', 'Box token', 'Linear', 'Project linking'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
 

@@ -169,6 +169,7 @@ describe('the corpora no longer invoke curl', () => {
       'linear.search',
       'linear.statuses',
       'linear.update',
+      'linking.show',
       'mail.send',
       'peers.list',
       'runs.end-request',
@@ -383,7 +384,7 @@ describe('the client stays closed', () => {
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(61);
+    expect(routeKeys().size).toBe(62);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
@@ -557,6 +558,21 @@ describe('the Linear rows: identity in the query on every row, the body as the c
     expect(linearRows().find((r) => r.key === 'linear.workspaces')?.query).toEqual([]);
   });
 
+  it('linking show sends GET /api/linking with the pane\'s byId and byUuid', async () => {
+    const r = await run(['linking', 'show']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['GET', `/api/linking?${ID}`, '']]);
+  });
+
+  it('linking show takes no id and no query key, and a caller cannot name the identity', async () => {
+    expect(clientRoutes().find((r) => r.key === 'linking.show')).toMatchObject({ method: 'GET', path: '/api/linking', query: [] });
+    for (const extra of [['AAA-12'], ['--workspace', 'x'], ['--byId', 'neighbour'], ['--byUuid', 'u-other'], ['--project', 'other']]) {
+      const r = await run(['linking', 'show', ...extra]);
+      expect(r.status, extra.join(' ')).not.toBe(0);
+    }
+    expect(seen).toEqual([]);
+  });
+
   it('the issue verbs take --workspace and send workspace=x', async () => {
     const f = path.join(home, 'comment.json');
     fs.writeFileSync(f, '{"body":"b"}');
@@ -611,7 +627,7 @@ describe('the Linear rows: identity in the query on every row, the body as the c
 
   it('the identity is appended to the query and nowhere else: the Linear block never names the body', () => {
     const code = clientCode();
-    const at = code.indexOf('if [[ "$key" == linear.* ]]; then');
+    const at = code.indexOf('if [[ "$key" == linear.* || "$key" == linking.show ]]; then');
     expect(at, 'the Linear identity block is gone').toBeGreaterThan(-1);
     const block = code.slice(at, code.indexOf('\n  fi\n', at));
     expect(block).toContain('derive_identity');

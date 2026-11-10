@@ -4402,31 +4402,50 @@ describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R
   });
 });
 
-// ── the Linear link rule (D-8141) ──
-// Every PR a fleet session opens for ticketed work is linked to its ticket from the Linear side, in every repository,
-// with no tracker id in the public repo. The rule is stated in SKILL.md and, at the landing steps, in
-// wave-lifecycle.md §5; the `ccrc-linear` skill carries the verb. Each pin is deliberate: a reworded rule is re-pinned.
-describe('the coordinator links every ticketed PR from the Linear side (D-8141)', () => {
+// ── the Linear link rule (D-8141, by visibility D-8147) ──
+// Every PR a fleet session opens for ticketed work is linked to its ticket by the repository's visibility: a private
+// repository carries the ticket id, a public one never does and is linked from the Linear side. The rule is stated in
+// SKILL.md and, at the landing steps, in wave-lifecycle.md §5; the `ccrc-linear` skill carries the verbs. Each pin is
+// deliberate: a reworded rule is re-pinned.
+describe('the coordinator links every ticketed PR by the repository\'s visibility (D-8141, D-8147)', () => {
   const linearSkill = readFileSync(path.join(root, 'ccd/linear-skill/SKILL.md'), 'utf8');
   const lifecycle = refs('wave-lifecycle.md');
 
-  it('SKILL.md names the verb, both keywords and the ban on the tracker id', () => {
-    expect(skill).toContain('**Link every pull request you open for ticketed work.**');
+  it('SKILL.md names the read, the verb, both keywords and the ban on the tracker id', () => {
+    expect(skill).toContain('**Link every pull request you open for ticketed work, by the repository\'s visibility.**');
+    expect(skill).toContain('~/.local/bin/ccrc-api linking show');
     expect(skill).toContain('ccrc-api linear link <REF> --json -');
-    expect(skill).toContain('`Closes #<n>` when merging the');
-    expect(skill).toContain('`Refs #<n>` when a live check is still owed');
-    expect(skill).toContain('A tracker\nid never appears in a public repository');
+    expect(skill).toContain('`Closes #<n>` or `Refs #<n>`');
+    expect(skill).toContain('`Closes KEY-123`');
+    expect(skill).toContain('`Refs KEY-123`');
+    expect(skill).toContain('never write a tracker id in the repository');
   });
 
-  it('the landing steps repeat it, and the verb is one the closed client table holds', () => {
-    expect(lifecycle).toContain('**Link the PR to its ticket, once, before it lands.**');
+  it('a failed or odd read follows the public rule, in all three places', () => {
+    const say = 'If `linking show` fails or answers anything else, follow the `public` rule.';
+    for (const [where, text] of [['SKILL.md', skill], ['wave-lifecycle.md', lifecycle], ['linear skill', linearSkill]] as const) {
+      expect(text.replace(/\s+/g, ' '), where).toContain(say);
+    }
+  });
+
+  it('the landing steps repeat it, and the verbs are ones the closed client table holds', () => {
+    expect(lifecycle).toContain('**Link the PR to its ticket, once, before it lands, by the repository\'s visibility.**');
+    expect(lifecycle).toContain('ccrc-api linking show');
     expect(lifecycle).toContain('ccrc-api linear link <REF> --json -');
-    expect(lifecycle).toContain('`Closes #<n>` when the merge meets the ticket\'s acceptance, `Refs #<n>`');
+    expect(lifecycle).toContain('`Closes #<n>` or `Refs #<n>`');
     expect(clientRoutes().map((r) => r.key)).toContain('linear.link');
+    expect(clientRoutes().map((r) => r.key)).toContain('linking.show');
     expect(linearSkill).toContain('| `linear link <REF> --json <f>` |');
   });
 
-  it('none of the three states a Linear ticket id (the repository is public)', () => {
+  it('the dispatch slug carries the ticket only on a private project', () => {
+    for (const text of [skill, lifecycle].map((t) => t.replace(/\s+/g, ' '))) {
+      expect(text).toContain('a dispatch\'s `slug` starts `key-123-`');
+      expect(text).toMatch(/`public` or `unknown`.*never write a tracker id|`public` or `unknown`: the PR is linked/);
+    }
+  });
+
+  it('none of the three states a Linear ticket id of this repository (the repository is public)', () => {
     for (const text of [skill, lifecycle, linearSkill]) expect(text).not.toMatch(new RegExp(`\\b${['CCRC', 'P'].join('')}-[0-9]`));
   });
 });

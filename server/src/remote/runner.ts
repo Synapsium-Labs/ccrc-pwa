@@ -44,6 +44,14 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // `PR_TRAIN_PROVE_TIMEOUT` on train records, over at most `PR_TRAIN_PROVE_MAX` members. Its own row, so the sweep's
   // `pr-state` bound (held inside `coordMutex` by `--session`) is not raised; `pr-timeout-budget.test.ts` sums it.
   'pr-train-prove': 40_000,
+  // D-8147: `repo-visibility --project` makes one `gh api` call (`PR_GH_TIMEOUT`, 8 s).
+  'repo-visibility': 15_000,
+  // D-8147: `pr-template --project` makes up to NINE bounded gh calls, all `PR_GH_TIMEOUT` plus the kill grace: the repository
+  // read, the branch's PR rows, the default branch's tip, the template there, the branch ref, the ref POST (or the template
+  // read on the branch), the file PUT, `gh pr create` and the PR rows read back. Nine at 8 s + 3 s grace is 99 s, so the
+  // bound is 100 s; `pr-timeout-budget.test.ts` sums it. A kill mid-sequence is recoverable: the retry reuses the branch
+  // and puts the template on it if it is missing.
+  'pr-template': 100_000,
   // Same reach as pr-state: it shells out to `git ls-remote` against origin
   // before it will rename. Without an entry it silently inherits the flat
   // 90 s, which is nine naming lanes' worth. It makes ONE network call, so it

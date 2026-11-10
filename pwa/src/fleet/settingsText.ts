@@ -386,6 +386,13 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.box, title: 'Linear',
       purpose: 'Linear keys let every session on this fleet read and write Linear through ccrc, and show real ticket titles. Add one key for each Linear workspace. Sessions never see a key.',
     },
+    // The Project linking card (the linking standard, D-8147) follows Linear: a private repository carries the ticket id
+    // in its branch, pull request and commits; a public one never does. Its rows and controls are
+    // `ProjectLinkingCard.tsx`'s.
+    linking: {
+      scope: SETTINGS_SCOPE.box, title: 'Project linking',
+      purpose: 'How each project\'s pull requests reach their Linear ticket. A private repository carries the ticket id in its branch, pull request and commits. A public one never does: the pull request is linked from Linear instead.',
+    },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
 

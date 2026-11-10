@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 48 id-taking calls across 15 files.
+// THE CLAIM: 49 id-taking calls across 15 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -49,7 +49,7 @@ const ID_BUILDERS = {
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', limitWait: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
   wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id', wsAddWorkerBase: 'no-id',
-  prStateSession: 'id', prStateProject: 'no-id', prStatePr: 'no-id', prTrainProve: 'no-id',
+  prStateSession: 'id', prStateProject: 'no-id', prStatePr: 'no-id', prTrainProve: 'no-id', repoVisibility: 'no-id', prTemplate: 'no-id',
   // D-6784: `prLanding`'s ids ride inside `<id>:<pr>` pairs the builder validates itself, never as a bare argv word.
   // The lane's ids come from the registry listing (the project's own sessions), never from a request body; the
   // call site PL-4 adds must keep it so, since this row is not checked for a gate over where its ids come from.
@@ -472,6 +472,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swap', id: 'id', origin: ['request'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/ },
   { file: 'server.ts', scope: 'GET /api/sessions/:id/pr', builder: 'prStateSession', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/pr', builder: 'prOpen', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
+  { file: 'server.ts', scope: 'POST /api/sessions/:id/pr', builder: 'prStateSession', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/archive', builder: 'wsArchive', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/restore', builder: 'wsRestore', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/forget', builder: 'forget', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
