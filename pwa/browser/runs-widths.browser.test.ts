@@ -381,6 +381,17 @@ for (const width of MATRIX.widths) {
               expect(b.left, `${b.tag} starts inside the window`).toBeGreaterThanOrEqual(0);
               if (b.tag.includes('rc-control')) expect(b.h, 'a control at the tap floor').toBeGreaterThanOrEqual(rows.tap - 1);
             }
+            // The claimant-gone group's sheet (D-8078): its longest reasons and its held runs fit the window too.
+            await page.getByTestId('run-close-claimant-gone').getByRole('button', { name: 'Turn on' }).click();
+            await page.getByTestId('run-close-sheet').waitFor({ timeout: 20_000 });
+            const goneSheet = await measure();
+            expect(goneSheet.page, 'no sideways page scroll with the claimant-gone sheet open').toBeLessThanOrEqual(0);
+            for (const b of goneSheet.boxes.filter((x) => x.tag.includes('rc-sheet') || x.tag.includes('rc-run'))) {
+              expect(b.right, `${b.tag} ends inside the window`).toBeLessThanOrEqual(goneSheet.vw);
+              if (b.tag.includes('rc-run')) expect(b.h, 'a run link at the tap floor').toBeGreaterThanOrEqual(goneSheet.tap - 1);
+            }
+            await page.getByRole('button', { name: 'Keep it in shadow' }).click();
+            await page.getByTestId('run-close-sheet').waitFor({ state: 'detached', timeout: 20_000 });
             await page.getByTestId('run-close-never-started').getByRole('button', { name: 'Turn on' }).click();
             await page.getByTestId('run-close-sheet').waitFor({ timeout: 20_000 });
             const sheet = await measure();
@@ -485,6 +496,18 @@ const RUN_CLOSE_VIEW = {
       },
     },
     { group: 'claimant-crashed', choice: 'shadow', marker: 'clear', state: 'shadow', held: null, closed7d: 0, refused7d: 0, updatedAt: 0, list: null },
+    {
+      group: 'claimant-gone', choice: 'shadow', marker: 'clear', state: 'shadow', held: null, closed7d: 1, refused7d: 2, updatedAt: 0,
+      list: {
+        would: [
+          { runId: 1801, program: 'prog-long-programme-name-that-wraps-on-a-phone', why: 'claimant-gone', at: NOW - H },
+          { runId: 1802, program: 'prog-f', why: 'claimant-stopped', at: NOW + 20 * H },
+          { runId: 1803, program: 'prog-g', why: 'name-reused', at: NOW },
+        ],
+        named: [{ runId: 1804, program: 'prog-h', why: 'busy-worker' }, { runId: 1805, program: 'prog-i', why: 'breaker-held' }],
+        now: 2, later: 1,
+      },
+    },
   ],
 };
 const ADVANCED_FIXTURE: AppFixture = {
