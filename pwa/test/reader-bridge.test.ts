@@ -3,12 +3,16 @@
 // read what it was given; the last group mounts the installed library for real (jsdom measured `MessageChannel` and
 // an iframe `srcdoc` load, both yes, at Step 0). Every page is a placeholder (`demo`, `a/b.md`); control characters
 // are built with `String.fromCharCode`.
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { frameCsp, mermaidGate, type RenderInput } from '@synapsium-labs/docserver/frame';
+import { FRAME_MANIFEST, frameCsp, mermaidGate, type RenderInput } from '@synapsium-labs/docserver/frame';
 import type { DocFrame, HostAdapters, HostLink, mountDocFrame, HiddenChar } from '@synapsium-labs/docserver/host';
 import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import type { EnumerableStoragePort } from '../src/lib/storage';
-import { readerDocKey, readerMountPlan, readerWatchdogMs, type ReaderLink } from '../src/docs/reader/policy';
+import {
+  docsDrawFor, READER_E17_MERMAID, readerDocKey, readerMountPlan, readerWatchdogMs,
+  type ReaderChrome, type ReaderE17Reading, type ReaderLink,
+} from '../src/docs/reader/policy';
 import { READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
 import { loadReaderAssets } from '../src/docs/reader/assets';
 import { mountReader, type ReaderMountInput } from '../src/docs/reader/bridge';
@@ -47,7 +51,7 @@ const STUB_ASSETS = { guard: 'g', bootstrap: 'b', enhance: 'e', css: 'c' };
 
 interface Rig {
   readonly input: { [K in keyof ReaderMountInput]: ReaderMountInput[K] };
-  readonly frame: { update: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn> };
+  readonly frame: { update: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn> };
   readonly mount: ReturnType<typeof vi.fn>;
   readonly mermaid: ReturnType<typeof vi.fn>;
   readonly options: () => { document: RenderInput; adapters: HostAdapters };
@@ -58,8 +62,10 @@ interface Rig {
 function rig(o: {
   document?: RenderInput; bytes?: number; docKey?: string | null; store?: EnumerableStoragePort | null;
   assets?: () => Promise<typeof STUB_ASSETS>; mermaid?: () => Promise<string>;
+  /** The E17 reading the deps plan with (default `does-not-hold`: on request); `'recorded'` passes no `e17` dep at all. */
+  e17?: ReaderE17Reading | 'recorded'; chrome?: ReaderChrome; onProgress?: (share: number) => void; onMermaidDrop?: () => void;
 } = {}): Rig {
-  const frame = { update: vi.fn(), setPrefs: vi.fn(), destroy: vi.fn() };
+  const frame = { update: vi.fn(), setPrefs: vi.fn(), destroy: vi.fn(), command: vi.fn() };
   const mount = vi.fn((_el: HTMLElement, _o: { document: RenderInput; adapters: HostAdapters }) => frame as unknown as DocFrame);
   const mermaid = vi.fn(o.mermaid ?? (() => Promise.resolve('MERMAID')));
   const input: ReaderMountInput = {
@@ -69,6 +75,9 @@ function rig(o: {
     title: 'b.md',
     prefs: { theme: 'auto' },
     onLink: vi.fn(), onHash: vi.fn(), copy: vi.fn(), onReady: vi.fn(), onFallback: vi.fn(),
+    ...(o.chrome === undefined ? {} : { chrome: o.chrome }),
+    ...(o.onProgress === undefined ? {} : { onProgress: o.onProgress }),
+    ...(o.onMermaidDrop === undefined ? {} : { onMermaidDrop: o.onMermaidDrop }),
   };
   const store = o.store === undefined ? fakeStore() : o.store;
   const run = () => mountReader(document.createElement('div'), input, {
@@ -76,30 +85,53 @@ function rig(o: {
     store: () => store,
     assets: o.assets ?? (() => Promise.resolve(STUB_ASSETS)),
     mermaid,
+    ...(o.e17 === 'recorded' ? {} : { e17: o.e17 ?? 'does-not-hold' }),
   });
   return { input, frame, mount, mermaid, run, options: () => mount.mock.calls[0]![1] };
 }
 
 describe('the adapters', () => {
-  it('the adapters are exactly ccrc\'s fourteen keys, with no changes or openVersion', async () => {
-    const r = rig();
-    await r.run();
-    const keys = Object.keys(r.options().adapters).sort();
-    expect(keys).toEqual(
+  it('the adapters are ccrc\'s keys for each draw and bar: the fourteen, loadMermaid after ready, features and onProgress on ccrc\'s bar', async () => {
+    const fourteen = [
+      'assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs',
+    ];
+    const rows: Array<[ReaderE17Reading, ReaderChrome, string[]]> = [
+      ['does-not-hold', 'frame-bar', fourteen],
+      ['holds', 'frame-bar', [...fourteen, 'loadMermaid']],
+      ['does-not-hold', 'host-bar', [...fourteen, 'features', 'onProgress']],
+      ['holds', 'host-bar', [...fourteen, 'features', 'loadMermaid', 'onProgress']],
+    ];
+    const literal = [
       ['assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
-    );
-    expect(keys).toHaveLength(14);
-    for (const k of ['changes', 'openVersion', 'features', 'mermaidGate']) expect(keys).not.toContain(k);
+      ['assets', 'copy', 'docKey', 'focus', 'loadMermaid', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
+      ['assets', 'copy', 'docKey', 'features', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onProgress', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
+      ['assets', 'copy', 'docKey', 'features', 'focus', 'loadMermaid', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onProgress', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
+    ];
+    expect(literal.map((l) => l.length)).toEqual([14, 15, 16, 17]);
+    for (const [n, [e17, chrome, expected]] of rows.entries()) {
+      const r = rig({ e17, chrome });
+      await r.run();
+      const keys = Object.keys(r.options().adapters).sort();
+      expect(keys).toEqual(literal[n]);
+      expect(keys).toEqual([...expected].sort());
+      for (const k of ['changes', 'openVersion', 'mermaidGate']) expect(keys).not.toContain(k);
+    }
   });
 
   it('mermaidDraw is on-request, storePrefix is ccrc:reader:v1:, focus is true', async () => {
-    const r = rig();
+    const r = rig({ e17: 'does-not-hold' });
     await r.run();
     const a = r.options().adapters;
     expect(a.mermaidDraw).toBe('on-request');
     expect(a.storePrefix).toBe('ccrc:reader:v1:');
     expect(a.storePrefix).toBe(READER_STORE_PREFIX);
     expect(a.focus).toBe(true);
+  });
+
+  it('mermaidDraw is after-ready when E17 held', async () => {
+    const r = rig({ e17: 'holds' });
+    await r.run();
+    expect(r.options().adapters.mermaidDraw).toBe('after-ready');
   });
 
   it('watchdogMs is readerWatchdogMs of the document\'s bytes', async () => {
@@ -196,6 +228,18 @@ describe('the Mermaid gate (A15/M8.20, the W8a plan\'s refinement (c))', () => {
     }
   });
 
+  it('on request, a rejected load drops the scan and reports no drop: the drop report is the lab\'s alone', async () => {
+    const dropped = vi.fn();
+    const r = rig({
+      document: docOf({ scan: { mermaid: mermaidCounts(2, 100, 200) } }),
+      mermaid: () => Promise.reject(new Error('chunk failed')), onMermaidDrop: dropped,
+    });
+    await r.run();
+    expect(r.mount).toHaveBeenCalledTimes(1);
+    expect(r.options().document.scan).toBeUndefined();
+    expect(dropped).not.toHaveBeenCalled();
+  });
+
   it('a document with no scan loads no Mermaid text', async () => {
     const r = rig();
     await r.run();
@@ -231,6 +275,110 @@ describe('the Mermaid gate (A15/M8.20, the W8a plan\'s refinement (c))', () => {
     expect(r.options().document.scan).toEqual({ mermaid: counts });
     // The bridge passes no caps of its own (the library's mount applies the gate and its maxTextSize).
     expect('mermaidGate' in r.options().adapters).toBe(false);
+  });
+});
+
+describe('Mermaid drawn after ready (the take-up plan, refinement (c))', () => {
+  const scan = { mermaid: mermaidCounts(2, 100, 200) };
+
+  it('hands the library the loader itself and awaits nothing before the mount', async () => {
+    const r = rig({ document: docOf({ scan }), e17: 'holds' });
+    await r.run();
+    expect(r.mermaid).not.toHaveBeenCalled();
+    expect(r.mount).toHaveBeenCalledTimes(1);
+    expect(r.options().adapters.loadMermaid).toBe(r.mermaid);
+    expect(r.options().adapters.assets.mermaid).toBeUndefined();
+    expect(r.options().document.scan).toEqual(scan);
+  });
+
+  it('a loader that never settles does not hold the mount, and leaves no timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig({ document: docOf({ scan }), e17: 'holds', mermaid: () => new Promise<string>(() => {}) });
+      void r.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(r.mount).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a doc over the gate is handed the loader too: the library\'s gate decides', async () => {
+    const over = { mermaid: mermaidCounts(25, 100, 2500) };
+    const r = rig({ document: docOf({ scan: over }), e17: 'holds' });
+    await r.run();
+    expect(r.options().adapters.loadMermaid).toBeDefined();
+    expect(r.options().document.scan).toEqual(over);
+    expect(r.mermaid).not.toHaveBeenCalled();
+  });
+
+  it('the D-8030 drop is never reported for the Docs reader', async () => {
+    const dropped = vi.fn();
+    const r = rig({
+      document: docOf({ scan }), e17: 'holds', onMermaidDrop: dropped,
+      mermaid: () => Promise.reject(new Error('chunk failed')),
+    });
+    await r.run();
+    expect(dropped).not.toHaveBeenCalled();
+  });
+});
+
+describe('ccrc\'s bar and the commands (the take-up plan, refinements (g), (i))', () => {
+  it('a host-bar mount turns the frame\'s bar off and trims its top space, as a fresh plain object', async () => {
+    const a = rig({ chrome: 'host-bar' });
+    await a.run();
+    const b = rig({ chrome: 'host-bar' });
+    await b.run();
+    const fa = a.options().adapters.features;
+    const fb = b.options().adapters.features;
+    expect(fa).toEqual({ chrome: { bar: false, topSpace: false } });
+    expect(Object.getPrototypeOf(fa)).toBe(Object.prototype);
+    expect(fa).not.toBe(fb);
+  });
+
+  it('a host-bar mount forwards each progress share to the input', async () => {
+    const onProgress = vi.fn();
+    const r = rig({ chrome: 'host-bar', onProgress });
+    await r.run();
+    r.options().adapters.onProgress!(0.25);
+    expect(onProgress).toHaveBeenCalledWith(0.25);
+    const none = rig({ chrome: 'host-bar' });
+    await none.run();
+    expect(() => none.options().adapters.onProgress!(1)).not.toThrow();
+  });
+
+  it('a frame-bar mount, and a mount that names no chrome, pass neither features nor onProgress', async () => {
+    for (const chrome of ['frame-bar', undefined] as const) {
+      const r = rig({ ...(chrome === undefined ? {} : { chrome }), onProgress: vi.fn() });
+      await r.run();
+      const keys = Object.keys(r.options().adapters);
+      expect(keys).not.toContain('features');
+      expect(keys).not.toContain('onProgress');
+    }
+  });
+
+  it('command forwards to DocFrame.command at once, and does nothing after destroy', async () => {
+    const r = rig();
+    const m = await r.run();
+    m.command!('jump');
+    expect(r.frame.command).toHaveBeenCalledTimes(1);
+    expect(r.frame.command).toHaveBeenCalledWith('jump');
+    m.destroy();
+    m.command!('contents');
+    expect(r.frame.command).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mount whose assets did not load has no command', async () => {
+    const r = rig({ assets: () => Promise.reject(new Error('chunk failed')) });
+    const m = await r.run();
+    expect('command' in m).toBe(false);
+  });
+
+  it('with no e17 dep, the recorded reading decides the draw', async () => {
+    const r = rig({ e17: 'recorded' });
+    await r.run();
+    expect(r.options().adapters.mermaidDraw).toBe(docsDrawFor(READER_E17_MERMAID));
   });
 });
 
@@ -381,6 +529,32 @@ describe('the installed library\'s mount, for real (jsdom)', () => {
     m.destroy();
   });
 
+  it('the installed library seeds a host-bar mount drawn after ready with the bar off, progress asked for, and no Mermaid script in its srcdoc', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const el = document.createElement('div');
+    document.body.append(el);
+    const input: ReaderMountInput = {
+      document: docOf({ scan: { mermaid: mermaidCounts(1, 10, 10) } }), bytes: 100, docKey: 'demo:sec:a/b.md', title: 'b.md',
+      prefs: { theme: 'auto' }, chrome: 'host-bar', onProgress: vi.fn(),
+      onLink: vi.fn(), onHash: vi.fn(), copy: vi.fn(), onReady: vi.fn(), onFallback: vi.fn(),
+    };
+    const m = await mountReader(el, input, { store: () => fakeStore(), e17: 'holds', mermaid: () => Promise.resolve('x') });
+    const srcdoc = el.querySelector('iframe')!.getAttribute('srcdoc')!;
+    const parsed = new DOMParser().parseFromString(srcdoc, 'text/html');
+    const seedEl = [...parsed.querySelectorAll('script')].find((s) => s.getAttribute('type') === 'application/json')!;
+    const seed = JSON.parse(seedEl.textContent ?? '{}') as {
+      features: { chrome: unknown }; bridge: { progress: unknown }; mermaid: { draw: unknown };
+    };
+    expect(seed.features.chrome).toEqual({ bar: false, topSpace: false });
+    expect(seed.bridge.progress).toBe(true);
+    expect(seed.mermaid.draw).toBe('after-ready');
+    for (const sc of parsed.querySelectorAll('script')) {
+      expect(createHash('sha256').update(sc.textContent ?? '').digest('hex')).not.toBe(FRAME_MANIFEST.mermaid.sha256);
+    }
+    expect(srcdoc.length).toBeLessThan(FRAME_MANIFEST.mermaid.chars);
+    m.destroy();
+  });
+
   it('M8.15 seed half: every key the real mount reads starts with ccrc:reader:v1:', async () => {
     const store = fakeStore({
       'ccrc-theme': 'dark', 'ccrc.fleet-snapshot.v1': '[]',
@@ -408,6 +582,7 @@ describe('the reader lab profile (reader lab plan, Task 7)', () => {
     await mountReader(document.createElement('div'), input, {
       mount: mount as unknown as typeof mountDocFrame, store: () => fakeStore(),
       assets: () => Promise.resolve(STUB_ASSETS), mermaid: () => Promise.resolve('MERMAID'),
+      e17: 'does-not-hold',
     });
     return mount.mock.calls[0]![1].adapters;
   };
@@ -420,7 +595,7 @@ describe('the reader lab profile (reader lab plan, Task 7)', () => {
     expect(Object.keys(a)).not.toContain('store');
   });
 
-  it('no profile is the Docs reader: Mermaid on request, the reader watchdog, the storage port', async () => {
+  it('no profile is the Docs reader: Mermaid on request where E17 did not hold, the reader watchdog, the storage port', async () => {
     const a = await adaptersFor(inputOf());
     expect(a.mermaidDraw).toBe('on-request');
     expect(a.watchdogMs).toBe(readerWatchdogMs(100));

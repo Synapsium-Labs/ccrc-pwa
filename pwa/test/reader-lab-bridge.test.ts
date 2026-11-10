@@ -1,24 +1,25 @@
 // The lab-only Mermaid drop signal; the ordinary reader's bridge tests live in reader-bridge.test.ts.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DocFrame, mountDocFrame } from '@synapsium-labs/docserver/host';
+import type { DocFrame, HostAdapters, mountDocFrame } from '@synapsium-labs/docserver/host';
 import type { RenderInput } from '@synapsium-labs/docserver/frame';
 import { mountReader, type ReaderMountInput } from '../src/docs/reader/bridge';
+import type { ReaderE17Reading } from '../src/docs/reader/policy';
 import { READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 const scan = { mermaid: { fences: 1, largestBytes: 10, totalBytes: 10, largestChars: 10, totalChars: 10 } };
 const assets = { guard: 'g', bootstrap: 'b', enhance: 'e', css: 'c' };
-function rig(profile: ReaderMountInput['profile'], mermaid: () => Promise<string>) {
+function rig(profile: ReaderMountInput['profile'], mermaid: () => Promise<string>, e17: ReaderE17Reading = 'does-not-hold') {
   const dropped = vi.fn();
   const input: ReaderMountInput & { onMermaidDrop: () => void } = {
     document: { result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'T', frontList: null } }, scan },
     bytes: 100, docKey: null, title: 'lab.md', prefs: { theme: 'auto' }, profile,
     onLink: vi.fn(), onHash: vi.fn(), copy: vi.fn(), onReady: vi.fn(), onFallback: vi.fn(), onMermaidDrop: dropped,
   };
-  const mount = vi.fn((_el: HTMLElement, _options: { document: RenderInput }) => ({ destroy: vi.fn(), setPrefs: vi.fn(), update: vi.fn() }) as unknown as DocFrame);
+  const mount = vi.fn((_el: HTMLElement, _options: { document: RenderInput; adapters: HostAdapters }) => ({ destroy: vi.fn(), setPrefs: vi.fn(), update: vi.fn() }) as unknown as DocFrame);
   const run = () => mountReader(document.createElement('div'), input, {
-    assets: async () => assets, mermaid, mount: mount as unknown as typeof mountDocFrame,
+    assets: async () => assets, mermaid, e17, mount: mount as unknown as typeof mountDocFrame,
   });
   return { dropped, mount, run };
 }
@@ -33,6 +34,14 @@ describe('lab Mermaid scan drop', () => {
     const ordinary = rig(undefined, async () => { throw new Error('lost'); });
     await ordinary.run();
     expect(ordinary.dropped).not.toHaveBeenCalled();
+  });
+  it('with E17 held the lab still inlines (auto), loads first and reports a drop; it is handed no loader and no bar', async () => {
+    const lab = rig('lab-draw', async () => { throw new Error('lost'); }, 'holds');
+    await lab.run();
+    expect(lab.dropped).toHaveBeenCalledTimes(1);
+    const a = lab.mount.mock.calls[0]![1].adapters;
+    expect(a.mermaidDraw).toBe('auto');
+    for (const k of ['loadMermaid', 'features', 'onProgress']) expect(Object.keys(a)).not.toContain(k);
   });
   it('signals a load that exceeds the lab deadline, and ignores a late resolution', async () => {
     vi.useFakeTimers();

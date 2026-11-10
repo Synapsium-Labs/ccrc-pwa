@@ -51,7 +51,10 @@ export const LAB_STALL_BUDGET_MS = 200;
  *  past `ready`, for a library that draws after `ready`, so the draw stays inside the window. The hostile mount stays live
  *  for LAB_SETTLE_MS under `ready`, or LAB_DRAW_SETTLE_MS under `ready-and-settle`, to observe its requests. */
 export type LabGapWindow = 'ready' | 'ready-and-settle';
-/** The window for the library this build pins. The library change that draws after `ready` flips it, in that change. */
+/** The window for the lab's own draw. `lab-draw` draws in the library's `auto` mode, where `ready` waits for every figure
+ *  (1.0.0, and 1.1.0, which added `after-ready` as a mode of its own and left `auto` as it was), so the window ends at
+ *  `ready` and times the whole draw (the library 1.1 take-up plan, refinement (d); reader-lab-window.test.ts holds the
+ *  two together). `ready-and-settle` is for a lab profile that draws after `ready`, which none does. */
 export const LAB_GAP_WINDOW: LabGapWindow = 'ready';
 
 /** The end of a timed mount's gap window: its outcome, or a settle past a `ready` outcome. */
