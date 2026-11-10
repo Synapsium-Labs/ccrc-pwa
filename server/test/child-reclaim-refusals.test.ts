@@ -6,7 +6,7 @@
 // (Task 6). The marker is written into the fixture registry directly — wave 1
 // need not be deployed for any of this to be measured.
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -203,8 +203,10 @@ describe('the coordinator is told, where it decides', () => {
     for (const code of ['`workspace-spent`', '`spent-unmeasured`']) expect(beforeSame).toContain(code);
   });
 
-  it('SKILL.md step 6 says it before the same-project arm', () => {
-    const skill = read('ccd/coordinator-skill/SKILL.md');
+  it('the skill\'s step 6 says it before the same-project arm', () => {
+    // The steps of a wave stood in SKILL.md and now live in the reference it points to: read whichever holds them.
+    const steps = 'ccd/coordinator-skill/references/wave-steps.md';
+    const skill = read(existsSync(path.join(repoRoot, steps)) ? steps : 'ccd/coordinator-skill/SKILL.md');
     const start = skill.indexOf('6. **Rule on the report**');
     expect(start, 'SKILL.md lost step 6').toBeGreaterThanOrEqual(0);
     expect(skill.slice(start, skill.indexOf('**Same project:**', start))).toContain('`workspace-spent`');
