@@ -35,8 +35,15 @@ const QUIETS = /\b(quietAtTestEnd|quietWatcher|drainWatcher)\(/;
  *  a file that registers it counts only when the name it is bound to calls that `remove(` (review 1724 F2), never for
  *  another `.remove(` in the file (review 1733 F1; D-8150). */
 const TEARDOWN_REGISTERED = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*watcherTeardown\(/g;
-const teardownRemoved = (src: string): boolean =>
-  [...src.matchAll(TEARDOWN_REGISTERED)].some(([, name]) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\.remove\\(`).test(src));
+/** A character that would make `<name>.remove(` part of a longer name or member chain (`list.remove(` is not `t.remove(`). */
+const NAME_BEFORE = /[\w$.]/;
+/** Whether `src` calls `<name>.remove(` with nothing name-like before it: a text search, so no pattern is built from it. */
+const callsRemove = (src: string, name: string): boolean => {
+  const call = `${name}.remove(`;
+  for (let at = src.indexOf(call); at !== -1; at = src.indexOf(call, at + 1)) if (at === 0 || !NAME_BEFORE.test(src[at - 1])) return true;
+  return false;
+};
+const teardownRemoved = (src: string): boolean => [...src.matchAll(TEARDOWN_REGISTERED)].some(([, name]) => callsRemove(src, name));
 const quiets = (src: string): boolean => QUIETS.test(src) || teardownRemoved(src);
 
 /** Every `.ts` file under `server/test`, relative to it, sorted. `node_modules` and fixture trees are not entered. */
