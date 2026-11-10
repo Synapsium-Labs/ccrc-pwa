@@ -8765,6 +8765,15 @@ export function blockFields(block) {
   return { gist: text === '' ? null : text, topics: topics.topics, refs, capped: gist.capped || topics.capped };
 }
 
+/** What a leaf of a transcript may have, by the transcript's agent_id (W4 addendum P2, SA7): a main-thread leaf ('') may carry a
+ *  steer receipt, and a subagent leaf (any other agent_id) never does. A steer is asked of the main thread: the card names a leaf of the
+ *  session's own copy, so no receipt is ever received for a subagent boundary, and a `<ccrc-leaf>` block a subagent's summary merely
+ *  quotes is text, never a steered gist. The receipt lookup is skipped for it and the leaf reads not-requested. A pure decider; derive.mjs's
+ *  leafFields asks it, so the rule lives here once. */
+export function leafPolicy(agentId) {
+  return { receipt: agentId === '' };
+}
+
 /** The steer receipt a leaf's span carries (§7.4 item 2): the receipt naming this leaf's id, else a generic one
  *  (leafId '') received after the previous boundary and no later than this one; null when neither. An epoch's
  *  first leaf has no lower bound. D-4685 (history-steer-receipt) */

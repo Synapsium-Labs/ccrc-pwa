@@ -16,7 +16,7 @@ import { HEADING_RE, fencedRanges, mineTokens } from '../compact-card.mjs';
 import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, capText, classifyRef, decideLeafId, directionOfSummaryRow,
   directiveFlag, eofAfterBoundary, EXACT_RECEIPT_SQL, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeBlockStatus, nodeIndexTexts,
-  parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
+  leafPolicy, parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
   secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, GIST_MAX, GIST_MIN, REPARSE_MAX_TARGETS, topicsOfColumn, stampAtOrBefore,
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx } from './store.mjs';
@@ -44,8 +44,11 @@ export function blobReadStmts(db) {
   };
 }
 
-/** The prepared statements, one set per connection. Each names its columns. A row's copies are found through
- *  (file_id, entry_id), the memberships primary key: v1 has no index on entry_id alone, on purpose. `todo` and
+/** The prepared statements, one set per connection. Each names its columns. `todo`, `firstTodo`, `lastBoundary` and `forkCandidates`
+ *  read EVERY transcript, a subagent's (agent_id <> '') as well as a main one (W4 addendum P2): a subagent boundary is a leaf, on its own
+ *  chain. The statement that picks a session's main transcripts (`parentStmts().epochTranscripts`) keeps `agent_id = ''`: fan-in's level-0
+ *  slots, and the card's lists that read them, come from it alone, so it is the one guard that keeps a subagent leaf out of a parent.
+ *  A row's copies are found through (file_id, entry_id), the memberships primary key: v1 has no index on entry_id alone, on purpose. `todo` and
  *  `firstTodo` take (low, LEAF_CRASHED_STEP, String(NODE_PARSER_VERSION)): a boundary with a crash marker at this parser
  *  version is not to do (RB5). */
 function stmts(db) {
@@ -53,18 +56,17 @@ function stmts(db) {
   if (s !== undefined) return s;
   s = {
     todo: db.prepare(`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms, b.transcript_pk AS transcript_pk,
-        t.cc_session_uuid AS cc_uuid
+        t.cc_session_uuid AS cc_uuid, t.agent_id AS agent_id
       FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id JOIN transcripts t ON t.transcript_pk = b.transcript_pk
-      WHERE b.entry_id > ? AND t.agent_id = ''
+      WHERE b.entry_id > ?
         AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.boundary_entry_id = b.entry_id)
         AND NOT EXISTS (SELECT 1 FROM derivation_state d WHERE d.step = ? AND d.version = b.entry_id AND d.cursor = ?)
       ORDER BY b.entry_id`),
     firstTodo: db.prepare(`SELECT min(b.entry_id) AS e FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk
-      WHERE b.entry_id > ? AND t.agent_id = ''
+      WHERE b.entry_id > ?
         AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.boundary_entry_id = b.entry_id)
         AND NOT EXISTS (SELECT 1 FROM derivation_state d WHERE d.step = ? AND d.version = b.entry_id AND d.cursor = ?)`),
-    lastBoundary: db.prepare(`SELECT max(b.entry_id) AS e FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk
-      WHERE t.agent_id = ''`),
+    lastBoundary: db.prepare(`SELECT max(b.entry_id) AS e FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk`),
     epochOf: db.prepare(`SELECT e.session_pk AS session_pk, e.seq AS seq, s.ccrc_id AS ccrc_id
       FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
       WHERE e.cc_session_uuid = ? AND e.confirmed_ms IS NOT NULL AND s.merged_into IS NULL
@@ -75,11 +77,11 @@ function stmts(db) {
     copySize: db.prepare('SELECT count(*) AS n FROM memberships WHERE file_id = ?'),
     /** Distinct rows over a JSON list of file_ids: the union of some copies, counted in SQLite, never in a JS Set. */
     rowsIn: db.prepare('SELECT count(DISTINCT entry_id) AS n FROM memberships WHERE file_id IN (SELECT value FROM json_each(?))'),
-    /** Main transcripts with two or more live copies, and the bytes read from them: the ones whose fork counts can
+    /** Transcripts, main or subagent, with two or more live copies, and the bytes read from them: the ones whose fork counts can
      *  change, and the cheap measure of whether they did. */
     forkCandidates: db.prepare(`SELECT f.transcript_pk AS transcript_pk, sum(f.offset) AS bytes
-      FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk
-      WHERE f.source_key = '' AND t.agent_id = ''
+      FROM ingest_files f
+      WHERE f.source_key = ''
       GROUP BY f.transcript_pk HAVING count(*) > 1`),
     copyRows: db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type,
         e.provenance AS provenance, e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms, e.model AS model,
@@ -312,7 +314,8 @@ function indexNode(db, s, id, gist, topics, refs, idx) {
  *  - No summary row, or one stored but unreadable (a tombstone, a body that is not JSON): a raw leaf (§6.1), its
  *    summary blob still recorded when the row exists.
  *  - With no steer receipt the status is not-requested, reason no-receipt (§7.4 item 2): `absent` comes only from
- *    blockStatus, on the receipt path. A raw leaf never looks a receipt up.
+ *    blockStatus, on the receipt path. A raw leaf never looks a receipt up, and neither does a subagent's leaf (lib leafPolicy: a
+ *    steer is asked of the main thread alone, W4 addendum P2, SA7), whatever its summary quotes: `b.agent_id` names its transcript.
  *  - A carried copy is counted by blockStatus' own reason. The prior gists are hashed with gistSha, the hash the
  *    block's gist gets, over the stored form; a prior gist of the leaf itself never counts. */
 function leafFields(db, ictx, kit, s, copy, b, pick, id, sessionPk, sources, budget) {
@@ -336,7 +339,7 @@ function leafFields(db, ictx, kit, s, copy, b, pick, id, sessionPk, sources, bud
     kind = 'native_leaf';
     topics = [];
     if (summaryParts(text).unclosed) counts.push(`summary_unclosed:${backend}`);
-    const receipt = pickReceipt(receiptsOf(s, b.cc_uuid), receiptWindow(copy, b, id));
+    const receipt = leafPolicy(b.agent_id).receipt ? pickReceipt(receiptsOf(s, b.cc_uuid), receiptWindow(copy, b, id)) : null;
     let steered = null;
     if (receipt !== null) {
       const blocks = parseBlocks(redactField(text, ictx.pairIdx));
@@ -452,7 +455,7 @@ function foldedOf(step) {
   return m === null ? { unspanned: 0, bytes: null } : { unspanned: Number(m[1]), bytes: Number(m[2]) };
 }
 
-/** A main transcript's fork counters (§6.1), from lib's forkCounts over what this measures on its LIVE copies:
+/** A transcript's fork counters, main or subagent (§6.1; W4 addendum P2, SA27), from lib's forkCounts over what this measures on its LIVE copies:
  *  - rows_unspanned: rows no holding copy has (they join no leaf), folded as the increase over the count already
  *    recorded;
  *  - transcript_forked: once, when it has two or more live copies and none holds every row.
@@ -481,7 +484,7 @@ function recountTranscript(db, s, transcriptPk, nowMs, bytes) {
 }
 
 /** Every boundary without its leaf, in entry order, within the run's budget (§9.2 step 6); then the fork counts
- *  of every main transcript with two or more live copies whose bytes read changed, or which gained a leaf.
+ *  of every transcript (a subagent's too) with two or more live copies whose bytes read changed, or which gained a leaf.
  *  - A throw inside the parser is deriveOne's: the leaf is written parse-failed (RB5).
  *  - A throw before a leaf can be written (span planning, an insert refused) counts parser_crash once and leaves a
  *    ('leaf-crashed', entry_id) marker at this NODE_PARSER_VERSION, in one transaction: the todo queries skip the
@@ -599,6 +602,8 @@ function parentStmts(db) {
     s = {
       maxRow: db.prepare('SELECT max(rowid) AS r FROM nodes'),
       touched: db.prepare('SELECT session_pk, epoch_seq, max(rowid) AS leaf_top FROM nodes WHERE depth = 0 AND rowid > ? AND rowid <= ? GROUP BY session_pk, epoch_seq ORDER BY leaf_top, session_pk, epoch_seq'),
+      // MAIN transcripts only (W4 addendum P2, SA8): a subagent's leaves are on their own chain and never reach fan-in, the card's slot lists
+      // or a steer. Level-0 slots come from this statement alone (epochCopySlots), and fanInLevels gains no filter of its own.
       epochTranscripts: db.prepare('SELECT t.transcript_pk AS transcript_pk FROM epochs e JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid '
         + "WHERE e.session_pk = ? AND e.seq = ? AND t.agent_id = '' ORDER BY t.transcript_pk"),
       bounds: db.prepare('SELECT entry_id, transcript_pk FROM boundaries WHERE transcript_pk = ? ORDER BY ord'),
@@ -1138,7 +1143,7 @@ export function refreshLeaf(db, ictx, nodeId, pass = { copy: null, epochs: new M
     FROM nodes WHERE node_id = ? AND depth = 0`).get(nodeId);
   if (n === undefined || n.boundary_entry_id === null) return 'skipped';
   const b = db.prepare(`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms, b.transcript_pk AS transcript_pk,
-      t.cc_session_uuid AS cc_uuid
+      t.cc_session_uuid AS cc_uuid, t.agent_id AS agent_id
     FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id JOIN transcripts t ON t.transcript_pk = b.transcript_pk
     WHERE b.entry_id = ?`).get(n.boundary_entry_id);
   if (b === undefined) return 'skipped';

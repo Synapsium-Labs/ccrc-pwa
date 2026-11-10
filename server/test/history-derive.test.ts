@@ -3,7 +3,7 @@
 // describe builds one fixture HOME, plants sessions and transcripts in the measured row shapes
 // (historyFixtures.ts's compactionSequence), spools the SessionStart line the hook would, and runs sweep.mjs as
 // the shim would; the cases then read the store read-only. Linux only (O24): it spawns the sweep.
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ import {
   makeHistoryBox, runSweep, plantSession, plantTranscript, spoolLine, openStoreRO, counters, skipOnDarwin,
   type HistoryBox,
 } from './historyHelpers.js';
-import { compactionSequence, steeredBlock, userRow, type Row } from './historyFixtures.js';
+import { compactionSequence, fixtureSummaryText, steeredBlock, userRow, type Row } from './historyFixtures.js';
 // Importing history-counters.mjs loads cli.mjs, which sets the process umask to 0o077 for this file.
 import * as ctrMod from '../../deploy/history-counters.mjs';
 import {
@@ -19,6 +19,9 @@ import {
   parentId, parentRollup, parseBlocks, blockStatus, nodeBlockStatus, gistSha, GIST_MIN, TOPICS_MAX,
 } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, withTx, getStep, setStep } from '../../ccd/history/store.mjs';
+import {
+  agentKeys, agentRig, armed, counterOf, holdAgainIn, plantAgentTree, T0 as RIG_T0, variantsOf, type AgentRig,
+} from './historyAgentFixtures.js';
 
 skipOnDarwin();
 
@@ -2657,4 +2660,175 @@ describe('a parser throw on the node path never wedges parent derivation (W3-4 r
     expect(row.gist, 'the rollup gist, the first sentences of the children').toBe(Array.from({ length: 8 }, (_, k) => LEAF_GIST(k)).join(' '));
     expect(counters(box)['node_parse_crash']).toBe(1);
   });
+});
+
+// ── W4 addendum P2, Task 2 (plan 2026-11-09, W4-2): a subagent boundary is a leaf on its own chain, with no receipt and no card ──
+// SA7 (no receipt), SA8 (own chain), SA9 (no card or steer act), failure row 24 (a summary-less subagent boundary is a raw leaf) and
+// SA27 (forked copies of one subagent transcript, and a true conflict). In-process through historyAgentFixtures.ts' rig: a scan tick
+// ingests the subagent files, then deriveNodes runs on the rig's store as the pass runs it (the tick's step 6).
+describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum P2; SA7, SA8, SA9, SA27, failure row 24)', () => {
+  const SLUG_A = '-home-u-tree';
+  const PARENT_A = 'b2000000-0000-4000-8000-000000000001';
+  const SINCE_A = { sinceMs: RIG_T0 };
+  /** Every row a day before the rig's clock, so a stored row is final past the raw-leaf grace. */
+  const DAY_BEFORE = RIG_T0 - 86_400_000;
+  const rigs: AgentRig[] = [];
+  const rigOf = async (prefix: string): Promise<AgentRig> => { const r = await agentRig(prefix); rigs.push(r); return r; };
+  afterAll(() => { for (const r of rigs.splice(0)) { try { closeWriter(r.db); } catch { /* already closed */ } } });
+
+  interface SweepA { makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>; newBudget(): object }
+  interface DeriveA { deriveNodes(db: unknown, ictx: object, budget: object): void }
+  /** deriveNodes as the tick's step 6 runs it, `passes` times (a boundary that waited is derived by a later pass). */
+  async function derive(rig: AgentRig, passes = 2): Promise<void> {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as DeriveA;
+    for (let i = 0; i < passes; i += 1) {
+      const ictx = S.makeIngestCtx(rig.box.home, rig.box.homes, RIG_T0 + 3_600_000, null);
+      D.deriveNodes(rig.db, ictx, S.newBudget());
+    }
+  }
+  interface LeafA { node_id: string; kind: string; status: string; agent_id: string; boundary_uuid: string }
+  /** Every leaf, the subagent ones after the main thread's, each in boundary order. */
+  const leavesA = (rig: AgentRig): LeafA[] => (rig.db.prepare(
+    `SELECT n.node_id AS node_id, n.kind AS kind, n.status AS status, t.agent_id AS agent_id, e.uuid AS boundary_uuid
+     FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk JOIN entries e ON e.entry_id = n.boundary_entry_id
+     WHERE n.depth = 0 ORDER BY t.agent_id, n.boundary_entry_id, n.node_id`).all() as unknown as LeafA[]).map((r) => ({ ...r }));
+  const parentsOf = (rig: AgentRig, ids: readonly string[]): Array<string | null> => ids.map((id) =>
+    (rig.db.prepare('SELECT node_id FROM node_children WHERE child_id = ?').get(id) as { node_id: string } | undefined)?.node_id ?? null);
+  const childrenOfEveryParent = (rig: AgentRig): string[][] => (rig.db.prepare('SELECT DISTINCT node_id FROM node_children ORDER BY node_id').all() as Array<{ node_id: string }>)
+    .map((p) => (rig.db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord').all(p.node_id) as Array<{ child_id: string }>).map((c) => c.child_id));
+  const seqOf = (n: number, seed: number, o: Partial<Parameters<typeof compactionSequence>[0]> = {}): Seq =>
+    compactionSequence({ n, trigger: 'manual', seed, sessionId: PARENT_A, startMs: DAY_BEFORE, ...o });
+  const plantA = (rig: AgentRig, agentRows: Row[], o: { main?: Row[] | false } = {}): Record<string, string> =>
+    plantAgentTree(rig, {
+      slug: SLUG_A, uuid: PARENT_A, agents: [{ id: 'a', rows: agentRows }], parent: 'epoch',
+      ...(o.main === false ? { main: false } : o.main === undefined ? {} : { mainRows: o.main }),
+    }, SINCE_A).paths;
+  const quoted = (k: number): string => [
+    fixtureSummaryText(k), '<ccrc-leaf v="1">', 'gist: A quoted gist the summary carries, which no steer asked for on a subagent.',
+    'Expand for details about: quoted, fixture', '</ccrc-leaf>',
+  ].join('\n');
+
+  it('SA7 no receipt on a subagent leaf: a summary quoting a whole <ccrc-leaf> block and a receipt planted for the parent session still read not-requested', async () => {
+    const rig = await rigOf('ccrc-hist-sa7-');
+    plantA(rig, seqOf(1, 0x702, { summaryText: quoted }).rows, { main: seqOf(1, 0x701, { summaryText: quoted }).rows });
+    // a generic receipt for the parent session, before both boundaries: the main leaf's window holds it, and a subagent leaf's would
+    rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES ('sa7-r1', 'lane-a-e1', ?, '', ?)").run(PARENT_A, DAY_BEFORE - 1000);
+    await rig.tick(armed, { scan: true });
+    expect(rig.db.prepare("SELECT count(*) AS n FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> ''").get(), 'CONTROL: ingest stored the subagent boundary').toEqual({ n: 1 });
+    await derive(rig);
+    const all = leavesA(rig);
+    expect(all.map((l) => l.agent_id === '' ? 'main' : 'agent')).toEqual(['main', 'agent']);
+    expect(all[0], 'CONTROL: the parent\'s own leaf reads the planted receipt, so it is one a leaf takes').toMatchObject({ kind: 'steered_leaf' });
+    expect(all[1]).toMatchObject({ status: 'not-requested', kind: 'native_leaf' });
+  }, 120_000);
+
+  it('SA8 own chain: 8 main and 8 subagent leaves of one session; the subagent leaves have no parent, and no parent mixes them with main leaves', async () => {
+    const rig = await rigOf('ccrc-hist-sa8-');
+    plantA(rig, seqOf(8, 0x802).rows, { main: seqOf(8, 0x801).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const all = leavesA(rig);
+    const mainLeaves = all.filter((l) => l.agent_id === '').map((l) => l.node_id);
+    const agentLeaves = all.filter((l) => l.agent_id !== '').map((l) => l.node_id);
+    expect([mainLeaves.length, agentLeaves.length], 'CONTROL: both threads derive all 8 leaves').toEqual([8, 8]);
+    expect(parentsOf(rig, mainLeaves).every((p) => p !== null), 'CONTROL: the main thread\'s 8 make a parent').toBe(true);
+    expect(parentsOf(rig, agentLeaves)).toEqual(Array(8).fill(null));
+    const kids = childrenOfEveryParent(rig);
+    expect(kids.length, 'CONTROL: one parent exists').toBe(1);
+    expect(kids.flat().some((id) => agentLeaves.includes(id))).toBe(false);
+    for (const children of kids) {
+      const kinds = new Set(children.map((id) => (mainLeaves.includes(id) ? 'main' : 'agent')));
+      expect(kinds.size, 'no parent mixes subagent and main leaves').toBe(1);
+    }
+  }, 240_000);
+
+  it('a subagent boundary whose anchor names no row is a raw leaf, as on main (failure row 24; DM25)', async () => {
+    const rig = await rigOf('ccrc-hist-row24-');
+    const agent = seqOf(1, 0xb02, { dropSummary: true });
+    plantA(rig, agent.rows, { main: seqOf(1, 0xb01, { dropSummary: true }).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const all = leavesA(rig);
+    expect(all.map((l) => ({ main: l.agent_id === '', kind: l.kind, status: l.status }))).toEqual([
+      { main: true, kind: 'raw_leaf', status: 'not-requested' },
+      { main: false, kind: 'raw_leaf', status: 'not-requested' },
+    ]);
+    expect(all[1]!.boundary_uuid).toBe(agent.boundaryUuids[0]);
+  }, 120_000);
+
+  it('SA9 no card or steer side effects: a subagent boundary is never measured, and no card or steer file is written, consumed or removed for it', async () => {
+    const rig = await rigOf('ccrc-hist-sa9-');
+    // The parent's main transcript is not in the store (only its subagent is), so a card step that read an agent row as the session's
+    // own would find a copy and a boundary to predict from; with the main transcript present the main one hides that.
+    plantA(rig, seqOf(1, 0x901).rows, { main: false });
+    await rig.tick(armed, { scan: true });
+    const P = historyPaths(rig.box.home);
+    const id = 'lane-a-e1';
+    for (const dir of ['card', 'steer']) fs.mkdirSync(path.join(P.root, dir, id), { recursive: true });
+    fs.mkdirSync(P.reg, { recursive: true });
+    fs.writeFileSync(path.join(P.reg, `${id}.uuid`), PARENT_A);
+    const C = (await import('../../ccd/history/card.mjs')) as unknown as {
+      measureCardDelivery(db: unknown, ictx: object, budget: object): object;
+      consumeAndWriteCards(db: unknown, ictx: object, budget: object): object;
+    };
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const measureAt = RIG_T0 + 7_200_000;
+    // the measure's first pass sets its cursor to the newest node there is: none yet, so a leaf derived next is above it
+    C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    await derive(rig);
+    expect(leavesA(rig).map((l) => l.agent_id !== ''), 'CONTROL: the subagent boundary has its leaf').toEqual([true]);
+    const eofMs = Number((rig.db.prepare("SELECT max(f.eof_ms) AS e FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.agent_id <> ''").get() as { e: number }).e);
+    expect(eofMs, 'CONTROL: the subagent copy was read to its end at a tick this pass can name').toBeGreaterThan(0);
+    const tree = (): string[] => ['card', 'steer'].flatMap((d) => fs.readdirSync(path.join(P.root, d), { recursive: true, encoding: 'utf8' }).map((n) => `${d}/${n}`)).sort();
+    const rows = (sql: string): unknown[] => rig.db.prepare(sql).all().map((r) => ({ ...r }));
+    const state = (): unknown => ({
+      tree: tree(),
+      counters: rows('SELECT name, n FROM counters ORDER BY name'),
+      steps: rows('SELECT step, version, cursor FROM derivation_state ORDER BY step, version'),
+      breaker: rows('SELECT key, consecutive_fail, open_until_ms FROM breaker ORDER BY key'),
+    });
+    const before = state();
+    const measured = C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    const cards = C.consumeAndWriteCards(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, eofMs, null), S.newBudget());
+    expect(measured).toEqual({ measured: 0, served: 0, mismatch: 0, waiting: 0 });
+    expect(cards).toEqual({ written: 0, consumed: 0, deleted: 0 });
+    expect(state(), 'no file under card/ or steer/, no counter, no cursor and no breaker row changed').toEqual(before);
+  }, 120_000);
+
+  it('SA27 forked copies of one subagent transcript, and a true conflict: every row stored, transcript_forked counted, each leaf from the copy holding its boundary, one entry with one variant', async () => {
+    const rig = await rigOf('ccrc-hist-sa27-');
+    const text = (tag: number) => (k: number): string => fixtureSummaryText(k + tag);
+    const shared = seqOf(1, 0xc01, { summaryText: text(100) });
+    const onlyA = seqOf(1, 0xc02, { summaryText: text(200) });
+    const onlyB = seqOf(1, 0xc03, { summaryText: text(300) });
+    // the same first row, a true conflict: one message uuid with two bodies
+    const conflictUuid = String(shared.rows[0]!['uuid']);
+    const changed = shared.rows.map((r, i): Row => (i !== 0 ? r : { ...r, message: { role: 'user', content: [{ type: 'text', text: 'the same uuid, a different body' }] } }));
+    const paths = plantA(rig, [...shared.rows, ...onlyA.rows], { main: false });
+    const second = holdAgainIn(paths['a']!, rig.box.homes[0]!, rig.box.homes[1]!, 'copy');
+    fs.writeFileSync(second, [...changed, ...onlyB.rows].map((r) => `${JSON.stringify(r)}\n`).join(''));
+    await rig.tick(armed, { scan: true });
+    await rig.tick(armed, { scan: true });
+    const key = agentKeys(rig.db)[0]!;
+    expect(agentKeys(rig.db), 'CONTROL: one subagent transcript, held twice').toEqual([key]);
+    expect(rig.db.prepare("SELECT count(*) AS n FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.agent_id = ? AND f.source_key = ''").get(key)).toEqual({ n: 2 });
+    const stored = (u: string): number => Number((rig.db.prepare('SELECT count(*) AS n FROM entries WHERE uuid = ?').get(u) as { n: number }).n);
+    for (const u of [...shared.rows, ...onlyA.rows, ...onlyB.rows].map((r) => String(r['uuid']))) expect(stored(u), `row ${u} stored once`).toBe(1);
+    // The store keeps BOTH bodies of a conflicted uuid as entry_variants rows (sweep.mjs inserts the entry's earlier body and the new one
+    // together), so "one entry and one entry_variants row" of the addendum is, measured, one entry and one variant row per body. Nothing is dropped.
+    const bodies = rig.db.prepare('SELECT v.blob_id AS b FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE e.uuid = ? ORDER BY v.blob_id').all(conflictUuid) as Array<{ b: number }>;
+    expect(bodies.length, 'the conflicted uuid keeps one variant row per body').toBe(2);
+    expect(variantsOf(rig.db, key), 'and no other uuid has one: the shared prefix and each copy\'s own rows agree').toBe(2);
+    const entryBlob = Number((rig.db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(conflictUuid) as { b: number }).b);
+    expect(bodies.map((x) => Number(x.b)), 'the entry\'s own body is one of the two').toContain(entryBlob);
+    await derive(rig);
+    expect(counterOf(rig.db, 'transcript_forked'), 'neither copy holds every row').toBeGreaterThan(0);
+    const leaves = leavesA(rig);
+    expect(leaves.map((l) => l.boundary_uuid).sort()).toEqual([shared.boundaryUuids[0]!, onlyA.boundaryUuids[0]!, onlyB.boundaryUuids[0]!].sort());
+    expect(leaves.every((l) => l.agent_id === key && l.kind === 'native_leaf')).toBe(true);
+    const summaryBlob = (u: string): number => Number((rig.db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(u) as { b: number }).b);
+    const leafOf = (u: string): { summary_blob_id: number } => rig.db.prepare('SELECT n.summary_blob_id FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id WHERE e.uuid = ?').get(u) as { summary_blob_id: number };
+    for (const sq of [shared, onlyA, onlyB]) expect(Number(leafOf(sq.boundaryUuids[0]!).summary_blob_id), `the leaf of ${sq.boundaryUuids[0]} reads its own copy's summary`).toBe(summaryBlob(sq.summaryUuids[0]!));
+  }, 240_000);
 });
