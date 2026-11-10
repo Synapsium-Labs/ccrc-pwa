@@ -12669,4 +12669,73 @@ describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
   ] as const)('holdingShape(%j) is %s', (lists, want) => {
     expect(libCensus.holdingShape(lists.map((l) => [...l]))).toBe(want);
   });
+
+  // review 1749 F3, F4: the identity rule ingest and the census share, and the census's cause orders, decided in L1
+  const ROW = { transcriptUuid: 'u1', agentKey: 'a1', birthNs: '1000', headSha: 'h1' };
+  it.each([
+    ['all agree', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h1' }, true],
+    ['another uuid', { row: ROW, pathUuid: 'u2', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h1' }, false],
+    ['another agent key', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a2', birthNs: 1000n, headSha: 'h1' }, false],
+    ['a main path against a subagent row', { row: ROW, pathUuid: 'u1', birthNs: 1000n, headSha: 'h1' }, false],
+    ['another birth time', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1001n, headSha: 'h1' }, false],
+    ['births agree, heads differ: the birth time rules', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h2' }, true],
+    ['births past 2^53 compared as BigInt', { row: { ...ROW, birthNs: '1794319515561000001' }, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1794319515561000000n, headSha: null }, false],
+    ['no birth on the file: the heads rule', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: null, headSha: 'h2' }, false],
+    ['no birth on the row: the heads rule', { row: { ...ROW, birthNs: null }, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h1' }, true],
+    ['no birth, no head on the file (the census): no difference proven', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: null, headSha: null }, true],
+    ['no birth, no head on the row', { row: { ...ROW, birthNs: null, headSha: null }, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: null, headSha: 'h2' }, true],
+  ] as const)('sameFileIdentity: %s', (_name, input, want) => {
+    expect(libCensus.sameFileIdentity(input)).toBe(want);
+  });
+
+  const H = { uuid: 'u1', agentKey: 'a1', birthNs: 1000n, size: 100 };
+  const R = { transcriptUuid: 'u1', agentKey: 'a1', birthNs: '1000', live: true, offset: 100 };
+  it.each([
+    ['bound, read to its size', { row: R, holding: H, pathStored: false, readable: null }, null],
+    ['bound, grown past its cursor', { row: { ...R, offset: 50 }, holding: H, pathStored: false, readable: null }, null],
+    ['bound, shorter than its cursor', { row: { ...R, offset: 101 }, holding: H, pathStored: false, readable: null }, 'shrunk'],
+    ['the inode is another transcript\'s', { row: { ...R, transcriptUuid: 'u2' }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['the inode is another agent key\'s', { row: { ...R, agentKey: 'a2' }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['another birth time on the same inode', { row: { ...R, birthNs: '999' }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['another birth time beats a shrink', { row: { ...R, birthNs: '999', offset: 101 }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['no birth on the file: the census reads no first line, so bound', { row: { ...R, birthNs: '999' }, holding: { ...H, birthNs: null }, pathStored: false, readable: null }, null],
+    ['its row marked gone', { row: { ...R, live: false }, holding: H, pathStored: false, readable: null }, 'unread'],
+    ['no row, the path known under another inode', { row: null, holding: H, pathStored: true, readable: null }, 'replaced'],
+    ['no row, readable', { row: null, holding: H, pathStored: false, readable: true }, 'unread'],
+    ['no row, not readable', { row: null, holding: H, pathStored: false, readable: false }, 'unreadable'],
+  ] as const)('holdingUnboundCause: %s', (_name, input, want) => {
+    expect(libCensus.holdingUnboundCause(input)).toBe(want);
+  });
+
+  it.each([
+    [[], null],
+    [[{ bound: true, readToEnd: true, pastEnd: null }], null],
+    [[{ bound: true, readToEnd: false, pastEnd: true }], null],
+    [[{ bound: true, readToEnd: false, pastEnd: false }], 'parent-behind'],
+    [[{ bound: false }], 'parent-copy-unbound'],
+    [[{ bound: false }, { bound: true, readToEnd: false, pastEnd: false }], 'parent-behind'],   // behind comes first
+    [[{ bound: true, readToEnd: false, pastEnd: false }, { bound: false }], 'parent-behind'],
+    [[{ bound: true, readToEnd: true, pastEnd: null }, { bound: false }], 'parent-copy-unbound'],
+  ] as const)('parentHoldingsCause(%j) is %s', (holdings, want) => {
+    expect(libCensus.parentHoldingsCause([...holdings])).toBe(want);
+  });
+
+  it.each([
+    [{ boundStopped: false, overCap: false, undecodable: false }, null],
+    [{ boundStopped: true, overCap: true, undecodable: true }, 'decode-bound'],
+    [{ boundStopped: false, overCap: true, undecodable: true }, 'over-cap'],
+    [{ boundStopped: false, overCap: false, undecodable: true }, 'undecodable'],
+    [{ boundStopped: true, overCap: false, undecodable: false }, 'decode-bound'],
+  ] as const)('linkSearchCause(%j) is %s', (input, want) => {
+    expect(libCensus.linkSearchCause(input)).toBe(want);
+  });
+
+  it.each([
+    [{ holdingsCause: null, untimed: false }, { outcome: 'none', complete: true }],
+    [{ holdingsCause: null, untimed: true }, { outcome: 'none', complete: false, cause: 'parent-untimed' }],
+    [{ holdingsCause: 'parent-behind', untimed: true }, { outcome: 'none', complete: false, cause: 'parent-behind' }],
+    [{ holdingsCause: 'parent-copy-unbound', untimed: false }, { outcome: 'none', complete: false, cause: 'parent-copy-unbound' }],
+  ] as const)('parentSearchOutcome(%j) is %j', (input, want) => {
+    expect(libCensus.parentSearchOutcome(input)).toEqual(want);
+  });
 });

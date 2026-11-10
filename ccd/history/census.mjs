@@ -4,8 +4,9 @@
 // how many subagent transcripts (units) there are, which of them resolve to the call that launched them, and what it cannot
 // tell. It LISTS NO TREE and opens no file: the one file reads it makes are the metas and the run summaries, through the two
 // functions it is handed (`deps.readMeta`, `deps.summaryState`), and the one probe it asks for an unread holding (`deps.canRead`).
-// Every decision is lib.mjs's (L1): the parts and their precedence, the verdict tables, the sums, the ranges and the reasons a
-// share is withheld (Task 1G). This module measures the facts they take and tallies what they answer. It writes nothing, not even
+// Every decision is lib.mjs's (L1): the parts and their precedence, the verdict tables, the sums, the ranges, the reasons a share is
+// withheld (Task 1G), a parent search's cause order and outcome, and why a holding is unbound, by the one identity rule ingest's
+// planFileRead asks too. This module measures the facts they take, by its reads and joins, and tallies what they answer. It writes nothing, not even
 // a counter: a walk refusal is a figure of THIS census, recomputed each run, never a tick's counter (D-8154).
 //
 // It reads bodies through derive.mjs's `blobReadStmts` and `bodyOf` (lib cannot decompress, and each blob SELECT is spelled once, in
@@ -13,8 +14,8 @@
 // alone (the ring case).
 import {
   AGENT_LEVELS, CENSUS_COLUMNS, HOLDING_SHAPES, LINK_DECODE_MAX, LINK_WINDOW_MS, agentKey, blobOverDecodeCap, canonicalOf, censusPart, censusSums,
-  censusWithheld, HOLDING_UNBOUND_CAUSES, metaPathOf, holdingShape, inColumn, isPreInstall, linkVerdict, metaEvidence, shareRange, toolUsesOf, unboundExtra,
-  workflowCanonicalVerdict, workflowVerdict, workflowWindow,
+  censusWithheld, HOLDING_UNBOUND_CAUSES, holdingUnboundCause, metaPathOf, holdingShape, inColumn, isPreInstall, linkSearchCause, linkVerdict,
+  metaEvidence, parentHoldingsCause, parentSearchOutcome, shareRange, toolUsesOf, unboundExtra, workflowCanonicalVerdict, workflowVerdict, workflowWindow,
 } from './lib.mjs';
 import { blobReadStmts, bodyOf } from './derive.mjs';
 
@@ -35,7 +36,9 @@ function stmts(db) {
     liveFiles: db.prepare("SELECT file_id FROM ingest_files WHERE transcript_pk = ? AND source_key = '' AND status = 'live' ORDER BY file_id"),
     memberUuids: db.prepare('SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line'),
     hasMember: db.prepare('SELECT 1 AS x FROM memberships WHERE file_id = ? LIMIT 1'),
-    byInode: db.prepare("SELECT file_id, transcript_pk, status, offset FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ''"),
+    // birth_ns as text, so lib's sameFileIdentity compares it as BigInt with no rounding (a nanosecond epoch is past 2^53)
+    byInode: db.prepare("SELECT i.status AS status, i.offset AS offset, CAST(i.birth_ns AS TEXT) AS birth_ns, t.cc_session_uuid AS uuid, t.agent_id AS key "
+      + "FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk WHERE i.dev = ? AND i.ino = ? AND i.source_key = ''"),
     pathRow: db.prepare('SELECT file_id FROM file_paths WHERE path = ?'),
     holdingByPath: db.prepare("SELECT f.file_id AS file_id, f.offset AS offset, f.size AS size FROM file_paths p JOIN ingest_files f ON f.file_id = p.file_id "
       + "WHERE p.path = ? AND f.transcript_pk = ? AND f.source_key = '' AND f.status = 'live'"),
@@ -78,9 +81,9 @@ function bodyOfRow(s, row, budget) {
 }
 
 /** Decode the candidates, newest or nearest first, at most LINK_DECODE_MAX of them (a body over the cap is passed over and still
- *  takes its place), and test each body. `{ match: true }` on the first hit; else `{ cause }` for an unmeasured outcome (the bound
- *  stopped a timed candidate, a body was over the cap, one could not be decoded); else `{ untimed }`, whether any candidate was an
- *  untimed row (P19 (b): such a row lies outside every window, so it leaves the window incomplete even when it was decoded). */
+ *  takes its place), and test each body. `{ match: true }` on the first hit; else `{ cause }`, lib's linkSearchCause of what the
+ *  loop measured (the bound stopped a timed candidate, a body was over the cap, one could not be decoded); else `{ untimed }`,
+ *  whether any candidate was an untimed row. */
 function searchRows(s, rows, test, tally) {
   const limit = Math.min(rows.length, LINK_DECODE_MAX);
   let overCap = false;
@@ -92,35 +95,27 @@ function searchRows(s, rows, test, tally) {
     tally.decodes += 1;
     if (test(d.body)) return { match: true };
   }
-  if (rows.slice(limit).some((r) => r.timed)) return { cause: 'decode-bound' };
-  if (overCap) return { cause: 'over-cap' };
-  if (undecodable) return { cause: 'undecodable' };
+  const cause = linkSearchCause({ boundStopped: rows.slice(limit).some((r) => r.timed), overCap, undecodable });
+  if (cause !== null) return { cause };
   return { untimed: rows.some((r) => !r.timed) };
 }
 
-/** P19 (b)'s two incomplete causes for a window ending at `end`: a holding of the parent not read past it (`parent-behind`: bound,
- *  with a cursor short of its size and no stored row of the holding timed after `end`), and a holding not yet bound
- *  (`parent-copy-unbound`: the path has no live row of the parent's main transcript). Read past the end is a stored row of that
- *  holding timed after it, or the holding read to its end at the last tick. null when the window is complete as far as holdings go. */
-function holdingsCause(s, pk, holdings, end) {
-  let unbound = false;
-  let behind = false;
-  for (const path of holdings) {
+/** The facts lib's parentHoldingsCause takes for a window ending at `end`, one per path the walk lists for the parent's main
+ *  transcript: whether a live row of that transcript holds the path, whether its cursor reached its size at the last tick, and,
+ *  only when it did not, whether a stored row of it is timed after `end`. */
+function parentHoldings(s, pk, holdings, end) {
+  return holdings.map((path) => {
     const f = s.holdingByPath.get(path, pk);
-    if (f === undefined) { unbound = true; continue; }
-    if (f.size !== null && f.offset >= f.size) continue;
-    if (s.pastEnd.get(f.file_id, end) === undefined) behind = true;
-  }
-  if (behind) return 'parent-behind';
-  return unbound ? 'parent-copy-unbound' : null;
+    if (f === undefined) return { bound: false };
+    const readToEnd = f.size !== null && f.offset >= f.size;
+    return { bound: true, readToEnd, pastEnd: readToEnd ? null : s.pastEnd.get(f.file_id, end) !== undefined };
+  });
 }
 
-/** What the rest of a parent search answers once the candidates ran with no match and no unmeasured cause. */
+/** What the rest of a parent search answers once the candidates ran with no match and no unmeasured cause: lib's
+ *  parentSearchOutcome of the holdings' cause and whether any candidate was untimed. */
 function afterCandidates(s, pk, holdings, end, r) {
-  const cause = holdingsCause(s, pk, holdings, end);
-  if (cause !== null) return { outcome: 'none', complete: false, cause };
-  if (r.untimed === true) return { outcome: 'none', complete: false, cause: 'parent-untimed' };
-  return { outcome: 'none', complete: true };
+  return parentSearchOutcome({ holdingsCause: parentHoldingsCause(parentHoldings(s, pk, holdings, end)), untimed: r.untimed === true });
 }
 
 /** An Agent-tool link (P4): does the parent's main transcript hold an assistant row with a `tool_use` block whose id is `toolUseId`,
@@ -210,13 +205,15 @@ function shapeOf(s, pk) {
   return holdingShape(files.map((f) => s.memberUuids.all(f.file_id).map((r) => r.uuid)));
 }
 
-/** Why an admissible holding of a stored key is not bound (HOLDING_UNBOUND_CAUSES), or null when it is. */
-function unboundCause(s, pk, h, canRead) {
+/** Why an admissible holding of a stored key is not bound (HOLDING_UNBOUND_CAUSES), or null when it is: lib's holdingUnboundCause
+ *  of the store's row for the holding's device and inode, the walk's facts of the holding (its birth time from the walk's own lstat),
+ *  and, with no such row, whether the store knows the path and, only then, whether the file can be opened. */
+function unboundCause(s, u, h, canRead) {
   const f = s.byInode.get(h.dev, h.ino);
-  if (f !== undefined && f.transcript_pk === pk && f.status === 'live') return h.size < f.offset ? 'shrunk' : null;
-  if (f !== undefined) return f.transcript_pk !== pk ? 'replaced' : 'unread';
-  if (s.pathRow.get(h.path) !== undefined) return 'replaced';
-  return canRead(h.path) ? 'unread' : 'unreadable';
+  const row = f === undefined ? null : { transcriptUuid: f.uuid, agentKey: f.key, birthNs: f.birth_ns, live: f.status === 'live', offset: f.offset };
+  const pathStored = row === null && s.pathRow.get(h.path) !== undefined;
+  const readable = row === null && !pathStored ? canRead(h.path) : null;
+  return holdingUnboundCause({ row, holding: { uuid: u.uuid, agentKey: u.key, birthNs: h.birthNs ?? null, size: h.size }, pathStored, readable });
 }
 
 /**
@@ -315,7 +312,7 @@ export function runCensus(db, walk, deps) {
     if (u.part !== 'Ad') continue;
     for (const h of u.holdings) {
       if (h.verdict === 'refuse') { beside.refusedSinceStored += 1; continue; }
-      const cause = unboundCause(s, u.row.transcript_pk, h, canRead);
+      const cause = unboundCause(s, u, h, canRead);
       if (cause === null) u.bound += 1;
       else { u.unbound += 1; beside.holdingUnbound[cause] += 1; }
     }

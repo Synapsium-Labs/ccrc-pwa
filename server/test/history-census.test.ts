@@ -781,6 +781,21 @@ describe('SA30 unbound holdings (P18 (a)): the lower end widens and the upper en
   });
 });
 
+describe('SA30 identity: the census asks lib\'s one identity rule (review 1749 F3; D-8163)', () => {
+  it('SA30 a holding whose stored birth time differs from the file\'s is unbound (replaced), though its inode and transcript match', async (ctx) => {
+    const rig = await rigOf('ccrc-hist-sa30-birth-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3603, { before: 60_000, ids: ['toolu_k1'] }), agents: [agent('k1', 0x4630, { meta: { toolUseId: 'toolu_k1' } })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    const pkOf = "(SELECT transcript_pk FROM transcripts WHERE agent_id = 'k1')";
+    const birth = rig.db.prepare(`SELECT CAST(birth_ns AS TEXT) AS b FROM ingest_files WHERE source_key = '' AND transcript_pk = ${pkOf}`).get() as { b: string | null };
+    if (birth.b === null) ctx.skip();   // a filesystem that reports no birth time: the rule falls to the first line, which the census cannot read
+    expect(censusOf(rig).beside.holdingUnbound, 'CONTROL: bound while the birth times agree').toEqual({ unread: 0, unreadable: 0, replaced: 0, shrunk: 0 });
+    rig.db.prepare(`UPDATE ingest_files SET birth_ns = birth_ns + 1000 WHERE source_key = '' AND transcript_pk = ${pkOf}`).run();
+    const c = censusOf(rig);
+    expect(c.beside.holdingUnbound).toEqual({ unread: 0, unreadable: 0, replaced: 1, shrunk: 0 });
+  });
+});
+
 describe('SA31 precedence: nothing counted twice (P18)', () => {
   it('SA31 a stored row whose only holding is replaced by a link is Ad once, refused_since_stored 1, and both sums hold', async () => {
     const rig = await rigOf('ccrc-hist-sa31-');

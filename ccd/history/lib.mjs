@@ -620,7 +620,9 @@ export const CENSUS_REASONS = Object.freeze([
   'predicate-unsettled', 'no-run-window',
 ]);
 /** Why every share is withheld (3.3, "Uncertainty is shown, never folded"): `K` and `identity_collision` are the addendum's own
- *  names for the unentered-directories population and the disjoint-holdings counter; `partition-sum` is a failed sum. */
+ *  names for the unentered-directories population and the disjoint-holdings counter; `partition-sum` is a failed sum.
+ *  `install-record` is D-8162 (history-w4-census-withholds-without-install-record): with no readable install record (P6), no
+ *  admissible holding can be placed in P or Q, so every share is withheld rather than read as if no file were post-install. */
 export const CENSUS_WITHHELD = Object.freeze(['K', 'identity_collision', 'partition-sum', 'install-record']);
 /** P12's settled predicate and the timing of its evidence (D-8161, act M1, measured on Claude Code 2.1.321): a workflow's launching call
  *  answers at once with a `tool_result` that reads `Workflow launched in background. Task ID: ...` and a line `Run ID: <runId>`, so
@@ -632,12 +634,67 @@ export const CENSUS_RUN_WINDOW = 'immediate';
 export const HOLDING_SHAPES = Object.freeze(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
 /** Why a listed holding of an admitted unit is not bound to the store (3.1, "unbound holdings"; plan-chosen words): `unread` (no row
  *  holds its inode yet, or the one that did was marked gone), `unreadable` (no row, and the file cannot be opened: ingest records no
- *  row for it either), `replaced` (the path is one the store knows under another inode, or its inode is another transcript's),
- *  `shrunk` (bound, but now shorter than its cursor). A changed first line shows only on a read, so it is not measured. */
+ *  row for it either), `replaced` (the path is one the store knows under another inode, or its inode's row is another file by
+ *  sameFileIdentity: another transcript or another birth time), `shrunk` (bound, but now shorter than its cursor).
+ *  D-8163 (history-w4-census-reads-no-transcript): the census opens no transcript file, so what only a read shows stays unmeasured.
+ *  A holding rewritten in place under one inode and birth time with no shrink, or one whose first line changed where no birth time
+ *  is reported, reads as bound until ingest's bindFile next judges it. That is the one way an unbound holding can narrow the range,
+ *  against P18 (a)'s "widens and never narrows". */
 export const HOLDING_UNBOUND_CAUSES = Object.freeze(['unread', 'unreadable', 'replaced', 'shrunk']);
 /** The link search's window (P4, P12 (b)): 15 minutes either side of its anchor; and the most candidates decoded for one search. */
 export const LINK_WINDOW_MS = 15 * 60 * 1000;
 export const LINK_DECODE_MAX = 64;
+
+/** P19 (b)'s two incomplete causes from a parent's holdings, one fact per path the walk lists for its main transcript: `{ bound:
+ *  false }` when no live row of that transcript holds the path (`parent-copy-unbound`), else `{ bound: true, readToEnd, pastEnd }`,
+ *  `readToEnd` when its cursor reached its size at the last tick and `pastEnd` when a stored row of it is timed after the window's
+ *  end (null when not asked: a holding read to its end needs no such row). A bound holding read neither to its end nor past the
+ *  window is `parent-behind`, which comes first. null when the window is complete as far as holdings go. */
+export function parentHoldingsCause(holdings) {
+  let unbound = false;
+  let behind = false;
+  for (const h of holdings) {
+    if (!h.bound) unbound = true;
+    else if (!h.readToEnd && h.pastEnd !== true) behind = true;
+  }
+  if (behind) return 'parent-behind';
+  return unbound ? 'parent-copy-unbound' : null;
+}
+
+/** Why a parent search stopped short of a verdict (P19 (b)'s lookup causes), in the order they are named: the decode bound stopped
+ *  it with a timed candidate left (`decode-bound`), then a candidate over the decode cap (`over-cap`), then one that could not be
+ *  decoded (`undecodable`). null when none holds, and the search answers by its window. */
+export function linkSearchCause({ boundStopped, overCap, undecodable }) {
+  if (boundStopped) return 'decode-bound';
+  if (overCap) return 'over-cap';
+  if (undecodable) return 'undecodable';
+  return null;
+}
+
+/** What a parent search answers once its candidates ran with no match and no lookup cause (P19 (b)): the holdings' cause first
+ *  (`parentHoldingsCause`), then `parent-untimed` when any candidate was an untimed row (it lies outside every window, so the window
+ *  stays incomplete even when it was decoded), else no match in a complete window. */
+export function parentSearchOutcome({ holdingsCause, untimed }) {
+  if (holdingsCause !== null) return { outcome: 'none', complete: false, cause: holdingsCause };
+  if (untimed) return { outcome: 'none', complete: false, cause: 'parent-untimed' };
+  return { outcome: 'none', complete: true };
+}
+
+/** Why an admissible holding of a stored key is not bound (HOLDING_UNBOUND_CAUSES), or null when it is. `row` is the store's row of
+ *  the holding's device and inode, `{ transcriptUuid, agentKey, birthNs, live, offset }`, or null; `holding` is the walk's `{ uuid,
+ *  agentKey, birthNs, size }`, its birth time from the walk's own lstat. A row of another file by sameFileIdentity (another
+ *  transcript, or another birth time) is `replaced`; then a row marked gone is `unread`, and a size below the cursor is `shrunk`.
+ *  With no row, a path the store knows under another inode is `replaced`, and the rest are `unread`, or `unreadable` when the file
+ *  cannot be opened (`readable`, asked only then). The census passes no first-line sha (D-8163). */
+export function holdingUnboundCause({ row, holding, pathStored, readable }) {
+  if (row !== null) {
+    if (!sameFileIdentity({ row, pathUuid: holding.uuid, pathAgentKey: holding.agentKey, birthNs: holding.birthNs, headSha: null })) return 'replaced';
+    if (!row.live) return 'unread';
+    return holding.size < row.offset ? 'shrunk' : null;
+  }
+  if (pathStored) return 'replaced';
+  return readable ? 'unread' : 'unreadable';
+}
 
 /** The part of one unit (3.3, precedence). `G`: a row and no listed holding (outside `D`). Else `Ad` when it has a row; then `P` or
  *  `Q` only when it has an admissible holding (`P` when every admissible holding is pre-install); else `R`: a unit whose every
@@ -1501,6 +1558,18 @@ export function planRun(i) {
   return { arm: 'run', holdWord: null, drain: true, ingest: pause === null, pause };
 }
 
+/** Whether a stored cursor row and a file on disk are one file (§9.2 step 3's identity arms, planFileRead's and the census's one
+ *  rule): the path's uuid and agent key (W4 P1: a transcript is the pair, '' for main, so a file under another key is a recycled
+ *  inode too), then the birth time where both sides report one, compared as BigInt, else the first line's sha where both sides have
+ *  one. A side with neither a birth time nor a first-line sha proves no difference. `row` is `{ transcriptUuid, agentKey, birthNs,
+ *  headSha }`; the census passes no first-line sha (it opens no transcript file: D-8163), as planFileRead's caller does when the
+ *  head is unknown. */
+export function sameFileIdentity({ row, pathUuid, pathAgentKey = '', birthNs, headSha }) {
+  if (pathUuid !== row.transcriptUuid || pathAgentKey !== (row.agentKey ?? '')) return false;
+  if (row.birthNs != null && birthNs != null) return BigInt(row.birthNs) === BigInt(birthNs);
+  return row.headSha == null || headSha == null || row.headSha === headSha;
+}
+
 /** The file planner (§9.2 step 3): resume only with proof that the cursor row
  *  and the file on disk are one file. Identity first — the path's uuid, then
  *  the birth time where the filesystem reports one on both sides, else the
@@ -1512,11 +1581,7 @@ export function planRun(i) {
 export function planFileRead({ row, stat, pathUuid, pathAgentKey = '', headSha, tailShaAtOffset }) {
   if (stat === null) return 'skip';
   if (row === null) return 'rescan';
-  // W4 P1: a transcript is the pair (uuid, agent key), '' for main, so a file under another key is a recycled inode too.
-  if (pathUuid !== row.transcriptUuid || pathAgentKey !== (row.agentKey ?? '')) return 'retire';
-  const births = row.birthNs != null && stat.birthNs != null;
-  if (births && BigInt(row.birthNs) !== BigInt(stat.birthNs)) return 'retire';
-  if (!births && row.headSha !== null && headSha !== null && row.headSha !== headSha) return 'retire';
+  if (!sameFileIdentity({ row, pathUuid, pathAgentKey, birthNs: stat.birthNs, headSha })) return 'retire';
   if (stat.size < row.offset) return 'rescan';
   if (tailShaAtOffset !== row.tailSha) return 'rescan';
   return 'resume';

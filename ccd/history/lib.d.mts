@@ -230,9 +230,18 @@ export function canonicalOf(i: { shares: Partial<Record<CensusColumn, ShareRange
 export type HoldingShape = (typeof HOLDING_SHAPES)[number];
 export const HOLDING_SHAPES: readonly ['none', 'single', 'identical', 'prefix', 'fork', 'disjoint'];
 export function holdingShape(lists: string[][]): HoldingShape;
+export type ParentHolding = { bound: false } | { bound: true; readToEnd: boolean; pastEnd: boolean | null };
+export function parentHoldingsCause(holdings: ParentHolding[]): 'parent-behind' | 'parent-copy-unbound' | null;
+export function linkSearchCause(i: { boundStopped: boolean; overCap: boolean; undecodable: boolean }): 'decode-bound' | 'over-cap' | 'undecodable' | null;
+export function parentSearchOutcome(i: { holdingsCause: 'parent-behind' | 'parent-copy-unbound' | null; untimed: boolean }): Extract<ParentSearch, { outcome: 'none' }>;
+export function holdingUnboundCause(i: {
+  row: { transcriptUuid: string; agentKey: string; birthNs: number | bigint | string | null; live: boolean; offset: number } | null;
+  holding: { uuid: string; agentKey: string; birthNs: bigint | null | undefined; size: number };
+  pathStored: boolean; readable: boolean | null;
+}): HoldingUnboundCause | null;
 /** What the subagent arm of the walk hands over (W4 P20). Paths stay in memory; nothing prints them. */
 export type AgentWalkEntry =
-  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number; dev: bigint | null; ino: bigint | null; size: number }
+  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number; dev: bigint | null; ino: bigint | null; size: number; /** The listing's own lstat's birth time, null where the filesystem reports none. */ birthNs?: bigint | null }
   | { type: 'companion'; home: string; slug: string; uuid: string; runId: string | null; role: 'meta' | 'journal'; id: string | null; path: string }
   | { type: 'unentered'; home: string; level: AgentLevel; reason: AgentDirReason; path: string };
 export interface AgentSink {
@@ -352,6 +361,12 @@ export interface FileReadInputs {
   row: CursorRow | null; stat: { size: number; birthNs: number | bigint | null } | null;
   pathUuid: string; /** The path's agent key; absent reads as ''. */ pathAgentKey?: string; headSha: string | null; tailShaAtOffset: string | null;
 }
+/** planFileRead's and the census's one identity rule: the path's uuid and agent key, the birth time where both sides have one, else
+ *  the first line's sha where both have one. The census passes no first-line sha (D-8163). */
+export function sameFileIdentity(i: {
+  row: { transcriptUuid: string; agentKey?: string; birthNs: number | bigint | string | null | undefined; headSha: string | null | undefined };
+  pathUuid: string; pathAgentKey?: string; birthNs: number | bigint | string | null | undefined; headSha: string | null | undefined;
+}): boolean;
 export function planFileRead(i: FileReadInputs): 'resume' | 'rescan' | 'retire' | 'skip';
 export const UNKNOWN_OP_FORM: 'unknown-op';
 export function formOf(op: string, args: readonly string[]): string | null;
