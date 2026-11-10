@@ -7,13 +7,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  agentRig, agentRows, agentKeys, armed, CENSUS_WALK_FIGURES, counterNames, fixtureRows, mainRows, noMarker, offsetOf,
+  agentRig, agentRows, agentKeys, armed, CENSUS_WALK_FIGURES, counterNames, fixtureRows, LANE_ROSTER, mainRows, noMarker, offsetOf,
   plantAgentTree, plantMarker, recordOpenFlagsAsync, runIdsOf, sidecarsOf, T0, type AgentRig, type TreeSpec,
 } from './historyAgentFixtures.js';
 import { makeHistoryBox, openStoreRO, plantSession, plantTranscript, runDriver, skipOnDarwin } from './historyHelpers.js';
-import { LANE_ROSTER } from './historyAgentFixtures.js';
 import { agentIdOk, capBytes, historyPaths } from '../../ccd/history/lib.mjs';
-import { closeWriter, createStore, getMeta, openWriter } from '../../ccd/history/store.mjs';
+import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
 import { behindStats, discoverTranscripts } from '../../ccd/history/sweep.mjs';
 
 skipOnDarwin();
@@ -42,11 +41,12 @@ describe('the scan tick\'s subagent arm and its arming marker (P15 (b), SA22)', 
     await tick(noMarker, { scan: true });
     expect(agentRows(db)).toBe(0);
     const baseline = mainRows(db);
-    expect(baseline, 'CONTROL: the parent\'s main transcript was ingested, so the scan did run').toHaveLength(1);
+    // the parent's own two rows, stated outright: subagent entries wrongly attached to the main transcript would change this count
+    expect(baseline, 'CONTROL: the parent\'s main transcript was ingested, so the scan did run').toEqual([{ uuid: PARENT, entries: 2 }]);
     plantMarker(box, 'link'); await tick(null, { scan: true }); expect(agentRows(db), 'a link is not armed').toBe(0);
     plantMarker(box, 'dir'); await tick(null, { scan: true }); expect(agentRows(db), 'a directory is not armed').toBe(0);
     plantMarker(box, 'file'); await tick(null, { scan: true }); expect(agentRows(db), 'CONTROL: a regular file arms it').toBe(1);
-    expect(mainRows(db), 'main capture is unchanged').toEqual(baseline);
+    expect(mainRows(db), 'main capture is unchanged').toEqual([{ uuid: PARENT, entries: 2 }]);
   });
 
   it('SA1 journal excluded: one row, and the journal never opened', async () => {
@@ -112,6 +112,15 @@ describe('the scan tick\'s subagent arm and its arming marker (P15 (b), SA22)', 
     const { db, tick } = rig;
     await tick(noMarker, { nowMs: T0 }); expect(getMeta(db, 'agents_since_ms')).toBe(String(T0));
     await tick(armed, { nowMs: T0 + 3_600_000, scan: true }); expect(getMeta(db, 'agents_since_ms')).toBe(String(T0));
+  });
+
+  it.each(['abc', '', ' ', '  ', '-5', '1e3', '12.5'])('a damaged install record %j reads as pre-install: nothing is ingested, and the record is not rewritten', async (damaged) => {
+    const rig = await rigOf('ccrc-hist-damaged-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x650)] }, SINCE);
+    rig.db.prepare('UPDATE meta SET v = ? WHERE k = ?').run(damaged, 'agents_since_ms');
+    await rig.tick(armed, { scan: true });
+    expect(agentRows(rig.db)).toBe(0);
+    expect(getMeta(rig.db, 'agents_since_ms')).toBe(damaged);
   });
 
   it('a walk cut inside subagents/ resumes and counts nothing unentered (Review Focus 2)', async () => {
@@ -208,6 +217,21 @@ describe('what the agent arm does not enter, and which parents it serves', () =>
     expect(via('%/-linked/%.jsonl'), 'main discovery lists through a linked project directory, as it always did').toBeGreaterThan(0);
     expect(via('%/-real/%/subagents/%'), 'CONTROL: the subagent file was read through the real directory').toBe(1);
     expect(via('%/-linked/%/subagents/%'), 'and never through the link').toBe(0);
+  });
+
+  it('a subagent file that fails admission leaves its parent out of skipped; a main copy that fails puts it in (D-5061)', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();   // root opens a mode-000 file regardless
+    const failing = async (which: 'agent' | 'main'): Promise<ReadonlySet<string>> => {
+      const rig = await rigOf(`ccrc-hist-skipped-${which}-`);
+      const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x920)] }, SINCE);
+      const victim = which === 'agent' ? paths['a']! : path.join(rig.box.homes[0]!, 'projects', SLUG, `${PARENT}.jsonl`);
+      fs.chmodSync(victim, 0o000);
+      try {
+        return ((await rig.tick(armed, { scan: true })) as { skipped: ReadonlySet<string> }).skipped;
+      } finally { fs.chmodSync(victim, 0o600); }
+    };
+    expect([...(await failing('main'))], 'CONTROL: an unreadable main copy withdraws the parent\'s predictions').toEqual([PARENT]);
+    expect([...(await failing('agent'))], 'an unreadable subagent file does not').toEqual([]);
   });
 
   it('history-off reads no subagent file (failure row 26)', async () => {
@@ -370,5 +394,3 @@ describe('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
   });
 });
 
-// openStoreRO/openWriter are used by neighbouring cases through the rig; this keeps the writer import exercised for the typecheck.
-void openWriter;

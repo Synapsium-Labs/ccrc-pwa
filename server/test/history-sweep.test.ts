@@ -1074,6 +1074,10 @@ describe('the transcript walk, pinned before the subagent arm (W4 P20 characteri
         { path: `<base>/home-1/projects/bb-link/${U2}.jsonl`, uuid: U2, home: '<base>/home-1' },
         { path: `<base>/home-2/projects/dd-proj/${U4}.jsonl`, uuid: U4, home: '<base>/home-2' },
       ]);   // the linked project's transcript included; nothing from subagents/, the locked or the stray
+      // the same fixture walked with the subagent arm on (a no-op sink that never cuts) hands the same main list: the arm adds no main file
+      const seen: string[] = [];
+      expect(discoverTranscripts([h1, h2], [U1, U2, U3, U4, 'agent-a', 'stray'], { take: (e: { type: string }) => { seen.push(e.type); }, stop: null } as never)).toEqual(got);   // sweep.mjs' JSDoc types the sink as null
+      expect(seen, 'CONTROL: the arm did walk the fixture\'s subagents/').toContain('file');
     } finally {
       fs.chmodSync(path.join(h1, 'projects', 'cc-locked'), 0o755);
     }

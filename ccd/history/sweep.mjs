@@ -1831,7 +1831,7 @@ function walkAgentProject(agents, state, stop, home, slug, names) {
       if (agentCut(agents, state, stop)) return false;
       const c = classifyAgentName(name, 'subagents');
       if (c.role !== 'descend') { agentEntry(agents, state, at, null, true, `${sub}/${name}`, c); continue; }
-      const wf = `${sub}/workflows`;
+      const wf = `${sub}/${name}`;   // the name classifyAgentName answered `descend` for: lib's grammar spells it once
       const runs = agentEnter(agents, home, 'workflows', wf, listSorted(wf));
       if (runs === null) continue;
       for (const run of runs) {
@@ -5065,7 +5065,9 @@ export async function ingestPath(db, ctx, f, budget, skipped) {
   const a = admitFile(f.path, f.home, ctx.homes, ctx.home);
   if (!a.ok) {
     countAdmission(db, a.why);
-    if (skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a refused copy may hold a boundary this pass did not see
+    // W1-B3 (D-5061): a refused copy may hold a boundary this pass did not see. A MAIN copy only: a subagent file cannot hold the
+    // parent's boundary, so its failure must not withdraw the parent's card predictions.
+    if (skipped !== undefined && (f.agentKey ?? '') === '') skipped.add(f.uuid);
     if (a.why === 'missing') markGoneIfPathless(db, f.path);
     return null;
   }
@@ -5080,7 +5082,8 @@ export async function ingestPath(db, ctx, f, budget, skipped) {
       fileId: bound.fileId, transcriptPk: bound.transcriptPk, ccUuid: f.uuid, fd: a.fd,
       size, mtimeNs: st.mtimeNs, offset: bound.action === 'resume' ? bound.offset : 0, agent: (f.agentKey ?? '') !== '',
     }, budget);
-    if (r.crashed === true && skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a parse crash holds the cursor before the crashing line, every tick
+    // W1-B3 (D-5061): a parse crash holds the cursor before the crashing line, every tick. A main copy only (see the refusal above).
+    if (r.crashed === true && skipped !== undefined && (f.agentKey ?? '') === '') skipped.add(f.uuid);
     return { fileId: bound.fileId, size, mtimeNs: st.mtimeNs, ...r, minNewTsMs: bound.action === 'resume' ? r.minNewTsMs : null };
   } finally {
     closeSync(a.fd);
@@ -5307,8 +5310,13 @@ function activeFiles(db, ctx, seen, budget) {
  *  reads as null, which reads every subagent file as pre-install, so a damaged record ingests nothing (fail closed). */
 function installRecordOf(db) {
   const raw = getMeta(db, INSTALL_META);
-  const n = raw === null ? NaN : Number(raw);
+  const n = raw === null ? NaN : installRecordNumber(raw);
   return Number.isFinite(n) ? n : null;
+}
+/** A stored record as a number: digits only, else NaN (damaged). Number('') and Number(' ') are 0, a finite record that would
+ *  read every file as post-install and never be repaired, so the text is checked before Number sees it. */
+function installRecordNumber(raw) {
+  return /^\d+$/.test(raw) ? Number(raw) : NaN;
 }
 
 /** The first W4 tick's install record (P6; the coordinator's ruling in fix round 3): lib's decideInstallRecord rules, this writes.
@@ -5316,7 +5324,7 @@ function installRecordOf(db) {
  *  whatever its pause or roster state, and no later pass moves it. A record that stands is never rewritten, damaged or not. */
 export function recordAgentsInstall(db, nowMs) {
   const raw = getMeta(db, INSTALL_META);
-  const write = decideInstallRecord({ existing: raw === null ? null : Number(raw), nowMs });
+  const write = decideInstallRecord({ existing: raw === null ? null : installRecordNumber(raw), nowMs });
   if (write !== null) setMeta(db, INSTALL_META, String(write));
 }
 
@@ -5455,7 +5463,7 @@ export async function ingestTick(db, ctx, budget) {
         if (!isFsError(e)) throw e;
         countAdmission(db, 'unreadable');
         filesUnreadable = true;
-        skipped.add(f.uuid);
+        if ((f.agentKey ?? '') === '') skipped.add(f.uuid);   // a main copy only: a subagent file holds none of the parent's boundaries (D-5061)
         continue;
       }
       if (r === null) continue;
