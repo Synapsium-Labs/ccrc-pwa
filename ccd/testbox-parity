@@ -205,15 +205,19 @@ EOF
   esac
 }
 _tp_fixture() {   # <worktree> <name> <command>... -> 0 iff both sides ran and printed the same lines, at least one
-  local wt="$1" name="$2" f="testbox-parity-fixture-$2.test.mjs" tag="fx-$2" ok=0
+  local wt="$1" name="$2" f="testbox-parity-fixture-$2.test.mjs" cfg="testbox-parity-fixture.config.mjs" tag="fx-$2" ok=0
   shift 2
   _tp_fixture_src "$name" > "$wt/$pkg/$f"
-  if _tp_legs "$wt" "$tag" "$@" "$f"; then
+  # The package's own vitest config only includes its own test directory (and extension), so a fixture beside it would
+  # match nothing and vitest would exit with "No test files found". The fixture runs under a config of its own that
+  # includes exactly the fixture files at the package root.
+  printf "export default { test: { include: ['testbox-parity-fixture-*.test.mjs'] } };\n" > "$wt/$pkg/$cfg"
+  if _tp_legs "$wt" "$tag" "$@" --config "$cfg" "$f"; then
     grep '^TP|' "$TP_TMP/$tag.local.out" > "$TP_TMP/$tag.local.lines" 2>/dev/null || :
     grep '^TP|' "$TP_TMP/$tag.box.out" > "$TP_TMP/$tag.box.lines" 2>/dev/null || :
     [ -s "$TP_TMP/$tag.local.lines" ] && cmp -s "$TP_TMP/$tag.local.lines" "$TP_TMP/$tag.box.lines" && ok=1
   fi
-  rm -f -- "${wt:?}/${pkg:?}/${f:?}"
+  rm -f -- "${wt:?}/${pkg:?}/${f:?}" "${wt:?}/${pkg:?}/${cfg:?}"
   fx_names+=("$name")
   if [ "$ok" = 1 ]; then fx_results+=(pass); printf 'fixture %s: byte-identical on both sides\n' "$name"
   else fx_results+=(fail); printf 'fixture %s: DIFFERS (or a leg could not run)\n' "$name"; total=$((total + 1)); fi

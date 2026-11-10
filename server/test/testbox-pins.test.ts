@@ -331,6 +331,7 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'deploy/gen-settings-lib.mjs', 'server/test/testbox-overlay.test.ts',
     'ccd/ccrc-testbox-admin', 'server/test/testbox-admin-verb.test.ts',
     'server/test/testbox-admin-connect.test.ts', 'server/test/testbox-admin-connect-retry.test.ts', 'server/test/testbox-admin-acts.test.ts',
+    'server/test/testbox-parity.test.ts',
   ];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,

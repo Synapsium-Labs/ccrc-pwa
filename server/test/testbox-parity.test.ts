@@ -160,6 +160,33 @@ describe.skipIf(!HAS_ALL)('testbox-parity: its scope and its record (D-8166, TC9
     expect(a.out + a.err).not.toContain('fixture file missing');
   });
 
+  it('the fixtures run under a real vitest whose package include is restrictive (they are found and print their lines)', () => {
+    const t = toolFixture();
+    // A repository whose server package includes only test/**/*.test.ts, with the real vitest of this suite linked in.
+    const real = join(t.dir, 'real');
+    mkdirSync(join(real, 'server', 'test'), { recursive: true });
+    git(real, 'init', '-q', '-b', 'main');
+    writeFileSync(join(real, 'server', 'vitest.config.ts'), "export default { test: { include: ['test/**/*.test.ts'] } };\n");
+    writeFileSync(join(real, 'server', 'test', 'a.test.ts'), "import { it } from 'vitest';\nit('a', () => {});\n");
+    symlinkSync(join(REPO, 'server', 'node_modules'), join(real, 'server', 'node_modules'));
+    git(real, 'add', '.');
+    git(real, 'commit', '-q', '-m', 'c');
+    const rev = git(real, 'rev-parse', 'HEAD');
+    // Both sides run the command for real; the tool's files beside them are the only fakes.
+    const tdir = join(t.dir, 'tree');
+    writeFileSync(join(tdir, 'ccd', 'ccrc-test'), '#!/usr/bin/env bash\nshift 2\nexec "$@"\n', { mode: 0o755 });
+    writeFileSync(join(tdir, 'agent', 'dist', 'agent', 'src', 'testbox', 'client.js'), `const a = process.argv.slice(2);
+const i = a.indexOf('--verdict');
+require('fs').writeFileSync(a[i + 1], 'remote\\tid\\ttext\\n');
+const r = require('child_process').spawnSync(a[a.indexOf('--') + 1], a.slice(a.indexOf('--') + 2), { stdio: 'inherit' });
+process.exit(r.status ?? 1);
+`);
+    const env = { ...t.env, PATH: `${join(REPO, 'server', 'node_modules', '.bin')}:${t.env.PATH ?? ''}` };
+    const r = spawnSync(BASH, [t.tool, '--repo', real, '--package', 'server', '--fixtures', '--rev', rev, '--', 'vitest', 'run'], { env, encoding: 'utf8', cwd: t.dir });
+    expect(r.stdout + r.stderr).not.toContain('No test files found');
+    for (const f of FX) expect(r.stdout, r.stdout + r.stderr).toContain(`fixture ${f}: byte-identical on both sides`);
+  });
+
   it('a fixture whose side printed nothing is not an agreement', () => {
     const t = toolFixture({ FAKE_BOX_VERDICT: 'local' });
     const r = runTool(t, ['--recent', '1', '--fixtures']);
