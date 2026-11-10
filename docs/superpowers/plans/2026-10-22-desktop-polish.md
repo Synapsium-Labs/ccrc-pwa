@@ -3217,6 +3217,32 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Acceptance.** Every item's cause is named and removed, or named as fixed already, with its commit; each flake's before and after counts are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
+### Task C18: the slow W24-R12 case, and the follow-up sweep of reviews 1722 to 1733 (D-8150) — now
+
+**Routing:** band 1. **Needs:** C16 (#2497) and C17 (#2500) have merged; they have. Step 0 measures the live claims. The native Docs reader's adoption wave is about to edit the Docs head (`pwa/src/docs/DocsHead.tsx`, `docs.css`, the Docs head tests and browser files). This task touches none of them, and the Docs head findings below are carried to that programme or to a later sweep.
+
+**Why.** One server case, `ccrc-update-flip-backups` W24-R12, took 19 to 21 s against a 20 s limit and timed out three times on 9 and 10 November: it dequeued #2497 once and reddened PR runs of #2497 and #2500. The reviews of C16 (1722, 1723, 1725) and C17 (1724, 1733) left small findings for a later sweep.
+
+**Items.**
+| # | From | Where | What |
+|---|---|---|---|
+| 1 | `update-flip-backups-timeout` | `server/test/ccrc-update-flip-backups.test.ts` (W24-R12, about line 3028), and the `ccrc` script only if the cause is there | Find why this case runs about 3 s locally and 19 to 21 s in CI, while its W24 siblings take 0.1 to 0.7 s. Remove that cause, for example a repeated real shell of the script per setting where one run would do. A longer timeout is not a fix. Record the before and after times, locally and from CI's per-case timing, in `c18.md`. |
+| 2 | review 1723 F2 | `pwa/src/lib/chatMarks.ts` (`NUMBER_WORDS`, `ZERO_COUNT_AFTER`), `pwa/test/chat-marks-negation.test.ts` | `tens` counts as a plural zero-count word, as `hundreds` and `thousands` do: "tests failed: 0 of tens of thousands" and "CI failed: 0 of tens of cases" are withheld. Pin both rows, red first. Narrow the test comment at about line 195 to what the rows cover. Review 1723 N6: the word-end lookahead also excludes `\p{M}`, as `NEGATION_TOKEN` does, with a pin. |
+| 3 | review 1733 F1 | `server/test/watcher-quiet-census.test.ts` | The census credits `watcherTeardown()` only for that teardown's own `remove(` call, not for any `.remove(` in the file. Pin it with a mutant: a file that registers the teardown and calls an unrelated `.remove(` must fail. |
+| 4 | review 1723 N1, N2 | `pwa/test/phone-bar.test.tsx` (about lines 117 and 194-199) | N1: the comment says each door is named by the word it shows. N2: the name arm of "no door in a phone head duplicates a bar place" builds its list from `p.short ?? title`, with a mutant. |
+| 5 | reviews 1723 N4, 1725 F1 to F3, 1733 F2 | this task's note, `c18.md` | The corrections to `c16.md` and `c17.md` go in `c18.md`, and no existing note is edited (as D-7282): c16's 900 to 1000 px range; the real-user focus clause (only a focus made before the reader's iframe is inserted is taken); the empty name against the next stop after main; three focus-ring cases failed, not one; and c17's forget wording (all three forget arms changed on the old reader, and the purge cannot remove a directory). |
+
+Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1) and `reader-mount-steals-focus` sit in the native Docs reader's carry receipt; review 1723 N5 (`docs.css` comment lengths) and review 1725 F4 (the ring case's first-crumb assertion) wait until the adoption wave releases the Docs head files.
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Read each report and the carried list, re-anchor every item on `main`, drop any a later merge fixed, and measure the live claims.
+- [ ] **Step 1: One commit per item.** Each guard is red first, under its mutant, restored from a saved copy with its sha checked.
+- [ ] **Step 2: Verify.** Each touched suite once through `ccrc test`; item 1's file at least 10 times; the pwa and server type checks; `deviation-refs`. A full CI run (`full-ci`) on the PR.
+
+- **D-8150** - `w24-r12-and-follow-up-sweep`: Task C18, issued on 2026-11-10. The slow W24-R12 case's cause, and the findings that reviews 1722 to 1733 carried to a later sweep outside the Docs head, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+
+**Acceptance.** Every item is fixed, or named as fixed already, with its commit; item 1's before and after times are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
