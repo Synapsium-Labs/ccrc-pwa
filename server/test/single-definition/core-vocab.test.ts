@@ -840,6 +840,32 @@ describe('Build 7 nouns', () => {
   });
 });
 
+// ── one MAIL_PACE (Overlord spec §6.4) ────────────────────────────────────
+//
+// The mail gate's two pace pairs had four module constants in `watch.ts` and
+// two ternaries on one boolean. They are one table now, one row per role, and
+// this pin holds the move: the table has one home, the four constants stay
+// retired, and the lane chooses its row through the one decider.
+describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)', () => {
+  const RETIRED = /^\s*(?:export\s+)?const\s+(?:MAIL_QUIET_MS|MAIL_COOLDOWN_MS|COORD_QUIET_MS|COORD_COOLDOWN_MS)\s*=/m;
+  it('MAIL_PACE is defined in exactly one file, server/src/coord/mailPace.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export\s+const\s+MAIL_PACE\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['server/src/coord/mailPace.ts']);
+  });
+  it('no source defines one of the four retired pace constants', () => {
+    expect(ALL.filter((f) => RETIRED.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('the mail lane chooses a row once, through mailPaceRoleOf', () => {
+    const code = stallCodeText(readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8'));
+    expect(code).toMatch(/import\s*\{[^}]*\bMAIL_PACE\b[^}]*\}\s*from\s*'\.\/coord\/mailPace\.js'/);
+    expect(code.match(/\bmailPaceRoleOf\(/g)).toHaveLength(1);
+  });
+  it('CONTROL: the retired-definition scan catches a planted copy and passes an import', () => {
+    expect(RETIRED.test('const COORD_QUIET_MS = 15_000;')).toBe(true);
+    expect(RETIRED.test("import { MAIL_PACE } from './coord/mailPace.js';")).toBe(false);
+  });
+});
+
 // ── program-leverage wave 8 ────────────────────────────────────────────────
 //
 // A docstring that names its own callers is a SECOND COPY of a fact the code
