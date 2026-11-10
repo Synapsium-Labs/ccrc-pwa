@@ -81,9 +81,9 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 - **The ask-or-act example was wrong by three.** At the starting weights a routine answer needs about sixty blind
   answers with none overturned, not about twenty. Ruling 15 now carries the figure, and the figure at a setting
   of 3.
-- **Calls in #2538 and #2539 are the operator's to overturn.** #2539's description lists eleven more, and #2543's eight. In #2538: A
-  renewal voids a staged act. After a boot the rung is capped at `advise`, not `chat`, until a witness answers. The
-  Overlord cannot drop a request that waits on the operator.
+- **Calls in #2538 and #2539 are the operator's to overturn.** #2539's description lists eleven more, and #2543's
+  eight. In #2538: A renewal voids a staged act. After a boot the rung is capped at `advise`, not `chat`, until a
+  witness answers. The Overlord cannot drop a request that waits on the operator.
 - **The operator's directions to the hardening review** are recorded in the spec's §2: built to run in containers; a
   decision model for the yes-or-no questions code cannot decide; accounts reserved for the Overlord and never
   fenced off, with auto memory off for every role.
