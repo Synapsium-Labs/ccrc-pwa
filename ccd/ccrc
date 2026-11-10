@@ -11726,6 +11726,14 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 #     under $HOME, as CHATGPT_TOKEN_DIR, and the interpreter `ccgpt-runtime
 #     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
 #     probe refuses `runtime-absent` rather than inheriting a caller's value.
+#     A DIRECT LANE (codex-bridge Stage 4) is handed the system python3 its
+#     bridge runs under instead (`_codex_python`, 3.9 or later), so it needs
+#     no LiteLLM runtime for its catalogue: the probe's program is stdlib plus
+#     the auth library, run under -I, whichever interpreter runs it. With no
+#     usable python3 the lane library's own `python-absent` or
+#     `python-too-old` line is the refusal, and the probe never runs. A lane
+#     whose mode cannot be read gains nothing: it is handed the runtime's
+#     interpreter, as a `litellm` lane is.
 #     It also exports the placed auth library, `_codex_auth_lib`'s one
 #     spelling, as CCRC_MODELS_AUTH_LIB (codex-bridge Stage 1, Task 7): the
 #     probe reads the lane's credential through it and refuses
@@ -11758,8 +11766,8 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 # remedy that is not its own. NO ROSTER FILE AT ALL (rc 3, the final review's
 # residual round) is refused too, `roster-absent` with the install remedy, for
 # the same reason: its word and remedy are the ones this operator needs.
-_models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say; 1, roster-absent, for no roster file
-  local kind=0
+_models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say; 1, roster-absent, for no roster file; 1 for a direct lane with no usable python3
+  local kind=0 mode
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) ;;
@@ -11773,7 +11781,12 @@ _models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex ro
   esac
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
-  CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
+  mode="$(_codex_lane_mode "$1" 2>/dev/null)" || mode=''
+  if [ "$mode" = direct ]; then
+    CCRC_CODEX_PYTHON="$(_codex_python "Nothing was probed.")" || return 1
+  else
+    CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
+  fi
   export CCRC_CODEX_PYTHON
   CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
   export CCRC_MODELS_AUTH_LIB
