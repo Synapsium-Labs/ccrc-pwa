@@ -77,7 +77,7 @@ export const TESTBOX_CONNECT_TEXT = {
   repoUrl: 'Fetch URL',
   repoPackage: 'Package folder',
   repoInputs: 'Install inputs',
-  repoCommand: 'Test command',
+  repoCommand: 'Test runner',
   addRepo: 'Add a repository',
   removeRepo: 'Remove',
   offered: 'From the fleet',
@@ -276,6 +276,11 @@ const ACT_WORD: Readonly<Record<TestboxAct, string>> = {
 export function actWord(act: string): string {
   return Object.hasOwn(TESTBOX_ACT_MAP, act) ? ACT_WORD[act as TestboxAct] : act;
 }
+
+/** The runner a repository row starts with. The parity tool appends `run`, `--reporter=junit` and `--maxWorkers=N` to a row's command
+ *  head, and the box matches runs by that head (every row in the tree uses it), so a package manager's `npm test` would hand vitest
+ *  none of the flags: no JUnit report is written, every pull request leg reads DIFFERS and the switch never arms. */
+export const TESTBOX_DEFAULT_RUNNER = './node_modules/.bin/vitest';
 
 /** The fleet's repository, as the card offers it: GitHub's https form of a slug `_gh_repo_slug` measured (`owner/name`). */
 export const GIT_HOST_BASE = 'https://github.com/';

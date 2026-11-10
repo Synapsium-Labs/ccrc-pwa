@@ -57,7 +57,7 @@ const WORDS = (extra: string[] = []): string[] => [
 
 const IDLE = '{"ok":true,"testbox":{"state":"ok","reason":null,"box":{"runs":{"inProgress":0,"limit":2},"queueDepth":0}}}';
 const BUSY = '{"ok":true,"testbox":{"state":"ok","reason":null,"box":{"runs":{"inProgress":1,"limit":2},"queueDepth":0}}}';
-const OLD_BOX = 'CCRC_TESTBOX_LISTEN=198.51.100.7:7443\\nCCRC_TESTBOX_ROOT=/srv/box\\nCCRC_TESTBOX_TOOLS_DIR=/opt/tools\\nCCRC_TESTBOX_WORKERS=2\\nCCRC_TESTBOX_LOG_TAIL=40\\n';
+const OLD_BOX = 'CCRC_TESTBOX_LISTEN=198.51.100.7:7443\\nCCRC_TESTBOX_ROOT=/srv/box\\nCCRC_TESTBOX_REPOS=/etc/ccrc-testbox/repos.d\\nCCRC_TESTBOX_TOOLS_DIR=/opt/tools\\nCCRC_TESTBOX_WORKERS=2\\nCCRC_TESTBOX_LOG_TAIL=40\\n';
 
 /** The rules of a box that answers every command of these acts: regex, exit code, stdout (printf %b). First match wins. */
 const PASSING_RULES: string[][] = [
@@ -331,16 +331,45 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     expect(all.findIndex((c) => c.includes('rm -rf'))).toBeGreaterThan(all.findIndex((c) => c.includes('install.sh')));
   });
 
-  it('settings-box refuses what the box file cannot hold, before anything is written', () => {
-    const h = fixture();
+  it('settings-box takes only the keys the card changed: the box\'s current file is read and the keys put into it, every other line kept', () => {
+    const catRule = ['^(sudo -n -- )?cat -- /etc/ccrc-testbox/ccrc\\.env$', '0', `# hand-made\\n${OLD_BOX}CCRC_RELEASE_BASE_URL=https://releases.testbox.invalid\\n`];
+    const h = fixture({}, WITH(catRule));
     connectedTo(h);
-    // no listen address: the box file cannot be loaded
-    const r = verb(h, 'settings-box', '--set=CCRC_TESTBOX_WORKERS=3', '--from', 'pwa');
-    expect(json(r)).toEqual({ ok: false, code: 'box-value-refused' });
-    expect(sshCalls(h)).toEqual([]);
+    // what the card sends for a Workers edit: that key alone
+    const r = verb(h, 'settings-box', '--set=CCRC_TESTBOX_WORKERS=3', '--set=CCRC_TESTBOX_SESSION_RUNS=2', '--from', 'pwa');
+    expect(json(r), r.out + r.err).toEqual({ ok: true });
+    // the key in place, the new key appended, the comment and the non-table key and every other value kept
+    expect(stdinOfLast(h, 'cmp')).toBe('# hand-made\n' + OLD_BOX.replace(/\\n/g, '\n').replace('WORKERS=2', 'WORKERS=3')
+      + 'CCRC_RELEASE_BASE_URL=https://releases.testbox.invalid\nCCRC_TESTBOX_SESSION_RUNS=2\n');
+    // the box file was read first, and the installer ran after the put
+    const all = cmds(h);
+    expect(all.findIndex((c) => /cat -- \/etc\/ccrc-testbox\/ccrc\.env$/.test(c))).toBeLessThan(all.findIndex((c) => c.includes('cmp -s')));
+    expect(all.findIndex((c) => c.includes('cmp -s'))).toBeLessThan(all.findIndex((c) => c.includes('install.sh --reapply')));
+  });
+
+  it('settings-box refuses what the merged file cannot hold before anything is written, and what a sent key names that the installer would make root\'s', () => {
+    // a box file with no listen address: even the one key sent makes a file the installer would refuse
+    const h = fixture({}, WITH(['^(sudo -n -- )?cat -- /etc/ccrc-testbox/ccrc\\.env$', '0', 'CCRC_TESTBOX_ROOT=/srv/box\\n']));
+    connectedTo(h);
+    expect(json(verb(h, 'settings-box', '--set=CCRC_TESTBOX_WORKERS=3', '--from', 'pwa'))).toEqual({ ok: false, code: 'box-value-refused' });
+    expect(cmds(h).filter((c) => c.includes('cmp -s') || c.includes('install.sh'))).toEqual([]);
+    // a service token that is not in the service user's home, and a root that is a system directory: refused on the fleet host
+    // by the sent key alone, with no call to the box at all
+    for (const word of ['--set=CCRC_TESTBOX_SERVICE_TOKEN_FILE=/etc/passwd', '--set=CCRC_TESTBOX_ROOT=/root', '--set=CCRC_TESTBOX_REPOS=/etc',
+      '--set=CCRC_TESTBOX_SERVICE_USER=root', '--set=CCRC_TESTBOX_PUSH_USER=root']) {
+      const g = fixture();
+      connectedTo(g);
+      expect(json(verb(g, 'settings-box', word, '--from', 'pwa')), word).toMatchObject({ ok: false, code: 'box-value-refused' });
+      expect(cmds(g).filter((c) => c.includes('cmp -s') || c.includes('install.sh')), word).toEqual([]);
+    }
+    // a row whose mirror is under /root is refused before the box is asked
+    const m = fixture();
+    connectedTo(m);
+    expect(json(verb(m, 'settings-box', '--set=CCRC_TESTBOX_WORKERS=3', `--repo=${rowArg({ ...ROW, mirrorPath: '/root/x.git' })}`, '--from', 'pwa'))).toEqual({ ok: false, code: 'box-value-refused' });
+    expect(sshCalls(m)).toEqual([]);
     // not connected
-    const g = fixture();
-    expect(json(verb(g, 'settings-box', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: false, code: 'not-connected' });
+    const n = fixture();
+    expect(json(verb(n, 'settings-box', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: false, code: 'not-connected' });
   });
 
   it('settings-box with a run in progress answers runs-in-progress, and touches nothing', () => {
@@ -358,6 +387,50 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     const d = fixture({ FAKE_API_IDLE: '{"ok":true,"testbox":{"state":"unreachable","box":null}}' });
     connectedTo(d);
     expect(json(verb(d, 'settings-box', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: true });
+  });
+
+  it('on a single box (no agent.env) runs in progress are the box\'s own active run, prepare and install units, and a box that cannot be asked counts as busy', () => {
+    const units = (n: string, rc = '0'): string[] => ['list-units', rc, `${n}\\n`];
+    const busy = fixture({ TBA_API: '' }, WITH(units('2')));
+    connectedTo(busy);
+    expect(existsSync(join(busy.home, '.ccrc', 'agent.env'))).toBe(false);
+    expect(json(verb(busy, 'settings-box', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: false, code: 'runs-in-progress' });
+    const asked = cmds(busy).filter((c) => c.includes('list-units'));
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('ccrc-testbox-run@*.service');
+    expect(asked[0]).toContain('ccrc-testbox-prepare@*.service');
+    expect(asked[0]).toContain('ccrc-testbox-install.service');
+    // no unit active: idle, and the change is applied
+    const idle = fixture({ TBA_API: '' }, WITH(units('0')));
+    connectedTo(idle);
+    expect(json(verb(idle, 'settings-box', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: true });
+    // an answer that is not a number, and a box that does not answer, are busy: the service may be running
+    for (const rule of [units('lots'), units('', '255')]) {
+      const g = fixture({ TBA_API: '' }, WITH(rule));
+      connectedTo(g);
+      expect(json(verb(g, 'settings-box', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: false, code: 'runs-in-progress' });
+    }
+    // Apply when idle waits on the same measure and then applies
+    const w = fixture({ TBA_API: '', TBA_IDLE_POLL: '0' }, WITH(units('1')));
+    connectedTo(w);
+    const id = detach(w, 'settings-box', WORDS(['--when-idle=true']));
+    writeFileSync(w.rules, [units('0'), ...PASSING_RULES].map((r) => r.join('\t')).join('\n') + '\n');
+    expect(unit(w, 'settings-box', id)).toBe(0);
+    expect(lastAct(w)).toMatchObject({ outcome: 'ok', code: null });
+  });
+
+  it('settings-box with new rows records them on the fleet host, merged by name, for parity', () => {
+    const h = fixture();
+    connectedTo(h);
+    const rows = join(h.home, '.ccrc', 'testbox-rows');
+    writeFileSync(rows, 'other https://testbox.invalid/other.git server ./node_modules/.bin/vitest\nproject-a https://old.invalid/a.git server old\n');
+    expect(json(verb(h, 'settings-box', ...WORDS([`--repo=${rowArg(ROW)}`]), '--from', 'pwa'))).toEqual({ ok: true });
+    expect(readFileSync(rows, 'utf8')).toBe(`other https://testbox.invalid/other.git server ./node_modules/.bin/vitest\nproject-a ${ROW.fetchUrl} server ./node_modules/.bin/vitest\n`);
+    // a settings-box with no row touches none
+    const g = fixture();
+    connectedTo(g);
+    expect(json(verb(g, 'settings-box', ...WORDS(), '--from', 'pwa'))).toEqual({ ok: true });
+    expect(existsSync(join(g.home, '.ccrc', 'testbox-rows'))).toBe(false);
   });
 
   it('settings-box when idle waits in a unit and applies once no run is in progress', () => {
@@ -413,11 +486,16 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     // WORKERS changed
     expect(json(verb(h, 'settings-box', ...WORDS(['--set=CCRC_TESTBOX_WORKERS=4', '--set=CCRC_TESTBOX_LOG_TAIL=40']), '--from', 'pwa'))).toEqual({ ok: true });
     expect(stateText(h)).toMatch(/^parity_stale=1$/m);
-    // a key removed from the file is a change too
+    // a run-shaping key the box has and the card did not send is kept as it was: not a change
     const g = fixture();
     connectedTo(g);
     expect(json(verb(g, 'settings-box', ...WORDS(['--set=CCRC_TESTBOX_LOG_TAIL=40']), '--from', 'pwa'))).toEqual({ ok: true });
-    expect(stateText(g)).toMatch(/^parity_stale=1$/m);
+    expect(stateText(g)).not.toMatch(/^parity_stale=/m);
+    // a run-shaping key the box did not have is a change
+    const k = fixture();
+    connectedTo(k);
+    expect(json(verb(k, 'settings-box', '--set=CCRC_TESTBOX_RUN_MEMORY_MAX=6G', '--from', 'pwa'))).toEqual({ ok: true });
+    expect(stateText(k)).toMatch(/^parity_stale=1$/m);
   });
 
   it('settings-box puts the old box file back when the installer refuses', () => {
@@ -654,8 +732,10 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin disc
   it('disconnect removes the token, the push key, the overlay, the pin, the parity record and the snapshot', () => {
     const h = fixture();
     paired(h, ['parity_stale=1', 'fingerprint=SHA256:' + 'A'.repeat(43)]);
+    const rows = join(h.home, '.ccrc', 'testbox-rows');
+    writeFileSync(rows, 'project-a https://testbox.invalid/project-a.git server ./node_modules/.bin/vitest\n');
     expect(json(verb(h, 'disconnect', '--replace=true', '--from', 'pwa'))).toEqual({ ok: true });
-    for (const f of [h.token, h.push, h.overlay, h.pin, h.parity, h.snapshot]) expect(existsSync(f), f).toBe(false);
+    for (const f of [h.token, h.push, h.overlay, h.pin, h.parity, h.snapshot, rows]) expect(existsSync(f), f).toBe(false);
     const s = status(h);
     expect(s.ok, JSON.stringify(s)).toBe(true);
     if (!s.ok) return;

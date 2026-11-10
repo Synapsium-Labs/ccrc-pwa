@@ -14,7 +14,7 @@
 // detached act runs in this process as the unit would. HOME is a fixture; ghContainedEnv poisons the user manager and tmux.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -241,12 +241,15 @@ const ROW = (name: string): unknown => ({
   packages: [{ name: 'server', installInputs: ['server/package.json'], commands: ['./node_modules/.bin/vitest'] }],
   buildOutputs: [], systemTools: [],
 });
-const ROWS_OUT = ['project-a', 'project-b'].map((n) => `@@ ${n}.json\\n${JSON.stringify(ROW(n))}\\n`).join('');
+/** What the box's own row files would say if root on the box edited them: a head that runs a package. Parity must never read it. */
+const EVIL_ROWS_OUT = ['project-a', 'project-b'].map((n) => `@@ ${n}.json\\n${JSON.stringify({ ...(ROW(n) as object), packages: [{ name: 'server', installInputs: [], commands: ['npx attacker-package'] }] })}\\n`).join('');
+/** The fleet host's own record of the rows it sent (`~/.ccrc/testbox-rows`: name, fetch URL, package, command head). */
+const FLEET_ROWS = ['project-a', 'project-b'].map((n) => `${n} https://testbox.invalid/${n}.git server ./node_modules/.bin/vitest\n`).join('');
 const BOXENV = '/etc/ccrc-testbox/ccrc.env';
 const RULES: string[][] = [
   ['build\\.json', '0', '{"version":"v1.2.3"}'],
   ['current', '0', 'node-20.1.0+chrome-130.0'],
-  ['CCRC_TESTBOX_REPOS', '0', ROWS_OUT],
+  ['CCRC_TESTBOX_REPOS', '0', EVIL_ROWS_OUT],
   [BOXENV.replace(/\./g, '\\.'), '0', ''],
 ];
 
@@ -262,6 +265,7 @@ function fixture(extra: NodeJS.ProcessEnv = {}, rules: string[][] = RULES): Home
   symlinkSync(BOXFAKE, join(fakes, 'ip'));
   symlinkSync(SCANFAKE, join(fakes, 'ssh-keyscan'));
   writeFileSync(join(home, 'rules'), rules.map((r) => r.join('\t')).join('\n') + '\n');
+  writeFileSync(join(home, '.ccrc', 'testbox-rows'), FLEET_ROWS, { mode: 0o600 });
   // The fleet's own clones of the two rows' fetch URLs, one spelled as an ssh URL.
   for (const [n, url] of [['project-a', 'https://testbox.invalid/project-a.git'], ['project-b', 'git@testbox.invalid:project-b.git']] as const) {
     const d = join(home, 'projects', n);
@@ -372,6 +376,25 @@ describe.skipIf(!HAS_ALL)('ccrc testbox-admin parity (D-8166, TC9)', () => {
     // the fixtures run once, with the first row
     expect(calls[0]).toContain('--fixtures');
     expect(calls[1]).not.toContain('--fixtures');
+  });
+
+  it('the rows come from the fleet host\'s own record, never from the box: root on the box cannot make parity run its command here (spec 2.11)', () => {
+    const h = fixture();
+    connectedTo(h);
+    act(h);
+    // The box's row files (EVIL_ROWS_OUT: a head `npx attacker-package`) were never asked for, and no tool call carries the head.
+    expect(readFileSync(h.log, 'utf8')).not.toContain('CCRC_TESTBOX_REPOS');
+    for (const c of toolCalls(h)) expect(c.join(' ')).not.toContain('attacker-package');
+    expect(readFileSync(join(h.home, 'tool-log'), 'utf8')).not.toContain('npx');
+  });
+
+  it('with no row on record the unit ends status-not-ok and runs nothing, whatever the box holds', () => {
+    const h = fixture();
+    rmSync(join(h.home, '.ccrc', 'testbox-rows'));
+    connectedTo(h);
+    act(h);
+    expect(toolCalls(h)).toEqual([]);
+    expect(status(h).act).toMatchObject({ sub: 'parity', outcome: 'failed', code: 'status-not-ok' });
   });
 
   it('named pull requests replace the default scope, on the first row', () => {

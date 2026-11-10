@@ -322,6 +322,13 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   const LIB_LOAD = /^_ccd_lib_load\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m;
   const LIB_HASH_TOOLS = /^__CCD_HASH_TOOLS=\([^\n]*\)\n/m;
 
+  /** `ccd/ccrc-testbox-admin`'s box-side commands (D-8166): three GNU spellings (`sha256sum`, `timeout`) that run on the test
+   *  box over ssh, a Linux machine of the fleet host's own distribution release (the preflight's `os` check), never on the
+   *  userland this file runs on. They sit in one marked region, cut here as the hook's epoch copy is, and the region is pinned
+   *  below to exactly those functions and exactly those four GNU lines, so a new GNU call anywhere else in the file is a
+   *  hit and the region cannot grow quietly. */
+  const BOX_SIDE = /^# ── BOX-SIDE COMMANDS \(begin\)[^\n]*\n[\s\S]*?^# ── BOX-SIDE COMMANDS \(end\)[^\n]*\n/m;
+
   /** One file's scanned text: the platform block cut where the file carries
    *  one, the pinned epoch copy cut out of the hook, and the pinned rename cut
    *  out of ccd. */
@@ -329,6 +336,7 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     // `ccd` is scanned WITH its library (D-6913): the moved disk-retention code is still ccd's.
     const src = name === 'ccd' ? ccdSource() : readFileSync(path.join(ccdRoot, name), 'utf8');
     if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
+    if (name === 'ccrc-testbox-admin') return executableText(src.replace(BOX_SIDE, ''));
     return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '').replace(LIB_LOAD, '').replace(LIB_HASH_TOOLS, '') : src);
   }
 
@@ -363,6 +371,15 @@ describe('no call site outside the platform block runs a GNU-only command bare',
       expect(hits, `ccd/${name} runs a GNU-only command outside the platform block — route it through the _plat_ shim (or an explicit template, for a file that cannot source the block)`).toEqual([]);
     });
   }
+
+  it('ccd/ccrc-testbox-admin\'s box-side region holds exactly three functions and exactly four GNU lines, and the cut leaves none outside it', () => {
+    const src = readFileSync(path.join(ccdRoot, 'ccrc-testbox-admin'), 'utf8');
+    const region = BOX_SIDE.exec(src)?.[0] ?? '';
+    expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/ccrc-testbox-admin').not.toBe('');
+    expect([...region.matchAll(/^(_tba_[a-z_]+)\(\) \{/gm)].map((m) => m[1])).toEqual(['_tba_box_manifest_ok', '_tba_box_file_sha', '_tba_box_tcp']);
+    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['bare timeout', 'sha256sum', 'sha256sum']);
+    expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
+  });
 
   for (const [name, spells] of Object.entries(unowned)) {
     it(`ccd/${name} is exempt on the record, and still needs to be`, () => {

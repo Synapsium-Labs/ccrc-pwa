@@ -115,9 +115,10 @@ describe('ccrc testbox-admin: the dispatch and the status (D-8166, TC3)', () => 
 
   it('status never prints an address or a path, and reads the connection, the pin, the act and the parity record', () => {
     const h = fixture();
+    const startedAt = Date.now() - 1000;   // a unit that started a second ago: it is not yet read as one that is gone (the reap tests are at the end of this file)
     writeState(h, [
       `address=${ADDR}`, 'port=2222', 'login=deploy', `fingerprint=${FP}`, 'connected=1', `box_sha256=${SHA}`,
-      `act_id=${ID}`, 'act_sub=repair', 'act_phase=copy', 'act_phases=verify:12,copy:5', 'act_outcome=running', 'act_started=1700000000000',
+      `act_id=${ID}`, 'act_sub=repair', 'act_phase=copy', 'act_phases=verify:12,copy:5', 'act_outcome=running', `act_started=${startedAt}`,
     ]);
     writeFileSync(join(h.home, '.ccrc', 'testbox-known-hosts'), `[${ADDR}]:2222 ssh-ed25519 AAAA\n`);
     const parity = { v: 1, result: 'pass', prs: [], fixtures: [], release: 'v1.2.3', toolsKey: 'k1', fingerprint: FP, boxFileSha256: SHA, at: 1700000000001 };
@@ -131,7 +132,7 @@ describe('ccrc testbox-admin: the dispatch and the status (D-8166, TC3)', () => 
     if (!read.ok) return;
     expect(read.value).toMatchObject({
       connected: true, addressSet: true, login: 'sudo', fingerprint: FP, hostKey: 'pinned', boxFileSha256: SHA,
-      act: { id: ID, sub: 'repair', phase: 'copy', phases: [{ name: 'verify', ms: 12 }, { name: 'copy', ms: 5 }], outcome: 'running', code: null, startedAt: 1700000000000, endedAt: null },
+      act: { id: ID, sub: 'repair', phase: 'copy', phases: [{ name: 'verify', ms: 12 }, { name: 'copy', ms: 5 }], outcome: 'running', code: null, startedAt, endedAt: null },
       parity,
     });
   });
@@ -353,18 +354,25 @@ describe('the one way to the box, and ssh\'s stderr (D-8166, T4)', () => {
     expect(tool).toBe('ssh');
     const pairs: string[] = [];
     args.forEach((a, i) => { if (args[i - 1] === '-o') pairs.push(a); });
-    expect(pairs).toEqual([`UserKnownHostsFile=${join(h.home, '.ccrc', 'testbox-known-hosts')}`, 'StrictHostKeyChecking=yes', 'BatchMode=yes', 'IdentitiesOnly=yes', 'ConnectTimeout=60']);
+    expect(pairs).toEqual([`UserKnownHostsFile=${join(h.home, '.ccrc', 'testbox-known-hosts')}`, 'StrictHostKeyChecking=yes', 'BatchMode=yes', 'IdentitiesOnly=yes', 'ConnectTimeout=10']);
     expect(args.slice(args.indexOf('-p'), args.indexOf('-p') + 2)).toEqual(['-p', '2222']);
     expect(args.slice(args.indexOf('-i'), args.indexOf('-i') + 2)).toEqual(['-i', join(h.home, '.ccrc', 'testbox-admin.key')]);
     expect(args.slice(-2)).toEqual([`root@${ADDR}`, 'true']);
   });
 
-  it('the deadline is the reconnect deadline setting, read by the one reader', () => {
+  it('the deadline is the reconnect deadline setting, read by the one reader, and outside the detached unit it is capped at 10 s so the agent\'s bounds (60 s short, 30 s a long act\'s detach) always hold', () => {
     const h = fixture();
     KEYED(h);
     writeFileSync(join(h.home, '.ccrc', 'ccrc.env'), 'CCRC_TESTBOX_RECONNECT_DEADLINE=2m\n');
     sh(h, SRC('linux') + '_tba_ssh true', [VERB]);
-    expect(fakeLog(h)[0]).toContain('ConnectTimeout=120');
+    expect(fakeLog(h)[0]).toContain('ConnectTimeout=10');
+    sh(h, SRC('linux') + 'TBA_IN_UNIT=1 _tba_ssh true', [VERB]);
+    expect(fakeLog(h)[1]).toContain('ConnectTimeout=120');
+    writeFileSync(join(h.home, '.ccrc', 'ccrc.env'), 'CCRC_TESTBOX_RECONNECT_DEADLINE=4s\n');
+    sh(h, SRC('linux') + '_tba_ssh true', [VERB]);
+    expect(fakeLog(h)[2]).toContain('ConnectTimeout=4');
+    const r = sh(h, SRC('linux') + '_tba_deadline', [VERB]);
+    expect(r.out.trim()).toBe('4');
   });
 
   it('under a sudo login every command is prefixed sudo -n -- and each word is quoted for the box\'s shell', () => {
@@ -590,5 +598,70 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
     const r = sh(h, SRC('linux') + '_tba_refuse not-a-code; echo "rc=$?"', [VERB]);
     expect(r.rc).toBe(70);
     expect(r.out).toBe('');
+  });
+});
+
+describe.skipIf(!HAS_FLOCK)('an act whose unit is gone, and the state file written by more than one process (D-8166)', () => {
+  const live = (h: Home, ageSeconds: number, extra: string[] = []): void => writeState(h, [
+    `address=${ADDR}`, 'port=22', 'login=root', `act_id=${ID}`, 'act_sub=connect', 'act_phase=copy', 'act_phases=verify:12', 'act_t0=1700000000000',
+    'act_outcome=running', `act_started=${Date.now() - ageSeconds * 1000}`, ...extra,
+  ]);
+  const act = (h: Home): Record<string, unknown> => {
+    const read = readTestboxAdminStatus(run(h, ['status']).out.trim());
+    expect(read.ok, JSON.stringify(read)).toBe(true);
+    return (read.ok ? read.value.act : null) as unknown as Record<string, unknown>;
+  };
+
+  it('an act running for longer than a unit needs to start, with its lock free, is ended failed `interrupted`, by the status, under the lock', () => {
+    const h = fixture();
+    live(h, 120);
+    expect(act(h)).toMatchObject({ id: ID, sub: 'connect', outcome: 'failed', code: 'interrupted', phase: 'copy' });
+    expect(readFileSync(h.state, 'utf8')).toMatch(/^act_ended=\d+$/m);
+    expect(readFileSync(h.state, 'utf8')).not.toMatch(/^act_t0=/m);
+    // read again: the same, and nothing is rewritten
+    expect(act(h)).toMatchObject({ outcome: 'failed', code: 'interrupted' });
+    // the lock is free afterwards
+    expect(spawnSync('flock', ['-n', join(h.home, '.ccrc', 'testbox-admin.lock'), 'true']).status).toBe(0);
+    // and the card has its controls back: a new act begins
+    const r = sh(h, SRC('linux') + '_tba_run_repair() { :; }; _svc_run_detached() { :; }; _tba_main repair --from pwa', [VERB]);
+    expect(r.out, r.err).toMatch(/^\{"ok":false,"code":"not-connected"\}|^\{"ok":true,"act":"[0-9a-f]{32}"\}/);
+  });
+
+  it('an act whose unit holds the lock is left running, and so is one younger than the unit\'s start (TBA_REAP_AFTER)', () => {
+    const h = fixture();
+    live(h, 120);
+    const r = sh(h, SRC('linux') + 'exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; _tba_main status', [VERB]);
+    expect(readTestboxAdminStatus(r.out.trim())).toMatchObject({ ok: true, value: { act: { outcome: 'running', code: null } } });
+    const g = fixture();
+    live(g, 5);
+    expect(act(g)).toMatchObject({ outcome: 'running', code: null });
+    const k = fixture({ TBA_REAP_AFTER: '1' });
+    live(k, 5);
+    expect(act(k)).toMatchObject({ outcome: 'failed', code: 'interrupted' });
+  });
+
+  it('a unit that starts after its act was ended does nothing', () => {
+    const h = fixture();
+    live(h, 120);
+    act(h);
+    writeFileSync(join(h.home, '.ccrc', `testbox-admin.args.${ID}`), '--from\npwa\n');
+    const r = sh(h, SRC('linux') + `_tba_run_repair() { echo ran >"$HOME/ran"; }; CCRC_TBA_ACT=${ID} _tba_main repair; echo "rc=$?"`, [VERB]);
+    expect(r.out).toBe('rc=0\n');
+    expect(existsSync(join(h.home, 'ran'))).toBe(false);
+    expect(act(h)).toMatchObject({ outcome: 'failed', code: 'interrupted' });
+  });
+
+  it('writers that run beside a unit (read, the host key mark, pin) never put `running` back after the unit\'s end, and never lose each other\'s keys', () => {
+    const h = fixture();
+    live(h, 1);
+    const r = sh(h, SRC('linux') + `
+      for i in $(seq 1 25); do ( _tba_state_write "k$i=v$i" ) & done
+      ( _tba_state_write act_outcome=ok act_ended=1700000001000 act_t0= ) &
+      for i in $(seq 26 50); do ( _tba_state_write "k$i=v$i" ) & done
+      wait
+      for i in $(seq 1 50); do [ "$(_tba_state_get "k$i")" = "v$i" ] || { echo "lost k$i"; exit 1; }; done
+      [ "$(_tba_state_get act_outcome)" = ok ] && echo fine`, [VERB]);
+    expect(r.out, r.err).toBe('fine\n');
+    expect(readFileSync(h.state, 'utf8').split('\n').filter((l) => l.startsWith('act_outcome=')).length).toBe(1);
   });
 });

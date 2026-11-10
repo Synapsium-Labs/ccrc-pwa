@@ -32,7 +32,7 @@ import { ApiError, api } from '../lib/api';
 import { testboxRouteText } from '../lib/refusalWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import {
-  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, TESTBOX_FAMILY_FOLD, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
+  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, TESTBOX_FAMILY_FOLD, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_DEFAULT_RUNNER, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
   codeSentence, listenFor, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
@@ -49,7 +49,7 @@ const utcMinute = (at: number): string => `${new Date(at).toISOString().slice(0,
 type Band = 'phone' | 'laptop' | 'wide';
 
 interface RepoDraft { name: string; fetchUrl: string; pkg: string; inputs: string; command: string }
-const blankRepo = (): RepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: 'npm test' });
+const blankRepo = (): RepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_RUNNER });
 
 /** A repository the fleet already knows: its name and the fetch URL the card offers. */
 interface Offer { readonly name: string; readonly fetchUrl: string }

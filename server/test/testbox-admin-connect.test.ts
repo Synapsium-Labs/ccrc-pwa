@@ -54,8 +54,8 @@ const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).di
 
 /** The words of a connect: a listen address (an IP literal), two paths, one row. */
 const WORDS = (extra: string[] = []): string[] => [
-  '--set=CCRC_TESTBOX_LISTEN=198.51.100.7:7443', '--set=CCRC_TESTBOX_ROOT=/srv/box', '--set=CCRC_TESTBOX_TOOLS_DIR=/opt/tools',
-  `--repo=${rowArg(ROW)}`, ...extra,
+  '--set=CCRC_TESTBOX_LISTEN=198.51.100.7:7443', '--set=CCRC_TESTBOX_ROOT=/srv/box', '--set=CCRC_TESTBOX_REPOS=/etc/ccrc-testbox/repos.d',
+  '--set=CCRC_TESTBOX_TOOLS_DIR=/opt/tools', `--repo=${rowArg(ROW)}`, ...extra,
 ];
 
 /** Rules of a box on which every connect command succeeds, as the fake ssh reads them: regex, exit code, stdout. */
@@ -69,6 +69,7 @@ const PASSING_RULES: string[][] = [
   ['push\\.pub', '0', ''],
   ['/dev/stdin', '0', ''],
   ['systemctl restart ccrc-testbox\\.service', '0', ''],
+  ['systemctl.*is-active', '0', ''],
   ['rm -rf', '0', ''],
 ];
 
@@ -462,5 +463,63 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
       expect(s.length).toBeGreaterThan(20);
       for (const text of seen) expect(text).not.toContain(s);
     }
+  });
+
+  it('a connect that ends connected records the rows it sent, 0600, for parity to read: name, fetch URL, package and command head', () => {
+    const h = fixture();
+    connectedTo(h);
+    expect(act(h, WORDS()).rc).toBe(0);
+    const f = join(h.home, '.ccrc', 'testbox-rows');
+    expect(readFileSync(f, 'utf8')).toBe(`${ROW.name} ${ROW.fetchUrl} ${ROW.packages[0]!.name} ${ROW.packages[0]!.commands[0]}\n`);
+    expect(statSync(f).mode & 0o777).toBe(0o600);
+    // a failed connect records nothing
+    const g = fixture({}, WITH(['sha256sum.*-c.*MANIFEST', '1', '']));
+    connectedTo(g);
+    act(g, WORDS());
+    expect(existsSync(join(g.home, '.ccrc', 'testbox-rows'))).toBe(false);
+  });
+
+  it('a path or user the installer would hand to root or to a system account is refused on the fleet host, before the act starts and before the box is asked', () => {
+    const bad: [string, string][] = [
+      ['CCRC_TESTBOX_SERVICE_TOKEN_FILE', '/etc/passwd'], ['CCRC_TESTBOX_ROOT', '/root'], ['CCRC_TESTBOX_REPOS', '/etc'],
+      ['CCRC_TESTBOX_TOOLS_DIR', '/usr/local'], ['CCRC_TESTBOX_SERVICE_USER', 'root'], ['CCRC_TESTBOX_PUSH_USER', 'root'],
+    ];
+    for (const [k, v] of bad) {
+      const h = fixture();
+      connectedTo(h);
+      const words = WORDS().filter((w) => !w.startsWith(`--set=${k}=`));
+      expect(json(verb(h, 'connect', ...words, `--set=${k}=${v}`, '--from', 'pwa')), `${k}=${v}`).toMatchObject({ ok: false, code: 'box-value-refused' });
+      expect(sshCalls(h), `${k}=${v}`).toEqual([]);
+      expect(readFileSync(h.state, 'utf8')).not.toContain('act_id=');
+    }
+    // the table's `~/` defaults are not absolute paths the installer takes: no repos path at all is refused too
+    const h = fixture();
+    connectedTo(h);
+    const words = WORDS().filter((w) => !w.startsWith('--set=CCRC_TESTBOX_REPOS='));
+    expect(json(verb(h, 'connect', ...words, '--from', 'pwa'))).toMatchObject({ ok: false, code: 'box-value-refused' });
+    // a row whose mirror is under /root, or has no mirror at all
+    for (const row of [{ ...ROW, mirrorPath: '/root/x.git' }, { ...ROW, mirrorPath: '/srv/x.git' }, { ...ROW, mirrorPath: undefined }]) {
+      const g = fixture();
+      connectedTo(g);
+      expect(json(verb(g, 'connect', ...WORDS().filter((w) => !w.startsWith('--repo=')), `--repo=${rowArg(row)}`, '--from', 'pwa'))).toMatchObject({ ok: false, code: 'box-value-refused' });
+      expect(sshCalls(g)).toEqual([]);
+    }
+  });
+
+  it('on a single box (no agent.env, so ccrc-api would refuse no-agent-env for ever) the check measures the box: the service active and its listen address answering', () => {
+    const h = fixture({ TBA_API: '' });
+    connectedTo(h);
+    expect(existsSync(join(h.home, '.ccrc', 'agent.env'))).toBe(false);
+    expect(act(h, WORDS()).rc).toBe(0);
+    expect(lastAct(h)).toMatchObject({ sub: 'connect', outcome: 'ok', code: null, phase: 'check' });
+    const probe = sshCalls(h).map(cmdOf).filter((c) => c.includes('is-active'));
+    expect(probe).toHaveLength(1);
+    expect(probe[0]).toContain('systemctl is-active --quiet ccrc-testbox.service');
+    expect(probe[0]).toMatch(/ bash 198\.51\.100\.7 7443$/);
+    // a service that is not active ends the act at the check phase
+    const g = fixture({ TBA_API: '' }, WITH(['systemctl.*is-active', '3', '']));
+    connectedTo(g);
+    act(g, WORDS());
+    expect(lastAct(g)).toMatchObject({ outcome: 'failed', code: 'status-not-ok', phase: 'check' });
   });
 });

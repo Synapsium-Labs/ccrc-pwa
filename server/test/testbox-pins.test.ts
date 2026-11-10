@@ -329,7 +329,7 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   const TC_HOLDERS = [
     'shared/testbox-admin.ts', 'server/test/testbox-admin-contract.test.ts',
     'deploy/gen-settings-lib.mjs', 'server/test/testbox-overlay.test.ts',
-    'ccd/ccrc-testbox-admin', 'server/test/testbox-admin-verb.test.ts',
+    'ccd/ccrc-testbox-admin', 'server/test/testbox-admin-verb.test.ts', 'server/test/testbox-admin-access.test.ts',
     'server/test/testbox-admin-connect.test.ts', 'server/test/testbox-admin-connect-retry.test.ts', 'server/test/testbox-admin-acts.test.ts',
     'server/test/testbox-parity.test.ts', 'server/test/testbox-remote-gate.test.ts',
     'agent/test/testbox-admin-op.test.ts', 'server/test/testbox-admin-routes.test.ts',

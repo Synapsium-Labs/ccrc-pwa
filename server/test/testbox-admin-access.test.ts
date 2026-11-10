@@ -15,7 +15,7 @@
 // fixture; ghContainedEnv poisons the user manager and tmux. Every row runs a fixed bash program; values are its arguments.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -217,7 +217,7 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin probe and pin (D-8166, TC4)', (
     expect(existsSync(h.pin)).toBe(false);
     expect(readFileSync(h.state, 'utf8')).not.toContain('fingerprint=');
     const scan = fakeCalls(h).find((c) => c[0] === 'ssh-keyscan')!;
-    expect(scan.slice(1)).toEqual(['-T', '60', '-p', '2222', '-t', 'ed25519', ADDR]);
+    expect(scan.slice(1)).toEqual(['-T', '10', '-p', '2222', '-t', 'ed25519', ADDR]);
   });
 
   it('probe with no connection answers not-connected, and a box that presents no key answers unreachable', () => {
@@ -328,6 +328,27 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
       expect(row, `${check} ${code}`).toEqual({ check, ok: false, code });
       expect(r.filter((x) => !x.ok).map((x) => x.check).filter((c) => c !== check && c !== 'from')).toEqual([]);
     }
+  });
+
+  it('before the first connect the storage check measures the card\'s starting root (an absolute path), never the login user\'s home; once connected, the box\'s own', () => {
+    const { h } = ready();
+    verb(h, 'preflight');
+    const probe = (): string => fakeCalls(h).filter((c) => c[0] === 'ssh').map((c) => c[c.length - 1]!).find((c) => c.includes('xfs_info'))!;
+    expect(probe().endsWith(' /var/lib/ccrc-testbox')).toBe(true);
+    expect(probe()).not.toContain('.ccrc/testbox');
+    const g = ready();
+    appendFileSync(g.h.state, 'box_root=/srv/box\n');
+    verb(g.h, 'preflight');
+    expect(fakeCalls(g.h).filter((c) => c[0] === 'ssh').map((c) => c[c.length - 1]!).find((c) => c.includes('xfs_info'))!.endsWith(' /srv/box')).toBe(true);
+  });
+
+  it('each egress probe is bounded to 8 s whatever the reconnect deadline says, so a box that drops outbound connections still gets its no-egress row inside the agent\'s 60 s', () => {
+    const { h } = ready();
+    writeFileSync(join(h.home, '.ccrc', 'ccrc.env'), 'CCRC_TESTBOX_RECONNECT_DEADLINE=5m\n');
+    verb(h, 'preflight');
+    const bounds = fakeCalls(h).filter((c) => c[0] === 'ssh').map((c) => /^timeout (\d+) bash/.exec(c[c.length - 1]!)?.[1]).filter((x) => x !== undefined);
+    expect(bounds.length).toBe(2);
+    for (const b of bounds) expect(Number(b)).toBeLessThanOrEqual(8);
   });
 
   it('the release already installed under this tag passes, and the same tag is read from the fleet host\'s own stamp', () => {

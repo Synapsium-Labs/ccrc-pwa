@@ -25,8 +25,11 @@
 #      version is --release; --node is a version; an installed release naming another tag refuses (later releases come
 #      only through the tool sync); CCRC_TESTBOX_ROOT, _REPOS and _TOOLS_DIR are absolute (the root installer has no
 #      reader's home to resolve `~/` against, D-7568); the listen address and the registry proxy are IP literals (the
-#      firewall and IPAddressAllow= take addresses); every egress name is a row of spec §2.0's table; the row file and
-#      the push key read; CCRC_TESTBOX_ROOT's filesystem is XFS with reflink=1; the distribution release is --distro's.
+#      firewall and IPAddressAllow= take addresses); CCRC_TESTBOX_ROOT, _REPOS, _TOOLS_DIR and each mirrorPath's parent are
+#      below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox, never a system directory; the
+#      service token is the service user's (`~/` or /var/lib/<service user>/); no user is root, named twice or a run user's, and a user
+#      that exists is one this installer made (its account comment is `ccrc test box`, D-8166); every egress name is a
+#      row of spec §2.0's table; the row file and the push key read; CCRC_TESTBOX_ROOT's filesystem is XFS with reflink=1; the distribution release is --distro's.
 #   2. the first release: <staging> copied to <tools>/release/<tag>, root's, no group or other write, and
 #      <tools>/release/installed linked to it in one rename; refused when any path of that tree is then not root's or is
 #      writable by group or other.
@@ -157,6 +160,10 @@ fi
 for key in CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_TOOLS_DIR; do
   case $(k "$key") in /*) ;; *) refuse "$key=$(k "$key") is not an absolute path (the installer has no reader's home)" ;; esac
 done
+# The paths made root's and the users named come from a file the card can change with no step-up: a path below a system
+# directory, a token path that is not the service user's, and the same user twice are refused before anything is written
+# (D-8166; ccd/testbox-knobs's `_tb_box_policy`).
+_tb_box_policy "$SYSROOT" || refuse "$TB_POLICY_WHY"
 ROOT=$(k CCRC_TESTBOX_ROOT) REPOS=$(k CCRC_TESTBOX_REPOS) TOOLS=$(k CCRC_TESTBOX_TOOLS_DIR)
 SVC=$(k CCRC_TESTBOX_SERVICE_USER) PUSH=$(k CCRC_TESTBOX_PUSH_USER) PREFIX=$(k CCRC_TESTBOX_RUN_USER_PREFIX) RUNS=$(k CCRC_TESTBOX_RUNS)
 TREE=$TOOLS/release/installed
@@ -253,6 +260,7 @@ for f in "${A_REPOS[@]}"; do
   t=$(cat -- "$f") || refuse "cannot read $f"
   [[ $t == *\"name\"*:*\""$n"\"* ]] || refuse "repository row $f does not name $n"
   m=$(row_field "$t" mirrorPath) && [[ $m == /* && "/$m/" != */../* && "/$m/" != */./* ]] || refuse "repository row $n has no one absolute mirrorPath"
+  _tb_path_ok "$(dirname -- "$m")" "$SYSROOT" || refuse "repository row $n has a mirrorPath that is not below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox (its parent directory is made root's)"
   u=$(row_field "$t" fetchUrl) && [[ $u =~ ^(https|ssh):// ]] || refuse "repository row $n has no one https or ssh fetchUrl"
   case " ${ROW_NAMES[*]} " in *" $n "*) refuse "repository row $n is named twice" ;; esac
   ROW_NAMES+=("$n"); ROW_MIRRORS+=("$m"); ROW_URLS+=("$u"); ROW_FILES+=("$f")
@@ -268,6 +276,18 @@ else
     || refuse "--push-key $A_KEY holds no public key line"
 fi
 PUSH_KEY="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+
+# A user name the box file names is an account this installer made, or none yet: a name that is already an account of
+# something else (root, a person, another service) is refused, because the name is written into the polkit rule, the box
+# file's group, the token's owner and the run users' units. The installer marks the accounts it makes with TBI_USER_MARK.
+TBI_USER_MARK='ccrc test box'
+have_user() { _sys getent passwd "$1" >/dev/null 2>&1; }
+have_group() { _sys getent group "$1" >/dev/null 2>&1; }
+for u in "$SVC" "$PUSH" "${PREFIX}install" $(for ((i = 1; i <= RUNS; i++)); do printf '%s%s ' "$PREFIX" "$i"; done); do
+  entry=$(_sys getent passwd "$u" 2>/dev/null) || continue
+  IFS=: read -r _ _ _ _ gecos _ <<<"$entry"
+  [ "$gecos" = "$TBI_USER_MARK" ] || refuse "the user $u already exists and this installer did not make it; name an account of the test box's own in the box file"
+done
 
 # The run root's filesystem: XFS with reflink=1 (spec §2.2 "XFS, settled").
 p=$ROOT; while [ ! -e "$p" ] && [ "$p" != / ]; do p=$(dirname -- "$p"); done
@@ -353,11 +373,9 @@ fi
 
 # ── phase 5: users, directories, rows, mirrors, units, rule, firewall file ─
 say "phase 5: users, directories, units, the rule and the firewall file"
-have_user() { _sys getent passwd "$1" >/dev/null 2>&1; }
-have_group() { _sys getent group "$1" >/dev/null 2>&1; }
 user() {   # <name> <home> <shell> [--create-home]
   have_user "$1" && return 0
-  _sys useradd --system --user-group --home-dir "$2" --shell "$3" ${4:+"$4"} "$1" || fail "cannot add the user $1"
+  _sys useradd --system --user-group --comment "$TBI_USER_MARK" --home-dir "$2" --shell "$3" ${4:+"$4"} "$1" || fail "cannot add the user $1"
 }
 have_group "$TBI_GIT_GROUP" || _sys groupadd --system "$TBI_GIT_GROUP" || fail "cannot add the group $TBI_GIT_GROUP"
 user "$SVC" "$SYSROOT/var/lib/$SVC" /usr/sbin/nologin --create-home

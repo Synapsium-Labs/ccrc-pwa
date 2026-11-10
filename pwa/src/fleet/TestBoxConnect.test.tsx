@@ -12,7 +12,7 @@ import type { StepUpDeps } from '../accounts/useStepUp';
 import { SETTINGS_CARDS } from './settingsText';
 import { TESTBOX_WIDE_QUERY, TestBoxSection } from './TestBoxSection';
 import { TestBoxConnect } from './TestBoxConnect';
-import { BOX_SETTING_FORM_START, TESTBOX_CONNECT_TEXT, TESTBOX_SERVICE_PORT, codeSentence, phaseWord } from './testboxAdminWords';
+import { BOX_SETTING_FORM_START, TESTBOX_CONNECT_TEXT, TESTBOX_DEFAULT_RUNNER, TESTBOX_SERVICE_PORT, codeSentence, phaseWord } from './testboxAdminWords';
 import { TESTBOX_ROUTE_TEXT } from '../lib/refusalWords';
 import type { TestboxBlock, TestboxBlockAdmin, TestboxPoll } from './useTestboxView';
 
@@ -372,7 +372,7 @@ describe('step 5: install, its six phases and the end of it', () => {
     });
     expect(sent.repos).toEqual([{
       name: REPO.name, fetchUrl: REPO.url, mirrorPath: '/var/lib/ccrc-testbox/mirrors/project-a.git',
-      packages: [{ name: 'server', installInputs: ['server/package.json', 'server/package-lock.json'], commands: ['npm test'] }],
+      packages: [{ name: 'server', installInputs: ['server/package.json', 'server/package-lock.json'], commands: [TESTBOX_DEFAULT_RUNNER] }],
       buildOutputs: [], systemTools: [],
     }]);
     const phases = [...flow().querySelectorAll<HTMLElement>('[data-testbox="phases"] li')];

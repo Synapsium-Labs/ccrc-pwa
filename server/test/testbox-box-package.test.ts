@@ -390,9 +390,11 @@ const RUNNING_SETS = [
 ];
 const indexOf = (l: string[], re: RegExp): number => l.findIndex((x) => re.test(x));
 const lastIndexOf = (l: string[], re: RegExp): number => { for (let i = l.length - 1; i >= 0; i--) if (re.test(l[i]!)) return i; return -1; };
-/** The TB_SYS lines phase 1 makes (its two queries) and nothing else. */
+/** The TB_SYS lines phase 1 makes (a user query for each account the box file names, then its two filesystem queries) and
+ *  nothing else (D-8166: a user that exists must be one the installer made). */
+const USER_QUERIES = ['getent passwd ccrc-tb-svc', 'getent passwd ccrc-tb-push', 'getent passwd ccrc-tb-install', 'getent passwd ccrc-tb-1', 'getent passwd ccrc-tb-2'];
 const QUERIES = (b: Box, made = false): string[] => [
-  `findmnt -n -o FSTYPE,TARGET -T ${made ? b.tbRoot : path.join(b.root, 'srv')}`, 'xfs_info /srv',
+  ...USER_QUERIES, `findmnt -n -o FSTYPE,TARGET -T ${made ? b.tbRoot : path.join(b.root, 'srv')}`, 'xfs_info /srv',
 ];
 
 describe('the installer: a first install into a fixture root (D-7409, D-7424)', () => {
@@ -484,11 +486,11 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     const l = lines(b);
     expect(l.filter((x) => /^(useradd|groupadd|usermod) /.test(x)).map((x) => x.replace(b.root, '<root>'))).toEqual([
       'groupadd --system ccrc-tb-git',
-      'useradd --system --user-group --home-dir <root>/var/lib/ccrc-tb-svc --shell /usr/sbin/nologin --create-home ccrc-tb-svc',
-      'useradd --system --user-group --home-dir <root>/var/lib/ccrc-tb-push --shell /usr/bin/git-shell ccrc-tb-push',
-      'useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-1',
-      'useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-2',
-      'useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-install',
+      'useradd --system --user-group --comment ccrc test box --home-dir <root>/var/lib/ccrc-tb-svc --shell /usr/sbin/nologin --create-home ccrc-tb-svc',
+      'useradd --system --user-group --comment ccrc test box --home-dir <root>/var/lib/ccrc-tb-push --shell /usr/bin/git-shell ccrc-tb-push',
+      'useradd --system --user-group --comment ccrc test box --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-1',
+      'useradd --system --user-group --comment ccrc test box --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-2',
+      'useradd --system --user-group --comment ccrc test box --home-dir /nonexistent --shell /usr/sbin/nologin ccrc-tb-install',
       'usermod -a -G ccrc-tb-git ccrc-tb-svc', 'usermod -a -G ccrc-tb-git ccrc-tb-push',
     ]);
     expect(l).toContain(`chown root:ccrc-tb-svc ${b.boxFile}`);
@@ -603,7 +605,7 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     }
   });
 
-  it('a second run with the same tag and an unchanged box file changes nothing: the same tree, owners and modes, and only phase 1\'s two queries', async () => {
+  it('a second run with the same tag and an unchanged box file changes nothing: the same tree, owners and modes, and only phase 1\'s queries', async () => {
     const before = treeOf(b.root);
     const n = sysLog(b).length;
     const again = await install(b, { staging: W.staging });
@@ -672,7 +674,7 @@ describe('the installer\'s refusals, each before anything is written (D-7423, D-
     const r = await install(b, { staging: W.staging });
     expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: CCRC_TESTBOX_ROOT=${b.tbRoot} is on ext4, not XFS; nothing was written`]);
     expect(treeOf(b.root)).toEqual(before);
-    expect(lines(b)).toEqual([QUERIES(b)[0]]);
+    expect(lines(b)).toEqual([...USER_QUERIES, QUERIES(b)[USER_QUERIES.length]]);
     const c = makeBox(W, { xfs: 'meta-data=/dev/fixture isize=512\n         =   reflink=0    bigtime=1\n' });
     await refused(c, {}, `CCRC_TESTBOX_ROOT=${c.tbRoot} is on XFS without reflink=1`, true);
   });
@@ -692,6 +694,58 @@ describe('the installer\'s refusals, each before anything is written (D-7423, D-
 
   it('a box path that is not absolute: the root installer has no reader\'s home to resolve ~/ against (D-7568)', async () => {
     await refused(makeBox(W, { boxLines: ['CCRC_TESTBOX_ROOT="~/.ccrc/testbox"'] }), {}, 'CCRC_TESTBOX_ROOT=~/.ccrc/testbox is not an absolute path (the installer has no reader\'s home)', false);
+  });
+});
+
+describe('the installer refuses a path or a user that would hand a system directory or account to the test box (D-8166)', () => {
+  const refusedAt = async (b: Box, why: string, sysLines: string[] = []): Promise<void> => {
+    const before = treeOf(b.root);
+    const r = await install(b, { staging: W.staging });
+    expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: ${why}; nothing was written`]);
+    expect(treeOf(b.root)).toEqual(before);
+    expect(lines(b)).toEqual(sysLines);
+  };
+  const BELOW = 'is not a directory below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox, and the installer makes it root\'s';
+
+  it('a service token that is not the service user\'s: /etc/passwd would be removed by --unpair, and a root-owned path replaced by the pairing', async () => {
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_TOKEN_FILE=/etc/passwd'] }),
+      'CCRC_TESTBOX_SERVICE_TOKEN_FILE=/etc/passwd is not in the service user\'s home (~/ or /var/lib/ccrc-tb-svc/), and the installer removes it on unpair');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_TOKEN_FILE=/var/lib/ccrc-tb-push/token'] }),
+      'CCRC_TESTBOX_SERVICE_TOKEN_FILE=/var/lib/ccrc-tb-push/token is not in the service user\'s home (~/ or /var/lib/ccrc-tb-svc/), and the installer removes it on unpair');
+  });
+
+  it('a run root, a rows directory or a tools directory that is a system directory is refused, so no run user can read /root', async () => {
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_ROOT=/root'] }), `CCRC_TESTBOX_ROOT=/root ${BELOW}`);
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_REPOS=/etc'] }), `CCRC_TESTBOX_REPOS=/etc ${BELOW}`);
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_TOOLS_DIR=/usr/local'] }), `CCRC_TESTBOX_TOOLS_DIR=/usr/local ${BELOW}`);
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_ROOT=/srv'] }), `CCRC_TESTBOX_ROOT=/srv ${BELOW}`);
+  });
+
+  it('a repository row whose mirror lies under /root, or directly under a base, is refused: its parent directory is made root\'s', async () => {
+    for (const mirror of ['/root/x.git', '/srv/x.git']) {
+      const b = makeBox(W);
+      const row = JSON.parse(readFileSync(b.rowFile, 'utf8')) as Record<string, unknown>;
+      writeFileSync(b.rowFile, `${JSON.stringify({ ...row, mirrorPath: mirror })}\n`);
+      await refusedAt(b, 'repository row project-a has a mirrorPath that is not below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox (its parent directory is made root\'s)');
+    }
+  });
+
+  it('a service or push user that is root, or the same account twice, is refused', async () => {
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_USER=root'] }), 'CCRC_TESTBOX_SERVICE_USER names root; the service and the push user are accounts of their own');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_PUSH_USER=root'] }), 'CCRC_TESTBOX_PUSH_USER names root; the service and the push user are accounts of their own');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_PUSH_USER=ccrc-tb-svc'] }), 'the service user and the push user are the same account (ccrc-tb-svc)');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_SERVICE_USER=ccrc-tb-1'] }), 'the service user and the push user are not run users: ccrc-tb-1 is one of the names CCRC_TESTBOX_RUN_USER_PREFIX makes');
+    await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_PUSH_USER=ccrc-tb-install'] }), 'the service user and the push user are not run users: ccrc-tb-install is one of the names CCRC_TESTBOX_RUN_USER_PREFIX makes');
+  });
+
+  it('a user that already exists and that this installer did not make (no account comment) is refused by name, whichever role names it', async () => {
+    const svc = makeBox(W);
+    appendFileSync(path.join(svc.fx, 'sys.db'), 'passwd ccrc-tb-svc\n');
+    await refusedAt(svc, 'the user ccrc-tb-svc already exists and this installer did not make it; name an account of the test box\'s own in the box file', ['getent passwd ccrc-tb-svc']);
+    const run = makeBox(W, { boxLines: ['CCRC_TESTBOX_RUN_USER_PREFIX=alice-'] });
+    appendFileSync(path.join(run.fx, 'sys.db'), 'passwd alice-2\n');
+    await refusedAt(run, 'the user alice-2 already exists and this installer did not make it; name an account of the test box\'s own in the box file',
+      ['getent passwd ccrc-tb-svc', 'getent passwd ccrc-tb-push', 'getent passwd alice-install', 'getent passwd alice-1', 'getent passwd alice-2']);
   });
 });
 

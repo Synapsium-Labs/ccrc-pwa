@@ -242,7 +242,7 @@ export type TestboxAdminCode =
   | 'systemd-too-old' | 'no-nftables' | 'not-xfs-reflink' | 'address-not-ip' | 'no-egress' | 'other-release'
   | 'verify-failed' | 'copy-failed' | 'box-value-refused' | 'install-refused' | 'install-failed' | 'pair-failed'
   | 'status-not-ok' | 'pairing-keys-in-ccrc-env' | 'key-in-ccrc-env' | 'runs-in-progress' | 'idle-deadline'
-  | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped';
+  | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped' | 'interrupted';
 /** Each code in one line that names no value (no address, path, key or setting text), for the card. */
 export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'busy': 'Another test box act is already running; wait for it to end or cancel it.',
@@ -280,6 +280,7 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'parity-differs': 'The test box and the fleet host gave different results.',
   'not-connected': 'No test box is connected.',
   'box-side-skipped': 'The box could not be reached, so its side was left as it is.',
+  'interrupted': 'The act stopped before it finished, because the fleet host restarted or its unit was stopped; run it again.',
 };
 export const TESTBOX_ADMIN_CODE_MAP: Record<TestboxAdminCode, true> = Object.fromEntries(
   Object.keys(TESTBOX_ADMIN_CODE_SENTENCE).map((k) => [k, true]),

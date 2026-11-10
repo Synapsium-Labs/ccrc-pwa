@@ -500,6 +500,7 @@ describe('the codes', () => {
       'address-not-ip', 'no-egress', 'other-release', 'verify-failed', 'copy-failed', 'box-value-refused', 'install-refused',
       'install-failed', 'pair-failed', 'status-not-ok', 'pairing-keys-in-ccrc-env', 'key-in-ccrc-env', 'runs-in-progress',
       'idle-deadline', 'cancelled', 'gh-signed-out', 'parity-differs', 'not-connected', 'box-side-skipped',
+      'interrupted',
     ]) expect(TESTBOX_ADMIN_CODES, c).toContain(c);
     expect(TESTBOX_ADMIN_CODES.length).toBeGreaterThanOrEqual(35);
     for (const c of TESTBOX_ADMIN_CODES) {

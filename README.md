@@ -7209,7 +7209,10 @@ disk and never joins a network.
    reaches the box's ssh port and its service port, and the box reaches nothing on that network.
 3. Root login by key, or a user with passwordless sudo, and the operator able to add one line to that user's
    `authorized_keys`.
-4. An XFS file system with `reflink=1`, mounted where `CCRC_TESTBOX_ROOT` will live.
+4. An XFS file system with `reflink=1`, mounted where `CCRC_TESTBOX_ROOT` will live. The card starts the root at
+   `/var/lib/ccrc-testbox`, and **Check the box** measures that path until a Connect records the box's own root, so mount
+   the file system there (a bind mount does); the installer measures the root typed in step 4 again, as root, and refuses
+   a root that is not XFS with `reflink=1`.
 5. Open egress to the release host and the npm upstream for the first install; the box's firewall closes it afterwards.
 
 **The card's six steps.** With no box connected the card says what a test box is for and offers **Connect a test box**.
@@ -7225,8 +7228,15 @@ session only. With sign-in off the card says sign-in is required rather than off
    console and the key is pinned. The read-only preflight then lists each prerequisite with a pass or the reason it
    failed; **Check again** repeats it, and nothing on the box has changed.
 4. **The box's settings.** The box's own settings in their families, filled with their defaults, the address the box was
-   reached on filling `CCRC_TESTBOX_LISTEN`, and one row per repository to run (name, fetch URL, checkout path and test
-   command, offered from the fleet's own repositories). Each value is checked as it is typed and again on the fleet host.
+   reached on filling `CCRC_TESTBOX_LISTEN`, and one row per repository to run (name, fetch URL, package folder and test
+   runner, offered from the fleet's own repositories). The runner starts as `./node_modules/.bin/vitest`: parity appends
+   `run`, `--reporter=junit` and `--maxWorkers=N` to it, so a package manager's `npm test` would swallow the flags. Each
+   value is checked as it is typed, again on the fleet host and once more by the installer, as root. The installer makes
+   the root, the rows directory, the tools directory and each mirror's parent directory root's, and the settings change
+   with no step-up, so those paths must lie below `/srv`, `/mnt`, `/media`, `/opt`, `/data`, `/etc/ccrc-testbox` or
+   `/var/lib/ccrc-testbox` (never a system directory); the service token is the service user's (`~/...` or below
+   `/var/lib/<service user>/`); no user is `root`, named twice or one of the run users' names; and a user that already exists must be one the installer
+   made (its account comment is `ccrc test box`), so a person's or another service's account is never taken over.
 5. **Install and pair.** The fleet host verifies its own release tag as `ccrc update` does, copies it to the box, writes
    the box's settings file, runs the installer and pairs the two sides: the service token and the push key are made on
    the fleet host and the fleet-side settings land in the overlay `~/.ccrc/testbox.env`, never in `ccrc.env`. The card
@@ -7238,7 +7248,13 @@ session only. With sign-in off the card says sign-in is required rather than off
 
 **Connected.** The card shows the address as set (never its text), the pinned fingerprint and the last act, and offers
 four controls, plus **Settings** (fleet-side keys apply at once; a change to a box setting waits until no run is in
-progress, **Apply when idle** then waits with a 6-hour deadline and a **Cancel**):
+progress, **Apply when idle** then waits with a 6-hour deadline and a **Cancel**). A box setting edit sends only the keys
+changed: the box's current settings file is read as root and the keys are put into it, every other line kept, and the whole
+file is checked before a byte is written. "No run in progress" is the fleet's own status where the fleet host has an
+`agent.env` (a `--role fleet` install); a single box, which has none, asks the box for its active run, prepare and install
+units instead. An act whose unit is gone (a reboot, an OOM kill, a stopped unit) reads `running` only for the first 45
+seconds: after that, with its lock free, the status ends it as failed with the code `interrupted` and the card offers its
+controls again.
 
 - **Repair** re-pushes the release recorded on the box, verified again on the fleet host, and re-runs the installer from
   it with the box's current settings file. It never changes the tag.
@@ -7264,8 +7280,14 @@ screen and one on a phone.
 session-only behind the account gate: no box token and no coordinator reaches them, neither is exempt from the cookie
 check, and a refusal is a closed code, never the verb's sentence. The agent's exec whitelist is unchanged.
 
-**The hand steps remain.** The test box plan's hand install, pairing and parity (`docs/superpowers/plans/2026-10-29-test-box.md`,
-TB12 to TB14) stay the recovery path for a box the card cannot reach.
+**The hand steps remain, for the install and not for the switch.** The test box plan's hand install, pairing and parity
+(`docs/superpowers/plans/2026-10-29-test-box.md`, TB12 to TB14) still install and pair a box the card cannot reach, and a
+hand-installed box answers runs sent to it by `ccrc test` as before. They do not arm the switch: **On** (and
+`ccd testbox-remote --state on`) needs a passing parity record that matches the pin and the box file's digest, and only the
+card's **Confirm** and **Connect** record those, so a box set up by hand answers `parity-required` until it has been
+connected through the card. There is no hand way to write the record, on purpose: the gate exists so that no box runs
+remote work without the card's own parity measurement. Parity runs the command head of the rows the fleet host itself sent (`~/.ccrc/testbox-rows`), never the box's
+copy of its row files, so root on the box cannot make the fleet host run a command of its choosing.
 
 ### Session history: lossless recall (`ccrc history`)
 
