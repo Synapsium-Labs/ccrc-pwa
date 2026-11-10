@@ -326,7 +326,8 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
      depth-1 parents carry `capped` 1. If so, an unreadable re-roll usually drops a steered gist for the fresh rollup.
      That is the safe direction, and the path itself is rare.
   5. Under `--sequence.shuffle`, seeds 1 and 3 fail DM36 and RB5's parser-throw case in `history-derive.test.ts`,
-     outside the node-steering describe. They fail the same way before W3-4's fix rounds (measured by the worker).
+     outside the node-steering describe. The worker measured them failing the same way at fix round 1's tip,
+     `a300c0210`, so W3-4's last two rounds did not cause them. No review re-measured this.
 
 ### Latest rulings and evidence — 2026-11-09 to 2026-11-10
 
