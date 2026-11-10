@@ -300,10 +300,9 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
       // not narrow a distinction it received, and this field distinguishes by
       // PRESENCE. Its own spread rather than a member of `extra`, whose value
-      // type is `number` and must stay so: `by` is the project's NAME.
+      // type is `number` and must stay so: `by` is the project's NAME. `detail` (D-6096, `self-dispatch`) is the same.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
         ...(r.by === undefined ? {} : { by: r.by }),
-        // D-6096: `self-dispatch`'s words, by presence, like `by` and `key` (an adapter may not narrow what it received).
         ...(r.detail === undefined ? {} : { detail: r.detail }),
         ...(r.key === undefined ? {} : { key: r.key }), ...(r.holder === undefined ? {} : { holder: r.holder }) });
     }
@@ -1688,9 +1687,9 @@ export function registerCoordRoutes(
     // fleet act is composed, so none of the dispatch's deps below are built for it, and the skill self-install (which
     // belongs to a bound WORKER) never runs for it. Any `inPlace` value but `true` is malformed.
     if (body.inPlace !== undefined) {
-      if (body.inPlace !== true) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'inPlace: must be true when given' });
+      if (body.inPlace !== true) return refuseRoute(reply, 'bad-request', { detail: 'inPlace: must be true when given' });
       if (typeof body.by !== 'string' || body.by === '' || typeof body.byUuid !== 'string' || body.byUuid === '') {
-        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'inPlace: by and byUuid (the claimant) are required' });
+        return refuseRoute(reply, 'bad-request', { detail: 'inPlace: by and byUuid (the claimant) are required' });
       }
       const by = body.by;
       const byUuid = body.byUuid;
@@ -1906,6 +1905,18 @@ export function registerCoordRoutes(
     }
   });
 
+  /** `refuseAdvance`, after the cap's refusal (and only it) was stamped and journalled inside the serialiser and put in the
+   *  feed (D-6095). Kept out of the handler, which `advance-gate.test.ts` holds to four `if`s. */
+  const refuseAdvanceNoting = (
+    reply: FastifyReply, coord: CoordStore, id: number, r: Parameters<typeof refuseAdvance>[1],
+  ): FastifyReply => {
+    if ('reject' in r && r.reject.code === 'cap-concurrency') {
+      noteCapRefusal(coord, id, r.reject.limit, r.reject.running);
+      announceAdmissionRefusal(coord, id, r.reject.limit, r.reject.running);
+    }
+    return refuseAdvance(reply, r);
+  };
+
   /**
    * `POST /api/runs/:id/advance`'s ACT, after `advanceGate` admitted the run (ARCH-33): the forward edges re-measure
    * the claim, then the advance and the read-back. It decides no gate.
@@ -2031,12 +2042,7 @@ export function registerCoordRoutes(
       if (!gate.ok) {
         // D-6095: a send-back the cap refused waits like a refused dispatch: stamped and journalled inside the serialiser,
         // its feed row written beside the refusal. The run keeps its state.
-        const r = gate.refusal;
-        if ('reject' in r && r.reject.code === 'cap-concurrency') {
-          noteCapRefusal(coord, id, r.reject.limit, r.reject.running);
-          announceAdmissionRefusal(coord, id, r.reject.limit, r.reject.running);
-        }
-        return refuseAdvance(reply, r);
+        return refuseAdvanceNoting(reply, coord, id, gate.refusal);
       }
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });

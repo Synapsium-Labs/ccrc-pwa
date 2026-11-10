@@ -234,6 +234,10 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
       drive: storeArm((s, id) => s.markDispatched(id, WORKER, null, null, true)) }],
     'coord/store.ts#CoordStore.dispatchRun markDispatched': [{ arm: 'dispatchRun', session: WORKER,
       drive: storeArm((s, id) => { s.dispatchRun({ runId: id, sessionId: WORKER, workspace: null, branch: null, resumed: true, clearedAt: null, items: [] }); }) }],
+    // D-6096: the in-place bind, which binds the claimant through `bindSession` and records its occupant's birth like any
+    // later wave; the session here is the fixture's worker only because the census drives every arm over the same name.
+    'coord/store.ts#CoordStore.bindInPlace bindSession': [{ arm: 'bindInPlace', session: WORKER,
+      drive: storeArm((s, id) => { s.bindInPlace(id, WORKER, 'feat/sibling'); }) }],
     'coord/store.ts#CoordStore.setSession bindSession': [{ arm: 'setSession', session: WORKER,
       drive: storeArm((s, id) => { s.setSession(id, WORKER); }) }],
     'coord/dispatch.ts#spawnFresh setSession': [
@@ -250,7 +254,7 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
   const ARMS = Object.values(DRIVERS).flat();
   const RECORDS_NOTHING: Record<OnRecord, readonly string[]> = {
     placeable: ['spawnFresh adopted', 'bindReturnedChild'],
-    unplaceable: ['open route', 'markDispatched', 'dispatchRun', 'setSession', 'spawnFresh adopted', 'bindReturnedChild'],
+    unplaceable: ['open route', 'markDispatched', 'dispatchRun', 'bindInPlace', 'setSession', 'spawnFresh adopted', 'bindReturnedChild'],
   };
   const CASES = (['placeable', 'unplaceable'] as const).flatMap((kind) => ARMS.map((a) => [`${a.arm}, over a ${kind} birth on record`, a, kind] as const));
 

@@ -273,6 +273,8 @@ describe('the reconstruction drill', () => {
                                          // forgets the home; the recovery is the coordinator
                                          // sending the right one on the next open, not a parse.
       'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
+      'inPlace',                         // D-6096: a run its coordinator took in a sibling worktree. No ledger line, registry
+                                         // field or `.prhistory` row says so, so a rebuilt run reads as an ordinary one.
       'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
       'health',                          // F7's per-run health facts. Every one of the eight is a
                                          // measurement over `mail_deliveries`, `mail_rejections` or
@@ -349,6 +351,7 @@ describe('the reconstruction drill', () => {
       lastMoveAt: true,
       hadChild: true,
       runTitle: true, closedBy: true, closeDetail: true,
+      inPlace: true,   // D-6096 (migration 52): a run its coordinator took in place; absent otherwise
       stuck: true, waitsOn: true, blockedBy: true, coordinatorGone: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
@@ -376,13 +379,14 @@ describe('the reconstruction drill', () => {
     // reason: nothing stores them on the run, the verdict's pass derives them from the runs and the fleet's readings
     // (`coord/runStuckPass.ts`). What a DB loss does cost them is `gone_since`'s anchors, so a gone owner's `since`
     // restarts at the first pass after the rebuild: the later, more patient direction.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(36);
+    // Bumped 36 -> 37 (D-6096): `inPlace`, named in UNRECOVERABLE above.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(37);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(23);
+    expect(UNRECOVERABLE.length).toBe(24);
   });
 
   it('coordinator_calls is a table no artifact mirrors: reconstruct() rebuilds none of it (D-8126)', () => {
