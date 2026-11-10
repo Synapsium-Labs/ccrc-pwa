@@ -7262,7 +7262,7 @@ _check_codex() {
   # guard for a caller that sources this table without ccrc.
   local fn
   for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
-            _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
+            _codex_litellm_yaml _codex_runtime_cli _codex_runtime_wanted _models_node _models_roster_path _models_litellm_template \
             _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
             _codex_lane_mode _codex_lane_upstream _codex_mode_tiers _codex_other_tiers _codex_tier_is_other_mode _plat_mode \
             _codex_auth_status _codex_auth \
@@ -7473,10 +7473,10 @@ _check_codex() {
 # reaches the next lane or the re-measurement.
 _fix_codex() {
   (
-    local role="" lanes lrc=0 n src dst rt id replaced=0 cmp_ok=1 bytes
+    local role="" lanes lrc=0 n src dst rt id replaced=0 cmp_ok=1 bytes wanted=0
     local -a ids=() missing=()
     for n in _codex_lanes _codex_row _codex_lane_json_state _codex_lock _codex_unlock \
-             _codex_shim_file _codex_auth_lib _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
+             _codex_shim_file _codex_auth_lib _codex_runtime_cli _codex_runtime_wanted _models_node _models_roster_path _models_litellm_lane_held \
              _inst_atomic _inst_codex_tiers _box_env_value _models_node_locked; do
       declare -F "$n" >/dev/null 2>&1 || missing+=("$n")
     done
@@ -7555,9 +7555,16 @@ _fix_codex() {
       fi
     done
 
-    # 2. The runtime: rebuilt only when its own check refuses.
+    # 2. The runtime: rebuilt only when its own check refuses, and only when a
+    # lane runs on it. With no lane in litellm mode (`_codex_runtime_wanted`
+    # answers 1) the check itself asks nothing of the runtime (Stage 4, Task 5),
+    # so there is nothing here to cure and nothing is asked or built. When the
+    # modes cannot be told (2), this step is the one it always was.
     rt="$(_codex_runtime_cli)"
-    if [ ! -x "$rt" ]; then
+    _codex_runtime_wanted || wanted=$?
+    if [ "$wanted" -eq 1 ]; then
+      :
+    elif [ ! -x "$rt" ]; then
       echo "FIX codex: runtime: not rebuilt — \$HOME/.local/bin/ccgpt-runtime is not on this box (the lines above say why)"
     elif ! "$rt" check >/dev/null 2>&1; then
       echo "FIX codex: runtime: rebuilding with 'ccgpt-runtime build' — pip may take minutes"
@@ -7698,8 +7705,18 @@ _dr_cx_bins() {
 # The isolated runtime, by `ccgpt-runtime check` — one word per failure, each
 # its own sentence and remedy. A `ccgpt-runtime` that is not there is the
 # executables row's finding, said there once.
+# ONLY A LANE IN LITELLM MODE RUNS ON IT (codex-bridge Stage 4, Task 5): when
+# the roster says none does (`_codex_runtime_wanted` answers 1), this box needs
+# no runtime, so the row asks nothing of it and says so, whether or not one is
+# there. When a lane does, or when it cannot be told (2), the row is the one it
+# always was: "cannot tell" is never "not needed".
 _dr_cx_runtime() {
-  local cli ans rc
+  local cli ans rc wrc=0
+  _codex_runtime_wanted || wrc=$?
+  if [ "$wrc" -eq 1 ]; then
+    DRX_RUNTIME="not needed (no codex lane runs in litellm mode)"
+    return 0
+  fi
   cli="$(_codex_runtime_cli)"
   [ -x "$cli" ] || return 0
   ans="$("$cli" check 2>&1)"; rc=$?

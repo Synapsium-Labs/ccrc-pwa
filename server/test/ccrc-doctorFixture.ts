@@ -1872,6 +1872,10 @@ export interface FixCodexCase {
   litellm?: Record<string, 'same' | 'rendered' | 'restarted' | 'foreign' | 'roster-invalid'>;
   /** `ccgpt-runtime check` before a build, `build`, and `check` after one; default 0 */
   runtime?: { check?: number; build?: number; afterBuild?: number };
+  /** `_codex_runtime_wanted`'s answer (codex bridge Stage 4, Task 5): 0 a lane runs in litellm mode, 1 none does,
+   *  2 it cannot be told. A case that names it has the question recorded in `calls`; one that does not is answered 0
+   *  silently, so the cases written before the question existed count their calls as they did. */
+  wanted?: 0 | 1 | 2;
   /** each placed executable against the fixture's shipped tree; default `same` */
   bins?: Partial<Record<LaneBin, 'same' | 'drift' | 'missing' | 'mode'>>;
   /** executables the fixture's shipped tree LACKS */
