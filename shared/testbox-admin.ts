@@ -56,6 +56,13 @@ export const TESTBOX_RUN_SHAPING: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_RUN_CPU_QUOTA', 'CCRC_TESTBOX_RUN_TMPDIR', 'CCRC_TESTBOX_TMPFS',
 ]);
 
+/** The four box settings the pairing rests on: the service's listen address, its token file and user, and the push user. Connect
+ *  and Replace write them with the pairing keys; `install.sh --reapply` never moves the token or re-keys the push user, so the
+ *  connected card keeps them as they were Connected and `settings-box` refuses them (only Replace changes them). */
+export const TESTBOX_PAIRED_BOX_KEYS: readonly string[] = Object.freeze([
+  'CCRC_TESTBOX_LISTEN', 'CCRC_TESTBOX_SERVICE_TOKEN_FILE', 'CCRC_TESTBOX_SERVICE_USER', 'CCRC_TESTBOX_PUSH_USER',
+]);
+
 /** A key's shape class: `_tb_shape_class` in `ccd/testbox-knobs`, key for key. */
 export type TestboxShapeClass =
   | 'url' | 'path' | 'size' | 'duration' | 'durations' | 'lostrun' | 'fallback' | 'onoff' | 'percent' | 'count'
@@ -184,6 +191,23 @@ export function isBoxAddress(v: unknown): v is string {
   return !/^[0-9]+$/.test(labels[labels.length - 1]!);   // a dotted run of numbers that is no IPv4 is no name
 }
 
+/** Whether an IP literal is on a private network: RFC 1918, the shared address space 100.64/10 (tailnets) or IPv6 unique
+ *  local addresses fc00::/7. A host name, or anything that is no IP literal, is not. The service has no TLS and its firewall
+ *  matches only the listen address (spec M21, C4), so Connect refuses any other address; `_tba_is_private_ip` in
+ *  `ccd/ccrc-testbox-admin` is this rule, held equal by `server/test/testbox-admin-contract.test.ts`. */
+export function isPrivateNetworkAddress(v: unknown): boolean {
+  if (typeof v !== 'string') return false;
+  if (IPV4_RE.test(v)) {
+    const [a, b] = v.split('.').map(Number) as [number, number];
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  }
+  if (!isIpv6(v)) return false;
+  const first = v.split(':')[0]!;
+  if (!HEX_GROUP_RE.test(first)) return false;
+  const n = parseInt(first, 16);
+  return n >= 0xfc00 && n <= 0xfdff;
+}
+
 /** A port from 1 to 65535: a whole number, or the digits of one with no lead zero. */
 export function isSshPort(v: unknown): boolean {
   if (typeof v === 'number') return Number.isInteger(v) && v >= 1 && v <= 65535;
@@ -242,7 +266,8 @@ export type TestboxAdminCode =
   | 'systemd-too-old' | 'no-nftables' | 'not-xfs-reflink' | 'address-not-ip' | 'no-egress' | 'other-release'
   | 'verify-failed' | 'copy-failed' | 'box-value-refused' | 'install-refused' | 'install-failed' | 'pair-failed'
   | 'status-not-ok' | 'pairing-keys-in-ccrc-env' | 'key-in-ccrc-env' | 'runs-in-progress' | 'idle-deadline'
-  | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped' | 'interrupted';
+  | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped' | 'interrupted'
+  | 'unpair-failed' | 'address-not-private' | 'box-already-set';
 /** Each code in one line that names no value (no address, path, key or setting text), for the card. */
 export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'busy': 'Another test box act is already running; wait for it to end or cancel it.',
@@ -250,7 +275,7 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'no-access-key': 'ccrc has not made its access key yet; make it first.',
   'foreign-key': 'The access key file was not made by ccrc, so ccrc will not use or replace it.',
   'unreachable': 'The box did not answer on that address and port in time.',
-  'auth-refused': 'The box refused the access key; check that the line was added for the login user.',
+  'auth-refused': 'The box refused the access key; check that the line was added for the login user, and that its from address is the one the box sees ccrc connect from.',
   'host-key-unknown': 'The box has no pinned host key yet; check its fingerprint and confirm it.',
   'host-key-changed': 'The box presented a different host key than the pinned one; confirm the new fingerprint to go on.',
   'fingerprint-mismatch': 'The fingerprint you confirmed is not the one the box presented.',
@@ -279,7 +304,10 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'gh-signed-out': 'GitHub is not signed in on the fleet host, so parity cannot choose its pull requests.',
   'parity-differs': 'The test box and the fleet host gave different results.',
   'not-connected': 'No test box is connected.',
-  'box-side-skipped': 'The box could not be reached, so its side was left as it is.',
+  'box-side-skipped': 'ccrc did not touch the box (it did not answer, or its host key was not trusted). If you added ccrc\'s access line to it, remove that line by hand.',
+  'unpair-failed': 'The box\'s own unpair did not finish. Run its installer\'s --unpair by hand, and remove ccrc\'s access line from its authorized_keys if it is still there.',
+  'address-not-private': 'The box is not on a private network, so ccrc will not connect to it. Use an address on a tailnet, a VPN or your provider\'s private network.',
+  'box-already-set': 'A box is already set up here, so its address and port change only through Replace or Start over.',
   'interrupted': 'The act stopped before it finished, because the fleet host restarted or its unit was stopped; run it again.',
 };
 export const TESTBOX_ADMIN_CODE_MAP: Record<TestboxAdminCode, true> = Object.fromEntries(
@@ -338,8 +366,8 @@ export interface TestboxAdminSubSpec {
   readonly fields: Readonly<Record<string, TestboxAdminField>>;
   /** Whether the act needs the passkey step-up: it puts, replaces or removes a credential or a pin (C14). */
   readonly stepUp: boolean;
-  /** Whether the act detaches into a unit under the lock. `settings-box` is short unless it carries `whenIdle`
-   *  (`testboxAdminIsLong`). */
+  /** Whether the act detaches into a unit under the lock. `settings-box` always does: its apply (the installer's --reapply
+   *  and the reads around it) outruns a short sub's bound. `whenIdle` only chooses wait or refuse `runs-in-progress`. */
   readonly long: boolean;
   /** The ledger act this sub records, or null for a read. */
   readonly act: TestboxAct | null;
@@ -352,6 +380,9 @@ const address = f('--address', 'address', { required: true });
 const port = f('--port', 'port');
 const loginUser = f('--login', 'user');
 const connection = { address, port, user: loginUser };
+/** The address the box sees ccrc connect from, when it differs from the one the fleet host's route says (a NAT, a second
+ *  network): the access line's `from=` takes it (spec §5.1). An IP literal; the verb refuses a host name here. */
+const source = f('--source', 'address');
 
 const spec = (
   fields: Record<string, TestboxAdminField>,
@@ -366,7 +397,7 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
   'status': spec({}, { act: null }),
   'read': spec({}, { act: null }),
   // `key` records the connection (address, port, login) in the state file; every later sub reads it from there.
-  'key': spec({ ...connection }, { stepUp: true, act: 'connect' }),
+  'key': spec({ ...connection, source }, { stepUp: true, act: 'connect' }),
   'probe': spec({}, { act: null }),
   'pin': spec({ fingerprint: f('--fingerprint', 'fingerprint', { required: true }) }, { stepUp: true, act: 'confirm-host-key' }),
   'preflight': spec({}, { act: null }),
@@ -379,7 +410,7 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
     settings: f('--set', 'setting-box', { required: true, repeatable: true }),
     repos: f('--repo', 'repo', { repeatable: true }),
     whenIdle: f('--when-idle', 'true'),
-  }, { act: 'settings-box' }),
+  }, { long: true, act: 'settings-box' }),
   'cancel': spec({}, { act: 'cancel' }),
   'parity': spec({ prs: f('--pr', 'pr', { repeatable: true }) }, { long: true, act: 'parity' }),
   'repair': spec({}, { long: true, act: 'repair' }),
@@ -392,12 +423,10 @@ export function isTestboxAdminSub(v: unknown): v is TestboxAdminSub {
   return typeof v === 'string' && Object.hasOwn(TESTBOX_ADMIN_SUB_MAP, v);
 }
 
-/** Whether this call detaches: the sub is long, or it is `settings-box` carrying `whenIdle`. `fields` are as built. */
-export function testboxAdminIsLong(sub: TestboxAdminSub, fields: unknown): boolean {
-  if (TESTBOX_ADMIN_SUBS[sub].long) return true;
-  if (sub !== 'settings-box' || typeof fields !== 'object' || fields === null) return false;
-  const w = (fields as Record<string, unknown>)['whenIdle'];
-  return w === true || w === 'true';
+/** Whether this call detaches: the sub's own row says (`settings-box` always does; `whenIdle` only chooses wait or refuse).
+ *  `_fields` is kept so every caller names the call it asks about. */
+export function testboxAdminIsLong(sub: TestboxAdminSub, _fields?: unknown): boolean {
+  return TESTBOX_ADMIN_SUBS[sub].long;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -512,7 +541,7 @@ function scalarText(v: unknown): string | null {
 }
 
 /** The words one field writes, or null when the value is off its grammar. */
-function fieldWords(fd: TestboxAdminField, value: unknown): string[] | null {
+function fieldWords(sub: TestboxAdminSub, fd: TestboxAdminField, value: unknown): string[] | null {
   switch (fd.grammar) {
     case 'address': return wordOk(value) && isBoxAddress(value) ? [`${fd.flag}=${value}`] : null;
     case 'user': return wordOk(value) && isLoginUser(value) ? [`${fd.flag}=${value}`] : null;
@@ -532,7 +561,8 @@ function fieldWords(fd: TestboxAdminField, value: unknown): string[] | null {
     case 'setting-fleet':
     case 'setting-box': {
       if (!plainObject(value)) return null;
-      const keys = fd.grammar === 'setting-fleet' ? TESTBOX_FLEET_EDITABLE : TESTBOX_BOX_KEYS;
+      const keys = fd.grammar === 'setting-fleet' ? TESTBOX_FLEET_EDITABLE
+        : sub === 'settings-box' ? TESTBOX_BOX_KEYS.filter((k) => !TESTBOX_PAIRED_BOX_KEYS.includes(k)) : TESTBOX_BOX_KEYS;
       const given = Object.keys(value);
       if (given.length < 1 || given.some((k) => !keys.includes(k))) return null;
       const out: string[] = [];
@@ -575,7 +605,7 @@ export function buildTestboxAdminArgv(sub: unknown, fields: unknown): TestboxAdm
       if (fd.required) return BAD;
       continue;
     }
-    const words = fieldWords(fd, fields[key]);
+    const words = fieldWords(sub, fd, fields[key]);
     if (words === null) return BAD;
     argv.push(...words);
   }
@@ -624,6 +654,10 @@ export interface TestboxAdminStatus {
    *  switches the installed tree without rewriting it, so a running release other than this one needs **Apply release**. */
   installedTag: string | null;
   parity: TestboxParityRecord | null;
+  /** The acts that ended before `act` began, oldest first, at most six. The verb's state holds one act, and the lane writes a
+   *  long act's ledger row from what it reads at its own pace, so an act that began and ended between two passes (or while the
+   *  server was down) is seen here and still gets its row (spec §2.10). Absent from a hand-built status (read as none). */
+  endedActs?: TestboxActState[];
 }
 
 /** What the gate compares the record with: the pin, the box file and the stale mark, as the status reports them. */
@@ -772,12 +806,14 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
   let raw: unknown;
   try { raw = JSON.parse(json); } catch { return { ok: false, reason: 'not JSON' }; }
   try {
-    // `installedTag` was added after the first status shape: a status without it (an older verb) reads as null.
-    const o = exact(raw && typeof raw === 'object' && !Array.isArray(raw) && !Object.hasOwn(raw, 'installedTag')
-      ? { ...(raw as Obj), installedTag: null } : raw, 'status', [
+    // `installedTag` and `endedActs` were added after the first status shape: a status without one (an older verb) reads as
+    // null and as none.
+    const o = exact(raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? { ...(!Object.hasOwn(raw, 'installedTag') ? { installedTag: null } : {}), ...(!Object.hasOwn(raw, 'endedActs') ? { endedActs: [] } : {}), ...(raw as Obj) } : raw, 'status', [
       'v', 'connected', 'addressSet', 'login', 'fingerprint', 'hostKey', 'boxFileSha256', 'act', 'boxSettings',
-      'boxSettingsAt', 'installedTag', 'parity',
+      'boxSettingsAt', 'installedTag', 'parity', 'endedActs',
     ]);
+    if (!Array.isArray(o['endedActs']) || o['endedActs'].length > 6) refuse('endedActs', 'not a list of at most six');
     if (o['v'] !== 1) refuse('v', 'not 1');
     const login = o['login'];
     if (login !== null && login !== 'root' && login !== 'sudo') refuse('login', 'not root, sudo or null');
@@ -803,6 +839,7 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
         boxSettingsAt: orNull(o['boxSettingsAt'], (x) => int(x, 'boxSettingsAt')),
         installedTag: orNull(o['installedTag'], (x) => (typeof x === 'string' && RELEASE_TAG_RE.test(x) ? x : refuse('installedTag', 'not a release tag'))),
         parity: orNull(o['parity'], (x) => parityRecord(x, 'parity')),
+        endedActs: (o['endedActs'] as unknown[]).map((x, i) => actState(x, `endedActs[${i}]`)),
       },
     };
   } catch (e) {

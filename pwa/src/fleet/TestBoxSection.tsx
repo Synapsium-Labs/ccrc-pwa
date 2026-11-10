@@ -235,7 +235,8 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
   return (
     <>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{T.stale}</p>}
-      {flow && <TestBoxConnect band={band} onChanged={poll.reload} begin={replacing} />}
+      {flow && <TestBoxConnect band={band} onChanged={poll.reload} begin={replacing}
+        sync={admin === undefined ? undefined : `${admin.connected}:${admin.hostKey}:${admin.parity}:${admin.act?.sub ?? ''}:${admin.act?.outcome ?? ''}`} />}
       {admin?.connected === true && (
         <TestBoxManage band={band} onChanged={poll.reload} onReplaced={() => setReplacing(true)} fleetRows={fleetRows} onFleetChanged={onFleetChanged}
           boxRelease={box?.release ?? null} runsInProgress={box?.runs.inProgress ?? 0} />

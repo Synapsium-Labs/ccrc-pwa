@@ -215,6 +215,7 @@
 .testbox-connect-body { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .testbox-connect-stateline { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .testbox-connect-text { margin: 0; overflow-wrap: anywhere; }
+.testbox-connect-recovery { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-top: calc(var(--pad-card) / 2); border-top: 1px solid var(--edge-subtle); }
 .testbox-connect-row, .testbox-manage-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .testbox-key-line {
   display: block; min-width: 0; padding: calc(var(--pad-card) / 2); overflow-wrap: anywhere; word-break: break-all; white-space: pre-wrap;

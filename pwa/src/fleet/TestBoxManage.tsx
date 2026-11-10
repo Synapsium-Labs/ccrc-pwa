@@ -29,8 +29,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, Skeleton, useCancelFirst } from '@ccrc/ui';
 import {
-  TESTBOX_BOX_KEYS, TESTBOX_PAIRING_KEYS, TESTBOX_PHASED_SUB_MAP, TESTBOX_RUN_SHAPING, fitsTestboxShape, isBoxAddress,
-  isLoginUser, isSshPort, type TestboxAdminFields, type TestboxAdminSub, type TestboxPhasedSub,
+  TESTBOX_BOX_KEYS, TESTBOX_PAIRING_KEYS, TESTBOX_PHASED_SUB_MAP, TESTBOX_RUN_SHAPING, fitsTestboxShape,
+  type TestboxAdminFields, type TestboxAdminSub, type TestboxPhasedSub,
 } from '../../../shared/testbox-admin';
 import type { BoxSettingRow, TestboxAdminResult } from '../../../shared/api';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
@@ -39,9 +39,9 @@ import { ApiError } from '../lib/api';
 import { testboxRouteText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
-import { Field, Phases, StateLine } from './TestBoxConnect';
+import { BLANK_CONN, ConnFields, Field, PARTIAL_DISCONNECT, Phases, StateLine, connReady, keyFieldsOf, type Conn } from './TestBoxConnect';
 import {
-  BOX_SETTING_FAMILIES, FLEET_EDIT_KEYS, TESTBOX_FAMILY_FOLD, actWord, TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, blockedOf, checkWord, codeSentence, ledgerLine, manageRowLine,
+  BOX_SETTING_FAMILIES, FLEET_EDIT_KEYS, PAIRED_BOX_KEYS, TESTBOX_FAMILY_FOLD, actWord, TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, blockedOf, checkWord, codeSentence, ledgerLine, manageRowLine,
   phaseWord, settingLabel, shapeSentence,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
@@ -54,6 +54,7 @@ const ASSUME_FRESH = Infinity;
 const WIDE_LEDGER_ROWS = 10;
 
 type Band = 'phone' | 'laptop' | 'wide';
+const PAIRED_LOCKED: ReadonlySet<string> = new Set(PAIRED_BOX_KEYS);
 type Sheeted = 'replace' | 'disconnect';
 
 export interface TestBoxManageProps {
@@ -104,7 +105,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
   const [sheet, setSheet] = useState<Sheeted | null>(null);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
-  const [access, setAccess] = useState({ address: '', port: '22', login: 'root' });
+  const [access, setAccess] = useState<Conn>(BLANK_CONN);
   const [accessLine, setAccessLine] = useState<string | null>(null);
   const [accessChecked, setAccessChecked] = useState(false);
   const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no');
@@ -130,8 +131,9 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return null;
       refused?.(err);
-      // The fleet side is clean whether or not the box answered: the box side was skipped, and the status is read again.
-      if (refusalCodeOf(err) === 'box-side-skipped') { admin.reload(); onChanged?.(); line.say(codeSentence('box-side-skipped'), 'refusal'); return {}; }
+      // The fleet side is clean whether or not the box answered: the box side was skipped or did not finish, and the status is read again.
+      const code = refusalCodeOf(err);
+      if (code !== null && PARTIAL_DISCONNECT.has(code)) { admin.reload(); onChanged?.(); line.say(codeSentence(code), 'refusal'); return {}; }
       line.say(testboxRouteText(err) ?? C.unreadable, 'refusal');
       return null;
     }
@@ -170,7 +172,9 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
     return out;
   };
   const fleetKeys = FLEET_EDIT_KEYS.filter((k) => !ccrcEnv.has(k));
-  const changedBox = changed(TESTBOX_BOX_KEYS, false);
+  // The four pairing keys are shown and never sent: only Replace changes them (`TESTBOX_PAIRED_BOX_KEYS`).
+  const editableBoxKeys = TESTBOX_BOX_KEYS.filter((k) => !PAIRED_BOX_KEYS.includes(k));
+  const changedBox = changed(editableBoxKeys, false);
   const changedFleet = changed(fleetKeys, true);
   const problemOf = (key: string, value: string): string | null => (fitsTestboxShape(key, value) ? null : shapeSentence(key));
   const problems = Object.entries({ ...changedBox, ...changedFleet }).filter(([k, v]) => problemOf(k, v) !== null);
@@ -199,7 +203,8 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
       if (r === null) return;
       setEdits({});
     }
-    line.say(waitsForIdle ? T.waiting : T.saved);
+    // A box change is a detached act: its phases show below, so this says only that it began (or that it waits).
+    line.say(Object.keys(changedBox).length === 0 ? T.saved : waitsForIdle ? T.waiting : T.applying);
   };
 
   const cancelWait = async (): Promise<void> => {
@@ -238,12 +243,12 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
       if (r !== null) setFingerprint(null);
     } finally { setChecking(false); }
   };
-  const accessReady = isBoxAddress(access.address.trim()) && isSshPort(access.port.trim()) && isLoginUser(access.login.trim());
+  const accessReady = connReady(access);
   const showAccessLine = async (): Promise<void> => {
-    const r = await run('key', { address: access.address.trim(), port: access.port.trim(), user: access.login.trim() });
+    const r = await run('key', keyFieldsOf(access));
     if (r?.line === undefined) return;
     // The address has done its work: it is forgotten with the form.
-    setAccess({ address: '', port: '22', login: 'root' });
+    setAccess(BLANK_CONN);
     setAccessLine(r.line);
     setCopied('no');
   };
@@ -305,13 +310,8 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
           {accessLine === null ? (
             <>
               <p className="settings-note">{T.accessIntro}</p>
-              <div className="testbox-form testbox-access">
-                <Field label={C.addressLabel} value={access.address} error={access.address === '' || isBoxAddress(access.address.trim()) ? null : C.badAddress}
-                  onChange={(v) => setAccess({ ...access, address: v })} />
-                <Field label={C.portLabel} value={access.port} error={access.port === '' || isSshPort(access.port.trim()) ? null : C.badPort}
-                  onChange={(v) => setAccess({ ...access, port: v })} />
-                <Field label={C.loginLabel} value={access.login} error={access.login === '' || isLoginUser(access.login.trim()) ? null : C.badLogin}
-                  onChange={(v) => setAccess({ ...access, login: v })} />
+              <div className="testbox-access">
+                <ConnFields conn={access} setConn={setAccess} withSource />
               </div>
             </>
           ) : (
@@ -397,7 +397,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
           {running && phased !== null && act !== null && (
             <>
               <Phases sub={phased} act={act} />
-              {settingsRunning && (
+              {settingsRunning && act?.phase === 'wait' && (
                 <>
                   <p className="settings-note" data-testbox="waiting">{T.waiting}</p>
                   <Button variant="ghost" size={size} disabled={admin.busy} onClick={() => void cancelWait()} data-testbox="cancel-wait">{T.cancel}</Button>
@@ -425,7 +425,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
               <GroupHead text={T.boxHead} />
               {BOX_SETTING_FAMILIES.map((f) => (
                 <SettingFamily key={f.id} id={f.id} title={f.title} keys={f.keys} rows={boxRows} edits={edits} problem={problemOf}
-                  onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))} />
+                  readOnly={PAIRED_LOCKED} readOnlyText={T.pairingLocked} onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))} />
               ))}
               {status.boxSettings === null && <p className="settings-note" data-testbox="box-none">{T.boxNone}</p>}
             </section>
@@ -433,7 +433,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
               <GroupHead text={T.fleetHead} />
               {fleetRows === null && <p className="settings-note" data-testbox="fleet-none">{T.fleetNone}</p>}
               <SettingFamily id="fleet" title={T.fleetHead} keys={FLEET_EDIT_KEYS} rows={fleetMap} edits={edits} problem={problemOf} readOnly={ccrcEnv}
-                onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))} />
+                readOnlyText={T.setInCcrcEnv} onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))} />
               <Family id="pairing" title={T.pairingHead}>
                 <p className="settings-note">{T.pairingNote}</p>
                 <dl className="testbox-pairing">
@@ -485,16 +485,17 @@ function StateRow({ term, id, children }: { term: string; id?: string; children:
 }
 
 /** A folded family of setting rows, each from `rows`, with `readOnly` keys drawn disabled and noted. */
-function SettingFamily({ id, title, keys, rows, edits, problem, readOnly, onEdit }: {
+function SettingFamily({ id, title, keys, rows, edits, problem, readOnly, readOnlyText, onEdit }: {
   id: string; title: string; keys: readonly string[]; rows: ReadonlyMap<string, BoxSettingRow>; edits: Readonly<Record<string, string>>;
-  problem: (key: string, value: string) => string | null; readOnly?: ReadonlySet<string>; onEdit: (key: string, value: string) => void;
+  problem: (key: string, value: string) => string | null; readOnly?: ReadonlySet<string>; readOnlyText?: string;
+  onEdit: (key: string, value: string) => void;
 }): ReactNode {
   return (
     <Family id={id} title={title}>
       <div className="testbox-form">
         {keys.map((key) => (
           <SettingRow key={key} name={key} line={manageRowLine(rows.get(key))} edit={edits[key]} problem={problem}
-            readOnlyNote={readOnly?.has(key) === true ? T.setInCcrcEnv : null} onEdit={(v) => onEdit(key, v)} />
+            readOnlyNote={readOnly?.has(key) === true ? readOnlyText ?? T.setInCcrcEnv : null} onEdit={(v) => onEdit(key, v)} />
         ))}
       </div>
     </Family>

@@ -231,11 +231,17 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'testbox-admin-state', root: '~/.ccrc/testbox-admin.state, with the act\'s argument file testbox-admin.args.<id> while its unit starts', pattern: 'O',
     creators: ['ccrc testbox-admin (every sub that records the connection or an act)'],
     collector: 'ccrc testbox-admin disconnect (clears the connection fields; the unit removes its argument file when it reads it)',
-    bound: 'one file', tier: 'under 2 KB of KEY=VALUE lines', ruling: null },
+    bound: 'one file', tier: 'under 4 KB of KEY=VALUE lines (the six acts that ended before the current one are kept in it)', ruling: null },
   { name: 'testbox-box-settings', root: '~/.ccrc/testbox-box-settings.json', pattern: 'O',
     creators: ['ccrc testbox-admin settings-box and read'],
     collector: 'ccrc testbox-admin disconnect (removes it with the connection)',
     bound: 'one snapshot of the box\'s settings', tier: 'about 28 short rows', ruling: null },
+  // The rows ccrc sent the box (name, fetch URL, package, command head), one line each: what parity runs on this host, read from
+  // here and never from the box, whose root can edit its own files (spec §2.11). Written whole, by a temp and a rename.
+  { name: 'testbox-rows', root: '~/.ccrc/testbox-rows, and the writer\'s temp <file>.tmp.<pid> while it is written', pattern: 'O',
+    creators: ['ccrc testbox-admin connect and settings-box (the rows they install)'],
+    collector: 'ccrc testbox-admin disconnect (removes it with the connection)',
+    bound: 'at most four rows for the connected box', tier: 'four short lines', ruling: null },
   { name: 'testbox-parity', root: '~/.ccrc/testbox-parity.json', pattern: 'O',
     creators: ['ccrc testbox-admin parity'],
     collector: 'ccrc testbox-admin disconnect (removes it with the connection)',

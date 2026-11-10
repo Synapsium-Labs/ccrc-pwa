@@ -6,7 +6,7 @@ import { LIFECYCLE } from '../../shared/lifecycle.js';
 const by = (n: string) => LIFECYCLE.find((x) => x.name === n);
 const NEW_ROWS = [
   'testbox-admin-key', 'testbox-known-hosts', 'testbox-overlay', 'testbox-admin-state', 'testbox-box-settings',
-  'testbox-parity', 'testbox-admin-lock', 'testbox-admin-log',
+  'testbox-rows', 'testbox-parity', 'testbox-admin-lock', 'testbox-admin-log',
 ] as const;
 
 describe('the test box connect lifecycle rows (D-8166)', () => {
@@ -20,7 +20,7 @@ describe('the test box connect lifecycle rows (D-8166)', () => {
       expect(JSON.stringify(c)).not.toContain('nothing in the tree writes or removes it');
     }
   });
-  it('testbox-admin-key, testbox-known-hosts, testbox-overlay, testbox-admin-state, testbox-box-settings, testbox-parity and testbox-admin-lock each have one row', () => {
+  it('testbox-admin-key, testbox-known-hosts, testbox-overlay, testbox-admin-state, testbox-box-settings, testbox-rows, testbox-parity and testbox-admin-lock each have one row', () => {
     for (const n of NEW_ROWS) expect(LIFECYCLE.filter((x) => x.name === n), `${n}`).toHaveLength(1);
     expect(by('testbox-admin-key')!.root).toContain('testbox-admin.key');
     expect(by('testbox-known-hosts')!.root).toContain('testbox-known-hosts');
@@ -28,6 +28,7 @@ describe('the test box connect lifecycle rows (D-8166)', () => {
     expect(by('testbox-admin-state')!.root).toContain('testbox-admin.state');
     expect(by('testbox-box-settings')!.root).toContain('testbox-box-settings.json');
     expect(by('testbox-parity')!.root).toContain('testbox-parity.json');
+    expect(by('testbox-rows')!.root).toContain('~/.ccrc/testbox-rows');
     expect(by('testbox-admin-lock')!.root).toContain('testbox-admin.lock');
   });
   it('the access key row says Disconnect keeps it and the operator removes it with the box\'s retirement', () => {

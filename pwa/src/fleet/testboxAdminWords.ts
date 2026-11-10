@@ -11,7 +11,8 @@
 //   * `BOX_SETTING_FAMILIES` and `BOX_SETTING_DEFAULTS`: the box's 28 settings in the four folded families of step 4 and the
 //     defaults the form starts from; `pwa/test/testbox-admin-words.test.ts` holds the defaults to `ccd/testbox-knobs`.
 import {
-  TESTBOX_ACT_MAP, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, isBoxAddress,
+  TESTBOX_ACT_MAP, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRED_BOX_KEYS, TESTBOX_SHAPE_CLASS,
+  TESTBOX_SHAPE_SENTENCE, isBoxAddress, isPrivateNetworkAddress,
   type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus, type TestboxAdminSub,
 } from '../../../shared/testbox-admin';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type NodeWire } from '../../../shared/api';
@@ -43,6 +44,7 @@ export const TESTBOX_CONNECT_TEXT = {
   loginLabel: 'Login user',
   loginHint: 'root, or a user with passwordless sudo.',
   badAddress: 'That is not an IP address or a host name. Leave out the port and the user.',
+  badPublicAddress: 'That address is not on a private network. The test service has no encryption of its own, so use the box\'s address on a tailnet, a VPN or your provider\'s private network.',
   badPort: 'The port is a whole number from 1 to 65535.',
   badLogin: 'A login user is lower-case letters, digits, _ and -.',
   next: 'Continue',
@@ -51,6 +53,16 @@ export const TESTBOX_CONNECT_TEXT = {
   makeKey: 'Generate access key',
   makingKey: 'Making the key…',
   keyWhere: "Add this line to the login user's authorized_keys on the box.",
+  // coming back to the line, or to the connection, once an address is recorded (a reload, a refused login, a mistyped address)
+  showLineAgain: 'Show the access line again',
+  changeConnection: 'Change the address, the port or the login',
+  connectionAgainIntro: 'Type the connection again: the card never keeps the address. The access key itself is unchanged.',
+  sourceLabel: 'Address the box sees ccrc connect from (only if the box refused the key)',
+  sourceHint: 'A box behind a NAT or on a second network sees another address than this host uses. Its ssh log names it. Leave blank otherwise.',
+  startOver: 'Start over',
+  startingOver: 'Starting over…',
+  startOverWhy: 'Start over removes ccrc\'s access line from the box (when ccrc can reach it) and forgets the address, the host key and the connection here. The access key is kept.',
+  startedOver: 'Started over.',
   keyLineLabel: 'Public access line',
   copy: 'Copy',
   copied: 'Copied',
@@ -86,7 +98,8 @@ export const TESTBOX_CONNECT_TEXT = {
   badRepoUrl: 'An https or ssh URL such as https://git.invalid/team/project.',
   badRepoWord: 'Required.',
   badRepoRow: 'That row is not one the box can take. Check the install inputs.',
-  needListen: 'The address the service listens on is required.',
+  needListen: 'The address the service listens on is required: the box\'s private address, the one ccrc reaches it on.',
+  listenNotPrivate: 'The service listens on the box\'s private address, an IP address on a tailnet, a VPN or your provider\'s private network, the one ccrc reaches it on.',
   needRepo: 'Add at least one repository.',
   // step 5
   installIntro: 'Install copies the release to the box, writes its settings, installs the service and pairs it with this console.',
@@ -220,12 +233,34 @@ export const TESTBOX_SERVICE_PORT = 8740;
 
 const IPV4_LITERAL = /^[0-9]{1,3}(?:\.[0-9]{1,3}){3}$/;
 
-/** `CCRC_TESTBOX_LISTEN` for an address: `host:port` for an IPv4 literal, `[host]:port` for an IPv6 one, and blank for a
- *  host name, which the installer refuses there (the firewall takes addresses), so the operator fills it. */
+/** `CCRC_TESTBOX_LISTEN` for an address: `host:port` for a private IPv4 literal, `[host]:port` for a private IPv6 one, and blank for
+ *  anything else. A host name is blank because the installer refuses one there (the firewall takes addresses), so the operator fills
+ *  it. A public address is blank because Connect refuses it (the service has no TLS and the box must be on a private network, spec
+ *  C4, M21): the card never fills a setting that would carry the token across the internet. */
 export function listenFor(address: string, port: number = TESTBOX_SERVICE_PORT): string {
+  if (!isPrivateNetworkAddress(address)) return '';
   if (IPV4_LITERAL.test(address)) return `${address}:${port}`;
-  if (address.includes(':') && isBoxAddress(address)) return `[${address}]:${port}`;
-  return '';
+  return `[${address}]:${port}`;
+}
+
+/** The host of a `host:port` listen value (brackets dropped), or null when it has no port. */
+export function listenHostOf(value: string): string | null {
+  const at = value.lastIndexOf(':');
+  if (at < 1) return null;
+  const host = value.slice(0, at);
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+}
+
+/** Whether a typed address is an IP literal that is not on a private network (a host name is not judged here: the verb resolves
+ *  it and refuses a public answer). The card says so at step 1, and Connect refuses it anyway. */
+export function isPublicIpLiteral(address: string): boolean {
+  const literal = IPV4_LITERAL.test(address) || (address.includes(':') && isBoxAddress(address));
+  return literal && !isPrivateNetworkAddress(address);
+}
+
+/** Whether a typed address is an IP literal (the `source` field takes no host name). */
+export function isIpLiteral(address: string): boolean {
+  return IPV4_LITERAL.test(address) || (address.includes(':') && isBoxAddress(address));
 }
 
 /** The form's starting value of each box key: `_tb_box_table`'s default (held equal by the words test), except the two the
@@ -375,7 +410,10 @@ export const TESTBOX_MANAGE_TEXT = {
   rebuild: 'Rebuild the box rather than reuse it.',
   replaceThen: 'Then you connect the new box, and parity must pass again.',
   disconnected: 'Disconnected.',
-  boxSideSkipped: 'The fleet side is clean. The box could not be reached, so its side was left as it is.',
+  boxSideSkipped: 'The fleet side is clean. ccrc did not touch the box, so its side was left as it is.',
+  applying: 'The change is being applied to the box. Its phases show here, and a failure shows as a line with Try again.',
+  pairingLocked: 'Changed only by Replace',
+  accessSourceLabel: 'Address the box sees ccrc connect from (only if the box refused the key)',
   sheetCancel: 'Cancel',
 } as const;
 
@@ -425,3 +463,6 @@ export function fleetRowsOf(nodes: readonly NodeWire[] | null | undefined): read
 
 /** The twelve fleet-host keys the card edits, in the contract's order, in one folded family. */
 export const FLEET_EDIT_KEYS: readonly string[] = TESTBOX_FLEET_EDITABLE;
+
+/** The four box keys the pairing rests on: the connected card shows them as read, never as a field (only Replace changes them). */
+export const PAIRED_BOX_KEYS: readonly string[] = TESTBOX_PAIRED_BOX_KEYS;

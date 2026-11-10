@@ -372,6 +372,29 @@ These settle questions a builder raised. None changes what the operator sees, an
 - **The `from=` address.** The access line shown at step 2 uses the fleet host's source address for the box's resolved
   address (the route lookup). Step 3 compares it with the box's `SSH_CONNECTION`. If they differ, the card says to
   re-add the line, with the corrected address.
+- **When the box refuses the key, the corrected line comes from the operator.** The corrected line of the step above needs a
+  working ssh to read the address the box saw, and a box that sees ccrc arrive from another address (a NAT, a second network)
+  refuses the key before any read. So `key` takes an optional `--source`, the address the box sees (its ssh log names it); the
+  line's `from=` is then that address, kept with the connection. A preflight that does reach the box and finds the two differ
+  keeps the address it saw as the source the same way. (Review correction, D-8166.)
+- **The private network is checked, not assumed (C4, C11, M21).** The preflight's `network` row and Connect refuse an address
+  or a listen address outside RFC 1918, the shared address space `100.64/10` and `fc00::/7`; the card says so at step 1 for an
+  IP literal. The address ccrc reaches the box on must be the listen address, since the installed firewall accepts ssh and the
+  service port only there. (Review correction, D-8166.)
+- **A recorded address is not lost, and not changed under a pin.** `key` for another address or port is refused
+  (`box-already-set`) while a box is connected or its host key is pinned: that is what Replace is for. Before either, the
+  address can be corrected. **Start over** (a Disconnect) and **Show the access line again** are offered whenever an address is
+  recorded and no box is connected, so no abandoned or refused Connect needs a shell (C6). (Review correction, D-8166.)
+- **Disconnect removes the access line whatever the unpair did.** While the pin still matches, the line comes out after the
+  installer's `--unpair` whether it finished, failed or was never installed; `unpair-failed` says the box side did not finish,
+  and `box-side-skipped` is kept for a box ccrc did not touch. (Review correction, D-8166.)
+- **Editing a box setting is always a detached act, and never moves the pairing.** The apply (the box file, the installer's
+  `--reapply`, the reads around it) outruns the bound of a short call, so `settings-box` always detaches; `--when-idle` only
+  chooses between waiting and refusing `runs-in-progress`. The four settings the pairing rests on (the listen address, the
+  service token file, the service user and the push user) are shown and refused: only Replace changes them. A box setting that
+  shapes no run keeps a passed parity record armable (the record follows the box file's new digest). (Review correction, D-8166.)
+- **The ledger misses no act.** The status carries the six acts that ended before the current one, so an act that began and
+  ended between two of the server's reads, or while it was down, still gets its row. (Review correction, D-8166.)
 - **Pairing keys already set by hand.** Under C12 (a), Connect refuses with a code that names the keys to remove from
   `ccrc.env`. It does not adopt them.
 - **Apply release after tool sync.** If tool sync does not update the installed tree and its tag marker

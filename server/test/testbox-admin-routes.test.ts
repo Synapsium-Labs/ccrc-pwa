@@ -58,7 +58,7 @@ const SESSION_SUBS = POST_SUBS.filter((s) => !TESTBOX_ADMIN_SUBS[s].stepUp);
 /** The status document, as `ccrc testbox-admin status` prints it, for a box that is not connected. */
 const STATUS = {
   v: 1, connected: false, addressSet: false, login: null, fingerprint: null, hostKey: 'none', boxFileSha256: null, act: null,
-  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null, endedActs: [],
 };
 const CONNECTED = { ...STATUS, connected: true, addressSet: true, login: 'root', fingerprint: FP, hostKey: 'pinned' };
 

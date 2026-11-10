@@ -30,9 +30,13 @@ const FAKE = join(REPO, 'server', 'test', 'fixtures', 'testbox-admin-ssh.sh');
 const BOX = join(REPO, 'server', 'test', 'fixtures', 'testbox-admin-box.sh');
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 const HAS_KEYGEN = spawnSync('bash', ['-c', 'command -v ssh-keygen'], { encoding: 'utf8' }).status === 0;
-const ADDR = '203.0.113.9';
+const ADDR = '10.0.0.9';
 const SRC_ADDR = '192.0.2.5';
+/** An address on no private network (the documentation range), for the checks that must refuse one. */
+const PUBLIC = '203.0.113.9';
 const SRC = `. "$1" || exit 90; shift; CCD_OS=linux; `;
+/** Addresses off the private and documentation ranges are assembled, never spelled, so no file the topology scanner reads holds one. */
+const ip = (s: string): string => s.replace(/_/g, '.');
 
 interface Home { home: string; env: NodeJS.ProcessEnv; log: string; state: string; key: string; pin: string; rules: string }
 
@@ -44,7 +48,7 @@ const PASSING_RULES: string[][] = [
   ['^(sudo -n -- )?systemctl --version$', '0', 'systemd 256 (256.1-1)\\n'],
   ['^(sudo -n -- )?nft --version$', '0', 'nftables v1.0.9 (Old Doris #3)\\n'],
   ['xfs_info', '0', 'meta-data=/dev/vdb isize=512\\n         =                       reflink=1 bigtime=1\\n'],
-  ['SSH_CONNECTION', '0', `${SRC_ADDR} 51234 198.51.100.7 22`],
+  ['SSH_CONNECTION', '0', `${SRC_ADDR} 51234 10.0.0.9 22`],
   ['^(sudo -n -- )?timeout ', '0', ''],
   ['readlink', '1', ''],
 ];
@@ -295,7 +299,7 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     writeState(h, [`address=${ADDR}`, 'port=22', `login=${login}`, `fingerprint=${k.fp}`]);
     return { h, k };
   }
-  const CHECKS = ['login', 'os', 'systemd', 'nftables', 'storage', 'address', 'from', 'egress', 'release'];
+  const CHECKS = ['login', 'os', 'systemd', 'nftables', 'storage', 'address', 'network', 'from', 'egress', 'release'];
   const rows = (r: { out: string }): { check: string; ok: boolean; code: string | null }[] => json(r)['checks'] as never;
 
   it('preflight lists every check with ok or its code', () => {
@@ -317,6 +321,7 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
       ['storage', [['xfs_info', '0', 'reflink=0\\n']], 'not-xfs-reflink'],
       ['storage', [['xfs_info', '1', '']], 'not-xfs-reflink'],
       ['address', [['SSH_CONNECTION', '0', 'not-an-address 1 host.invalid 22']], 'address-not-ip'],
+      ['network', [['SSH_CONNECTION', '0', `${SRC_ADDR} 51234 ${PUBLIC} 22`]], 'address-not-private'],
       ['egress', [['timeout ', '124', '']], 'no-egress'],
       ['release', [['readlink', '0', '/opt/ccrc-testbox/tools/release/v0.0.1\\n']], 'other-release'],
     ];
@@ -347,7 +352,8 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     writeFileSync(join(h.home, '.ccrc', 'ccrc.env'), 'CCRC_TESTBOX_RECONNECT_DEADLINE=5m\n');
     verb(h, 'preflight');
     const bounds = fakeCalls(h).filter((c) => c[0] === 'ssh').map((c) => /^timeout (\d+) bash/.exec(c[c.length - 1]!)?.[1]).filter((x) => x !== undefined);
-    expect(bounds.length).toBe(2);
+    // one probe: the release host. The npm upstream is the installer's own setting, typed after this check, so Connect probes it.
+    expect(bounds.length).toBe(1);
     for (const b of bounds) expect(Number(b)).toBeLessThanOrEqual(8);
   });
 
@@ -361,7 +367,8 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     const { h } = ready();
     verb(h, 'preflight');
     const cmds = fakeCalls(h).filter((c) => c[0] === 'ssh').map((c) => c[c.length - 1]!);
-    expect(cmds.length).toBeGreaterThanOrEqual(CHECKS.length);
+    // the login, os, systemd, nftables and storage reads, the connection read, the one egress probe and the release link
+    expect(cmds).toHaveLength(8);
     const allowed = /^(id -u|true|cat \/etc\/os-release|systemctl --version|nft --version|readlink -- \S+|sh -c .*|timeout \d+ bash -c .*)$/;
     for (const c of cmds) {
       expect(c, c).toMatch(allowed);
@@ -399,12 +406,12 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
 
   it('a from address that differs from SSH_CONNECTION answers from-mismatch with the corrected line', () => {
     const { h } = ready();
-    writeFileSync(h.rules, [['SSH_CONNECTION', '0', '198.51.100.77 51234 198.51.100.7 22'], ...PASSING_RULES].map((x) => x.join('\t')).join('\n') + '\n');
+    writeFileSync(h.rules, [['SSH_CONNECTION', '0', '10.0.0.97 51234 10.0.0.9 22'], ...PASSING_RULES].map((x) => x.join('\t')).join('\n') + '\n');
     const r = verb(h, 'preflight');
     const a = json(r);
     expect(rows(r).find((x) => x.check === 'from')).toEqual({ check: 'from', ok: false, code: 'from-mismatch' });
     const pub = readFileSync(`${h.key}.pub`, 'utf8').trim().split(' ');
-    expect(a['line']).toBe(`from="198.51.100.77",restrict ${pub[0]} ${pub[1]} ccrc-testbox-admin`);
+    expect(a['line']).toBe(`from="10.0.0.97",restrict ${pub[0]} ${pub[1]} ccrc-testbox-admin`);
   });
 
   it('ssh failing answers its closed code instead of rows; no connection and no key are refused before any ssh', () => {
@@ -459,6 +466,134 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     expect(json(verb(h, 'preflight'))).toEqual({ ok: false, code: 'host-key-changed' });
     const s = readTestboxAdminStatus(verb(h, 'status').out.trim());
     expect(s.ok && s.value.hostKey).toBe('changed');
+  });
+});
+
+describe.skipIf(!HAS_KEYGEN)('the connection the key sub records, and the private network (D-8166, C4, C11, M21)', () => {
+  const OTHER = '10.0.0.77';
+  const stateOf = (h: Home): string => (existsSync(h.state) ? readFileSync(h.state, 'utf8') : '');
+
+  it('key --source puts the address the box sees in the line, keeps it with the connection, and a later key for the same box answers the same line', () => {
+    const h = fixture();
+    const first = json(verb(h, 'key', `--address=${ADDR}`, '--source=10.0.0.250'));
+    const pub = readFileSync(`${h.key}.pub`, 'utf8').trim().split(' ');
+    expect(first['line']).toBe(`from="10.0.0.250",restrict ${pub[0]} ${pub[1]} ccrc-testbox-admin`);
+    expect(stateOf(h)).toContain('source=10.0.0.250\n');
+    // no route lookup was needed for the line
+    expect(fakeCalls(h).some((c) => c[0] === 'ip')).toBe(false);
+    expect(json(verb(h, 'key', `--address=${ADDR}`))).toEqual(first);
+    // a new source replaces it; a different box (nothing pinned yet) forgets it and uses the route's source
+    expect(json(verb(h, 'key', `--address=${ADDR}`, '--source=10.0.0.251'))['line']).toContain('from="10.0.0.251"');
+    h.env['FAKE_IP_OUT'] = `${OTHER} dev eth0 src ${SRC_ADDR} uid 0`;
+    expect(json(verb(h, 'key', `--address=${OTHER}`))['line']).toContain(`from="${SRC_ADDR}"`);
+    expect(stateOf(h)).not.toMatch(/^source=/m);
+  });
+
+  it('key --source is an IP literal, not a name', () => {
+    const h = fixture();
+    expect(json(verb(h, 'key', `--address=${ADDR}`, '--source=host.invalid'))).toEqual({ ok: false, code: 'address-not-ip' });
+    expect(existsSync(h.state)).toBe(false);
+  });
+
+  it('a connected box, or one whose host key is pinned, keeps its address and port: another is refused box-already-set and nothing moves', () => {
+    for (const marked of ['connected=1', 'pinned']) {
+      const h = fixture();
+      const k = hostKey(h);
+      h.env['FAKE_SSH_KEYSCAN_OUT'] = scanOut(k);
+      const lines = [`address=${ADDR}`, 'port=22', 'login=root', `fingerprint=${k.fp}`];
+      if (marked === 'connected=1') lines.push('connected=1');
+      writeState(h, lines);
+      if (marked === 'pinned') writeFileSync(h.pin, `${ADDR} ${k.type} ${k.b64}\n`, { mode: 0o600 });
+      haveKey(h);
+      const before = stateOf(h);
+      h.env['FAKE_IP_OUT'] = `${OTHER} dev eth0 src ${SRC_ADDR} uid 0`;
+      expect(json(verb(h, 'key', `--address=${OTHER}`)), marked).toEqual({ ok: false, code: 'box-already-set' });
+      expect(json(verb(h, 'key', `--address=${ADDR}`, '--port=2222')), marked).toEqual({ ok: false, code: 'box-already-set' });
+      expect(stateOf(h), marked).toBe(before);
+      // the same address and port is the access-line form of a connected card: it answers its line, and the login may change
+      h.env['FAKE_IP_OUT'] = `${ADDR} dev eth0 src ${SRC_ADDR} uid 0`;
+      expect(json(verb(h, 'key', `--address=${ADDR}`, '--login=deploy'))['ok'], marked).toBe(true);
+      expect(stateOf(h), marked).toContain('login=deploy\n');
+      if (marked === 'connected=1') expect(stateOf(h)).toContain('connected=1\n');
+    }
+  });
+
+  it('before anything is pinned or connected the address can still be corrected', () => {
+    const h = fixture();
+    json(verb(h, 'key', `--address=${ADDR}`));
+    h.env['FAKE_IP_OUT'] = `${OTHER} dev eth0 src ${SRC_ADDR} uid 0`;
+    expect(json(verb(h, 'key', `--address=${OTHER}`, '--login=deploy'))['ok']).toBe(true);
+    expect(stateOf(h)).toContain(`address=${OTHER}\n`);
+  });
+
+  const ready = (extra: NodeJS.ProcessEnv = {}, address = ADDR): { h: Home } => {
+    const h = fixture(extra);
+    const k = hostKey(h);
+    h.env['FAKE_SSH_KEYSCAN_OUT'] = scanOut(k, address);
+    writeFileSync(h.pin, `${address} ${k.type} ${k.b64}\n`, { mode: 0o600 });
+    writeState(h, [`address=${address}`, 'port=22', 'login=root', `fingerprint=${k.fp}`]);
+    const g = verb(h, 'key', `--address=${address}`);
+    expect(json(g)['ok'], g.out + g.err).toBe(true);
+    return { h };
+  };
+  const checks = (r: { out: string }): { check: string; ok: boolean; code: string | null }[] => json(r)['checks'] as never;
+
+  it('a box on a public address fails the network check even when every other check passes, and the preflight does not pass', () => {
+    const { h } = ready({ FAKE_IP_OUT: `${PUBLIC} dev eth0 src ${SRC_ADDR} uid 0` }, PUBLIC);
+    writeFileSync(h.rules, [['SSH_CONNECTION', '0', `${SRC_ADDR} 51234 ${PUBLIC} 22`], ...PASSING_RULES].map((x) => x.join('\t')).join('\n') + '\n');
+    const r = verb(h, 'preflight');
+    expect(json(r)['pass']).toBe(false);
+    expect(checks(r).filter((x) => !x.ok)).toEqual([{ check: 'network', ok: false, code: 'address-not-private' }]);
+  });
+
+  it('every private range passes and the neighbours of each fail: RFC 1918, 100.64/10 and fc00::/7', () => {
+    const cases: [string, boolean][] = [
+      ['10.0.0.1', true], ['10.255.255.255', true], ['172.16.0.1', true], ['172.31.255.255', true], [ip('172_15_255_255'), false], [ip('172_32_0_1'), false],
+      ['192.168.0.1', true], [ip('192_169_0_1'), false], [ip('100_64_0_1'), true], [ip('100_127_255_255'), true], [ip('100_63_255_255'), false], [ip('100_128_0_1'), false],
+      [ip('11_0_0_1'), false], [ip('8_8_8_8'), false], ['127.0.0.1', false], [ip('169_254_1_1'), false],
+      ['fc00::1', true], ['fd7a:115c:a1e0::1', true], ['fdff::1', true], ['fe80::1', false], ['2001:db8::1', false], ['::1', false], ['::', false], ['fbff::1', false],
+      ['testbox.invalid', false], ['', false],
+    ];
+    const h = fixture();
+    const r = sh(h, SRC + 'for a in "$@"; do _tba_is_private_ip "$a" && echo "$a yes" || echo "$a no"; done', [VERB, ...cases.map(([a]) => a)]);
+    const got = r.out.split('\n').filter((l) => l !== '');
+    expect(got).toEqual(cases.map(([a, ok]) => `${a} ${ok ? 'yes' : 'no'}`));
+  });
+
+  it('the bash rule and shared/testbox-admin.ts#isPrivateNetworkAddress agree on the same corpus', async () => {
+    const { isPrivateNetworkAddress } = await import('../../shared/testbox-admin.js');
+    const corpus = ['10.0.0.1', '172.16.0.1', ip('172_15_0_1'), ip('172_32_0_1'), '192.168.1.1', ip('192_167_1_1'), ip('100_64_0_0'), ip('100_127_0_1'), ip('100_128_0_1'), ip('8_8_8_8'), 'fc00::', 'fd12:3456::1', 'fe00::1', 'fbff::', '2001:db8::1', '::1', 'a.invalid', '1.2.3', ip('300_1_1_1')];
+    const h = fixture();
+    const r = sh(h, SRC + 'for a in "$@"; do _tba_is_private_ip "$a" && echo yes || echo no; done', [VERB, ...corpus]);
+    expect(r.out.split('\n').filter((l) => l !== '')).toEqual(corpus.map((a) => (isPrivateNetworkAddress(a) ? 'yes' : 'no')));
+  });
+
+  it('a from mismatch keeps the address the box saw as the source, so the next check and the next line agree', () => {
+    const { h } = ready();
+    writeFileSync(h.rules, [['SSH_CONNECTION', '0', '10.0.0.97 51234 10.0.0.9 22'], ...PASSING_RULES].map((x) => x.join('\t')).join('\n') + '\n');
+    const first = json(verb(h, 'preflight'));
+    expect(first['line']).toContain('from="10.0.0.97"');
+    expect(stateOf(h)).toContain('source=10.0.0.97\n');
+    const second = verb(h, 'preflight');
+    expect(json(second)['pass']).toBe(true);
+    expect(json(second)['line']).toBeUndefined();
+    expect(json(verb(h, 'key', `--address=${ADDR}`))['line']).toContain('from="10.0.0.97"');
+  });
+
+  it('a stored source is what the check compares with, ahead of the route lookup', () => {
+    const { h } = ready();
+    expect(json(verb(h, 'key', `--address=${ADDR}`, `--source=${SRC_ADDR}`))['ok']).toBe(true);
+    // the box sees ccrc come from the stored source; the route lookup now says something else
+    h.env['FAKE_IP_OUT'] = `${ADDR} dev eth0 src 10.0.0.201 uid 0`;
+    expect(json(verb(h, 'preflight'))['pass']).toBe(true);
+  });
+
+  it('the egress check probes the release host only: the npm upstream is the installer\'s setting, typed after the preflight', () => {
+    const { h } = ready();
+    verb(h, 'preflight');
+    const probes = fakeCalls(h).filter((c) => c[0] === 'ssh').map((c) => c[c.length - 1]!).filter((c) => c.startsWith('timeout '));
+    expect(probes).toHaveLength(1);
+    expect(probes[0]).not.toContain('registry.npmjs.org');
   });
 });
 

@@ -1144,7 +1144,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'testbox-token', 'testbox-push-key',
       // Test box connect (D-8166): the files `ccrc testbox-admin` owns.
       'testbox-admin-key', 'testbox-known-hosts', 'testbox-overlay', 'testbox-admin-state', 'testbox-box-settings',
-      'testbox-parity', 'testbox-admin-lock', 'testbox-admin-log',
+      'testbox-rows', 'testbox-parity', 'testbox-admin-lock', 'testbox-admin-log',
       'testbox-times', 'testbox-runs-log',
       // D-7857: the carry dedupe sweep's record.
       'carry-dedupe-record',

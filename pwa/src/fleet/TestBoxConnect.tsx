@@ -22,7 +22,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, Skeleton, TextInput } from '@ccrc/ui';
-import { parityArmable, TESTBOX_ADMIN_PHASES, TESTBOX_BOX_KEYS, TESTBOX_REPO_ROWS_MAX, fitsTestboxShape, isBoxAddress, isLoginUser, isSshPort,
+import { parityArmable, TESTBOX_ADMIN_PHASES, TESTBOX_BOX_KEYS, TESTBOX_REPO_ROWS_MAX, fitsTestboxShape, isBoxAddress, isLoginUser, isPrivateNetworkAddress, isSshPort,
   type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub, type TestboxPhasedSub } from '../../../shared/testbox-admin';
 import type { TestboxAdminResult, TestboxEventRow } from '../../../shared/api';
 import { parseRepoRow } from '../../../shared/testbox';
@@ -33,7 +33,7 @@ import { testboxRouteText } from '../lib/refusalWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import {
   BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, TESTBOX_FAMILY_FOLD, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_DEFAULT_RUNNER, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
-  codeSentence, listenFor, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
+  codeSentence, isIpLiteral, isPublicIpLiteral, listenFor, listenHostOf, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
 
@@ -47,6 +47,29 @@ const COMMAND_HEAD = /^[^\s]+(?: [^\s]+)*$/;
 const utcMinute = (at: number): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
 type Band = 'phone' | 'laptop' | 'wide';
+
+/** What step 1 types and the access-line step may type again: the address is the card's only copy of it and is forgotten once the
+ *  install has started. `source` is the address the box sees ccrc connect from, only when the box refused the key (spec §5.1). */
+export interface Conn { address: string; port: string; login: string; source: string }
+export const BLANK_CONN: Conn = { address: '', port: '22', login: 'root', source: '' };
+/** The fleet side of a disconnect is clean whether or not the box side finished: its two refusals say what is left. */
+export const PARTIAL_DISCONNECT: ReadonlySet<string> = new Set(['box-side-skipped', 'unpair-failed']);
+function refusalCodeOf(err: unknown): string | null {
+  if (!(err instanceof ApiError) || typeof err.body !== 'object' || err.body === null) return null;
+  const code = (err.body as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+/** The fields of one `key` call from what was typed. */
+export function keyFieldsOf(c: Conn): TestboxAdminFields {
+  const source = c.source.trim();
+  return { address: c.address.trim(), port: c.port.trim(), user: c.login.trim(), ...(source === '' ? {} : { source }) };
+}
+/** Whether what was typed may be sent (`source` is optional, an IP literal when given). */
+export function connReady(c: Conn): boolean {
+  const source = c.source.trim();
+  return isBoxAddress(c.address.trim()) && !isPublicIpLiteral(c.address.trim()) && isSshPort(c.port.trim()) && isLoginUser(c.login.trim())
+    && (source === '' || isIpLiteral(source));
+}
 
 interface RepoDraft { name: string; fetchUrl: string; pkg: string; inputs: string; command: string }
 const blankRepo = (): RepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_RUNNER });
@@ -88,7 +111,14 @@ function settingsToSend(values: Readonly<Record<string, string>>): Record<string
 function settingProblem(key: string, value: string): string | null {
   const v = value.trim();
   if (v === '') return key === TESTBOX_LISTEN_KEY ? T.needListen : null;
-  return fitsTestboxShape(key, v) ? null : shapeSentence(key);
+  if (!fitsTestboxShape(key, v)) return shapeSentence(key);
+  // The service has no TLS and the firewall matches its listen address only: a listen address that is no private IP literal is
+  // refused by Connect, so the card says so as it is typed.
+  if (key === TESTBOX_LISTEN_KEY) {
+    const host = listenHostOf(v);
+    if (host === null || !isPrivateNetworkAddress(host)) return T.listenNotPrivate;
+  }
+  return null;
 }
 
 /** Parity's word from the status alone: the same rule the block's admin applies (`adminOfStatus`). */
@@ -109,19 +139,31 @@ export interface TestBoxConnectProps {
   runningPollMs?: number;
   /** Start at step 1 with no "Connect a test box" tap first: Replace has just removed the old box (TC16, spec §2.9). */
   begin?: boolean;
+  /** What the section's block says about the box now (connected, host key, parity and the last act, as one string). This flow's
+   *  status is its own read, so when the connected card beside it acts (Replace, Disconnect, Repair), the block moves first and
+   *  this flow re-reads on the change: it never draws the old box's state over the new one. */
+  sync?: string;
 }
 
-export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, begin = false }: TestBoxConnectProps): ReactNode {
+export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, begin = false, sync }: TestBoxConnectProps): ReactNode {
   const admin = useTestboxAdmin({ runningPollMs });
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
   const line = useResultLine();
   const status = admin.status;
 
+  const reload = admin.reload;
+  const lastSync = useRef(sync);
+  useEffect(() => {
+    if (lastSync.current === sync) return;
+    lastSync.current = sync;
+    reload();
+  }, [sync, reload]);
+
   const [begun, setBegun] = useState(begin);
   // A Replace that lands while this flow is already mounted (a connected box whose parity has not passed) opens step 1 too.
   useEffect(() => { if (begin) setBegun(true); }, [begin]);
   const [seen, setSeen] = useState<TestboxStepSeen>({});
-  const [conn, setConn] = useState({ address: '', port: '22', login: 'root' });
+  const [conn, setConn] = useState<Conn>(BLANK_CONN);
   const [addressDone, setAddressDone] = useState(false);
   const [keyLine, setKeyLine] = useState<{ text: string; fixed: boolean } | null>(null);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
@@ -131,6 +173,24 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
   const [repos, setRepos] = useState<RepoDraft[]>(() => Array.from({ length: PRIMARY_REPO_ROWS }, blankRepo));
   const [offers, setOffers] = useState<readonly Offer[]>([]);
   const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no');
+  // "Show the access line again" opened the connection form on step 2 (an address is recorded that this card no longer holds).
+  const [again, setAgain] = useState(false);
+  const partial = useRef(false);
+
+  // What this card remembers belongs to the box it was typed for. A Replace or a Disconnect from the connected card (or Start over
+  // here) clears the recorded address while this flow is still mounted (a connected box whose parity has not passed keeps it
+  // mounted): the access line, the preflight rows and the confirmed settings of the old box must not carry into the new one, and
+  // the listen address typed for the old box must not be offered for the new.
+  const addressSet = status?.addressSet ?? null;
+  const wasSet = useRef(false);
+  useEffect(() => {
+    if (addressSet === null) return;
+    if (wasSet.current && !addressSet) {
+      setSeen({}); setConn(BLANK_CONN); setAddressDone(false); setKeyLine(null); setFingerprint(null); setChecks(null); setCopied('no'); setAgain(false);
+      setValues((v) => ({ ...v, [TESTBOX_LISTEN_KEY]: '' }));
+    }
+    wasSet.current = addressSet;
+  }, [addressSet]);
 
   const step = status === null ? 1 : (!status.addressSet && addressDone ? 2 : stepOf(status, seen));
   // A box just disconnected is a card with nothing set up: its last act is not a setup in progress (TC16).
@@ -165,12 +225,19 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
   /** One act: its answer, or why not. A refusal says its sentence on the card's line; a stale step-up shows the step. */
   const run = async (sub: TestboxAdminSub, fields: TestboxAdminFields): Promise<TestboxAdminResult | null> => {
     line.clear();
+    partial.current = false;
     let landed: TestboxAdminResult | 'unreadable' | undefined;
     try {
       const outcome = await stepUp.runAct(async () => { landed = await admin.act(sub, fields); });
       if (outcome === 'step-up') return null;
     } catch (err) {
-      if (!(err instanceof ApiError && err.status === 401)) line.say(testboxRouteText(err) ?? T.unreadable, 'refusal');
+      if (err instanceof ApiError && err.status === 401) return null;
+      // A disconnect that cleaned this side and left the box side says so, and the card re-reads: it is not a failure to retry.
+      const code = refusalCodeOf(err);
+      if (sub === 'disconnect' && code !== null && PARTIAL_DISCONNECT.has(code)) {
+        partial.current = true; admin.reload(); onChanged?.(); line.say(codeSentence(code), 'refusal'); return {};
+      }
+      line.say(testboxRouteText(err) ?? T.unreadable, 'refusal');
       return null;
     }
     if (landed === undefined || landed === 'unreadable') { line.say(T.unknown, 'refusal'); return null; }
@@ -178,10 +245,23 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
     return landed;
   };
 
+  /** Start over: Disconnect, from a connection that is recorded but was never Connected (an abandoned or refused one). It removes
+   *  ccrc's access line from the box when ccrc can reach it, and forgets the address, the host key and the connection here. */
+  const startOver = async (): Promise<void> => {
+    setChecking(true);
+    try {
+      const r = await run('disconnect', {});
+      if (r === null) return;
+      // Nothing is recorded now: the card is at step 1, with no "Connect a test box" tap first (as after a Replace).
+      setBegun(true);
+      if (!partial.current) line.say(T.startedOver);
+    } finally { setChecking(false); }
+  };
+
   const makeKey = async (): Promise<void> => {
-    const r = await run('key', { address: conn.address, port: conn.port, user: conn.login });
+    const r = await run('key', keyFieldsOf(conn));
     if (r === null) return;
-    if (r.line !== undefined) { setKeyLine({ text: r.line, fixed: false }); setSeen((s) => ({ ...s, line: true })); setCopied('no'); }
+    if (r.line !== undefined) { setKeyLine({ text: r.line, fixed: false }); setSeen((s) => ({ ...s, line: true })); setCopied('no'); setAgain(false); }
   };
 
   const runPreflight = async (): Promise<void> => {
@@ -218,7 +298,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
     const r = await run('connect', { settings: settingsToSend(values), repos: rows });
     if (r === null) return;
     // The install has started: the address typed in step 1 has done its work and is forgotten.
-    setConn({ address: '', port: '22', login: 'root' });
+    setConn(BLANK_CONN);
     setSeen((s) => ({ ...s, retry: false }));
   };
 
@@ -263,16 +343,27 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
     switch (step) {
       case 1:
         return <AddressStep conn={conn} setConn={setConn} size={actionSize} onNext={() => { setAddressDone(true); setBegun(true); }} />;
-      case 2:
+      case 2: {
+        // An address already recorded but not in this card's memory (a reload, a refused login, a mistyped address): the
+        // connection is typed again here, with the one optional field the line may need (spec §5.1).
+        const needsConnection = keyLine === null && again;
         return (
           <div className="testbox-connect-body">
-            <StateLine band={band} text={keyLine === null ? T.keyIntro : keyLine.fixed ? T.fixedLine : T.keyWhere}>
-              {keyLine === null && (
-                <Button variant="primary" size={actionSize} disabled={busy || conn.address === ''} onClick={() => void makeKey()} data-testbox="make-key">
+            <StateLine band={band} text={keyLine === null ? (needsConnection ? T.connectionAgainIntro : T.keyIntro) : keyLine.fixed ? T.fixedLine : T.keyWhere}>
+              {keyLine === null && !needsConnection && (
+                <Button variant="primary" size={actionSize} disabled={busy || !connReady(conn)} onClick={() => void makeKey()} data-testbox="make-key">
                   {admin.busy ? T.makingKey : T.makeKey}
                 </Button>
               )}
             </StateLine>
+            {needsConnection && (
+              <div className="testbox-connect-body" data-testbox="connection-again">
+                <ConnFields conn={conn} setConn={setConn} withSource />
+                <Button variant="primary" size={actionSize} disabled={busy || !connReady(conn)} onClick={() => void makeKey()} data-testbox="make-key">
+                  {admin.busy ? T.makingKey : T.showLineAgain}
+                </Button>
+              </div>
+            )}
             {keyLine !== null && (
               <>
                 <p className="settings-note">{T.keyLineLabel}</p>
@@ -286,6 +377,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
             )}
           </div>
         );
+      }
       case 3: {
         const failed = checks !== null && checks.some((c) => !c.ok);
         const pinned = status.hostKey === 'pinned';
@@ -432,6 +524,21 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
     }
   })();
 
+  // A connection that is recorded and was never Connected can be taken back to the line or to step 1 from here, so an abandoned or
+  // refused one never needs a shell (spec C6, the acceptance of "the card alone"). While its install runs, nothing is offered.
+  const recovery = status.addressSet && !status.connected && connectAct?.outcome !== 'running' ? (
+    <div className="testbox-connect-recovery" data-testbox="recovery">
+      <div className="testbox-connect-row">
+        {step !== 2 && (
+          <Button variant="ghost" size={actionSize} disabled={busy}
+            onClick={() => { setKeyLine(null); setChecks(null); setAgain(true); setSeen((s) => ({ ...s, line: true })); }} data-testbox="show-line-again">{T.showLineAgain}</Button>
+        )}
+        <Button variant="ghost" size={actionSize} disabled={busy} onClick={() => void startOver()} data-testbox="start-over">{checking ? T.startingOver : T.startOver}</Button>
+      </div>
+      <p className="settings-note" data-testbox="start-over-why">{T.startOverWhy}</p>
+    </div>
+  ) : null;
+
   const recent = band === 'wide' ? <Ledger events={admin.events} /> : null;
   return (
     <div className="testbox-connect" data-testbox="connect" data-band={band}>
@@ -443,12 +550,12 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
             return (
               <li key={name} data-step={n} data-state={state} aria-current={state === 'current' ? 'step' : undefined}>
                 <span className="testbox-step-name">{name}{state === 'done' && <span className="settings-note">{` (${T.done})`}</span>}</span>
-                {band === 'phone' && state === 'current' && <div className="testbox-step-open" data-testbox="step-open">{current}</div>}
+                {band === 'phone' && state === 'current' && <div className="testbox-step-open" data-testbox="step-open">{current}{recovery}</div>}
               </li>
             );
           })}
         </ol>
-        {band !== 'phone' && <div className="testbox-step-panel" data-testbox="step-panel">{current}</div>}
+        {band !== 'phone' && <div className="testbox-step-panel" data-testbox="step-panel">{current}{recovery}</div>}
         {recent}
       </div>
       <ConfirmItsYou stepUp={stepUp} subject="the test box" />
@@ -492,26 +599,41 @@ export function Field({ label, value, onChange, error, placeholder, now, disable
   );
 }
 
-function AddressStep({ conn, setConn, size, onNext }: {
-  conn: { address: string; port: string; login: string };
-  setConn: (c: { address: string; port: string; login: string }) => void;
-  size: 'full' | 'fit'; onNext: () => void;
-}): ReactNode {
-  const addressOk = isBoxAddress(conn.address.trim());
+/** The connection's fields: the address, the port, the login and, where the box may have refused the key, the address it sees. */
+export function ConnFields({ conn, setConn, withSource = false }: { conn: Conn; setConn: (c: Conn) => void; withSource?: boolean }): ReactNode {
+  const address = conn.address.trim();
+  const addressOk = isBoxAddress(address);
+  const publicAddress = addressOk && isPublicIpLiteral(address);
   const portOk = isSshPort(conn.port.trim());
   const loginOk = isLoginUser(conn.login.trim());
-  const ready = addressOk && portOk && loginOk;
-  const next = (): void => { setConn({ address: conn.address.trim(), port: conn.port.trim(), login: conn.login.trim() }); onNext(); };
+  const source = conn.source.trim();
+  return (
+    <div className="testbox-form">
+      <Field label={T.addressLabel} value={conn.address} error={conn.address === '' || (addressOk && !publicAddress) ? null : publicAddress ? T.badPublicAddress : T.badAddress}
+        onChange={(v) => setConn({ ...conn, address: v })} />
+      <Field label={T.portLabel} value={conn.port} error={conn.port === '' || portOk ? null : T.badPort}
+        onChange={(v) => setConn({ ...conn, port: v })} />
+      <Field label={T.loginLabel} value={conn.login} error={conn.login === '' || loginOk ? null : T.badLogin}
+        onChange={(v) => setConn({ ...conn, login: v })} />
+      {withSource && (
+        <>
+          <Field label={T.sourceLabel} value={conn.source} error={source === '' || isIpLiteral(source) ? null : T.badAddress}
+            onChange={(v) => setConn({ ...conn, source: v })} />
+          <p className="settings-note">{T.sourceHint}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AddressStep({ conn, setConn, size, onNext }: {
+  conn: Conn; setConn: (c: Conn) => void; size: 'full' | 'fit'; onNext: () => void;
+}): ReactNode {
+  const ready = connReady({ ...conn, source: '' });
+  const next = (): void => { setConn({ ...conn, address: conn.address.trim(), port: conn.port.trim(), login: conn.login.trim() }); onNext(); };
   return (
     <div className="testbox-connect-body" data-testbox="address-step">
-      <div className="testbox-form">
-        <Field label={T.addressLabel} value={conn.address} error={conn.address === '' || addressOk ? null : T.badAddress}
-          onChange={(v) => setConn({ ...conn, address: v })} />
-        <Field label={T.portLabel} value={conn.port} error={conn.port === '' || portOk ? null : T.badPort}
-          onChange={(v) => setConn({ ...conn, port: v })} />
-        <Field label={T.loginLabel} value={conn.login} error={conn.login === '' || loginOk ? null : T.badLogin}
-          onChange={(v) => setConn({ ...conn, login: v })} />
-      </div>
+      <ConnFields conn={conn} setConn={setConn} />
       <p className="settings-note">{T.addressHint}</p>
       <Button variant="primary" size={size} disabled={!ready} onClick={next} data-testbox="address-next">{T.next}</Button>
     </div>

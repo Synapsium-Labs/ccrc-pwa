@@ -12,12 +12,12 @@ import type { StepUpDeps } from '../accounts/useStepUp';
 import { SETTINGS_CARDS } from './settingsText';
 import { TESTBOX_WIDE_QUERY, TestBoxSection } from './TestBoxSection';
 import { TestBoxManage, type TestBoxManageProps } from './TestBoxManage';
-import { TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, codeSentence, fleetRowsOf, ledgerLine, manageRowLine } from './testboxAdminWords';
+import { PAIRED_BOX_KEYS, TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, codeSentence, fleetRowsOf, ledgerLine, manageRowLine } from './testboxAdminWords';
 import type { TestboxBlock, TestboxBlockAdmin, TestboxPoll } from './useTestboxView';
 
 const T = TESTBOX_MANAGE_TEXT;
 const C = TESTBOX_CONNECT_TEXT;
-const ADDRESS = '192.0.2.7';
+const ADDRESS = '10.0.0.7';
 const FP = `SHA256:${'A'.repeat(43)}`;
 const NEW_FP = `SHA256:${'N'.repeat(43)}`;
 const LINE = `from="192.0.2.2" ssh-ed25519 ${'B'.repeat(68)} ccrc-testbox`;
@@ -189,7 +189,24 @@ describe('Settings', () => {
     expect(f.posts('settings-box')[0]!.body).toEqual({ fields: { settings: { CCRC_TESTBOX_WORKERS: '3' } } });
     // The form shows what the box answered, not what was typed.
     expect(setting('CCRC_TESTBOX_WORKERS').value).toBe('3');
-    expect(screen.getByText(T.saved)).toBeInTheDocument();
+    // A box change is a detached act: the line says it began, and the phases follow from the status.
+    expect(screen.getByText(T.applying)).toBeInTheDocument();
+  });
+
+  it('the four pairing settings are shown and never sent: read-only, with their reason, and no edit reaches the box', async () => {
+    const f = fakeFleet();
+    await mount();
+    await openSettings();
+    for (const key of PAIRED_BOX_KEYS) {
+      expect(setting(key), key).toBeDisabled();
+      expect(q(`[data-setting="${key}"] [data-testbox="ccrc-env-note"]`)!.textContent, key).toBe(T.pairingLocked);
+    }
+    expect(PAIRED_BOX_KEYS).toEqual(['CCRC_TESTBOX_LISTEN', 'CCRC_TESTBOX_SERVICE_TOKEN_FILE', 'CCRC_TESTBOX_SERVICE_USER', 'CCRC_TESTBOX_PUSH_USER']);
+    // an editable key beside them is not locked
+    expect(setting('CCRC_TESTBOX_RETENTION')).toBeEnabled();
+    typeIn(setting('CCRC_TESTBOX_RETENTION'), '48h');
+    await press(q('[data-testbox="settings-save"]'));
+    expect(f.posts('settings-box')[0]!.body).toEqual({ fields: { settings: { CCRC_TESTBOX_RETENTION: '48h' } } });
   });
 
   it('a value off its key\'s shape is refused as typed, and a row only shown as set sends only what was typed', async () => {
@@ -200,10 +217,10 @@ describe('Settings', () => {
     expect(q('[data-testbox="settings-save"]')).toBeDisabled();
     expect(within(q('[data-setting="CCRC_TESTBOX_WORKERS"]')!).getByRole('status').textContent).toContain('whole number');
     typeIn(setting('CCRC_TESTBOX_WORKERS'), '2');
-    typeIn(setting('CCRC_TESTBOX_LISTEN'), '192.0.2.7:8740');
+    typeIn(setting('CCRC_TESTBOX_RETENTION'), '48h');
     expect(q('[data-testbox="settings-save"]')).toBeEnabled();
     await press(q('[data-testbox="settings-save"]'));
-    expect(f.posts('settings-box')[0]!.body).toEqual({ fields: { settings: { CCRC_TESTBOX_LISTEN: '192.0.2.7:8740' } } });
+    expect(f.posts('settings-box')[0]!.body).toEqual({ fields: { settings: { CCRC_TESTBOX_RETENTION: '48h' } } });
   });
 
   it('a fleet change goes to settings-fleet alone, and asks the page to re-read its nodes', async () => {
@@ -247,7 +264,7 @@ describe('Settings', () => {
     fakeFleet();
     await mount();
     await openSettings();
-    typeIn(setting('CCRC_TESTBOX_LISTEN'), '192.0.2.7:8740');
+    typeIn(setting('CCRC_TESTBOX_RETENTION'), '48h');
     expect(q('[data-testbox="parity-again"]')).toBeNull();
     typeIn(setting('CCRC_TESTBOX_WORKERS'), '3');
     expect(q('[data-testbox="parity-again"]')!.textContent).toBe(T.parityAgain);
@@ -401,6 +418,32 @@ describe('Replace and Disconnect', () => {
   });
 });
 
+describe('the box side of a disconnect, and an apply that always detaches (D-8166 review)', () => {
+  it('a disconnect whose unpair did not finish says what to do by hand, reads the status again and closes', async () => {
+    const f = fakeFleet();
+    f.box.on.disconnect = () => { f.box.status = baseStatus(); return { refuse: refused(409, 'testbox-admin-refused', { code: 'unpair-failed' }) }; };
+    const onChanged = vi.fn();
+    await mount({ onChanged });
+    await press(q('[data-testbox="disconnect"]'));
+    await press(document.querySelector<HTMLElement>('[data-testbox="sheet-confirm"]'));
+    expect(onChanged).toHaveBeenCalled();
+    await waitFor(() => expect(document.querySelector('[data-testbox="manage"]')).toBeNull());
+  });
+
+  it('the wait and its Cancel show only while the act is in its wait phase; once it is writing, the phases alone show', async () => {
+    fakeFleet(connected({ act: actState({ sub: 'settings-box', phase: 'wait', phases: [] }) }));
+    const waiting = await mount();
+    expect(q('[data-testbox="waiting"]')).not.toBeNull();
+    expect(q('[data-testbox="cancel-wait"]')).not.toBeNull();
+    waiting.unmount();
+    fakeFleet(connected({ act: actState({ sub: 'settings-box', phase: 'settings', phases: [{ name: 'wait', ms: 0 }] }) }));
+    await mount();
+    expect(q('[data-testbox="phases"]')).not.toBeNull();
+    expect(q('[data-testbox="waiting"]')).toBeNull();
+    expect(q('[data-testbox="cancel-wait"]')).toBeNull();
+  });
+});
+
 describe('the section: Replace returns to step 1 and shows the new fingerprint at step 3', () => {
   const TOOLS = { node: '22.11.0', npm: '10.9.0', tmux: '3.4', git: '2.43.0', python3: '3.12.3', chrome: '131.0.6778.85' };
   const STATUS: StatusAnswer = {
@@ -546,6 +589,20 @@ describe('blocked: one line and the one control that resolves it', () => {
     expect(f.posts('preflight')).toHaveLength(1);
     expect(screen.getByText(T.accessChecked)).toBeInTheDocument();
     expect(q('[data-blocked]')).toBeNull();
+  });
+
+  it('the access form takes the address the box sees ccrc connect from, only when typed, and refuses a public address', async () => {
+    const f = fakeFleet(connected({ act: actState({ sub: 'repair', outcome: 'failed', code: 'auth-refused', phase: 'copy' }) }));
+    f.box.on.key = () => ({ result: { line: LINE } });
+    await mount();
+    const form = manage().querySelector<HTMLElement>('[data-blocked="access"]')!;
+    typeIn(within(form).getByLabelText(C.addressLabel), '203.0.113.9');
+    expect(within(form).getByText(C.badPublicAddress)).toBeInTheDocument();
+    expect(q('[data-testbox="show-access"]')).toBeDisabled();
+    typeIn(within(form).getByLabelText(C.addressLabel), ADDRESS);
+    typeIn(within(form).getByLabelText(C.sourceLabel), '10.0.0.250');
+    await press(q('[data-testbox="show-access"]'));
+    expect(f.posts('key')[0]!.body).toEqual({ fields: { address: ADDRESS, port: '22', user: 'root', source: '10.0.0.250' } });
   });
 
   it('a failed access check names the failing check and keeps the line', async () => {

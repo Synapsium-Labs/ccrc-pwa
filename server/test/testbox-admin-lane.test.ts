@@ -37,7 +37,7 @@ const RECORD: TestboxParityRecord = {
 };
 const STATUS: TestboxAdminStatus = {
   v: 1, connected: true, addressSet: true, login: 'root', fingerprint: FP, hostKey: 'pinned', boxFileSha256: SHA, act: null,
-  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: RECORD,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: RECORD, endedActs: [],
 };
 const act = (over: Partial<TestboxActState>): TestboxActState => ({
   id: 'c'.repeat(32), sub: 'connect', phase: null, phases: [], outcome: 'ok', code: null, startedAt: 1, endedAt: 2, ...over,
@@ -203,6 +203,30 @@ describe('an ended long act writes its end rows once, across a restart (D-8166)'
     r.setStatus({ ...STATUS, act: act({ sub: 'parity' }) });
     await lane.sweep(true);
     expect(shape(r.rows())).toEqual([['parity', 'ok', null, 'c'.repeat(32)]]);
+  });
+
+  it('two acts between passes: the first, which ended before the second began, still gets its row (the status carries it in endedActs)', async () => {
+    // Connect failed at verify in a few seconds; the operator pressed Try again inside the poll, so the status holds only the second.
+    const first = act({ id: 'a'.repeat(32), outcome: 'failed', phase: 'verify', code: 'verify-failed' });
+    const second = act({ id: 'b'.repeat(32), outcome: 'running', endedAt: null });
+    const r = rig({ ...STATUS, endedActs: [first], act: second });
+    const lane = r.lane();
+    await lane.sweep();
+    expect(shape(r.rows())).toEqual([['install', 'failed', 'verify-failed', 'a'.repeat(32)]]);
+    // the second ends: its row follows, and the first is not written again
+    r.setStatus({ ...STATUS, endedActs: [first], act: { ...second, outcome: 'ok', endedAt: 9 } });
+    await lane.sweep(true);
+    expect(shape(r.rows())).toEqual([['install', 'failed', 'verify-failed', 'a'.repeat(32)], ['install', 'ok', null, 'b'.repeat(32)], ['pair', 'ok', null, null]]);
+    // a restart (a new lane over the same ledger) writes none of them again
+    await r.lane().sweep();
+    expect(r.rows()).toHaveLength(3);
+  });
+
+  it('a server that was down while one act ended and the next began writes both rows when it is back, oldest first', async () => {
+    const acts = ['1', '2', '3'].map((c) => act({ id: c.repeat(32), sub: 'parity', startedAt: Number(c), endedAt: Number(c) + 1 }));
+    const r = rig({ ...STATUS, endedActs: acts.slice(0, 2), act: acts[2]! });
+    await r.lane().sweep();
+    expect(shape(r.rows())).toEqual(acts.map((a) => ['parity', 'ok', null, a.id]));
   });
 
   it('no row holds an address, a path or free text', async () => {

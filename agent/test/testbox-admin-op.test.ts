@@ -219,8 +219,9 @@ describe('the testbox-admin op', () => {
       const long = TESTBOX_ADMIN_SUBS[sub].long;
       expect(testboxAdminSpawnBounds(sub, {}).timeoutMs, sub).toBe(long ? 30_000 : 60_000);
     }
+    // settings-box always detaches (its apply outruns a short sub's bound); --when-idle only chooses wait or refuse
     expect(testboxAdminSpawnBounds('settings-box', { whenIdle: true }).timeoutMs).toBe(30_000);
-    expect(testboxAdminSpawnBounds('settings-box', {}).timeoutMs).toBe(60_000);
+    expect(testboxAdminSpawnBounds('settings-box', {}).timeoutMs).toBe(30_000);
   });
 
   it('ready.ops offers testbox-admin', async () => {

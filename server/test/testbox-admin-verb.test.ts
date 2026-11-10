@@ -195,7 +195,7 @@ describe('the bash argument check is the twin of buildTestboxAdminArgv (D-8166)'
     }
   });
 
-  it('the long subs are the contract\'s (settings-box only with --when-idle)', () => {
+  it('the long subs are the contract\'s (settings-box always detaches; --when-idle only chooses to wait)', () => {
     const h = fixture();
     const r = sh(h, SRC('linux') + 'for s in "$@"; do TBA_WHENIDLE=0; _tba_is_long "$s" && echo "$s:long" || echo "$s:short"; done; TBA_WHENIDLE=1; _tba_is_long settings-box && echo "idle:long"', [VERB, ...SUBS]);
     const got = Object.fromEntries(r.out.split('\n').filter((l) => l.includes(':')).map((l) => l.split(':') as [string, string]));
@@ -494,7 +494,8 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
     expect(state).toContain('act_sub=connect\n');
     expect(state).toContain('act_outcome=running\n');
     const calls = readFileSync(join(h.home, 'systemd-run-calls'), 'utf8').trim().split('\n');
-    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} /usr/bin/env CCRC_TBA_ACT=${id} ${h.home}/.local/bin/ccrc testbox-admin connect`]);
+    // The unit's PATH is the user manager's: the shell puts ~/.local/bin first, as `_upd_detach` does, so `node` and `gh` resolve there as in the parent.
+    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} /usr/bin/env CCRC_TBA_ACT=${id} /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" ccrc-detach testbox-admin connect`]);
     const args = readFileSync(join(h.home, '.ccrc', `testbox-admin.args.${id}`), 'utf8');
     expect(args).toBe(`--set=CCRC_TESTBOX_RUN_TMPDIR=/tmp/$HOME/%h\n--repo=${rowArg(ROW)}\n--from\npwa\n`);
     expect((statSync(join(h.home, '.ccrc', `testbox-admin.args.${id}`)).mode & 0o777).toString(8)).toBe('600');

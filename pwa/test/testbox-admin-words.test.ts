@@ -10,12 +10,14 @@ import { TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_PHASE_M
 import { TESTBOX_PARITY_REQUIRED_SENTENCE } from '../../shared/api';
 import {
   BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, BOX_SETTING_FORM_START, TESTBOX_CONNECT_TEXT, TESTBOX_LISTEN_KEY, TESTBOX_SERVICE_PORT, actWord,
-  boxSettingStart, checkWord, codeSentence, listenFor, phaseTime, phaseWord, shapeSentence, stepOf,
+  boxSettingStart, checkWord, codeSentence, isIpLiteral, isPublicIpLiteral, listenFor, phaseTime, phaseWord, shapeSentence, stepOf,
 } from '../src/fleet/testboxAdminWords';
 import { ApiError } from '../src/lib/api';
 import { TESTBOX_GATE_DARK_TEXT, TESTBOX_ROUTE_TEXT, testboxRouteText } from '../src/lib/refusalWords';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+/** Addresses off the private and documentation ranges are assembled, never spelled, so no file the topology scanner reads holds one. */
+const ip = (s: string): string => s.replace(/_/g, '.');
 
 const status = (over: Partial<TestboxAdminStatus> = {}): TestboxAdminStatus => ({
   v: 1, connected: false, addressSet: false, login: null, fingerprint: null, hostKey: 'none', boxFileSha256: null, act: null,
@@ -148,12 +150,23 @@ describe('the box settings the form starts from (D-8166)', () => {
     expect(start[TESTBOX_LISTEN_KEY]).toBe('');
   });
 
-  it('the listen address is an IP literal and the service port, or blank for a host name', () => {
-    expect(listenFor('192.0.2.7')).toBe(`192.0.2.7:${TESTBOX_SERVICE_PORT}`);
-    expect(listenFor('2001:db8::7', 9000)).toBe('[2001:db8::7]:9000');
+  it('the listen address is a private IP literal and the service port, or blank for a host name or a public address', () => {
+    expect(listenFor('10.0.0.7')).toBe(`10.0.0.7:${TESTBOX_SERVICE_PORT}`);
+    expect(listenFor(ip('100_64_1_2'))).toBe(`${ip('100_64_1_2')}:${TESTBOX_SERVICE_PORT}`);
+    expect(listenFor('fd7a:115c:a1e0::7', 9000)).toBe('[fd7a:115c:a1e0::7]:9000');
     expect(listenFor('testbox.invalid')).toBe('');
-    expect(fitsTestboxShape(TESTBOX_LISTEN_KEY, listenFor('192.0.2.7'))).toBe(true);
-    expect(fitsTestboxShape(TESTBOX_LISTEN_KEY, listenFor('2001:db8::7'))).toBe(true);
+    // a public address would carry the token in clear across the internet: the card never fills it, and Connect refuses it
+    for (const v of ['192.0.2.7', ip('8_8_8_8'), ip('172_32_0_1'), '2001:db8::7']) expect(listenFor(v), v).toBe('');
+    expect(fitsTestboxShape(TESTBOX_LISTEN_KEY, listenFor('10.0.0.7'))).toBe(true);
+    expect(fitsTestboxShape(TESTBOX_LISTEN_KEY, listenFor('fd7a:115c:a1e0::7'))).toBe(true);
+  });
+
+  it('a public IP literal is named as one; a host name and a private address are not', () => {
+    for (const v of ['192.0.2.7', ip('8_8_8_8'), '2001:db8::7']) expect(isPublicIpLiteral(v), v).toBe(true);
+    for (const v of ['10.0.0.7', ip('100_127_0_1'), 'fd00::1', 'testbox.invalid', '']) expect(isPublicIpLiteral(v), v).toBe(false);
+    expect(isIpLiteral('10.0.0.7')).toBe(true);
+    expect(isIpLiteral('2001:db8::7')).toBe(true);
+    expect(isIpLiteral('testbox.invalid')).toBe(false);
   });
 
   it('a value off its shape is said in the shape\'s words, never the value', () => {

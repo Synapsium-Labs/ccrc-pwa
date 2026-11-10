@@ -18,6 +18,8 @@ export const TESTBOX_POLL_DEFAULT_MS = 30_000;
 export const TESTBOX_RUNS_DIR = 'testbox-runs';
 /** How often the lane asks the box's settings `read` while a box is connected (spec §2.7, D-8166): six hours. */
 export const TESTBOX_SETTINGS_READ_MS = 6 * 3_600_000;
+/** How many settled act ids the lane remembers (the status carries the current act and at most six before it). */
+const SETTLED_ACTS_KEPT = 32;
 
 /** What the lane takes from the composition: the fleet io and config it always had, and (D-8166) the connect surface's ops
  *  port, its ledger and the fleet's identity, each absent in a test or script that wants none. */
@@ -35,8 +37,9 @@ export class TestboxLane {
   private held: TestboxBlock | null = null;
   /** The wall clock `read` was last asked at (0: never). */
   private lastRead = 0;
-  /** The long act whose end rows this lane last wrote or found written, so a pass does not ask the ledger again. */
-  private settledAct: string | null = null;
+  /** The long acts whose end rows this lane wrote or found written, so a pass does not ask the ledger again. Bounded: the status
+   *  names at most seven acts a pass (the current one and the six that ended before it), and the oldest ids are forgotten first. */
+  private readonly settledActs = new Set<string>();
 
   constructor(private readonly deps: () => TestboxLaneDeps, private readonly now: () => number = Date.now) {}
 
@@ -81,6 +84,9 @@ export class TestboxLane {
       this.lastRead = at;
       void ops.run('read', {}).catch(() => undefined);
     }
+    // The acts that ended before the current one began come first (oldest first), so a second act started before this pass cannot
+    // cost the first its row (spec §2.10).
+    for (const ended of s.status.endedActs ?? []) this.writeEndRows(d, ended);
     if (s.status.act !== null) this.writeEndRows(d, s.status.act);
     return s.status;
   }
@@ -90,8 +96,8 @@ export class TestboxLane {
    *  failed at the pair or the check writes install `ok` and pair `failed`. */
   private writeEndRows(d: TestboxLaneDeps, a: TestboxActState): void {
     const audit = d.testboxAudit;
-    if (audit === undefined || a.endedAt === null || a.outcome === 'running' || this.settledAct === a.id) return;
-    if (audit.hasAct(a.id)) { this.settledAct = a.id; return; }
+    if (audit === undefined || a.endedAt === null || a.outcome === 'running' || this.settledActs.has(a.id)) return;
+    if (audit.hasAct(a.id)) { this.settle(a.id); return; }
     const outcome = a.outcome === 'ok' ? 'ok' : 'failed';
     const code = a.outcome === 'ok' || a.code === null ? {} : { code: a.code };
     const fleetIdentity = knownFleetIdentity(d.fleetIdentity);
@@ -104,7 +110,12 @@ export class TestboxLane {
       const act = TESTBOX_ADMIN_SUBS[a.sub].act;
       if (act !== null) audit.write({ ...row, act, actId: a.id, outcome, ...code });
     }
-    this.settledAct = a.id;
+    this.settle(a.id);
+  }
+
+  private settle(id: string): void {
+    this.settledActs.add(id);
+    while (this.settledActs.size > SETTLED_ACTS_KEPT) this.settledActs.delete(this.settledActs.values().next().value as string);
   }
 
   /** The card's **Bring tools up to date** and the update lane's signal (spec §2.7, §2.10): the op's one write, then

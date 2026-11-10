@@ -30,7 +30,7 @@ const THEMES = ['light', PHOSPHOR] as const;
 const WIDTHS = [360, 390, 1280, 1470, 1920] as const;
 const bandOf = (width: number): 'phone' | 'laptop' | 'wide' => (width < 900 ? 'phone' : width < 1600 ? 'laptop' : 'wide');
 
-const ADDRESS = '192.0.2.7';
+const ADDRESS = '10.0.0.7';
 const FP = `SHA256:${'A'.repeat(43)}`;
 const LINE = `from="192.0.2.1" ssh-ed25519 ${'B'.repeat(68)} ccrc-testbox`;
 const TOOLS = { node: '22.11.0', npm: '10.9.0', tmux: '3.4', git: '2.43.0', python3: '3.12.3', chrome: '131.0.6778.85' };
@@ -204,7 +204,8 @@ async function open(skin: string, theme: string, width: number): Promise<{ page:
     const sub = new URL(r.request().url()).pathname.split('/').pop()!;
     fleet.posts.push({ sub, body: r.request().postDataJSON() });
     let result: Record<string, unknown> = {};
-    if (sub === 'key') { fleet.status = baseStatus({ addressSet: true, login: 'root' }); result = { line: LINE }; }
+    // `key` records the connection and keeps a pin that is already there (the verb never unpins on a repeated key).
+    if (sub === 'key') { fleet.status = { ...fleet.status, addressSet: true, login: 'root' }; result = { line: LINE }; }
     if (sub === 'probe') result = { fingerprint: FP };
     if (sub === 'pin') fleet.status = baseStatus({ addressSet: true, login: 'root', hostKey: 'pinned', fingerprint: FP });
     if (sub === 'preflight') {
@@ -294,7 +295,18 @@ describe.each(SKINS)('Connect a test box in %s', (skin) => {
           await shot('3');
           expect(three.checks, 'one line a check').toHaveLength(3);
           for (let i = 1; i < three.checks.length; i++) expect(three.checks[i]!.top, 'checks stack').toBeGreaterThanOrEqual(three.checks[i - 1]!.bottom - 0.5);
-          await flow.getByRole('button', { name: T.checkAgain }).click();
+          // The recorded connection can be taken back: Start over sits beside Show the access line again, in the step it belongs to.
+          expect(await flow.getByRole('button', { name: T.startOver }).count(), 'Start over is offered once an address is recorded').toBe(1);
+          await flow.getByRole('button', { name: T.showLineAgain }).click();
+          await flow.getByLabel(T.sourceLabel).waitFor();
+          const again = await read('step 2 again: the connection typed again');
+          await shot('2again');
+          expect(again.fields.length, 'address, port, login and the optional source').toBeGreaterThanOrEqual(4);
+          await flow.getByLabel(T.addressLabel, { exact: true }).fill(ADDRESS);
+          await flow.getByRole('button', { name: T.showLineAgain }).click();
+          await flow.locator('[data-testbox="key-line"]').waitFor();
+          await flow.getByRole('button', { name: T.added }).click();
+          await flow.getByRole('button', { name: T.probe }).click();
 
           // Step 4: four folded families, a two-column form beyond a phone.
           await flow.getByText(T.settingsIntro).waitFor();
@@ -316,7 +328,7 @@ describe.each(SKINS)('Connect a test box in %s', (skin) => {
           await shot('5');
           expect(five.phases).toHaveLength(6);
           for (let i = 1; i < five.phases.length; i++) expect(five.phases[i]!.top, 'phases stack').toBeGreaterThanOrEqual(five.phases[i - 1]!.bottom - 0.5);
-          expect(fleet.posts.map((p) => p.sub)).toEqual(['key', 'probe', 'pin', 'preflight', 'preflight', 'connect']);
+          expect(fleet.posts.map((p) => p.sub)).toEqual(['key', 'probe', 'pin', 'preflight', 'key', 'preflight', 'connect']);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

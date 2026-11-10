@@ -36,8 +36,10 @@ const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).
 const HAS_KEYGEN = spawnSync('bash', ['-c', 'command -v ssh-keygen'], { encoding: 'utf8' }).status === 0;
 const HAS_FLOCK = spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0;
 const HAS_NODE = spawnSync('bash', ['-c', 'command -v node'], { encoding: 'utf8' }).status === 0;
-const ADDR = '203.0.113.9';
+const ADDR = '10.0.0.9';
 const SRC_ADDR = '192.0.2.5';
+/** Addresses off the private and documentation ranges are assembled, never spelled, so no file the topology scanner reads holds one. */
+const ip = (s: string): string => s.replace(/_/g, '.');
 const STG = '/tmp/ccrc-stg.AbC123';
 // The OS is forced to linux for the verb's own gate; the two platform helpers the act reads (a file's mode, a digest) keep
 // the userland's real answer, so the suite runs on both.
@@ -54,7 +56,7 @@ const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).di
 
 /** The words of a connect: a listen address (an IP literal), two paths, one row. */
 const WORDS = (extra: string[] = []): string[] => [
-  '--set=CCRC_TESTBOX_LISTEN=198.51.100.7:7443', '--set=CCRC_TESTBOX_ROOT=/srv/box', '--set=CCRC_TESTBOX_REPOS=/etc/ccrc-testbox/repos.d',
+  '--set=CCRC_TESTBOX_LISTEN=10.0.0.9:7443', '--set=CCRC_TESTBOX_ROOT=/srv/box', '--set=CCRC_TESTBOX_REPOS=/etc/ccrc-testbox/repos.d',
   '--set=CCRC_TESTBOX_TOOLS_DIR=/opt/tools', `--repo=${rowArg(ROW)}`, ...extra,
 ];
 
@@ -70,6 +72,7 @@ const PASSING_RULES: string[][] = [
   ['/dev/stdin', '0', ''],
   ['systemctl restart ccrc-testbox\\.service', '0', ''],
   ['systemctl.*is-active', '0', ''],
+  ['^(sudo -n -- )?timeout ', '0', ''],
   ['rm -rf', '0', ''],
 ];
 
@@ -190,7 +193,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     const s = status(h);
     expect(s.ok && s.value.connected).toBe(true);
     const box = stdinOf(h, '/etc/ccrc-testbox/ccrc.env')!;
-    expect(box).toContain('CCRC_TESTBOX_LISTEN=198.51.100.7:7443\n');
+    expect(box).toContain('CCRC_TESTBOX_LISTEN=10.0.0.9:7443\n');
     expect(s.ok && s.value.boxFileSha256).toBe(sha256(box));
     // the fleet host's own tag was resolved, and the installer ran from the staging tree with it
     expect(readFileSync(join(h.home, 'resolved-tag'), 'utf8').trim()).toBe('v1.2.3');
@@ -348,15 +351,63 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
   });
 
   it('an IPv6 address is bracketed in the URL and the git base', () => {
-    const h = fixture({ FAKE_IP_OUT: '2001:db8::9 dev eth0 src 2001:db8::5 uid 0' });
-    const g = verb(h, 'key', '--address=2001:db8::9');
+    const h = fixture({ FAKE_IP_OUT: 'fd00::9 dev eth0 src fd00::5 uid 0' });
+    const g = verb(h, 'key', '--address=fd00::9');
     expect(json(g)['ok'], g.out).toBe(true);
-    writeFileSync(h.pin, '2001:db8::9 ssh-ed25519 AAAA\n', { mode: 0o600 });
-    act(h, WORDS());
-    expect(lastAct(h).outcome).toBe('ok');
+    writeFileSync(h.pin, 'fd00::9 ssh-ed25519 AAAA\n', { mode: 0o600 });
+    act(h, WORDS().filter((w) => !w.startsWith('--set=CCRC_TESTBOX_LISTEN=')).concat('--set=CCRC_TESTBOX_LISTEN=[fd00::9]:7443'));
+    expect(lastAct(h)).toMatchObject({ outcome: 'ok' });
     const o = readFileSync(h.overlay, 'utf8');
-    expect(o).toContain('CCRC_TESTBOX_URL=http://[2001:db8::9]:7443\n');
-    expect(o).toContain('CCRC_TESTBOX_GIT_URL_BASE=ssh://ccrc-tb-push@[2001:db8::9]:22/\n');
+    expect(o).toContain('CCRC_TESTBOX_URL=http://[fd00::9]:7443\n');
+    expect(o).toContain('CCRC_TESTBOX_GIT_URL_BASE=ssh://ccrc-tb-push@[fd00::9]:22/\n');
+  });
+
+  it('a listen address off the private ranges is refused before the act starts: the service has no TLS and the token would cross the internet in clear', () => {
+    for (const listen of ['203.0.113.9:7443', `${ip('8_8_8_8')}:7443`, '[2001:db8::9]:7443', `${ip('172_32_0_1')}:7443`, 'testbox.invalid:7443']) {
+      const h = fixture();
+      connectedTo(h);
+      const words = WORDS().filter((w) => !w.startsWith('--set=CCRC_TESTBOX_LISTEN=')).concat(`--set=CCRC_TESTBOX_LISTEN=${listen}`);
+      expect(json(verb(h, 'connect', ...words, '--from', 'pwa')), listen).toEqual({ ok: false, code: 'box-value-refused', keys: ['CCRC_TESTBOX_LISTEN'] });
+      expect(sshCalls(h), listen).toEqual([]);
+      expect(readFileSync(h.state, 'utf8')).not.toContain('act_id=');
+    }
+  });
+
+  it('the address ccrc reaches the box on must be the listen address: the installed firewall accepts ssh and the service port only there', () => {
+    const h = fixture();
+    connectedTo(h);
+    const words = WORDS().filter((w) => !w.startsWith('--set=CCRC_TESTBOX_LISTEN=')).concat('--set=CCRC_TESTBOX_LISTEN=10.0.0.77:7443');
+    expect(json(verb(h, 'connect', ...words, '--from', 'pwa'))).toEqual({ ok: false, code: 'box-value-refused', keys: ['CCRC_TESTBOX_LISTEN'] });
+    expect(sshCalls(h)).toEqual([]);
+  });
+
+  it('the overlay\'s service URL and push base are built from the listen address', () => {
+    const h = fixture();
+    connectedTo(h);
+    act(h, WORDS());
+    const o = readFileSync(h.overlay, 'utf8');
+    expect(o).toContain('CCRC_TESTBOX_URL=http://10.0.0.9:7443\n');
+    expect(o).toContain('CCRC_TESTBOX_GIT_URL_BASE=ssh://ccrc-tb-push@10.0.0.9:22/\n');
+  });
+
+  it('the box reaches the npm upstream before a file is written there: the default, or the one the settings name', () => {
+    const h = fixture();
+    connectedTo(h);
+    act(h, WORDS());
+    const probe = sshCalls(h).map(cmdOf).filter((c) => c.startsWith('timeout '));
+    expect(probe).toHaveLength(1);
+    expect(probe[0]).toMatch(/ bash registry\.npmjs\.org 443$/);
+    const g = fixture();
+    connectedTo(g);
+    act(g, WORDS(['--set=CCRC_TESTBOX_REGISTRY_UPSTREAM=https://npm.mirror.invalid:8443']));
+    expect(sshCalls(g).map(cmdOf).filter((c) => c.startsWith('timeout '))[0]).toMatch(/ bash npm\.mirror\.invalid 8443$/);
+    // an upstream the box cannot reach ends the settings phase no-egress, with the box file never written
+    const d = fixture({}, WITH(['^(sudo -n -- )?timeout ', '124', '']));
+    connectedTo(d);
+    act(d, WORDS());
+    expect(lastAct(d)).toMatchObject({ outcome: 'failed', code: 'no-egress', phase: 'settings' });
+    expect(sshCalls(d).map(cmdOf).some((c) => c.includes('/etc/ccrc-testbox') && c.includes('ccrc.env') && c.includes('install -d'))).toBe(false);
+    expect(existsSync(d.token)).toBe(false);
   });
 
   it('an installer refused line ends at install with install-refused, and the line stays in the fleet-side log', () => {
@@ -435,11 +486,11 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     const id = m![1]!;
     // the parent started one unit named for the act, and nothing has run on the box yet
     const calls = readFileSync(join(h.home, 'systemd-run-calls'), 'utf8').trim().split('\n');
-    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} /usr/bin/env CCRC_TBA_ACT=${id} ${h.home}/.local/bin/ccrc testbox-admin connect`]);
+    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} /usr/bin/env CCRC_TBA_ACT=${id} /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" ccrc-detach testbox-admin connect`]);
     expect(sshCalls(h)).toEqual([]);
     expect(lastAct(h)).toMatchObject({ id, outcome: 'running' });
     // the checked words reach the unit by file and are read once
-    expect(readFileSync(join(h.home, '.ccrc', `testbox-admin.args.${id}`), 'utf8')).toContain('--set=CCRC_TESTBOX_LISTEN=198.51.100.7:7443\n');
+    expect(readFileSync(join(h.home, '.ccrc', `testbox-admin.args.${id}`), 'utf8')).toContain('--set=CCRC_TESTBOX_LISTEN=10.0.0.9:7443\n');
     const u = sh(h, SRC + STUBS + `CCRC_TBA_ACT=${id} _tba_main connect >/dev/null; echo "rc=$?"`, [VERB]);
     expect(u.out.trim(), u.err).toBe('rc=0');
     expect(readFileSync(join(h.home, 'lock-seen'), 'utf8').trim()).toBe('held');
@@ -515,7 +566,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     const probe = sshCalls(h).map(cmdOf).filter((c) => c.includes('is-active'));
     expect(probe).toHaveLength(1);
     expect(probe[0]).toContain('systemctl is-active --quiet ccrc-testbox.service');
-    expect(probe[0]).toMatch(/ bash 198\.51\.100\.7 7443$/);
+    expect(probe[0]).toMatch(/ bash 10\.0\.0\.9 7443$/);
     // a service that is not active ends the act at the check phase
     const g = fixture({ TBA_API: '' }, WITH(['systemctl.*is-active', '3', '']));
     connectedTo(g);

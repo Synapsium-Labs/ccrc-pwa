@@ -185,12 +185,12 @@ function common(m: Measured, width: number, at: string): void {
   expect(m.contrast.length, `${at}: some text was measured`).toBeGreaterThan(0);
 }
 
-async function open(skin: string, theme: string, width: number): Promise<{ page: Page; ctx: Awaited<ReturnType<typeof openApp>>['ctx']; errors: string[] }> {
+async function open(skin: string, theme: string, width: number, admin: Record<string, unknown> = STATUS_ADMIN): Promise<{ page: Page; ctx: Awaited<ReturnType<typeof openApp>>['ctx']; errors: string[] }> {
   const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, FIXTURE);
   const answer = (body: unknown) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   await ctx.route('**/api/testbox', (r) => r.fulfill(answer({ ok: true, testbox: BLOCK })));
-  await ctx.route('**/api/testbox/admin', (r) => r.fulfill(answer({ ok: true, status: STATUS_ADMIN, events: EVENTS.slice(0, 10) })));
-  await ctx.route('**/api/testbox/admin/*', (r) => r.fulfill(answer({ ok: true, status: STATUS_ADMIN, events: EVENTS.slice(0, 10), result: {} })));
+  await ctx.route('**/api/testbox/admin', (r) => r.fulfill(answer({ ok: true, status: admin, events: EVENTS.slice(0, 10) })));
+  await ctx.route('**/api/testbox/admin/*', (r) => r.fulfill(answer({ ok: true, status: admin, events: EVENTS.slice(0, 10), result: {} })));
   return { page, ctx, errors };
 }
 
@@ -303,6 +303,49 @@ describe.each(SKINS)('the connected test box card in %s', (skin) => {
             expect(b.right).toBeLessThanOrEqual(sheetM.w);
           }
           expect(sheetM.scroll, `${width}px: the sheet does not scroll sideways`).toBeLessThanOrEqual(0);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+/** A lost access key: the blocked line and its form, which asks the address again (and the address the box sees, only if the key was
+ *  refused). One column of full-width inputs and a full-width button on a phone, the same form at the laptop and wide bands. */
+const REFUSED = {
+  ...STATUS_ADMIN,
+  act: { id: 'd'.repeat(32), sub: 'repair', phase: 'copy', phases: [], outcome: 'failed', code: 'auth-refused', startedAt: 1, endedAt: 2 },
+};
+describe.each(SKINS)('the connected card\'s blocked access form in %s', (skin) => {
+  for (const theme of THEMES) {
+    for (const width of WIDTHS) {
+      it(`${theme}, ${width}px: the access form, with the address the box sees, fits and reads`, async () => {
+        const { ctx, page, errors } = await open(skin, theme, width, REFUSED);
+        try {
+          page.setDefaultTimeout(10_000);
+          await page.goto(server!.origin + '/settings/automation');
+          const card = page.getByRole('region', { name: TITLE }).locator('[data-testbox="manage"]');
+          await card.locator('[data-blocked="access"]').waitFor({ timeout: 20_000 });
+          await page.waitForTimeout(350);
+          const m = await card.evaluate(measure);
+          common(m, width, 'blocked access');
+          const form = await card.locator('[data-blocked="access"]').evaluate((el) => {
+            const inputs = [...el.querySelectorAll('input')].map((i) => { const r = i.getBoundingClientRect(); return { left: r.left, right: r.right, height: r.height }; });
+            const b = el.querySelector('[data-testbox="show-access"]')!.getBoundingClientRect();
+            const root = el.getBoundingClientRect();
+            return { inputs, button: { left: b.left, right: b.right, height: b.height }, root: { left: root.left, right: root.right },
+              tapMin: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min')) };
+          });
+          expect(form.inputs, 'address, port, login and the optional source').toHaveLength(4);
+          for (const i of form.inputs) {
+            expect(i.height, `${width}px: an input is at least --tap-min tall`).toBeGreaterThanOrEqual(form.tapMin - 0.5);
+            expect(i.left, `${width}px: an input starts inside the card`).toBeGreaterThanOrEqual(form.root.left - 0.5);
+            expect(i.right, `${width}px: an input ends inside the card`).toBeLessThanOrEqual(form.root.right + 0.5);
+          }
+          expect(form.button.height, `${width}px: the button is at least --tap-min tall`).toBeGreaterThanOrEqual(form.tapMin - 0.5);
+          if (width < 900) expect(Math.abs((form.button.right - form.button.left) - (form.root.right - form.root.left)), `${width}px: the button is full width`).toBeLessThanOrEqual(1);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

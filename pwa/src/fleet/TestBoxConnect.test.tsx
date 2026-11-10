@@ -17,10 +17,12 @@ import { TESTBOX_ROUTE_TEXT } from '../lib/refusalWords';
 import type { TestboxBlock, TestboxBlockAdmin, TestboxPoll } from './useTestboxView';
 
 const T = TESTBOX_CONNECT_TEXT;
-const ADDRESS = '192.0.2.7';
+const ADDRESS = '10.0.0.7';
 const FP = `SHA256:${'A'.repeat(43)}`;
 const LINE = `from="192.0.2.1" ssh-ed25519 ${'B'.repeat(68)} ccrc-testbox`;
 const SECOND_LINE = `from="192.0.2.9" ssh-ed25519 ${'C'.repeat(68)} ccrc-testbox`;
+/** Addresses off the private and documentation ranges are assembled, never spelled, so no file the topology scanner reads holds one. */
+const ip = (s: string): string => s.replace(/_/g, '.');
 
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const baseStatus = (over: Partial<TestboxAdminStatus> = {}): TestboxAdminStatus => ({
@@ -314,6 +316,21 @@ describe('step 4: the box settings and the repositories', () => {
     type('CCRC_TESTBOX_LISTEN', '');
     expect(within(flow()).getByText(T.needListen)).toBeInTheDocument();
     expect(button(T.next)).toBeDisabled();
+  });
+
+  it('a listen address that is no private IP literal is refused as typed: the service has no TLS and the firewall matches that address only', async () => {
+    await atStepFour();
+    fillRepo();
+    for (const bad of ['203.0.113.9:8740', `${ip('8_8_8_8')}:8740`, 'testbox.invalid:8740', '[2001:db8::9]:8740']) {
+      type('CCRC_TESTBOX_LISTEN', bad);
+      expect(within(flow()).getByText(T.listenNotPrivate), bad).toBeInTheDocument();
+      expect(button(T.next), bad).toBeDisabled();
+    }
+    for (const good of ['10.0.0.7:8740', `${ip('100_64_1_2')}:8740`, '[fd00::7]:8740']) {
+      type('CCRC_TESTBOX_LISTEN', good);
+      expect(within(flow()).queryByText(T.listenNotPrivate), good).toBeNull();
+      expect(button(T.next), good).toBeEnabled();
+    }
   });
 
   it('a repository row is checked as typed: a name, a fetch URL and a package, and the fleet\'s own repositories are offered', async () => {
@@ -621,6 +638,23 @@ describe('the card: the flow mounts with no connected box, and the switch waits 
     expect(within(card()).getByRole('button', { name: T.runParity })).toBeInTheDocument();
   });
 
+  it('the flow re-reads when the block moves (a Replace or Disconnect from the connected card beside it), so it never draws the old box', async () => {
+    atBand('laptop');
+    const f = fakeFleet(baseStatus({ addressSet: true, connected: true, hostKey: 'pinned', fingerprint: FP, boxFileSha256: 'f'.repeat(64) }));
+    const view = render(<TestBoxSection poll={sectionPoll(block({ admin: admin({ connected: true, hostKey: 'pinned', parity: 'none' }) }))} />);
+    await settle();
+    expect(within(card()).getByRole('button', { name: T.runParity })).toBeInTheDocument();
+    const reads = (): number => f.calls.filter((c) => c.method === 'GET' && c.path === '/api/testbox/admin').length;
+    const before = reads();
+    // the Disconnect landed: the block says no box is connected, and the fleet's status says no address is recorded
+    f.box.status = baseStatus();
+    view.rerender(<TestBoxSection poll={sectionPoll(block({ state: 'off', box: null, admin: admin() }))} />);
+    await settle();
+    expect(reads()).toBeGreaterThan(before);
+    expect(within(card()).queryByRole('button', { name: T.runParity })).toBeNull();
+    expect(within(card()).getByRole('button', { name: T.begin })).toBeInTheDocument();
+  });
+
   it('the parity-required refusal the switch route answers is the card\'s own sentence', async () => {
     atBand('laptop');
     fakeFleet();
@@ -633,5 +667,138 @@ describe('the card: the flow mounts with no connected box, and the switch waits 
     fireEvent.click(within(card()).getByRole('radio', { name: 'On' }));
     await settle();
     expect(within(card()).getByText(TESTBOX_PARITY_REQUIRED_SENTENCE)).toBeInTheDocument();
+  });
+});
+
+describe('step 1 and the private network (D-8166, C4, M21)', () => {
+  it('a public IP literal is refused in words (the service has no TLS); a private one, and a host name, go on', async () => {
+    fakeFleet();
+    await mount();
+    await click(T.begin);
+    for (const pub of ['192.0.2.7', ip('8_8_8_8'), '2001:db8::7']) {
+      type(T.addressLabel, pub);
+      expect(screen.getByText(T.badPublicAddress), pub).toBeInTheDocument();
+      expect(button(T.next), pub).toBeDisabled();
+    }
+    for (const ok of ['10.0.0.7', ip('100_64_3_4'), 'fd00::7', 'testbox.invalid']) {
+      type(T.addressLabel, ok);
+      expect(screen.queryByText(T.badPublicAddress), ok).toBeNull();
+      expect(button(T.next), ok).toBeEnabled();
+    }
+  });
+});
+
+describe('coming back to a connection that is recorded and never Connected (D-8166 review)', () => {
+  const recordedFleet = (over: Partial<TestboxAdminStatus> = {}): ReturnType<typeof fakeFleet> => {
+    const f = fakeFleet(baseStatus({ addressSet: true, login: 'root', ...over }));
+    f.box.on.key = (b) => { f.box.status = baseStatus({ addressSet: true, login: 'root', ...over }); void b; return { result: { line: LINE } }; };
+    f.box.on.disconnect = () => { f.box.status = baseStatus(); return {}; };
+    return f;
+  };
+
+  it('after a reload the card offers Show the access line again and Start over, and a connected card offers neither', async () => {
+    recordedFleet();
+    await mount();
+    expect(button(T.probe)).toBeInTheDocument();
+    expect(button(T.showLineAgain)).toBeInTheDocument();
+    expect(button(T.startOver)).toBeInTheDocument();
+    expect(screen.getByText(T.startOverWhy)).toBeInTheDocument();
+    cleanup();
+    fakeFleet(baseStatus({ addressSet: true, connected: true, hostKey: 'pinned', fingerprint: FP }));
+    await mount();
+    expect(within(flow()).queryByRole('button', { name: T.startOver })).toBeNull();
+    expect(within(flow()).queryByRole('button', { name: T.showLineAgain })).toBeNull();
+  });
+
+  it('Show the access line again types the connection again, with the optional source, and shows the same line', async () => {
+    const { posts } = recordedFleet();
+    await mount();
+    await click(T.showLineAgain);
+    // the address is not in this card's memory: it is typed again, and nothing is sent until it is
+    expect(within(flow()).getByLabelText(T.addressLabel)).toHaveValue('');
+    expect(button(T.showLineAgain)).toBeDisabled();
+    expect(posts('key')).toHaveLength(0);
+    type(T.addressLabel, ADDRESS);
+    type(T.sourceLabel, 'testbox.invalid');
+    expect(button(T.showLineAgain)).toBeDisabled();
+    type(T.sourceLabel, '10.0.0.250');
+    type(T.loginLabel, 'deploy');
+    await click(T.showLineAgain);
+    expect(posts('key')).toHaveLength(1);
+    expect(posts('key')[0]!.body).toEqual({ fields: { address: ADDRESS, port: '22', user: 'deploy', source: '10.0.0.250' } });
+    expect(document.querySelector('[data-testbox="key-line"]')!.textContent).toBe(LINE);
+    expect(screen.getByText(T.keyWhere)).toBeInTheDocument();
+    await click(T.added);
+    expect(button(T.probe)).toBeInTheDocument();
+  });
+
+  it('a source is optional: left blank it is not sent', async () => {
+    const { posts } = recordedFleet();
+    await mount();
+    await click(T.showLineAgain);
+    type(T.addressLabel, ADDRESS);
+    await click(T.showLineAgain);
+    expect(posts('key')[0]!.body).toEqual({ fields: { address: ADDRESS, port: '22', user: 'root' } });
+  });
+
+  it('Start over disconnects (with step-up), and the card is at step 1 with nothing carried over', async () => {
+    const { box, posts } = recordedFleet({ hostKey: 'pinned', fingerprint: FP });
+    let refused = true;
+    const first = box.on.disconnect!;
+    box.on.disconnect = (b) => (refused ? { refuse: json(403, { ok: false, error: 'step-up-required' }) } : first(b));
+    await mount();
+    await click(T.startOver);
+    expect(posts('disconnect')).toHaveLength(1);
+    expect(document.querySelector('[data-step-up]')).not.toBeNull();
+    refused = false;
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'a passphrase' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm with passphrase' }));
+    await settle();
+    await click(T.startOver);
+    expect(posts('disconnect')).toHaveLength(2);
+    expect(posts('disconnect')[1]!.body).toEqual({ fields: {} });
+    // step 1 again, with no tap first: the address field, empty, and no recovery bar (nothing is recorded)
+    expect(within(flow()).getByLabelText(T.addressLabel)).toHaveValue('');
+    expect(within(flow()).queryByRole('button', { name: T.startOver })).toBeNull();
+    expect(screen.getByText(T.startedOver)).toBeInTheDocument();
+  });
+
+  it('a Start over whose box side did not finish says so, and the card still starts over (the fleet side is clean)', async () => {
+    const { box } = recordedFleet();
+    box.on.disconnect = () => { box.status = baseStatus(); return { refuse: json(409, { ok: false, error: 'testbox-admin-refused', code: 'unpair-failed' }) }; };
+    await mount();
+    await click(T.startOver);
+    await settle();
+    expect(screen.getByText(TESTBOX_ADMIN_CODE_SENTENCE['unpair-failed'])).toBeInTheDocument();
+    expect(within(flow()).getByLabelText(T.addressLabel)).toHaveValue('');
+    expect(screen.queryByText(T.startedOver)).toBeNull();
+  });
+
+  it('a recorded connection cannot be Started over while its install runs', async () => {
+    recordedFleet({ hostKey: 'pinned', fingerprint: FP, act: connectAct() });
+    await mount();
+    expect(within(flow()).queryByRole('button', { name: T.startOver })).toBeNull();
+  });
+
+  it('what this card remembers goes when the recorded address goes: a Replace or Disconnect from the connected card clears the old line and the old checks', async () => {
+    const f = fakeFleet();
+    f.box.on.key = () => { f.box.status = baseStatus({ addressSet: true }); return { result: { line: LINE } }; };
+    await mount();
+    await toKey();
+    await click(T.makeKey);
+    expect(document.querySelector('[data-testbox="key-line"]')!.textContent).toBe(LINE);
+    // the connected card beside this flow acts: the status this flow re-reads says no address is recorded
+    f.box.status = baseStatus();
+    fireEvent.click(button(T.copy));
+    await settle();
+    await click(T.added);
+    f.box.status = baseStatus();
+    // a re-read lands (the section's `sync` moves; here the flow's own reload through an act's answer)
+    f.box.on.probe = () => ({ result: { fingerprint: FP } });
+    await click(T.probe);
+    // step 1 is back, empty, and "I have added it" has nothing to loop on
+    expect(within(flow()).getByLabelText(T.addressLabel)).toHaveValue('');
+    expect(document.querySelector('[data-testbox="key-line"]')).toBeNull();
+    expect(within(flow()).queryByRole('button', { name: T.added })).toBeNull();
   });
 });

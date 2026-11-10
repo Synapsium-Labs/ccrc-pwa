@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 import {
   TESTBOX_ADMIN_SUBS, TESTBOX_ADMIN_SUB_MAP, TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_ADMIN_PHASES,
   TESTBOX_ACTS, TESTBOX_ACT_OUTCOMES, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRING_KEYS,
-  TESTBOX_RUN_SHAPING, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, TESTBOX_REPO_ROW_MAX_BYTES,
-  buildTestboxAdminArgv, fitsTestboxShape, isBoxAddress, isSshPort, isLoginUser, isHostKeyFingerprint, isPrNumber,
+  TESTBOX_PAIRED_BOX_KEYS, TESTBOX_RUN_SHAPING, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, TESTBOX_REPO_ROW_MAX_BYTES,
+  buildTestboxAdminArgv, fitsTestboxShape, isBoxAddress, isPrivateNetworkAddress, isSshPort, isLoginUser, isHostKeyFingerprint, isPrNumber,
   parityArmable, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg, testboxAdminIsLong,
   type TestboxAdminSub, type TestboxAdminFields, type TestboxParityRecord,
 } from '../../shared/testbox-admin.js';
@@ -54,6 +54,8 @@ const refused = (sub: unknown, fields: unknown, why = 'bad-field') => {
 const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64url');
 /** Invalid dotted quads are assembled, never spelled, so no file the topology scanner reads holds an address. */
 const q = (...p: (number | string)[]): string => p.join('.');
+/** Addresses off the private and documentation ranges are assembled, never spelled, so no file the topology scanner reads holds one. */
+const ip = (s: string): string => s.replace(/_/g, '.');
 
 describe('the sub table', () => {
   it('every sub has a spec and every spec a sub', () => {
@@ -68,9 +70,9 @@ describe('the sub table', () => {
   it('step-up is exactly key, pin, connect and disconnect', () => {
     expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp).sort()).toEqual(['connect', 'disconnect', 'key', 'pin']);
   });
-  it('the long subs are connect, parity, repair and apply-release, and settings-box once it waits', () => {
-    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].long).sort()).toEqual(['apply-release', 'connect', 'parity', 'repair']);
-    expect(testboxAdminIsLong('settings-box', { settings: {} })).toBe(false);
+  it('the long subs are connect, parity, repair, apply-release and settings-box: the box apply outruns a short sub\'s bound, so it always detaches', () => {
+    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].long).sort()).toEqual(['apply-release', 'connect', 'parity', 'repair', 'settings-box']);
+    expect(testboxAdminIsLong('settings-box', { settings: {} })).toBe(true);
     expect(testboxAdminIsLong('settings-box', { settings: {}, whenIdle: true })).toBe(true);
     expect(testboxAdminIsLong('status', { whenIdle: true })).toBe(false);
   });
@@ -188,6 +190,26 @@ describe('the argv builder', () => {
     refused('settings-box', { settings: { __proto__x: '1' } });
     refused('settings-box', { settings: {} }); refused('settings-box', { settings: ['CCRC_TESTBOX_RUNS=2'] });
     refused('settings-box', { settings: 'CCRC_TESTBOX_RUNS=2' });
+  });
+  it('the four pairing settings are Connect\'s alone: settings-box refuses each, with a valid value, and connect takes them', () => {
+    const valid: Record<string, string> = {
+      CCRC_TESTBOX_LISTEN: '10.0.0.9:7443', CCRC_TESTBOX_SERVICE_TOKEN_FILE: '~/.ccrc/t.token', CCRC_TESTBOX_SERVICE_USER: 'svc', CCRC_TESTBOX_PUSH_USER: 'push',
+    };
+    expect([...TESTBOX_PAIRED_BOX_KEYS]).toEqual(Object.keys(valid));
+    for (const k of TESTBOX_PAIRED_BOX_KEYS) {
+      expect(fitsTestboxShape(k, valid[k]), k).toBe(true);
+      refused('settings-box', { settings: { [k]: valid[k] } });
+      refused('settings-box', { settings: { CCRC_TESTBOX_RUNS: '2', [k]: valid[k] } });
+      expect(build('connect', { settings: { [k]: valid[k] }, repos: [ROW] }).ok, k).toBe(true);
+    }
+  });
+  it('key takes an optional source, the address the box sees ccrc connect from, under the address grammar', () => {
+    const r = build('key', { address: '10.0.0.9', source: '10.0.0.250' });
+    expect(r.ok && r.argv).toEqual(['testbox-admin', 'key', '--address=10.0.0.9', '--source=10.0.0.250']);
+    expect(build('key', { address: '10.0.0.9' }).ok).toBe(true);
+    refused('key', { address: '10.0.0.9', source: '10.0.0.250:22' });
+    refused('key', { address: '10.0.0.9', source: '' });
+    refused('connect', { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW], source: '10.0.0.250' });
   });
   it('a settings value off its shape is bad-field', () => {
     refused('settings-box', { settings: { CCRC_TESTBOX_WORKERS: '0' } });
@@ -383,6 +405,15 @@ describe('the connection grammars', () => {
     for (const v of ['10.0.0.1', q(255, 255, 255, 255), '::1', '2001:db8::1', '2001:db8:0:0:0:0:0:1', 'fe80::', 'a.b', 'box-1.example.invalid', 'x']) expect(isBoxAddress(v), v).toBe(true);
     for (const v of [q(256, 1, 1, 1), '1.2.3', q(1, 2, 3, 4, 5), q('01', 2, 3, 4), 'a:b', '1:2:3:4:5:6:7:8:9', ':::', '1::2::3', 'g::1', 'box:22', 'a@b', ' a', 'a b', '-a', 'a-', 'a..b', '.a', 'a.', '[::1]', 'a/b', '', 'é.invalid', 'a'.repeat(64) + '.invalid', ('a.'.repeat(130)) + 'b', 4, null, undefined]) expect(isBoxAddress(v), String(v)).toBe(false);
   });
+  it('isPrivateNetworkAddress is RFC 1918, 100.64/10 and fc00::/7, for IP literals only', () => {
+    for (const v of ['10.0.0.1', '10.255.255.255', '172.16.0.1', '172.31.255.255', '192.168.0.1', ip('100_64_0_1'), ip('100_127_255_255'), 'fc00::1', 'fd7a:115c:a1e0::1', 'fdff::']) {
+      expect(isPrivateNetworkAddress(v), v).toBe(true);
+    }
+    for (const v of [ip('172_15_255_255'), ip('172_32_0_1'), ip('192_169_0_1'), ip('100_63_255_255'), ip('100_128_0_1'), ip('11_0_0_1'), ip('8_8_8_8'), '127.0.0.1', ip('169_254_1_1'),
+      'fbff::1', 'fe80::1', '2001:db8::1', '::1', '::', 'box.invalid', '', 5, null, `${q(10, 0, 0)}`]) {
+      expect(isPrivateNetworkAddress(v), String(v)).toBe(false);
+    }
+  });
   it('isSshPort is 1 to 65535', () => {
     for (const v of [1, 22, 65535, '1', '22', '65535']) expect(isSshPort(v), String(v)).toBe(true);
     for (const v of [0, 65536, -1, 1.5, '0', '65536', '022', '1e3', ' 22', '22 ', '', null, undefined, NaN]) expect(isSshPort(v), String(v)).toBe(false);
@@ -424,6 +455,16 @@ describe('the status reader', () => {
     const old = read(STATUS);
     expect(old.ok && old.value.installedTag).toBeNull();
     for (const bad of ['1.2.3', 'v1.2', '/etc/x', 'v01.2.3', 5]) expect(read({ ...STATUS, installedTag: bad }).ok, String(bad)).toBe(false);
+  });
+
+  it('endedActs is a list of at most six act states, and a status without it (an older verb) reads as none', () => {
+    const old = read(STATUS);
+    expect(old.ok && old.value.endedActs).toEqual([]);
+    const some = read({ ...STATUS, endedActs: [ACT, { ...ACT, id: 'e'.repeat(32) }] });
+    expect(some.ok && some.value.endedActs?.map((a) => a.id)).toEqual([ACT.id, 'e'.repeat(32)]);
+    expect(read({ ...STATUS, endedActs: Array.from({ length: 7 }, () => ACT) }).ok).toBe(false);
+    expect(read({ ...STATUS, endedActs: [{ ...ACT, address: '10.0.0.9' }] }).ok).toBe(false);
+    expect(read({ ...STATUS, endedActs: 'none' }).ok).toBe(false);
   });
 
   it('reads the document the verb prints', () => {
