@@ -1,23 +1,28 @@
-// The Docs reader's compact phone head, measured in a real Chrome over the production build (native Docs reader, the
-// phone-header plan of 2026-11-03, refinements (a), (b), (d), (i)). The operator's phone, a Pixel 10 Pro XL in Chrome on
-// Android, has a CSS viewport of about 412 x 915; on it 311.5 px sat above a reader doc's title (measured at the base:
-// the console's part 234.5 and the reader frame's own top 77), and the mockup the operator picked (one console row)
-// draws 133. So, at 412 x 915 with the reader up:
-//   - the head is the compact row, and the console's part above the frame (the row and the gap under it) is at most
+// The Docs reader's phone head, measured in a real Chrome over the production build (native Docs reader, the phone-header
+// plan of 2026-11-03 and the library 1.1 take-up plan, refinements (f), (g), (j), (k), (l)). The operator's phone, a
+// Pixel 10 Pro XL in Chrome on Android, has a CSS viewport of about 412 x 915; on it 311.5 px sat above a reader doc's
+// title (measured at the base: the console's part 234.5 and the reader frame's own top 77). On a leaf whose reader frame
+// is ready on ccrc's bar, the head is the one bar (back, the title, the reader's tools and the reading line); on a leaf
+// the reader does not draw, it is option 1's row; at 600 and wider it is the full head. So, at 412 x 915 with the reader up:
+//   - the head is the one bar, and the console's part above the frame (the bar and the gap under it) is at most
 //     CONSOLE_PART_MAX px, in either skin;
-//   - in Refined, the phone's skin, the title's top is at most PHONE_TITLE_MAX px below the top of the page;
-//   - every control on the row is at least one tap (44 x 44), and the row, the mockup's 1 px divider inside it, is one
-//     tap tall (its border box, as getBoundingClientRect reads it);
-//   - on a draft leaf of a ref view with a long branch name, the ref is cut and the draft badge is whole, inside the label;
+//   - in Refined, the phone's skin, the title's top is at most ONE_BAR_TITLE_MAX px below the top of the page, the
+//     frame draws no bar of its own, and the title is the document's own h1;
+//   - every control on the bar is at least one tap (44 x 44), and the bar, the mockup's 1 px divider inside it, is one
+//     tap tall (its border box, as getBoundingClientRect reads it), with the 2 px reading line inside its bottom edge;
+//   - Quick jump and Contents run the frame's tools from ccrc's own buttons, and the reading line follows the scroll;
+//   - the title opens the details panel, and Escape closes it with focus back on the title;
+//   - on a draft leaf of a ref view with a long branch name, the ref is cut and the draft badge is whole, inside the title;
 //   - on a leaf under a 46-character directory in a ref view, the ref still has room on the first line (the directory
-//     gives way first), and the badge is inside the label;
-//   - Page details opens the truth line under the row, and Escape closes it with focus back on the button.
+//     gives way first), and the badge is inside the title;
+//   - a bar mounted at 412 keeps its tools when the phone turns or the window widens;
+//   - on a text leaf, where no reader is drawn, option 1's row stays and its Page details opens the truth line.
 // At 599 the head is still the row; at 600 and wider it is the full head, which desk-nav Part B (D-8101) makes one row
 // (back, the crumbs, the actions) over one dense truth line: the title's figure and the head's height at 1280 under a
 // mouse, the row on one line, the crumbs giving way before any action's words, the words hidden under the container
 // query with each action keeping its name, no sideways scroll, and a touch laptop (1280 x 800 and a phone turned
-// sideways, 915 x 412) keeping the 44 px floor. Every case prints its figures on a `PHH-FIGURE` line for the plan's
-// Results.
+// sideways, 915 x 412) keeping the 44 px floor; a frame mounted at a desk width keeps its own bar. Every case prints its
+// figures on a `PHH-FIGURE` or `L11-FIGURE` line for the plan's Results.
 //
 // The figure is the iframe's top in the page plus the doc title's top inside the frame (Playwright's frame evaluation),
 // at the frame's scroll 0, once the reader is up ("Formatting…" gone, no fallback note) and both documents' fonts have
@@ -26,11 +31,12 @@
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config
 // vitest.browser.config.ts browser/docs-compact-head.browser.test.ts )`, through `ccrc test`.
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
-import { DOCS_HEAD_TEXT } from '../src/docs/docsText';
+import { DOCS_HEAD_TEXT, DOCS_TOOL_TEXT } from '../src/docs/docsText';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
 import { COMMIT_A, COMMIT_B, draftOf, entry, holder, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
@@ -52,15 +58,22 @@ const LONG_BRANCH = 'ws/a-long-workspace-branch-for-the-phone-header';
  *  holds the directory and nothing else unless the ref is given its own room. */
 const LONG_DIR = '2026-10-27-one-long-directory-name-for-the-row';
 
-/** The picked mockup's figure is 133 px above the title. The console's part, its row and the gap under it, is 48 (44 + 4),
- *  and CONSOLE_PART_MAX is the binding pin. The reader frame's own top (its body margin, its bar and the gap under the
- *  bar) measured 77: the shared reader library's, so not ccrc's to pin. The title therefore sits at 125, with 8 px of
- *  slack under 133, kept so that a 1 px change in the library does not red a ccrc test. */
-const PHONE_TITLE_MAX = 133;
+/** The option 2 mockup's trimmed figure: the bar and its gap, 48, and the frame's root trimmed to 8 px (prediction 56). */
+const ONE_BAR_TITLE_MAX = 61;
 const CONSOLE_PART_MAX = 48;
 /** The floor every control on the row reaches (`--tap-min`). */
 const TAP = 44;
 const PHONE = { width: 412, height: 915 } as const;
+
+/** A plain-text leaf: no reader draws it, so option 1's row stays. `notes.txt` is deliberately not a registered highlight grammar. */
+const TEXT_NAME = 'notes.txt';
+const TEXT_BODY = 'A plain text leaf, without a registered grammar.\n';
+const TEXT_BLOB = 'd'.repeat(40);
+const TEXT_SIZE = Buffer.byteLength(TEXT_BODY, 'utf8');
+const TEXT_SHA256 = createHash('sha256').update(TEXT_BODY, 'utf8').digest('hex');
+const TEXT_TREE = treeOk({ entries: [entry(SECTION, TEXT_NAME, {
+  committed: { kind: 'file', blob: TEXT_BLOB, size: TEXT_SIZE },
+})] });
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -84,6 +97,12 @@ const bodyOf = (value: unknown): Buffer => Buffer.from(JSON.stringify(value), 'u
 /** The one committed leaf on origin's default branch. */
 const COMMITTED_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
 
+/** The same document with six h2 sections under its h1. The library builds its contents rail only for a document (its own
+ *  check: an h1 and more than two h2) and its quick jump only past four entries, so the two tools (case 5) have something
+ *  to open only here; the default document has no section headings. */
+const HEADED_DOC = `${DOC}${['first', 'second', 'third', 'fourth', 'fifth', 'sixth'].map((n) => `## The ${n} section\n\nText under the ${n} section.\n`).join('\n')}`;
+const HEADED_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: Buffer.byteLength(HEADED_DOC, 'utf8') } })] });
+
 /** The same leaf in a ref view of a long local branch, with a draft over it held by that branch's checkout. */
 function draftTree(leaf = NAME): ReturnType<typeof treeOk> {
   const base = treeOk({
@@ -98,7 +117,7 @@ function draftTree(leaf = NAME): ReturnType<typeof treeOk> {
 
 /** `/api/docs/demo/tree` answers `tree` and `/api/docs/demo/file` the leaf's Markdown; any other `/api/docs` request (a
  *  refresh) answers 204. Routed after `openApp`'s own `/api` route, so this one answers first. */
-async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
+async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME, contentClass: 'markdown' | 'text' = 'markdown', doc = DOC): Promise<void> {
   await app.ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
     const req = route.request();
     if (req.method() !== 'GET') {
@@ -110,11 +129,16 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME): P
       await route.fulfill({ status: 200, headers, body: bodyOf(treeResponse(tree)) });
       return;
     }
-    const show = {
-      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: leaf, size: SIZE,
-      sha256: BLOB.padEnd(64, '0'), encoding: 'utf8', text: DOC, commit: COMMIT_A, blob: BLOB, onRef: 'contains',
-    };
-    await route.fulfill({ status: 200, headers, body: bodyOf({ ok: true, contentClass: 'markdown', from: 'ccd', show }) });
+    const show = contentClass === 'text'
+      ? {
+        v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: TEXT_NAME, size: TEXT_SIZE,
+        sha256: TEXT_SHA256, encoding: 'utf8', text: TEXT_BODY, commit: COMMIT_A, blob: TEXT_BLOB, onRef: 'contains',
+      }
+      : {
+        v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: leaf, size: Buffer.byteLength(doc, 'utf8'),
+        sha256: BLOB.padEnd(64, '0'), encoding: 'utf8', text: doc, commit: COMMIT_A, blob: BLOB, onRef: 'contains',
+      };
+    await route.fulfill({ status: 200, headers, body: bodyOf({ ok: true, contentClass, from: 'ccd', show }) });
   });
 }
 
@@ -126,11 +150,11 @@ interface View {
 
 /** A context at `view` (a touch screen below 900 px, or when `touch` asks; a mouse when `pointer` is `fine`), its
  *  `/api/docs` answering `tree`. */
-async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise<OpenedApp> {
+async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME, contentClass: 'markdown' | 'text' = 'markdown', doc = DOC): Promise<OpenedApp> {
   const opened = view.pointer === 'fine' ? Math.max(view.width, 900) : view.width;
   const app = await openApp(browser!, { width: opened, skin: view.skin, theme: 'light', touch: view.touch }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize({ width: view.width, height: view.height });
-  await answerDocs(app, tree, leaf);
+  await answerDocs(app, tree, leaf, contentClass, doc);
   return app;
 }
 
@@ -159,7 +183,7 @@ async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise
 }
 
 interface Figure {
-  readonly head: 'compact' | 'full';
+  readonly head: 'one-bar' | 'compact' | 'full';
   /** `.docs-screen`'s top in the page. */
   readonly screenTop: number;
   /** The reader iframe's top in the page. */
@@ -170,13 +194,18 @@ interface Figure {
   readonly frameScroll: number;
   /** px above the title: `frameTop + titleInFrame`. */
   readonly above: number;
+  /** Whether the frame holds a bar of its own (`.topbar`). */
+  readonly frameBar: boolean;
+  /** Whether the frame's own Aa button (`.aa-wrap`) overlaps the title's text: recorded, never asserted (the operator's Q2). */
+  readonly aaOverTitle: boolean;
 }
 
 async function measure(page: Page): Promise<Figure> {
   const outer = await page.evaluate(async () => {
     await document.fonts.ready;
     const top = (sel: string): number => document.querySelector(sel)?.getBoundingClientRect().top ?? Number.NaN;
-    const head: 'compact' | 'full' = document.querySelector('.docs-head.docs-compact') === null ? 'full' : 'compact';
+    const head: 'one-bar' | 'compact' | 'full' = document.querySelector('.docs-head.docs-one-bar') !== null ? 'one-bar'
+      : document.querySelector('.docs-head.docs-compact') === null ? 'full' : 'compact';
     return { head, screenTop: top('.docs-screen'), frameTop: top('.docs-reader iframe') };
   });
   const handle = await page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
@@ -184,14 +213,27 @@ async function measure(page: Page): Promise<Figure> {
   if (frame === null || frame === undefined) throw new Error('the reader iframe has no content frame');
   const inner = await frame.evaluate(async (title) => {
     await document.fonts.ready;
-    const tops = [...document.querySelectorAll('h1')]
-      .filter((h) => h.textContent?.trim() === title)
-      .map((h) => h.getBoundingClientRect().top);
-    return { tops, scroll: window.scrollY };
+    const heads = [...document.querySelectorAll('h1')].filter((h) => h.textContent?.trim() === title);
+    const tops = heads.map((h) => h.getBoundingClientRect().top);
+    const aa = document.querySelector('.aa-wrap')?.getBoundingClientRect() ?? null;
+    const aaOverTitle = aa !== null && heads.some((h) => {
+      const range = document.createRange();
+      range.selectNodeContents(h);
+      return [...range.getClientRects()].some((r) => r.left < aa.right && r.right > aa.left && r.top < aa.bottom && r.bottom > aa.top);
+    });
+    return { tops, scroll: window.scrollY, frameBar: document.querySelector('.topbar') !== null, aaOverTitle };
   }, TITLE);
   if (inner.tops.length === 0) throw new Error(`no h1 in the frame reads ${TITLE}`);
   const titleInFrame = Math.max(...inner.tops);
-  return { ...outer, titleInFrame, frameScroll: inner.scroll, above: outer.frameTop + titleInFrame };
+  return {
+    ...outer, titleInFrame, frameScroll: inner.scroll, above: outer.frameTop + titleInFrame,
+    frameBar: inner.frameBar, aaOverTitle: inner.aaOverTitle,
+  };
+}
+
+/** Waits for the one bar (the reader is ready and was mounted on ccrc's bar), after `openLeaf`. */
+async function oneBar(page: Page): Promise<void> {
+  await page.waitForSelector('.docs-head.docs-one-bar', { timeout: 30_000 });
 }
 
 /** Puts keyboard focus on back once the reader has settled, for a case that presses Tab next (fix round 2 of review
@@ -221,38 +263,319 @@ async function at(view: View, check: (app: OpenedApp) => Promise<void>, tree = C
   }
 }
 
-describe('a phone draws one console row above the reader (refinements (a), (i))', () => {
-  it(`412 x 915, Refined: the title is at most ${PHONE_TITLE_MAX} px down, ${CONSOLE_PART_MAX} of them the console's`, async () => {
+describe('a phone draws the one bar above a ready reader (the take-up plan, refinements (f), (g), (l))', () => {
+  it(`412 x 915, Refined: the title is at most ${ONE_BAR_TITLE_MAX} px down, ${CONSOLE_PART_MAX} of them the console's`, async () => {
     await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+      await oneBar(page);
       const f = await measure(page);
-      console.log(`PHH-FIGURE refined 412x915 ${JSON.stringify(f)}`);
-      expect(f.head).toBe('compact');
+      console.log(`L11-FIGURE refined 412x915 ${JSON.stringify(f)}`);
+      expect(f.head).toBe('one-bar');
       expect(f.screenTop, 'nothing of the console draws above the Docs screen').toBe(0);
       expect(f.frameScroll, 'the frame is at its top').toBe(0);
-      expect(f.frameTop - f.screenTop, 'the row and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
-      expect(f.above, 'px above the title').toBeLessThanOrEqual(PHONE_TITLE_MAX);
+      expect(f.frameTop - f.screenTop, 'the bar and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
+      expect(f.above, 'px above the title').toBeLessThanOrEqual(ONE_BAR_TITLE_MAX);
+      expect(f.frameBar, 'the frame draws no bar of its own').toBe(false);
+      expect(await page.locator('.docs-title').textContent(), "the title is the document's h1, not the file name").toContain(TITLE);
     });
   }, 120_000);
 
-  it(`412 x 915, Instrument: the same row, and at most ${CONSOLE_PART_MAX} px of the console above the frame`, async () => {
+  it(`412 x 915, Instrument: the one bar, and at most ${CONSOLE_PART_MAX} px of the console above the frame`, async () => {
     await at({ ...PHONE, skin: INSTRUMENT }, async ({ page }) => {
+      await oneBar(page);
       const f = await measure(page);
-      console.log(`PHH-FIGURE instrument 412x915 ${JSON.stringify(f)}`);
-      expect(f.head).toBe('compact');
-      expect(f.frameTop - f.screenTop, 'the row and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
+      console.log(`L11-FIGURE instrument 412x915 ${JSON.stringify(f)}`);
+      expect(f.head).toBe('one-bar');
+      expect(f.frameTop - f.screenTop, 'the bar and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
     });
   }, 120_000);
 
-  it('599 x 915: still the row (the compact width ends at 600)', async () => {
+  it('599 x 915: still the one bar (the compact width ends at 600)', async () => {
     await at({ width: 599, height: 915, skin: REFINED }, async ({ page }) => {
+      await oneBar(page);
       const f = await measure(page);
-      console.log(`PHH-FIGURE refined 599x915 ${JSON.stringify(f)}`);
-      expect(f.head).toBe('compact');
+      console.log(`L11-FIGURE refined 599x915 ${JSON.stringify(f)}`);
+      expect(f.head).toBe('one-bar');
     });
   }, 120_000);
+
+  it('412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it', async () => {
+    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+      await oneBar(page);
+      const row = await page.evaluate(() => {
+        const bar = document.querySelector('.docs-one-bar .docs-compact-bar');
+        if (bar === null) return null;
+        const rect = (e: Element): { w: number; h: number; bottom: number } => {
+          const r = e.getBoundingClientRect();
+          return { w: r.width, h: r.height, bottom: r.bottom };
+        };
+        const read = bar.querySelector('.docs-read');
+        return {
+          bar: rect(bar),
+          divider: getComputedStyle(bar).borderBottomWidth,
+          buttons: [...bar.querySelectorAll('button')].map((b) => ({
+            name: b.classList.contains('docs-title') ? 'title' : b.getAttribute('aria-label') ?? '', text: b.textContent ?? '', ...rect(b),
+          })),
+          read: read === null ? null : rect(read),
+        };
+      });
+      console.log(`L11-FIGURE refined 412x915 bar ${JSON.stringify(row)}`);
+      expect(row, 'the one bar is drawn').not.toBeNull();
+      const r = row!;
+      expect(r.buttons.map((b) => b.name)).toEqual([DOCS_HEAD_TEXT.back, 'title', DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents]);
+      expect(r.buttons[1]?.text, 'the title button holds the document title and the Page details words').toContain(TITLE);
+      for (const b of r.buttons) {
+        expect(b.w, b.name).toBeGreaterThanOrEqual(TAP);
+        expect(b.h, b.name).toBeGreaterThanOrEqual(TAP);
+      }
+      expect(r.bar.h, 'the bar is one tap tall, its divider inside').toBeLessThanOrEqual(TAP + 0.5);
+      expect(r.bar.h, 'the bar is a whole tap tall').toBeGreaterThanOrEqual(TAP - 0.5);
+      expect(r.divider, 'the mockup\'s 1 px divider').toBe('1px');
+      expect(r.read, 'the reading line is drawn').not.toBeNull();
+      expect(r.read!.h, 'the reading line is 2 px tall').toBeCloseTo(2, 1);
+      expect(Math.abs(r.read!.bottom - r.bar.bottom), 'the line ends at the bar\'s bottom edge').toBeLessThanOrEqual(0.5);
+
+      // Recorded, never asserted: whether the 2 px line paints over the bottom edge of an inset keyboard focus ring (the
+      // title's, then the first tool's). The outline box is the control's box grown by its outline offset and width. The
+      // frame is scrolled to its end first, so the line spans the bar. (The line is `pointer-events: none`, so a hit test
+      // cannot see which one paints on top; the boxes' intersection is the figure.)
+      const scrolled = await (await page.locator('.docs-reader iframe').elementHandle())!.contentFrame();
+      await scrolled!.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.waitForFunction(() => {
+        const read = document.querySelector('.docs-one-bar .docs-read')!.getBoundingClientRect().width;
+        return Math.abs(read - document.querySelector('.docs-one-bar .docs-compact-bar')!.getBoundingClientRect().width) <= 1;
+      }, undefined, { timeout: 2000 });
+      await page.locator('.docs-one-bar .docs-back').focus();
+      await page.waitForFunction(() => document.activeElement?.classList.contains('docs-back') === true, undefined, { timeout: 10_000 });
+      const rings: unknown[] = [];
+      for (let i = 0; i < 2; i++) {
+        await page.keyboard.press('Tab');
+        rings.push(await page.evaluate(() => {
+          const a = document.activeElement as HTMLElement;
+          const read = document.querySelector('.docs-one-bar .docs-read')!.getBoundingClientRect();
+          const b = a.getBoundingClientRect();
+          const cs = getComputedStyle(a);
+          const grow = Number.parseFloat(cs.outlineOffset) + Number.parseFloat(cs.outlineWidth);
+          const out = { top: b.top - grow, bottom: b.bottom + grow, left: b.left - grow, right: b.right + grow };
+          return {
+            focused: a.className || a.getAttribute('aria-label'), outline: `${cs.outlineStyle} ${cs.outlineWidth} offset ${cs.outlineOffset}`,
+            box: { top: b.top, bottom: b.bottom }, outlineBox: out, read: { top: read.top, bottom: read.bottom, left: read.left, right: read.right },
+            readOverBox: read.top < b.bottom && read.bottom > b.top && read.left < b.right && read.right > b.left,
+            readOverOutline: read.top < out.bottom && read.bottom > out.top && read.left < out.right && read.right > out.left,
+          };
+        }));
+      }
+      console.log(`L11-FIGURE refined 412x915 focus-ring ${JSON.stringify(rings)}`);
+    });
+  }, 120_000);
+
+  it("412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons", async () => {
+    const app = await openView({ ...PHONE, skin: REFINED }, HEADED_TREE, NAME, 'markdown', HEADED_DOC);
+    try {
+      const { page } = app;
+      await page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`, { waitUntil: 'load' });
+      await page.waitForSelector('.docs-head.docs-one-bar', { timeout: 90_000 });
+      const handle = await page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
+      const frame = (await handle?.contentFrame())!;
+      const tocOpen = (): Promise<boolean> => frame.evaluate(() => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') === true);
+      const inJump = (): Promise<boolean> => frame.evaluate(() => document.querySelector('.jump')?.contains(document.activeElement) === true);
+      const contents = page.getByRole('button', { name: DOCS_TOOL_TEXT.contents });
+      const jump = page.getByRole('button', { name: DOCS_TOOL_TEXT.jump });
+      await contents.click();
+      await frame.waitForFunction(() => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') === true, undefined, { timeout: 5000 });
+      expect(await tocOpen(), 'the first tap opens Contents').toBe(true);
+      await contents.click();
+      await frame.waitForFunction(() => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') !== true, undefined, { timeout: 5000 });
+      expect(await tocOpen(), 'the second tap closes it').toBe(false);
+      await jump.click();
+      await frame.waitForFunction(() => document.querySelector('.jump')?.contains(document.activeElement) === true, undefined, { timeout: 5000 });
+      expect(await inJump(), 'the first tap puts focus in Quick jump').toBe(true);
+      await jump.click();
+      await frame.waitForFunction(() => document.querySelector('.jump')?.contains(document.activeElement) !== true, undefined, { timeout: 5000 });
+      expect(await inJump(), 'the second tap takes it out').toBe(false);
+      console.log('L11-FIGURE refined 412x915 tools {"contents":"toggles","jump":"toggles"}');
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it("412 x 915: the reading line follows the frame's scroll", async () => {
+    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+      await oneBar(page);
+      const handle = await page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
+      const frame = (await handle?.contentFrame())!;
+      const widths = (): Promise<{ read: number; bar: number }> => page.evaluate(() => ({
+        read: document.querySelector('.docs-one-bar .docs-read')!.getBoundingClientRect().width,
+        bar: document.querySelector('.docs-one-bar .docs-compact-bar')!.getBoundingClientRect().width,
+      }));
+      const top = await widths();
+      expect(top.read, 'at the top the line is under 2 % of the bar').toBeLessThan(top.bar * 0.02);
+      await frame.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.waitForFunction(() => {
+        const read = document.querySelector('.docs-one-bar .docs-read')!.getBoundingClientRect().width;
+        const bar = document.querySelector('.docs-one-bar .docs-compact-bar')!.getBoundingClientRect().width;
+        return Math.abs(read - bar) <= 1;
+      }, undefined, { timeout: 2000 });
+      const end = await widths();
+      console.log(`L11-FIGURE refined 412x915 reading-line ${JSON.stringify({ top, end })}`);
+      expect(Math.abs(end.read - end.bar), 'at the end the line is the bar\'s width').toBeLessThanOrEqual(1);
+    });
+  }, 120_000);
+
+  it('412 x 915: the title opens the details panel; Escape closes it, focus back on the title (refinement (k))', async () => {
+    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+      await oneBar(page);
+      const title = page.locator('.docs-one-bar .docs-title');
+      expect(await page.locator('.docs-truth').isVisible(), 'the truth line is behind the tap').toBe(false);
+      await title.click();
+      expect(await title.getAttribute('aria-expanded')).toBe('true');
+      expect(await page.locator('.docs-truth').isVisible()).toBe(true);
+      const panel = page.locator('.docs-more-panel');
+      expect(await panel.getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible(), 'View on GitHub, with its words').toBe(true);
+      expect(await panel.getByRole('button', { name: DOCS_HEAD_TEXT.share }).isVisible(), 'Share, with its word').toBe(true);
+      expect(await panel.getByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView }).isVisible(), 'Export, with its words').toBe(true);
+      // Escape is pressed from inside the open panel, so the panel's own handler and the focus's return to the title are
+      // what close it: a click leaves focus on the title, where the title's handler alone would do.
+      await panel.getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit }).focus();
+      expect(await page.evaluate(() => document.activeElement?.closest('.docs-more-panel') !== null), 'focus is in the panel').toBe(true);
+      const f = await measure(page);
+      console.log(`L11-FIGURE refined 412x915 panel-open ${JSON.stringify(f)}`);
+      expect(f.frameTop, 'the frame stays under the open panel').toBeGreaterThan(CONSOLE_PART_MAX);
+      await page.keyboard.press('Escape');
+      expect(await title.getAttribute('aria-expanded')).toBe('false');
+      expect(await page.locator('.docs-truth').isVisible()).toBe(false);
+      expect(await page.evaluate(() => document.activeElement?.classList.contains('docs-title') ?? false), 'focus is on the title').toBe(true);
+    });
+  }, 120_000);
+
+  it('412 x 915: a draft in a ref view of a long branch; the ref is cut, the draft badge is whole and inside the title (refinement (g))', async () => {
+    const app = await openView({ ...PHONE, skin: REFINED }, draftTree());
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-one-bar .docs-compact-where .docs-badge') !== null, undefined, { timeout: 60_000 });
+      const got = await app.page.evaluate(() => {
+        const rect = (sel: string): { left: number; right: number; top: number; mid: number } | null => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r === undefined ? null : { left: r.left, right: r.right, top: r.top, mid: (r.top + r.bottom) / 2 };
+        };
+        const text = document.querySelector('.docs-compact-where-ref');
+        const badge = document.querySelector('.docs-one-bar .docs-compact-where .docs-badge');
+        return {
+          label: rect('.docs-title'), badge: rect('.docs-one-bar .docs-compact-where .docs-badge'), ref: rect('.docs-compact-where-ref'),
+          textCut: text === null ? null : text.scrollWidth > text.clientWidth,
+          badgeWhole: badge === null ? null : badge.scrollWidth <= badge.clientWidth + 1,
+          words: badge?.textContent ?? null,
+        };
+      });
+      console.log(`L11-FIGURE refined 412x915 long-branch-draft ${JSON.stringify(got)}`);
+      expect(got.textCut, 'the long ref overflows and is cut').toBe(true);
+      expect(got.badgeWhole, 'the badge is not cut').toBe(true);
+      expect(got.label).not.toBeNull();
+      expect(got.badge).not.toBeNull();
+      expect(got.badge!.left).toBeGreaterThanOrEqual(got.label!.left - 0.5);
+      expect(got.badge!.right, 'the badge lies inside the title').toBeLessThanOrEqual(got.label!.right + 0.5);
+      // The badge stays on the ref's line (the ref's span is in this fixture, so it is the one measured): were the row to
+      // stack them, the badge would sit lower and still be inside the title. The two are centred on one line, and the badge
+      // is the taller box, so their tops differ by 1.4 px and their centres by none: the centres are compared.
+      expect(got.ref).not.toBeNull();
+      expect(Math.abs(got.badge!.mid - got.ref!.mid), 'the badge is on the ref\'s line').toBeLessThanOrEqual(1);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it('412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the title (refinement (g))', async () => {
+    const leaf = `${LONG_DIR}/${NAME}`;
+    const app = await openView({ ...PHONE, skin: REFINED }, draftTree(leaf), leaf);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-one-bar .docs-compact-where-ref') !== null, undefined, { timeout: 60_000 });
+      const got = await app.page.evaluate(async () => {
+        await document.fonts.ready;
+        const box = (sel: string): { left: number; right: number; width: number } | null => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r === undefined ? null : { left: r.left, right: r.right, width: r.width };
+        };
+        // The separator's own space is drawn: the first character of the ref's text has a box of its own.
+        const ref = document.querySelector('.docs-compact-where-ref');
+        const first = document.createRange();
+        if (ref?.firstChild != null) { first.setStart(ref.firstChild, 0); first.setEnd(ref.firstChild, 1); }
+        return {
+          label: box('.docs-title'), crumb: box('.docs-compact-where-crumb'), ref: box('.docs-compact-where-ref'),
+          badge: box('.docs-one-bar .docs-compact-where .docs-badge'), separatorW: first.getBoundingClientRect().width,
+          refText: ref?.textContent ?? null,
+        };
+      });
+      console.log(`L11-FIGURE refined 412x915 long-directory-ref ${JSON.stringify(got)}`);
+      expect(got.ref, 'the ref is drawn').not.toBeNull();
+      expect(got.ref!.width, 'the ref has room for at least four mono characters').toBeGreaterThan(24);
+      expect(got.separatorW, 'the separator\'s space is drawn').toBeGreaterThan(0);
+      expect(got.badge).not.toBeNull();
+      expect(got.label).not.toBeNull();
+      expect(got.badge!.right, 'the badge lies inside the title').toBeLessThanOrEqual(got.label!.right + 0.5);
+      expect(got.ref!.right, 'the ref ends before the badge').toBeLessThanOrEqual(got.badge!.left + 0.5);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it('mounted at 412 x 915, then turned to 915 x 412: the one bar stays, its tools still there (refinement (f))', async () => {
+    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+      await oneBar(page);
+      await page.setViewportSize({ width: 915, height: 412 });
+      await page.waitForFunction(() => innerWidth === 915 && innerHeight === 412, undefined, { timeout: 10_000 });
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const f = await measure(page);
+      console.log(`L11-FIGURE refined 412x915-then-915x412 ${JSON.stringify(f)}`);
+      expect(await page.locator('.docs-head.docs-one-bar').count(), 'the one bar stays').toBe(1);
+      expect(await page.getByRole('button', { name: DOCS_TOOL_TEXT.jump }).isVisible(), 'Quick jump is still drawn').toBe(true);
+      expect(f.frameBar, 'the frame keeps ccrc\'s bar').toBe(false);
+    });
+  }, 120_000);
+
+  it('mounted at 412 x 915, then widened to 1280 x 915: the phone-born one bar persists without a full row', async () => {
+    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+      await oneBar(page);
+      await page.setViewportSize({ width: 1280, height: 915 });
+      await page.waitForFunction(() => innerWidth === 1280, undefined, { timeout: 10_000 });
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const f = await measure(page);
+      console.log(`L11-FIGURE refined 412x915-then-1280x915 ${JSON.stringify(f)}`);
+      expect(await page.locator('.docs-head.docs-one-bar').count(), 'the one bar persists').toBe(1);
+      expect(await page.getByRole('button', { name: DOCS_TOOL_TEXT.jump }).isVisible(), 'Quick jump is still drawn').toBe(true);
+      expect(await page.locator('.docs-head.docs-full').count(), 'no full head is mounted').toBe(0);
+      expect(await page.locator('.docs-head-bar').count(), 'no full row is mounted').toBe(0);
+      expect(f.frameBar, 'the frame still has no bar of its own').toBe(false);
+    });
+  }, 120_000);
+});
+
+describe("option 1's row stays where the reader is not up (refinement (f))", () => {
+  /** Opens the text leaf at 412 x 915 (no reader draws it), runs `check`, closes the context whatever happens. */
+  async function onText(check: (app: OpenedApp) => Promise<void>): Promise<void> {
+    const app = await openView({ ...PHONE, skin: REFINED }, TEXT_TREE, TEXT_NAME, 'text');
+    try {
+      const fileAnswer = app.page.waitForResponse((r) => new URL(r.url()).pathname.endsWith('/file'), { timeout: 30_000 });
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${TEXT_NAME}`, { waitUntil: 'load' });
+      await app.page.waitForFunction((body) => document.querySelector('pre.doc-plain')?.textContent === body, TEXT_BODY, { timeout: 30_000 });
+      await app.page.waitForSelector('.docs-head.docs-compact', { timeout: 30_000 });
+      const answered = (await (await fileAnswer).json()) as { contentClass: string; show: { path: string; blob: string; size: number; sha256: string } };
+      expect({ contentClass: answered.contentClass, path: answered.show.path, blob: answered.show.blob, size: answered.show.size, sha256: answered.show.sha256 },
+        'the file request was made and its answer agrees with the listed fixture')
+        .toEqual({ contentClass: 'text', path: TEXT_NAME, blob: TEXT_BLOB, size: TEXT_SIZE, sha256: TEXT_SHA256 });
+      expect(await app.page.locator('.docs-reader iframe').count(), 'no reader iframe').toBe(0);
+      expect(await app.page.locator('.docs-head.docs-one-bar').count(), 'not the one bar').toBe(0);
+      await check(app);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }
 
   it('412 x 915: back, Share, Export and Page details, each at least one tap, on a row one tap tall', async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+    await onText(async ({ page }) => {
       const row = await page.evaluate(() => {
         const bar = document.querySelector('.docs-compact-bar');
         if (bar === null) return null;
@@ -267,10 +590,10 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
           lines: [...bar.querySelectorAll('.docs-compact-where, .docs-compact-name')].map((e) => box(e).h),
         };
       });
-      console.log(`PHH-FIGURE refined 412x915 row ${JSON.stringify(row)}`);
+      console.log(`L11-FIGURE refined 412x915 text-row ${JSON.stringify(row)}`);
       expect(row, 'the compact row is drawn').not.toBeNull();
       const r = row!;
-      expect(r.buttons.map((b) => b.name).slice(0, 3)).toEqual([DOCS_HEAD_TEXT.back, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView]);
+      expect(r.buttons.map((b) => b.name).slice(0, 3)).toEqual([DOCS_HEAD_TEXT.back, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export]);
       expect(r.buttons[3]?.name).toMatch(/^Page details/);
       expect(r.buttons).toHaveLength(4);
       for (const b of r.buttons) {
@@ -284,98 +607,29 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
     });
   }, 120_000);
 
-  it('412 x 915: a draft in a ref view of a long branch; the ref is cut, the draft badge is whole and inside the label (refinement (g))', async () => {
-    const app = await openView({ ...PHONE, skin: REFINED }, draftTree());
-    try {
-      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
-      await app.page.waitForFunction(() => document.querySelector('.docs-compact-where .docs-badge') !== null, undefined, { timeout: 30_000 });
-      const got = await app.page.evaluate(() => {
-        const rect = (sel: string): { left: number; right: number; top: number; mid: number } | null => {
-          const r = document.querySelector(sel)?.getBoundingClientRect();
-          return r === undefined ? null : { left: r.left, right: r.right, top: r.top, mid: (r.top + r.bottom) / 2 };
-        };
-        const text = document.querySelector('.docs-compact-where-ref');
-        const badge = document.querySelector('.docs-compact-where .docs-badge');
-        return {
-          label: rect('.docs-compact-label'), badge: rect('.docs-compact-where .docs-badge'), ref: rect('.docs-compact-where-ref'),
-          textCut: text === null ? null : text.scrollWidth > text.clientWidth,
-          badgeWhole: badge === null ? null : badge.scrollWidth <= badge.clientWidth + 1,
-          words: badge?.textContent ?? null,
-        };
-      });
-      console.log(`PHH-FIGURE refined 412x915 long-branch-draft ${JSON.stringify(got)}`);
-      expect(got.textCut, 'the long ref overflows and is cut').toBe(true);
-      expect(got.badgeWhole, 'the badge is not cut').toBe(true);
-      expect(got.label).not.toBeNull();
-      expect(got.badge).not.toBeNull();
-      expect(got.badge!.left).toBeGreaterThanOrEqual(got.label!.left - 0.5);
-      expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
-      // The badge stays on the ref's line (the ref's span is in this fixture, so it is the one measured): were the row to
-      // stack them, the badge would sit lower and still be inside the label. The two are centred on one line, and the badge
-      // is the taller box, so their tops differ by 1.4 px and their centres by none: the centres are compared.
-      expect(got.ref).not.toBeNull();
-      expect(Math.abs(got.badge!.mid - got.ref!.mid), 'the badge is on the ref\'s line').toBeLessThanOrEqual(1);
-      expect(app.errors, 'no page error').toEqual([]);
-    } finally {
-      await app.ctx.close();
-    }
-  }, 120_000);
-
-  it('412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the label (refinement (g))', async () => {
-    const leaf = `${LONG_DIR}/${NAME}`;
-    const app = await openView({ ...PHONE, skin: REFINED }, draftTree(leaf), leaf);
-    try {
-      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
-      await app.page.waitForFunction(() => document.querySelector('.docs-compact-where-ref') !== null, undefined, { timeout: 30_000 });
-      const got = await app.page.evaluate(() => {
-        const box = (sel: string): { left: number; right: number; width: number } | null => {
-          const r = document.querySelector(sel)?.getBoundingClientRect();
-          return r === undefined ? null : { left: r.left, right: r.right, width: r.width };
-        };
-        // The separator's own space is drawn: the first character of the ref's text has a box of its own.
-        const ref = document.querySelector('.docs-compact-where-ref');
-        const first = document.createRange();
-        if (ref?.firstChild != null) { first.setStart(ref.firstChild, 0); first.setEnd(ref.firstChild, 1); }
-        return {
-          label: box('.docs-compact-label'), crumb: box('.docs-compact-where-crumb'), ref: box('.docs-compact-where-ref'),
-          badge: box('.docs-compact-where .docs-badge'), separatorW: first.getBoundingClientRect().width,
-          refText: ref?.textContent ?? null,
-        };
-      });
-      console.log(`PHH-FIGURE refined 412x915 long-directory-ref ${JSON.stringify(got)}`);
-      expect(got.ref, 'the ref is drawn').not.toBeNull();
-      expect(got.ref!.width, 'the ref has room for at least four mono characters').toBeGreaterThan(24);
-      expect(got.separatorW, 'the separator\'s space is drawn').toBeGreaterThan(0);
-      expect(got.badge).not.toBeNull();
-      expect(got.label).not.toBeNull();
-      expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
-      expect(got.ref!.right, 'the ref ends before the badge').toBeLessThanOrEqual(got.badge!.left + 0.5);
-      expect(app.errors, 'no page error').toEqual([]);
-    } finally {
-      await app.ctx.close();
-    }
-  }, 120_000);
-
-  it('412 x 915: Page details opens the truth line under the row; Escape closes it, focus back on the button (refinement (d))', async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+  it('412 x 915: Page details opens the truth line under the row, above the text; Escape closes it, focus back on the button (refinement (d))', async () => {
+    await onText(async ({ page }) => {
       const more = page.locator('.docs-compact-bar .docs-more');
       expect(await more.count(), 'Page details is on the row').toBe(1);
       expect(await page.locator('.docs-truth').isVisible(), 'the truth line is behind the tap').toBe(false);
+      const bottomOf = (sel: string): Promise<number> => page.evaluate((s) => document.querySelector(s)!.getBoundingClientRect().bottom, sel);
+      const closedHeadBottom = await bottomOf('.docs-head');
       await more.click();
       expect(await more.getAttribute('aria-expanded')).toBe('true');
       expect(await page.locator('.docs-truth').isVisible()).toBe(true);
       // Escape is pressed from inside the open panel, so the panel's own handler and the focus's return to the button are
       // what close it: a click leaves focus on the button, where the button's handler alone would do.
-      const inside = page.locator('.docs-more-panel').getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit });
-      await inside.focus();
+      await page.locator('.docs-more-panel').getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit }).focus();
       expect(await page.evaluate(() => document.activeElement?.closest('.docs-more-panel') !== null), 'focus is in the panel').toBe(true);
       expect(await page.locator('.docs-more-panel').getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible()).toBe(true);
-      const f = await measure(page);
-      console.log(`PHH-FIGURE refined 412x915 panel-open ${JSON.stringify(f)}`);
-      expect(f.frameTop, 'the frame stays under the open panel').toBeGreaterThan(CONSOLE_PART_MAX);
+      const panelBottom = await bottomOf('.docs-more-panel');
+      const bodyTop = await page.evaluate(() => document.querySelector('pre.doc-plain')!.getBoundingClientRect().top);
+      console.log(`L11-FIGURE refined 412x915 text-panel-open ${JSON.stringify({ closedHeadBottom, panelBottom, bodyTop })}`);
+      expect(bodyTop, 'the text begins at or below the open panel').toBeGreaterThanOrEqual(panelBottom - 0.5);
+      expect(bodyTop, 'the text is below the closed header').toBeGreaterThan(closedHeadBottom);
       await page.keyboard.press('Escape');
       expect(await more.getAttribute('aria-expanded')).toBe('false');
-      expect(await page.locator('.docs-truth').isVisible()).toBe(false);
+      expect(await page.locator('.docs-more-panel').isHidden(), 'the panel is hidden').toBe(true);
       expect(await page.evaluate(() => document.activeElement?.classList.contains('docs-more') ?? false), 'focus is on Page details')
         .toBe(true);
     });
@@ -500,6 +754,7 @@ describe('the desk head (desk-nav Part B)', () => {
       const r = await rowFigure(page);
       console.log(`PHH-FIGURE refined ${width}x${height} ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
+      expect(f.frameBar, 'a frame mounted at a desk width keeps its own bar').toBe(true);
       expect(await page.locator('.docs-more').count()).toBe(0);
       expect(await page.locator('.docs-truth').isVisible()).toBe(true);
       expect(await page.locator('.docs-head-bar .docs-actions').getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible()).toBe(true);
@@ -998,6 +1253,7 @@ describe('the desk head (desk-nav Part B)', () => {
       const r = await rowFigure(page);
       console.log(`PHH-FIGURE refined ${width}x${height} touch ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
+      expect(f.frameBar, 'a frame mounted at this width keeps its own bar').toBe(true);
       expect(r.fine, 'a coarse pointer').toBe(false);
       for (const c of [...r.controls, ...r.truthControls]) expect(c.height, c.name).toBeGreaterThanOrEqual(TAP - 0.5);
       expect(r.truth!.height, 'the line keeps the floor').toBeGreaterThanOrEqual(TAP - 0.5);

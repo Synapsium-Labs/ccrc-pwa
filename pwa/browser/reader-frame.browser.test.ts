@@ -35,6 +35,7 @@ import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
 import {
   DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
 } from '../../shared/docs';
+import { READER_E17_MERMAID, docsDrawFor } from '../src/docs/reader/policy';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
 import { LAB_BATTERY_CHANNELS } from '../../shared/readerLab';
 import { LAB_BATTERY_CHANNELS_JS, LAB_BATTERY_PRELUDE_JS } from '../src/readerLab/battery';
@@ -70,6 +71,10 @@ const hostileLinks = (o: Origins): string => fence(
 
 /** Figures in flow.md: a flowchart, a sequence, a gantt and two hostile ones. */
 const FIGURES = 5;
+/** How the Docs reader draws figures, by the recorded E17 reading (`docsDrawFor`): these rows open at 1280, where the frame is
+ *  on its own bar, so the draw is the reading's. 'on-request' (arm B): a Render button per figure, a tap draws it.
+ *  'after-ready' (arm A): no button, every figure draws after ready with no tap. A later flip of the reading needs no edit here. */
+const DRAW = docsDrawFor(READER_E17_MERMAID);
 
 /** The global names the installed frame bootstrap guards against clobbering: the first array literal of
  *  `assets/frame/bootstrap.js` (`var O=[...]`), read from the installed file so a library change moves the fixture. Some are
@@ -618,19 +623,22 @@ function summariseSrcdoc(page: Page, n: number): Promise<SrcdocSummary> {
 // ---- the rows ---------------------------------------------------------------------------------------------------------
 
 describe('W8a reader frame in Chrome', () => {
-  it('M8.B1: the 27-channel battery inside the frame reaches neither origin, Mermaid draws on tap, and the hostile directive injects no style', async () => {
+  it('M8.B1: the 27-channel battery inside the frame reaches neither origin, Mermaid draws (on tap, or after ready where E17 held), and the hostile directive injects no style', async () => {
     const { s, outcome } = await open('flow.md');
     expect(outcome).toBe('ready');
     const frame = await readerFrame(s.page);
     // E15: tap Render on EVERY figure, the hostile ones included, and wait for each.
     const buttons = frame.locator('.fig-render-btn');
-    expect(await buttons.count(), 'one Render button per figure').toBe(FIGURES);
-    expect(await frame.evaluate(() => [...document.querySelectorAll('figure.mermaid-figure')].map((f) => `${f.getAttribute('data-docreader-draw')}:${f.querySelectorAll('svg').length}`)),
-      'before the tap nothing is drawn (on-request)').toEqual(Array.from({ length: FIGURES }, () => 'on-request:0'));
+    if (DRAW === 'on-request') {
+      expect(await buttons.count(), 'one Render button per figure').toBe(FIGURES);
+      expect(await frame.evaluate(() => [...document.querySelectorAll('figure.mermaid-figure')].map((f) => `${f.getAttribute('data-docreader-draw')}:${f.querySelectorAll('svg').length}`)),
+        'before the tap nothing is drawn (on-request)').toEqual(Array.from({ length: FIGURES }, () => 'on-request:0'));
+    } else {
+      expect(await buttons.count(), 'no Render button: the figures draw after ready (after-ready)').toBe(0);
+    }
     const fromDraw = origins.hits.length;
     for (let i = 0; i < FIGURES; i += 1) {
-      const figure = frame.locator('figure.mermaid-figure').nth(i);
-      await figure.locator('.fig-render-btn').click();
+      if (DRAW === 'on-request') await frame.locator('figure.mermaid-figure').nth(i).locator('.fig-render-btn').click();
       await frame.waitForFunction((k) => {
         const f = document.querySelectorAll('figure.mermaid-figure')[k];
         const state = f?.getAttribute('data-docreader-draw');
@@ -1031,7 +1039,7 @@ describe('W8a reader frame in Chrome', () => {
     const mermaid = byHash(FRAME_MANIFEST.mermaid.sha256);
     const seeds = scripts.filter((x) => x.type === 'application/json').map((x) => x.i);
     expect({ guard: guard.length, bootstrap: bootstrap.length, enhance: enhance.length, mermaid: mermaid.length, seed: seeds.length },
-      'each once').toEqual({ guard: 1, bootstrap: 1, enhance: 1, mermaid: 1, seed: 1 });
+      'each once; the srcdoc carries Mermaid only when it draws before the mount (on request), never after ready').toEqual({ guard: 1, bootstrap: 1, enhance: 1, mermaid: DRAW === 'after-ready' ? 0 : 1, seed: 1 });
     expect(guard[0], 'the guard follows the meta at once').toBe(1);
     expect(seeds[0], 'the seed follows the guard').toBe(2);
     expect(bootstrap[0], 'the seed is immediately before the bootstrap').toBe(3);
@@ -1127,7 +1135,7 @@ describe('W8a reader frame in Chrome', () => {
     expect(await settle(s.page), 'the document reaches ready').toBe('ready');
     const frame = await readerFrame(s.page);
     // Mermaid has run while every bootstrap global is also an id in the document.
-    await frame.locator('.fig-render-btn').click();
+    if (DRAW === 'on-request') await frame.locator('.fig-render-btn').click();
     await frame.waitForFunction(() => document.querySelector('figure.mermaid-figure')?.getAttribute('data-docreader-draw') === 'drawn', undefined, { timeout: 90_000 });
     const live = await frame.evaluate((names) => ({
       // A name the bootstrap pinned reads as its own property; one it did not would read as the element with that id.
@@ -1159,6 +1167,9 @@ describe('W8a reader frame in Chrome', () => {
     expect(summary.head.filter((h) => h.sha256 === FRAME_MANIFEST.mermaid.sha256), 'no script is the Mermaid text').toEqual([]);
     expect((await framesSeen(s.page))[0]?.srcdoc.length, 'and the srcdoc is nowhere near the Mermaid text').toBeLessThan(FRAME_MANIFEST.mermaid.chars);
     expect(await settle(s.page), 'the frame starts').toBe('ready');
+    if (DRAW === 'after-ready') {
+      expect(s.responses.filter((u) => /mermaid\.frame-[^/]*\.js/.test(u)), 'no Mermaid chunk was fetched (the library\'s gate kept the loader from being called)').toEqual([]);
+    }
     const frame = await readerFrame(s.page);
     const figures = await frame.evaluate(() => [...document.querySelectorAll('figure.mermaid-figure')].map((f) => ({
       source: (f.querySelector('pre')?.textContent ?? '').trim().length, render: f.querySelectorAll('.fig-render-btn').length, svgs: f.querySelectorAll('svg').length,
@@ -1248,8 +1259,12 @@ describe('W8a reader frame in Chrome', () => {
       elements: document.querySelectorAll('*').length,
     }));
     console.log(`T10-FIGURES worst ${JSON.stringify({ ...m, wallMs: wall, budget: READER_IMAGE_BUDGET_BYTES, seedImages: imageCount, painted })}`);
-    expect(summary.head.filter((h) => h.sha256 === FRAME_MANIFEST.mermaid.sha256).length, 'the Mermaid text is inlined once (the gate passed)').toBe(1);
-    expect(m.srcdocChars).toBeGreaterThan(FRAME_MANIFEST.mermaid.chars);
+    expect(summary.head.filter((h) => h.sha256 === FRAME_MANIFEST.mermaid.sha256).length,
+      DRAW === 'after-ready' ? 'no head script is the Mermaid text (it loads after ready)' : 'the Mermaid text is inlined once (the gate passed)')
+      .toBe(DRAW === 'after-ready' ? 0 : 1);
+    // Arm A keeps this out of its arm: the 30 images (about 7 million characters of base64) hold the srcdoc over Mermaid's
+    // length in both arms, so the size says nothing about Mermaid there; `srcdocChars` is recorded beside BASE above.
+    if (DRAW === 'on-request') expect(m.srcdocChars).toBeGreaterThan(FRAME_MANIFEST.mermaid.chars);
     expect(imageCount, 'all 30 images are in the seed').toBe(DOCS_MAX_IMAGES_PER_PAGE);
     expect(painted.decoded, 'and all 30 decode in the frame').toBe(DOCS_MAX_IMAGES_PER_PAGE);
     expect(m.readyMs, 'ready arrived').toBeGreaterThan(0);
