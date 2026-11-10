@@ -459,7 +459,8 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
     ] });
     addParent(p, 'P1', k);
     addParent(p, 'P2', ['m1', 'm2']);
-    // a node of depth 2 whose last child is a leaf (hand-built) is no depth-1 parent
+    // P3 is a depth-2 parent over leaves, which production cannot make. d2 holds no exact receipt, so the receipt keeps it out of
+    // addOn, not the depth word: this pins nothing about depth, and `p.depth = 1` in addOnLeaf stays an EQUIVALENT mutant (the coordinator's ruling)
     addParent(p, 'P3', ['d1', 'd2'], 2);
     addParent(p, 'P4', ['o1', 'o2']);
     // an unreceipted last child was never printed, so it carried no add-on: counted in perBackend, kept out of addOn

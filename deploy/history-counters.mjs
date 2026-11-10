@@ -1519,7 +1519,7 @@ function compareUnclosed(coh, base) {
  *  generic text carries no add-on and is printed whenever the card skips), and its leaf is the last child of a depth-1
  *  parent. A span without all three stays out of `addOn`. Those spans stay in `perBackend` too, and the fixed gates read
  *  `perBackend`. `addOn`'s compliance is the LEAF block's (spikeFigures reads the leaf's status); the node block's verdict is
- *  carried by the `node_status:*` counters, and `SpikeFigures` has no field for it. `addOn` carries no
+ *  carried by the `node_status:*` counters, and spikeFigures' result has no field for it. `addOn` carries no
  *  `summaryUnclosed.comparison` and no `durationMs.addedP50` or `echoChars.addedP50`: O19 and §10.7's added p50 compare
  *  the cohort with the baseline, over `perBackend` only.
  *  @param {{ db: object, sessions: string[], sinceMs: number, untilMs: number }} a */

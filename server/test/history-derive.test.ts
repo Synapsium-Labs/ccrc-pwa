@@ -12,6 +12,7 @@ import {
   type HistoryBox,
 } from './historyHelpers.js';
 import { compactionSequence, steeredBlock, userRow, type Row } from './historyFixtures.js';
+// Importing history-counters.mjs loads cli.mjs, which sets the process umask to 0o077 for this file.
 import * as ctrMod from '../../deploy/history-counters.mjs';
 import {
   leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth, makePairIndex, secretPairs, cardLine, displayPrefixes,
@@ -1885,6 +1886,10 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
   let box: HistoryBox;
   let ids: string[] = [];
   let parents: string[] = [];
+  /** The node counters the first derivation added. The store held none before it, so this snapshot, taken right after the first pass,
+   *  is that pass's delta. The cases that count verdicts read it, never the live counters, so none depends on the order the cases run in;
+   *  the one case that derives again measures its own before and after. */
+  let firstPass: Record<string, number> = {};
 
   const nodeBlock = (id: string, gist: string, expand?: string): string =>
     // the depth attribute goes into the opening tag only, so the pattern is anchored to it
@@ -1969,6 +1974,7 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
       if (k !== UNRECEIPTED) spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: exactReceipt(k) ? ids[k]! : '', ts: at(b) - 500 });
     });
     settle(box);
+    firstPass = nodeCounters();
   }, 600_000);
 
   const rerollMod = async (): Promise<{ rerollParents(db: ReturnType<typeof openWriter>, ictx: object, nodeIds: readonly string[], onlyIfChanged?: boolean): number }> =>
@@ -2064,7 +2070,7 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect(p.gist).not.toBe(NODE_GENERIC);
     expectRollupFields(parents[G.generic]!);
     // No node_status or node_reason counter moved for it: the verdicts counted are the eight asked groups', one status each.
-    const nc = nodeCounters();
+    const nc = firstPass;
     const statuses = Object.entries(nc).filter(([k]) => k.startsWith('node_status:')).reduce((n, [, v]) => n + v, 0);
     expect(statuses, 'one node_status per asked group, none for the generic one').toBe(exactCount);
     expect(Object.keys(nc).filter((k) => k.startsWith('node_') && !k.startsWith('node_status:') && !k.startsWith('node_reason:')),
@@ -2082,16 +2088,29 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
       return p.status !== 'ok' || p.gist !== rollupOf(parents[g]!).gist;
     };
     expect(Array.from({ length: GROUPS }, (_, g) => g).filter(verdict), 'derive: only the exact-receipted last children asked').toEqual(asked);
-    const nodeVerdicts = Object.entries(nodeCounters()).filter(([k]) => k.startsWith('node_status:')).reduce((n, [, v]) => n + v, 0);
+    const nodeVerdicts = Object.entries(firstPass).filter(([k]) => k.startsWith('node_status:')).reduce((n, [, v]) => n + v, 0);
     expect(nodeVerdicts, 'derive counts one verdict per asked group').toBe(asked.length);
     // the counter's reader, over the very same store
     const ctr = ctrMod as unknown as Record<string, (...a: never[]) => never> & { openCounterStore: (f: string) => { db: object; close(): void }; spikeReport: (a: object) => Record<string, Record<string, { population: { spans: number } }>> };
     const rs = ctr.openCounterStore(historyPaths(box.home).dbFile);
     try {
-      const r = ctr.spikeReport({ db: rs.db, sessions: [ID], sinceMs: T0 - 1, untilMs: Date.now() + 86_400_000 });
-      const sum = (side: string): number => Object.values(r[side]!).reduce((n, f) => n + f.population.spans, 0);
-      expect(sum('perBackend'), 'CONTROL: the report sees all eighty leaves of the store').toBe(N);
-      expect(sum('addOn'), 'the report: the same eight, and not the generic-receipted or the unreceipted last child').toBe(asked.length);
+      const report = (since: number, until: number): Record<string, Record<string, { population: { spans: number } }>> =>
+        ctr.spikeReport({ db: rs.db, sessions: [ID], sinceMs: since, untilMs: until });
+      const sum = (r: ReturnType<typeof report>, side: string): number => Object.values(r[side]!).reduce((n, f) => n + f.population.spans, 0);
+      const all = report(T0 - 1, Date.now() + 86_400_000);
+      expect(sum(all, 'perBackend'), 'CONTROL: the report sees all eighty leaves of the store').toBe(N);
+      expect(sum(all, 'addOn'), 'the report: the same eight in all').toBe(asked.length);
+      // Per key: one report per group, over the range [ts, ts + 1) of its last child's own boundary, so the count is that one span's.
+      const tsOf = (leaf: string): number => q<{ ts_ms: number }>(box,
+        `SELECT e.ts_ms AS ts_ms FROM nodes n JOIN boundaries b ON b.entry_id = n.boundary_entry_id JOIN entries e ON e.entry_id = b.entry_id WHERE n.node_id = ?`, leaf)[0]!.ts_ms;
+      for (let g = 0; g < GROUPS; g += 1) {
+        const ts = tsOf(ids[g * 8 + 7]!);
+        const one = report(ts, ts + 1);
+        expect(sum(one, 'perBackend'), `CONTROL: group ${g}'s range holds only its last child's boundary`).toBe(1);
+        expect(sum(one, 'addOn'), `group ${g}: the report counts its last child in addOn exactly when derive took a node verdict for the parent`).toBe(verdict(g) ? 1 : 0);
+      }
+      const gts = tsOf(ids[GENERIC]!);
+      expect({ derive: verdict(G.generic), report: sum(report(gts, gts + 1), 'addOn') }, 'the generic-receipted last child: neither reader asked').toEqual({ derive: false, report: 0 });
     } finally { rs.close(); }
   });
 
@@ -2103,7 +2122,7 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
   const OTHER = 'other';
 
   it('each node verdict is counted once: node_status:<status>:<backend>, and node_reason:<reason>:<backend> when the status is not ok', () => {
-    const c = nodeCounters();
+    const c = firstPass;
     expect(c[`node_status:ok:${BACKEND}`], 'ok: the redact and whole groups').toBe(2);
     expect(c[`node_status:ok:${OTHER}`], 'ok: the first group, whose last child has another producer').toBe(1);
     expect(c[`node_status:degraded:${BACKEND}`], 'degraded: the wrong id').toBe(1);
@@ -2364,7 +2383,7 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect(ftsTexts(id).join('\n')).not.toContain(W);
   });
 
-  // Last in this describe: it derives every parent again, so the verdict counters of the store double.
+  // It derives every parent again and so moves the live verdict counters; it measures its own before and after, and the other cases read firstPass, so the order is free.
   it('one read of the holding copy serves every counted parent of a run, and the producer a re-run counts is the same', async () => {
     const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): object };
     const before = nodeCounters();
@@ -2393,7 +2412,8 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     } finally { closeWriter(db); }
     expect(copyReads, `${exactCount} parents were counted from one holding copy: its rows were read once, not once per parent`).toBe(1);
     const after = nodeCounters();
-    expect(after, 'the same verdicts under the same producers, once more').toEqual(Object.fromEntries(Object.entries(before).map(([k, v]) => [k, v * 2])));
+    const delta = Object.fromEntries(Object.keys({ ...before, ...after }).map((k) => [k, (after[k] ?? 0) - (before[k] ?? 0)]).filter(([, v]) => v !== 0));
+    expect(delta, 'the same verdicts under the same producers, once more: what the run added is what the first pass added').toEqual(firstPass);
   });
 });
 
