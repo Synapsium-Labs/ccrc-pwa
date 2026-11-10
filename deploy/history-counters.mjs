@@ -1072,7 +1072,8 @@ export function combineCommand(flags) {
 // status, the receipts' footprints, the stored model refs, the headroom figures (`summaryUnclosed`, `cutShapes`,
 // `cutUntestable`, `analysisOnly`), the compaction durations and the manual echo, each beside O21's baseline. It states
 // figures and never a pass or fail: the operator reads the gate at CP-63. It prints counts and aggregates only, never
-// text, and it opens the store read-only (openCounterStore).
+// text, and it opens the store read-only (openCounterStore). The report is `{ perBackend, baseline, addOn }`; `addOn` is the
+// cohort's figures over the add-on spans alone (O15, W3-4), which `perBackend` counts too.
 //
 // Every figure is read per span from stored rows. The node-wide `counters` table is never read for a figure, since it
 // keeps one cumulative count per name with no session and no time column (W2-D87). O18's ruling lets the node-wide
@@ -1117,6 +1118,9 @@ function spikeStmts(db) {
     exact: db.prepare(`SELECT r.ts_ms AS ts_ms, p.ts_source AS ts_source FROM steer_receipts r
       LEFT JOIN spool_receipts p ON p.event_key = r.event_key WHERE r.leaf_id = ? ORDER BY r.ts_ms, r.event_key`),
     exactOfSession: db.prepare("SELECT leaf_id, ts_ms FROM steer_receipts WHERE cc_session_uuid = ? AND leaf_id <> ''"),
+    // O15: is this leaf the LAST child (max ord) of a depth-1 parent, the span a steered group's add-on is written for
+    addOnLeaf: db.prepare(`SELECT 1 AS hit FROM node_children nc JOIN nodes p ON p.node_id = nc.node_id
+      WHERE nc.child_id = ? AND p.depth = 1 AND nc.ord = (SELECT max(c2.ord) FROM node_children c2 WHERE c2.node_id = nc.node_id) LIMIT 1`),
     modelRefs: db.prepare("SELECT count(*) AS n FROM node_refs WHERE node_id = ? AND origin = 'model'"),
     newestTick: db.prepare('SELECT files_behind FROM ticks ORDER BY ts_ms DESC, tick_id DESC LIMIT 1'),
     pairs: db.prepare('SELECT len, sha256 FROM redact_hashes'),
@@ -1506,7 +1510,10 @@ function compareUnclosed(coh, base) {
 }
 
 /** The spike report (spec §7.5; plan Task 1D). `db` is a read handle (openCounterStore's); `sessions` are `ccrc_id`s;
- *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text.
+ *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text. Returns `{ perBackend,
+ *  baseline, addOn }`: `addOn` is the cohort's figures over the spans whose leaf is the last child of a depth-1 parent (O15,
+ *  W3-4's add-on spans), computed by spikeFigures with the cohort's run words so it reads like the cohort's. Those spans
+ *  stay in `perBackend` too, and the fixed gates read `perBackend`.
  *  @param {{ db: object, sessions: string[], sinceMs: number, untilMs: number }} a */
 export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   if (!Array.isArray(sessions) || sessions.length === 0 || !sessions.every((x) => typeof x === 'string' && x !== '')) throw new TypeError('spikeReport: sessions are ccrc ids');
@@ -1565,11 +1572,15 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
     ...(producerUnknown > 0 ? ['producer-unknown'] : []), ...(uncopied > 0 ? ['boundary-uncopied'] : [])];
   const perBackend = {};
   const baseline = {};
+  const addOn = {};
+  /** O15: a cohort span whose leaf is the last child of a depth-1 parent (read-only, from node_children). */
+  const isAddOn = (x) => x.leaf !== null && s.addOnLeaf.get(x.leaf.id) !== undefined;
   for (const be of BACKENDS) {
     const pick = (side) => ({ placed: sides[side].placed.filter((x) => x.backend === be), untimed: sides[side].untimed.filter((x) => x.backend === be) });
     const c = pick('cohort');
     const b = pick('baseline');
     perBackend[be] = spikeFigures(rs, s, shared, { side: 'cohort', spans: c.placed, untimed: c.untimed, runWords: cohortWords, run });
+    addOn[be] = spikeFigures(rs, s, shared, { side: 'cohort', spans: c.placed.filter(isAddOn), untimed: c.untimed.filter(isAddOn), runWords: cohortWords, run });
     baseline[be] = spikeFigures(rs, s, shared, { side: 'baseline', spans: b.placed, untimed: b.untimed, runWords: [...sweepWords, ...attributionWords, ...(b.untimed.length > 0 ? ['boundary-untimed'] : [])], run });
   }
   for (const be of BACKENDS) {
@@ -1585,7 +1596,7 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
     const bech = b.echoChars.set;
     c.echoChars.addedP50 = ce.state === 'measured' && bech.state === 'measured' ? measured(ce.value.p50 - bech.value.p50) : unmeasured('echo-absent');
   }
-  return { perBackend, baseline };
+  return { perBackend, baseline, addOn };
 }
 
 // ── the spike arm (O5): `history-counters.mjs spike --db <history.db> --session <id> [--session <id>] --since <ms> --until <ms> --out <file>`
