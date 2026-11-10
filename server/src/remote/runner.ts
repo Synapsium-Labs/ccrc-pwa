@@ -46,6 +46,8 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   'pr-train-prove': 40_000,
   // D-8147: `repo-visibility --project` makes one `gh api` call (`PR_GH_TIMEOUT`, 8 s).
   'repo-visibility': 15_000,
+  // D-8147: `pr-template --project` fetches, pushes one branch, creates a PR and reads it back: four network calls, each bounded.
+  'pr-template': 60_000,
   // Same reach as pr-state: it shells out to `git ls-remote` against origin
   // before it will rename. Without an entry it silently inherits the flat
   // 90 s, which is nine naming lanes' worth. It makes ONE network call, so it

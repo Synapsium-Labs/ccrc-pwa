@@ -50,7 +50,7 @@ export interface LinkingWriteBody { teamKey: string | null; override: LinkingOve
 
 /** Every refusal word the linking routes answer; each reaches the PWA through `refusalText`. */
 export const LINKING_REFUSALS = ['bad-team-key', 'bad-override', 'no-project', 'repo-public', 'repo-unmeasured',
-  'template-exists', 'no-team-key', 'tracker-id-public', 'ticket-slug-public'] as const;
+  'template-exists', 'no-team-key', 'tracker-id-public', 'ticket-slug-public', 'template-failed'] as const;
 export type LinkingRefusal = (typeof LINKING_REFUSALS)[number];
 
 /** Where a repository's pull request template lives. */

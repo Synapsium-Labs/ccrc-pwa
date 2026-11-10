@@ -70,6 +70,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   prStatePr: ['demo', 41],
   prTrainProve: ['demo'],
   repoVisibility: ['demo'],
+  prTemplate: ['demo', 'KEY'],
   prLanding: ['demo', [{ id: 'demo-quiet-basin', pr: 41 }]],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
   wsArchive: ['demo-quiet-basin', null],

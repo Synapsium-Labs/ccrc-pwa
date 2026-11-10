@@ -252,6 +252,16 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.repoVisibility('project-a')])).toBe(true);
   });
 
+  // D-8147: the template PR is granted on `--project` alone, and its builder refuses a team key outside Linear's grammar.
+  it('pr-template is grantable ONLY with --project, and the builder holds the team key to its grammar', () => {
+    const pt = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pr-template');
+    expect(pt, 'exactly one pr-template grant').toEqual([['pr-template', '--project']]);
+    expect(isExecAllowed('ccd', ['pr-template'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pr-template', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.prTemplate('project-a', 'KEY')])).toBe(true);
+    for (const bad of ['key', 'K Y', '1K', 'KEY-1', '']) expect(() => CCD_ARGV.prTemplate('project-a', bad), bad).toThrow(/team key/);
+  });
+
   // The project create (add-project spec 2026-11-04 §4) is granted on `--name` alone: the flag is its whole argument
   // surface, and a bare `['project-add']` would let any form through. Both builders lead with it.
   it('project-add is grantable ONLY with --name, and builds its clone and empty forms', () => {
@@ -570,6 +580,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     prStatePr: ['pr-state', '--project', 'demo', '--pr', '41'],
     prTrainProve: ['pr-train-prove', '--project', 'demo'],
     repoVisibility: ['repo-visibility', '--project', 'demo'],
+    prTemplate: ['pr-template', '--project', 'demo', '--team', 'KEY'],
     prLanding: ['pr-landing', '--project', 'demo', '--sessions', 'demo-quiet-basin:41'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
     // unknown[] since wave 6, and the call site casts through `unknown[]`), which

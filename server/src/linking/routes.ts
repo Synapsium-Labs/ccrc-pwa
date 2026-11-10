@@ -1,6 +1,6 @@
 // The linking standard's routes (D-8147). L4: they own the reply and decide nothing; `policy.ts` parses the body and
 // `coord/linkingStore.ts` is the table. Task 2 registers the operator's write; the session's read and the template
-// pull request join it in this file. Task 3 adds the session's read, `GET /api/linking`.
+// pull request join it in this file. Task 3 adds the session's read, `GET /api/linking`; Task 5 the template pull request.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { LinkingShowAnswer } from '../../../shared/linking.js';
 import type { AttributionRead } from '../coord/openRun.js';
@@ -8,7 +8,12 @@ import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
 import type { SingleRead } from '../registry.js';
-import { parseLinkingWrite } from './policy.js';
+import { CCD_ARGV, ccdCan } from '../ccdargv.js';
+import type { CcdArgv } from '../ccdargv.js';
+import type { CcdResult } from '../lifecycle.js';
+import type { FleetState } from '../fleetstate.js';
+import { withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
+import { linkingMode, parseLinkingWrite } from './policy.js';
 
 export interface LinkingRouteOpts {
   /** The coordination store, or undefined on a server without one (a test, a script): the write answers `unavailable`. */
@@ -22,6 +27,9 @@ export interface LinkingRouteOpts {
   attribute?: (id: string, uuid: string) => Promise<AttributionRead>;
   /** The caller's registry record (`readSessionRecord`), the project it names being the one the read answers for. */
   readRecord?: (id: string) => Promise<SingleRead>;
+  /** The ccd runner, and the fleet's verb list it is asked against: the template pull request's act. Absent: `unavailable`. */
+  runCcd?: (argv: CcdArgv) => Promise<CcdResult>;
+  fleetState?: () => Pick<FleetState, 'ccdVerbs'> | undefined;
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -93,4 +101,57 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     const answer: LinkingShowAnswer = { ok: true, project, ...row };
     return answer;
   });
+
+  /**
+   * `POST /api/projects/:project/pr-template` (no body): the operator's tap that opens a pull request adding the pull
+   * request template to a PRIVATE project. NOT in `auth/gate.ts`'s EXEMPT table: session-gated when armed, open dark, no
+   * box token. The route decides nothing but the order of its refusals (all from the stored row, before any ccd call):
+   * no key stored, nothing measured and no override, the mode public. The act is `ccd pr-template`; ccd re-reads the
+   * visibility itself and refuses a public repository and a template already on the default branch in its own words.
+   * On success the stored reading's template cell is written `present` (a project never measured has no cell to update).
+   */
+  app.post('/api/projects/:project/pr-template', async (req, reply) => {
+    const { project } = req.params as { project: string };
+    const coord = opts.coord;
+    if (coord === undefined || opts.runCcd === undefined) return refuseRoute(reply, 'unavailable');
+    const row = coord.linkingOf(project);
+    if (row.teamKey === null) return refuseRoute(reply, 'no-team-key');
+    const mode = linkingMode(row.override, row.measured);
+    if (mode === 'unknown') return refuseRoute(reply, 'repo-unmeasured');
+    if (mode === 'public') return refuseRoute(reply, 'repo-public');
+    if (!ccdCan(opts.fleetState?.(), 'prTemplate')) return refuseRoute(reply, 'unsupported');
+    let argv: CcdArgv;
+    try { argv = CCD_ARGV.prTemplate(project, row.teamKey); } catch { return refuseRoute(reply, 'bad-team-key'); }
+    const res = await opts.runCcd(argv);
+    if (!res.ok) {
+      const reason = ccdReason(res.stdout);
+      if (reason === 'repo-public' || reason === 'template-exists') return refuseRoute(reply, reason);
+      return refuseRoute(reply, 'template-failed', { stderr: withoutCcdRefusal(res.stderr) });
+    }
+    const url = openPrUrl(res.stdout);
+    if (url === null) return refuseRoute(reply, 'template-failed', { stderr: 'ccd answered no open pull request' });
+    const m = row.measured;
+    if (m.state === 'measured') coord.recordLinkingReading(project, { ...m, template: 'present', at: now() });
+    return { ok: true, url };
+  });
+}
+
+/** The `{"reason":...}` ccd prints on a refusal, or null. */
+function ccdReason(stdout: string): string | null {
+  try {
+    const v = JSON.parse(stdout.split('\n')[0] ?? '') as { reason?: unknown };
+    return typeof v.reason === 'string' ? v.reason : null;
+  } catch { return null; }
+}
+
+/** The first open pull request's https URL in the rows ccd printed, or null. */
+function openPrUrl(stdout: string): string | null {
+  try {
+    const rows = JSON.parse(stdout.split('\n')[0] ?? '') as unknown;
+    if (!Array.isArray(rows)) return null;
+    for (const r of rows as Array<Record<string, unknown>>) {
+      if (r['state'] === 'OPEN' && typeof r['url'] === 'string' && /^https:\/\/github\.com\/[^\s]+$/.test(r['url'])) return r['url'];
+    }
+  } catch { /* falls to null */ }
+  return null;
 }

@@ -6,6 +6,7 @@ import {
   type OrphanToken, type RouteFields, type StopSurface,
 } from '../../shared/api.js';
 import type { DocSectionSlug } from '../../shared/docs.js';
+import { LINEAR_TEAM_KEY_SHAPE } from '../../shared/linear.js';
 import type { DepsShedClass } from './depsShed.js';
 
 declare const CcdArgvBrand: unique symbol;
@@ -631,6 +632,12 @@ export const CCD_ARGV = {
   prTrainProve: (p: string)    => argv(['pr-train-prove', '--project', p]),
   /** D-8147: one read of the repository's visibility, default branch and template (`linking/visibilityLane.ts`). */
   repoVisibility: (p: string)  => argv(['repo-visibility', '--project', p]),
+  /** D-8147: the template pull request (`linking/routes.ts`, the operator's tap). The team key is held to Linear's grammar
+   *  here (upper case, as stored), so a bad one throws at the builder and never reaches ccd. */
+  prTemplate: (p: string, team: string) => {
+               if (!LINEAR_TEAM_KEY_SHAPE.test(team)) throw new Error('CCD_ARGV.prTemplate: a team key is Linear\'s upper-case grammar');
+               return argv(['pr-template', '--project', p, '--team', team]);
+             },
   /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
    *  whole call), each id a registry id (no comma, no colon: they delimit the pairs; no leading dash; no repeat) and
    *  each pr a positive integer with no leading zero. The builder refuses all of these itself, so a bad pair throws
@@ -1480,6 +1487,7 @@ export const CCD_CAN = {
   prLanding: capRow('pr-landing-v1'),
   prTrainProve: verbRow('pr-train-prove'),
   repoVisibility: verbRow('repo-visibility'),
+  prTemplate: verbRow('pr-template'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
   wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),

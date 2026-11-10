@@ -252,6 +252,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'bad-team-key': 400, 'bad-override': 400, 'no-project': 404,
   'repo-public': 409, 'repo-unmeasured': 409, 'template-exists': 409, 'no-team-key': 409, 'tracker-id-public': 409,
   'ticket-slug-public': 409,
+  // 502: the template pull request's ccd act failed (a fetch, a push or a create), with ccd's stderr beside the word.
+  'template-failed': 502,
   // 400
   'bad-request': 400, 'bad-tag': 400, 'bad-kind': 400, 'bad-account-id': 400, 'bad-attachment': 400,
   'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400,

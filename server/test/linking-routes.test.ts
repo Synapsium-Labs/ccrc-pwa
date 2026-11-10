@@ -1,4 +1,4 @@
-// D-8147: `POST /api/projects/:project/linking` and the `linking` cell on `GET /api/projects`.
+// D-8147: `POST /api/projects/:project/linking`, `POST /api/projects/:project/pr-template` and the `linking` cell on `GET /api/projects`.
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -181,5 +181,92 @@ describe('GET /api/linking: a session reads its own project\'s row', () => {
     app = await open({ coord, mailToken: ID_GATE_TOKEN });
     const none = await get(app, '?byId=bare-session&byUuid=u-bare-session');
     expect([none.statusCode, none.json().error]).toEqual([404, 'no-project']);
+  });
+});
+
+describe('POST /api/projects/:project/pr-template', () => {
+  const OPEN_ROW = [{ number: 9, state: 'OPEN', url: 'https://github.com/owner/repo/pull/9' }];
+  const measure = (visibility: 'private' | 'public', template: 'absent' | 'present' = 'absent'): void => {
+    coord!.recordLinkingReading('project-a', { state: 'measured', visibility, slug: 'owner/repo', template, at: 5 });
+  };
+  const tmpl = (a: FastifyInstance) => a.inject({ method: 'POST', url: '/api/projects/project-a/pr-template' });
+  /** A runCcd that records its argv and answers `res`. */
+  const ccd = (res: { ok: boolean; stdout?: string; stderr?: string }) => {
+    const calls: string[][] = [];
+    const runCcd = (async (argv: readonly string[]) => {
+      calls.push([...argv]);
+      return { ok: res.ok, code: res.ok ? 0 : 1, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+    }) as unknown as Deps['runCcd'];
+    return { calls, runCcd };
+  };
+
+  it('refuses no-team-key and repo-unmeasured before any ccd call', async () => {
+    const { calls, runCcd } = ccd({ ok: true });
+    app = await open({ coord, runCcd });
+    measure('private');
+    const noKey = await tmpl(app);
+    expect([noKey.statusCode, noKey.json().error]).toEqual([409, 'no-team-key']);
+    coord!.setLinking('project-a', { teamKey: 'KEY', override: null }, 'd', 1);
+    coord!.recordLinkingReading('project-a', { state: 'unmeasured' });
+    const unmeasured = await tmpl(app);
+    expect([unmeasured.statusCode, unmeasured.json().error]).toEqual([409, 'repo-unmeasured']);
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses repo-public on an override to public', async () => {
+    const { calls, runCcd } = ccd({ ok: true });
+    app = await open({ coord, runCcd });
+    measure('private');
+    coord!.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'd', 1);
+    const res = await tmpl(app);
+    expect([res.statusCode, res.json().error]).toEqual([409, 'repo-public']);
+    expect(calls).toEqual([]);
+  });
+
+  it('answers the PR url and records the template present', async () => {
+    const { calls, runCcd } = ccd({ ok: true, stdout: `${JSON.stringify(OPEN_ROW)}\n` });
+    app = await open({ coord, runCcd });
+    measure('private');
+    coord!.setLinking('project-a', { teamKey: 'KEY', override: null }, 'd', 1);
+    const res = await tmpl(app);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ ok: true, url: 'https://github.com/owner/repo/pull/9' });
+    expect(calls).toEqual([['pr-template', '--project', 'project-a', '--team', 'KEY']]);
+    expect(coord!.linkingOf('project-a').measured).toMatchObject({ state: 'measured', template: 'present', visibility: 'private' });
+  });
+
+  it('maps ccd\'s own refusals (repo-public, template-exists) and answers its other failures as 502', async () => {
+    coord!.setLinking('project-a', { teamKey: 'KEY', override: null }, 'd', 1);
+    measure('private');
+    for (const reason of ['repo-public', 'template-exists']) {
+      const { runCcd } = ccd({ ok: false, stdout: `{"reason":"${reason}"}\n` });
+      app = await open({ coord, runCcd });
+      const res = await tmpl(app);
+      expect([res.statusCode, res.json().error], reason).toEqual([409, reason]);
+      await app.close();
+    }
+    const { runCcd } = ccd({ ok: false, stderr: 'ccd: push failed' });
+    app = await open({ coord, runCcd });
+    const res = await tmpl(app);
+    expect([res.statusCode, res.json().error]).toEqual([502, 'template-failed']);
+  });
+
+  it('answers unsupported on a ccd without the verb', async () => {
+    const { calls, runCcd } = ccd({ ok: true });
+    app = await open({ coord, runCcd, fleetState: { ccdVerbs: ['repo-visibility'] } as never });
+    measure('private');
+    coord!.setLinking('project-a', { teamKey: 'KEY', override: null }, 'd', 1);
+    const res = await tmpl(app);
+    expect([res.statusCode, res.json().error]).toEqual([501, 'unsupported']);
+    expect(calls).toEqual([]);
+  });
+
+  it('is session-gated when armed', async () => {
+    const line = `${await hashLine('open sesame', { n: 1024, r: 8, p: 1, keylen: 32 }, 1)}\n`;
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), line, { mode: 0o600 });
+    const { calls, runCcd } = ccd({ ok: true });
+    app = await open({ coord, runCcd }, true);
+    expect((await tmpl(app)).statusCode).toBe(401);
+    expect(calls).toEqual([]);
   });
 });

@@ -5760,8 +5760,9 @@ _gh_repo_meta() {   # slug -> "<visibility>\t<default_branch>"
 }
 
 # D-8147: the pull request template's path in a main checkout, the one definition `pr-state` and `repo-visibility` read.
+_pr_template_rel() { printf '%s\n' ".github/pull_request_template.md"; }   # the path inside a checkout
 _pr_template_file() {   # main -> the path (present or not)
-  printf '%s\n' "$1/.github/pull_request_template.md"
+  printf '%s/%s\n' "$1" "$(_pr_template_rel)"
 }
 
 _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
@@ -9191,6 +9192,7 @@ pr-admin-merge
 pr-landing
 pr-open
 pr-state
+pr-template
 pr-train-prove
 prefer
 project-add
@@ -11701,6 +11703,71 @@ cmd_repo_visibility() {   # ccd repo-visibility --project <p>  (D-8147)
   [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || { printf '{"reason":"bad-answer"}\n'; return 1; }
   [[ -f "$(_pr_template_file "$main")" ]] && tmpl=present
   printf '{"slug":"%s","visibility":"%s","defaultBranch":"%s","template":"%s"}\n' "$slug" "$vis" "$branch" "$tmpl"
+}
+
+cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
+  # A branch and a pull request that add the pull request template to a PRIVATE repository, on the operator's tap. Fixed
+  # arity. Never a push to the default branch (one refspec, `refs/heads/ccrc/linking-template`, never forced), refused on a
+  # public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a refusal. The temp worktree is
+  # a dot name under $PROJECTS_ROOT (the project walk skips it) and is removed on every path.
+  [[ $# -eq 4 && $1 == --project && $3 == --team ]] || die "usage: ccd pr-template --project <p> --team <KEY>"
+  [[ "$2" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  [[ "$4" =~ ^[A-Z][A-Z0-9_]{0,15}$ ]] || die "bad team key"
+  local main="$PROJECTS_ROOT/$2" team=$4 slug meta vis def rows rc reason
+  slug=$(_gh_repo_slug "$main") || { printf '{"reason":"no-remote"}\n'; return 1; }
+  meta=$(_gh_repo_meta "$slug") || { printf '{"reason":"%s"}\n' "$meta"; return 1; }
+  vis=${meta%%$'\t'*}; def=${meta#*$'\t'}
+  [[ "$meta" == *$'\t'* && "$def" =~ ^[A-Za-z0-9._/-]+$ ]] || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  case "$vis" in private|internal) ;; public) printf '{"reason":"repo-public"}\n'; return 1 ;; *) printf '{"reason":"bad-answer"}\n'; return 1 ;; esac
+  # An open PR from the branch is answered, not duplicated.
+  rows=$(_gh_pr_list "$slug" ccrc/linking-template); rc=$?
+  if (( rc != 0 )); then reason="${rows##*\"reason\":\"}"; printf '{"reason":"%s"}\n' "${reason%%\"*}"; return 1; fi
+  _gh_rows_ok "$rows" || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  if printf '%s' "$rows" | python3 -c 'import json, sys
+sys.exit(0 if any(r.get("state") == "OPEN" for r in json.load(sys.stdin)) else 1)'; then printf '%s\n' "$rows"; return 0; fi
+  _plat_timeout "$PR_GH_TIMEOUT" git -C "$main" fetch --quiet origin "refs/heads/$def" 2>/dev/null \
+    || die "could not fetch $def from origin — nothing was pushed"
+  local tip; tip=$(git -C "$main" rev-parse --verify 'FETCH_HEAD^{commit}') || die "could not read $def — nothing was pushed"
+  if git -C "$main" cat-file -e "$tip:$(_pr_template_rel)" 2>/dev/null; then
+    printf '{"reason":"template-exists"}\n'; return 1
+  fi
+  local wt="$PROJECTS_ROOT/.pr-template.$2.$$"
+  git -C "$main" worktree add --detach --quiet "$wt" "$tip" || die "git worktree add failed for $wt"
+  rc=0; _pr_template_open "$wt" "$slug" "$def" "$team" || rc=$?
+  git -C "$main" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+  git -C "$main" worktree prune >/dev/null 2>&1 || :
+  return "$rc"
+}
+
+_pr_template_open() {   # worktree slug default-branch team -> the PR rows on stdout; returns (never dies) so the caller removes the worktree
+  local wt=$1 slug=$2 def=$3 team=$4 rows rc reason
+  local rel; rel=$(_pr_template_rel)
+  mkdir -p "$(dirname "$wt/$rel")"
+  cat > "$wt/$rel" <<EOF
+<!-- Linking: name this PR's Linear ticket so Linear links it and acts on merge. -->
+<!-- Closes $team-<n> when merging this PR meets the ticket's acceptance; Refs $team-<n> when a live check is still owed. -->
+Closes $team-
+
+## Summary
+
+## Test plan
+EOF
+  git -C "$wt" add "$rel" || { echo "pr-template: git add failed" >&2; return 1; }
+  git -C "$wt" -c user.name='ccrc' -c user.email='ccrc@ccrc.invalid' -c commit.gpgsign=false \
+    commit --quiet -m "Add a pull request template that names the Linear ticket" \
+    || { echo "pr-template: git commit failed" >&2; return 1; }
+  git -C "$wt" push origin "HEAD:refs/heads/ccrc/linking-template" >/dev/null \
+    || { echo "pr-template: push failed for ccrc/linking-template — nothing was opened" >&2; return 1; }
+  _plat_timeout "$PR_GH_TIMEOUT" gh pr create --repo "$slug" --head ccrc/linking-template --base "$def" \
+    --title "Add a pull request template that names the Linear ticket" \
+    --body "Adds the pull request template, so each PR names its Linear ticket." >/dev/null \
+    || { echo "pr-template: gh pr create failed — ccrc/linking-template is on origin, but no PR was opened" >&2; return 1; }
+  rows=$(_gh_pr_list "$slug" ccrc/linking-template); rc=$?
+  if (( rc != 0 )); then
+    reason="${rows##*\"reason\":\"}"; echo "pr-template: the PR was opened, but reading it back failed (${reason%%\"*})" >&2; return 1
+  fi
+  _gh_rows_ok "$rows" || { echo "pr-template: the PR was opened, but gh answered something that is not a list of PRs" >&2; return 1; }
+  printf '%s\n' "$rows"
 }
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]
@@ -47578,11 +47645,12 @@ case "${1:-}" in
   pr-landing) shift; cmd_pr_landing "$@" ;;
   pr-train-prove) shift; cmd_pr_train_prove "$@" ;;
   repo-visibility) shift; cmd_repo_visibility "$@" ;;
+  pr-template) shift; cmd_pr_template "$@" ;;
   docs-index) shift; cmd_docs_index "$@" ;;
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|repo-visibility|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|repo-visibility|pr-template|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
