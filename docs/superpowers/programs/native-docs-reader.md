@@ -633,18 +633,41 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 
 ## Current next-wave brief — A, library 1.1 take-up and Settings access
 
-**Entry status:** R7's five findings closed; the subsequent CI high-water correction awaits exact-head CI and focused closure. No dispatch. Protected plan landing, fresh exact-head/claim/source checks and claim 3862 release are mandatory. Open B1 before A closes; first rollout containing B1 is server-first. F owns deployed acceptance; retirement is operator-only.
+**Entry status (2026-11-10):** #2346 and #2350 have merged; R8's correction passed actual CI and focused review. Existing run 1532 is still planned and undispatched: the coordinator failed to resume after the merge, not a continuing queue block. Claim 3862 is absent from live claims; no explicit release is claimed. The narrow R9 baseline reconciliation below is prepared and measured, but independent review and protected landing of this rebrief remain before dispatch. Fresh claims/source/release checks remain mandatory. Open B1 before A closes; first rollout containing B1 is server-first. F owns deployed acceptance; retirement remains operator-controlled.
+
+### A baseline reconciliation — 2026-11-10 (R9 candidate)
+
+The original 38-path source gate correctly stopped before the Find inventory when main moved beyond C16. Read-only comparison from `8b0fab68f1de802f3952b8ec24f2ee93f76a8574` to `d452cfc356dde01344d06e1a2da132746d94870e` found exactly three changed declared paths:
+
+| Path | Landed change | A obligation |
+|---|---|---|
+| `pwa/src/fleet/settingsText.ts` | #2537 adds the Project linking card copy | Preserve that addition; Task 9 adds only the sibling diagnostic purposes, not a replacement card record |
+| `pwa/test/settings-frame.test.tsx` | #2537 adds Project linking to the Security card order | Preserve that card-order expectation while changing only the Settings-index scopes named in Task 9 |
+| `pwa/test/control-census.test.ts` | #2544 adds two unrelated ghost-anchor census entries | Preserve both entries; Task 6 changes only its declared Docs control entries |
+
+No other declared path changed. The adoption plan is byte-identical (SHA256 `996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330`); every Find mapping, all 38 gate paths, both phone blocks and the issued block remain unchanged. Only the checker's source pin changes. The candidate measured SOURCE-BASE-OK 38 and FINDS-OK 83 directives / 82 baseline / 1 deferred intermediate / 0 misses at that successor base. Negative controls rejected both altered plan bytes and old-base source drift before writing any receipt. This is preflight evidence, not a product test or an independent approval. Any further declared-path drift still stops for a fresh narrow reconciliation. A's worker records its actual BASE and re-runs the same gate there.
+
+### Operator amendment — native visual continuity and legacy decoupling (2026-11-10)
+
+The operator requested the necessary legacy decoupling and clarified the visual requirement: the reader should use the same skin and theme choices as ccrc, open with ccrc's selected appearance, and feel like part of the same environment rather than a separate destination. This is required programme scope, not an optional Later item or a claim that it has shipped.
+
+- **One native path.** Keep the shared rendering library and native Docs routes. Remove remaining legacy preview/proxy integration in the existing verified cutover order; do not add a fallback to the standalone HTTP server. Task 18 still owns the operator-controlled infrastructure acts, after F's prerequisites. This request is not a shortcut around the live-unit/config safety boundary or permission to break previews before their native replacement is verified.
+- **One appearance authority.** Reuse ccrc's canonical skin and theme catalogue and preference source. Current skins are Refined and Instrument; the theme catalogue has twelve named palettes plus Follow the system. Do not hand-maintain a second selectable list. The frame must open with the host's resolved appearance; continuing to follow host changes while open is the coordinator's integration default. A stale reader preference must not override that appearance.
+- **Native visual language.** Align surfaces, text/accent/semantic colours, typography, borders, focus treatments, controls and density with the surrounding ccrc skin. Preserve the rich document's reading layout, figures, tables and accessibility. A colour-mode-only approximation is insufficient: the current adapter collapses named palettes to light/dark/auto and sends no skin.
+- **Boundary and controls.** Rendering styles and any necessary checked-preference extension belong to the shared library; ccrc owns its appearance preference and the adapter. Use the existing checked bridge, never parent-DOM access, an extra renderer/message channel, arbitrary stylesheet injection, or a sandbox/CSP widening. Keep one frame Aa for reader-local settings. Coordinator default: while hosted by ccrc, Aa's global appearance follows ccrc rather than creating a persistent conflicting reader theme; reading-specific width/font/fold choices remain separate. Exact API and compatibility design require a scoped follow-on design/review before implementation.
+- **Delivery placement.** A remains the approved exact 1.1.0 adoption, with no shared-library or theme implementation added to its worker scope. Specify and execute the additional shared-renderer/consumer appearance work after A and before the final E/F candidate is accepted; do not alter the published 1.1.0 tag or pretend that its adoption supplies named themes. Its acceptance matrix must discover the host catalogue, cover both skins and every palette/system transition, changes during lazy start and while open, readable diagrams/code/tables, focus/contrast, and the existing one-bar/tap/desktop-fit budgets. Existing release, independent-review and signing boundaries still apply.
+- **Share remains truthful.** Existing Share uses a device share sheet or Copy link for a GitHub permalink to a committed, origin-verifiable version. It grants no repository or console access and does not publish drafts. Export is the separately approved self-contained rendered HTML option. Hosted public/expiring rendered links remain deferred; this appearance request does not authorise a new public publishing service.
 
 ### A — released library take-up and Settings access
 
 Run 1532, native-docs-reader wave 17. Execute only Tasks 1–10 of `docs/superpowers/plans/2026-11-05-native-docs-reader-library-1-1-take-up.md`, with completion Task 2 and its design. Read `docs/superpowers/programs/native-docs-reader.md` current A brief and its issued definition. No W5b, W6, history/diff or focus-repair implementation in A.
 
 #### Base and scope
-Source pin `8b0fab68f1de802f3952b8ec24f2ee93f76a8574` is C16 #2497 merged; C16 claims ended. Preserve #2480 desktop fitting. Plans/ledger land first. Before dispatch release coordinator claim 3862, recheck all A paths and Task 8 specs; worker claims the take-up plan too. Record child HEAD as BASE. The checker gates pin→BASE on its 38 explicit File Structure paths, not broad roots/plan/ledger; drift stops for rebrief. Recheck claims each shared-file task.
+Source pin `d452cfc356dde01344d06e1a2da132746d94870e` includes merged C16; ledger A baseline reconciliation covers three later changes. Preserve #2480 and #2537/#2544 additions. Claim 3862 is no longer live. Recheck all A paths and Task 8 specs; worker claims the take-up plan. Record child HEAD as BASE. Checker gates pin→BASE on all 38 File Structure paths, not broad roots/plan/ledger; further drift stops for rebrief. Recheck claims each shared-file task.
 
 Plan Files/byte-identical constraints apply to worker BASE→HEAD. No extra edit without scoped leave; markup census is run-only. Claim before subagent edits. Coordinator owns the programme ledger, not the worker SDD progress ledger. Scratch is session-temp.
 
-Task 1: all T1 predicates. Extract ledger “A Find-check artifact” Python to session temp, SHA256 `879266d892d51fa0eb5a67ad27cdfefa6375a52a036e9cda002650ee3ab46f98`; run `python3 -I <script> <plan> HEAD <fresh-receipt.json>` at repo root. It asserts exact plan SHA256 before its line inventory and source gate. Expected SOURCE-BASE-OK then FINDS-OK: 83 directives, 82 baseline, one Task 4 interim Find deferred until Task 3. Miss → stop-and-ask. Before edits, fresh post-C16 PHH-FIGURE / T10-FIGURES worst BASE through ccrc test; no historical geometry substitution.
+Task 1: all T1 predicates. Extract ledger “A Find-check artifact” Python to session temp, SHA256 `dca1aa33659b402c2682d29bc357d9eec558a6ecd1a33a761cbb4fedff9f403f`; run `python3 -I <script> <plan> HEAD <fresh-receipt.json>` at repo root. It asserts exact plan SHA256 before its line inventory and source gate. Expected SOURCE-BASE-OK then FINDS-OK: 83 directives, 82 baseline, one Task 4 interim Find deferred until Task 3. Miss → stop-and-ask. Before edits, fresh post-C16 PHH-FIGURE / T10-FIGURES worst BASE through ccrc test; no historical geometry substitution.
 
 CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome (worker rechecks).
 
@@ -710,7 +733,7 @@ door: 48 counted, 0 ignored; session cookie sent
 
 ### A Find-check artifact
 
-Copy only this Python fence to session temp, preserving its final newline. Script SHA256 `879266d892d51fa0eb5a67ad27cdfefa6375a52a036e9cda002650ee3ab46f98`. It asserts adoption-plan SHA256 `996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330` before using the line mappings. Run from repository root with the plan path, actual BASE and a new receipt path. It compares the explicit 38-path File Structure scope below, not broad byte-identical roots, plan or programme ledger. It deliberately defers Task 4's intermediate call until Task 3. A plan revision requires a fresh inventory and pinned hash, not silent reuse. Only read-only git commands and a new receipt write; no product execution.
+Copy only this Python fence to session temp, preserving its final newline. Script SHA256 `dca1aa33659b402c2682d29bc357d9eec558a6ecd1a33a761cbb4fedff9f403f`. It asserts adoption-plan SHA256 `996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330` before using the line mappings. Run from repository root with the plan path, actual BASE and a new receipt path. It compares the explicit 38-path File Structure scope below, not broad byte-identical roots, plan or programme ledger. It deliberately defers Task 4's intermediate call until Task 3. A plan revision requires a fresh inventory and pinned hash, not silent reuse. Only read-only git commands and a new receipt write; no product execution.
 
 ```python
 """Check the adoption plan's explicit Find inventory against an immutable git base.
@@ -722,7 +745,7 @@ plan=Path(sys.argv[1]); base=sys.argv[2]; output=Path(sys.argv[3])
 assert not output.exists(), 'Use a fresh receipt path.'
 expected_plan_sha256='996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330'
 assert hashlib.sha256(plan.read_bytes()).hexdigest()==expected_plan_sha256, 'Plan bytes changed: re-inventory; do not reuse these line mappings.'
-source_pin='8b0fab68f1de802f3952b8ec24f2ee93f76a8574'
+source_pin='d452cfc356dde01344d06e1a2da132746d94870e'
 # Exactly the File Structure paths, expanding shorthand and the three specs.
 # Includes all four new paths and the run-only markup census. Excludes the plan,
 # programme ledger and broad byte-identical roots; those constrain BASE..HEAD.
