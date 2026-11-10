@@ -189,6 +189,7 @@ _pr_bind_facts	C4
 _pr_state_one	C4
 cmd_repo_visibility	C4
 cmd_pr_template	C4
+_gh_api	C4
 _pr_template_open	C4
 cmd_pr_state	C4
 _gh_pr_landing_query	C4

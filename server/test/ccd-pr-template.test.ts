@@ -96,12 +96,12 @@ describe('ccd pr-template (D-8147)', () => {
     expect(r.code, r.stderr).toBe(0);
     const rows = JSON.parse(r.stdout.split('\n')[0]!) as Array<{ number: number }>;
     expect(rows[0]!.number).toBe(9);
-    // The exact GitHub-side sequence: meta, tip of the default branch, the template there, the branch ref, create, put.
+    // The exact GitHub-side sequence: meta, tip of the default branch, the template AT that tip, the branch ref, create, put.
     const calls = apiCalls();
     expect(calls).toHaveLength(6);
     expect(calls[0]).toBe('api repos/owner/repo --jq [.visibility,.default_branch]|@tsv');
     expect(calls[1]).toBe('api repos/owner/repo/git/ref/heads/main --jq .object.sha');
-    expect(calls[2]).toBe(`api repos/owner/repo/contents/${REL}?ref=main --jq .path`);
+    expect(calls[2]).toBe(`api repos/owner/repo/contents/${REL}?ref=${TIP} --jq .path`);
     expect(calls[3]).toBe(`api repos/owner/repo/git/ref/heads/${BRANCH} --jq .object.sha`);
     expect(calls[4]).toBe(`api -X POST repos/owner/repo/git/refs -f ref=refs/heads/${BRANCH} -f sha=${TIP} --jq .ref`);
     expect(calls[5]).toMatch(new RegExp(`^api -X PUT repos/owner/repo/contents/${REL.replace(/\./g, '\\.')} -f message=Add a pull request template that names the Linear ticket -f content=\\S+ -f branch=${BRANCH} --jq \\.commit\\.sha$`));
@@ -208,8 +208,8 @@ describe('ccd pr-template (D-8147)', () => {
   });
 
   it.each([
-    ['the default branch tip', 'git/ref/heads/main', /could not read main on GitHub/],
-    ['the template on the default branch', 'contents/.github/pull_request_template.md?ref=main', /could not read the template on main/],
+    ['the default branch tip', 'git/ref/heads/main', /could not read main on GitHub \(rate-limit\)/],
+    ['the template on the default branch', `contents/.github/pull_request_template.md?ref=${TIP}`, /could not read the template on main \(rate-limit\)/],
     ['the branch', 'git/ref/heads/ccrc/linking-template', /could not read ccrc\/linking-template \(rate-limit\)/],
   ])('a failed read of %s opens nothing and says so', (_n, needle, msg) => {
     setup();
@@ -228,7 +228,7 @@ describe('ccd pr-template (D-8147)', () => {
     failOn('-X POST', 'HTTP 422: Reference already exists\n');
     const r = run('--project demo --team KEY');
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/could not create ccrc\/linking-template/);
+    expect(r.stderr).toMatch(/could not create ccrc\/linking-template \(conflict\)/);
     expect(apiCalls().some((c) => c.includes('-X PUT'))).toBe(false);
     expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
     noGitWrites();
@@ -239,7 +239,22 @@ describe('ccd pr-template (D-8147)', () => {
     failOn('-X PUT', 'HTTP 409: conflict\n');
     const r = run('--project demo --team KEY');
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/could not put the template on ccrc\/linking-template/);
+    expect(r.stderr).toMatch(/could not put the template on ccrc\/linking-template \(conflict\)/);
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+    noGitWrites();
+  });
+
+  it.each([
+    ['-X POST', 'gh: Resource not accessible by integration (HTTP 403)\n', /could not create ccrc\/linking-template \(forbidden\)/],
+    ['-X PUT', 'gh: Resource not accessible by integration (HTTP 403)\n', /could not put the template on ccrc\/linking-template \(forbidden\)/],
+    ['-X POST', 'HTTP 403: API rate limit exceeded\n', /could not create ccrc\/linking-template \(rate-limit\)/],
+    ['-X PUT', 'HTTP 422: Invalid request\n', /could not put the template on ccrc\/linking-template \(rejected\)/],
+  ])('a write refused (%s: %s) names the reason, not a rate limit', (needle, text, msg) => {
+    setup();
+    failOn(needle, text);
+    const r = run('--project demo --team KEY');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(msg);
     expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
     noGitWrites();
   });

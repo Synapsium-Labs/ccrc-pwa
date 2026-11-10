@@ -11709,7 +11709,8 @@ cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
   # A branch and a pull request that add the pull request template to a PRIVATE repository, on the operator's tap. Fixed
   # arity. Never a push to the default branch (the one ref it creates is `refs/heads/ccrc/linking-template`, created and
   # never moved), refused on a public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a
-  # refusal. Every write happens on GitHub through `gh api`: ccd writes no object, ref or file on this machine.
+  # refusal. Every write happens on GitHub through `gh api`: ccd writes no object, ref or file in any checkout (`_gh_api` only keeps
+  # a `_plat_mktemp` stderr scratch file for the length of one call and removes it).
   [[ $# -eq 4 && $1 == --project && $3 == --team ]] || die "usage: ccd pr-template --project <p> --team <KEY>"
   _ws_project_valid "$2" || die "bad project"
   [[ "$4" =~ ^[A-Z][A-Z0-9_]{0,15}$ ]] || die "bad team key"
@@ -11725,16 +11726,19 @@ cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
   _gh_rows_ok "$rows" || { printf '{"reason":"bad-answer"}\n'; return 1; }
   if printf '%s' "$rows" | python3 -c 'import json, sys
 sys.exit(0 if any(r.get("state") == "OPEN" for r in json.load(sys.stdin)) else 1)'; then printf '%s\n' "$rows"; return 0; fi
-  tip=$(_gh_api "repos/$slug/git/ref/heads/$def" --jq .object.sha) && [[ "$tip" =~ ^[0-9a-f]{40,64}$ ]] \
-    || die "could not read $def on GitHub — nothing was created"
-  _gh_api "repos/$slug/contents/$(_pr_template_rel)?ref=$def" --jq .path >/dev/null; rc=$?
+  # The tip is read once and the template is looked for AT that sha, so the two reads cannot straddle a push to $def.
+  tip=$(_gh_api "repos/$slug/git/ref/heads/$def" --jq .object.sha); rc=$?
+  (( rc == 0 )) || die "could not read $def on GitHub (${tip:-not-found}) — nothing was created"
+  [[ "$tip" =~ ^[0-9a-f]{40,64}$ ]] || die "could not read $def on GitHub (bad-answer) — nothing was created"
+  reason=$(_gh_api "repos/$slug/contents/$(_pr_template_rel)?ref=$tip" --jq .path); rc=$?
   if (( rc == 0 )); then printf '{"reason":"template-exists"}\n'; return 1; fi
-  (( rc == 2 )) || die "could not read the template on $def — nothing was created"
+  (( rc == 2 )) || die "could not read the template on $def ($reason) — nothing was created"
   _pr_template_open "$slug" "$def" "$team" "$tip"
 }
 
 # One `gh api` call under the GitHub timeout: stdout on rc 0; rc 2 and nothing when GitHub answers 404; rc 1 and ONE
-# reason word (`_gh_fail_reason`'s, `unavailable` for a timeout) otherwise. The linking verbs' only GitHub reader/writer.
+# reason word (`_gh_fail_reason`'s, `unavailable` for a timeout, `forbidden` for a non-rate-limit 403, `conflict` for a 409 or
+# "already exists", `rejected` for any other 422) otherwise. The linking verbs' only GitHub reader/writer.
 _gh_api() {   # gh-api-args... -> stdout
   local errf out rc err
   errf=$(_plat_mktemp)
@@ -11743,6 +11747,17 @@ _gh_api() {   # gh-api-args... -> stdout
   if (( rc == 0 )); then printf '%s\n' "$out"; return 0; fi
   if (( rc == 124 )); then printf '%s\n' unavailable; return 1; fi
   case "$err" in *"HTTP 404"*|*"Not Found"*) return 2 ;; esac
+  # Two writes' refusals that `_gh_fail_reason` would misname for a write: a 403 that is not a rate limit is a missing
+  # permission (it would read `rate-limit`), and a 422 "already exists" / 409 is a concurrent run having got there first
+  # (it would read `error`). Reads and rate-limit 403s still go through `_gh_fail_reason`.
+  case "$err" in
+    *"rate limit"*) ;;
+    *"HTTP 403"*) printf '%s\n' forbidden; return 1 ;;
+  esac
+  case "$err" in
+    *"already exists"*|*"HTTP 409"*) printf '%s\n' conflict; return 1 ;;
+    *"HTTP 422"*) printf '%s\n' rejected; return 1 ;;
+  esac
   _gh_fail_reason "$err"; return 1
 }
 

@@ -233,3 +233,35 @@ describe('pr-train-prove fits inside its own bound, and pr-state keeps its own (
     expect(verbTimeoutMs('pr-state')).toBe(25_000);
   });
 });
+
+describe('pr-template fits inside the bound that kills it (D-8147)', () => {
+  // `cmd_pr_template` makes up to nine gh calls, each `_plat_timeout "$PR_GH_TIMEOUT"`: the repository read, the branch's
+  // PR rows, the default branch's tip, the template there, the branch ref, the ref POST (or the template read on the
+  // branch), the file PUT, `gh pr create` and the rows read back. Each can run its deadline plus the kill grace.
+  const GH_CALLS = 9;
+
+  it('nine calls, each its deadline plus the default kill grace, fit the outer bound', () => {
+    const src = ccdSource();
+    const grace = Number(/CCD_TIMEOUT_KILL_AFTER:-(\d+)/.exec(src)?.[1]);
+    expect(grace, 'the kill grace default was not found').toBeGreaterThan(0);
+    const budgetS = verbTimeoutMs('pr-template') / 1000;
+    expect(GH_CALLS * (ccdSeconds('PR_GH_TIMEOUT') + grace), 'nine calls against the bound').toBeLessThanOrEqual(budgetS);
+  });
+
+  it('the pin names every gh call site the verb and its helper make', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_template()');
+    const end = src.indexOf('\ncmd_pr_state()');
+    expect(start, 'cmd_pr_template moved').toBeGreaterThan(0);
+    // The sites are counted by kind (the `_gh_api` definition itself is cut out). The longest path through them is the
+    // nine: repo read, PR rows, tip, template, branch ref, ref POST (or template read on the branch), file PUT, create, rows.
+    const body = src.slice(start, end).replace(/\n_gh_api\(\) \{[\s\S]*?\n\}\n/, '\n');
+    const count = (re: RegExp): number => [...body.matchAll(re)].length;
+    expect({
+      api: count(/\$\(_gh_api |^ *_gh_api /gm),
+      create: count(/_plat_timeout "\$PR_GH_TIMEOUT" gh pr create/g),
+      rows: count(/\$\(_gh_pr_list /g),
+      meta: count(/\$\(_gh_repo_meta /g),
+    }, 'a gh call site was added or removed: re-derive GH_CALLS and the pr-template bound').toEqual({ api: 6, create: 1, rows: 2, meta: 1 });
+  });
+});
