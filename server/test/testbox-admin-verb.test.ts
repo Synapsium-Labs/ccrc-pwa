@@ -561,8 +561,8 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
     const h = fixture();
     let r = sh(h, SRC('linux') + '_tba_run_probe() { _tba_ok \'"fingerprint":"x"\'; }; _tba_main probe', [VERB]);
     expect(r.out).toBe('{"ok":true,"fingerprint":"x"}\n');
-    // `parity` is built by a later task (TC9); until then it is a usage error, never half-run
-    r = sh(h, SRC('linux') + '_tba_main parity; echo "rc=$?"', [VERB]);
+    // every sub is built now (TC9 was the last); a sub whose function is missing is still a usage error, never half-run
+    r = sh(h, SRC('linux') + 'unset -f _tba_run_parity; _tba_main parity; echo "rc=$?"', [VERB]);
     expect(r.rc).toBe(2);
     expect(r.err).toContain('parity is not built in this release');
     expect(existsSync(h.state)).toBe(false);

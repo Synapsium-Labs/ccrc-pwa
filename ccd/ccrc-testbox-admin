@@ -66,7 +66,7 @@ TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refuse
   pair-failed status-not-ok pairing-keys-in-ccrc-env key-in-ccrc-env runs-in-progress idle-deadline cancelled
   gh-signed-out parity-differs not-connected box-side-skipped)
 # The long subs whose parent asks them for a precheck before it detaches (`settings-box` only with --when-idle).
-TBA_PRECHECK_SUBS=(connect settings-box repair apply-release)
+TBA_PRECHECK_SUBS=(connect settings-box repair apply-release parity)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
 # The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the twenty-eight box keys.
 TBA_FLEET_KEYS=(CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE
@@ -347,8 +347,10 @@ _tba_is_long() {   # <sub> -> 0 iff it detaches (settings-box only with --when-i
 # `_tba_detach <sub> [word]...` — hand the act to a transient unit and answer its id. The parent writes `running` first
 # and answers only when the state file says so, so the card never learns an id the state does not hold.
 _tba_detach() {
-  local sub="$1" prc=0 id rc=0 args
+  local sub="$1" prc=0 id rc=0 args slice=""
   shift
+  # A parity run is a test run: it goes in the tests slice, never the verb's own (spec §2.8).
+  [ "$sub" != parity ] || slice="$TBA_PARITY_SLICE"
   _tba_lock_probe || prc=$?
   case "$prc" in
     0) ;;
@@ -367,7 +369,7 @@ _tba_detach() {
   # The agent spawns the verb with HOME, PATH and LANG only, so `systemd-run --user` has no user bus unless this sets it
   # (ccrc sets both in each function that needs them; `_codex_bus_defaults` is the one place that does).
   _codex_bus_defaults
-  _svc_run_detached --unit="ccrc-testbox-admin-$sub-$id" /usr/bin/env "CCRC_TBA_ACT=$id" "$HOME/.local/bin/ccrc" \
+  _svc_run_detached --unit="ccrc-testbox-admin-$sub-$id" ${slice:+--slice="$slice"} /usr/bin/env "CCRC_TBA_ACT=$id" "$HOME/.local/bin/ccrc" \
     testbox-admin "$sub" || rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f -- "$args"
@@ -1499,6 +1501,131 @@ _tba_run_apply-release() {
   [ "$rc" = 0 ] || { _tba_log "apply-release: failed ($TBA_CODE)"; return 1; }
   ( _tba_read_snapshot ) >/dev/null 2>&1 || :
   _tba_log "apply-release: ok"
+}
+
+# ── parity [--pr=<n>...] ───────────────────────────────────────────────────────────────────────────────────────────────
+# The parity tool (ccd/testbox-parity), run by the detached unit, which `_tba_detach` puts in ccrctests.slice. Per installed
+# repository row (read from the box: its name, fetch URL, first package and first command head): the checkout is the fleet's
+# own clone of that fetch URL under CCRC_PROJECTS_ROOT (default ~/projects), the command is the row's head with `run`, and the
+# scope is the five most recent merged pull requests, or the pull requests named (the first row only; a number belongs to one
+# repository). The three fixtures run once, in the first row that has a checkout. The record is the rows' results merged with
+# the box's release, its tools key, the pin's fingerprint and the box file's sha256; a pass clears the stale mark.
+# `gh` signed out is answered by the parent, before the unit, and writes no record.
+TBA_PARITY_RECENT=5
+TBA_PARITY_SLICE=ccrctests.slice
+_tba_gh() { if [ -n "${TBA_GH:-}" ]; then "$TBA_GH" "$@"; else gh "$@"; fi; }
+_tba_pr_tool() { if [ -n "${TBA_PARITY_TOOL:-}" ]; then "$TBA_PARITY_TOOL" "$@"; else bash "$TBA_HERE/testbox-parity" "$@"; fi; }
+# `<url>` as `host/path`: no scheme, no user, no `.git`, no trailing slash, so an https and an ssh spelling of one repository agree.
+_tba_norm_url() { local u="${1%.git}"; u="${u%/}"; u="${u#*://}"; u="${u#*@}"; printf '%s' "${u/://}"; }
+# `_tba_pr_checkout <fetch url>` -> the path of the fleet's clone of it, rc 1 when there is none.
+_tba_pr_checkout() {
+  local root="" want d u
+  _ccrc_knob CCRC_PROJECTS_ROOT '' >/dev/null 2>&1 && root="$KNOB"
+  [ -n "$root" ] || root="${CCRC_PROJECTS_ROOT:-}"
+  [ -n "$root" ] || root="$HOME/projects"
+  root="$(_tba_home_path "$root")"
+  want="$(_tba_norm_url "$1")"
+  for d in "$root"/*/; do
+    d="${d%/}"
+    [ -e "$d/.git" ] || continue
+    u="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$d" config --get remote.origin.url 2>/dev/null)" || continue
+    [ "$(_tba_norm_url "$u")" = "$want" ] || continue
+    printf '%s' "$d"; return 0
+  done
+  return 1
+}
+# The installed repository rows, from the box: `name fetchUrl package command-head` per line into PR_ROWS. rc 1 with TBA_CODE.
+_tba_pr_rows() {
+  local line
+  PR_ROWS=()
+  _tba_cx_out sh -c 'd=$(sed -n "s/^CCRC_TESTBOX_REPOS=//p" "$1" | tail -n 1); d=${d#\"}; d=${d%\"}; case $d in /*) ;; *) exit 3 ;; esac; for r in "$d"/*.json; do [ -f "$r" ] || continue; printf "@@ %s\n" "${r##*/}"; cat "$r"; printf "\n"; done' sh "$TBA_BOX_ENV_PATH"
+  [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" status-not-ok; return 1; }
+  while IFS= read -r line; do PR_ROWS+=("$line"); done < <(printf '%s' "$CX_OUT" | node -e '
+let s = "";
+process.stdin.on("data", (c) => (s += c)).on("end", () => {
+  for (const part of s.split(/^@@ /m).slice(1)) {
+    const nl = part.indexOf("\n");
+    const name = part.slice(0, nl).replace(/\.json$/, "");
+    try {
+      const r = JSON.parse(part.slice(nl + 1));
+      const p = r.packages[0], head = p.commands[0];
+      const word = /^[A-Za-z0-9._\/=+-]+$/;
+      if (/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name) && typeof r.fetchUrl === "string" && !/\s/.test(r.fetchUrl)
+          && word.test(p.name) && !p.name.split("/").includes("..") && head.split(" ").every((w) => word.test(w)))
+        process.stdout.write([name, r.fetchUrl, p.name, head].join(" ") + "\n");
+    } catch {}
+  }
+});' 2>/dev/null)
+  [ "${#PR_ROWS[@]}" -gt 0 ] || { TBA_CODE=status-not-ok; return 1; }
+}
+# The merge of the rows' records: argv is the result floor (1 when a row could not run), the meta, then the record files.
+_tba_pr_merge() {   # <fail 0|1> <release> <tools key> <fingerprint> <sha256> <record file>... -> the final record on stdout
+  node -e '
+const fs = require("fs");
+const [fail, release, toolsKey, fingerprint, boxFileSha256, ...files] = process.argv.slice(1);
+let result = fail === "1" ? "fail" : "pass";
+const prs = [];
+let fixtures = [];
+for (const f of files) {
+  let r;
+  try { r = JSON.parse(fs.readFileSync(f, "utf8")); } catch { result = "fail"; continue; }
+  if (r.result !== "pass") result = "fail";
+  prs.push(...r.prs);
+  if (r.fixtures.length > 0) fixtures = r.fixtures;
+}
+if (fixtures.length !== 3 || fixtures.some((x) => x.result !== "pass") || prs.length === 0) result = "fail";
+process.stdout.write(JSON.stringify({ v: 1, result, prs, fixtures, release, toolsKey, fingerprint, boxFileSha256, at: Date.now() }) + "\n");
+' "$@"
+}
+_tba_run_parity() {
+  local pre=0 w i=0 name url pkg head co fail=0 fxpending=1 rel="" v="" tk="" fp sha tmp rec final named=() args=() cmd=() recs=() row pass
+  if [ "${1-}" = --precheck ]; then pre=1; shift; fi
+  TBA_CODE=""; TBA_CODE_KEYS=""
+  _tba_ra_precheck || return 1
+  _tba_gh auth status >/dev/null 2>&1 || { TBA_CODE=gh-signed-out; return 1; }
+  [ "$pre" = 0 ] || return 0
+  for w in "$@"; do case "$w" in --pr=*) named+=("${w#--pr=}") ;; esac; done
+  fp="$(_tba_state_get fingerprint 2>/dev/null)"; sha="$(_tba_state_get box_sha256 2>/dev/null)"
+  { _tba_is_fingerprint "$fp" && [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; } || { TBA_CODE=not-connected; return 1; }
+  _tba_log "parity: begins"
+  _tba_phase legs
+  _tba_cx_out cat -- "$(_tba_box_tools)/release/installed/build.json"
+  if [ "$CX_RC" = 0 ] && [[ "$CX_OUT" =~ \"version\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then rel="${BASH_REMATCH[1]}"; fi
+  [[ "$rel" =~ ^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$ ]] || { _tba_cx_fail "$CX_RC" status-not-ok; return 1; }
+  _tba_cx_out sh -c 't=$1/current; k=; for n in node chrome; do v=$(basename "$(readlink -f "$t/$n" 2>/dev/null)" 2>/dev/null); [ -n "$v" ] && [ "$v" != "$n" ] && k="${k:+$k+}$n-$v"; done; printf "%s" "${k:-none}"' sh "$(_tba_box_tools)"
+  tk="$CX_OUT"; [[ "$tk" =~ ^[A-Za-z0-9._:+-]{1,128}$ ]] || tk=none
+  _tba_pr_rows || return 1
+  tmp="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ccrc-tba-parity.XXXXXXXX")" || { TBA_CODE=status-not-ok; return 1; }
+  _tba_rm_on_exit "$tmp"
+  for row in "${PR_ROWS[@]}"; do
+    read -r name url pkg head <<<"$row"
+    if ! co="$(_tba_pr_checkout "$url")"; then _tba_log "parity: $name: the fleet host has no clone of its fetch URL"; fail=1; i=$(( i + 1 )); continue; fi
+    rec="$tmp/rec.$i"; i=$(( i + 1 ))
+    args=(--repo "$co" --package "$pkg" --record "$rec" --repo-name "$name" --release "$rel" --tools-key "$tk" --fingerprint "$fp" --box-sha256 "$sha")
+    if [ "$fxpending" = 1 ] && [ "${#named[@]}" -gt 0 ]; then
+      for w in "${named[@]}"; do args+=(--pr "$w"); done
+    else
+      args+=(--recent "$TBA_PARITY_RECENT")
+    fi
+    [ "$fxpending" = 0 ] || args+=(--fixtures)
+    fxpending=0
+    read -r -a cmd <<<"$head"
+    _tba_pr_tool "${args[@]}" -- "${cmd[@]}" run 2>&1 | while IFS= read -r w; do _tba_log "parity: $name: $w"; done
+    [ -f "$rec" ] && recs+=("$rec") || fail=1
+  done
+  _tba_phase record
+  final="$tmp/final.json"
+  _tba_pr_merge "$fail" "$rel" "$tk" "$fp" "$sha" ${recs[@]+"${recs[@]}"} >"$final" 2>/dev/null || { TBA_CODE=status-not-ok; return 1; }
+  [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") || { TBA_CODE=status-not-ok; return 1; }
+  ( umask 077; cp -- "$final" "$TBA_PARITY.tmp.$$" ) 2>/dev/null && _tmp_guard "$TBA_PARITY.tmp.$$" \
+    && mv -f -- "$TBA_PARITY.tmp.$$" "$TBA_PARITY" 2>/dev/null || { rm -f -- "${TBA_PARITY:?}.tmp.$$"; TBA_CODE=status-not-ok; return 1; }
+  pass=0; grep -q '^{"v":1,"result":"pass",' "$final" && pass=1
+  if [ "$pass" = 1 ]; then
+    _tba_state_write parity_stale= || :
+    _tba_log "parity: ok"
+  else
+    TBA_CODE=parity-differs; _tba_log "parity: the test box and the fleet host differ (parity-differs)"; return 1
+  fi
 }
 
 # ── disconnect [--replace=true] ────────────────────────────────────────────────────────────────────────────────────────
