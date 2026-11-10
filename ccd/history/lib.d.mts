@@ -1117,6 +1117,7 @@ export interface CardPredictionInputs {
 export type CardPrediction =
   | { act: 'write'; line: string; leafId: string; parentId: string | null; parentKind: 'predicted' | 'newest-condensed' | null; children: string[] }
   | { act: 'skip'; reason: 'fork-qualified'; plainLeafId: string }
+  | { act: 'skip'; reason: 'compose-failed'; plainLeafId: string }
   | { act: 'skip'; reason: 'no-epoch' | 'no-rows' };
 export function predictedSpanStart(i: { firstRowUuid: string | null; lastBoundary: CardBoundary | null }): string | null;
 export function planCardPrediction(i: CardPredictionInputs): CardPrediction;

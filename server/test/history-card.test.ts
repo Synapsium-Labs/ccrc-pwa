@@ -163,7 +163,7 @@ describe('the card prediction and the card file decision (spec 8.6, 6.1, 6.3; W1
   });
 
   it('the add-on appears exactly when planCardPrediction answers parentKind predicted, and names its parentId and children', () => {
-    // children is the planFanIn group the prediction already computed: oldest first, ending with the leaf being written (W3 Task 4, D2)
+    // children is the planFanIn group the prediction already computed: oldest first, ending with the leaf being written (the W3 steering plan, Task 4)
     const seven = Array.from({ length: 7 }, (_, k) => leafOf(`s-${k}`));
     const leaf = leafOf('h-7');
     const p = writeOf(libCard.planCardPrediction({
@@ -2716,7 +2716,7 @@ describe("childrenOf reads the group's stored rows; the card step passes them to
     }
   }));
 
-  it('a composer that throws makes the steer prediction a skip: the standing steer file goes, steer_compose_failed is counted once, the card is written as usual, and no card_skipped is counted (D4)', () => forcingComposeThrow(async () => {
+  it('a composer that throws makes the steer prediction a skip: the standing steer file goes, steer_compose_failed is counted once, the card is written as usual, and no card_skipped is counted', () => forcingComposeThrow(async () => {
     {
       const fx = await store7(null, FLAGS.map(() => ({ flag: 0 })));
       try {

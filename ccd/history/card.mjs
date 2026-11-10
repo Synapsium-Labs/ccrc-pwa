@@ -355,7 +355,7 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, roots, out) {
  *  (absent: none; this leaf, as written or re-rendered: keep; another leaf, junk or unreadable: delete) is the same without
  *  it, because a steer file this writer composed names its own leaf whole. The line is then `undefined`, which no file's text
  *  equals (an empty file's is `''`, an unreadable one's `null`), so a junk file is still deleted.
- *  A composer that throws (the add-on does not fit its bounds: a defect, D4) makes the steer prediction a skip named
+ *  A composer that throws (the add-on does not fit its bounds: a defect, the coordinator's ruling on the compose failure) makes the steer prediction a skip named
  *  `compose-failed`, with the leaf as its plain id so a file that named another leaf still reads consumed: decideCardFile
  *  deletes any standing file, as for every skip, and the caller counts `steer_compose_failed`. The card's own prediction is
  *  untouched. Answers `{ prediction, composeFailed }`. */

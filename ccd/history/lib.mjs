@@ -6553,7 +6553,7 @@ const quotableStored = (c) => c.kind === 'steered_leaf' && c.status === 'ok' && 
  *  the sentence, then the current slot `[{leafId} this span]`. Absent or null `parentId`: no add-on, and `children` is not read.
  *  A parent add-on needs exactly FAN_IN.leaf - 1 stored children (the eighth span is the current slot); any other count throws.
  *  Both bounds hold after escaping, previous-leaf lines and children together: the add-on, counted from the LF that joins
- *  it to the previous part to the end of the text (D5, the plan's count), at most PARENT_ADDON_MAX chars, and the file, its LF included, at most
+ *  it to the previous part to the end of the text (the plan's count of the add-on), at most PARENT_ADDON_MAX chars, and the file, its LF included, at most
  *  STEER_FILE_MAX bytes. One cap serves every child quote: the largest integer from PARENT_QUOTE_CAP_MIN to PREV_GIST_MAX
  *  for which both bounds hold, by binary search (at most 9 compositions). No quote is ever dropped to fit; a composition
  *  that misses a bound at the floor throws (O14, ruled). Each child quote is cut BEFORE it is escaped (quoteGist). */
