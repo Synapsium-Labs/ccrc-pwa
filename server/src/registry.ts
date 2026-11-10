@@ -686,8 +686,9 @@ export function browserMcpOf(read: MeasuredRead | null): BrowserMcpApplied | nul
 
 /** `$REG/<id>.limitwait`'s ONE reader (D-8123): `null` for an unlisted field, one that vanished between the listing and the read, a closed record, an empty one or one that does
  *  not match the whole line grammar ccd writes (a torn or hand-edited record is matched, never evaluated); `'unreadable'` for a
- *  listed field whose bytes did not come back. The grammar is `_limitwait_open`'s and `_limitwait_choose`'s. */
-const LIMIT_WAIT_LINE = /^state=open since=([0-9]{1,12}) reset=([0-9]{1,12}|-) account=([A-Za-z0-9._-]+) sign=(?:pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12})?$/;
+ *  listed field whose bytes did not come back. The grammar is `_limitwait_open`'s and `_limitwait_choose`'s (` by=auto`: ccd chose the wait
+ *  itself, D-8173 ruling (a); it reads `waiting` the same). */
+const LIMIT_WAIT_LINE = /^state=open since=([0-9]{1,12}) reset=([0-9]{1,12}|-) account=([A-Za-z0-9._-]+) sign=(?:pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12}(?: by=auto)?)?$/;
 export function limitWaitOf(read: MeasuredRead | null): LimitWaitMark | null | 'unreadable' {
   if (read === null) return null;
   if (!read.ok) return read.reason === 'absent' ? null : 'unreadable';   // listed, then gone before the read: no record

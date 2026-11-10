@@ -50,6 +50,8 @@ describe('limitWaitOf reads the one line, strictly', () => {
   it('an open record gives its since, reset, account and whether the operator chose to wait', () => {
     expect(limitWaitOf({ ok: true, content: OPEN })).toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: false });
     expect(limitWaitOf({ ok: true, content: `${OPEN} choice=wait at=1784500100` }))
+      .toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: true });    // D-8173 ruling (a): ccd's own choice where no account has room reads the same.
+    expect(limitWaitOf({ ok: true, content: `${OPEN} choice=wait at=1784500100 by=auto` }))
       .toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: true });
   });
   it('a reset of `-` is null', () => {
@@ -72,6 +74,8 @@ describe('limitWaitOf reads the one line, strictly', () => {
     ['a stray word', `${OPEN} surprise=1`],
     ['a choice other than wait', `${OPEN} choice=swap at=1784500100`],
     ['a choice with no time', `${OPEN} choice=wait`],
+    ['a chooser other than auto', `${OPEN} choice=wait at=1784500100 by=operator`],
+    ['by=auto with no choice', `${OPEN} by=auto`],
     ['two lines', `${OPEN}\n${OPEN}`],
   ])('%s reads null, never evaluated', (_n, content) => {
     expect(limitWaitOf({ ok: true, content })).toBeNull();

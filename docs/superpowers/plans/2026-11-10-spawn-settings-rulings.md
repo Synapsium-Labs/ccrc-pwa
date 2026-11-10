@@ -12,7 +12,7 @@ Three of the operator's 2026-11-10 rulings (session host research, section 6.1) 
 
 ## Deviations found
 
-- **D-8173 (2026-11-10)** — spawn-settings-rulings: auto-continue at the usage limit off, cross-session inbound refused, idle compaction on
+- **D-8173 (2026-11-10)** — spawn-settings-rulings: auto-continue at the usage limit off, cross-session inbound refused, idle compaction on; with no account that has room, ccd chooses Wait until reset itself and restarts in place at the reset (operator ruling (a))
 
 ## Design
 
@@ -22,7 +22,7 @@ Three of the operator's 2026-11-10 rulings (session host research, section 6.1) 
 
 ## Consequences the ruling carries (review finding, verified)
 
-- **A session with no account room parks until the operator acts.** Before the pin, Claude Code's own wait-then-continue re-sent the turn at the reset. With it off, nothing in ccd re-sends that turn: `_rescue_check` types nothing, the no-room `_rescuewait` closes `clear` once the home account resets (no swap fires, the target is the home wrapper), and `_watchdog_resume_here` restarts in place only when the operator recorded `choice=wait` through `ccd limit-wait`. A fleet that hits the five-hour ceiling unattended therefore sits idle after the reset until someone taps "Wait until reset" on each session. This is what the ruling says ("the operator's options come only when no account has room"); an automatic in-place restart at the reset (for example `_watchdog_resume_here` without `choice=wait`) is NOT part of this change and is left as an open question for the operator.
+- **A session with no account room waits for the reset by itself (operator ruling (a), 2026-11-10).** Before the pin, Claude Code's own wait-then-continue re-sent the turn at the reset. With it off, nothing re-sent it, and the review found that a fleet hitting the ceiling unattended would sit idle after the reset until someone tapped "Wait until reset" on each session. The operator ruled (a): when no account has room, ccd chooses the wait itself. `_watchdog_one`'s no-room branch records `choice=wait at=<now> by=auto` through `_limitwait_choose` for a stopped session (not an account-only sign) whose record states a reset, and `_watchdog_resume_here` restarts it in place after the reset, as it does for the operator's tap. An automatic wait is not a pin: until `_watchdog_resume_here` restarts it, the rescue keeps looking and moves the session to an account that gets measured room. A `-` reset (the stale-low-reading case) is never chosen automatically. The server's `limitWaitOf` reads ` by=auto` as `waiting`, like a tap.
 - **The five-hour near-reset wait can no longer open.** Rule b of `_rescue_check` (`_rescue_armed`) keys on Claude Code's own auto-continue footer, which the pin removes, so every near-reset block now swaps instead of waiting a few minutes. Expect more rescue swaps and more herd/spread pressure until the holds are deleted and the spread is re-measured.
 
 ## Evidence for the three spellings (review finding, verified)

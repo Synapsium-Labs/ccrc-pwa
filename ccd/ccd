@@ -31724,17 +31724,20 @@ _limitwait_close() {   # id end-word — close an open record: `state=closed` wi
   return 0
 }
 
-_limitwait_choose() {   # id -> record `choice=wait at=<now>` on an OPEN limitwait. rc 0 recorded (or already chosen) | 1 not open | 2 could not write
+_limitwait_choose() {   # id [auto] -> record `choice=wait at=<now>[ by=auto]` on an OPEN limitwait. rc 0 recorded (or already chosen) | 1 not open | 2 could not write
   # The second and last write to `$REG/<id>.limitwait` (the first is `_limitwait_open`, the end is `_limitwait_close`): the
-  # operator's own tap, behind `ccd limit-wait`. A record that is not exactly `state=open` (closed by a landing or by a pass
-  # with no sign, absent, or a hand-edited line) is refused, never evaluated. The first choice stands: a second tap keeps its time.
-  local id="$1" rec="" now re='^state=open since=[0-9]{1,12} reset=([0-9]{1,12}|-) account=[A-Za-z0-9._-]+ sign=(pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12})?$'
+  # operator's own tap, behind `ccd limit-wait`, or, with `auto`, the watchdog's own choice where no account has room
+  # (D-8173 ruling (a), `_watchdog_one`). A record that is not exactly `state=open` (closed by a landing or by a pass
+  # with no sign, absent, or a hand-edited line) is refused, never evaluated. The first choice stands: a second tap keeps its
+  # time, and a tap on an automatic choice keeps it automatic.
+  local id="$1" by="${2:-}" rec="" now re='^state=open since=[0-9]{1,12} reset=([0-9]{1,12}|-) account=[A-Za-z0-9._-]+ sign=(pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12}( by=auto)?)?$'
+  [[ -z "$by" || "$by" == auto ]] || return 1
   _reg_get_to rec "$id" limitwait || return 1
   [[ "$rec" =~ $re ]] || return 1   # the whole line is matched, never evaluated: a torn or hand-edited record is no record
   [[ -n "${BASH_REMATCH[3]}" ]] && return 0
   _now_s_to now
-  _reg_set "$id" limitwait "$rec choice=wait at=$now" || return 2
-  echo "$(date '+%F %T') limit-wait $id: choice=wait account=$(_rw_field "$rec" account) sign=$(_rw_field "$rec" sign)" >> "$REG/swap.log"
+  _reg_set "$id" limitwait "$rec choice=wait at=$now${by:+ by=$by}" || return 2
+  echo "$(date '+%F %T') limit-wait $id: choice=wait account=$(_rw_field "$rec" account) sign=$(_rw_field "$rec" sign)${by:+ by=$by}" >> "$REG/swap.log"
   return 0
 }
 
@@ -31750,7 +31753,12 @@ cmd_limit_wait() {   # <id> — the operator chose "Wait until reset" on a sessi
   [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "limit-wait: '$id' is not a session id"
   _limitwait_choose "$id" || rc=$?
   case "$rc" in
-    0) echo "limit-wait: $id waits until the limit resets; the watchdog moves nothing and restarts it once its account has room" ;;
+    0) local lw=""; _reg_get_to lw "$id" limitwait || lw=""
+       if [[ "$(_rw_field "$lw" by)" == auto ]]; then
+         echo "limit-wait: $id already waits by itself (no account had room); the watchdog restarts it once its account has room, or moves it if another account gets room first"
+       else
+         echo "limit-wait: $id waits until the limit resets; the watchdog moves nothing and restarts it once its account has room"
+       fi ;;
     1) die "not-waiting: $id has no open limit-wait record (it moved, or its limit cleared)" ;;
     *) die "limit-wait: could not record the choice for $id" ;;
   esac
@@ -31956,10 +31964,13 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
     _reg_set "$id" limitsign "$since $sign" || return 0
   fi
   # THE OPERATOR WAITS. Nothing is moved; the session restarts in place once its own account has room again.
+  # AN AUTOMATIC WAIT (`by=auto`, D-8173 ruling (a)) restarts in place the same way, but it is not the operator's pin: until
+  # the reset it keeps looking, and the moment another account has measured room the rescue below moves the session there
+  # (ccd always swaps; the wait is for when there is nowhere to go). Its landing closes the record `swap`.
   _reg_get_to lw "$id" limitwait || lw=""
   if [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait ]]; then
-    _watchdog_resume_here "$id" || :
-    return 0
+    _watchdog_resume_here "$id" && return 0
+    [[ "$(_rw_field "$lw" by)" == auto ]] || return 0
   fi
   age=$(( now - since ))
   (( age >= n * 60 )) || return 0
@@ -32023,6 +32034,14 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
     # NOWHERE TO GO. The operator is told through the record, once per episode in the log.
     _wd_flag_once "$id" noroom && echo "$(date '+%F %T') watchdog-noroom $id: $wrapper sign=$sign for=${m}m and no account has measured room" >> "$REG/swap.log"
     _limitwait_open "$id" "$wrapper" "$sign" || :
+    # D-8173 RULING (a): with no account that has room, ccd chooses "Wait until reset" itself, so the session restarts in place
+    # at the reset instead of sitting idle until the operator taps (spawns pin auto-continue off, so Claude Code will not).
+    # Only for a session that HAS stopped (not an account-only sign) and only when the record states a reset: a `-` reset is
+    # the stale-low-reading case, where a restart by the clock would hit the limit again, so that one stays the operator's.
+    if [[ "$sign" != account ]]; then
+      _reg_get_to lw "$id" limitwait || lw=""
+      [[ "$(_rw_field "$lw" reset)" =~ ^[0-9]+$ ]] && { _limitwait_choose "$id" auto || :; }
+    fi
     if [[ "$sign" != account && ! -e "$REG/$id.stranded" ]]; then
       _reg_get_to project "$id" project || project=""
       _strand_mark "$id" "$wrapper" "$project" "limit sign $sign for $m min and no account has measured room"

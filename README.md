@@ -6921,9 +6921,13 @@ Three more keys ride the same one `--settings` at every spawn, on every lane, as
 `autoContinueAtUsageLimit` off (Claude Code never waits out a usage limit by itself, so `ccd` swaps the session to an
 account with room), `crossSessionInbound` refuse (a stray inbox message never opens an approval dialog; nudges stay
 typed) and `idleCompaction` on (no account or session setting can switch it off).
-With auto-continue off, a session that hits a usage limit when no account has room does not resume by itself at the
-reset: it waits for the operator (Wait until reset on the limit menu, or `ccd limit-wait`), and only then does the
-watchdog restart it in place. The five-hour near-reset wait never opens any more, so every near-reset block swaps.
+With auto-continue off, Claude Code does not resume a session by itself at a usage limit's reset, so the limit watchdog
+does: when a stopped session has no account with room and its limit states a reset, `ccd` chooses Wait until reset
+itself (the record reads `choice=wait by=auto`) and restarts the session in place on its own account once the reset has
+passed and that account reads room again. An automatic wait is not a pin: if another account gets room first, the
+watchdog moves the session there. The operator's own Wait until reset (the Waiting on you row, or `ccd limit-wait`) is a
+pin: nothing moves the session until the reset. A limit with no stated reset stays the operator's to decide. The
+five-hour near-reset wait never opens any more, so every near-reset block swaps.
 - **Settings › Automation › Browser tools** shows the box default, the server list and how many running sessions use a
   browser. `ccrc doctor`'s `browser-mcp` check counts the Claude Code processes that run a configured browser server
   against the sessions whose last spawn applied `on`, and warns when more run one than asked for.
