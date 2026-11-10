@@ -829,19 +829,28 @@ _tba_run_preflight() {
 # `MANIFEST` checked again there), settings (the box file and the row files, by a temp and a rename, as root), install
 # (the staging tree's own installer), pair (the token and the push key, then the overlay) and check (the status reads ok
 # or degraded). No secret rides argv: the token goes to the box on ssh stdin and to the fleet host's file by a redirect;
-# the push key's private half never leaves the fleet host. The installer's `refused:` and `failed:` lines are kept in
-# ~/.ccrc/testbox-admin.log (0600) and go nowhere else.
+# the push key's private half never leaves the fleet host. Each act's begin, outcome and refusal lines, and the parity run's output,
+# are kept in ~/.ccrc/testbox-admin.log (0600, rolling to its last 200 lines past 64 KiB) and go nowhere else.
 TBA_PAIRING_KEYS=(CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY)
 # The box file's one place on a box (`_tb_box_env_file`'s, without a fixture root).
 TBA_BOX_ENV_PATH=/etc/ccrc-testbox/ccrc.env
 TBA_LOG="$TBA_DIR/testbox-admin.log"
 TBA_PUSH_KEY_COMMENT=ccrc-testbox-push
 
-# A line for the fleet-side log: printable bytes only, one line, at most 300 of them.
+# A line for the fleet-side log: printable bytes only, one line, at most 300 of them. The log is rolling: once it passes
+# 64 KiB the append rewrites it, by a rename, to its last 200 lines (at most 60 KB), so a parity run's output or a long
+# life of acts never grows it past about 64 KiB.
 _tba_log() {
   local LC_ALL=C l="$*"
   l="${l//[![:print:]]/?}"
-  ( umask 077; printf '%s\n' "${l:0:300}" >>"$TBA_LOG" ) 2>/dev/null || :
+  (
+    umask 077
+    printf '%s\n' "${l:0:300}" >>"$TBA_LOG"
+    sz="$(wc -c <"$TBA_LOG")"; sz="${sz//[[:space:]]/}"
+    if [ "$sz" -gt 65536 ]; then
+      tail -n 200 "$TBA_LOG" >"$TBA_LOG.tmp.$$" && mv -f -- "$TBA_LOG.tmp.$$" "$TBA_LOG" || rm -f -- "$TBA_LOG.tmp.$$"
+    fi
+  ) 2>/dev/null || :
 }
 # A `~/`-relative setting value on this host.
 # shellcheck disable=SC2088  # the setting's literal `~/` prefix
