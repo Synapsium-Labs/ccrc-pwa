@@ -856,8 +856,9 @@ describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)',
     expect(ALL.filter((f) => RETIRED.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
   it('the mail lane chooses a row once, through mailPaceRoleOf', () => {
-    const code = stallCodeText(readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8'));
-    expect(code).toMatch(/import\s*\{[^}]*\bMAIL_PACE\b[^}]*\}\s*from\s*'\.\/coord\/mailPace\.js'/);
+    // Keyed on the symbol (scan/symbols.ts), never a literal read of watch.ts: the pin follows `mailPass` if it moves.
+    const code = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'FleetWatcher.mailPass'));
+    expect(code.match(/\bMAIL_PACE\[mailPaceRoleOf\(/g)).toHaveLength(1);
     expect(code.match(/\bmailPaceRoleOf\(/g)).toHaveLength(1);
   });
   it('CONTROL: the retired-definition scan catches a planted copy and passes an import', () => {
