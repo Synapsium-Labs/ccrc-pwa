@@ -761,9 +761,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[102] (continuity_act_keys and continuity_starts.doorNonceSha256, the door process's act key, Overlord W1),
     // and MIGRATIONS[103] (approval_census, two approvals columns and push_outbox.pushSource, approvals PR 1),
     // and MIGRATIONS[104] (mail.clientKey, mail.inReplyTo and mail_client_key_once, the mail idempotency key, Overlord wave 164),
-    // and MIGRATIONS[105] (plan_tickets.doneAt and doneEvidence, a ticket's done time and evidence, programme work map WM1).
-    expect(COORD_SCHEMA_VERSION).toBe(106);
-    expect(MIGRATIONS.length).toBe(106);
+    // and MIGRATIONS[105] (plan_tickets.doneAt and doneEvidence, a ticket's done time and evidence, programme work map WM1),
+    // and MIGRATIONS[106] (runs.admissionWaitSince, lastRefusedAt and admissionWokenAt, the admission wait, D-6095).
+    expect(COORD_SCHEMA_VERSION).toBe(107);
+    expect(MIGRATIONS.length).toBe(107);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -894,8 +895,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[102] (continuity_act_keys and the start's nonce hash, Overlord W1 door process),
     // and MIGRATIONS[103] (approval_census, two approvals columns and push_outbox.pushSource, approvals PR 1),
     // and MIGRATIONS[104] (mail.clientKey, Overlord wave 164),
-    // and MIGRATIONS[105] (plan_tickets.doneAt and doneEvidence, programme work map WM1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(106);
+    // and MIGRATIONS[105] (plan_tickets.doneAt and doneEvidence, programme work map WM1)
+    // and MIGRATIONS[106] (the admission wait columns, D-6095); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(107);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

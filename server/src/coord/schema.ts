@@ -3963,6 +3963,26 @@ export const MIGRATIONS: readonly string[] = [
     doneAt = (SELECT r.closedAt FROM runs r WHERE r.id = plan_tickets.runId)
     WHERE state = 'done' AND runId IS NOT NULL;
   `,
+
+  // ── 107: user_version 106 -> 107 ──────────────────────────────────────────
+  // The admission wait (D-6095, fleet-capacity W1-4): a coordinator whose dispatch, or send-back of a parked run, the
+  // concurrency cap refused is mailed when the cap has room again. `admissionWaitSince` is the OLDEST refusal and only
+  // orders the queue; `lastRefusedAt` is the newest refusal and re-arms the wake; `admissionWokenAt` is when the
+  // `admissionWake` lane last mailed for it. The writers are `CoordStore`'s `stampAdmissionWait` (the first two),
+  // `markAdmissionWoken` (the third) and `clearAdmissionWait`, which `advanceInner` calls on every state move, so a
+  // dispatched, sent-back, closed or abandoned run is never mailed.
+  //
+  // THREE NULLABLE COLUMNS, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 107` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names them, and boots. Every earlier entry is frozen. The
+  // stack this was re-grounded from took 52 on a main 440 commits older; main had reached 106 (cb101e0ee), so this is 107.
+  // RE-MEASURE the slot before the PR and before merge (it must print 106 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN admissionWaitSince INTEGER;
+  ALTER TABLE runs ADD COLUMN lastRefusedAt INTEGER;
+  ALTER TABLE runs ADD COLUMN admissionWokenAt INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -73,3 +73,67 @@ describe('characterization: a cap-refused dispatch writes nothing (today)', () =
     expect(mailCount(f.coord)).toBe(0);
   });
 });
+
+describe('the stamp (store)', () => {
+  const open = (f: ReturnType<typeof fixture>, program: string, claimedBy: string): number => {
+    const o = f.coord.openRun({ program, title: program, project: PROJECT, wave: 1, waveOf: 1, claimedBy });
+    if (!('id' in o)) throw new Error('fixture openRun refused');
+    return o.id;
+  };
+
+  it('the migration is nullable: three columns, no NOT NULL and no CHECK, so a rollback stays bootable', () => {
+    const f = fixture();
+    const cols = f.coord.db.prepare('PRAGMA table_info(runs)').all() as { name: string; notnull: number; dflt_value: unknown }[];
+    for (const name of ['admissionWaitSince', 'lastRefusedAt', 'admissionWokenAt']) {
+      const c = cols.find((x) => x.name === name);
+      expect(c, name).toBeDefined();
+      expect(c!.notnull).toBe(0);
+    }
+    const ddl = (f.coord.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'runs'").get() as { sql: string }).sql;
+    expect(ddl).not.toMatch(/admissionWaitSince[^,]*(NOT NULL|CHECK)/);
+  });
+
+  it('the stamp keeps the oldest refusal and moves the newest', () => {
+    const f = fixture();
+    const id = open(f, 'prog-a', 'coord-a');
+    f.coord.stampAdmissionWait(id, 1_000);
+    f.coord.stampAdmissionWait(id, 5_000);
+    expect(f.coord.admissionStampOf(id)).toEqual({ since: 1_000, lastRefusedAt: 5_000, wokenAt: null, claimedBy: 'coord-a', program: 'prog-a' });
+  });
+
+  it('a woken waiter is skipped until it is refused again', () => {
+    const f = fixture();
+    const id = open(f, 'prog-a', 'coord-a');
+    f.coord.stampAdmissionWait(id, 1_000);
+    expect(f.coord.admissionWaiters().map((w) => w.runId)).toEqual([id]);
+    f.coord.markAdmissionWoken(id, 2_000);
+    expect(f.coord.admissionWaiters()).toEqual([]);
+    f.coord.stampAdmissionWait(id, 3_000);
+    expect(f.coord.admissionWaiters()).toEqual([{ runId: id, program: 'prog-a', claimedBy: 'coord-a', since: 1_000, lastRefusedAt: 3_000, sendBack: false }]);
+  });
+
+  it('a run that left planned (dispatched, abandoned) is not a waiter and its stamp is cleared', () => {
+    const f = fixture();
+    const a = open(f, 'prog-a', 'coord-a');
+    const b = open(f, 'prog-b', 'coord-b');
+    f.coord.stampAdmissionWait(a, 1_000);
+    f.coord.stampAdmissionWait(b, 1_000);
+    f.coord.markDispatched(a, 'a-worker', 'a-ws', 'ws/a', false);
+    expect(f.coord.advance(a, 'dispatched', 'test').ok).toBe(true);
+    expect(f.coord.advance(b, 'failed', 'operator', 'abandon:x').ok).toBe(true);
+    expect(f.coord.admissionWaiters()).toEqual([]);
+    expect(f.coord.admissionStampOf(a)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
+    expect(f.coord.admissionStampOf(b)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
+  });
+
+  it('a send-back waiter is a run parked in an idle state; the cleared stamp of a send-back that proceeds is gone', () => {
+    const f = fixture();
+    const id = f.holder('prog-a');
+    expect(f.coord.advance(id, 'working', 'test').ok).toBe(true);
+    expect(f.coord.advance(id, 'awaiting-review', 'test').ok).toBe(true);
+    f.coord.stampAdmissionWait(id, 1_000);
+    expect(f.coord.admissionWaiters()).toMatchObject([{ runId: id, sendBack: true }]);
+    expect(f.coord.advance(id, 'working', 'test').ok).toBe(true);
+    expect(f.coord.admissionWaiters()).toEqual([]);
+  });
+});
