@@ -6528,6 +6528,19 @@ export const PARENT_ADDON_INSTRUCTION = [
  *  a composition that misses a bound here is a defect, and the composer throws. The ceiling is PREV_GIST_MAX. */
 export const PARENT_QUOTE_CAP_MIN = 40;
 
+/** The largest cap in [PARENT_QUOTE_CAP_MIN, PREV_GIST_MAX] for which `fits(cap)` holds, or null when none does, by binary
+ *  search: `fits` must be monotone (true up to some cap, false above it), and it is called at most 9 times (O14, ruled). */
+export function searchLargestCap(fits) {
+  let lo = PARENT_QUOTE_CAP_MIN;
+  let hi = PREV_GIST_MAX;
+  let best = null;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (fits(mid)) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+}
+
 /** A child the add-on may quote: a steered leaf whose status is `ok` and whose flag is false (Task 1A's rule). */
 const quotableStored = (c) => c.kind === 'steered_leaf' && c.status === 'ok' && c.flag === false;
 
@@ -6538,8 +6551,9 @@ const quotableStored = (c) => c.kind === 'steered_leaf' && c.status === 'ok' && 
  *  `parentId` (a string) adds the parent add-on (W3 Task 4, spec §7.1): the instruction text, then each stored child of
  *  `children` (oldest first, the SteerPrev shape) as its slot `[{id} {range}]` and, for a quotable child, its quote and
  *  the sentence, then the current slot `[{leafId} this span]`. Absent or null `parentId`: no add-on, and `children` is not read.
- *  Both bounds hold after escaping, previous-leaf lines and children together: the add-on, from the first char of the
- *  instruction text to the end of the text, at most PARENT_ADDON_MAX chars, and the file, its LF included, at most
+ *  A parent add-on needs exactly FAN_IN.leaf - 1 stored children (the eighth span is the current slot); any other count throws.
+ *  Both bounds hold after escaping, previous-leaf lines and children together: the add-on, counted from the LF that joins
+ *  it to the previous part to the end of the text (D5, the plan's count), at most PARENT_ADDON_MAX chars, and the file, its LF included, at most
  *  STEER_FILE_MAX bytes. One cap serves every child quote: the largest integer from PARENT_QUOTE_CAP_MIN to PREV_GIST_MAX
  *  for which both bounds hold, by binary search (at most 9 compositions). No quote is ever dropped to fit; a composition
  *  that misses a bound at the floor throws (O14, ruled). Each child quote is cut BEFORE it is escaped (quoteGist). */
@@ -6556,6 +6570,9 @@ export function composeSteerFile({ leafId: id, prev, children, parentId, pairIdx
     return { text, bytes: Buffer.byteLength(`${text}\n`, 'utf8') };
   };
   if (typeof parentId !== 'string') return whole(null);
+  if (children.length !== FAN_IN.leaf - 1) {
+    throw new RangeError(`composeSteerFile: a parent add-on needs ${FAN_IN.leaf - 1} stored children, got ${children.length}`);
+  }
   const addOnAt = (cap) => {
     const lines = [PARENT_ADDON_INSTRUCTION.replace('{PARENT_ID}', () => parentId)];
     for (const c of children) {
@@ -6568,15 +6585,12 @@ export function composeSteerFile({ leafId: id, prev, children, parentId, pairIdx
     lines.push(`[${id} this span]`);
     return lines.join('\n');
   };
-  let lo = PARENT_QUOTE_CAP_MIN;
-  let hi = PREV_GIST_MAX;
-  let best = null;
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const addOn = addOnAt(mid);
-    const w = whole(addOn);
-    if (addOn.length <= PARENT_ADDON_MAX && w.bytes <= STEER_FILE_MAX) { best = w; lo = mid + 1; } else hi = mid - 1;
-  }
+  const fitsAt = (cap) => {
+    const addOn = addOnAt(cap);
+    return addOn.length + 1 <= PARENT_ADDON_MAX && whole(addOn).bytes <= STEER_FILE_MAX;
+  };
+  const cap = searchLargestCap(fitsAt);
+  const best = cap === null ? null : whole(addOnAt(cap));
   if (best === null) {
     throw new RangeError(`composeSteerFile: the parent add-on does not fit ${PARENT_ADDON_MAX} chars and ${STEER_FILE_MAX} bytes at a quote cap of ${PARENT_QUOTE_CAP_MIN}`);
   }

@@ -803,8 +803,10 @@ export interface SteerPrev { id: string; range: string; kind: string; status?: s
 export const PARENT_ADDON_INSTRUCTION: string;
 /** The floor of the add-on's searched quote cap, in chars; the ceiling is PREV_GIST_MAX. */
 export const PARENT_QUOTE_CAP_MIN: 40;
+/** The largest cap in [PARENT_QUOTE_CAP_MIN, PREV_GIST_MAX] for which a monotone `fits` holds, or null; at most 9 calls. */
+export function searchLargestCap(fits: (cap: number) => boolean): number | null;
 /** `parentId` (a string) adds the parent add-on over `children`, the parent's stored children oldest first, under both byte
- *  and char bounds; absent or null, no add-on. Throws a RangeError when the add-on does not fit at PARENT_QUOTE_CAP_MIN. */
+ *  and char bounds; absent or null, no add-on. Throws a RangeError when `children` is not FAN_IN.leaf - 1 long, or the add-on does not fit at PARENT_QUOTE_CAP_MIN. */
 export function composeSteerFile(i: {
   leafId: string; prev: SteerPrev | null; children: readonly SteerPrev[]; parentId?: string | null | undefined; pairIdx: PairIndex;
 }): { text: string; bytes: number };
