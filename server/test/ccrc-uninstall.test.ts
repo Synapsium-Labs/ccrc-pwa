@@ -2950,7 +2950,7 @@ describe('ccrc uninstall --purge and the history store (history spec §9.5, O42,
     expect(text, 'a site still tests memory by hand').not.toMatch(/-d "\$HOME\/\.ccrc\/memory"/);
     expect(text).not.toMatch(/\bmemory\) continue/);
     const helpers = `${body}\n${ccrcFunction('_uninst_is_kept')}\n${ccrcFunction('_uninst_purge_history_store')}`;
-    for (const sw of ['history-off', 'history-max-gb', 'history-steer-off', 'history-steer-live', 'steer-on', 'headless-on']) {
+    for (const sw of ['history-off', 'history-max-gb', 'history-steer-off', 'history-steer-live', 'steer-on', 'headless-on', 'agents-on']) {
       expect(helpers, `the purge spells the switch ${sw}: only its readers may (O13)`).not.toContain(sw);
     }
   });

@@ -21,6 +21,7 @@ import {
   UUID_RE, WRITER_RE, idOk, readBoxEnvValue, historyPaths,
   AGENT_ID_MAX, RUN_ID_RE, AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
   agentIdOk, classifyAgentName, decideAgentDir, decideAgentFile, agentKey,
+  INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
 } from '../../ccd/history/lib.mjs';
 import {
   canonicalJson, JSON_DEPTH_MAX, JSON_NODES_MAX, jsonWithinStructureBound, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
@@ -271,7 +272,9 @@ describe('the vocabularies are frozen, and each holds what the spec names', () =
     for (const v of [EXIT, REASONS, REFUSALS, WRITING_FORMS, STORE_FILES, SWITCHES, NODE_KINDS, PARSE_STATUS,
       ENTRY_PARSE_STATES, PROVENANCE, SEARCHABLE_PROVENANCE, SPOOL_EVENTS, SPOOL_SOURCES, EPOCH_CAUSES,
       DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES, BACKENDS, JOURNAL_KINDS,
-      JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS]) {
+      JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS,
+      // W4 P20 (Task 1B's three vocabularies, frozen unchecked until Task 1C)
+      AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS]) {
       expect(Object.isFrozen(v)).toBe(true);
     }
     for (const f of Object.values(WRITING_FORMS)) expect(Object.isFrozen(f)).toBe(true);
@@ -10652,6 +10655,12 @@ describe('W2-1 Task 2: the recall-off paths, the presence constants and isSynthe
     expect(() => lib.recallOffPath('/home/u', '../x'), 'the id is still checked before a path is formed (C66)').toThrow(TypeError);
   });
 
+  it('historyPaths gains agentsOn from SWITCHES: the one path both readers of the subagent ingest\'s marker lstat (W4 P15 (b), D-8151)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.historyPaths('/home/u').agentsOn).toBe('/home/u/.ccrc/history/agents-on');
+    expect(lib.historyPaths('/home/u').agentsOn).toBe(`/home/u/${lib.SWITCHES.agentsOn}`);
+  });
+
   it('RECALL_OFF_DIR is joined onto a path on one code line of lib.mjs, historyPaths\' recallOffDir, and recallOffPath reads it (W2-D29)', () => {
     const code = codeOf(LIB_SRC());
     expect(code.filter((l) => l.includes('${RECALL_OFF_DIR}')).map((l) => l.trim())).toEqual(['recallOffDir: `${root}/${RECALL_OFF_DIR}`,']);
@@ -12215,5 +12224,63 @@ describe('the subagent grammars and identity (W4 addendum P1, P10, P20)', () => 
   it('agentKey is <ID> or <RUN>/<ID> (P1)', () => {
     expect(agentKey('x', null)).toBe('x');
     expect(agentKey('x', 'wf_0123abcd-0a1')).toBe('wf_0123abcd-0a1/x');
+  });
+});
+
+// W4 addendum P6, P15 (b), P1: the subagent ingest's gates and the cursor's identity (Task 1C).
+describe('the subagent ingest gates (W4 addendum P6, P15 (b))', () => {
+  it('agentsArmedOf arms a regular, non-link file only', () => {
+    expect(agentsArmedOf({ isFile: true, isSymbolicLink: false })).toBe(true);
+    expect(agentsArmedOf({ isFile: false, isSymbolicLink: true }), 'a link').toBe(false);
+    expect(agentsArmedOf({ isFile: true, isSymbolicLink: true }), 'a link test that stands on its own').toBe(false);
+    expect(agentsArmedOf({ isFile: false, isSymbolicLink: false }), 'a directory or a special file').toBe(false);
+    expect(agentsArmedOf(null), 'an lstat that threw').toBe(false);
+  });
+
+  it('the install record: the first tick writes now, every later tick writes nothing', () => {
+    expect(INSTALL_META).toBe('agents_since_ms');
+    expect(decideInstallRecord({ existing: null, nowMs: 5 })).toBe(5);
+    expect(decideInstallRecord({ existing: 3, nowMs: 5 }), 'a record that stands is never rewritten').toBeNull();
+    expect(decideInstallRecord({ existing: 0, nowMs: 5 }), 'zero is a record').toBeNull();
+  });
+
+  it('isPreInstall: no record, or an mtime before it; an mtime equal to the record is post-install', () => {
+    expect(isPreInstall(100, null)).toBe(true);
+    expect(isPreInstall(99, 100)).toBe(true);
+    expect(isPreInstall(100, 100)).toBe(false);
+    expect(isPreInstall(101, 100)).toBe(false);
+  });
+
+  const OK = { armed: true, historyOff: false, pause: null, admitted: true, parentKnown: true } as const;
+  it.each([
+    ['tick', { preInstall: false }, true],                                 // T1 post-install, armed
+    ['tick', { preInstall: false, armed: false }, false],                  // T2 the marker
+    ['tick', { preInstall: true }, false],                                 // T3 pre-install: never a tick's
+    ['tick', { preInstall: false, historyOff: true }, false],              // T4
+    ['tick', { preInstall: false, pause: 'at-90' }, false],                // T5
+    ['tick', { preInstall: false, admitted: false }, false],               // T6
+    ['tick', { preInstall: false, parentKnown: false }, false],            // T7
+    ['import', { preInstall: true, armed: false }, true],                  // I1 pre-install, the marker ignored
+    ['import', { preInstall: false }, false],                              // I2 post-install: never the import's
+    ['import', { preInstall: true, historyOff: true }, false],             // I3
+    ['import', { preInstall: true, pause: 'agents-paused-at-cap' }, false], // I4
+    ['import', { preInstall: true, parentKnown: false }, false],           // I5
+    ['import', { preInstall: true, admitted: false }, false],              // I6 an import that ignored `admitted` would read a refused file
+  ] as const)('decideAgentIngest(%s, %j) is %s', (form, d, want) => {
+    expect(decideAgentIngest({ form, ...OK, ...d })).toBe(want);
+  });
+
+  it('planFileRead compares the path\'s agent key with the row\'s as it compares the uuid: another key retires the row (W4 P1)', () => {
+    const U = '0189abcd-1234-4678-9abc-0123456789ab';
+    const row = { transcriptUuid: U, agentKey: 'a', birthNs: 7n, headSha: 'aa', offset: 100, tailSha: 'bb' };
+    const read = (o: Partial<libPlan.FileReadInputs> = {}): string => libPlan.planFileRead({
+      row, stat: { size: 200, birthNs: 7n }, pathUuid: U, pathAgentKey: 'a', headSha: 'aa', tailShaAtOffset: 'bb', ...o,
+    });
+    expect(read(), 'the same key resumes').toBe('resume');
+    expect(read({ pathAgentKey: 'b' }), 'another agent key').toBe('retire');
+    expect(read({ pathAgentKey: '' }), 'a main path onto a subagent row').toBe('retire');
+    expect(read({ pathAgentKey: undefined }), 'an absent key reads as main').toBe('retire');
+    expect(read({ row: { ...row, agentKey: '' }, pathAgentKey: 'a' }), 'a subagent path onto a main row').toBe('retire');
+    expect(read({ row: { transcriptUuid: U, birthNs: 7n, headSha: 'aa', offset: 100, tailSha: 'bb' }, pathAgentKey: undefined }), 'a row with no key reads as main').toBe('resume');
   });
 });

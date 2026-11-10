@@ -1513,6 +1513,7 @@ jobs:
           test/history-steer.test.ts
           test/history-counters.test.ts
           test/history-replay.test.ts
+          test/history-agents-ingest.test.ts
           test/history-rss-preload.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts

@@ -1349,9 +1349,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.creators).toEqual(['operator shell']);
     expect(c!.collector).toBeNull();
     expect(c!.ruling).toContain('touched by hand; persists until removed');
-    // B1's two and W2-2b's headless-on (W2-D49), each spelled from ~/.ccrc as lib's SWITCHES is; W3 adds the steer
+    // B1's two, W2-2b's headless-on (W2-D49) and W4-1's agents-on (D-8151), each spelled from ~/.ccrc as lib's SWITCHES is; W3 adds the steer
     // markers to this root in its own PR
-    expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on');
+    expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on, ~/.ccrc/history/agents-on');
   });
 
   it('declares history-backups: an operator-made O class with no collector, created by --op backup, its stale .tmp removed by the next backup', () => {
@@ -1522,7 +1522,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     const c = LIFECYCLE.find((x) => x.name === 'history-switches');
     expect(c, 'shared/lifecycle.ts declares no history-switches class').toBeTruthy();
     expect(c!.root.split(', '), 'the row spells a switch otherwise than lib\'s SWITCHES')
-      .toEqual([SWITCHES.off, SWITCHES.maxGb, SWITCHES.headlessOn].map((s) => `~/${s}`));
+      .toEqual([SWITCHES.off, SWITCHES.maxGb, SWITCHES.headlessOn, SWITCHES.agentsOn].map((s) => `~/${s}`));
     expect(HEADLESS_LIST_MAX_BYTES % 1024, 'CONTROL: the bound is a whole number of KiB').toBe(0);
     expect(c!.tier).toBe('<64 B each; `headless-on` bounded at ' + `${HEADLESS_LIST_MAX_BYTES / 1024}` + ' KiB (HEADLESS_LIST_MAX_BYTES), one store line plus one line per listed family');
     // The grammar takes exactly the bound the row states: a marker of HEADLESS_LIST_MAX_BYTES bytes parses, one more does not.

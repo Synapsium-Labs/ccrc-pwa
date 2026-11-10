@@ -139,6 +139,9 @@ export const SWITCHES = Object.freeze({
   steerLivePrefix: '.ccrc/history-steer-live.',
   steerOnDir: '.ccrc/history/steer-on',
   headlessOn: '.ccrc/history/headless-on',
+  // D-8151 (history-w4-agents-on-marker-name): the subagent ingest's arming marker, read as a regular non-link file only
+  // (agentsArmedOf), with no writer in the tree (P15 (b)).
+  agentsOn: '.ccrc/history/agents-on',
 });
 
 // ── constants (each *chosen* in the spec unless it says measured) ─────────
@@ -503,6 +506,35 @@ export function agentKey(id, runId) {
   return runId === null ? id : `${runId}/${id}`;
 }
 
+// ── the subagent ingest gates (W4 addendum P6, P15 (b)) ───────────────────
+/** The `meta` key holding when the first W4 tick ran (P6): a subagent file is post-install when its mtime is at or after it. */
+export const INSTALL_META = 'agents_since_ms';
+/** The first W4 tick, armed or not, writes `nowMs`; every later tick writes nothing, so an existing record stands (P6).
+ *  null is "write nothing". */
+export function decideInstallRecord({ existing, nowMs }) {
+  return existing === null ? nowMs : null;
+}
+/** Whether a subagent file predates the install record (P6). No record reads as pre-install, so nothing is ingested by a
+ *  tick before a record exists. An mtime equal to the record is post-install (the record is the first tick's own time). */
+export function isPreInstall(mtimeMs, sinceMs) {
+  return sinceMs === null || mtimeMs < sinceMs;
+}
+/** Whether the arming marker (SWITCHES.agentsOn) arms the ingest: true only for a regular, non-link file. `st` is the
+ *  reader's one lstat as booleans, `{ isFile: st.isFile(), isSymbolicLink: st.isSymbolicLink() }` (never the Stats
+ *  object, whose methods would be truthy), or null when the lstat threw. lib stays free of I/O. */
+export function agentsArmedOf(st) {
+  return st !== null && st.isFile === true && st.isSymbolicLink !== true;
+}
+/** Whether one admitted subagent file is read (P6, P15 (b), P5), the one rule both forms ask (review 1737 F7). Both need
+ *  history-on, no pause, an admitted file and a parent in `knownUuids`. The scan `tick` form also needs the marker and a
+ *  post-install file; the operator's `import` form needs a pre-install file and reads no marker. Any other form reads nothing. */
+export function decideAgentIngest(i) {
+  if (i.historyOff || i.pause !== null || !i.admitted || !i.parentKnown) return false;
+  if (i.form === 'tick') return i.armed && !i.preInstall;
+  if (i.form === 'import') return i.preInstall;
+  return false;
+}
+
 // ── the one role reader (§5.2, O53) ───────────────────────────────────────
 /** One key out of an env file's TEXT, by `ccd/ccrc`'s `_box_env_value` rules
  *  in its default (two-argument) mode, which every doctor caller uses — so the
@@ -569,6 +601,7 @@ export function historyPaths(home) {
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
     headlessOn: `${h}/${SWITCHES.headlessOn}`,
+    agentsOn: `${h}/${SWITCHES.agentsOn}`,
     ccrcEnv: `${h}/.ccrc/ccrc.env`,
     accountsSh: `${h}/.ccrc/accounts.sh`,
     reg: `${h}/.cc-sessions`,
@@ -1222,10 +1255,11 @@ export function planRun(i) {
  *  rescanned onto (DM45). Birth times are compared as BigInt, because a
  *  nanosecond epoch is past 2^53 and two Numbers may round to one.
  *  D-4178 */
-export function planFileRead({ row, stat, pathUuid, headSha, tailShaAtOffset }) {
+export function planFileRead({ row, stat, pathUuid, pathAgentKey = '', headSha, tailShaAtOffset }) {
   if (stat === null) return 'skip';
   if (row === null) return 'rescan';
-  if (pathUuid !== row.transcriptUuid) return 'retire';
+  // W4 P1: a transcript is the pair (uuid, agent key), '' for main, so a file under another key is a recycled inode too.
+  if (pathUuid !== row.transcriptUuid || pathAgentKey !== (row.agentKey ?? '')) return 'retire';
   const births = row.birthNs != null && stat.birthNs != null;
   if (births && BigInt(row.birthNs) !== BigInt(stat.birthNs)) return 'retire';
   if (!births && row.headSha !== null && headSha !== null && row.headSha !== headSha) return 'retire';

@@ -353,6 +353,8 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     ['history-max-gb', ['ccd/history/lib.mjs']],
     ['steer-on', ['ccd/history/lib.mjs', 'ccd/session-hook.sh']],
     ['headless-on', ['ccd/history/lib.mjs']],
+    // W4 P15 (b) (D-8151): the subagent ingest's arming marker. Its readers name it symbolically (`.agentsOn`), so the path text is lib's alone.
+    ['agents-on', ['ccd/history/lib.mjs']],
   ];
   /** W1-B2: the skill's text joins the corpus with the skill (spec §9.11 O13 names "every bash, .mjs or skill
    *  line"). Every line of it is read, comment or not, as a line a model may run (`code` below reads it whole).
@@ -566,7 +568,9 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, read by lib's planner, sweep.mjs and (the prefix) the gate.
     'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX',
     // W2-1 Task 4 (W2-D30): the presence record's meta keys, each built from RECALL_OFF_META. W2-2b Task 1 (W2-D12): the arm words and the marker's bounds.
-    'RECALL_OFF_KEYS', 'RECALL_ARMS', 'HEADLESS_LIST_MAX_BYTES', 'HEADLESS_LIST_MAX_PAIRS'] as const;
+    'RECALL_OFF_KEYS', 'RECALL_ARMS', 'HEADLESS_LIST_MAX_BYTES', 'HEADLESS_LIST_MAX_PAIRS',
+    // W4 P20 (Task 1B's vocabularies, joined here by Task 1C): the walk's levels, and why a directory or a candidate file is refused.
+    'AGENT_LEVELS', 'AGENT_DIR_REASONS', 'AGENT_FILE_REASONS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -724,7 +728,7 @@ describe('ccrc history: no .mjs writes a switch through its symbolic spelling (s
     const m = VERB.exec(line);
     return m !== null && symbolic(keys).test(line.slice(m.index + m[0].length));
   };
-  const KEYS = ['maxGb', 'steerOff', 'steerLivePrefix', 'steerOnDir', 'headlessOn'] as const;
+  const KEYS = ['maxGb', 'steerOff', 'steerLivePrefix', 'steerOnDir', 'headlessOn', 'agentsOn'] as const;
 
   it('CONTROL: the classifier sees a write through P.off, a historyPaths(...) field and SWITCHES., and not a read', () => {
     expect(writesSymbolically("writeFileSync(P.off, '')", KEYS)).toBe(true);
@@ -747,6 +751,35 @@ describe('ccrc history: no .mjs writes a switch through its symbolic spelling (s
     const hits = ALL_MJS.flatMap((f) => stallCode(f).split('\n')
       .filter((l) => writesSymbolically(l, KEYS)).map((l) => `${rel(f)}: ${l.trim()}`));
     expect(hits, 'a switch is touched and removed by hand (§9.7): a .mjs write through SWITCHES or historyPaths is a writer').toEqual([]);
+  });
+
+  // W4 P15 (b) (D-8151). The subagent ingest's arming marker has no writer in the tree and two readers, each one `lstat` handed to
+  // lib's agentsArmedOf: the sweep's ingest gate, in `ingestTick`, and the status envelope's health input in cli.mjs (Task 1E adds
+  // that one to READERS). `SWITCHES`' own entry is written `agentsOn: '…'`, as `headlessOn`'s is, so the `.agentsOn` needle does
+  // not find it; HOLDERS and KEYS guard it. KNOWN WIDTH: a reader that aliases the field (`const f = P.agentsOn`) names it on
+  // the line of the alias, which is still a line this scan counts.
+  const READERS = ['ccd/history/lib.mjs historyPaths', 'ccd/history/sweep.mjs ingestTick'];
+  /** The `.agentsOn` code lines of the given .mjs texts, each as `<file> <enclosing top-level function>`. */
+  const agentsOnLines = (files: ReadonlyArray<{ file: string; text: string }>): string[] =>
+    files.flatMap((f) => {
+      let fn = '<top>';
+      const out: string[] = [];
+      for (const l of stallCodeText(f.text).split('\n')) {
+        const m = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/.exec(l);
+        if (m) fn = m[1]!;
+        if (l.includes('.agentsOn')) out.push(`${f.file} ${fn}`);
+      }
+      return out;
+    });
+  const ccdMjs = (): Array<{ file: string; text: string }> =>
+    ALL_MJS.filter((f) => rel(f).startsWith('ccd/')).map((f) => ({ file: rel(f), text: readFileSync(f, 'utf8') }));
+
+  it('the arming marker is named by exactly its readers: historyPaths\' field and one line of ingestTick, and no writer', () => {
+    expect(agentsOnLines(ccdMjs()).sort(), 'a new line names the marker: a reader this design does not list, or a writer').toEqual([...READERS].sort());
+    // CONTROL: a third reader planted in the scanned text is seen (mutant (o): one in scheduledPassBody)
+    const planted = [...ccdMjs(), { file: 'ccd/history/sweep.mjs', text: 'async function scheduledPassBody() {\n  const m = lstatSync(historyPaths(home).agentsOn);\n}\n' }];
+    expect(agentsOnLines(planted)).toContain('ccd/history/sweep.mjs scheduledPassBody');
+    expect(agentsOnLines([{ file: 'x.mjs', text: '// the .agentsOn field\n * .agentsOn\n' }]), 'a comment names it without reading it').toEqual([]);
   });
 });
 

@@ -22,7 +22,7 @@ export const HISTORY_ROOT_REL: string;
 export const STORE_DB_FILE: 'history.db';
 export const STORE_FILES: readonly string[];
 export const SWITCHES: Readonly<{
-  off: string; maxGb: string; steerOff: string; steerLivePrefix: string; steerOnDir: string; headlessOn: string;
+  off: string; maxGb: string; steerOff: string; steerLivePrefix: string; steerOnDir: string; headlessOn: string; agentsOn: string;
 }>;
 
 export const SPOOL_LINE_MAX: number;
@@ -133,12 +133,12 @@ export function spoolFileIdOf(name: unknown): string | null;
 export const RUN_ID_RE: RegExp;
 export const AGENT_ID_MAX: number;
 export function agentIdOk(id: unknown): boolean;
-export type AgentLevel = 'root' | 'project' | 'session' | 'subagents' | 'workflows' | 'run';
-export const AGENT_LEVELS: readonly AgentLevel[];
-export type AgentDirReason = 'link' | 'not-dir' | 'unlistable';
-export const AGENT_DIR_REASONS: readonly AgentDirReason[];
-export type AgentFileReason = 'run-id' | 'name' | 'link' | 'not-regular';
-export const AGENT_FILE_REASONS: readonly AgentFileReason[];
+export type AgentLevel = (typeof AGENT_LEVELS)[number];
+export const AGENT_LEVELS: readonly ['root', 'project', 'session', 'subagents', 'workflows', 'run'];
+export type AgentDirReason = (typeof AGENT_DIR_REASONS)[number];
+export const AGENT_DIR_REASONS: readonly ['link', 'not-dir', 'unlistable'];
+export type AgentFileReason = (typeof AGENT_FILE_REASONS)[number];
+export const AGENT_FILE_REASONS: readonly ['run-id', 'name', 'link', 'not-regular'];
 export type AgentName =
   | { role: 'candidate'; id: string | null }
   | { role: 'meta'; id: string }
@@ -148,6 +148,24 @@ export function classifyAgentName(name: string, where: 'subagents' | 'run'): Age
 export function decideAgentDir(i: { kind: 'dir' | 'link' | 'file' | 'other'; listable: boolean }): { enter: true } | { enter: false; reason: AgentDirReason };
 export function decideAgentFile(i: { kind: 'file' | 'link' | 'dir' | 'other'; id: string | null; runOk: boolean }): { verdict: 'admit' } | { verdict: 'refuse'; reason: AgentFileReason };
 export function agentKey(id: string, runId: string | null): string;
+export const INSTALL_META: 'agents_since_ms';
+export function decideInstallRecord(i: { existing: number | null; nowMs: number }): number | null;
+export function isPreInstall(mtimeMs: number, sinceMs: number | null): boolean;
+export function agentsArmedOf(st: { isFile: boolean; isSymbolicLink: boolean } | null): boolean;
+export interface AgentIngestInputs {
+  form: 'tick' | 'import'; armed: boolean; historyOff: boolean; pause: string | null; admitted: boolean; preInstall: boolean; parentKnown: boolean;
+}
+export function decideAgentIngest(i: AgentIngestInputs): boolean;
+/** What the subagent arm of the walk hands over (W4 P20). Paths stay in memory; nothing prints them. */
+export type AgentWalkEntry =
+  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number }
+  | { type: 'companion'; home: string; slug: string; uuid: string; runId: string | null; role: 'meta' | 'journal'; id: string | null; path: string }
+  | { type: 'unentered'; home: string; level: AgentLevel; reason: AgentDirReason; path: string };
+export interface AgentSink {
+  take(e: AgentWalkEntry): void;
+  /** Asked before each entry of `subagents/` and of a run directory, after the walk's own stop; `taken` counts the `file` entries handed to `take` so far. */
+  stop: ((taken: number) => boolean) | null;
+}
 export function readBoxEnvValue(text: string, key: string): { found: boolean; value: string };
 export interface HistoryPaths {
   readonly root: string; readonly spool: string; readonly draining: string; readonly journalDir: string;
@@ -158,6 +176,8 @@ export interface HistoryPaths {
   readonly op: string; readonly pass: string; readonly passDied: string; readonly lock: string; readonly off: string; readonly cap: string;
   /** W2-D29: the headless-on switch (SWITCHES.headlessOn) and the recall-off directory (RECALL_OFF_DIR under the root). */
   readonly headlessOn: string; readonly recallOffDir: string;
+  /** W4 P15 (b): the subagent ingest's arming marker (SWITCHES.agentsOn), the one path both readers lstat. */
+  readonly agentsOn: string;
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
@@ -253,10 +273,10 @@ export interface RunPlan {
   drain: boolean; ingest: boolean; pause: null | 'at-cap' | 'low-disk';
 }
 export function planRun(i: RunInputs): RunPlan;
-export interface CursorRow { transcriptUuid: string; birthNs: number | bigint | null; headSha: string | null; offset: number; tailSha: string | null }
+export interface CursorRow { transcriptUuid: string; /** W4 P1: the row's agent key, '' for a main transcript (absent reads as ''). */ agentKey?: string; birthNs: number | bigint | null; headSha: string | null; offset: number; tailSha: string | null }
 export interface FileReadInputs {
   row: CursorRow | null; stat: { size: number; birthNs: number | bigint | null } | null;
-  pathUuid: string; headSha: string | null; tailShaAtOffset: string | null;
+  pathUuid: string; /** The path's agent key; absent reads as ''. */ pathAgentKey?: string; headSha: string | null; tailShaAtOffset: string | null;
 }
 export function planFileRead(i: FileReadInputs): 'resume' | 'rescan' | 'retire' | 'skip';
 export const UNKNOWN_OP_FORM: 'unknown-op';
