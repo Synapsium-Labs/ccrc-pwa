@@ -725,12 +725,14 @@ function parentFields(db, ictx, budget, { id, sessionPk, kids, lastChildId, befo
 }
 
 /** The producer of a depth-0 leaf, as leafFields derives it for the leaf counters: the first real assistant row after the
- *  leaf's summary row in the copy that holds its boundary (producerOfCopy). Read only for a parent that has a verdict to count. */
-function producerOfLeafNode(db, budget, leafNodeId) {
+ *  leaf's summary row in the copy that holds its boundary (producerOfCopy). Read only for a parent that has a verdict to count.
+ *  `pass` is the caller's cache for one fan-in run (fanInLevels makes one per holding copy's slot list): copyPlan keeps the
+ *  copy it last read, so every counted parent of the run shares ONE read of the copy's rows and ONE decode of its kept blobs,
+ *  not one per parent. The bound is one copyPlan per holding copy per run, whatever the number of counted parents. */
+function producerOfLeafNode(db, budget, pass, leafNodeId) {
   const b = parentStmts(db).leafBoundary.get(leafNodeId);
   if (b === undefined) return 'unknown';
   const s = stmts(db);
-  const pass = { copy: null, epochs: new Map(), files: new Map() };
   const holding = holdingCopy(s, pass, b);
   if (holding === null) return 'unknown';
   const copy = copyPlan(s, pass, holding.file_id, budget);
@@ -742,15 +744,16 @@ function producerOfLeafNode(db, budget, leafNodeId) {
 
 /** The counters a node verdict adds, in the leaf path's form under node_ names and with the last child's producer
  *  (spec §7.4 item 10 and §7.7: compliance by status and by reason, each by producer): `node_status:<status>:<backend>`, and
- *  `node_reason:<reason>:<backend>` when the status is not ok. Counted at createParent only, as the leaf path counts at
- *  deriveOne only: a re-roll and a reparse fold no counter again (measured, history-derive.test.ts). */
-function nodeVerdictCounts(db, budget, lastChildId, r) {
-  const backend = producerOfLeafNode(db, budget, lastChildId);
+ *  `node_reason:<reason>:<backend>` when the status is not ok. These verdict counters are folded at createParent only, as the
+ *  leaf path folds its own at deriveOne only: a re-roll and a reparse fold none again (measured, history-derive.test.ts).
+ *  node_parse_crash is another word: steeredNodeOf can still count it on a re-roll or a belt pass. */
+function nodeVerdictCounts(db, budget, pass, lastChildId, r) {
+  const backend = producerOfLeafNode(db, budget, pass, lastChildId);
   return [`node_status:${r.status}:${backend}`, ...(r.reason === null ? [] : [`node_reason:${r.reason}:${backend}`])];
 }
 
 /** The parent of `childIds` at `depth`, unless it exists. Returns its id, or null when it was there. */
-function createParent(db, ictx, childIds, depth, budget) {
+function createParent(db, ictx, childIds, depth, budget, pass) {
   const s = parentStmts(db);
   const id = parentId(childIds);
   if (s.exists.get(id) !== undefined) return null;
@@ -767,7 +770,7 @@ function createParent(db, ictx, childIds, depth, budget) {
       beforeRowid: Number.MAX_SAFE_INTEGER,
     })
     : { ...parentRollup(kids.map((k) => redactedRollup(ictx, k.rollup))), status: 'ok', read: 'not-asked' };
-  const counts = r.read === 'verdict' ? nodeVerdictCounts(db, budget, childIds[childIds.length - 1], r) : [];
+  const counts = r.read === 'verdict' ? nodeVerdictCounts(db, budget, pass, childIds[childIds.length - 1], r) : [];
   withTx(db, 'NORMAL', () => {
     s.insNode.run(id, first.session_pk, first.epoch_seq, first.transcript_pk, 'condensed', depth, r.status, r.gist, JSON.stringify(r.topics),
       r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars, directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0,
@@ -785,6 +788,8 @@ function createParent(db, ictx, childIds, depth, budget) {
  *  group because one large epoch must remain resumable; a retry finds prior parents through parentOf and mints only
  *  the groups still absent. */
 function fanInLevels(db, ictx, level0, budget) {
+  // One cache for the whole run over this holding copy's slots: the producer of a counted parent's last child is read off it.
+  const pass = { copy: null, epochs: new Map(), files: new Map() };
   let made = 0;
   let level = level0;
   for (let depth = 0; depth < MAX_FAN_DEPTH && level.length > 0; depth += 1) {
@@ -792,7 +797,7 @@ function fanInLevels(db, ictx, level0, budget) {
     const slots = level.map((id) => ({ nodeId: id, final: id !== null, parented: id !== null && parentOf(db, id) !== null }));
     for (const group of planFanIn({ slots, width })) {
       if (!parentsBudgetLeft(budget)) return { made, complete: false };
-      if (createParent(db, ictx, group, depth + 1, budget) !== null) made += 1;
+      if (createParent(db, ictx, group, depth + 1, budget, pass) !== null) made += 1;
     }
     const next = [];
     for (const id of level) {
@@ -939,7 +944,9 @@ function parentReroller(db, ictx, onlyIfChanged = false, runBudget = null) {
   const dropRefs = db.prepare('DELETE FROM node_refs WHERE node_id = ?');
   // The byte budget the summary decode of a steered parent's last child is charged to: the caller's, when a budgeted run
   // reaches the re-roller (the belt's node step, the late-pair fast path), as createParent charges the parents budget. A caller
-  // with no budget (a reparse, the recovery's condensed pass) gets a local one that nothing reads: those runs are unbudgeted.
+  // with no budget gets a local one that nothing reads: `reparse --apply` runs unbudgeted, and the recovery's condensed pass does
+  // run under a budget (recoverReindex runs under run.budget) but recoverNodesBatch in sweep.mjs, which calls rerollNodes and
+  // reparseFailClosed, is not handed it and does not pass it on.
   const budget = runBudget ?? { bytes: 0 };
   return (id) => {
     // The last child is the last LIVE row (kidsOf joins nodes, so a dangling row is skipped). If the true last child is gone, the
@@ -958,13 +965,19 @@ function parentReroller(db, ictx, onlyIfChanged = false, runBudget = null) {
     if (read.read === 'verdict') {
       r = read;
     } else if (read.read === 'unreadable') {
-      // Asked, but the summary cannot be read now: the stored gist and status stand (the coordinator's ruling of 2026-11-10: a re-roll keeps
-      // the steered gist), the gist redacted again under the current pairs. `capped` is the stored flag with the rollup's topics and
-      // refs cuts; the stored flag cannot tell the gist's own cut from them, so it stays set once set.
-      r = {
-        ...read, status: self.row.status, gist: typeof self.row.gist === 'string' ? redactField(self.row.gist, ictx.pairIdx) : null,
-        capped: Number(self.row.capped) === 1 || read.restCapped,
-      };
+      // Asked, but the summary cannot be read now. The stored status always stands. The stored gist stands (re-redacted under the
+      // current pairs) ONLY when that status is ok or degraded, which is a steered gist (the coordinator's ruling of 2026-11-10:
+      // a re-roll keeps the steered gist). An invalid or absent parent holds the rollup by construction, and a tombstoned summary
+      // makes "unreadable" routine, so it takes the fresh rollup as the verdict arm does: a kept rollup would go stale, and a value
+      // cut at GIST_MAX would keep its prefix. For a kept gist `capped` is the stored flag with the rollup's topics and refs cuts
+      // (the stored flag cannot tell its own gist cut from them, so it stays set once set).
+      const steered = self.row.status === 'ok' || self.row.status === 'degraded';
+      r = steered
+        ? {
+          ...read, status: self.row.status, gist: typeof self.row.gist === 'string' ? redactField(self.row.gist, ictx.pairIdx) : null,
+          capped: Number(self.row.capped) === 1 || read.restCapped,
+        }
+        : { ...read, status: self.row.status };
     } else {
       // Nothing was asked ("unchanged from today": today's re-roll never wrote a status): a stored former verdict (degraded, invalid,
       // absent) goes back to ok with the rollup gist, and any other stored status (ok, or what a store from another build holds)
@@ -1032,7 +1045,8 @@ export function rerollParents(db, ictx, nodeIds, onlyIfChanged = false, budget =
  *  children, which a field rewrite alone can never heal. Returns how many it rewrote.
  *  D-4610 (history-reroll-from-redacted-children) */
 export function rerollNodes(db, ictx, nodeIds, budget = null) {
-  // The recovery's condensed pass calls this with no budget (recoverNodesBatch holds none), so its re-roller keeps a local one.
+  // The recovery's condensed pass reaches here from recoverNodesBatch (sweep.mjs), which is not handed recoverReindex's budget
+  // and so passes none: this re-roller keeps a local one until that caller passes the run's budget on.
   const reroll = parentReroller(db, ictx, false, budget);
   let n = 0;
   for (const id of nodeIds) if (reroll(id)) n += 1;
@@ -1275,7 +1289,7 @@ export function redactNodeFields(db, ictx, nodeIds) {
  *  at the pair). So one bad summary holds neither, and only `reparse` re-derives it again. Re-deriving twice is
  *  idempotent. Answers how many leaves changed. */
 export function reparseFailClosed(db, ictx, nodeIds) {
-  // The recovery's batch (recoverNodesBatch) holds no run budget: the re-roll keeps a local one.
+  // recoverNodesBatch (sweep.mjs) is not handed recoverReindex's run budget and does not pass it on: the re-roll keeps a local one.
   return reparseSome(db, ictx, nodeIds, () => true).changed;
 }
 

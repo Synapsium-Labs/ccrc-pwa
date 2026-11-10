@@ -1880,6 +1880,8 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
   const GENERIC = G.generic * 8 + 7;
   /** Whether leaf k's receipt is exact: the last child of a group that was asked. */
   const exactReceipt = (k: number): boolean => k % 8 === 7 && k !== UNRECEIPTED && k !== GENERIC;
+  /** How many groups were asked. */
+  const exactCount = Array.from({ length: GROUPS }, (_, g) => g * 8 + 7).filter(exactReceipt).length;
   let box: HistoryBox;
   let ids: string[] = [];
   let parents: string[] = [];
@@ -1955,7 +1957,13 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     parents = Array.from({ length: GROUPS }, (_, g) => parentId(ids.slice(g * 8, g * 8 + 8)));
     const seq = compactionSequence({ n: N, trigger: 'manual', seed: 0xd8, sessionId: U, startMs: T0, summaryText: (k) => summaryAt(k, parents) });
     expect(seq.boundaryUuids, 'CONTROL: the summary text moves no uuid').toEqual(probe.boundaryUuids);
-    plant(box, ID, U, seq.rows);
+    // Group 0's last child (leaf 7) has another producer than the rest: the assistant rows between its summary and the next
+    // boundary name a non-Claude model, so the producer of a counted parent is not the same word everywhere.
+    const from = seq.rows.findIndex((r) => r['uuid'] === seq.summaryUuids[7]);
+    const upto = seq.rows.findIndex((r) => r['uuid'] === seq.boundaryUuids[8]);
+    const rows = seq.rows.map((r, i) => (i > from && i < upto && r['type'] === 'assistant'
+      ? { ...r, message: { ...(r['message'] as object), model: 'gpt-fixture-1' } } : r));
+    plant(box, ID, U, rows);
     const at = (u: string): number => Date.parse(String(seq.rows.find((r) => r['uuid'] === u)!['timestamp']));
     seq.boundaryUuids.forEach((b, k) => {
       if (k !== UNRECEIPTED) spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: exactReceipt(k) ? ids[k]! : '', ts: at(b) - 500 });
@@ -2055,7 +2063,12 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: rollupOf(parents[G.generic]!).gist });
     expect(p.gist).not.toBe(NODE_GENERIC);
     expectRollupFields(parents[G.generic]!);
-    expect(last, 'CONTROL: the group is the tenth, so no other parent is counted for it').toBe(ids[G.generic * 8 + 7]);
+    // No node_status or node_reason counter moved for it: the verdicts counted are the eight asked groups', one status each.
+    const nc = nodeCounters();
+    const statuses = Object.entries(nc).filter(([k]) => k.startsWith('node_status:')).reduce((n, [, v]) => n + v, 0);
+    expect(statuses, 'one node_status per asked group, none for the generic one').toBe(exactCount);
+    expect(Object.keys(nc).filter((k) => k.startsWith('node_') && !k.startsWith('node_status:') && !k.startsWith('node_reason:')),
+      'no other node counter either').toEqual([]);
   });
 
   /** The parity case: ONE derived store, read by BOTH readers of "a node block was asked" (lib's EXACT_RECEIPT_SQL). Derive asked
@@ -2086,10 +2099,13 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
   const nodeCounters = (b: HistoryBox = box): Record<string, number> =>
     Object.fromEntries(Object.entries(counters(b)).filter(([k]) => k.startsWith('node_')));
   const BACKEND = 'anthropic';
+  /** Leaf 7's producer, another from the rest (see beforeAll), and so group 0's counted verdict. */
+  const OTHER = 'other';
 
   it('each node verdict is counted once: node_status:<status>:<backend>, and node_reason:<reason>:<backend> when the status is not ok', () => {
     const c = nodeCounters();
-    expect(c[`node_status:ok:${BACKEND}`], 'ok: the ok, redact and whole groups').toBe(3);
+    expect(c[`node_status:ok:${BACKEND}`], 'ok: the redact and whole groups').toBe(2);
+    expect(c[`node_status:ok:${OTHER}`], 'ok: the first group, whose last child has another producer').toBe(1);
     expect(c[`node_status:degraded:${BACKEND}`], 'degraded: the wrong id').toBe(1);
     expect(c[`node_reason:id-mismatch:${BACKEND}`], 'degraded for id-mismatch').toBe(1);
     expect(c[`node_status:invalid:${BACKEND}`], 'invalid: the short gist and the two carried copies').toBe(3);
@@ -2098,10 +2114,14 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect(c[`node_status:absent:${BACKEND}`], 'absent: the analysis-only group').toBe(1);
     expect(c[`node_reason:no-block:${BACKEND}`], 'absent for no-block').toBe(1);
     expect(c, 'nothing else is counted: an ok verdict has no reason, and a parent that was not asked has no verdict').toEqual({
-      [`node_status:ok:${BACKEND}`]: 3, [`node_status:degraded:${BACKEND}`]: 1, [`node_reason:id-mismatch:${BACKEND}`]: 1,
+      [`node_status:ok:${BACKEND}`]: 2, [`node_status:ok:${OTHER}`]: 1, [`node_status:degraded:${BACKEND}`]: 1, [`node_reason:id-mismatch:${BACKEND}`]: 1,
       [`node_status:invalid:${BACKEND}`]: 3, [`node_reason:gist-short:${BACKEND}`]: 1, [`node_reason:carried-copy:${BACKEND}`]: 2,
       [`node_status:absent:${BACKEND}`]: 1, [`node_reason:no-block:${BACKEND}`]: 1,
     });
+    // The producer of a counted parent is its last child's, as the leaf path counted it for that very leaf.
+    const leafC = counters(box);
+    expect(leafC[`leaf_status:ok:${OTHER}`], 'the leaf path counted leaf 7 under the same producer, and no other leaf').toBe(1);
+    expect(Object.keys(leafC).filter((k) => k.endsWith(`:${OTHER}`) && k.startsWith('leaf_status:')), 'CONTROL: only one leaf has it').toEqual([`leaf_status:ok:${OTHER}`]);
   });
 
   it('a re-roll and a reparse count no verdict again: the leaf path folds its counters at first derivation only, and the node path matches it', async () => {
@@ -2168,13 +2188,17 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
     const id = parents[G.analysis]!;
     const last = ids[G.analysis * 8 + 7]!;
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
     const db = openWriter(historyPaths(box.home).dbFile);
     try {
       expect(parentRow(id).status, 'CONTROL: a former verdict stands').toBe('absent');
       db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
-      expect(D.rerollParents(db, ictx, [last], true), 'nothing differs: the stored gist and status stand').toBe(0);
-    } finally { closeWriter(db); }
-    expect({ status: parentRow(id).status, gist: parentRow(id).gist }).toEqual({ status: 'absent', gist: rollupOf(id).gist });
+      expect(D.rerollParents(db, ictx, [last], true), 'nothing differs: the status stands, and the rollup gist is the fresh one').toBe(0);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }).toEqual({ status: 'absent', gist: rollupOf(id).gist });
+    } finally {
+      db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+      closeWriter(db);
+    }
   });
 
   it('a re-roll that reads a last child that was not asked returns a stored former verdict to ok, with the rollup gist: its receipt is generic now', async () => {
@@ -2182,17 +2206,23 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
     const id = parents[G.analysis]!;
     const last = ids[G.analysis * 8 + 7]!;
+    const receiptKey = q<{ event_key: string }>(box, 'SELECT event_key FROM steer_receipts WHERE leaf_id = ?', last)[0]!.event_key;
     const db = openWriter(historyPaths(box.home).dbFile);
     try {
       expect(parentRow(id).status, 'CONTROL: a former verdict stands').toBe('absent');
-      db.prepare("UPDATE steer_receipts SET leaf_id = '' WHERE leaf_id = ?").run(last);
+      db.prepare("UPDATE steer_receipts SET leaf_id = '' WHERE event_key = ?").run(receiptKey);
       expect(D.rerollParents(db, ictx, [last], true), 'only the status differs, and the belt sees it').toBe(1);
       expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'ok, the rollup gist').toEqual({ status: 'ok', gist: rollupOf(id).gist });
       // A stored status that is no former verdict is left as it is, whatever the read: nothing to rewrite, nothing compared.
       db.prepare("UPDATE nodes SET status = 'not-requested' WHERE node_id = ?").run(id);
       expect(D.rerollParents(db, ictx, [last], true), 'a status of another build is neither rewritten nor compared').toBe(0);
-    } finally { closeWriter(db); }
-    expect(parentRow(id).status).toBe('not-requested');
+      expect(parentRow(id).status).toBe('not-requested');
+    } finally {
+      // restore group 6's last child (its receipt) and its parent's former verdict, so no later case depends on the order
+      db.prepare('UPDATE steer_receipts SET leaf_id = ? WHERE event_key = ?').run(last, receiptKey);
+      db.prepare("UPDATE nodes SET status = 'absent' WHERE node_id = ?").run(id);
+      closeWriter(db);
+    }
   });
 
   it('a re-roll that cannot read an asked last child\'s summary keeps the stored ok steered gist, re-redacted under the current pairs', async () => {
@@ -2258,6 +2288,47 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect(parentRow(id), 'CONTROL: restored').toMatchObject({ status: 'ok', gist: NODE_OK });
   });
 
+  it('a re-roll that cannot read an asked last child\'s summary takes the FRESH rollup for a stored absent or invalid parent, and keeps its status: a changed child, then a late pair', async () => {
+    const D = await rerollMod();
+    const X = crypto.randomBytes(32).toString('hex');
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    for (const [g, status] of [[G.analysis, 'absent'], [G.short, 'invalid']] as const) {
+      const id = parents[g]!;
+      const first = ids[g * 8]!;
+      const last = ids[g * 8 + 7]!;
+      const all = ids.slice(g * 8, g * 8 + 8);
+      const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+      const firstGist = parentRow(first).gist;
+      const stored = parentRow(id);
+      expect({ status: stored.status, gist: stored.gist }, `CONTROL: a stored ${status} parent holds the rollup`).toEqual({ status, gist: rollupOf(id).gist });
+      const db = openWriter(historyPaths(box.home).dbFile);
+      try {
+        // retention's tombstone: the last child's summary blob is gone, so the node block cannot be read again
+        db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+        db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run('The first child of this group was reparsed and now reads quite differently from before.', first);
+        expect(rollupOf(id).gist, 'CONTROL: the rollup moved with the child').not.toBe(stored.gist);
+        expect(D.rerollParents(db, plain, all, true), `the belt rewrites the stale ${status} parent`).toBeGreaterThan(0);
+        expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the status stands, the gist is the fresh rollup, not the stale one')
+          .toEqual({ status, gist: rollupOf(id).gist });
+        // a value learned since, inside a child's gist: the fresh rollup is redacted whole, so no prefix of it survives
+        db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(`The first child used the key ${X} for the whole run, start to end.`, first);
+        const learned = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([X]).pairs) };
+        expect(D.rerollParents(db, learned, all, true)).toBeGreaterThan(0);
+        expect(parentRow(id).status).toBe(status);
+        expect(parentRow(id).gist).toContain('[redacted]');
+        expect(parentRow(id).gist).not.toContain(X);
+        expect(ftsTexts(id).join('\n')).not.toContain(X);
+      } finally {
+        db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(firstGist, first);
+        db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+        D.rerollParents(db, plain, all, false);
+        db.prepare('UPDATE nodes SET status = ? WHERE node_id = ?').run(status, id);
+        closeWriter(db);
+      }
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status, gist: stored.gist });
+    }
+  });
+
   it('a registered value inside a node gist is redacted in the stored gist and in nodes_fts by the re-roll, and the status stays', async () => {
     const D = await rerollMod();
     const last = parents[G.redact]!;
@@ -2291,6 +2362,38 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect({ status: p.status, gist: p.gist }).toEqual({ status: 'invalid', gist: rollupOf(id).gist });
     expect(p.gist).not.toContain('[redacted]');
     expect(ftsTexts(id).join('\n')).not.toContain(W);
+  });
+
+  // Last in this describe: it derives every parent again, so the verdict counters of the store double.
+  it('one read of the holding copy serves every counted parent of a run, and the producer a re-run counts is the same', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): object };
+    const before = nodeCounters();
+    const db = openWriter(historyPaths(box.home).dbFile);
+    let copyReads = 0;
+    const prepare = db.prepare.bind(db);
+    (db as unknown as { prepare: (sql: string) => object }).prepare = (sql: string) => {
+      const st = prepare(sql) as { all: (...a: unknown[]) => unknown };
+      if (/FROM memberships m JOIN entries e ON e\.entry_id = m\.entry_id JOIN blobs bl/.test(sql)) {
+        const all = st.all.bind(st);
+        st.all = (...a: unknown[]) => { copyReads += 1; return all(...a); };
+      }
+      return st;
+    };
+    try {
+      const D = (await import('../../ccd/history/derive.mjs')) as unknown as { deriveParents(db: unknown, ictx: object, budget: object): number };
+      withTx(db, 'NORMAL', () => {
+        db.prepare('DELETE FROM nodes_fts WHERE rowid IN (SELECT rowid FROM nodes WHERE depth > 0)').run();
+        db.prepare('DELETE FROM node_refs WHERE node_id IN (SELECT node_id FROM nodes WHERE depth > 0)').run();
+        db.prepare('DELETE FROM node_children WHERE node_id IN (SELECT node_id FROM nodes WHERE depth > 0)').run();
+        db.prepare('DELETE FROM nodes WHERE depth > 0').run();
+        setStep(db, 'parents', NODE_PARSER_VERSION, '0', null);
+      });
+      const made = D.deriveParents(db, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]), isBusy: () => false }, S.newBudget());
+      expect(made, 'CONTROL: every parent was made again, the ten of depth 1 and the two of depth 2').toBe(GROUPS + 2);
+    } finally { closeWriter(db); }
+    expect(copyReads, `${exactCount} parents were counted from one holding copy: its rows were read once, not once per parent`).toBe(1);
+    const after = nodeCounters();
+    expect(after, 'the same verdicts under the same producers, once more').toEqual(Object.fromEntries(Object.entries(before).map(([k, v]) => [k, v * 2])));
   });
 });
 
