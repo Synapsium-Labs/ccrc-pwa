@@ -12,7 +12,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The hardened edition of the spec, on top of rev 8 | #2513 | merged |
 | spec | The model check's fixes: 24 unsettled readings and one design fault | #2529 | merged |
 | spec | The builders' gaps closed, and the ratchet's scope put to the operator | #2533 | merged |
-| spec | The second model check's fixes: 38 findings in authority, restore, requests and pushes; I11 and I12 | #2538 | in review |
+| spec | The second model check's fixes: 38 findings in authority, restore, requests and pushes; I11 and I12 | #2538 | merged |
 | W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | The skill-size ratchet | #2530 (draft); plan `w1a-skill-ratchet.md` | built. Waits for the operator's ruling on its scope |
