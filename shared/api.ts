@@ -14220,12 +14220,16 @@ import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatu
  *  host). The two routes ask the account gate for it; a fleet that does not print it answers `unsupported`. */
 export const TESTBOX_ADMIN_CAP = 'testbox-admin-v1';
 
-/** The one route word the test box admin routes add (D-8166): the verb refused for a reason of its own (409). Its closed
- *  code rides `code` (a `TestboxAdminCode`) and, for the codes that name settings, `keys`. Spelled by the card through
- *  `refusalText`; every other word the routes answer is an existing one (`unsupported`, `fleetFailed`, `outcome-unknown`,
- *  `bad-request`). */
-export const TESTBOX_ADMIN_ROUTE_REFUSALS = ['testbox-admin-refused'] as const;
+/** The route words the test box routes add (D-8166). `testbox-admin-refused`: the verb refused for a reason of its own (409);
+ *  its closed code rides `code` (a `TestboxAdminCode`) and, for the codes that name settings, `keys`. `parity-required`
+ *  (TC13, spec §2.8, T9): `POST /api/testbox/switch` with `{on: true}` and no passing parity record that still matches the
+ *  pin and the box file (409). Spelled by the card through `refusalText`; every other word the routes answer is an existing
+ *  one (`unsupported`, `fleetFailed`, `outcome-unknown`, `bad-request`). */
+export const TESTBOX_ADMIN_ROUTE_REFUSALS = ['testbox-admin-refused', 'parity-required'] as const;
 export type TestboxAdminRouteRefusal = (typeof TESTBOX_ADMIN_ROUTE_REFUSALS)[number];
+
+/** The sentence `parity-required` carries in `detail` (it names no value): the words the card draws beside the disabled switch. */
+export const TESTBOX_PARITY_REQUIRED_SENTENCE = 'Turns on after the parity check passes.';
 
 /** One row of the test box ledger (`testbox_events`, spec §2.10) as `GET /api/testbox/admin` lists it. No address, path,
  *  secret or free text: `code` is a closed word, `fingerprint` the host key's SHA-256 form, `fleetIdentity` the node id. */

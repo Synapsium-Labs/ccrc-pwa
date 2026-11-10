@@ -15,6 +15,7 @@
 import type { TestboxHostMeasure, TestboxOpReply } from '../../shared/agent-protocol.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
 import { readSwitches, TESTBOX_REMOTE_LIVE_MARKER } from '../../shared/switches.js';
+import { parityArmable, type TestboxActState, type TestboxAdminStatus } from '../../shared/testbox-admin.js';
 import {
   parseRunsLine, TESTBOX_TOOLS, type StatusAnswer, type TestboxFallbackId, type TestboxState, type TestboxTool,
 } from '../../shared/testbox.js';
@@ -55,6 +56,30 @@ export interface TestboxCounts {
   readonly byReason: Readonly<Partial<Record<TestboxFallbackId, number>>>;
 }
 
+/** What the connect surface adds to the block (D-8166, TC13): the connection, the host key's state, the act in flight or last
+ *  ended, and the parity record's word. No address, path or secret: the card reads the rest from `GET /api/testbox/admin`. */
+export interface TestboxBlockAdmin {
+  readonly connected: boolean;
+  readonly hostKey: 'pinned' | 'changed' | 'none';
+  readonly act: TestboxActState | null;
+  readonly parity: 'pass' | 'fail' | 'stale' | 'none';
+}
+
+/** What a reader takes a block with no `admin` for (an older server, or a lane that got no status): not connected. */
+export const NOT_CONNECTED_ADMIN: TestboxBlockAdmin = Object.freeze({ connected: false, hostKey: 'none', act: null, parity: 'none' });
+
+/** The block's admin, or {@link NOT_CONNECTED_ADMIN} for one with none (skew in both directions). */
+export const adminOfBlock = (b: { readonly admin?: TestboxBlockAdmin }): TestboxBlockAdmin => b.admin ?? NOT_CONNECTED_ADMIN;
+
+/** The block's admin from a `status` the lane read. `stale` is not in the status: a record that passed but no longer matches the
+ *  pin or the box file reads `stale` here, and the fleet's own `parity_stale` mark is `ccd testbox-remote`'s to refuse. */
+export function adminOfStatus(s: TestboxAdminStatus): TestboxBlockAdmin {
+  const p = s.parity;
+  const parity = p === null ? 'none' : p.result === 'fail' ? 'fail'
+    : parityArmable(p, { fingerprint: s.fingerprint, boxFileSha256: s.boxFileSha256, stale: false }) ? 'pass' : 'stale';
+  return { connected: s.connected, hostKey: s.hostKey, act: s.act, parity };
+}
+
 export interface TestboxBlock {
   readonly state: TestboxState;
   /** Why `degraded`, `down` or `unreachable`; empty for `ok` and `off`. */
@@ -70,6 +95,8 @@ export interface TestboxBlock {
   readonly cells: readonly TestboxCell[];
   /** `null` when a runs log could not be read. */
   readonly counts: TestboxCounts | null;
+  /** The connect surface (TC13); absent when the lane got no `status` (an agent without the op). Optional on the wire both ways. */
+  readonly admin?: TestboxBlockAdmin;
 }
 
 /** A runs log as the lane read it: its text (`''` for a file that is not there), or `null` when it could not be read. */
@@ -82,6 +109,8 @@ export interface TestboxInputs {
   /** Today's and yesterday's runs logs (`runsLogDates`' order). */
   readonly logs: readonly RunsLogRead[];
   readonly now: number;
+  /** The connect surface's `status`, or absent when the lane got none. */
+  readonly admin?: TestboxAdminStatus | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -146,7 +175,10 @@ export function testboxBlock(i: TestboxInputs): TestboxBlock {
   const sw = testboxSwitch(i.listing);
   const counts = runsCounts(i.logs, i.now);
   const mk = (state: TestboxState, reasons: readonly string[], host: TestboxHostMeasure | null, box: StatusAnswer | null, cells: readonly TestboxCell[]): TestboxBlock =>
-    ({ state, reasons, summary: summaryOf(state, reasons), switch: sw, at: i.now, host, box, cells, counts });
+    ({
+      state, reasons, summary: summaryOf(state, reasons), switch: sw, at: i.now, host, box, cells, counts,
+      ...(i.admin === undefined || i.admin === null ? {} : { admin: adminOfStatus(i.admin) }),
+    });
   if (!i.answer.ok) {
     return mk('unreachable', [i.answer.reason === 'no-op' ? 'agent has no testbox op' : 'the fleet agent did not answer the testbox op'], null, null, []);
   }

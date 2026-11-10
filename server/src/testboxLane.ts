@@ -5,14 +5,25 @@
 // carries (the agent read and validated it), and, before an answer has carried one, at that setting's default.
 // `watch.ts` owns one of these and calls `sweep()` from its tick, never awaited. The server never reaches the test box
 // itself: the fleet agent does, so it sees what the wrapper sees (spec §2.7).
+import { TESTBOX_ADMIN_SUBS, type TestboxActState, type TestboxAdminStatus } from '../../shared/testbox-admin.js';
+import { actorOf, knownFleetIdentity } from './accounts/audit.js';
 import type { Deps } from './deps.js';
 import type { MeasuredRead, TestboxSyncAsked } from './io.js';
 import { runsLogDates, testboxBlock, type RunsLogRead, type TestboxAnswer, type TestboxBlock } from './testbox.js';
+import { readAdminStatus } from './testboxAdmin.js';
 
 /** `CCRC_TESTBOX_POLL`'s default (`ccd/testbox-knobs`), the lane's interval only until an answer carries the setting. */
 export const TESTBOX_POLL_DEFAULT_MS = 30_000;
 /** The runs log's directory under the registry (D-7445; the wrapper is its one writer). */
 export const TESTBOX_RUNS_DIR = 'testbox-runs';
+/** How often the lane asks the box's settings `read` while a box is connected (spec §2.7, D-8166): six hours. */
+export const TESTBOX_SETTINGS_READ_MS = 6 * 3_600_000;
+
+/** What the lane takes from the composition: the fleet io and config it always had, and (D-8166) the connect surface's ops
+ *  port, its ledger and the fleet's identity, each absent in a test or script that wants none. */
+export type TestboxLaneDeps = Pick<Deps, 'io' | 'cfg'> & Partial<Pick<Deps, 'testboxAdmin' | 'testboxAudit' | 'fleetIdentity'>>;
+
+const SERVER_ACTOR = actorOf('ccrc server', '');
 
 const logRead = (r: MeasuredRead): RunsLogRead => (r.ok ? r.content : r.reason === 'absent' ? '' : null);
 
@@ -22,8 +33,12 @@ export class TestboxLane {
   private inflight = false;
   private pollMs = TESTBOX_POLL_DEFAULT_MS;
   private held: TestboxBlock | null = null;
+  /** The wall clock `read` was last asked at (0: never). */
+  private lastRead = 0;
+  /** The long act whose end rows this lane last wrote or found written, so a pass does not ask the ledger again. */
+  private settledAct: string | null = null;
 
-  constructor(private readonly deps: () => Pick<Deps, 'io' | 'cfg'>, private readonly now: () => number = Date.now) {}
+  constructor(private readonly deps: () => TestboxLaneDeps, private readonly now: () => number = Date.now) {}
 
   /** The block the last pass decided, or `null` before the first: absence on the wire reads as UNKNOWN. */
   block(): TestboxBlock | null { return this.held; }
@@ -39,17 +54,57 @@ export class TestboxLane {
     try {
       const d = this.deps();
       const reg = d.cfg.registryDir;
-      const [answer, listed, ...logs] = await Promise.all([
+      const [answer, listed, admin, ...logs] = await Promise.all([
         d.io.testboxMeasured().catch((): TestboxAnswer => ({ ok: false, reason: 'unanswered' })),
         d.io.readdirMeasured(reg).catch(() => null),
+        this.adminStatus(d),
         ...runsLogDates(at).map((day) => d.io.readFileMeasured(`${reg}/${TESTBOX_RUNS_DIR}/${day}.log`).then(logRead, () => null)),
       ]);
       if (answer.ok && answer.reply.pollMs !== null) this.pollMs = answer.reply.pollMs;
       const listing = listed !== null && listed.ok ? listed.entries : null;
-      this.held = testboxBlock({ answer, listing, logs: logs as RunsLogRead[], now: this.now() });
+      this.held = testboxBlock({ answer, listing, logs: logs as RunsLogRead[], now: this.now(), admin });
     } finally {
       this.inflight = false;
     }
+  }
+
+  /** The connect surface's `status`, or `null` when the lane has no ops port or the fleet did not answer it (the block then
+   *  carries no `admin`). While a box is connected, asks `read` at most every {@link TESTBOX_SETTINGS_READ_MS}, not awaited: it
+   *  reaches the box over the network, and the pass must not wait on it. A long act that has ended writes its end rows. */
+  private async adminStatus(d: TestboxLaneDeps): Promise<TestboxAdminStatus | null> {
+    const ops = d.testboxAdmin;
+    if (ops === undefined) return null;
+    const s = await readAdminStatus(ops);
+    if (!s.ok) return null;
+    const at = this.now();
+    if (s.status.connected && (this.lastRead === 0 || at - this.lastRead >= TESTBOX_SETTINGS_READ_MS)) {
+      this.lastRead = at;
+      void ops.run('read', {}).catch(() => undefined);
+    }
+    if (s.status.act !== null) this.writeEndRows(d, s.status.act);
+    return s.status;
+  }
+
+  /** A long act's end row(s) (spec §2.10): written once, keyed by `actId`, so a restart never writes them twice. `connect`
+   *  ends as `install` (keyed) then `pair`: an act that failed before the pair step writes the install row alone; one that
+   *  failed at the pair or the check writes install `ok` and pair `failed`. */
+  private writeEndRows(d: TestboxLaneDeps, a: TestboxActState): void {
+    const audit = d.testboxAudit;
+    if (audit === undefined || a.endedAt === null || a.outcome === 'running' || this.settledAct === a.id) return;
+    if (audit.hasAct(a.id)) { this.settledAct = a.id; return; }
+    const outcome = a.outcome === 'ok' ? 'ok' : 'failed';
+    const code = a.outcome === 'ok' || a.code === null ? {} : { code: a.code };
+    const fleetIdentity = knownFleetIdentity(d.fleetIdentity);
+    const row = { fleetIdentity, actor: SERVER_ACTOR };
+    if (a.sub === 'connect') {
+      const atPair = outcome === 'failed' && (a.phase === 'pair' || a.phase === 'check');
+      const installed = audit.write({ ...row, act: 'install', actId: a.id, outcome: outcome === 'ok' || atPair ? 'ok' : 'failed', ...(outcome === 'failed' && !atPair ? code : {}) });
+      if (installed.ok && (outcome === 'ok' || atPair)) audit.write({ ...row, act: 'pair', outcome, ...code });
+    } else {
+      const act = TESTBOX_ADMIN_SUBS[a.sub].act;
+      if (act !== null) audit.write({ ...row, act, actId: a.id, outcome, ...code });
+    }
+    this.settledAct = a.id;
   }
 
   /** The card's **Bring tools up to date** and the update lane's signal (spec §2.7, §2.10): the op's one write, then

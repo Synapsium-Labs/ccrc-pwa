@@ -22,6 +22,12 @@ import type { MeasuredTestbox, TestboxSyncAsked } from '../src/io.js';
 import { TestboxLane } from '../src/testboxLane.js';
 import { notRanSentence } from '../src/unmeasured.js';
 import { TESTBOX_PROTO, type StatusAnswer } from '../../shared/testbox.js';
+import { TESTBOX_ADMIN_CAP, TESTBOX_PARITY_REQUIRED_SENTENCE } from '../../shared/api.js';
+import type { TestboxAdminStatus, TestboxAdminSub } from '../../shared/testbox-admin.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { TestboxAudit } from '../src/testboxAudit.js';
+import type { TestboxAdminOps, TestboxAdminOutcome } from '../src/testboxAdmin.js';
+import type { FleetState } from '../src/fleetstate.js';
 import { TESTBOX_REMOTE_LIVE_MARKER } from '../../shared/switches.js';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
@@ -69,19 +75,53 @@ const realCcd = (h: CcdHarness, argvs: string[][]): Runner => (_cmd, args) => ne
   });
 });
 
-interface Setup { app: FastifyInstance; h: CcdHarness; argvs: string[][]; syncs: () => number; marker: string }
+/** The connect surface's `status` as the switch gate reads it (TC13): what the fake ops port answers. `armable` is a passing
+ *  record that matches the pin and the box file `seedPassingParity` wrote; `none` has no record; `mismatch` has a pass for
+ *  another box file; `no-op` is an agent that does not carry the op; `absent` is a server with no ops port at all. */
+type AdminMode = 'armable' | 'none' | 'mismatch' | 'no-op' | 'unanswered' | 'absent';
+const PIN = `SHA256:${'A'.repeat(43)}`;
+const BOX_SHA = 'a'.repeat(64);
+const adminStatus = (mode: AdminMode): TestboxAdminStatus => ({
+  v: 1, connected: true, addressSet: true, login: 'root', fingerprint: PIN, hostKey: 'pinned', boxFileSha256: BOX_SHA, act: null,
+  boxSettings: null, boxSettingsAt: null,
+  parity: mode === 'none' ? null : {
+    v: 1, result: 'pass', prs: [], fixtures: [], release: 'v0.0.900', toolsKey: 'k', fingerprint: PIN,
+    boxFileSha256: mode === 'mismatch' ? 'b'.repeat(64) : BOX_SHA, at: 1,
+  },
+});
 
-async function setup(o: { armed?: boolean; session?: boolean; watcher?: boolean; verbs?: string[] | null; sync?: TestboxSyncAsked; runner?: Runner } = {}): Promise<Setup> {
+interface Setup {
+  app: FastifyInstance; h: CcdHarness; argvs: string[][]; syncs: () => number; marker: string;
+  mode: (m: AdminMode) => void; adminAsked: () => TestboxAdminSub[]; rows: () => { act: string; outcome: string; code: string | null }[];
+}
+
+async function setup(o: {
+  armed?: boolean; session?: boolean; watcher?: boolean; verbs?: string[] | null; sync?: TestboxSyncAsked; runner?: Runner; admin?: AdminMode;
+} = {}): Promise<Setup> {
   const h = makeCcdHarness('ccrc-testbox-routes-');
   harnesses.push(h);
   seedPassingParity(h.home);
   const argvs: string[][] = [];
   const base = testDeps(h.home, o.runner ?? realCcd(h, argvs));
   let syncs = 0;
+  let mode: AdminMode = o.admin ?? 'armable';
+  const asked: TestboxAdminSub[] = [];
+  const ops: TestboxAdminOps = {
+    arm: 'remote',
+    run: async (sub): Promise<TestboxAdminOutcome> => {
+      asked.push(sub);
+      if (mode === 'no-op') return { kind: 'unsupported' };
+      if (mode === 'unanswered') return { kind: 'lost' };
+      return { kind: 'exited', code: 0, stdout: `${JSON.stringify(adminStatus(mode))}\n` };
+    },
+  };
+  const audit = new TestboxAudit(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
   const io = { ...base.io, testboxMeasured: async () => MEASURED, testboxToolsSync: async () => { syncs += 1; return o.sync ?? SENT; } };
+  // The default fleet carries the connect surface's cap beside the switch verb, so the gate's `unsupported` arm is its own row.
+  const fleetState = { ccdVerbs: o.verbs ?? ['testbox-remote', TESTBOX_ADMIN_CAP] } as unknown as FleetState;
   const deps: Deps = {
-    ...base, io, cfg: { ...base.cfg, authEnabled: o.armed ?? false }, mailToken: TOKEN,
-    ...(o.verbs === undefined ? {} : { fleetState: { ccdVerbs: o.verbs } as unknown as Deps['fleetState'] }),
+    ...base, io, cfg: { ...base.cfg, authEnabled: o.armed ?? false }, mailToken: TOKEN, fleetState, testboxAudit: audit,
+    ...(o.admin === 'absent' ? {} : { testboxAdmin: ops }),
   };
   const lane = new TestboxLane(() => deps);
   const watcher = o.watcher === false ? undefined : ({ testboxLane: lane } as unknown as FleetWatcher);
@@ -91,7 +131,11 @@ async function setup(o: { armed?: boolean; session?: boolean; watcher?: boolean;
   const app = Fastify();
   registerCoordRoutes(app, deps, new Bus(), sessionAuth, { tmux: deps.tmux, queue: deps.queue, readAsk: async () => null }, watcher);
   apps.push(app);
-  return { app, h, argvs, syncs: () => syncs, marker: path.join(h.home, '.cc-sessions', TESTBOX_REMOTE_LIVE_MARKER) };
+  return {
+    app, h, argvs, syncs: () => syncs, marker: path.join(h.home, '.cc-sessions', TESTBOX_REMOTE_LIVE_MARKER),
+    mode: (m) => { mode = m; }, adminAsked: () => asked,
+    rows: () => audit.recent(50).reverse().map((r) => ({ act: r.act, outcome: r.outcome, code: r.code })),
+  };
 }
 
 const post = (app: FastifyInstance, url: string, payload?: unknown, headers: Record<string, string> = {}) =>
@@ -157,6 +201,112 @@ describe('POST /api/testbox/switch: the marker through the verb (D-7411)', () =>
       detail: notRanSentence('ccd testbox-remote', { ran: false, reason: 'transport', detail: 'the link dropped' }),
     });
     expect(existsSync(s.marker)).toBe(false);
+  });
+});
+
+describe('POST /api/testbox/switch: on needs a passing parity record (D-8166, spec §2.8, T9)', () => {
+  const PARITY_REQUIRED = { ok: false, error: 'parity-required', detail: TESTBOX_PARITY_REQUIRED_SENTENCE };
+
+  it('on without a passing record is refused parity-required and runs no ccd', async () => {
+    const s = await setup({ admin: 'none' });
+    const r = await post(s.app, '/api/testbox/switch', { on: true });
+    expect([r.statusCode, r.json()]).toEqual([409, PARITY_REQUIRED]);
+    expect(s.argvs).toEqual([]);
+    expect(existsSync(s.marker)).toBe(false);
+  });
+
+  it('on with a stale record is refused: a pass for another box file', async () => {
+    const s = await setup({ admin: 'mismatch' });
+    const r = await post(s.app, '/api/testbox/switch', { on: true });
+    expect([r.statusCode, r.json()]).toEqual([409, PARITY_REQUIRED]);
+    expect(s.argvs).toEqual([]);
+  });
+
+  it('on with a record the verb marked stale is refused by ccd and answers parity-required, not a fleet failure', async () => {
+    const s = await setup({ admin: 'armable' });
+    // The status carries no stale mark; ccd reads `parity_stale` in the verb's state file, and its refusal is the answer.
+    writeFileSync(path.join(s.h.home, '.ccrc', 'testbox-admin.state'), `fingerprint=${PIN}\nbox_sha256=${BOX_SHA}\nparity_stale=1\n`);
+    const r = await post(s.app, '/api/testbox/switch', { on: true });
+    expect([r.statusCode, r.json()]).toEqual([409, PARITY_REQUIRED]);
+    expect(s.argvs).toEqual([['testbox-remote', '--state', 'on']]);
+    expect(existsSync(s.marker)).toBe(false);
+    expect(s.rows()).toEqual([{ act: 'switch', outcome: 'refused', code: 'parity-required' }]);
+  });
+
+  it('on with a matching pass runs ccd testbox-remote --state on', async () => {
+    const s = await setup({ admin: 'armable' });
+    const r = await post(s.app, '/api/testbox/switch', { on: true });
+    expect([r.statusCode, r.json()]).toEqual([200, { ok: true, requested: true }]);
+    expect(s.argvs).toEqual([['testbox-remote', '--state', 'on']]);
+    expect(existsSync(s.marker)).toBe(true);
+  });
+
+  it('off is never gated: no status is asked and the marker comes down on any record', async () => {
+    // No watcher: the forced lane pass after a switch asks `status` too, and this row counts the gate's own asks.
+    const s = await setup({ admin: 'none', watcher: false });
+    writeFileSync(s.marker, '');
+    const r = await post(s.app, '/api/testbox/switch', { on: false });
+    expect([r.statusCode, r.json()]).toEqual([200, { ok: true, requested: false }]);
+    expect(s.adminAsked()).toEqual([]);
+    expect(existsSync(s.marker)).toBe(false);
+  });
+
+  it('the gate reads a fresh status on every request, never the lane\'s cache', async () => {
+    const s = await setup({ admin: 'armable', watcher: false });
+    expect((await post(s.app, '/api/testbox/switch', { on: true })).statusCode).toBe(200);
+    s.mode('none');
+    expect((await post(s.app, '/api/testbox/switch', { on: true })).statusCode).toBe(409);
+    s.mode('armable');
+    expect((await post(s.app, '/api/testbox/switch', { on: true })).statusCode).toBe(200);
+    expect(s.adminAsked()).toEqual(['status', 'status', 'status']);
+  });
+
+  it('an agent without the op refuses on as unsupported, and runs no ccd', async () => {
+    for (const admin of ['no-op', 'absent'] as const) {
+      const s = await setup({ admin });
+      const r = await post(s.app, '/api/testbox/switch', { on: true });
+      expect([r.statusCode, r.json().error], admin).toEqual([501, 'unsupported']);
+      expect(s.argvs).toEqual([]);
+    }
+  });
+
+  it('a fleet whose ccd carries no testbox-admin cap refuses on as unsupported before asking the op', async () => {
+    const s = await setup({ verbs: ['testbox-remote'], watcher: false });
+    expect((await post(s.app, '/api/testbox/switch', { on: true })).statusCode).toBe(501);
+    expect(s.adminAsked()).toEqual([]);
+    expect(s.argvs).toEqual([]);
+  });
+
+  it('a status the fleet did not answer is a fleet failure, never an arm', async () => {
+    const s = await setup({ admin: 'unanswered' });
+    const r = await post(s.app, '/api/testbox/switch', { on: true });
+    expect(r.statusCode).toBe(502);
+    expect(s.argvs).toEqual([]);
+  });
+
+  it('each switch request writes one switch row: on, a refusal, off, a bad body, a failed raise', async () => {
+    const s = await setup({ admin: 'armable' });
+    await post(s.app, '/api/testbox/switch', { on: true });
+    s.mode('none');
+    await post(s.app, '/api/testbox/switch', { on: true });
+    await post(s.app, '/api/testbox/switch', { on: false });
+    await post(s.app, '/api/testbox/switch', { on: 'yes' });
+    expect(s.rows()).toEqual([
+      { act: 'switch', outcome: 'ok', code: null },
+      { act: 'switch', outcome: 'refused', code: 'parity-required' },
+      { act: 'switch', outcome: 'ok', code: null },
+      { act: 'switch', outcome: 'refused', code: 'bad-request' },
+    ]);
+    s.mode('armable');
+    mkdirSync(path.join(s.marker, 'x'), { recursive: true });
+    await post(s.app, '/api/testbox/switch', { on: true });
+    expect(s.rows().at(-1)).toEqual({ act: 'switch', outcome: 'failed', code: 'fleetFailed' });
+  });
+
+  it('a verb that never ran writes an unknown row', async () => {
+    const s = await setup({ runner: async () => ({ ran: false, reason: 'transport', detail: 'x', code: 1, stdout: '', stderr: '' }) });
+    await post(s.app, '/api/testbox/switch', { on: true });
+    expect(s.rows()).toEqual([{ act: 'switch', outcome: 'unknown', code: 'fleetFailed' }]);
   });
 });
 

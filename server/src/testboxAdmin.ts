@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
-  TESTBOX_ADMIN_CAP, type TestboxAdminActAnswer, type TestboxAdminAnswer, type TestboxAdminResult,
+  TESTBOX_ADMIN_CAP, TESTBOX_PARITY_REQUIRED_SENTENCE, type TestboxAdminActAnswer, type TestboxAdminAnswer, type TestboxAdminResult,
 } from '../../shared/api.js';
 import {
   TESTBOX_ADMIN_DRAIN_MS, TESTBOX_ADMIN_KILL_GRACE_MS, TESTBOX_ADMIN_LONG_TIMEOUT_MS, TESTBOX_ADMIN_OUTPUT_MAX_BYTES,
@@ -11,11 +11,16 @@ import {
 import type { RouteRefusal } from '../../shared/refusal.js';
 import {
   TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_SUBS, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, buildTestboxAdminArgv, isHostKeyFingerprint,
-  isTestboxAdminSub, readTestboxAdminStatus, testboxAdminIsLong,
-  type TestboxAct, type TestboxAdminCode, type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub,
+  isTestboxAdminSub, parityArmable, readTestboxAdminStatus, testboxAdminIsLong,
+  type TestboxAct, type TestboxActOutcome, type TestboxAdminCode, type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub,
 } from '../../shared/testbox-admin.js';
 import { boundedStdinSpawn } from '../../shared/spawn.mjs';
 import { accountSpawnEnv } from './accounts/ops.js';
+import { actorOf, type AccountActor } from './accounts/audit.js';
+import { parseCookies, SESSION_COOKIE } from './auth/cookie.js';
+import { sessionIdHash } from './auth/sessions.js';
+import { capSupported } from './ccdargv.js';
+import type { FleetState } from './fleetstate.js';
 import { credentialBodyRoute, type AccountGate } from './accounts/gate.js';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
@@ -196,6 +201,65 @@ function actOf(sub: TestboxAdminSub, fields: TestboxAdminFields): TestboxAct | n
   return TESTBOX_ADMIN_SUBS[sub].act;
 }
 
+// ── the status read and the switch's gate (TC13) ─────────────────────────────────────────────────────────────────────
+
+/** A `status` run and read by the one reader (its document has no `ok`), or the decision to refuse with. */
+export type StatusRead = { ok: true; status: TestboxAdminStatus } | { ok: false; d: Extract<Decision, { kind: 'refuse' }> };
+
+/** Runs `status` through `ops` and reads it. Shared by the connect routes, the switch's gate and the lane. Never throws. */
+export async function readAdminStatus(ops: Pick<TestboxAdminOps, 'run'>): Promise<StatusRead> {
+  let ran: TestboxAdminOutcome;
+  try { ran = await ops.run('status', {}); } catch { ran = { kind: 'lost' }; }
+  if (ran.kind === 'exited' && ran.code === 0) {
+    const text = ran.stdout.trim();
+    const read = readTestboxAdminStatus(text.slice(text.lastIndexOf('\n') + 1));
+    if (read.ok) return { ok: true, status: read.value };
+  }
+  const d = decisionOf(ran);
+  return { ok: false, d: d.kind === 'refuse' ? d : { kind: 'refuse', word: 'fleetFailed', extra: {}, audit: 'failed', code: 'fleetFailed' } };
+}
+
+/** What the switch's `{on: true}` gate answers when it refuses: the route word, its extra fields and the ledger's outcome and code. */
+export type SwitchRefusal = Extract<Decision, { kind: 'refuse' }>;
+
+/**
+ * The switch's parity gate (spec §2.8, T9): the fleet's `status`, asked FRESH (never the lane's cache), and `parityArmable` over
+ * its record, its pin and its box file. `null` when the record lets the switch arm. A fleet without the connect surface (no
+ * `testbox-admin-v1` cap, no ops port, an agent that does not carry the op) is `unsupported`; a status that did not come back is
+ * the read's own refusal. `stale` is `false` here: the status does not carry the verb's `parity_stale` mark, and
+ * `ccd testbox-remote --state on` refuses it (`parityRefusedByCcd`), so the second layer decides what this one cannot see.
+ */
+export async function switchOnGate(
+  ops: Pick<TestboxAdminOps, 'run'> | undefined, fleetState: Pick<FleetState, 'ccdVerbs'> | undefined,
+): Promise<SwitchRefusal | null> {
+  if (ops === undefined || !capSupported(fleetState, TESTBOX_ADMIN_CAP)) {
+    return { kind: 'refuse', word: 'unsupported', extra: {}, audit: 'refused', code: 'unsupported' };
+  }
+  const s = await readAdminStatus(ops);
+  if (!s.ok) return s.d;
+  if (parityArmable(s.status.parity, { fingerprint: s.status.fingerprint, boxFileSha256: s.status.boxFileSha256, stale: false })) return null;
+  return { kind: 'refuse', word: 'parity-required', extra: { detail: TESTBOX_PARITY_REQUIRED_SENTENCE }, audit: 'refused', code: 'parity-required' };
+}
+
+/** Whether `ccd testbox-remote --state on` died on its own parity check (its words begin `parity-required`). */
+export const parityRefusedByCcd = (stderr: string): boolean => /(^|\s)parity-required\b/.test(stderr);
+
+/** The `switch` ledger row for one request: the actor from the session the gate measured, the fleet from its identity cell. A
+ *  failed write is an answer, never a throw. */
+export function writeSwitchRow(
+  deps: { audit: Pick<TestboxAudit, 'write'> | undefined; fleetIdentity: () => string | null },
+  actor: AccountActor, outcome: TestboxActOutcome, code?: TestboxAdminCode | RouteRefusal,
+): void {
+  deps.audit?.write({ act: 'switch', outcome, ...(code === undefined ? {} : { code }), fleetIdentity: deps.fleetIdentity(), actor });
+}
+
+/** The actor of a switch request: the device label of the session and 8 hex characters of its id hash; a request with no
+ *  session cookie (auth off) is the unlabelled actor. */
+export function switchActorOf(req: FastifyRequest, device: string | null): AccountActor {
+  const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+  return actorOf(device, token === undefined || token === '' ? '' : sessionIdHash(token));
+}
+
 // ── the routes ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface TestboxAdminRouteDeps {
@@ -231,17 +295,7 @@ function fieldsOf(req: FastifyRequest): Record<string, unknown> | null {
 export function registerTestboxAdminRoutes(app: FastifyInstance, deps: TestboxAdminRouteDeps): void {
   const events = () => deps.audit?.recent(EVENTS_SHOWN) ?? [];
 
-  /** `status`, run and read by the one reader (its document has no `ok`), or the decision to refuse with. */
-  const readStatus = async (): Promise<{ ok: true; status: TestboxAdminStatus } | { ok: false; d: Extract<Decision, { kind: 'refuse' }> }> => {
-    const ran = await deps.ops.run('status', {});
-    if (ran.kind === 'exited' && ran.code === 0) {
-      const text = ran.stdout.trim();
-      const read = readTestboxAdminStatus(text.slice(text.lastIndexOf('\n') + 1));
-      if (read.ok) return { ok: true, status: read.value };
-    }
-    const d = decisionOf(ran);
-    return { ok: false, d: d.kind === 'refuse' ? d : { kind: 'refuse', word: 'fleetFailed', extra: {}, audit: 'failed', code: 'fleetFailed' } };
-  };
+  const readStatus = (): Promise<StatusRead> => readAdminStatus(deps.ops);
 
   app.get('/api/testbox/admin', async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     const g = deps.gate(req, reply, { cap: TESTBOX_ADMIN_CAP });
