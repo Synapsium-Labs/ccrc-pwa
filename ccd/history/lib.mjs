@@ -6696,6 +6696,18 @@ export function blockStatus({ receipt, block, idMismatch, priorGistShas }) {
   return { status: 'ok', reason: null };
 }
 
+/** A node block's verdict (§7.4 item 5 on the node path; W3 steering plan Task 4): blockStatus's rules with the
+ *  receipt arm gone (the caller read the block off a receipted leaf) and the topics and refs arms gone, because §6.3 says a
+ *  steered node gist replaces only the parent's gist, so a missing topics or refs line cannot degrade it. The order
+ *  is blockStatus's: no block is absent, a short or carried gist is invalid, a wrong id is degraded, else ok. */
+export function nodeBlockStatus({ block, idMismatch, priorGistShas }) {
+  if (block === null) return { status: 'absent', reason: 'no-block' };
+  if (block.gist === null || block.gist.trim().length < GIST_MIN) return { status: 'invalid', reason: 'gist-short' };
+  if (priorGistShas.has(gistSha(block.gist))) return { status: 'invalid', reason: 'carried-copy' };
+  if (idMismatch) return { status: 'degraded', reason: 'id-mismatch' };
+  return { status: 'ok', reason: null };
+}
+
 export function summaryParts(text) {
   const s = String(text);
   let opens = 0;

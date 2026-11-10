@@ -827,6 +827,8 @@ export function selectBlock(i: { blocks: readonly Block[]; kind: 'leaf' | 'node'
 export type BlockStatus = 'ok' | 'degraded' | 'invalid' | 'absent' | 'not-requested';
 export function blockStatus(i: { receipt: boolean; block: Block | null; idMismatch: boolean; priorGistShas: ReadonlySet<string> }):
   { status: BlockStatus; reason: BlockReason | null };
+export function nodeBlockStatus(i: { block: Block | null; idMismatch: boolean; priorGistShas: ReadonlySet<string> }):
+  { status: Exclude<BlockStatus, 'not-requested'>; reason: BlockReason | null };
 export function summaryParts(text: string): { bodyStart: number; opens: number; unclosed: boolean; analysisSurvives: boolean };
 export function summaryRowFor(i: {
   boundaryUuid: string; anchorUuid: string | null; rows: readonly { uuid: string; isCompactSummary: boolean; isEcho: boolean }[];

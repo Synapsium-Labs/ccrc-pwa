@@ -15,7 +15,7 @@ import { closeSync, readSync } from 'node:fs';
 import { HEADING_RE, fencedRanges, mineTokens } from '../compact-card.mjs';
 import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
-  directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
+  directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeBlockStatus, nodeIndexTexts,
   parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
   secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, REPARSE_MAX_TARGETS, topicsOfColumn, stampAtOrBefore,
 } from './lib.mjs';
@@ -604,7 +604,9 @@ function parentStmts(db) {
       bounds: db.prepare('SELECT entry_id, transcript_pk FROM boundaries WHERE transcript_pk = ? ORDER BY ord'),
       leafAt: db.prepare('SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0 AND rowid <= ?'),
       exists: db.prepare('SELECT 1 AS x FROM nodes WHERE node_id = ?'),
-      node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars FROM nodes WHERE node_id = ?'),
+      node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars FROM nodes WHERE node_id = ?'),
+      lastKid: db.prepare('SELECT nc.child_id AS child_id FROM node_children nc JOIN nodes n ON n.node_id = nc.child_id WHERE nc.node_id = ? ORDER BY nc.ord DESC LIMIT 1'),
+      kidSummary: db.prepare('SELECT depth, status, summary_blob_id FROM nodes WHERE node_id = ?'),
       refs: db.prepare('SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid'),
       rowidOf: db.prepare('SELECT rowid AS r FROM nodes WHERE node_id = ?'),
       insNode: db.prepare('INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, '
@@ -647,8 +649,48 @@ function insertNodeFts(db, ictx, rowid, gist, topics, refs) {
   db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(rowid, t.gist, t.topics, t.refs);
 }
 
+/** The leaf statuses that say a steer was requested of the span (§7.4 item 2): the leaf had a receipt, whatever it answered.
+ *  A leaf with no receipt (not-requested) or whose parser threw (parse-failed) was never asked for a node block. */
+const RECEIPTED_STATUSES = new Set(['ok', 'degraded', 'invalid', 'absent']);
+
+/** A depth-1 parent's steered node gist (spec §6.3, §7.1; W3 steering plan Task 4), the ONE reader createParent and
+ *  parentReroller share. The block rides the summary of the parent's LAST child, which the steer file asked for when that
+ *  leaf completed its group of FAN_IN.leaf, so it reads only when that child is a depth-0 leaf with a receipt (ok, degraded,
+ *  invalid or absent). The child's stored summary is read as leafFields reads it (textOf), redacted whole with the current
+ *  pairs, parsed, and the node block selected by the parent's id; nodeBlockStatus judges it on its id and gist alone, with
+ *  the other depth-0 gists of the session as the carried copies.
+ *  Answers null for "unchanged from today" (the rollup gist, status ok): the last child is no receipted leaf (this is also
+ *  what a depth-2 parent answers, its last child being a parent), or its summary is gone or unreadable. Otherwise
+ *  { status, gist, capped }: gist is the block's (blockFields' cut at GIST_MAX) for ok and degraded, null for absent and
+ *  invalid, which keep the rollup gist. Topics, refs, time and counts are never the block's. */
+function steeredNodeOf(db, ictx, budget, { id, sessionPk, lastChildId }) {
+  const kid = parentStmts(db).kidSummary.get(lastChildId);
+  if (kid === undefined || Number(kid.depth) !== 0 || !RECEIPTED_STATUSES.has(kid.status) || kid.summary_blob_id === null) return null;
+  const q = stmts(db);
+  const text = textOf(q, kid.summary_blob_id, budget);
+  if (text === null) return null;
+  const sel = selectBlock({ blocks: parseBlocks(redactField(text, ictx.pairIdx)), kind: 'node', computedId: id, generic: false });
+  const prior = new Set(q.priorGists.all(sessionPk).map((r) => gistSha(r.gist)));
+  const verdict = nodeBlockStatus({ block: sel.block, idMismatch: sel.idMismatch, priorGistShas: prior });
+  const fields = verdict.status === 'ok' || verdict.status === 'degraded' ? blockFields(sel.block) : null;
+  return { status: verdict.status, gist: fields === null ? null : fields.gist, capped: fields === null ? false : fields.capped };
+}
+
+/** A parent as it is stored: the rollup of its children (redacted whole), its gist replaced by a steered node gist when
+ *  steeredNodeOf reads one, the status that read gives (ok when it reads nothing), and `capped` made of the final gist's
+ *  cut and the rollup's topics and refs cuts. The rollup gist's own cap does not count when the block's gist replaces it. */
+function parentFields(db, ictx, budget, { id, sessionPk, kids, lastChildId }) {
+  const r = parentRollup(kids);
+  const node = steeredNodeOf(db, ictx, budget, { id, sessionPk, lastChildId });
+  if (node === null) return { ...r, status: 'ok' };
+  if (node.gist === null) return { ...r, status: node.status };
+  // The rollup's `capped` folds its gist cut in with the topics and refs cuts; with the gist replaced only the latter two stay.
+  const others = parentRollup(kids.map((k) => ({ ...k, gist: null }))).capped;
+  return { ...r, gist: node.gist, capped: node.capped || others, status: node.status };
+}
+
 /** The parent of `childIds` at `depth`, unless it exists. Returns its id, or null when it was there. */
-function createParent(db, ictx, childIds, depth) {
+function createParent(db, ictx, childIds, depth, budget) {
   const s = parentStmts(db);
   const id = parentId(childIds);
   if (s.exists.get(id) !== undefined) return null;
@@ -657,9 +699,12 @@ function createParent(db, ictx, childIds, depth) {
   // Each child is read through redactedRollup, as a re-roll reads it: a child still stored unredacted (a pruned leaf, a
   // sibling a later batch rewrites) must not have the parent's GIST_MAX or TOPIC_CHARS cut land inside a value (spec §6.3
   // caps rule 6, SE1; D-4610 (history-reroll-from-redacted-children)).
-  const r = parentRollup(kids.map((k) => redactedRollup(ictx, k.rollup)));
+  // Only a depth-1 parent can carry a node block: its last child is a leaf.
+  const r = depth === 1
+    ? parentFields(db, ictx, budget, { id, sessionPk: first.session_pk, kids: kids.map((k) => redactedRollup(ictx, k.rollup)), lastChildId: childIds[childIds.length - 1] })
+    : { ...parentRollup(kids.map((k) => redactedRollup(ictx, k.rollup))), status: 'ok' };
   withTx(db, 'NORMAL', () => {
-    s.insNode.run(id, first.session_pk, first.epoch_seq, first.transcript_pk, 'condensed', depth, 'ok', r.gist, JSON.stringify(r.topics),
+    s.insNode.run(id, first.session_pk, first.epoch_seq, first.transcript_pk, 'condensed', depth, r.status, r.gist, JSON.stringify(r.topics),
       r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars, directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0,
       NODE_PARSER_VERSION, ictx.nowMs);
     childIds.forEach((c, i) => { s.insChild.run(id, c, i); });
@@ -681,7 +726,7 @@ function fanInLevels(db, ictx, level0, budget) {
     const slots = level.map((id) => ({ nodeId: id, final: id !== null, parented: id !== null && parentOf(db, id) !== null }));
     for (const group of planFanIn({ slots, width })) {
       if (!parentsBudgetLeft(budget)) return { made, complete: false };
-      if (createParent(db, ictx, group, depth + 1) !== null) made += 1;
+      if (createParent(db, ictx, group, depth + 1, budget) !== null) made += 1;
     }
     const next = [];
     for (const id of level) {
@@ -799,10 +844,11 @@ function redactedRollup(ictx, c) {
 }
 
 /** Whether a stored node's gist, topics and refs (as a set) are the ones a re-roll would write: the belt's test for a
- *  parent it leaves alone. */
-function sameParentFields(stored, rolled) {
+ *  parent it leaves alone: the status is part of it, the steered gist is the rolled gist, and `rolled` is what
+ *  parentFields answers. */
+function sameParentFields(stored, rolled, storedStatus) {
   const refSet = (refs) => refs.map((x) => `${x.kind}\u0000${x.value}\u0000${x.origin}`).sort().join('\n');
-  return stored.gist === rolled.gist && JSON.stringify(stored.topics) === JSON.stringify(rolled.topics)
+  return storedStatus === rolled.status && stored.gist === rolled.gist && JSON.stringify(stored.topics) === JSON.stringify(rolled.topics)
     && refSet(stored.refs) === refSet(rolled.refs);
 }
 
@@ -823,16 +869,20 @@ function parentReroller(db, ictx, onlyIfChanged = false) {
   // from the transcripts still on disk; that, or a restore of a backup that predates the cut, is the way back.
   const kidsOf = db.prepare('SELECT nc.child_id AS child_id FROM node_children nc JOIN nodes n ON n.node_id = nc.child_id WHERE nc.node_id = ? ORDER BY nc.ord');
   const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
-    + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ? WHERE node_id = ?');
+    + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ?, status = ? WHERE node_id = ?');
   const dropRefs = db.prepare('DELETE FROM node_refs WHERE node_id = ?');
+  const budget = { bytes: 0 };
   return (id) => {
-    const kids = kidsOf.all(id).map((r) => redactedRollup(ictx, storedNode(db, r.child_id).rollup));
+    const kidIds = kidsOf.all(id).map((r) => r.child_id);
+    const kids = kidIds.map((c) => redactedRollup(ictx, storedNode(db, c).rollup));
     if (kids.length === 0) return false;
-    const r = parentRollup(kids);
-    if (onlyIfChanged && sameParentFields(storedNode(db, id).rollup, r)) return false;
+    const self = storedNode(db, id);
+    // Depth-1 parents only: a depth-2 parent's last child is no leaf, and steeredNodeOf answers null for it.
+    const r = parentFields(db, ictx, budget, { id, sessionPk: self.row.session_pk, kids, lastChildId: kidIds[kidIds.length - 1] });
+    if (onlyIfChanged && sameParentFields(self.rollup, r, self.row.status)) return false;
     withTx(db, 'NORMAL', () => {
       setParent.run(r.gist, JSON.stringify(r.topics), r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars,
-        directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0, NODE_PARSER_VERSION, id);
+        directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0, NODE_PARSER_VERSION, r.status, id);
       dropRefs.run(id);
       for (const ref of r.refs) s.insRef.run(id, ref.kind, ref.value, ref.origin);
       if (ictx.fts === true) {

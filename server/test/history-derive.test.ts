@@ -14,6 +14,7 @@ import {
 import { compactionSequence, steeredBlock, userRow, type Row } from './historyFixtures.js';
 import {
   leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth, makePairIndex, secretPairs, cardLine, displayPrefixes,
+  parentId, parentRollup, parseBlocks, blockStatus, nodeBlockStatus, gistSha, GIST_MIN,
 } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, withTx, getStep, setStep } from '../../ccd/history/store.mjs';
 
@@ -1849,4 +1850,212 @@ describe('CP-39 Task 4: every derivation step advances in a pass whose ingest or
     expect(counters(box)['card_withdrawn:budget'], "the card step's own positive floor was spent: its prediction withdrawn, counted for budget").toBe(1);
     expect(fs.existsSync(cardFile), 'the prediction is gone').toBe(false);
   }, 240_000);
+});
+
+// ── W3-4 T4c: a steered <ccrc-node> gist replaces only the depth-1 parent's gist (spec 2026-10-05 §6.3, §7.1) ──
+describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W3-4; spec 6.3, 7.1)', () => {
+  const ID = 'claude-node';
+  const U = '0189abcd-1234-4678-9abc-0000000000b8';
+  const GROUPS = 7;
+  const N = GROUPS * 8;
+  const V = crypto.randomBytes(32).toString('hex');   // one [A-Za-z0-9_-] run: one pair
+  const LEAF_GIST = (k: number): string => `Leaf ${k} built part ${k} of the node fixture and settled it for good.`;
+  const NODE_OK = 'The eight spans together built the first fixture parent: tried two shapes, kept one, and left the docs open.';
+  const NODE_WRONG = 'The eight spans together built the second fixture parent under a block that names some other id entirely.';
+  const NODE_SHORT = 'Too short a gist.';
+  const NODE_REDACT = `The eight spans together built the last fixture parent and used the key ${V} throughout the whole run.`;
+  const NODE_HIDDEN = 'This gist sits inside an analysis block and must never be selected for any parent at all.';
+  const NODE_IGNORED = 'This gist rides a last child that was never asked to steer, so the parent must not read it at all.';
+  // The group (of 8) a leaf index falls in: 0 ok, 1 wrong id, 2 short gist, 3 carried copy, 4 last child not receipted,
+  // 5 node block only inside an <analysis>, 6 a registered value inside the node gist (planted unregistered).
+  const UNRECEIPTED = 4 * 8 + 7;
+  let box: HistoryBox;
+  let ids: string[] = [];
+  let parents: string[] = [];
+
+  const nodeBlock = (id: string, gist: string): string => steeredBlock({ kind: 'node', id, gist }).replace('>', ' depth="1">');
+  const summaryAt = (k: number, parentIds: readonly string[]): string => {
+    const g = Math.floor(k / 8);
+    const lines = ['<summary>', '1. Primary Request and Intent:', `   Node fixture summary ${k}.`, '</summary>',
+      steeredBlock({ gist: LEAF_GIST(k), expand: `node topic ${k}`, refs: 'ccd/history/derive.mjs' })];
+    if (k % 8 === 7) {
+      const pid = parentIds[g] ?? 'unplanned';
+      if (g === 0) lines.push(nodeBlock(pid, NODE_OK));
+      if (g === 1) lines.push(nodeBlock('not-the-parent-id', NODE_WRONG));
+      if (g === 2) lines.push(nodeBlock(pid, NODE_SHORT));
+      if (g === 3) lines.push(nodeBlock(pid, LEAF_GIST(3)));
+      if (g === 4) lines.push(nodeBlock(pid, NODE_IGNORED));
+      if (g === 5) lines.push('<analysis>', nodeBlock(pid, NODE_HIDDEN), '</analysis>');
+      if (g === 6) lines.push(nodeBlock(pid, NODE_REDACT));
+    }
+    return lines.join('\n');
+  };
+
+  type ParentRow = { node_id: string; kind: string; status: string; gist: string | null; topics: string | null; earliest_ms: number;
+    latest_ms: number; src_chars: number; desc_count: number; desc_chars: number; directive_flag: number; capped: number };
+  const parentRow = (id: string, b: HistoryBox = box): ParentRow => q<ParentRow>(b,
+    'SELECT node_id, kind, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped FROM nodes WHERE node_id = ?', id)[0]!;
+  const refsOfNode = (id: string, b: HistoryBox = box): string[] => q<{ kind: string; value: string; origin: string }>(b,
+    'SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid', id).map((r) => `${r.kind}|${r.value}|${r.origin}`);
+  /** What the rollup of a parent's stored children is, computed here from the children rows (never from the parent). */
+  const rollupOf = (id: string, b: HistoryBox = box): ReturnType<typeof parentRollup> => parentRollup(q<{ node_id: string }>(b,
+    'SELECT child_id AS node_id FROM node_children WHERE node_id = ? ORDER BY ord', id).map((c) => {
+    const r = parentRow(c.node_id, b);
+    return {
+      gist: r.gist, topics: JSON.parse(r.topics ?? '[]') as string[],
+      refs: q<{ kind: string; value: string; origin: string }>(b, 'SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid', c.node_id),
+      earliestMs: r.earliest_ms, latestMs: r.latest_ms, srcChars: r.src_chars, descCount: r.desc_count, descChars: r.desc_chars,
+    };
+  }));
+  /** The fields the node block never touches: all equal the rollup's. */
+  const rollupFields = (id: string, b: HistoryBox = box): object => {
+    const r = rollupOf(id, b);
+    const row = parentRow(id, b);
+    return {
+      topics: JSON.parse(row.topics ?? '[]'), refs: refsOfNode(id, b),
+      time: [row.earliest_ms, row.latest_ms], counts: [row.src_chars, row.desc_count, row.desc_chars],
+      expected: {
+        topics: r.topics, refs: r.refs.map((x) => `${x.kind}|${x.value}|${x.origin}`),
+        time: [r.earliestMs, r.latestMs], counts: [r.srcChars, r.descCount, r.descChars],
+      },
+    };
+  };
+  const expectRollupFields = (id: string, b: HistoryBox = box): void => {
+    const f = rollupFields(id, b) as { expected: object } & Record<string, unknown>;
+    const { expected, ...stored } = f;
+    expect(stored).toEqual(expected);
+  };
+  const ftsTexts = (id: string, b: HistoryBox = box): string[] => q<{ gist: string | null; topics: string | null; refs: string | null }>(b,
+    'SELECT f.gist, f.topics, f.refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?', id)
+    .flatMap((r) => [r.gist ?? '', r.topics ?? '', r.refs ?? '']);
+
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-derive-node-');
+    // The ids are fixed by the rows' uuids, which the summary text never changes: one plain pass learns them.
+    const probe = compactionSequence({ n: N, trigger: 'manual', seed: 0xd8, sessionId: U, startMs: T0, summaryText: (k) => summaryAt(k, []) });
+    ids = Array.from({ length: N }, (_, k) => leafId(ID, U, k === 0 ? firstUuid(probe) : probe.headUuids[k - 1]!));
+    parents = Array.from({ length: GROUPS }, (_, g) => parentId(ids.slice(g * 8, g * 8 + 8)));
+    const seq = compactionSequence({ n: N, trigger: 'manual', seed: 0xd8, sessionId: U, startMs: T0, summaryText: (k) => summaryAt(k, parents) });
+    expect(seq.boundaryUuids, 'CONTROL: the summary text moves no uuid').toEqual(probe.boundaryUuids);
+    plant(box, ID, U, seq.rows);
+    const at = (u: string): number => Date.parse(String(seq.rows.find((r) => r['uuid'] === u)!['timestamp']));
+    seq.boundaryUuids.forEach((b, k) => {
+      if (k !== UNRECEIPTED) spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: '', ts: at(b) - 500 });
+    });
+    settle(box);
+  }, 600_000);
+
+  it('CONTROL: the store holds the leaves, seven depth-1 parents of eight in order, and one depth-2 parent over the first four', () => {
+    expect(leavesOf(box, U).map((l) => l.node_id)).toEqual(ids);
+    const d1 = q<{ node_id: string }>(box, 'SELECT node_id FROM nodes WHERE depth = 1 ORDER BY earliest_ms').map((r) => r.node_id);
+    expect(d1).toEqual(parents);
+    expect(q<{ child_id: string }>(box, 'SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord', parents[0]!).map((r) => r.child_id))
+      .toEqual(ids.slice(0, 8));
+    const d2 = q<{ node_id: string }>(box, 'SELECT node_id FROM nodes WHERE depth = 2').map((r) => r.node_id);
+    expect(d2).toEqual([parentId(parents.slice(0, 4))]);
+    expect(leavesOf(box, U)[UNRECEIPTED]!.status, 'CONTROL: the last child of group 4 has no receipt').toBe('not-requested');
+    expect(leavesOf(box, U)[7]!.status, 'CONTROL: group 0\'s last child is a receipted steered leaf').toBe('ok');
+  });
+
+  it('a steered node block replaces only the parent\'s gist (§6.3), and a wrong id is degraded', () => {
+    const p = parentRow(parents[0]!);
+    expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: NODE_OK });
+    expect(p.gist, 'CONTROL: the rollup gist is another text').not.toBe(rollupOf(parents[0]!).gist);
+    expect(JSON.parse(p.topics!), 'CONTROL: the children have topics, so the equality below means something').not.toEqual([]);
+    expectRollupFields(parents[0]!);
+    expect({ directive: p.directive_flag, capped: p.capped }).toEqual({ directive: 0, capped: 0 });
+    const w = parentRow(parents[1]!);
+    expect({ kind: w.kind, status: w.status, gist: w.gist }, 'the gist is replaced all the same, as a leaf\'s is; the status says the id was wrong')
+      .toEqual({ kind: 'condensed', status: 'degraded', gist: NODE_WRONG });
+    expectRollupFields(parents[1]!);
+  });
+
+  it('a steered node block with no topics or refs is not degraded for it', () => {
+    const block = parseBlocks(nodeBlock(parents[0]!, NODE_OK))[0]!;
+    expect({ expand: block.expand, refs: block.refs }, 'CONTROL: the block carries neither line').toEqual({ expand: null, refs: null });
+    expect(blockStatus({ receipt: true, block, idMismatch: false, priorGistShas: new Set() }), 'CONTROL: a leaf block this bare is degraded')
+      .toEqual({ status: 'degraded', reason: 'topics-missing' });
+    expect(nodeBlockStatus({ block, idMismatch: false, priorGistShas: new Set() })).toEqual({ status: 'ok', reason: null });
+    expect(parentRow(parents[0]!).status).toBe('ok');
+  });
+
+  it('the node verdict by its decider: absent, short, carried copy, wrong id, ok', () => {
+    const block = (gist: string | null) => ({ kind: 'node' as const, attrs: { id: 'x' }, gist, expand: null, refs: null, refsNone: false, inAnalysis: false });
+    const none = new Set<string>();
+    expect(nodeBlockStatus({ block: null, idMismatch: false, priorGistShas: none })).toEqual({ status: 'absent', reason: 'no-block' });
+    expect(nodeBlockStatus({ block: block(null), idMismatch: false, priorGistShas: none })).toEqual({ status: 'invalid', reason: 'gist-short' });
+    expect(nodeBlockStatus({ block: block('x'.repeat(GIST_MIN - 1)), idMismatch: false, priorGistShas: none })).toEqual({ status: 'invalid', reason: 'gist-short' });
+    const g = 'y'.repeat(GIST_MIN);
+    expect(nodeBlockStatus({ block: block(g), idMismatch: false, priorGistShas: new Set([gistSha(g)]) })).toEqual({ status: 'invalid', reason: 'carried-copy' });
+    expect(nodeBlockStatus({ block: block(g), idMismatch: true, priorGistShas: none })).toEqual({ status: 'degraded', reason: 'id-mismatch' });
+    expect(nodeBlockStatus({ block: block(g), idMismatch: false, priorGistShas: none })).toEqual({ status: 'ok', reason: null });
+  });
+
+  it('a short gist gives invalid with the rollup gist; a carried copy of another stored gist in the session gives invalid; no node block gives absent with the rollup gist', () => {
+    const short = parentRow(parents[2]!);
+    expect({ status: short.status, gist: short.gist }).toEqual({ status: 'invalid', gist: rollupOf(parents[2]!).gist });
+    expectRollupFields(parents[2]!);
+    expect(parentRow(parents[3]!).gist, 'CONTROL: the carried gist is leaf 3\'s stored gist').not.toBe(LEAF_GIST(3));
+    expect(leavesOf(box, U)[3]!.gist, 'CONTROL: leaf 3 stores it').toBe(LEAF_GIST(3));
+    const copy = parentRow(parents[3]!);
+    expect({ status: copy.status, gist: copy.gist }).toEqual({ status: 'invalid', gist: rollupOf(parents[3]!).gist });
+    // Group 5 has a receipted last child and a node block only inside an <analysis>: no node block was selected.
+    const absent = parentRow(parents[5]!);
+    expect({ status: absent.status, gist: absent.gist }).toEqual({ status: 'absent', gist: rollupOf(parents[5]!).gist });
+    expect(absent.gist, 'the hidden block\'s gist is nowhere in it').not.toContain('analysis block');
+    expectRollupFields(parents[5]!);
+  });
+
+  it('a parent whose last child has no receipt is the rollup gist with status ok, as today', () => {
+    const p = parentRow(parents[4]!);
+    expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: rollupOf(parents[4]!).gist });
+    expect(p.gist).not.toBe(NODE_IGNORED);
+    expectRollupFields(parents[4]!);
+  });
+
+  it('a depth-2 parent never reads a node block: it is the rollup of its four parents, status ok', () => {
+    const top = parentId(parents.slice(0, 4));
+    const p = parentRow(top);
+    expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: rollupOf(top).gist });
+    expectRollupFields(top);
+  });
+
+  it('a re-roll keeps every steered gist and status, and a belt pass leaves every parent untouched', async () => {
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      rerollParents(db: ReturnType<typeof openWriter>, ictx: object, nodeIds: readonly string[], onlyIfChanged?: boolean): number;
+    };
+    const before = parents.map((id) => parentRow(id));
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      expect(D.rerollParents(db, ictx, ids, true), 'the belt finds every parent as a re-roll would write it, the steered ones included').toBe(0);
+      expect(D.rerollParents(db, ictx, ids, false), 'a plain re-roll rewrites the seven depth-1 parents and the depth-2 one').toBe(GROUPS + 1);
+    } finally { closeWriter(db); }
+    expect(parents.map((id) => parentRow(id)), 'gist, status and the rest are what they were').toEqual(before);
+    expect(parentRow(parents[0]!).gist).toBe(NODE_OK);
+    expect(parentRow(parents[1]!)).toMatchObject({ gist: NODE_WRONG, status: 'degraded' });
+    expect(refsOfNode(parents[0]!), 'its refs are written again').not.toEqual([]);
+    expect(ftsTexts(parents[0]!).join('\n')).toContain('eight spans together built the first fixture parent');
+  });
+
+  it('a registered value inside a node gist is redacted in the stored gist and in nodes_fts by the re-roll, and the status stays', async () => {
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      rerollParents(db: ReturnType<typeof openWriter>, ictx: object, nodeIds: readonly string[], onlyIfChanged?: boolean): number;
+    };
+    const last = parents[6]!;
+    expect(parentRow(last).gist, 'CONTROL: no pair was known when the parent was made').toBe(NODE_REDACT);
+    expect(parentRow(last).status).toBe('ok');
+    expect(ftsTexts(last).join('\n'), 'CONTROL: its index row holds the value too').toContain(V);
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([V]).pairs) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      expect(D.rerollParents(db, ictx, ids.slice(48), true), 'the belt sees the gist change under the new pairs').toBe(1);
+    } finally { closeWriter(db); }
+    const p = parentRow(last);
+    expect(p.status).toBe('ok');
+    expect(p.gist).toBe(NODE_REDACT.replace(V, '[redacted]'));
+    expect(p.gist).not.toContain(V);
+    expect(ftsTexts(last).join('\n')).not.toContain(V);
+    expect(ftsTexts(last).join('\n'), 'the index row still carries the gist').toContain('built the last fixture parent');
+  });
 });
