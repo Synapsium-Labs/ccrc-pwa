@@ -176,7 +176,7 @@ function emptyEnvelope(P) {
     retention: { lowered: null, unmeasured: [] },
     redact_unreadable: [],
     recall_off: { seen_ms: null, files: 0, unreadable: 0 },   // W2-D31 (W2-1 Task 4): no store read, no observation
-    recovering: null, op: null, pass: null, pass_died: null, history_off: false, shim_mtime_ms: null,
+    recovering: null, op: null, pass: null, pass_died: null, history_off: false, agents_armed: false, shim_mtime_ms: null,
     counters: {},
     health: { pass: null, warn: [], fail: [] },
   };
@@ -193,6 +193,12 @@ function decided(env, d) {
 function boxFacts(env, P) {
   try { env.shim_mtime_ms = Math.trunc(lstatSync(P.shim).mtimeMs); } catch { env.shim_mtime_ms = null; }
   env.history_off = existsSync(P.off);
+  // W4 P15 (b), P5 (D-8151, D-8155): the subagent ingest's arming marker, the second of its two readers (ingestTick is the first), one
+  // lstat as booleans handed to lib's agentsArmedOf: a regular, non-link file arms it. Never opened and never followed, so a FIFO, a
+  // directory or a link answers false at once. healthInputsOf carries it to deriveHealth's `agents-paused-at-cap`.
+  let marker = null;
+  try { const st = lstatSync(P.agentsOn); marker = { isFile: st.isFile(), isSymbolicLink: st.isSymbolicLink() }; } catch { /* absent or unreadable: not armed */ }
+  env.agents_armed = healthLib.agentsArmedOf(marker);
   // The sweep's capText rule (Task 14), spelled again because cli.mjs imports only loadSecrets from sweep.mjs, statically: absent is
   // null (the default, not malformed); an unreadable file is '' — malformed, so doctor WARNs (§9.3).
   const cr = readBounded(P.cap, CONTROL_FILE_MAX, true);
@@ -498,6 +504,7 @@ const USAGE = [
   '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
   '  operator verbs: import | prune | reparse | recall-off <id> [--generation <uuid>] [--clear] | recall-off --clear-all',
+  '    | census [--json] (read-only: subagent parent-link coverage)',
   '    | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
@@ -1351,7 +1358,7 @@ function readStoreExtras(p, nowMs) {
 }
 
 /** Everything deriveHealth needs that the envelope does not carry. */
-async function readHealthExtras(home, env, nowMs) {
+export async function readHealthExtras(home, env, nowMs) {
   const p = healthLib.historyPaths(home);
   const unreachable = env.reason === 'store-unreachable';
   let rootIsSymlink = false;
@@ -1392,7 +1399,7 @@ async function readHealthExtras(home, env, nowMs) {
 }
 
 /** The envelope and the extras, as deriveHealth's inputs. */
-function healthInputsOf(env, x, nowMs) {
+export function healthInputsOf(env, x, nowMs) {
   const exp = (env.export && env.export['claude-code']) || {};
   return {
     nowMs,
@@ -1411,6 +1418,7 @@ function healthInputsOf(env, x, nowMs) {
     userVersion: env.user_version ?? null,
     codeVersion: env.code_version,
     historyOff: env.history_off === true,
+    agentsArmed: env.agents_armed === true,   // W4 P5: the marker the envelope measured, for the agents-paused-at-cap WARN
     // The step and cursor are the envelope's (task 27 spells the step `recover/<v>`); only the
     // unmoved-tick count, a meta key B2's recovery step keeps, comes from readStoreExtras.
     recovering: env.recovering
@@ -1532,7 +1540,7 @@ export function formatHealth(health) {
 
 /** A CLI operator verb, or a doctor flag, → the --op verb the sweep runs. */
 export const OP_OF_VERB = Object.freeze({
-  import: 'import', prune: 'prune', reparse: 'reparse', 'recall-off': 'recall-off',
+  import: 'import', prune: 'prune', reparse: 'reparse', 'recall-off': 'recall-off', census: 'census',
   '--repair': 'repair', '--backup': 'backup', '--migrate': 'migrate', '--adopt': 'adopt', '--restore': 'restore', '--rebuild': 'rebuild',
 });
 
@@ -1802,9 +1810,16 @@ export async function operatorMain(home, argv) {
     return env.exit;
   }
   const P = healthLib.historyPaths(home);
+  // W4 P16 (a): the census's report IS its answer, so under --json stdout is ONE JSON document: the report on success, the envelope
+  // on any other exit (as every operator verb's --json stdout is the envelope alone). The sweep prints the report as one JSON line
+  // when it is handed `--json` (parseOpVerbArgs' census arm), which this puts back after the strip above. What the sweep prints
+  // itself is held until the exit is known: stdout on exit 0, else stderr beside the envelope's exit, never on stdout.
+  const reportOnStdout = json && verb === 'census';
+  const held = [];
   const emit = (line, toStderr = false) => {
     const text = `${line}\n`;
-    if (json || toStderr) process.stderr.write(text);
+    if (reportOnStdout && !toStderr) held.push(line);
+    else if (json || toStderr) process.stderr.write(text);
     else process.stdout.write(text);
   };
   // A throw out of the door that is neither a StoreError nor a SQLite error (relayIndexOf's rethrow) is a defect: exit 1.
@@ -1816,13 +1831,17 @@ export async function operatorMain(home, argv) {
   // the catch below) is redacted with the index of the read its text belongs to, as D-5023 rules; before the index exists, NO_PAIRS.
   const seam = { idx: NO_PAIRS };
   try {
-    r = await runOpVerb(home, verb, rest.slice(1), emit, seam);
+    r = await runOpVerb(home, verb, reportOnStdout ? [...rest.slice(1), '--json'] : rest.slice(1), emit, seam);
   } catch (e) {
     thrown = true;
     r = { exit: EXIT.INTERNAL };
     errLine(`ccrc history ${verb}: internal error: ${thrownText(e)}; ${OP_OPERATOR_NOTE_ANY}`, seam.idx);
   }
-  if (json) {
+  for (const line of held) {
+    if (r.exit === EXIT.OK) process.stdout.write(`${line}\n`);
+    else errLine(line, seam.idx);   // already redacted by the relay; errLine is the one stderr door of a held line (H-32)
+  }
+  if (json && !(reportOnStdout && r.exit === EXIT.OK)) {
     const id = readTrimmed(P.storeId);
     const env = healthLib.readEnvelope({
       exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }),

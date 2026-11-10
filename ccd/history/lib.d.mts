@@ -22,7 +22,7 @@ export const HISTORY_ROOT_REL: string;
 export const STORE_DB_FILE: 'history.db';
 export const STORE_FILES: readonly string[];
 export const SWITCHES: Readonly<{
-  off: string; maxGb: string; steerOff: string; steerLivePrefix: string; steerOnDir: string; headlessOn: string;
+  off: string; maxGb: string; steerOff: string; steerLivePrefix: string; steerOnDir: string; headlessOn: string; agentsOn: string;
 }>;
 
 export const SPOOL_LINE_MAX: number;
@@ -128,6 +128,127 @@ export const HEALTH_WORDS: Readonly<Record<string, HealthClass>>;
 
 export function idOk(id: unknown): boolean;
 export function spoolFileIdOf(name: unknown): string | null;
+
+// --- W4 addendum P1, P10, P20: the subagent file grammars and identity
+export const RUN_ID_RE: RegExp;
+export const AGENT_ID_MAX: number;
+export function agentIdOk(id: unknown): boolean;
+export type AgentLevel = (typeof AGENT_LEVELS)[number];
+export const AGENT_LEVELS: readonly ['root', 'project', 'session', 'subagents', 'workflows', 'run'];
+export type AgentDirReason = (typeof AGENT_DIR_REASONS)[number];
+export const AGENT_DIR_REASONS: readonly ['link', 'not-dir', 'unlistable'];
+export type AgentFileReason = (typeof AGENT_FILE_REASONS)[number];
+export const AGENT_FILE_REASONS: readonly ['run-id', 'name', 'link', 'not-regular'];
+export type AgentName =
+  | { role: 'candidate'; id: string | null }
+  | { role: 'meta'; id: string }
+  | { role: 'journal' }
+  | { role: 'descend' };
+export function classifyAgentName(name: string, where: 'subagents' | 'run'): AgentName;
+/** The name of an agent's meta companion, `agent-<ID>.meta.json`: its one spelling (final review M3). */
+export function metaNameOf(agentId: string): string;
+/** The path of an agent's meta: in the directory of `agentFilePath`, named by metaNameOf(agentId). A pure string rule. */
+export function metaPathOf(agentFilePath: string, agentId: string): string;
+export function decideAgentDir(i: { kind: 'dir' | 'link' | 'file' | 'other'; listable: boolean }): { enter: true } | { enter: false; reason: AgentDirReason };
+export function decideAgentFile(i: { kind: 'file' | 'link' | 'dir' | 'other'; id: string | null; runOk: boolean }): { verdict: 'admit' } | { verdict: 'refuse'; reason: AgentFileReason };
+export function agentKey(id: string, runId: string | null): string;
+/** How many bytes of one subagent file are still waiting: no row or another file's row leaves its size, the same file its size past the cursor, a file shorter than its cursor its whole size (final review M2). */
+export function bytesLeftOf(i: { stored: { dev: bigint | number | null; ino: bigint | number | null; offset: bigint | number } | null; size: number; dev: bigint | number | null; ino: bigint | number | null }): number;
+export const META_MAX_BYTES: 65536;
+/** The meta key that names a subagent's type, measured by act M2 (D-8161). */
+export const AGENT_TYPE_KEY: string;
+export type MetaFailure = (typeof META_FAILURES)[number];
+export type MetaRead = { ok: true; toolUseId: string | null; agentType: string | null } | { ok: false; cause: MetaFailure };
+export type MetaCount = 'agent_meta_conflict' | `agent_meta_unreadable:${MetaFailure}`;
+export function decideMetaLink(i: { stored: string | null; read: MetaRead }): { write: string | null; count: MetaCount | null };
+export function decideMetaType(i: { stored: string | null; read: MetaRead }): string | null;
+export const INSTALL_META: 'agents_since_ms';
+export function decideInstallRecord(i: { existing: number | null; nowMs: number }): number | null;
+export function isPreInstall(mtimeMs: number, sinceMs: number | null): boolean;
+export function agentsArmedOf(st: { isFile: boolean; isSymbolicLink: boolean } | null): boolean;
+export interface AgentIngestInputs {
+  form: 'tick' | 'import'; armed: boolean; historyOff: boolean; pause: string | null; admitted: boolean; preInstall: boolean; parentKnown: boolean;
+}
+export function decideAgentIngest(i: AgentIngestInputs): boolean;
+/** The share of the store cap at which subagent capture pauses (W4 P5). */
+export const AGENTS_PAUSE_SHARE: 0.9;
+/** §9.3's store-to-source ratios, the two ends of `import --agents`' size forecast (W4 P6). */
+export const AGENTS_STORE_RATIO_LOW: 0.4;
+export const AGENTS_STORE_RATIO_HIGH: 0.55;
+/** The pause order's one rule (W4 P5, D-8155): `'at-90'` when armed, no other pause stands, the cap is measured (over 0) and the size has reached
+ *  `AGENTS_PAUSE_SHARE` of it; else null. */
+export function decideAgentsPause(i: { armed: boolean; pause: string | null; sizeBytes: number; capBytes: number }): 'at-90' | null;
+
+// --- W4 P11, P12, P17 to P19: the census's pure deciders (addendum 3.2 and 3.3)
+export type CensusPart = (typeof CENSUS_PARTS)[number];
+export const CENSUS_PARTS: readonly ['R', 'P', 'Q', 'Ad'];
+export type CensusVerdict = (typeof CENSUS_VERDICTS)[number];
+export const CENSUS_VERDICTS: readonly ['L', 'U', 'M', 'X'];
+export type CensusColumn = (typeof CENSUS_COLUMNS)[number];
+/** `D-T` first: the one ever called canonical. */
+export const CENSUS_COLUMNS: readonly ['D-T', 'D', 'E', 'Ad'];
+export const META_FAILURES: readonly ['absent', 'oversized', 'not-regular', 'unreadable', 'malformed'];
+export type CensusReason =
+  | 'meta-conflict' | `meta-unread:${MetaFailure}`
+  | 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable'
+  | 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed'
+  | 'summary-unreadable' | 'predicate-unsettled' | 'no-run-window';
+export const CENSUS_REASONS: readonly CensusReason[];
+export type CensusWithheldReason = 'K' | 'identity_collision' | 'partition-sum' | 'install-record';
+export const CENSUS_WITHHELD: readonly CensusWithheldReason[];
+/** P12's settled predicate and run window (D-8161, act M1): the one place either is spelled. */
+export const CENSUS_PREDICATE: 'b';
+export const CENSUS_RUN_WINDOW: 'immediate';
+export const LINK_WINDOW_MS: number;
+export const LINK_DECODE_MAX: number;
+export function censusPart(i: { hasRow: boolean; listed: number; admissibleMtimes: number[]; sinceMs: number | null }): CensusPart | 'G';
+export type MetaEvidence = { link: string } | { none: true } | { unknown: CensusReason };
+export function metaEvidence(i: { stored: string | null; reads: MetaRead[] }): MetaEvidence;
+export type ParentSearch =
+  | { outcome: 'match' }
+  | { outcome: 'none'; complete: true }
+  | { outcome: 'none'; complete: false; cause: 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed' }
+  | { outcome: 'unmeasured'; cause: 'parent-not-stored' | 'no-timed-row' | 'no-run-window' | 'decode-bound' | 'over-cap' | 'undecodable' };
+export type LinkVerdict = { v: 'L' | 'U' | 'M' | 'X'; reason: CensusReason | null };
+export function linkVerdict(i: { meta: MetaEvidence; parent: ParentSearch }): LinkVerdict;
+export type WorkflowVerdict = { v: 'L' | 'U' | 'M'; reason: CensusReason | null };
+export type WorkflowSummary = 'exists' | 'absent' | 'unreadable';
+export const HOLDING_UNBOUND_CAUSES: readonly ['unread', 'unreadable', 'replaced', 'shrunk'];
+export type HoldingUnboundCause = (typeof HOLDING_UNBOUND_CAUSES)[number];
+export function workflowCanonicalVerdict(predicate: 'b' | 'c' | null, options: { a?: WorkflowVerdict | 'unavailable'; b?: WorkflowVerdict | 'unavailable'; c?: WorkflowVerdict | 'unavailable' }): WorkflowVerdict;
+export function workflowVerdict(option: 'a' | 'b' | 'c', ev: ParentSearch | WorkflowSummary | null): WorkflowVerdict | 'unavailable';
+/** null when the anchor (`t0`, or `tEnd` for `at-end`) is not a finite number: no window, so the caller reads `no-timed-row` (an `M`). */
+export function workflowWindow(t0: number | null, runWindow: 'immediate' | 'at-end', tEnd?: number | null): [number, number] | null;
+export function inColumn(column: CensusColumn, part: CensusPart, imported: boolean): boolean;
+export function censusSums(c: { D: number; R: number; P: number; Q: number; Ad: number; L: number; U: number; M: number; X: number }): { ok: boolean; failed: Array<'D' | 'Ad'> };
+export function unboundExtra(keys: Array<{ bound: number; unbound: number }>): number;
+export interface ShareRange { lo: number; hi: number }
+/** null for an empty denominator: no share, never a zero. */
+export function shareRange(i: { L: number; M: number; den: number; extraLow: number }): ShareRange | null;
+export function censusWithheld(i: { K: number; collisions: number; sumsOk: boolean; installRecord: number | 'absent' | 'damaged' }): CensusWithheldReason[];
+export function canonicalOf(i: { shares: Partial<Record<CensusColumn, ShareRange | null>> | null; withheld: readonly string[]; predicate: 'b' | 'c' | null }): ShareRange | null;
+export type HoldingShape = (typeof HOLDING_SHAPES)[number];
+export const HOLDING_SHAPES: readonly ['none', 'single', 'identical', 'prefix', 'fork', 'disjoint'];
+export function holdingShape(lists: string[][]): HoldingShape;
+export type ParentHolding = { bound: false } | { bound: true; readToEnd: boolean; pastEnd: boolean | null };
+export function parentHoldingsCause(holdings: ParentHolding[]): 'parent-behind' | 'parent-copy-unbound' | null;
+export function linkSearchCause(i: { boundStopped: boolean; overCap: boolean; undecodable: boolean }): 'decode-bound' | 'over-cap' | 'undecodable' | null;
+export function parentSearchOutcome(i: { holdingsCause: 'parent-behind' | 'parent-copy-unbound' | null; untimed: boolean }): Extract<ParentSearch, { outcome: 'none' }>;
+export function holdingUnboundCause(i: {
+  row: { transcriptUuid: string; agentKey: string; birthNs: number | bigint | string | null; live: boolean; offset: number } | null;
+  holding: { uuid: string; agentKey: string; birthNs: bigint | null | undefined; size: number };
+  pathStored: boolean; readable: boolean | null;
+}): HoldingUnboundCause | null;
+/** What the subagent arm of the walk hands over (W4 P20). Paths stay in memory; nothing prints them. */
+export type AgentWalkEntry =
+  | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number; dev: bigint | null; ino: bigint | null; size: number; /** The listing's own lstat's birth time, null where the filesystem reports none. */ birthNs?: bigint | null }
+  | { type: 'companion'; home: string; slug: string; uuid: string; runId: string | null; role: 'meta' | 'journal'; id: string | null; path: string }
+  | { type: 'unentered'; home: string; level: AgentLevel; reason: AgentDirReason; path: string };
+export interface AgentSink {
+  take(e: AgentWalkEntry): void;
+  /** Asked before each entry of `subagents/` and of a run directory, after the walk's own stop; `taken` counts the `file` entries handed to `take` so far. */
+  stop: ((taken: number) => boolean) | null;
+}
 export function readBoxEnvValue(text: string, key: string): { found: boolean; value: string };
 export interface HistoryPaths {
   readonly root: string; readonly spool: string; readonly draining: string; readonly journalDir: string;
@@ -138,6 +259,8 @@ export interface HistoryPaths {
   readonly op: string; readonly pass: string; readonly passDied: string; readonly lock: string; readonly off: string; readonly cap: string;
   /** W2-D29: the headless-on switch (SWITCHES.headlessOn) and the recall-off directory (RECALL_OFF_DIR under the root). */
   readonly headlessOn: string; readonly recallOffDir: string;
+  /** W4 P15 (b): the subagent ingest's arming marker (SWITCHES.agentsOn), the one path both readers lstat. */
+  readonly agentsOn: string;
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
@@ -233,11 +356,17 @@ export interface RunPlan {
   drain: boolean; ingest: boolean; pause: null | 'at-cap' | 'low-disk';
 }
 export function planRun(i: RunInputs): RunPlan;
-export interface CursorRow { transcriptUuid: string; birthNs: number | bigint | null; headSha: string | null; offset: number; tailSha: string | null }
+export interface CursorRow { transcriptUuid: string; /** W4 P1: the row's agent key, '' for a main transcript (absent reads as ''). */ agentKey?: string; birthNs: number | bigint | null; headSha: string | null; offset: number; tailSha: string | null }
 export interface FileReadInputs {
   row: CursorRow | null; stat: { size: number; birthNs: number | bigint | null } | null;
-  pathUuid: string; headSha: string | null; tailShaAtOffset: string | null;
+  pathUuid: string; /** The path's agent key; absent reads as ''. */ pathAgentKey?: string; headSha: string | null; tailShaAtOffset: string | null;
 }
+/** planFileRead's and the census's one identity rule: the path's uuid and agent key, the birth time where both sides have one, else
+ *  the first line's sha where both have one. The census passes no first-line sha (D-8163). */
+export function sameFileIdentity(i: {
+  row: { transcriptUuid: string; agentKey?: string; birthNs: number | bigint | string | null | undefined; headSha: string | null | undefined };
+  pathUuid: string; pathAgentKey?: string; birthNs: number | bigint | string | null | undefined; headSha: string | null | undefined;
+}): boolean;
 export function planFileRead(i: FileReadInputs): 'resume' | 'rescan' | 'retire' | 'skip';
 export const UNKNOWN_OP_FORM: 'unknown-op';
 export function formOf(op: string, args: readonly string[]): string | null;
@@ -459,6 +588,8 @@ export interface HealthInputs {
   readonly userVersion: number | null;
   readonly codeVersion: number;
   readonly historyOff: boolean;
+  /** W4 P15 (b), P5: whether the subagent ingest's arming marker stands (the status envelope's `agents_armed`); optional, read as false when absent. */
+  readonly agentsArmed?: boolean;
   readonly recovering: null | { readonly step: string; readonly cursor: string; readonly cursorUnmovedTicks: number };
   readonly op: null | { readonly verb: string; readonly pid: number; readonly alive: boolean };
   /** D-5016: the scheduled pass's marker as status measured it; `live` only when its identity measured equal. */
@@ -874,7 +1005,7 @@ export function parentRollup(children: readonly RollupChild[]): {
 
 // --- W1-B2 Task 6: operator-verb decisions (spec §6.6, §6.9, §8.3, §8.4)
 export type OpArgs =
-  | { readonly op: 'import'; readonly apply: boolean; readonly session: string | null; readonly file: string | null }
+  | { readonly op: 'import'; readonly apply: boolean; readonly session: string | null; readonly file: string | null; readonly agents: boolean }
   | { readonly op: 'migrate' }
   | { readonly op: 'prune'; readonly days: number; readonly apply: boolean }
   | { readonly op: 'reparse'; readonly node: string | null; readonly session: string | null; readonly apply: boolean }

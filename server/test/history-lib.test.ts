@@ -19,6 +19,10 @@ import {
   SPOOL_EVENTS, SPOOL_SOURCES, SPOOL_NODE_KINDS, EPOCH_CAUSES, DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES,
   BACKENDS, JOURNAL_KINDS, JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS,
   UUID_RE, WRITER_RE, idOk, readBoxEnvValue, historyPaths,
+  AGENT_ID_MAX, RUN_ID_RE, AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
+  agentIdOk, classifyAgentName, decideAgentDir, decideAgentFile, agentKey,
+  INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest, AGENTS_PAUSE_SHARE, decideAgentsPause,
+  META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, decideMetaType,
 } from '../../ccd/history/lib.mjs';
 import {
   canonicalJson, JSON_DEPTH_MAX, JSON_NODES_MAX, jsonWithinStructureBound, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
@@ -29,6 +33,7 @@ import {
   parseJournalRecord, journalRecord,
 } from '../../ccd/history/lib.mjs';
 import * as libPlan from '../../ccd/history/lib.mjs';
+import * as libCensus from '../../ccd/history/lib.mjs';
 import * as libEpoch from '../../ccd/history/lib.mjs';
 import * as libRows from '../../ccd/history/lib.mjs';
 import * as rowFx from './historyFixtures.js';
@@ -61,15 +66,46 @@ import * as libFork from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
+const HISTORY_DIR = join(REPO, 'ccd', 'history');
 
-describe('lib.mjs is L1: its import block is node:crypto and nothing else (spec §6.4, §13)', () => {
+// lib stays free of I/O: its one import besides node:crypto is an L0 file that imports nothing (W4 addendum P10, the shared arm;
+// the coordinator's ruling in fix round 4, review 1735 F1).
+const LIB_IMPORTS = ['node:crypto', '../../shared/workflow-ids.mjs'];
+const SHARED_IDS = join(REPO, 'shared', 'workflow-ids.mjs');
+// Module level (not the ring describe's own), so the import case above it reads the same row (review 1737 A7).
+/** L3 never imports an outer ring and only L4 may reach `../compact-card.mjs`; store.mjs is the sole node:sqlite importer. */
+const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {
+  'lib.mjs': { ring: 'L1', forbids: (s) => !LIB_IMPORTS.includes(s) },
+  'store.mjs': { ring: 'L3', forbids: (s) => s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') },
+  'sweep.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
+  'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
+  // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
+  'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  // W4 Task 1H: the subagent census, L4 like derive.mjs (it imports lib and derive's blob reads, and runs statements on the handle it is handed).
+  'census.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  // W3 Task 1B: the steer file's IO, L3, which card.mjs (L4) calls. It imports lib and store and nothing outward, and reaches SQLite through the handle it is given.
+  'steer.mjs': { ring: 'L3', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './card.mjs' || s === './derive.mjs' || s.startsWith('../') },
+  'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
+};
+
+describe('lib.mjs is L1: its import block is node:crypto and the shared run-id grammar, nothing else (spec §6.4, §13; W4 addendum P10)', () => {
   const src = readFileSync(LIB, 'utf8');
 
-  it('imports exactly node:crypto — no fs, no sqlite, no child_process, nothing that imports them', () => {
+  it('imports exactly node:crypto and the shared run-id grammar — no fs, no sqlite, no child_process, nothing that imports them', () => {
     const specs = specsOf(src);
     // Non-vacuity: a reader that matched nothing would pass every ring.
     expect(specs.length, 'the import scan matched nothing').toBeGreaterThan(0);
-    expect(specs).toEqual(['node:crypto']);
+    expect([...specs].sort()).toEqual([...LIB_IMPORTS].sort());
+    expect(specsOf(readFileSync(SHARED_IDS, 'utf8'))).toEqual([]);   // the L0 file imports nothing
+    expect(otherDoors(readFileSync(SHARED_IDS, 'utf8'))).toEqual([]);
+  });
+
+  it('CONTROL (review 1735 F1): a second shared import reds both pins', () => {
+    const more = `${src}\nimport { SPAWN_X } from '../../shared/spawn.mjs';`;
+    expect([...specsOf(more)].sort()).not.toEqual([...LIB_IMPORTS].sort());
+    expect(specsOf(more).filter(RINGS['lib.mjs']!.forbids)).toEqual(['../../shared/spawn.mjs']);
   });
 
   it('reaches no module by any other door, and reads no environment', () => {
@@ -103,20 +139,6 @@ const otherDoors = (src: string): string[] => DOORS.filter((r) => r.test(codeOf(
 describe('every ccd/history module and history test fixture keeps its ring (spec §6.4, §13; plan Global Constraints "Rings"; review 316 F26)', () => {
   const HIST = join(REPO, 'ccd', 'history');
   const FIX = join(REPO, 'server', 'test', 'fixtures', 'history');
-  /** L3 never imports an outer ring and only L4 may reach `../compact-card.mjs`; store.mjs is the sole node:sqlite importer. */
-  const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {
-    'lib.mjs': { ring: 'L1', forbids: (s) => s !== 'node:crypto' },
-    'store.mjs': { ring: 'L3', forbids: (s) => s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') },
-    'sweep.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
-    'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
-    // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
-    'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
-    'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
-    // W3 Task 1B: the steer file's IO, L3, which card.mjs (L4) calls. It imports lib and store and nothing outward, and reaches SQLite through the handle it is given.
-    'steer.mjs': { ring: 'L3', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './card.mjs' || s === './derive.mjs' || s.startsWith('../') },
-    'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
-    'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
-  };
   /**
    * - A preload is a seam from outside (D-4247). It imports only node builtins, never the module graph it patches, with ONE allowance
    *   (FU6, B3M21/B3M22): a lazy `import()` that LAZY_IMPORTS names for that file, exactly. preload-faults.mjs reads store.mjs's
@@ -255,7 +277,11 @@ describe('the vocabularies are frozen, and each holds what the spec names', () =
     for (const v of [EXIT, REASONS, REFUSALS, WRITING_FORMS, STORE_FILES, SWITCHES, NODE_KINDS, PARSE_STATUS,
       ENTRY_PARSE_STATES, PROVENANCE, SEARCHABLE_PROVENANCE, SPOOL_EVENTS, SPOOL_SOURCES, EPOCH_CAUSES,
       DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES, BACKENDS, JOURNAL_KINDS,
-      JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS]) {
+      JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS,
+      // W4 P20 (Task 1B's three vocabularies, frozen unchecked until Task 1C)
+      AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
+      // W4 P11, P12, P17 to P19 (Task 1G): the census's vocabularies
+      libCensus.CENSUS_PARTS, libCensus.CENSUS_VERDICTS, libCensus.CENSUS_COLUMNS, libCensus.META_FAILURES, libCensus.CENSUS_REASONS, libCensus.CENSUS_WITHHELD, libCensus.HOLDING_SHAPES, libCensus.HOLDING_UNBOUND_CAUSES]) {
       expect(Object.isFrozen(v)).toBe(true);
     }
     for (const f of Object.values(WRITING_FORMS)) expect(Object.isFrozen(f)).toBe(true);
@@ -1133,6 +1159,9 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
     expect(libPlan.formOf('import', [])).toBe(null);
     expect(libPlan.formOf('import', ['--session', 'demo-quiet-basin'])).toBe(null);
     expect(libPlan.formOf('import', ['--apply'])).toBe('import-apply');
+    expect(libPlan.formOf('import', ['--agents'])).toBe(null);
+    expect(libPlan.formOf('import', ['--agents', '--apply'])).toBe('import-agents-apply');
+    expect(libPlan.formOf('import', ['--apply', '--agents'])).toBe('import-agents-apply');
     expect(libPlan.formOf('import', ['--session', 'demo-quiet-basin', '--file', '/home/u/.claude-a/projects/p/x.jsonl', '--apply'])).toBe('import-session-apply');
     expect(libPlan.formOf('prune', ['--older-than', '90d'])).toBe(null);
     expect(libPlan.formOf('prune', ['--older-than', '90d', '--apply'])).toBe('prune-apply');
@@ -1141,11 +1170,13 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
     expect(libPlan.formOf('recall-off', ['demo-quiet-basin'])).toBe('recall-off');
     expect(libPlan.formOf('recall-off', ['--clear-all'])).toBe('recall-off-clear-all');
     for (const op of ['repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) expect(libPlan.formOf(op, [])).toBe(op);
+    // W4 P16 (a): the census is read-only, never a writing form, whatever it is handed (a dry run, so it runs inside a session)
+    for (const a of [[], ['--json'], ['--apply'], ['--agents', '--apply']]) expect(libPlan.formOf('census', a), a.join(' ')).toBe(null);
     expect(libPlan.formOf('frobnicate', ['--apply'])).toBe(libPlan.UNKNOWN_OP_FORM);
   });
   it('every non-null form formOf answers for a known verb is a WRITING_FORMS key', () => {
-    const argvs = [[], ['--apply'], ['--session', 'x', '--file', 'y', '--apply'], ['--clear-all']];
-    for (const op of ['import', 'prune', 'reparse', 'recall-off', 'repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) {
+    const argvs = [[], ['--apply'], ['--session', 'x', '--file', 'y', '--apply'], ['--clear-all'], ['--agents', '--apply']];
+    for (const op of ['import', 'prune', 'reparse', 'recall-off', 'census', 'repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) {
       for (const a of argvs) {
         const f = libPlan.formOf(op, a);
         if (f !== null) expect(NAMES, `${op} ${a.join(' ')}`).toContain(f);
@@ -1171,6 +1202,7 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
     }
     expect(FORMS['import-session-apply']!.irreversible).toBe(true);
     expect(FORMS['import-apply']!.irreversible).toBe(false);
+    expect(FORMS['import-agents-apply']).toMatchObject({ op: 'import', irreversible: false, binding: false });
     expect(FORMS['migrate']!.irreversible).toBe(false);
   });
   it('from a cc- pane only the irreversible forms refuse irreversible-in-pane; another pane passes', () => {
@@ -4527,6 +4559,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['cap-malformed', 'warn', { capMalformed: true }],
     ['redact-source-unreadable', 'warn', { redactUnreadable: ['/home/u/.cc-secrets/fixture.env'] }],
     ['cap-near', 'warn', { sizeBytes: 41 * 2 ** 30 }],
+    ['agents-paused-at-cap', 'warn', { sizeBytes: 45 * 2 ** 30, agentsArmed: true }],   // W4 P5 (D-8155): 90% of the 50 GB cap, armed
     ['breaker-open', 'warn', { breakerOpen: true }],
     ['roster-unreadable', 'warn', { rosterUnreadable: true }],
     ['root-is-symlink', 'warn', { rootIsSymlink: true }],
@@ -4694,7 +4727,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('each remedy names the real command and path in this build, as the operator\'s (whole-branch fix 1 item C)', () => {
     const R = healthLib.HEALTH_REMEDIES;
     const out = 'from a terminal outside any session';
-    for (const w of ['at-cap', 'cap-near']) {
+    for (const w of ['at-cap', 'cap-near', 'agents-paused-at-cap']) {
       expect(R[w], w).toContain('ccrc history prune --older-than <age> --apply');
       expect(R[w], w).toContain(out);
     }
@@ -5304,6 +5337,23 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const r = healthLib.deriveHealth(base({ capturePause: 'at-cap', sizeBytes: 50 * 2 ** 30 }));
     expect(words(r, 'fail')).toContain('at-cap');
     expect(words(r, 'warn')).not.toContain('cap-near');
+  });
+  // W4 P5 (D-8155), review 1728 A3; SA11's doctor half by its parts (D-8159, review 1737 F3): the WARN is decided where the pause
+  // applies, by decideAgentsPause, from the marker the status envelope carries, the standing pause and the size and cap.
+  it('agents-paused-at-cap is decided where the pause applies (review 1728, A3; SA11\'s doctor half, by its parts)', () => {
+    const h90 = { sizeBytes: Math.ceil(0.9 * 50 * 2 ** 30) };
+    const h100 = { sizeBytes: 50 * 2 ** 30 };
+    expect(words(healthLib.deriveHealth(base({ ...h90, agentsArmed: false })), 'warn'), 'unarmed: no pause').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ ...h90 })), 'warn'), 'an absent agentsArmed reads as false').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ ...h90, agentsArmed: true, capturePause: 'low-disk' })), 'warn'), 'under a low-disk pause').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ sizeBytes: Math.ceil(0.9 * 50 * 2 ** 30) - 1, agentsArmed: true })), 'warn'), 'under 90%').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ ...h90, agentsArmed: true })), 'warn')).toEqual(expect.arrayContaining(['agents-paused-at-cap', 'cap-near']));
+    const at = healthLib.deriveHealth(base({ ...h100, agentsArmed: true, capturePause: 'at-cap' }));
+    expect(words(at, 'fail')).toContain('at-cap');
+    expect(words(at, 'warn')).not.toContain('agents-paused-at-cap');
+    expect(words(at, 'warn')).not.toContain('cap-near');
+    const item = healthLib.deriveHealth(base({ ...h90, agentsArmed: true })).warn.find((i) => i.word === 'agents-paused-at-cap')!;
+    expect(item.remedy).toBe(healthLib.HEALTH_REMEDIES['agents-paused-at-cap']);
   });
   it('fts-pending is derivation in progress, not unavailable: no WARN', () => {
     expect(healthLib.deriveHealth(base({ fts: 'fts-pending' })).pass).toBe('ok');
@@ -6096,7 +6146,12 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
     const dir = mkTmp('ccrc-history-f2r5-');
     const copy = join(dir, 'lib-instrumented.mjs');
     const EXPORTS = 'export { isUnicode61Token, unicode61Fold, isDroppedMark };';
-    writeFileSync(copy, `${readFileSync(LIB, 'utf8')}\n${EXPORTS}\n`);
+    // The copy lives in a temp dir where lib's relative `../../shared/workflow-ids.mjs` does not resolve, so that ONE specifier is
+    // rewritten to the shared file's absolute URL (W4 addendum P10); CONTROL: the rewrite replaced exactly one specifier.
+    const SHARED_SPEC = "'../../shared/workflow-ids.mjs'";
+    const libBytes = readFileSync(LIB, 'utf8');
+    expect(libBytes.split(SHARED_SPEC).length - 1, 'CONTROL: lib names the shared run-id file in exactly one specifier').toBe(1);
+    writeFileSync(copy, `${libBytes.replace(SHARED_SPEC, JSON.stringify(pathToFileURL(SHARED_IDS).href))}\n${EXPORTS}\n`);
     const h = await import(/* @vite-ignore */ `${pathToFileURL(copy).href}?f2r5=${process.pid}-${Date.now()}`) as {
       isUnicode61Token: (cp: number) => boolean; unicode61Fold: (cp: number) => number; isDroppedMark: (cp: number) => boolean;
     };
@@ -6378,7 +6433,7 @@ describe('decideOpGate while a recovery step is registered: every writing form b
   const FORMS = libOps.WRITING_FORMS as unknown as Readonly<Record<string, Readonly<{ op: string; irreversible: boolean; binding: boolean }>>>;
   /** RB6's list: import --apply (both forms), prune --apply, reparse --apply, doctor --repair, --backup, --adopt, --migrate.
    *  migrate and adopt are refused here because `recovering` alone carries none of RB13's or RB14's facts. */
-  const REFUSED = ['import-apply', 'import-session-apply', 'prune-apply', 'reparse-apply', 'repair', 'backup', 'adopt', 'migrate'];
+  const REFUSED = ['import-apply', 'import-agents-apply', 'import-session-apply', 'prune-apply', 'reparse-apply', 'repair', 'backup', 'adopt', 'migrate'];
   /** RB6 allows restore and rebuild (they replace the step); RB12 exempts W2's recall-off forms. */
   const ALLOWED = ['restore', 'rebuild', 'recall-off', 'recall-off-clear-all'];
   const recovering = { claudecode: false, historyOff: false, recovering: true };
@@ -6449,9 +6504,9 @@ describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8
   const FILE = '/home/u/.claude/projects/-home-u-worktrees-p-quiet-basin/0189abcd-1234-4678-9abc-000000000001.jsonl';
 
   it("import keeps B1's grammar: --apply, and --session with --file, both or neither", () => {
-    expect(ok('import', [])).toEqual({ op: 'import', apply: false, session: null, file: null });
-    expect(ok('import', ['--apply'])).toEqual({ op: 'import', apply: true, session: null, file: null });
-    expect(ok('import', ['--session', 'claude-demo', '--file', FILE, '--apply'])).toEqual({ op: 'import', apply: true, session: 'claude-demo', file: FILE });
+    expect(ok('import', [])).toEqual({ op: 'import', apply: false, session: null, file: null, agents: false });
+    expect(ok('import', ['--apply'])).toEqual({ op: 'import', apply: true, session: null, file: null, agents: false });
+    expect(ok('import', ['--session', 'claude-demo', '--file', FILE, '--apply'])).toEqual({ op: 'import', apply: true, session: 'claude-demo', file: FILE, agents: false });
     expect(why('import', ['--session', 'claude-demo'])).toBe('bad-args');
     expect(why('import', ['--apply', '--apply'])).toBe('bad-args');
     expect(why('import', ['stray'])).toBe('bad-args');
@@ -6459,6 +6514,29 @@ describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8
     expect(why('import', ['--session', '../x', '--file', FILE])).toBe('bad-id');
     expect(why('import', ['--session', 'claude-demo', '--file', '/home/u/notes.txt'])).toBe('bad-args');
     expect(why('import', ['--session', 'claude-demo', '--file', '/home/u/x/not-a-uuid.jsonl'])).toBe('bad-args');
+  });
+
+  it('import --agents (W4 P6): a bool beside --apply, and never beside --session or --file', () => {
+    expect(ok('import', ['--agents'])).toEqual({ op: 'import', apply: false, session: null, file: null, agents: true });
+    expect(ok('import', ['--agents', '--apply'])).toEqual({ op: 'import', apply: true, session: null, file: null, agents: true });
+    expect(why('import', ['--agents', '--agents'])).toBe('bad-args');
+    expect(why('import', ['--agents', 'stray'])).toBe('bad-args');
+    // CONTROL: the pair parses without --agents (a valid id, a <uuid>.jsonl file), so only the combination refuses
+    expect(why('import', ['--session', 'claude-demo', '--file', FILE])).toBe('ok');
+    expect(why('import', ['--agents', '--session', 'claude-demo', '--file', FILE])).toBe('bad-args');
+    expect(why('import', ['--agents', '--session', 'claude-demo'])).toBe('bad-args');
+    expect(why('import', ['--agents', '--file', FILE, '--apply'])).toBe('bad-args');
+    // the combination is bad-args before the id grammar can say bad-id
+    expect(why('import', ['--agents', '--session', '../x', '--file', FILE])).toBe('bad-args');
+  });
+
+  it('census (W4 P16 (a)) takes --json alone, a bool', () => {
+    expect(ok('census', [])).toEqual({ op: 'census', json: false });
+    expect(ok('census', ['--json'])).toEqual({ op: 'census', json: true });
+    expect(why('census', ['--json', '--json'])).toBe('bad-args');
+    expect(why('census', ['--apply'])).toBe('bad-args');
+    expect(why('census', ['stray'])).toBe('bad-args');
+    expect(why('census', ['--json', 'stray'])).toBe('bad-args');
   });
 
   it('migrate, repair, backup and adopt take no arguments', () => {
@@ -10631,6 +10709,12 @@ describe('W2-1 Task 2: the recall-off paths, the presence constants and isSynthe
     expect(() => lib.recallOffPath('/home/u', '../x'), 'the id is still checked before a path is formed (C66)').toThrow(TypeError);
   });
 
+  it('historyPaths gains agentsOn from SWITCHES: the one path both readers of the subagent ingest\'s marker lstat (W4 P15 (b), D-8151)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.historyPaths('/home/u').agentsOn).toBe('/home/u/.ccrc/history/agents-on');
+    expect(lib.historyPaths('/home/u').agentsOn).toBe(`/home/u/${lib.SWITCHES.agentsOn}`);
+  });
+
   it('RECALL_OFF_DIR is joined onto a path on one code line of lib.mjs, historyPaths\' recallOffDir, and recallOffPath reads it (W2-D29)', () => {
     const code = codeOf(LIB_SRC());
     expect(code.filter((l) => l.includes('${RECALL_OFF_DIR}')).map((l) => l.trim())).toEqual(['recallOffDir: `${root}/${RECALL_OFF_DIR}`,']);
@@ -12131,5 +12215,527 @@ describe('CP-39d: decideActiveRead (D-7096)', () => {
     // the boundary: exactly tornStaleMs old is stale (the examinedSize rule is `>=`)
     const edge = BigInt(NOW - lib.SCAN_INTERVAL_MS) * 1_000_000n;
     expect(decide(row({ mtimeNs: edge }), stat({ mtimeNs: edge, size: 150 })), 'exactly tornStaleMs old').toBe('same');
+  });
+});
+
+// W4 addendum P1, P10, P20: the subagent file grammars, the identity and the run-id holder.
+describe('the subagent grammars and identity (W4 addendum P1, P10, P20)', () => {
+  it('the grammar constants and vocabularies are as the addendum states them', () => {
+    expect(AGENT_ID_MAX).toBe(128);
+    expect(AGENT_LEVELS).toEqual(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
+    expect(AGENT_DIR_REASONS).toEqual(['link', 'not-dir', 'unlistable']);
+    expect(AGENT_FILE_REASONS).toEqual(['run-id', 'name', 'link', 'not-regular']);
+    expect(RUN_ID_RE.source).toBe('^wf_[0-9a-f]{8}-[0-9a-f]{3}$');
+    expect([RUN_ID_RE.test('wf_0123abcd-0a1'), RUN_ID_RE.test('wf_0123abcd-0a'), RUN_ID_RE.test('wf_0123ABCD-0a1'), RUN_ID_RE.test('x/wf_0123abcd-0a1')]).toEqual([true, false, false, false]);
+  });
+
+  it.each([
+    ['', false], ['a', true], ['a'.repeat(128), true], ['a'.repeat(129), false], ['a.b', false],
+    ['-a', true], ['a_b', true], ['a b', false], ['é', false],
+  ] as const)('agentIdOk(%j) is %s', (id, ok) => expect(agentIdOk(id)).toBe(ok));
+
+  it('agentIdOk answers false for a non-string', () => {
+    expect([agentIdOk(undefined as unknown as string), agentIdOk(null as unknown as string), agentIdOk(7 as unknown as string)]).toEqual([false, false, false]);
+  });
+
+  it('classifyAgentName tells transcript candidates from companions', () => {
+    expect(classifyAgentName('agent-x.jsonl', 'subagents')).toEqual({ role: 'candidate', id: 'x' });
+    expect(classifyAgentName('agent-x.meta.json', 'run')).toEqual({ role: 'meta', id: 'x' });
+    expect(classifyAgentName('journal.jsonl', 'run')).toEqual({ role: 'journal' });
+    expect(classifyAgentName('journal.jsonl', 'subagents')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName('workflows', 'subagents')).toEqual({ role: 'descend' });
+    expect(classifyAgentName('agent-a.b.jsonl', 'subagents')).toEqual({ role: 'candidate', id: null });
+  });
+
+  it('classifyAgentName: the other names, each where it is not special', () => {
+    expect(classifyAgentName('workflows', 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName('agent-x.meta.json', 'subagents')).toEqual({ role: 'meta', id: 'x' });
+    expect(classifyAgentName('agent-a.b.meta.json', 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName('agent-.jsonl', 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName(`agent-${'a'.repeat(129)}.jsonl`, 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName(`agent-${'a'.repeat(128)}.jsonl`, 'run')).toEqual({ role: 'candidate', id: 'a'.repeat(128) });
+    expect(classifyAgentName('notes.txt', 'subagents')).toEqual({ role: 'candidate', id: null });
+  });
+
+  it('decideAgentDir enters a listable directory and refuses a link, a non-directory and an unlistable one', () => {
+    expect(decideAgentDir({ kind: 'dir', listable: true })).toEqual({ enter: true });
+    expect(decideAgentDir({ kind: 'dir', listable: false })).toEqual({ enter: false, reason: 'unlistable' });
+    expect(decideAgentDir({ kind: 'link', listable: true })).toEqual({ enter: false, reason: 'link' });
+    expect(decideAgentDir({ kind: 'file', listable: true })).toEqual({ enter: false, reason: 'not-dir' });
+    expect(decideAgentDir({ kind: 'other', listable: true })).toEqual({ enter: false, reason: 'not-dir' });
+  });
+
+  it('decideAgentFile admits a regular file with a good name in a good run, and refuses in order: run-id, name, link, not-regular', () => {
+    expect(decideAgentFile({ kind: 'file', id: 'x', runOk: true })).toEqual({ verdict: 'admit' });
+    expect(decideAgentFile({ kind: 'file', id: 'x', runOk: false })).toEqual({ verdict: 'refuse', reason: 'run-id' });
+    expect(decideAgentFile({ kind: 'link', id: null, runOk: false })).toEqual({ verdict: 'refuse', reason: 'run-id' });
+    expect(decideAgentFile({ kind: 'link', id: null, runOk: true })).toEqual({ verdict: 'refuse', reason: 'name' });
+    expect(decideAgentFile({ kind: 'link', id: 'x', runOk: true })).toEqual({ verdict: 'refuse', reason: 'link' });
+    expect(decideAgentFile({ kind: 'other', id: 'x', runOk: true })).toEqual({ verdict: 'refuse', reason: 'not-regular' });
+    expect(decideAgentFile({ kind: 'dir', id: 'x', runOk: true })).toEqual({ verdict: 'refuse', reason: 'not-regular' });
+  });
+
+  it('agentKey is <ID> or <RUN>/<ID> (P1)', () => {
+    expect(agentKey('x', null)).toBe('x');
+    expect(agentKey('x', 'wf_0123abcd-0a1')).toBe('wf_0123abcd-0a1/x');
+  });
+
+  it.each([
+    ['x', 'agent-x.meta.json'],
+    ['a_b-C9', 'agent-a_b-C9.meta.json'],
+  ] as const)('metaNameOf(%j) is %j, and classifyAgentName reads it back as that id\'s companion (final review M3)', (id, name) => {
+    expect(libCensus.metaNameOf(id)).toBe(name);
+    expect(classifyAgentName(name, 'subagents')).toEqual({ role: 'meta', id });
+    expect(classifyAgentName(name, 'run')).toEqual({ role: 'meta', id });
+  });
+
+  it.each([
+    ['/h/projects/s/u/subagents/agent-x.jsonl', 'x', '/h/projects/s/u/subagents/agent-x.meta.json'],
+    ['/h/projects/s/u/subagents/workflows/wf_0123abcd-0a1/agent-y.jsonl', 'y', '/h/projects/s/u/subagents/workflows/wf_0123abcd-0a1/agent-y.meta.json'],
+    ['agent-z.jsonl', 'z', 'agent-z.meta.json'],
+  ] as const)('metaPathOf(%j, %j) is the meta in the same directory: %j', (file, id, want) => {
+    expect(libCensus.metaPathOf(file, id)).toBe(want);
+  });
+
+  it('the meta companion\'s name is spelled in lib.mjs alone: no other history module has a code line naming `.meta.json` (final review M3)', () => {
+    const offenders: string[] = [];
+    for (const f of readdirSync(HISTORY_DIR).filter((n) => n.endsWith('.mjs') && n !== 'lib.mjs')) {
+      readFileSync(join(HISTORY_DIR, f), 'utf8').split('\n').forEach((line, i) => {
+        const code = /^\s*(\/\/|\*|\/\*)/.test(line) ? '' : line.replace(/\s\/\/.*$/, '');
+        if (code.includes('.meta.json')) offenders.push(`${f}:${i + 1}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // [stored row, size, dev, ino, bytes left]: the one rule behind the tick's withheld count and the import's forecast (final review M2)
+  it.each([
+    ['no row: the whole size', null, 100, 1n, 5n, 100],
+    ['no row, an empty file: nothing waits', null, 0, 1n, 5n, 0],
+    ['the same file stored whole: nothing waits', { dev: 1n, ino: 5n, offset: 100n }, 100, 1n, 5n, 0],
+    ['the same file grown: the size past the cursor', { dev: 1n, ino: 5n, offset: 60n }, 100, 1n, 5n, 40],
+    ['the same file SHRUNK below its cursor: it is read again, so its whole size waits', { dev: 1n, ino: 5n, offset: 150n }, 100, 1n, 5n, 100],
+    ['another inode at the path: the whole size', { dev: 1n, ino: 6n, offset: 100n }, 100, 1n, 5n, 100],
+    ['another device: the whole size', { dev: 2n, ino: 5n, offset: 100n }, 100, 1n, 5n, 100],
+    ['a number offset reads as the bigint does', { dev: 1n, ino: 5n, offset: 60 }, 100, 1n, 5n, 40],
+  ] as const)('bytesLeftOf: %s', (_why, stored, size, dev, ino, want) => {
+    expect(libCensus.bytesLeftOf({ stored, size, dev, ino })).toBe(want);
+  });
+});
+
+// W4 addendum P6, P15 (b), P1: the subagent ingest's gates and the cursor's identity (Task 1C).
+describe('the subagent ingest gates (W4 addendum P6, P15 (b))', () => {
+  it('agentsArmedOf arms a regular, non-link file only', () => {
+    expect(agentsArmedOf({ isFile: true, isSymbolicLink: false })).toBe(true);
+    expect(agentsArmedOf({ isFile: false, isSymbolicLink: true }), 'a link').toBe(false);
+    expect(agentsArmedOf({ isFile: true, isSymbolicLink: true }), 'a link test that stands on its own').toBe(false);
+    expect(agentsArmedOf({ isFile: false, isSymbolicLink: false }), 'a directory or a special file').toBe(false);
+    expect(agentsArmedOf(null), 'an lstat that threw').toBe(false);
+  });
+
+  it('the install record: the first tick writes now, every later tick writes nothing', () => {
+    expect(INSTALL_META).toBe('agents_since_ms');
+    expect(decideInstallRecord({ existing: null, nowMs: 5 })).toBe(5);
+    expect(decideInstallRecord({ existing: 3, nowMs: 5 }), 'a record that stands is never rewritten').toBeNull();
+    expect(decideInstallRecord({ existing: 0, nowMs: 5 }), 'zero is a record').toBeNull();
+  });
+
+  it('isPreInstall: no record, or an mtime before it; an mtime equal to the record is post-install', () => {
+    expect(isPreInstall(100, null)).toBe(true);
+    expect(isPreInstall(99, 100)).toBe(true);
+    expect(isPreInstall(100, 100)).toBe(false);
+    expect(isPreInstall(101, 100)).toBe(false);
+  });
+
+  const OK = { armed: true, historyOff: false, pause: null, admitted: true, parentKnown: true } as const;
+  it.each([
+    ['tick', { preInstall: false }, true],                                 // T1 post-install, armed
+    ['tick', { preInstall: false, armed: false }, false],                  // T2 the marker
+    ['tick', { preInstall: true }, false],                                 // T3 pre-install: never a tick's
+    ['tick', { preInstall: false, historyOff: true }, false],              // T4
+    ['tick', { preInstall: false, pause: 'at-90' }, false],                // T5
+    ['tick', { preInstall: false, admitted: false }, false],               // T6
+    ['tick', { preInstall: false, parentKnown: false }, false],            // T7
+    ['import', { preInstall: true, armed: false }, true],                  // I1 pre-install, the marker ignored
+    ['import', { preInstall: false }, false],                              // I2 post-install: never the import's
+    ['import', { preInstall: true, historyOff: true }, false],             // I3
+    ['import', { preInstall: true, pause: 'agents-paused-at-cap' }, false], // I4
+    ['import', { preInstall: true, parentKnown: false }, false],           // I5
+    ['import', { preInstall: true, admitted: false }, false],              // I6 an import that ignored `admitted` would read a refused file
+  ] as const)('decideAgentIngest(%s, %j) is %s', (form, d, want) => {
+    expect(decideAgentIngest({ form, ...OK, ...d })).toBe(want);
+  });
+
+  // W4 P5 (D-8155): the pause order. Subagent capture pauses at 90% of the store cap while main capture continues; the one rule.
+  const CAP = 2 ** 30;
+  it('AGENTS_PAUSE_SHARE is 0.9', () => {
+    expect(AGENTS_PAUSE_SHARE).toBe(0.9);
+  });
+  it.each([
+    [true, null, 0.9, 'at-90'], [true, null, 0.9 - 1e-9, null], [false, null, 0.95, null],
+    [true, 'at-cap', 1, null], [true, 'low-disk', 0.95, null],
+  ] as const)('decideAgentsPause(armed %s, pause %s, share %s) is %s', (armed, pause, share, want) => {
+    expect(decideAgentsPause({ armed, pause, sizeBytes: share * CAP, capBytes: CAP })).toBe(want);
+  });
+  it('decideAgentsPause pauses nothing on an unmeasured cap (review 1737 F2)', () => {
+    expect(decideAgentsPause({ armed: true, pause: null, sizeBytes: 0, capBytes: 0 })).toBeNull();   // makeIngestCtx's defaults
+    expect(decideAgentsPause({ armed: true, pause: null, sizeBytes: 5, capBytes: 0 }), 'a size over an unmeasured cap').toBeNull();
+  });
+
+  it('planFileRead compares the path\'s agent key with the row\'s as it compares the uuid: another key retires the row (W4 P1)', () => {
+    const U = '0189abcd-1234-4678-9abc-0123456789ab';
+    const row = { transcriptUuid: U, agentKey: 'a', birthNs: 7n, headSha: 'aa', offset: 100, tailSha: 'bb' };
+    const read = (o: Partial<libPlan.FileReadInputs> = {}): string => libPlan.planFileRead({
+      row, stat: { size: 200, birthNs: 7n }, pathUuid: U, pathAgentKey: 'a', headSha: 'aa', tailShaAtOffset: 'bb', ...o,
+    });
+    expect(read(), 'the same key resumes').toBe('resume');
+    expect(read({ pathAgentKey: 'b' }), 'another agent key').toBe('retire');
+    expect(read({ pathAgentKey: '' }), 'a main path onto a subagent row').toBe('retire');
+    expect(read({ pathAgentKey: undefined }), 'an absent key reads as main').toBe('retire');
+    expect(read({ row: { ...row, agentKey: '' }, pathAgentKey: 'a' }), 'a subagent path onto a main row').toBe('retire');
+    expect(read({ row: { transcriptUuid: U, birthNs: 7n, headSha: 'aa', offset: 100, tailSha: 'bb' }, pathAgentKey: undefined }), 'a row with no key reads as main').toBe('resume');
+  });
+});
+
+// W4 addendum P17 (c), the store side: what a key's metas write (Task 1D).
+describe('the subagent meta\'s store side (W4 addendum P17 (c))', () => {
+  const okRead = (toolUseId: string | null, agentType: string | null = null): libPlan.MetaRead => ({ ok: true, toolUseId, agentType });
+  it('the measured values: a 64 KiB bound and the key act M2 measured (D-8161)', () => {
+    expect(META_MAX_BYTES).toBe(65536);
+    expect(AGENT_TYPE_KEY).toBe('agentType');
+  });
+  it.each([
+    [null, okRead('t1'), { write: 't1', count: null }],
+    ['t1', okRead('t2'), { write: null, count: 'agent_meta_conflict' }],
+    [null, { ok: false, cause: 'oversized' }, { write: null, count: 'agent_meta_unreadable:oversized' }],
+    ['t1', okRead('t1'), { write: null, count: null }],
+    [null, okRead(null), { write: null, count: null }],
+    ['t1', okRead(null), { write: null, count: null }],
+    ['t1', { ok: false, cause: 'absent' }, { write: null, count: 'agent_meta_unreadable:absent' }],
+    [null, { ok: false, cause: 'malformed' }, { write: null, count: 'agent_meta_unreadable:malformed' }],
+    [null, { ok: false, cause: 'not-regular' }, { write: null, count: 'agent_meta_unreadable:not-regular' }],
+    [null, { ok: false, cause: 'unreadable' }, { write: null, count: 'agent_meta_unreadable:unreadable' }],
+  ] as const)('decideMetaLink(%j, %j) is %j (P17 (c), the store side)', (stored, read, want) => {
+    expect(decideMetaLink({ stored, read: read as libPlan.MetaRead })).toEqual(want);
+  });
+  it.each([
+    [null, okRead('t1', 'general-purpose'), 'general-purpose'],    // the first meta read whole that carries a type
+    [null, okRead(null, 'Explore'), 'Explore'],                    // independent of the link
+    ['general-purpose', okRead('t1', 'Explore'), null],            // a row that stands is never rewritten
+    ['general-purpose', okRead('t1', 'general-purpose'), null],
+    [null, okRead('t1', null), null],                              // no type in a meta read whole
+    [null, { ok: false, cause: 'malformed' }, null],               // an incomplete read writes nothing
+    ['general-purpose', { ok: false, cause: 'absent' }, null],
+  ] as const)('decideMetaType(%j, %j) is %j (write once, from the first whole meta)', (stored, read, want) => {
+    expect(decideMetaType({ stored, read: read as libPlan.MetaRead })).toBe(want);
+  });
+});
+
+
+// W4 addendum 3.2 and 3.3 (P11, P12, P17 to P19): the census's pure deciders. Each table's rows are the addendum's.
+describe('the census deciders (W4 addendum P11, P12, P17 to P19)', () => {
+  const okLink = (t: string | null): libPlan.MetaRead => ({ ok: true, toolUseId: t, agentType: null });
+  const bad = (cause: libPlan.MetaFailure): libPlan.MetaRead => ({ ok: false, cause });
+  const IMPORTED = true;
+
+  it('the vocabularies are as the brief states them (D-T first; the reasons of both tables)', () => {
+    expect(libCensus.CENSUS_PARTS).toEqual(['R', 'P', 'Q', 'Ad']);
+    expect(libCensus.CENSUS_VERDICTS).toEqual(['L', 'U', 'M', 'X']);
+    expect(libCensus.CENSUS_COLUMNS).toEqual(['D-T', 'D', 'E', 'Ad']);
+    expect(libCensus.CENSUS_REASONS).toEqual([
+      'meta-conflict', 'meta-unread:absent', 'meta-unread:oversized', 'meta-unread:not-regular', 'meta-unread:unreadable', 'meta-unread:malformed',
+      'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable', 'parent-behind', 'parent-copy-unbound', 'parent-untimed',
+      'summary-unreadable', 'predicate-unsettled', 'no-run-window']);
+    expect(libCensus.HOLDING_UNBOUND_CAUSES).toEqual(['unread', 'unreadable', 'replaced', 'shrunk']);
+    expect(libCensus.CENSUS_WITHHELD).toEqual(['K', 'identity_collision', 'partition-sum', 'install-record']);
+    expect([libCensus.CENSUS_PREDICATE, libCensus.CENSUS_RUN_WINDOW], 'P12\'s settled predicate (D-8161, act M1)').toEqual(['b', 'immediate']);
+    expect(libCensus.HOLDING_SHAPES).toEqual(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
+    expect(libCensus.LINK_WINDOW_MS).toBe(900000);
+    expect(libCensus.LINK_DECODE_MAX).toBe(64);
+  });
+
+  it.each([
+    // [hasRow, listed, admissibleMtimes, sinceMs, part]
+    [true, 0, [], 100, 'G'],               // a row and no listed holding
+    [true, 0, [50], 100, 'G'],             // G before Ad
+    [true, 1, [], 100, 'Ad'],              // a stored row whose holding was later refused stays in Ad
+    [true, 2, [50, 200], 100, 'Ad'],
+    [false, 1, [50], 100, 'P'],            // every admissible holding pre-install
+    [false, 2, [50, 99], 100, 'P'],
+    [false, 2, [50, 200], 100, 'Q'],       // one post-install holding
+    [false, 1, [100], 100, 'Q'],           // an mtime equal to the record is post-install
+    [false, 1, [50], null, 'P'],           // no record reads as pre-install
+    [false, 1, [], 100, 'R'],              // every listed holding refused
+    [false, 2, [], null, 'R'],             // R whatever sinceMs is
+  ] as const)('censusPart(row %j, listed %j, mtimes %j, since %j) is %s', (hasRow, listed, admissibleMtimes, sinceMs, want) => {
+    expect(libCensus.censusPart({ hasRow, listed, admissibleMtimes: [...admissibleMtimes], sinceMs })).toBe(want);
+  });
+
+  it.each([
+    // the meta table's P17 (c) column, a row each
+    ['same link, one holding', null, [okLink('t1')], { link: 't1' }],
+    ['same link, several holdings', null, [okLink('t1'), okLink('t1')], { link: 't1' }],
+    ['same link, stored agrees', 't1', [okLink('t1')], { link: 't1' }],
+    ['none named, one holding', null, [okLink(null)], { none: true }],
+    ['none named, several holdings', null, [okLink(null), okLink(null)], { none: true }],
+    ['different links', null, [okLink('t1'), okLink('t2')], { unknown: 'meta-conflict' }],
+    ['a link beside one naming none', null, [okLink('t1'), okLink(null)], { unknown: 'meta-conflict' }],
+    ['changed since stored: another link', 't1', [okLink('t2')], { unknown: 'meta-conflict' }],
+    ['changed since stored: now names none', 't1', [okLink(null)], { unknown: 'meta-conflict' }],
+    ['absent, one holding', null, [bad('absent')], { unknown: 'meta-unread:absent' }],
+    ['oversized, beside a whole one', null, [okLink('t1'), bad('oversized')], { unknown: 'meta-unread:oversized' }],
+    ['a link or not regular', null, [bad('not-regular')], { unknown: 'meta-unread:not-regular' }],
+    ['unreadable, stored link stands in (a) but not (c)', 't1', [bad('unreadable')], { unknown: 'meta-unread:unreadable' }],
+    ['not a JSON object', null, [bad('malformed')], { unknown: 'meta-unread:malformed' }],
+    ['a conflict among whole reads outranks an unreadable one', null, [okLink('t1'), okLink('t2'), bad('absent')], { unknown: 'meta-conflict' }],
+    ['no meta at all is a meta absent', null, [], { unknown: 'meta-unread:absent' }],
+  ] as const)('metaEvidence: %s', (_name, stored, reads, want) => {
+    expect(libCensus.metaEvidence({ stored, reads: [...reads] })).toEqual(want);
+  });
+
+  const MATCH = { outcome: 'match' } as const;
+  const COMPLETE = { outcome: 'none', complete: true } as const;
+  const behind = (cause: 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed') => ({ outcome: 'none', complete: false, cause }) as const;
+  const unmeasured = (cause: 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable') => ({ outcome: 'unmeasured', cause }) as const;
+  it.each([
+    // the parent table's P19 (b) column, a row each, under a link
+    ['no main transcript of the parent', unmeasured('parent-not-stored'), { v: 'M', reason: 'parent-not-stored' }],
+    ['no timed row, so no window', unmeasured('no-timed-row'), { v: 'M', reason: 'no-timed-row' }],
+    ['a candidate matches', MATCH, { v: 'L', reason: null }],
+    ['the decode bound reached', unmeasured('decode-bound'), { v: 'M', reason: 'decode-bound' }],
+    ['a candidate over the decode cap', unmeasured('over-cap'), { v: 'M', reason: 'over-cap' }],
+    ['a candidate undecodable', unmeasured('undecodable'), { v: 'M', reason: 'undecodable' }],
+    ['no match, the window complete', COMPLETE, { v: 'U', reason: null }],
+    ['no match, a holding not read past the window', behind('parent-behind'), { v: 'M', reason: 'parent-behind' }],
+    ['no match, a holding not yet bound', behind('parent-copy-unbound'), { v: 'M', reason: 'parent-copy-unbound' }],
+    ['no match, an untimed tool row left undecided', behind('parent-untimed'), { v: 'M', reason: 'parent-untimed' }],
+  ] as const)('linkVerdict, a link, parent: %s', (_name, parent, want) => {
+    expect(libCensus.linkVerdict({ meta: { link: 't1' }, parent })).toEqual(want);
+  });
+  it.each([
+    [{ none: true }, MATCH, { v: 'X', reason: null }],                         // X only for a meta naming none
+    [{ none: true }, COMPLETE, { v: 'X', reason: null }],
+    [{ none: true }, unmeasured('parent-not-stored'), { v: 'X', reason: null }],
+    [{ unknown: 'meta-conflict' }, MATCH, { v: 'M', reason: 'meta-conflict' }], // an unknown meta is M whatever the parent says
+    [{ unknown: 'meta-unread:absent' }, COMPLETE, { v: 'M', reason: 'meta-unread:absent' }],
+    [{ unknown: 'meta-unread:oversized' }, unmeasured('decode-bound'), { v: 'M', reason: 'meta-unread:oversized' }],
+  ] as const)('linkVerdict(meta %j, parent %j) is %j', (meta, parent, want) => {
+    expect(libCensus.linkVerdict({ meta, parent })).toEqual(want);
+  });
+
+  it.each([
+    ['a', null, { v: 'L', reason: null }],                  // placement measures nothing
+    ['a', 'absent', { v: 'L', reason: null }],
+    ['b', MATCH, { v: 'L', reason: null }],                 // the settled predicate takes the parent side
+    ['b', COMPLETE, { v: 'U', reason: null }],
+    ['b', behind('parent-behind'), { v: 'M', reason: 'parent-behind' }],
+    ['b', unmeasured('over-cap'), { v: 'M', reason: 'over-cap' }],
+    ['b', null, 'unavailable'],                             // the lookup was not run (predicate unsettled)
+    ['c', 'exists', { v: 'L', reason: null }],
+    ['c', 'absent', { v: 'U', reason: null }],
+    ['c', 'unreadable', { v: 'M', reason: 'summary-unreadable' }],
+    ['c', null, 'unavailable'],
+    ['c', 'nonsense', 'unavailable'],
+  ] as const)('workflowVerdict(%s, %j) is %j', (option, ev, want) => {
+    expect(libCensus.workflowVerdict(option, ev as never)).toEqual(want);
+  });
+
+  const UNSETTLED = { v: 'M', reason: 'predicate-unsettled' } as const;
+  it.each([
+    // the settled predicate's verdict, from the option rows
+    ['b', { a: { v: 'L', reason: null }, b: { v: 'U', reason: null }, c: 'unavailable' }, { v: 'U', reason: null }],
+    ['b', { a: { v: 'L', reason: null }, b: { v: 'M', reason: 'over-cap' }, c: { v: 'L', reason: null } }, { v: 'M', reason: 'over-cap' }],
+    ['c', { a: { v: 'L', reason: null }, b: 'unavailable', c: { v: 'L', reason: null } }, { v: 'L', reason: null }],
+    // an unsettled predicate, or a settled one whose evidence was not run, is M and never a guess
+    [null, { a: { v: 'L', reason: null }, b: { v: 'L', reason: null }, c: { v: 'L', reason: null } }, UNSETTLED],
+    ['b', { a: { v: 'L', reason: null }, b: 'unavailable', c: { v: 'L', reason: null } }, UNSETTLED],
+    ['c', { a: { v: 'L', reason: null }, b: { v: 'L', reason: null }, c: 'unavailable' }, UNSETTLED],
+    ['b', {}, UNSETTLED],
+  ] as const)('workflowCanonicalVerdict(%s, %j) is %j', (predicate, options, want) => {
+    expect(libCensus.workflowCanonicalVerdict(predicate, options as never)).toEqual(want);
+  });
+
+  it('workflowWindow: immediate is t0 +- 15 min, at-end is [tEnd, tEnd + 15 min]', () => {
+    const t0 = 10_000_000;
+    expect(libCensus.workflowWindow(t0, 'immediate')).toEqual([t0 - 900000, t0 + 900000]);
+    expect(libCensus.workflowWindow(t0, 'at-end', 12_000_000)).toEqual([12_000_000, 12_900_000]);
+  });
+  it.each([
+    [null, 'immediate', undefined],               // a run with no timed row has no window: no-timed-row, an M, never a U
+    [Number.NaN, 'immediate', undefined],
+    [Number.POSITIVE_INFINITY, 'immediate', undefined],
+    [10_000_000, 'at-end', undefined],            // at-end needs tEnd
+    [10_000_000, 'at-end', null],
+    [null, 'at-end', Number.NaN],
+  ] as const)('workflowWindow(%j, %s, %j) is null (a non-finite anchor has no window)', (t0, runWindow, tEnd) => {
+    expect(libCensus.workflowWindow(t0, runWindow, tEnd)).toBeNull();
+  });
+  it('workflowWindow(at-end) ignores t0, and immediate ignores tEnd', () => {
+    expect(libCensus.workflowWindow(null, 'at-end', 5_000_000)).toEqual([5_000_000, 5_900_000]);
+    expect(libCensus.workflowWindow(5_000_000, 'immediate', null)).toEqual([4_100_000, 5_900_000]);
+  });
+
+  it.each([
+    // [part, imported, D-T, D, E, Ad]: the membership table's five rows by four columns
+    ['R', false, true, true, false, false],
+    ['P', false, false, true, false, false],
+    ['Q', false, true, true, true, false],
+    ['Ad', false, true, true, true, true],     // Ad - I, admitted post-install
+    ['Ad', IMPORTED, false, true, true, true], // I, imported pre-install
+  ] as const)('inColumn: part %s imported %j', (part, imported, dt, d, e, ad) => {
+    const got = libCensus.CENSUS_COLUMNS.map((col) => libCensus.inColumn(col, part, imported));
+    expect(got).toEqual([dt, d, e, ad]);
+  });
+  it('inColumn has a row for every column CENSUS_COLUMNS names, and every part of the table is decided', () => {
+    for (const col of libCensus.CENSUS_COLUMNS) for (const part of libCensus.CENSUS_PARTS) {
+      expect(typeof libCensus.inColumn(col, part, false), `${col} ${part}`).toBe('boolean');
+    }
+    // the table is derived from CENSUS_COLUMNS in lib: a column without a membership row fails when the module loads
+    expect(readFileSync(LIB, 'utf8')).toMatch(/Object\.fromEntries\(CENSUS_COLUMNS\.map\(/);
+  });
+  it('inColumn answers false for a column it does not know', () => {
+    expect(libCensus.inColumn('X' as never, 'Ad', false)).toBe(false);
+  });
+
+  it.each([
+    [{ D: 10, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 1 }, true, []],
+    [{ D: 11, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 1 }, false, ['D']],
+    [{ D: 10, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 0 }, false, ['Ad']],
+    [{ D: 9, R: 1, P: 2, Q: 3, Ad: 4, L: 1, U: 1, M: 1, X: 0 }, false, ['D', 'Ad']],
+  ] as const)('censusSums(%j) is ok %j, failing %j', (c, ok, failed) => {
+    expect(libCensus.censusSums(c)).toEqual({ ok, failed });
+  });
+
+  it('unboundExtra: u for a key with a bound holding, u - 1 for one with none (P18 (a))', () => {
+    expect(libCensus.unboundExtra([{ bound: 1, unbound: 1 }, { bound: 0, unbound: 2 }])).toBe(2);
+    expect(libCensus.unboundExtra([])).toBe(0);
+    expect(libCensus.unboundExtra([{ bound: 2, unbound: 0 }, { bound: 0, unbound: 0 }])).toBe(0); // never negative
+    expect(libCensus.unboundExtra([{ bound: 0, unbound: 1 }])).toBe(0);
+  });
+
+  it('shareRange: L / (den + extraLow) to (L + M) / den, and no share for an empty denominator', () => {
+    expect(libCensus.shareRange({ L: 2, M: 1, den: 4, extraLow: 2 })).toEqual({ lo: 2 / 6, hi: 3 / 4 });
+    expect(libCensus.shareRange({ L: 3, M: 0, den: 3, extraLow: 0 })).toEqual({ lo: 1, hi: 1 });
+    expect(libCensus.shareRange({ L: 0, M: 0, den: 0, extraLow: 0 })).toBeNull();
+  });
+
+  it.each([
+    [0, 0, true, 1234, []],
+    [1, 0, true, 1234, ['K']],
+    [0, 2, true, 1234, ['identity_collision']],
+    [0, 0, false, 1234, ['partition-sum']],
+    [3, 1, false, 1234, ['K', 'identity_collision', 'partition-sum']],
+    [0, 0, true, 0, []],                                  // a record of 0 ms is a number: the install record stands
+    [0, 0, true, 'absent', ['install-record']],
+    [0, 0, true, 'damaged', ['install-record']],
+    [2, 0, false, 'absent', ['K', 'partition-sum', 'install-record']],
+  ] as const)('censusWithheld(K %j, collisions %j, sums ok %j, install record %j) is %j', (K, collisions, sumsOk, installRecord, want) => {
+    expect(libCensus.censusWithheld({ K, collisions, sumsOk, installRecord })).toEqual(want);
+  });
+
+  it('the settled predicate and run window are spelled in lib.mjs alone (final review M6)', () => {
+    const holders = readdirSync(HISTORY_DIR).filter((n) => n.endsWith('.mjs') && /(?:const|let|var)\s+CENSUS_(?:PREDICATE|RUN_WINDOW)\b/.test(readFileSync(join(HISTORY_DIR, n), 'utf8')));
+    expect(holders).toEqual(['lib.mjs']);
+  });
+
+  const SHARES = { 'D-T': { lo: 0.9, hi: 0.95 }, D: { lo: 0.8, hi: 0.9 } } as const;
+  it.each([
+    [SHARES, [], 'b', { lo: 0.9, hi: 0.95 }],
+    [SHARES, [], 'c', { lo: 0.9, hi: 0.95 }],
+    [SHARES, [], null, null],                          // no canonical share until the predicate is settled
+    [SHARES, [], 'a', null],                           // (a) is not chosen and measures nothing
+    [SHARES, ['K'], 'b', null],                // nor while anything is withheld
+    [null, [], 'b', null],
+    [{ D: { lo: 0.8, hi: 0.9 } }, [], 'b', null],      // no D-T range
+  ] as const)('canonicalOf(shares %j, withheld %j, predicate %j) is %j', (shares, withheld, predicate, want) => {
+    expect(libCensus.canonicalOf({ shares: shares as never, withheld: [...withheld], predicate: predicate as never })).toEqual(want);
+  });
+
+  it.each([
+    [[], 'none'],                                      // no bound holding
+    [[[]], 'none'],
+    [[[], []], 'none'],                                // no stored rows to compare
+    [[['a', 'b']], 'single'],                          // hardlinks are one file row
+    [[['a', 'b'], ['a', 'b']], 'identical'],
+    [[['a', 'b'], ['a', 'b'], ['a', 'b']], 'identical'],
+    [[['a', 'b'], ['a', 'b', 'c']], 'prefix'],         // growing copies
+    [[['a'], ['a', 'b'], ['a', 'b', 'c']], 'prefix'],
+    [[[], ['a', 'b']], 'prefix'],
+    [[['a', 'b', 'c'], ['a', 'b', 'd']], 'fork'],      // a shared prefix, then rows only one holding has
+    [[['a', 'b'], ['a', 'c'], ['a', 'b', 'c']], 'fork'],
+    [[['a', 'b'], ['c', 'd']], 'disjoint'],            // at least one row each, none in common
+    [[['a', 'b'], ['a', 'c'], ['x']], 'disjoint'],     // any pair disjoint is a collision
+    [[['a', 'b'], []], 'prefix'],                      // an empty holding is not disjoint
+  ] as const)('holdingShape(%j) is %s', (lists, want) => {
+    expect(libCensus.holdingShape(lists.map((l) => [...l]))).toBe(want);
+  });
+
+  // review 1749 F3, F4: the identity rule ingest and the census share, and the census's cause orders, decided in L1
+  const ROW = { transcriptUuid: 'u1', agentKey: 'a1', birthNs: '1000', headSha: 'h1' };
+  it.each([
+    ['all agree', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h1' }, true],
+    ['another uuid', { row: ROW, pathUuid: 'u2', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h1' }, false],
+    ['another agent key', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a2', birthNs: 1000n, headSha: 'h1' }, false],
+    ['a main path against a subagent row', { row: ROW, pathUuid: 'u1', birthNs: 1000n, headSha: 'h1' }, false],
+    ['another birth time', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1001n, headSha: 'h1' }, false],
+    ['births agree, heads differ: the birth time rules', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h2' }, true],
+    ['births past 2^53 compared as BigInt', { row: { ...ROW, birthNs: '1794319515561000001' }, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1794319515561000000n, headSha: null }, false],
+    ['no birth on the file: the heads rule', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: null, headSha: 'h2' }, false],
+    ['no birth on the row: the heads rule', { row: { ...ROW, birthNs: null }, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: 1000n, headSha: 'h1' }, true],
+    ['no birth, no head on the file (the census): no difference proven', { row: ROW, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: null, headSha: null }, true],
+    ['no birth, no head on the row', { row: { ...ROW, birthNs: null, headSha: null }, pathUuid: 'u1', pathAgentKey: 'a1', birthNs: null, headSha: 'h2' }, true],
+  ] as const)('sameFileIdentity: %s', (_name, input, want) => {
+    expect(libCensus.sameFileIdentity(input)).toBe(want);
+  });
+
+  const H = { uuid: 'u1', agentKey: 'a1', birthNs: 1000n, size: 100 };
+  const R = { transcriptUuid: 'u1', agentKey: 'a1', birthNs: '1000', live: true, offset: 100 };
+  it.each([
+    ['bound, read to its size', { row: R, holding: H, pathStored: false, readable: null }, null],
+    ['bound, grown past its cursor', { row: { ...R, offset: 50 }, holding: H, pathStored: false, readable: null }, null],
+    ['bound, shorter than its cursor', { row: { ...R, offset: 101 }, holding: H, pathStored: false, readable: null }, 'shrunk'],
+    ['the inode is another transcript\'s', { row: { ...R, transcriptUuid: 'u2' }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['the inode is another agent key\'s', { row: { ...R, agentKey: 'a2' }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['another birth time on the same inode', { row: { ...R, birthNs: '999' }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['another birth time beats a shrink', { row: { ...R, birthNs: '999', offset: 101 }, holding: H, pathStored: false, readable: null }, 'replaced'],
+    ['no birth on the file: the census reads no first line, so bound', { row: { ...R, birthNs: '999' }, holding: { ...H, birthNs: null }, pathStored: false, readable: null }, null],
+    ['its row marked gone', { row: { ...R, live: false }, holding: H, pathStored: false, readable: null }, 'unread'],
+    ['no row, the path known under another inode', { row: null, holding: H, pathStored: true, readable: null }, 'replaced'],
+    ['no row, readable', { row: null, holding: H, pathStored: false, readable: true }, 'unread'],
+    ['no row, not readable', { row: null, holding: H, pathStored: false, readable: false }, 'unreadable'],
+  ] as const)('holdingUnboundCause: %s', (_name, input, want) => {
+    expect(libCensus.holdingUnboundCause(input)).toBe(want);
+  });
+
+  it.each([
+    [[], null],
+    [[{ bound: true, readToEnd: true, pastEnd: null }], null],
+    [[{ bound: true, readToEnd: false, pastEnd: true }], null],
+    [[{ bound: true, readToEnd: false, pastEnd: false }], 'parent-behind'],
+    [[{ bound: false }], 'parent-copy-unbound'],
+    [[{ bound: false }, { bound: true, readToEnd: false, pastEnd: false }], 'parent-behind'],   // behind comes first
+    [[{ bound: true, readToEnd: false, pastEnd: false }, { bound: false }], 'parent-behind'],
+    [[{ bound: true, readToEnd: true, pastEnd: null }, { bound: false }], 'parent-copy-unbound'],
+  ] as const)('parentHoldingsCause(%j) is %s', (holdings, want) => {
+    expect(libCensus.parentHoldingsCause([...holdings])).toBe(want);
+  });
+
+  it.each([
+    [{ boundStopped: false, overCap: false, undecodable: false }, null],
+    [{ boundStopped: true, overCap: true, undecodable: true }, 'decode-bound'],
+    [{ boundStopped: false, overCap: true, undecodable: true }, 'over-cap'],
+    [{ boundStopped: false, overCap: false, undecodable: true }, 'undecodable'],
+    [{ boundStopped: true, overCap: false, undecodable: false }, 'decode-bound'],
+  ] as const)('linkSearchCause(%j) is %s', (input, want) => {
+    expect(libCensus.linkSearchCause(input)).toBe(want);
+  });
+
+  it.each([
+    [{ holdingsCause: null, untimed: false }, { outcome: 'none', complete: true }],
+    [{ holdingsCause: null, untimed: true }, { outcome: 'none', complete: false, cause: 'parent-untimed' }],
+    [{ holdingsCause: 'parent-behind', untimed: true }, { outcome: 'none', complete: false, cause: 'parent-behind' }],
+    [{ holdingsCause: 'parent-copy-unbound', untimed: false }, { outcome: 'none', complete: false, cause: 'parent-copy-unbound' }],
+  ] as const)('parentSearchOutcome(%j) is %j', (input, want) => {
+    expect(libCensus.parentSearchOutcome(input)).toEqual(want);
   });
 });

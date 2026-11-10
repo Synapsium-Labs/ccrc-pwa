@@ -9,7 +9,7 @@ import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK
 import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
-import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
+import { ALL, ALL_MJS, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
 
 
 // — Build 4, Task 10: the wave's own two definitions —
@@ -1585,5 +1585,29 @@ describe('the admin-merge door reads a hold as the session hook does', () => {
       return m[1]!;
     };
     expect(read('ccd', 'AM_HOLD_WAVE_RE')).toBe(read('session-hook.sh', 'CCRC_HOLD_WAVE_RE'));
+  });
+});
+
+// — W4 addendum P10 (SA17): one run-id grammar —
+// Over helpers.ts' scanners: `ALL` (every .ts/.tsx under shared, server/src, pwa/src, agent/src) and `ALL_MJS` (every .mjs under
+// ccd, deploy, shared; never a .d.mts). `holdersOf` reads bash files only, so it is not used here.
+describe('W4 addendum P10 — one run-id grammar', () => {
+  const RUN_ID_SOURCE = 'wf_[0-9a-f]{8}-[0-9a-f]{3}';
+  const runIdHolders = (): string[] =>
+    [...ALL, ...ALL_MJS].filter((f) => readFileSync(f, 'utf8').includes(RUN_ID_SOURCE)).map(rel).sort();
+
+  it('one run-id grammar (P10): the shared holder is the one definer', () => {
+    expect(runIdHolders()).toEqual(['shared/workflow-ids.mjs']);
+  });
+
+  // The two readers hold the shared object itself, not an equal copy. (Not a `toContain` on model.ts's text: a literal pin over a
+  // server/src file is a new pin for advance-switches.test.ts' exact ARCH-06 ratchet, which only ever shrinks.)
+  it('the server reader and ccrc history re-export the shared RUN_ID_RE itself (P10)', async () => {
+    const shared = await import('../../../shared/workflow-ids.mjs');
+    const model = await import('../../src/workflows/model.js');
+    const lib = await import('../../../ccd/history/lib.mjs');
+    expect(shared.RUN_ID_RE.source).toBe(`^${RUN_ID_SOURCE}$`);
+    expect(model.RUN_ID_RE).toBe(shared.RUN_ID_RE);
+    expect(lib.RUN_ID_RE).toBe(shared.RUN_ID_RE);
   });
 });

@@ -47,7 +47,7 @@ import {
   heavyVersionsBetween, passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_READ_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, metaPathOf, bytesLeftOf, sameFileIdentity, CENSUS_PREDICATE, CENSUS_RUN_WINDOW, SIDECAR_READ_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
   SIDECAR_WALK_META, parseSidecarWalk, formatSidecarWalk, emptySidecarWalk, startSidecarWalk, foldWalkCandidates, finishSidecarWalk, walkCandidates,
   parseSidecarScanAt, formatSidecarScanAt, sidecarWrapClose,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
@@ -70,6 +70,10 @@ import {
   segmentListingRecord, addSegmentToListing, segmentListingVanished,
   decideReplayMark, replayWriterLayout, planReplayLayout, formatReplayLayout, widestReplayRanges,
   carryHoldAdvice,
+  // W4 P1, P6, P15 (b), P20: the subagent walk's grammar, its identity and the ingest gates.
+  RUN_ID_RE, classifyAgentName, decideAgentDir, decideAgentFile, agentKey, META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, decideMetaType, INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
+  // W4 P5 (D-8155): the pause order's one rule, and the cap's byte count the pass hands to the tick.
+  decideAgentsPause, capBytes, AGENTS_PAUSE_SHARE, AGENTS_STORE_RATIO_LOW, AGENTS_STORE_RATIO_HIGH,
   // W2-1 Task 4 (W2-D30): the presence record's lib decisions.
   RECALL_OFF_KEYS, RECALL_OFF_SCAN_MAX, recallOffStateOf, planRecallOffObservation, recallOffReplayRows,
 } from './lib.mjs';
@@ -90,6 +94,7 @@ import {
   beltNodesStep,
 } from './derive.mjs';
 import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, lstatKind, withdrawCards } from './card.mjs';
+import { formatCensus, runCensus } from './census.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] [--unanswered <path>]... --secrets <file...> -- <home...>';
 
@@ -1745,42 +1750,167 @@ export function admitFile(p, home, homes, userHome) {
  *  sorted): take({path, uuid, home}) for each, uuid the name's stem. A projects/ or slug directory that cannot be listed
  *  is skipped, as discoverTranscripts always skipped it. discoverTranscripts and the location rule's per-tick index
  *  both walk through it (review 316 F16). CP-39 (D-6938): `stop`, when given, is asked before each projects/ listing and
- *  each slug listing, and a true answer ends the walk; the call answers whether it walked everything. */
-function walkTranscripts(homes, take, stop = null) {
+ *  each slug listing, and a true answer ends the walk; the call answers whether it walked everything.
+ *  W4 P20: `agents`, when given (an AgentSink, lib.d.mts), adds the subagent arm: below each project directory, every
+ *  session directory's `subagents/` is walked by walkAgentProject and its entries handed to `agents.take`. With `null` the
+ *  walk is today's exactly (the P20 characterization case pins it). Every refusal and unentered directory is handed over as
+ *  an entry and counted by the census alone, never at a tick (D-8154). */
+function walkTranscripts(homes, take, stop = null, agents = null) {
+  const state = { taken: 0 };
   for (const home of homes) {
     if (stop !== null && stop()) return false;
-    let slugs;
-    try { slugs = readdirSync(`${home}/projects`).sort(); } catch { continue; }
+    let slugs = null;
+    try { slugs = readdirSync(`${home}/projects`).sort(); } catch { /* no projects/ yet, or none that can be listed: skipped */ }
+    // The subagent arm lstats the root itself: a link or an unlistable root is handed over unentered, while main lists
+    // through a link as it always did. An absent root is no entry (the failure table: nothing to walk, no count).
+    const rootOpen = agents !== null && agentEnter(agents, home, 'root', `${home}/projects`, () => slugs) !== null;
+    if (slugs === null) continue;
     for (const slug of slugs) {
       if (stop !== null && stop()) return false;
-      let names;
-      try { names = readdirSync(`${home}/projects/${slug}`).sort(); } catch { continue; }
-      for (const n of names) {
-        if (!n.endsWith('.jsonl')) continue;
-        take({ path: `${home}/projects/${slug}/${n}`, uuid: n.slice(0, -'.jsonl'.length), home });
+      let names = null;
+      try { names = readdirSync(`${home}/projects/${slug}`).sort(); } catch { /* an unlistable project directory: skipped */ }
+      if (names !== null) {
+        for (const n of names) {
+          if (!n.endsWith('.jsonl')) continue;
+          take({ path: `${home}/projects/${slug}/${n}`, uuid: n.slice(0, -'.jsonl'.length), home });
+        }
       }
+      if (rootOpen && !walkAgentProject(agents, state, stop, home, slug, names)) return false;
     }
   }
   return true;
 }
 
+/** W4 P20. One lstat for the subagent arm: `{ st }`, `{ absent: true }` for a path that is not there (ENOENT, ENOTDIR: no
+ *  entry, no count), or `{ failed: true }` for any other error (read as a directory that cannot be listed). */
+function agentLstat(p) {
+  try { return { st: lstatSync(p, { bigint: true }) }; } catch (e) {
+    const c = e && e.code;
+    return c === 'ENOENT' || c === 'ENOTDIR' ? { absent: true } : { failed: true };
+  }
+}
+/** lib's decideAgentDir/decideAgentFile kind word for one lstat. */
+function agentKindOf(st) {
+  if (st.isSymbolicLink()) return 'link';
+  if (st.isDirectory()) return 'dir';
+  if (st.isFile()) return 'file';
+  return 'other';
+}
+/** W4 P20. Whether the subagent arm goes into `path`, a directory of the given level: lib's decideAgentDir rules it from its
+ *  lstat kind and whether it could be listed (`list()` answers its sorted names, or null when it cannot). Entered, it answers
+ *  the names; not entered, it hands one `unentered` entry over and answers null; absent, it answers null and says nothing. */
+function agentEnter(agents, home, level, path, list) {
+  const l = agentLstat(path);
+  if (l.absent === true) return null;
+  const kind = l.st === undefined ? 'dir' : agentKindOf(l.st);
+  let names = null;
+  let listable = l.st !== undefined;
+  if (listable && kind === 'dir') { names = list(); listable = names !== null; }
+  const v = decideAgentDir({ kind, listable });
+  if (v.enter) return names;
+  agents.take({ type: 'unentered', home, level, reason: v.reason, path });
+  return null;
+}
+const listSorted = (p) => () => { try { return readdirSync(p).sort(); } catch { return null; } };
+
+/** W4 P20. The subagent arm below one project directory (D-8153: a walk the budget or the seam cuts is cut, not rotated; the
+ *  rest waits for the next scan tick). A session directory is an entry named as a session id with no `.jsonl`; of it only
+ *  `subagents/` is looked at. Answers false when the walk was cut. `names` is main's listing of the project directory, null
+ *  when it could not be listed (then the project is unentered, `unlistable`). Nothing here opens a file. */
+function walkAgentProject(agents, state, stop, home, slug, names) {
+  const proj = `${home}/projects/${slug}`;
+  const entries = agentEnter(agents, home, 'project', proj, () => names);
+  if (entries === null) return true;
+  for (const uuid of entries) {
+    if (!UUID_RE.test(uuid)) continue;
+    const sess = `${proj}/${uuid}`;
+    const inSess = agentEnter(agents, home, 'session', sess, listSorted(sess));
+    if (inSess === null || !inSess.includes('subagents')) continue;
+    const at = { home, slug, uuid };
+    const sub = `${sess}/subagents`;
+    const inSub = agentEnter(agents, home, 'subagents', sub, listSorted(sub));
+    if (inSub === null) continue;
+    for (const name of inSub) {
+      if (agentCut(agents, state, stop)) return false;
+      const c = classifyAgentName(name, 'subagents');
+      if (c.role !== 'descend') { if (!agentEntry(agents, state, at, null, true, `${sub}/${name}`, c)) break; continue; }
+      const wf = `${sub}/${name}`;   // the name classifyAgentName answered `descend` for: lib's grammar spells it once
+      const runs = agentEnter(agents, home, 'workflows', wf, listSorted(wf));
+      if (runs === null) continue;
+      for (const run of runs) {
+        const dir = `${wf}/${run}`;
+        const inRun = agentEnter(agents, home, 'run', dir, listSorted(dir));
+        if (inRun === null) continue;
+        const runOk = RUN_ID_RE.test(run);
+        for (const rn of inRun) {
+          if (agentCut(agents, state, stop)) return false;
+          if (!agentEntry(agents, state, at, run, runOk, `${dir}/${rn}`, classifyAgentName(rn, 'run'))) break;
+        }
+      }
+    }
+  }
+  return true;
+}
+/** Whether the walk is cut before the next entry of `subagents/` or of a run directory: the walk's own stop first (the run
+ *  budget), then the sink's, handed the file entries taken so far (the test seam ctx.agentStop reaches it). */
+function agentCut(agents, state, stop) {
+  return (stop !== null && stop()) || (agents.stop !== null && agents.stop(state.taken));
+}
+/** One entry of `subagents/` or of a run directory, by its name's role: a recognised companion is handed over as it is (never
+ *  opened here), and a transcript candidate is lstat'ed and ruled by lib's decideAgentFile. A candidate that vanished between
+ *  the listing and its lstat is dropped. `runId` is the run directory's name, or null in `subagents/`. */
+function agentEntry(agents, state, at, runId, runOk, path, c) {
+  if (c.role === 'meta') { agents.take({ type: 'companion', ...at, runId, role: 'meta', id: c.id, path }); return true; }
+  if (c.role === 'journal') { agents.take({ type: 'companion', ...at, runId, role: 'journal', id: null, path }); return true; }
+  const l = agentLstat(path);
+  if (l.absent === true) return true;
+  // An lstat that failed for another reason (EACCES, EIO) measured nothing, so the file is neither admitted nor refused (final review
+  // M5, recast: the addendum's K counts directories alone). The CONTAINING directory is handed over unentered, `unlistable`, as a
+  // directory that cannot be searched is, and the caller stops listing it; entries already handed over stay handed over. A vanished
+  // file (ENOENT, ENOTDIR) stays dropped, above. Answers false when the directory was cut.
+  if (l.st === undefined) {
+    agents.take({ type: 'unentered', home: at.home, level: runId === null ? 'subagents' : 'run', reason: 'unlistable', path: path.slice(0, path.lastIndexOf('/')) });
+    return false;
+  }
+  const v = decideAgentFile({ kind: agentKindOf(l.st), id: c.id, runOk });
+  state.taken += 1;
+  agents.take({
+    type: 'file', ...at, runId, id: c.id, path, verdict: v.verdict, reason: v.verdict === 'refuse' ? v.reason : null,
+    // The census's physical-file and unbound-holding facts (P18): the listing's own lstat, read as bigints so an inode past 2^53
+    // matches the store's. `mtimeMs` of a bigint stat is whole milliseconds, the floor the float stat gave. `birthNs` is bindFile's
+    // rule for the stored birth time (null where the filesystem reports none), for lib's sameFileIdentity.
+    mtimeMs: Number(l.st.mtimeMs), dev: l.st.dev, ino: l.st.ino, size: Number(l.st.size), birthNs: l.st.birthtimeNs > 0n ? l.st.birthtimeNs : null,
+  });
+  return true;
+}
+
 /** `<home>/projects/*\/<uuid>.jsonl` for every wanted uuid, across the rostered homes the shim passed. Paths come
- *  from directory entries, never from a uuid spliced into a path. A home with no projects/ is skipped silently. */
-export function discoverTranscripts(homes, uuids) {
+ *  from directory entries, never from a uuid spliced into a path. A home with no projects/ is skipped silently.
+ *  W4 P20: with `agents` (an AgentSink), the walk's subagent arm runs too, and the sink is handed the file and companion
+ *  entries of the wanted uuids' sessions (never an unentered directory: those are the census's). */
+export function discoverTranscripts(homes, uuids, agents = null) {
   const want = new Set(uuids);
   const out = [];
   if (want.size === 0) return out;
-  walkTranscripts(homes, (t) => { if (want.has(t.uuid)) out.push(t); });
+  walkTranscripts(homes, (t) => { if (want.has(t.uuid)) out.push(t); }, null, wantedAgentSink(want, agents));
   return out;
 }
 
+/** The sink the walk is handed when `agents` is not null: the entries of the wanted uuids only. */
+function wantedAgentSink(want, agents) {
+  if (agents === null) return null;
+  return { take: (e) => { if (e.type !== 'unentered' && want.has(e.uuid)) agents.take(e); }, stop: agents.stop };
+}
+
 /** CP-39 (D-6938). discoverTranscripts under `budget`, checked before each projects/ and slug listing: `files` is what the walk
- *  found, `complete` says it reached its end. No wanted uuid lists nothing and is complete. */
-function discoverTranscriptsWithin(homes, uuids, budget) {
+ *  found, `complete` says it reached its end. No wanted uuid lists nothing and is complete. A null `budget` is no budget (then
+ *  only the sink's stop can cut the walk). */
+function discoverTranscriptsWithin(homes, uuids, budget, agents = null) {
   const want = new Set(uuids);
   const files = [];
   if (want.size === 0) return { files, complete: true };
-  const complete = walkTranscripts(homes, (t) => { if (want.has(t.uuid)) files.push(t); }, () => !budgetLeft(budget));
+  const complete = walkTranscripts(homes, (t) => { if (want.has(t.uuid)) files.push(t); },
+    budget === null ? null : () => !budgetLeft(budget), wantedAgentSink(want, agents));
   return { files, complete };
 }
 
@@ -1873,6 +2003,69 @@ function ensureTranscript(db, uuid) {
   return db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(uuid).transcript_pk;
 }
 
+/** W4 P1: the transcripts row of a subagent, keyed by the pair (parent session uuid, agent key), `<ID>` or `<RUN>/<ID>`, with
+ *  `workflow_run_id` from the path (null for an Agent-tool subagent). Like ensureTranscript it runs inside its caller's
+ *  transaction (bindFile's) and writes nothing to a row that stands. Every holding of one key binds to this one row. */
+export function ensureAgentTranscript(db, uuid, key, runId) {
+  db.prepare('INSERT INTO transcripts (cc_session_uuid, agent_id, workflow_run_id) VALUES (?, ?, ?) ON CONFLICT (cc_session_uuid, agent_id) DO NOTHING').run(uuid, key, runId);
+  return db.prepare('SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ?').get(uuid, key).transcript_pk;
+}
+
+/** A subagent's meta file, read bounded (W4 P17): an `lstat` of a regular, non-link file, at most META_MAX_BYTES + 1 bytes read
+ *  through an O_NOFOLLOW open, parsed as a JSON object. Answers the link it names (`toolUseId`, a non-empty string, else null)
+ *  and its type (the string under AGENT_TYPE_KEY, else null: a value of another type is not coerced), or why it could not be
+ *  read whole. The census reads every holding's meta through this one reader. */
+export function readAgentMeta(path) {
+  let st;
+  try { st = lstatSync(path); } catch (e) { return { ok: false, cause: e?.code === 'ENOENT' || e?.code === 'ENOTDIR' ? 'absent' : 'unreadable' }; }
+  if (!st.isFile()) return { ok: false, cause: 'not-regular' };
+  if (st.size > META_MAX_BYTES) return { ok: false, cause: 'oversized' };
+  let text;
+  let fd = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_NOCTTY);
+    // a swap to a non-regular file between the lstat and the open reads as one
+    if (!fstatSync(fd).isFile()) return { ok: false, cause: 'not-regular' };
+    const buf = Buffer.alloc(META_MAX_BYTES + 1);
+    let n = 0;
+    for (;;) {
+      const got = readSync(fd, buf, n, buf.length - n, null);
+      if (got === 0) break;
+      n += got;
+      if (n > META_MAX_BYTES) return { ok: false, cause: 'oversized' };
+    }
+    // ignoreBOM keeps a leading BOM in the text, so JSON.parse refuses it (malformed) as it always did; fatal refuses invalid UTF-8
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf.subarray(0, n));
+  } catch (e) {
+    // a TextDecoder failure is a TypeError with code ERR_ENCODING_INVALID_ENCODED_DATA: the bytes are not a JSON text
+    if (e?.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') return { ok: false, cause: 'malformed' };
+    return { ok: false, cause: e?.code === 'ENOENT' ? 'absent' : e?.code === 'ELOOP' ? 'not-regular' : 'unreadable' };
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* read already answered */ } }
+  }
+  let doc;
+  try { doc = JSON.parse(text); } catch { return { ok: false, cause: 'malformed' }; }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, cause: 'malformed' };
+  const link = doc.toolUseId;
+  const type = doc[AGENT_TYPE_KEY];
+  return { ok: true, toolUseId: typeof link === 'string' && link !== '' ? link : null, agentType: typeof type === 'string' ? type : null };
+}
+
+/** W4 P17 (c), the store side: when a holding of a subagent key is first bound (a path the store has not met), its meta is read
+ *  and decideMetaLink rules what the key's row keeps. The first link read whole is written once; a different one later is
+ *  counted `agent_meta_conflict`; an incomplete read is counted `agent_meta_unreadable:<cause>`; nothing retries. The type is
+ *  written once too, from the field AGENT_TYPE_KEY names. Runs inside bindFile's transaction. */
+function bindAgentMeta(db, transcriptPk, key, filePath) {
+  const read = readAgentMeta(metaPathOf(filePath, key.slice(key.lastIndexOf('/') + 1)));
+  const row = db.prepare('SELECT parent_tool_use_id AS link, agent_type AS type FROM transcripts WHERE transcript_pk = ?').get(transcriptPk);
+  const d = decideMetaLink({ stored: row.link, read });
+  const type = decideMetaType({ stored: row.type, read });
+  // the SQL guards (IS NULL) are the second line behind the deciders: a row that stands is never rewritten
+  if (d.write !== null) db.prepare('UPDATE transcripts SET parent_tool_use_id = ? WHERE transcript_pk = ? AND parent_tool_use_id IS NULL').run(d.write, transcriptPk);
+  if (type !== null) db.prepare('UPDATE transcripts SET agent_type = ? WHERE transcript_pk = ? AND agent_type IS NULL').run(type, transcriptPk);
+  if (d.count !== null) bump(db, d.count);
+}
+
 /** After a retire: the old row's paths that now resolve to the new file move with it (§9.2). A path that resolves
  *  elsewhere, or nowhere, keeps naming the old row. */
 function repointPaths(db, fromId, toId, st) {
@@ -1884,7 +2077,7 @@ function repointPaths(db, fromId, toId, st) {
   }
 }
 
-const ROW_BY_INODE = 'SELECT i.file_id, i.dev, i.ino, i.transcript_pk, t.cc_session_uuid, i.birth_ns, i.head_sha256, i.offset, i.tail_sha256 '
+const ROW_BY_INODE = 'SELECT i.file_id, i.dev, i.ino, i.transcript_pk, t.cc_session_uuid, t.agent_id, i.birth_ns, i.head_sha256, i.offset, i.tail_sha256 '
   + "FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk WHERE i.dev = ? AND i.ino = ? AND i.source_key = ''";
 const hexOf = (b) => (b === null ? null : Buffer.from(b).toString('hex'));
 
@@ -1897,10 +2090,13 @@ const hexOf = (b) => (b === null ? null : Buffer.from(b).toString('hex'));
  *    nothing: memberships and entries stay.
  *  - Otherwise resume at the cursor.
  *  - Every path seen is an alias in file_paths.
+ *  - W4 P1: a subagent file carries `f.agentKey` (and `f.runId`) and binds to the row of (uuid, agent key); a main file
+ *    carries neither. planFileRead compares the key as it does the uuid, so a file under another key retires the row.
  *  nanosecond columns are read as BigInt (setReadBigInts): as a JS number they throw ERR_OUT_OF_RANGE. */
 export function bindFile(db, f, nowMs) {
   return withTx(db, 'NORMAL', () => {
-    const transcriptPk = ensureTranscript(db, f.uuid);
+    const agentKeyOf = f.agentKey ?? '';
+    const transcriptPk = agentKeyOf === '' ? ensureTranscript(db, f.uuid) : ensureAgentTranscript(db, f.uuid, agentKeyOf, f.runId ?? null);
     const birth = f.st.birthtimeNs > 0n ? f.st.birthtimeNs : null;
     const size = Number(f.st.size);
     const sel = db.prepare(ROW_BY_INODE);
@@ -1910,6 +2106,7 @@ export function bindFile(db, f, nowMs) {
     const plan = planFileRead({
       row: row === undefined ? null : {
         transcriptUuid: row.cc_session_uuid,
+        agentKey: row.agent_id,
         birthNs: row.birth_ns,   // a BigInt (setReadBigInts): Task 6's planFileRead compares birth times as BigInt
         // a row bound before its first line was whole has no head yet: the first whole one it shows is its own
         headSha: row.head_sha256 === null && rowOffset === 0 ? f.headSha : hexOf(row.head_sha256),
@@ -1918,6 +2115,7 @@ export function bindFile(db, f, nowMs) {
       },
       stat: { size, birthNs: birth },
       pathUuid: f.uuid,
+      pathAgentKey: agentKeyOf,
       headSha: f.headSha,
       tailShaAtOffset: row === undefined ? null : lineShaBefore(f.fd, rowOffset, size),
     });
@@ -1949,8 +2147,11 @@ export function bindFile(db, f, nowMs) {
           .run(size, f.st.mtimeNs, birth, head, fileId);
       }
     }
+    // W4 P17 (c): a subagent path the store has not met is a further holding of its key: its meta is read once, here
+    const firstHolding = agentKeyOf !== '' && db.prepare('SELECT 1 AS x FROM file_paths WHERE path = ?').get(f.path) === undefined;
     db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?) ON CONFLICT (path) DO UPDATE SET file_id = excluded.file_id, last_seen_ms = excluded.last_seen_ms')
       .run(f.path, fileId, nowMs);
+    if (firstHolding) bindAgentMeta(db, boundTranscript, agentKeyOf, f.path);
     return { fileId, transcriptPk: boundTranscript, action, offset };
   });
 }
@@ -3708,6 +3909,10 @@ export async function tick(db, ctx) {
   // The tick's one ingest context (Task 19), made once and shared by the secrets, the ingest, the launch facts and
   // the ticks row. It is built here, right after the outbox flush, so the secrets step can set its pairIdx (plan task 22).
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir));
+  // W4 P5: the pass's own pause, size and cap, which ingestTick reads to decide the subagent pause (the context is built with 0 and 0).
+  ictx.pause = ctx.pause ?? null;
+  ictx.sizeBytes = ctx.sizeBytes ?? 0;
+  ictx.capBytes = ctx.capBytes ?? 0;
   // A node rewrite deletes nodes_fts rows, whose term bytes stay until FTS5 merges them: the rewrite registers the merge
   // step inside its own transaction, as the blob re-index does (D-4609 (history-nodes-fts-merged-after-rewrite)).
   registerNodesMerge(ictx, db);
@@ -4058,6 +4263,10 @@ export function passCtx(o) {
     rosterUnreadable: o.parsed.rosterUnreadable,
     pause: o.pause,
     ingest: o.ingest,
+    // W4 P5 (D-8155): the size and cap the pass measured for planRun, which tick() hands to the ingest context so ingestTick can ask
+    // decideAgentsPause. A pass that ingests nothing, or an operator pass, hands none: 0 and 0 pause nothing by that rule.
+    sizeBytes: o.sizeBytes ?? 0,
+    capBytes: o.capBytes ?? 0,
     // deps.budget is an in-process limit (maxMs, maxBytes, chunkBytes) for tests only; absent, lib's run budget applies
     // (W1-B2 Task 25; slug history-test-seams-not-env).
     budget: newBudget(o.now, o.deps.budget ?? {}),
@@ -4255,8 +4464,11 @@ async function scheduledPassBody(parsed, deps, out, P, now, role) {
     setMeta(db, 'capture_pause', run.pause ?? '');
     if (run.pause === 'at-cap') bump(db, 'capture_paused_at_cap');
     if (run.pause === 'low-disk') bump(db, 'capture_paused_low_disk');
+    // W4 P6: the first W4 pass's install record, beside the pause word and before the tick, so it is written whatever the pause (at the
+    // cap, below the floor) or roster state. The run arm alone writes it: a migrate, recover or hold pass returned above.
+    recordAgentsInstall(db, now());
     fixModes(db, P);
-    const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: run.pause, ingest: run.ingest });
+    const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: run.pause, ingest: run.ingest, sizeBytes, capBytes: capBytes(cap.gb) });
     let busy = false;
     try {
       await tick(db, ctx);
@@ -4478,6 +4690,12 @@ function findLineEnd(fd, start, size) {
 // backup held rather than move onto the exported: row replay just made (whose file_id is always the larger); and at ingest
 // a live copy beats an exported: holder at an equal rank whatever the file ids, which brings back an entry a replay took at
 // a strictly newer rank once the live file is read at that rank. A strictly newer rank wins from either caller, as before.
+// W4 (review 1749 F6): the entry is keyed by uuid alone, across transcripts, so a subagent row reusing a uuid its parent's main
+// transcript holds would share the main entry (its transcript_pk is the first reader's, and a newer-ranked copy rewrites its
+// structure), and a raw line keyed rawRowKey(<parent uuid>, sha) equal to a parent's line would too. Measured read-only on one node
+// on 2026-11-10 (19 homes, 14,367 subagent files and their 585 parent sessions): no subagent row reuses a uuid of its parent's
+// transcript or of a sibling's, and none of 488,265 raw lines repeats a parent line. No subagent of agentType `fork` existed there,
+// so a context-inheriting one is unmeasured; the coordinator re-measures before each node is armed.
 const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
     ts_ms, request_id, api_block_index, msg_id, source_tool_use_id, tool_name, is_compact_summary,
     provenance, prov_version, parse_state, struct_rank_ns, struct_file_id, blob_id)
@@ -4848,7 +5066,9 @@ function countFloorPause(db) {
  *  stop at a tail with no '\n' yet reports `tornAt` (Task 20 reads it); a stop at the floor
  *  reports the probe's word as `floor`. */
 export async function ingestFile(db, ctx, file, budget) {
-  const st = { db, ccUuid: file.ccUuid, toolUses: new Map(), blockIdx: new Map(), firstPending: file.offset === 0 };
+  // W4: a subagent file's first row is not its parent session's launch facts (epochs.started_ms, cwd and branch are the main
+  // transcript's first row, and fill only once): firstPending is false for it, so it never writes the parent epoch's facts.
+  const st = { db, ccUuid: file.ccUuid, toolUses: new Map(), blockIdx: new Map(), firstPending: file.offset === 0 && file.agent !== true };
   let offset = file.offset;
   let bytes = 0;
   let newEntries = 0;
@@ -4931,7 +5151,9 @@ export async function ingestPath(db, ctx, f, budget, skipped) {
   const a = admitFile(f.path, f.home, ctx.homes, ctx.home);
   if (!a.ok) {
     countAdmission(db, a.why);
-    if (skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a refused copy may hold a boundary this pass did not see
+    // W1-B3 (D-5061): a refused copy may hold a boundary this pass did not see. A MAIN copy only: a subagent file cannot hold the
+    // parent's boundary, so its failure must not withdraw the parent's card predictions.
+    if (skipped !== undefined && (f.agentKey ?? '') === '') skipped.add(f.uuid);
     if (a.why === 'missing') markGoneIfPathless(db, f.path);
     return null;
   }
@@ -4940,13 +5162,14 @@ export async function ingestPath(db, ctx, f, budget, skipped) {
     const size = Number(st.size);
     // Task 18's one head-sha function and its bindFile signature (the plan's integration contract 2): the
     // bind reads the cursor's tail proof through `fd` and keys a retire on the tick's `nowMs`.
-    const bound = bindFile(db, { path: f.path, uuid: f.uuid, fd: a.fd, st: a.st, headSha: headShaOf(a.fd, size) }, ctx.nowMs);
+    const bound = bindFile(db, { path: f.path, uuid: f.uuid, fd: a.fd, st: a.st, headSha: headShaOf(a.fd, size), agentKey: f.agentKey, runId: f.runId }, ctx.nowMs);
     if (bound.action === 'skip') return null;
     const r = await ingestFile(db, ctx, {
       fileId: bound.fileId, transcriptPk: bound.transcriptPk, ccUuid: f.uuid, fd: a.fd,
-      size, mtimeNs: st.mtimeNs, offset: bound.action === 'resume' ? bound.offset : 0,
+      size, mtimeNs: st.mtimeNs, offset: bound.action === 'resume' ? bound.offset : 0, agent: (f.agentKey ?? '') !== '',
     }, budget);
-    if (r.crashed === true && skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a parse crash holds the cursor before the crashing line, every tick
+    // W1-B3 (D-5061): a parse crash holds the cursor before the crashing line, every tick. A main copy only (see the refusal above).
+    if (r.crashed === true && skipped !== undefined && (f.agentKey ?? '') === '') skipped.add(f.uuid);
     return { fileId: bound.fileId, size, mtimeNs: st.mtimeNs, ...r, minNewTsMs: bound.action === 'resume' ? r.minNewTsMs : null };
   } finally {
     closeSync(a.fd);
@@ -4978,7 +5201,10 @@ export function floorProbeFor(dir, statfs) {
  *  readRegPresence is handed to card.mjs the same way: it names the sessions a card may be written for (W1-B3 Task 5). */
 export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
   const off = historyPaths(home).off;
-  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, pendingReceiptState: { kind: 'measured', sessionUuids: new Set() }, admitFile, budgetLeft, isBusy, readRegPresence, activeStat: statActive, activeStatMax: ACTIVE_STAT_MAX };
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, pendingReceiptState: { kind: 'measured', sessionUuids: new Set() }, admitFile, budgetLeft, isBusy, readRegPresence, activeStat: statActive, activeStatMax: ACTIVE_STAT_MAX,
+    // W4: what the subagent ingest's gate reads off the context. agentsPause is the 90% pause word (Task 1E decides it in ingestTick); pause, sizeBytes
+    // and capBytes are the pass's own, handed on by tick(). agentStop is a test seam only (candidateFiles), an injected dependency left unset here.
+    agentsPause: null, pause: null, sizeBytes: 0, capBytes: 0 };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -5015,21 +5241,31 @@ function tickStmts(db) {
     // The id's two most recently confirmed epochs: its current one, and the one a just-confirmed /clear replaced.
     epochsOfId: db.prepare(`SELECT e.cc_session_uuid AS u FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
       WHERE s.ccrc_id = ? AND e.confirmed_ms IS NOT NULL ORDER BY e.confirmed_ms DESC LIMIT 2`),
-    // "Behind" is a live row a path still names, short of its last measured size: bytes a later tick can read.
+    // "Behind" is a live row a path still names, short of its last measured size: bytes a later tick can read. W4 P3, P5 (review 1728
+    // F1: filter, not gate): MAIN rows only (`t.agent_id = ''`). A subagent row left short is read only by the scan tick's gated agent
+    // arm (and the active pass), so no route here reads one and none holds `files_behind` above 0; behindRows below follows it.
     behindPaths: db.prepare(`SELECT p.path AS path, t.cc_session_uuid AS uuid FROM ingest_files f
       JOIN file_paths p ON p.file_id = f.file_id JOIN transcripts t ON t.transcript_pk = f.transcript_pk
-      WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset ORDER BY p.path`),
+      WHERE t.agent_id = '' AND f.source_key = '' AND f.status = 'live' AND f.size > f.offset ORDER BY p.path`),
     // Examination is proof the file is there: a gone row it finds again is live (Task 19's markGoneIfPathless).
     examined: db.prepare("UPDATE ingest_files SET size = ?, mtime_ns = ?, eof_ms = coalesce(?, eof_ms), status = 'live' WHERE file_id = ?"),
     // behindStats' rows: one per (live short row, path), for behindStats to filter by rostered home and count by file_id.
     behindRows: db.prepare(`SELECT f.file_id AS fileId, f.size - f.offset AS gap, p.path AS path FROM ingest_files f
-      JOIN file_paths p ON p.file_id = f.file_id
-      WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset`),
+      JOIN file_paths p ON p.file_id = f.file_id JOIN transcripts t ON t.transcript_pk = f.transcript_pk
+      WHERE t.agent_id = '' AND f.source_key = '' AND f.status = 'live' AND f.size > f.offset`),
     // CP-39d (D-7096). A registered uuid's live main-thread rows, one row per path, each uuid's newest copy first: a uuid holds one
     // live main copy per home its swaps carried it to, and ordered by recorded mtime alone the stale copies of other uuids would
     // sit ahead of an idle-then-active session's only copy, so the cap would drop the very session the pass is for.
     activeRows: (() => {
       const st = db.prepare(`SELECT f.file_id AS fileId, f.dev AS dev, f.ino AS ino, f.offset AS offset, f.size AS size, f.mtime_ns AS mtimeNs, p.path AS path, t.cc_session_uuid AS uuid FROM transcripts t JOIN ingest_files f ON f.transcript_pk = t.transcript_pk JOIN file_paths p ON p.file_id = f.file_id WHERE t.cc_session_uuid IN (SELECT value FROM json_each(?)) AND t.agent_id = '' AND f.source_key = '' AND f.status = 'live' ORDER BY DENSE_RANK() OVER (PARTITION BY t.cc_session_uuid ORDER BY f.mtime_ns DESC, f.file_id), f.mtime_ns DESC, f.file_id, p.path`);
+      st.setReadBigInts(true);
+      return st;
+    })(),
+    // W4 P3 (D-8152): the same columns for the subagent rows of the uuids whose main file this tick's activeFiles took, with the row's
+    // agent key and run id. Stored holdings only: a file with no row waits for a scan tick. Its text carries no json_each-and-DENSE_RANK
+    // join of activeRows' own, and its filter is the other way round (`<>`), so activeRows stays the one statement of that shape.
+    activeAgentRows: (() => {
+      const st = db.prepare(`SELECT f.file_id AS fileId, f.dev AS dev, f.ino AS ino, f.offset AS offset, f.size AS size, f.mtime_ns AS mtimeNs, p.path AS path, t.cc_session_uuid AS uuid, t.agent_id AS agentKey, t.workflow_run_id AS runId FROM transcripts t JOIN ingest_files f ON f.transcript_pk = t.transcript_pk JOIN file_paths p ON p.file_id = f.file_id WHERE t.cc_session_uuid IN (SELECT value FROM json_each(?)) AND t.agent_id <> '' AND f.source_key = '' AND f.status = 'live' ORDER BY f.mtime_ns DESC, f.file_id, p.path LIMIT ?`);
       st.setReadBigInts(true);
       return st;
     })(),
@@ -5134,34 +5370,159 @@ function statActive(path) {
  *  `complete` false. lib's decideActiveRead rules each file: a vanished path or a link is skipped silently (the hint and
  *  the scan own it), anything else changed is taken. */
 function activeFiles(db, ctx, seen, budget) {
+  // The per-tick stat cap, read here and nowhere else: activeAgentFiles gets what this pass leaves of it, as `room`.
+  const cap = ctx.activeStatMax ?? ACTIVE_STAT_MAX;
   const uuids = [...registeredUuids(ctx.home)];
   // No registered uuid: no row can name one, so the statement is not run (review 1065 F10).
-  if (uuids.length === 0) return { files: [], complete: true };
+  if (uuids.length === 0) return { files: [], complete: true, room: cap };
   const files = [];
+  const r = scanActiveRows(ctx, tickStmts(db).activeRows.all(JSON.stringify(uuids)), seen, budget, cap, (row, home) => {
+    files.push({ path: row.path, uuid: row.uuid, home });
+  });
+  return { files, complete: r.complete, room: cap - r.statted };
+}
+
+/** The one iteration of the between-scans passes over a list of recorded rows (activeFiles' main rows, activeAgentFiles' subagent rows),
+ *  in the list's order: one file per `fileId`, the first path under a rostered home's `projects/` that a stat measures (review 1065
+ *  F4: a path that vanished or is no regular file leaves the file's next path to be offered); a path already taken this tick
+ *  (`seen`) is neither stat'ed nor counted, and takes its file's other paths with it. At most `room` lstats; before each the budget
+ *  is asked, and a spent one ends the pass with `complete` false. lib's decideActiveRead rules each file, and `visit(row, home, stat)`
+ *  is called for each one it says to read. Answers `{ complete, statted }`. */
+function scanActiveRows(ctx, rows, seen, budget, room, visit) {
   const stat = ctx.activeStat ?? statActive;
-  const max = ctx.activeStatMax ?? ACTIVE_STAT_MAX;
   const fileIds = new Set();
   let statted = 0;
-  for (const row of tickStmts(db).activeRows.all(JSON.stringify(uuids))) {
+  for (const row of rows) {
     if (fileIds.has(row.fileId)) continue;
     const home = ctx.homes.find((h) => row.path.startsWith(`${h}/projects/`));
     if (home === undefined) continue;
     if (seen.has(row.path)) { fileIds.add(row.fileId); continue; }   // taken this tick already: the file's other paths are not offered
-    if (statted >= max) break;
-    if (budget !== null && !budgetLeft(budget)) return { files, complete: false };
+    if (statted >= room) break;
+    if (budget !== null && !budgetLeft(budget)) return { complete: false, statted };
     statted += 1;
+    const st = stat(row.path);
     const verdict = decideActiveRead({
       row: { dev: row.dev, ino: row.ino, offset: Number(row.offset), size: row.size === null ? null : Number(row.size), mtimeNs: row.mtimeNs },
-      stat: stat(row.path),
+      stat: st,
       nowMs: ctx.nowMs,
       tornStaleMs: TORN_STALE_MS,
     });
     // The file is taken only after a verdict that measured it: a first path that vanished or is no regular file ('skip') leaves
     // the file's next path to be offered (review 1065 F4).
     if (verdict !== 'skip') fileIds.add(row.fileId);
-    if (verdict === 'read') files.push({ path: row.path, uuid: row.uuid, home });
+    if (verdict === 'read') visit(row, home, st);
   }
-  return { files, complete: true };
+  return { complete: true, statted };
+}
+
+/** W4 P3 (D-8152), the between-scans pass for subagent files: the stored holdings of the subagents of the uuids whose main file
+ *  `activeFiles` took this tick (`parents`), stated with what is left of the per-tick stat cap after the tick's main files (`room`,
+ *  so main files take precedence) through the same iteration as the main files', each then ruled by decideAgentIngest (form 'tick', so
+ *  the marker, history-off and the 90% pause reach it as they reach the scan tick's agent arm). Nothing about subagents happens on
+ *  an unarmed node or under history-off: the gate is asked once before the query, and only 'read' and 'paused' go on. A subagent file
+ *  with no row waits for a scan tick. A file the pause alone withholds, and that has bytes to read, is counted in `withheld`, which
+ *  ingestTick turns into one count of the tick. The parent is known by construction: a taken main file belongs to a registered uuid,
+ *  which is knownUuids' registry half. */
+function activeAgentFiles(db, ctx, seen, budget, parents, room, armed) {
+  const files = [];
+  let withheld = 0;
+  // Unarmed, decideAgentIngest answers false whatever history-off says, so the probe (an existsSync) is not made: an unarmed node with
+  // an active registered session pays nothing for this arm.
+  if (!armed || parents.size === 0 || room <= 0) return { files, withheld, complete: true };
+  const historyOff = ctx.historyOff();
+  const base = { form: 'tick', armed, historyOff, admitted: true, parentKnown: true };
+  if (agentGate(ctx, { ...base, preInstall: false }) === 'skip') return { files, withheld, complete: true };
+  const sinceMs = installRecordOf(db);
+  // LIMIT room: the rows are ordered newest first, and no more than `room` files can be stat'ed. A file held under several paths
+  // counts one row per path, so such a tick may stat fewer than `room` of them; the next scan tick lists the rest.
+  const r = scanActiveRows(ctx, tickStmts(db).activeAgentRows.all(JSON.stringify([...parents]), room), seen, budget, room, (row, home, st) => {
+    const gate = agentGate(ctx, { ...base, preInstall: isPreInstall(Number(st.mtimeNs / 1_000_000n), sinceMs) });
+    if (gate === 'paused' && bytesWaiting(row, st)) withheld += 1;
+    if (gate === 'read') files.push({ path: row.path, uuid: row.uuid, home, agentKey: row.agentKey, runId: row.runId });
+  });
+  return { files, withheld, complete: r.complete };
+}
+
+/** Whether a subagent file holds bytes its stored row has not read, by lib's bytesLeftOf (the one rule, shared with the import's
+ *  forecast). Only such a file is counted when the pause withholds it. `st` is a bigint lstat in statActive's shape. */
+function bytesWaiting(row, st) {
+  return bytesLeftOf({ stored: row, size: st.size, dev: st.dev, ino: st.ino }) > 0;
+}
+
+/** The row of a file's device and inode (ROW_BY_INODE's key), with what bindFile asks of it: its status, transcript uuid, agent key
+ *  and birth time (as text, so the BigInt compare loses nothing past 2^53). One statement, prepared once per handle. */
+const AGENT_INODE_ROWS = new WeakMap();
+function agentInodeRowOf(db) {
+  let st = AGENT_INODE_ROWS.get(db);
+  if (st === undefined) {
+    st = db.prepare("SELECT i.dev AS dev, i.ino AS ino, i.offset AS offset, i.status AS status, t.cc_session_uuid AS uuid, t.agent_id AS key, "
+      + "CAST(i.birth_ns AS TEXT) AS birth_ns FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk "
+      + "WHERE i.dev = ? AND i.ino = ? AND i.source_key = ''");
+    st.setReadBigInts(true);
+    AGENT_INODE_ROWS.set(db, st);
+  }
+  return st;
+}
+
+/** The row bindFile would resume for one subagent file, `{ dev, ino, offset }`, or null: the row of its device and inode counts only
+ *  when it is live and is the same file by lib's sameFileIdentity (the path's uuid and agent key, the birth time where both sides
+ *  have one), asked with no first-line sha, as the census asks it. A row marked gone, or one bindFile would retire, is no row: the
+ *  file then waits with its whole size, as a file with no row does (review 1750 F1). So a hardlinked second holding the store has
+ *  not aliased yet reads the cursor its bind would resume at (review 1749 F1). The scan arm's count of a withheld file
+ *  (scanFileWaiting) and the import's forecast (agentBytesLeft) both ask it, the forecast on its read-only handle. `f` is `{ dev, ino,
+ *  uuid, agentKey, birthNs }`. */
+function agentWaitingRow(db, f) {
+  const r = agentInodeRowOf(db).get(f.dev, f.ino);
+  if (r === undefined || r.status !== 'live') return null;
+  const same = sameFileIdentity({
+    row: { transcriptUuid: r.uuid, agentKey: r.key, birthNs: r.birth_ns, headSha: null },
+    pathUuid: f.uuid, pathAgentKey: f.agentKey, birthNs: f.birthNs, headSha: null,
+  });
+  return same ? r : null;
+}
+
+/** bytesWaiting for a file the scan walk handed over (`e`, an admitted file entry): agentWaitingRow's row against the walk's own size,
+ *  ruled by lib's bytesLeftOf for every case: a file with no such row waits with its size, so an unstored empty one waits for nothing. */
+function scanFileWaiting(db, e) {
+  const stored = agentWaitingRow(db, { dev: e.dev, ino: e.ino, uuid: e.uuid, agentKey: agentKey(e.id, e.runId), birthNs: e.birthNs ?? null });
+  return bytesLeftOf({ stored, size: e.size, dev: e.dev, ino: e.ino }) > 0;
+}
+
+/** One admitted subagent file's gate (W4 P3, P5, P6, P15 (b)), the one place both arms ask decideAgentIngest: 'read' when it is
+ *  read, 'paused' when the 90% pause alone withholds it (the same inputs with no pause would read it), else 'skip'. */
+function agentGate(ctx, i) {
+  if (decideAgentIngest({ ...i, pause: ctx.agentsPause ?? null })) return 'read';
+  return (ctx.agentsPause ?? null) !== null && decideAgentIngest({ ...i, pause: null }) ? 'paused' : 'skip';
+}
+
+/** The install record (P6): meta `agents_since_ms` as a number, or null when none stands. A record that is not a finite number
+ *  reads as null, which reads every subagent file as pre-install, so a damaged record ingests nothing (fail closed). */
+function installRecordOf(db) {
+  const raw = getMeta(db, INSTALL_META);
+  const n = raw === null ? NaN : installRecordNumber(raw);
+  return Number.isFinite(n) ? n : null;
+}
+/** The install record as the census reports it: its milliseconds, `'absent'` (no record), or `'damaged'` (a value that is not digits,
+ *  which installRecordOf reads as null and so as "every file is pre-install"). */
+function installRecordState(db) {
+  const raw = getMeta(db, INSTALL_META);
+  if (raw === null) return 'absent';
+  const n = installRecordNumber(raw);
+  return Number.isFinite(n) ? n : 'damaged';
+}
+/** A stored record as a number: digits only, else NaN (damaged). Number('') and Number(' ') are 0, a finite record that would
+ *  read every file as post-install and never be repaired, so the text is checked before Number sees it. */
+function installRecordNumber(raw) {
+  return /^\d+$/.test(raw) ? Number(raw) : NaN;
+}
+
+/** The first W4 tick's install record (P6; the coordinator's ruling in fix round 3): lib's decideInstallRecord rules, this writes.
+ *  scheduledPassBody's run arm calls it once a pass has opened the store, before the ingest gate, so the first W4 pass writes it
+ *  whatever its pause or roster state, and no later pass moves it. A record that stands is never rewritten, damaged or not. */
+export function recordAgentsInstall(db, nowMs) {
+  const raw = getMeta(db, INSTALL_META);
+  const write = decideInstallRecord({ existing: raw === null ? null : installRecordNumber(raw), nowMs });
+  if (write !== null) setMeta(db, INSTALL_META, String(write));
 }
 
 /** This tick's candidate files, in order: hinted (fresh activity, so the lowest lag), then behind
@@ -5171,22 +5532,30 @@ function activeFiles(db, ctx, seen, budget) {
  *  given share (task 21 takes their sidecars): the uuids the hinted and the behind files came from. CP-39 (D-6933,
  *  D-6938): the scan's files add none, since the sidecar scan covers `known` from its own cursor; `known` is filled when
  *  either scan is due (`scan` the transcripts', `sideScan` the sidecars'). With `budget`, discovery checks it before each
- *  directory it lists, and `complete` is false when it was cut (the transcript scan is then not run at all, or is cut). */
-export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null) {
+ *  directory it lists, and `complete` is false when it was cut (the transcript scan is then not run at all, or is cut).
+ *  W4 P6, P15 (b) (D-8153): when `armed` (the marker, read by ingestTick), the scan tick's `discover(known)` alone also walks the
+ *  subagent trees, and each admitted subagent file it hands over is appended after the tick's main files when decideAgentIngest
+ *  (form 'tick') says so: a post-install file of a known parent, with no pause and history on. The hinted walk, the behind files
+ *  and the active pass never see a subagent file. A walk the budget or ctx.agentStop cuts is incomplete (the scan stays unmarked and
+ *  the next tick is a scan), and the entries handed over before the cut are still taken. */
+export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null, armed = false) {
   const hinted = hintedUuids(db, ctx.home);
   const uuids = new Set(hinted);
   const files = [];
   const seen = new Set();
   let complete = true;
+  let agentsWithheld = 0;
   const take = (list, addUuids) => {
     for (const f of list) {
       if (addUuids) uuids.add(f.uuid);
       if (!seen.has(f.path)) { seen.add(f.path); files.push(f); }
     }
   };
-  const discover = (wanted) => (budget === null
-    ? { files: discoverTranscripts(ctx.homes, wanted), complete: true }
-    : discoverTranscriptsWithin(ctx.homes, wanted, budget));
+  const discover = (wanted, agents = null) => discoverTranscriptsWithin(ctx.homes, wanted, budget, agents);
+  const agentFiles = [];
+  const agentSink = armed
+    ? { take: (e) => { if (e.type === 'file' && e.verdict === 'admit') agentFiles.push(e); }, stop: ctx.agentStop ?? null }
+    : null;
   const h = discover(hinted);
   take(h.files, true);
   if (!h.complete) complete = false;
@@ -5195,14 +5564,36 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null) {
     const a = activeFiles(db, ctx, seen, budget);
     take(a.files, false);
     if (!a.complete) complete = false;
+    else {
+      // W4 P3: after the main files, in what the per-tick stat cap leaves them, for the parents whose main file was just taken.
+      const g = activeAgentFiles(db, ctx, seen, budget, new Set(a.files.map((f) => f.uuid)), a.room, armed);
+      take(g.files, false);
+      agentsWithheld += g.withheld;
+      if (!g.complete) complete = false;
+    }
   }
   const known = scan || sideScan ? knownUuids(db, ctx.home) : new Set();
   if (scan && complete) {
-    const k = discover(known);
+    const k = discover(known, agentSink);
     take(k.files, false);
     if (!k.complete) complete = false;
   }
-  return { files, uuids, known, complete };
+  if (agentFiles.length > 0) {
+    const sinceMs = installRecordOf(db);
+    const historyOff = ctx.historyOff();
+    for (const e of agentFiles) {
+      const gate = agentGate(ctx, {
+        form: 'tick', armed, historyOff, admitted: e.verdict === 'admit',
+        preInstall: isPreInstall(e.mtimeMs, sinceMs), parentKnown: known.has(e.uuid),
+      });
+      if (gate === 'paused' && scanFileWaiting(db, e)) agentsWithheld += 1;
+      if (gate === 'read' && !seen.has(e.path)) {
+        seen.add(e.path);
+        files.push({ path: e.path, uuid: e.uuid, home: e.home, agentKey: agentKey(e.id, e.runId), runId: e.runId });
+      }
+    }
+  }
+  return { files, uuids, known, complete, agentsWithheld };
 }
 
 /** Every examined file's measured size and mtime, `eof_ms` for those left at end-of-file, and the
@@ -5243,7 +5634,15 @@ function isFsError(e) {
 export async function ingestTick(db, ctx, budget) {
   const scan = ingestScanDue(db, ctx.nowMs);
   const sideScan = sidecarScanDue(db, ctx.nowMs);
-  const found = candidateFiles(db, ctx, scan, sideScan, budget);
+  // W4 P15 (b) (D-8151): the subagent ingest's arming marker, one lstat read as booleans (lib's agentsArmedOf: a regular, non-link
+  // file arms it). No writer in the tree; planRun takes no armed input, so the pass reads no marker.
+  let marker = null;
+  try { const st = lstatSync(historyPaths(ctx.home).agentsOn); marker = { isFile: st.isFile(), isSymbolicLink: st.isSymbolicLink() }; } catch { /* absent or unreadable: not armed */ }
+  const armed = agentsArmedOf(marker);
+  // W4 P5 (D-8155): the pause order's one site. Subagent capture pauses at 90% of the cap, main capture goes on to the cap; the size and
+  // cap are the pass's own, handed on by tick(), and a context built without them (capBytes 0) pauses nothing by this rule.
+  ctx.agentsPause = decideAgentsPause({ armed, pause: ctx.pause ?? null, sizeBytes: ctx.sizeBytes ?? 0, capBytes: ctx.capBytes ?? 0 });
+  const found = candidateFiles(db, ctx, scan, sideScan, budget, armed);
   const { files, uuids, known } = found;
   const examined = [];
   let bytes = 0;
@@ -5262,6 +5661,9 @@ export async function ingestTick(db, ctx, budget) {
   // standing line.
   const skipped = new Set();
   try {
+    // D-8155: the counter of the pause, once per tick that withheld an admitted subagent file (its cursor does not move). It does not join
+    // W1's capture_paused_* kill rule by its name; the 90% WARN (agents-paused-at-cap) is its watch.
+    if (found.agentsWithheld > 0) withTx(db, 'NORMAL', () => { bump(db, 'capture_paused_agents_at_cap'); });
     for (const f of files) {
       if (!budgetLeft(budget) || ctx.historyOff()) { complete = false; break; }
       let r;
@@ -5273,14 +5675,18 @@ export async function ingestTick(db, ctx, budget) {
         if (!isFsError(e)) throw e;
         countAdmission(db, 'unreadable');
         filesUnreadable = true;
-        skipped.add(f.uuid);
+        if ((f.agentKey ?? '') === '') skipped.add(f.uuid);   // a main copy only: a subagent file holds none of the parent's boundaries (D-5061)
         continue;
       }
       if (r === null) continue;
       examined.push({ fileId: r.fileId, size: examinedSize(r, ctx.nowMs), mtimeNs: r.mtimeNs, atEof: r.atEof });
       bytes += r.bytes;
-      newEntries += r.newEntries;
-      if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
+      // The tick's lag is the MAIN index's staleness (ticks.lag_ms): a subagent file, resumed only at a scan tick or an active
+      // parent's pass, feeds it neither entries nor time, as firstPending leaves it out of a parent's launch facts.
+      if ((f.agentKey ?? '') === '') {
+        newEntries += r.newEntries;
+        if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
+      }
       if (r.floor !== undefined) { paused = true; complete = false; break; }
     }
     // D-6933: the transcripts' mark is set here, once their half is examined; the sidecar half sets its own.
@@ -5488,10 +5894,11 @@ function sideStmts(db) {
     // row names; it changes a row only for such a blob, which is how the caller knows to clear the blob's referrers too.
     blobUnmark: db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE blob_id = ? AND exported_ms IS NOT NULL AND z IS NOT NULL'),
     // Not caught up as Task 20 counts behind: a live row a path still names, short of its measured size (or never
-    // measured). One row per (file, path), for notCaughtUp to filter by rostered home, as behindStats does.
+    // measured). One row per (file, path), for notCaughtUp to filter by rostered home, as behindStats does. W4 (review 1735 F2): main
+    // rows only, the same "behind" predicate's second site (D-4309), so a short subagent row holds none of its parent's sidecars back.
     notCaughtUp: db.prepare(`SELECT f.file_id AS fileId, p.path AS path FROM ingest_files f
       JOIN transcripts t ON t.transcript_pk = f.transcript_pk JOIN file_paths p ON p.file_id = f.file_id
-      WHERE t.cc_session_uuid = ?
+      WHERE t.cc_session_uuid = ? AND t.agent_id = ''
         AND f.source_key = '' AND f.status = 'live' AND (f.size IS NULL OR f.size > f.offset)`),
     // D-6931: the walk is keyed by the transcript row with no agent id (ensureTranscript's), never a subagent's.
     pkOfUuid: db.prepare("SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''"),
@@ -6809,7 +7216,7 @@ export function mergeSteps(db, ctx, budget) {
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS, or an arm in bindingPass, and one in OP_DRY_RUNS when it has a dry run.
  *  W2-1 adds recall-off, whose arm is opPass's own (recallOffPass): it has no dry run (D-5763 (history-w2-recall-off-no-dry-run)). */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore', 'rebuild', 'recall-off']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore', 'rebuild', 'recall-off', 'census']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -6824,18 +7231,20 @@ const OP_NEEDS_CODE_VERSION = new Set(['import', 'prune', 'reparse', 'repair']);
  *  {rc, reason?}. */
 const OP_DRY_RUNS = Object.freeze({
   import: async (c) => {
-    importDryRun(c.P, c.parsed.homes, c.args, c.out);
+    if (c.args.agents) importAgentsDryRun(c.P, c.parsed.homes, c.out, c.home);
+    else importDryRun(c.P, c.parsed.homes, c.args, c.out);
     return { rc: EXIT.OK };
   },
   prune: (h) => pruneDryRunOp(h.home, h.P, h.args, h.out, h.now()),
   reparse: (h) => reparseDryRunOp(h.home, h.P, h.args, h.out),
+  census: (c) => censusOp(c.P, c.parsed.homes, c.args, c.out, c.home),   // W4 P16 (a): never a writing form (formOf answers null)
 });
 
 /** Each writing verb's body, on the store openStore opened, under the lock, after the lock-take journal half, the
  *  op marker and the first outbox flush. c = {db, ctx, P, args, opened, free}; answers {rc, reason?}. An rc of 0 is
  *  followed by the release flush and journal half (§8.4: every writing form flushes before it exits 0). */
 const OP_HANDLERS = Object.freeze({
-  import: (c) => importApply(c.db, c.ctx, c.P, c.args),
+  import: (c) => (c.args.agents ? importAgentsApply(c.db, c.ctx, c.P, c.args) : importApply(c.db, c.ctx, c.P, c.args)),
   migrate: (c) => migrateOp(c.db, c.ctx, c.opened, c.free),
   prune: (c) => pruneApplyOp(c.db, c.ctx, c.args),
   reparse: (c) => reparseApplyOp(c.db, c.ctx, c.args),
@@ -7164,25 +7573,32 @@ export function transcriptsUnder(homes) {
  *  STATFS_DEADLINE_MS, through Task 14's in-process seam when a test injects one), the cap file and the store's
  *  measured size, and lets lib's planRun decide — the rule a scheduled pass applies, never a second one here
  *  (L4). null when it may; else the word it stops on. */
-export async function importRoom(db, ctx) {
+export async function importRoom(db, ctx, agents = false) {
   const free = await statfsWithDeadline(probePath(ctx.paths, ctx.home), STATFS_DEADLINE_MS, ctx.deps.statfs);
   const sizeBytes = (ctx.deps.measureSize ?? measuredSize)(db, ctx.paths.dbFile);
+  const capGb = capOf(capText(ctx.paths.cap)).gb;
   const run = planRun({
-    historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb: capOf(capText(ctx.paths.cap)).gb,
+    historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb,
     migration: 'none', recovering: false,
   });
   if (run.arm !== 'run') return 'store-unreachable';   // planRun's only hold for these inputs: a probe that never settled
   if (run.pause === 'at-cap') return 'at-cap';
   if (run.pause === 'low-disk') return 'capture-paused-low-disk';
+  // W4 P5, P6 (the coordinator's ruling in fix round 3, review 1731 F2): the `--agents` form is subagent capture, so the pause at 90% of
+  // the cap reaches it as it reaches a tick's. The operator's act is its own arming (`armed: true`, whatever the marker says, D-8158),
+  // and every other pause was answered above, so none stands here (`pause: null`): decideAgentsPause stays the one rule.
+  if (agents && decideAgentsPause({ armed: true, pause: null, sizeBytes, capBytes: capBytes(capGb) }) !== null) return 'agents-paused-at-cap';
   return null;
 }
 
-/** importRoom's answer counted and said as a scheduled pass counts a pause (§9.3); true when the import must stop. */
-async function importPaused(db, ctx, say) {
-  const pause = await importRoom(db, ctx);
+/** importRoom's answer counted and said as a scheduled pass counts a pause (§9.3); true when the import must stop. `agents` is the
+ *  `--agents` form's (importRoom's third argument): its 90% pause is counted `capture_paused_agents_at_cap`, as a tick counts it (D-8155). */
+async function importPaused(db, ctx, say, agents = false) {
+  const pause = await importRoom(db, ctx, agents);
   if (pause === null) return false;
   if (pause === 'at-cap') bump(db, 'capture_paused_at_cap');
   if (pause === 'capture-paused-low-disk') bump(db, 'capture_paused_low_disk');
+  if (pause === 'agents-paused-at-cap') bump(db, 'capture_paused_agents_at_cap');
   say(pause);
   return true;
 }
@@ -7202,15 +7618,19 @@ const floorStopWord = (floor) => (floor === 'low-disk' ? 'capture-paused-low-dis
  *  chunks"). A file that is not a regular file under a rostered projects/ root, or that has gone, is counted by
  *  `ingestPath`'s admission and answers 'refused'. The ingest context is Task 19's own `makeIngestCtx`, with
  *  `fts` false, so these blobs are written unindexed; `importApply` then calls Task 23's `resetFtsPending`,
- *  and the next scheduled tick's `deriveFts` indexes them through its full pair index. */
-export async function importFile(db, ctx, filePath, uuid) {
+ *  and the next scheduled tick's `deriveFts` indexes them through its full pair index.
+ *  W4 P6: `agent` ({ agentKey, runId }) is a subagent file's identity, handed to the bind as the tick hands it; it also selects the
+ *  `--agents` form's pause (importRoom) and its stop message, which names the act that resumes the file: no scheduled tick takes a
+ *  pre-install file, whatever stopped it (review 1735 A4). A main file's call is unchanged. */
+export async function importFile(db, ctx, filePath, uuid, agent = null) {
   const home = homeOfPath(filePath, ctx.homes) ?? '';
-  const say = (word) => ctx.out(`history-sweep: ${word}: ingest stopped at ${filePath}; the scheduled ticks resume it by cursor`);
+  const resume = agent === null ? 'the scheduled ticks resume it by cursor' : 're-run import --agents --apply to resume it: the scheduled ticks never take a pre-install file (P6)';
+  const say = (word) => ctx.out(`history-sweep: ${word}: ingest stopped at ${filePath}; ${resume}`);
   for (;;) {
-    if (await importPaused(db, ctx, say)) return 'paused';
+    if (await importPaused(db, ctx, say, agent !== null)) return 'paused';
     // Task 19's per-chunk floor probe, on db/ (a link followed), through the same in-process seam importRoom uses.
     const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
-    const r = await ingestPath(db, ictx, { path: filePath, uuid, home }, newBudget(ctx.now));
+    const r = await ingestPath(db, ictx, { path: filePath, uuid, home, ...(agent ?? {}) }, newBudget(ctx.now));
     if (r === null) return 'refused';
     if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed');
     if (r.floor !== undefined) {
@@ -7290,6 +7710,183 @@ function importDryRun(P, homes, args, out) {
   } finally {
     ro?.close();
   }
+}
+
+/** The subagent files `import --agents` (either form) ranks, from the walk's agent arm alone, as the census lists them (P20 (a), SA34):
+ *  `transcriptsUnder` stays main-only and no second lister of `subagents/` exists. Nothing is opened; the file entries only. */
+function agentImportEntries(homes) {
+  const files = [];
+  walkTranscripts(homes, () => {}, null, { take: (e) => { if (e.type === 'file') files.push(e); }, stop: null });
+  return files;
+}
+
+/** Why `import --agents` does not take one subagent file, or null when it does (W4 P6, D-8157). The rule is decideAgentIngest's, form
+ *  'import' (history on, no pause, an admitted file, a pre-install one, its parent in `known`); a file it refuses is named by its first
+ *  failing fact: refused by the walk, not this import's (post-install: a tick's), then by its parent, which `ev` (importEvidence's wider
+ *  map) tells apart: `parent-unconfirmed` is named by evidence a plain `import --apply` can confirm, `parent-unknown` by none. */
+function agentImportSkip(e, known, ev, sinceMs) {
+  const preInstall = isPreInstall(e.mtimeMs, sinceMs);
+  const take = decideAgentIngest({
+    form: 'import', armed: false, historyOff: false, pause: null, admitted: e.verdict === 'admit', preInstall, parentKnown: known.has(e.uuid),
+  });
+  if (take) return null;
+  if (e.verdict !== 'admit') return 'refused';
+  if (!preInstall) return 'post-install';
+  return ev.has(e.uuid) ? 'parent-unconfirmed' : 'parent-unknown';
+}
+
+/** The remedy printed when a file's parent is named by evidence only (`parent-unconfirmed` above 0), with its two exceptions
+ *  (review 1731 F9): at main, mapRegistryUuid answers `skipped` in the first (D-4297) and `refused` in the second. */
+const AGENT_IMPORT_REMEDY = 'history-sweep: run `ccrc history import --apply` first: it confirms these parents\' epochs, and `import --agents --apply` then admits their subagent files. '
+  + 'It does not when the same id already holds the uuid as an unconfirmed epoch, or another family holds it confirmed; those files stay parent-unconfirmed';
+
+/** The walk's subagent files, split by agentImportSkip into those `import --agents` takes (`take`) and the count of those it does not,
+ *  by reason (`skipped`): the one plan the dry run forecasts and the apply runs. */
+function agentImportPlan(homes, known, ev, sinceMs) {
+  const take = [];
+  const skipped = { 'parent-unconfirmed': 0, 'parent-unknown': 0, 'post-install': 0, refused: 0 };
+  for (const e of agentImportEntries(homes)) {
+    const why = agentImportSkip(e, known, ev, sinceMs);
+    if (why === null) take.push(e); else skipped[why] += 1;
+  }
+  return { take, skipped };
+}
+
+/** The lines the apply says about what it did not take, by reason, and the remedy when a parent waits on a plain `import --apply`. */
+function agentImportSkipLines(skipped) {
+  const lines = [`history-sweep: skipped by reason: ${Object.entries(skipped).map(([k, n]) => `${k} ${n}`).join(', ')}`];
+  if (skipped['parent-unconfirmed'] > 0) lines.push(AGENT_IMPORT_REMEDY);
+  return lines;
+}
+
+/** How many bytes of one subagent file (`e`, a walk entry the import takes) are still waiting to be ingested, by lib's bytesLeftOf
+ *  (the tick's rule too): its size, or, when agentWaitingRow finds the row bindFile would resume (live, and the same file), the size
+ *  past that cursor. A file stored whole waits for none; a vanished path waits for none, and so does a physical file already counted
+ *  (`seen`, keyed by device and inode): the apply reads one file once, whatever its holdings. `ro` is the read-only handle, or null
+ *  when no store is open. */
+function agentBytesLeft(e, ro, seen) {
+  let st;
+  try { st = lstatSync(e.path, { bigint: true }); } catch { return 0; }
+  const id = `${st.dev}:${st.ino}`;
+  if (seen.has(id)) return 0;
+  seen.add(id);
+  const stored = ro === null ? null : agentWaitingRow(ro, {
+    dev: st.dev, ino: st.ino, uuid: e.uuid, agentKey: agentKey(e.id, e.runId), birthNs: st.birthtimeNs > 0n ? st.birthtimeNs : null,
+  });
+  return bytesLeftOf({ stored, size: Number(st.size), dev: st.dev, ino: st.ino });
+}
+
+/** `import --agents` without --apply (W4 P6): READ-ONLY, one JSON forecast line, then the words. `files` and `bytes` are what the apply
+ *  would still read: the pre-install files of known parents, an unstored file whole and a stored one past its cursor (a file stored
+ *  whole is neither counted nor sized). `storeBytesLow` and `storeBytesHigh` are that size at §9.3's two ratios, `pauseAtBytes` the
+ *  size at which the apply stops (the 90% share of the cap, rounded up as decideAgentsPause's >= reads it), and `skipped` the files it
+ *  would not take, by reason. `home` is the pass's (knownUuids' registry half); a missing store has no epochs, so only the registry
+ *  names a known parent. */
+function importAgentsDryRun(P, homes, out, home) {
+  let ro = null;
+  try { if (statSync(P.dbFile).size > 0) ro = openReader(P.dbFile); } catch { ro = null; }
+  try {
+    const ev = importEvidence(ro, P);
+    const known = ro === null ? registeredUuids(home) : knownUuids(ro, home);
+    const sinceMs = ro === null ? null : installRecordOf(ro);
+    const { take, skipped } = agentImportPlan(homes, known, ev, sinceMs);
+    const seen = new Set();
+    let files = 0;
+    let bytes = 0;
+    for (const e of take) {
+      const left = agentBytesLeft(e, ro, seen);
+      if (left === 0) continue;
+      files += 1;
+      bytes += left;
+    }
+    const pauseAtBytes = Math.ceil(AGENTS_PAUSE_SHARE * capBytes(capOf(capText(P.cap)).gb));
+    out(JSON.stringify({
+      files, bytes, storeBytesLow: Math.round(bytes * AGENTS_STORE_RATIO_LOW), storeBytesHigh: Math.round(bytes * AGENTS_STORE_RATIO_HIGH), pauseAtBytes, skipped,
+    }));
+    out(`history-sweep: the apply stops once the store reaches ${pauseAtBytes} bytes (${AGENTS_PAUSE_SHARE * 100}% of the cap): re-run it to resume`);
+    if (skipped['parent-unconfirmed'] > 0) out(AGENT_IMPORT_REMEDY);
+  } finally {
+    ro?.close();
+  }
+}
+
+/** Option (c)'s evidence (P12): `<session>/workflows/<runId>.json`, one lstat. 'exists' for a regular file, 'absent' for ENOENT or
+ *  ENOTDIR, 'unreadable' for anything else (a link, a directory, a failed lstat). */
+function runSummaryState({ home, slug, uuid, runId }) {
+  try {
+    return lstatSync(`${home}/projects/${slug}/${uuid}/workflows/${runId}.json`).isFile() ? 'exists' : 'unreadable';
+  } catch (e) {
+    return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'absent' : 'unreadable';
+  }
+}
+
+/** Whether a file can be opened for reading by this process (the census asks it of an unread holding only). */
+function canReadPath(p) {
+  try { accessSync(p, constants.R_OK); return true; } catch { return false; }
+}
+
+/** The census report (W4 P16 (a)): discovery's one walk over the rostered homes with the agent arm, no stop and no seam, so it sees
+ *  the whole tree, handed whole to runCensus with the store, the install record and the uuids a tick would ingest. It writes nothing
+ *  and bumps no counter. `over` replaces any dependency (an in-process test's seam, as the pass's `deps`: the op arm passes none). */
+export function censusReport(db, homes, home, over = {}) {
+  const main = [];
+  const agents = [];
+  walkTranscripts(homes, (t) => { main.push(t); }, null, { take: (e) => { agents.push(e); }, stop: null });
+  return runCensus(db, { main, agents }, {
+    readMeta: readAgentMeta, predicate: CENSUS_PREDICATE, runWindow: CENSUS_RUN_WINDOW, sinceMs: installRecordOf(db), installRecord: installRecordState(db),
+    known: knownUuids(db, home), summaryState: runSummaryState, canRead: canReadPath, ...over,
+  });
+}
+
+/** `census [--json]` (W4 P16 (a)): READ-ONLY, behind the dry runs' bounded reachability probe. The store is opened read-only; no store
+ *  on this box (absent or zero bytes) is exit 9. The report is one JSON line under `--json`, else one group per line; it exits 0
+ *  whatever it withholds. The census opens no writer, runs no decideInstallRecord and bumps no counter. */
+function censusOp(P, homes, args, out, home) {
+  let size = 0;
+  try { size = statSync(P.dbFile).size; } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  if (size === 0) {
+    out('history-sweep: no store on this box; nothing to census');
+    return { rc: EXIT.NO_STORE };
+  }
+  const ro = openReader(P.dbFile);
+  try {
+    const report = censusReport(ro, homes, home);
+    if (args.json) out(JSON.stringify(report));
+    else for (const line of formatCensus(report)) out(line);
+  } finally {
+    ro.close();
+  }
+  return { rc: EXIT.OK };
+}
+
+/** `import --agents --apply` (W4 P6): the operator's import of the subagent files written before capture began. The plan (agentImportPlan)
+ *  holds the pre-install files of parents in `knownUuids`, literally the tick's admitted set and never importEvidence's wider map (D-8157),
+ *  ruled by decideAgentIngest, form 'import'; each is asked again through agentGate (the tick's own asker) with history-off, just before it
+ *  is read. It says what it did not take, by reason, and the remedy for a parent that waits on a plain `import --apply`. It reads no arming
+ *  marker (D-8158) and maps nothing.
+ *  The 90% pause does NOT reach the per-file decider: agentGate reads `ctx.agentsPause`, which the op context never sets, so every file is
+ *  asked with `pause: null`. The pause reaches the import as importFile's stop, per window (importRoom with agents, armed: true, then
+ *  decideAgentsPause), counted and said with the act that resumes it. That route stays: a per-file pause would turn a stop the operator is
+ *  told about into a silent skip. A main transcript and a sidecar are never touched. */
+async function importAgentsApply(db, ctx, P, args) {
+  const known = knownUuids(db, ctx.home);
+  const sinceMs = installRecordOf(db);
+  const { take, skipped } = agentImportPlan(ctx.homes, known, importEvidence(db, P), sinceMs);
+  for (const line of agentImportSkipLines(skipped)) ctx.out(line);
+  const ends = [];
+  for (const e of take) {
+    const gate = agentGate(ctx, {
+      form: 'import', armed: false, historyOff: existsSync(P.off), admitted: e.verdict === 'admit',
+      preInstall: isPreInstall(e.mtimeMs, sinceMs), parentKnown: known.has(e.uuid),
+    });
+    if (gate !== 'read') continue;
+    const end = await importFile(db, ctx, e.path, e.uuid, { agentKey: agentKey(e.id, e.runId), runId: e.runId });
+    ends.push(end);
+    if (end === 'paused') break;
+  }
+  // §9.1, as importApply: these blobs are written unindexed (fts false), so the next tick's deriveFts indexes them.
+  if (ends.some((end) => end !== 'refused')) resetFtsPending(db);
+  return { rc: EXIT.OK };
 }
 
 /** `import --apply` and `import --session <id> --file <path> --apply` (§8.4): map from evidence, one verdict
@@ -7428,11 +8025,11 @@ async function opPass(parsed, deps, out) {
     const r = recallOffPass(home, args, out);
     return result(r.rc, r.reason);
   }
-  if (form === null && parsed.op === 'import' && parsed.rosterUnreadable) {
+  if (form === null && (parsed.op === 'import' || parsed.op === 'census') && parsed.rosterUnreadable) {
     // B1's D-4313 (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or
     // admit; reading it as an empty roster answered "nothing to import" and exit 0. A dry run writes nothing at all
-    // (§8.4), so it cannot count the condition; --apply does (below). Import only: prune's and reparse's dry runs
-    // need no roster.
+    // (§8.4), so it cannot count the condition; --apply does (below). Import and the census only: prune's and reparse's dry
+    // runs need no roster. The census (W4 P16 (a)) needs it: no home would read as no units, an unknown turned into a zero.
     out('history-sweep: accounts.sh could not be read, so no home is known; nothing listed');
     return result(EXIT.REFUSED, 'roster-unreadable');
   }

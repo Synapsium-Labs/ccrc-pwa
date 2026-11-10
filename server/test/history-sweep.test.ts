@@ -17,7 +17,7 @@ import {
 } from './historyHelpers.js';
 import { SCHEMA_VERSION, STATFS_DEADLINE_MS, historyPaths } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta, openWriter, userVersion } from '../../ccd/history/store.mjs';
-import { candidateFiles, makeIngestCtx, newBudget, parseSweepArgv, recallOffKind, recordRecallOff } from '../../ccd/history/sweep.mjs';
+import { candidateFiles, discoverTranscripts, makeIngestCtx, newBudget, parseSweepArgv, recallOffKind, recordRecallOff } from '../../ccd/history/sweep.mjs';
 import { lstatKind } from '../../ccd/history/card.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { readFileSync as readUnitText } from 'node:fs';
@@ -1036,4 +1036,50 @@ describe('one lstat-kind predicate answers both callers (the recallOffKind merge
       expect(recallOffKind(p)).toBe(kind === 'other' ? 'special' : kind);
     });
   }
+});
+
+// W4 P20 characterization. discoverTranscripts reaches the unexported walkTranscripts: this pins today's main list, green on
+// the base and unchanged through the subagent arm, which must leave one traversal's main output exactly as it is.
+describe('the transcript walk, pinned before the subagent arm (W4 P20 characterization)', () => {
+  it('discovery lists today\'s main transcripts unchanged (P20 characterization)', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();   // root lists a mode-000 directory regardless of its mode
+    const U1 = 'a1000000-1111-4111-8111-111111111111';
+    const U2 = 'a2000000-1111-4111-8111-111111111111';
+    const U3 = 'a3000000-1111-4111-8111-111111111111';
+    const U4 = 'a4000000-1111-4111-8111-111111111111';
+    const base = mkTmp('ccrc-hist-sweep-walk-');
+    const h1 = path.join(base, 'home-1');
+    const h2 = path.join(base, 'home-2');
+    const put = (p: string, text = '{}\n'): void => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+    // home-1: a project holding a transcript, a notes file, and a session directory with a subagent file
+    put(path.join(h1, 'projects', 'aa-proj', `${U1}.jsonl`));
+    put(path.join(h1, 'projects', 'aa-proj', 'notes.txt'), 'notes');
+    put(path.join(h1, 'projects', 'aa-proj', U1, 'subagents', 'agent-a.jsonl'));
+    // a linked project directory: main discovery lists through it
+    put(path.join(base, 'elsewhere', `${U2}.jsonl`));
+    fs.mkdirSync(path.join(h1, 'projects'), { recursive: true });
+    fs.symlinkSync(path.join(base, 'elsewhere'), path.join(h1, 'projects', 'bb-link'));
+    // an unlistable project directory: skipped silently
+    put(path.join(h1, 'projects', 'cc-locked', `${U3}.jsonl`));
+    fs.chmodSync(path.join(h1, 'projects', 'cc-locked'), 0o000);
+    // a file directly under projects/: not a directory, skipped
+    put(path.join(h1, 'projects', 'stray.jsonl'));
+    // home-2: one project, one transcript
+    put(path.join(h2, 'projects', 'dd-proj', `${U4}.jsonl`));
+    try {
+      const got = discoverTranscripts([h1, h2], [U1, U2, U3, U4, 'agent-a', 'stray']);
+      const rel = (p: string): string => p.replace(base, '<base>');
+      expect(got.map((t: { path: string; uuid: string; home: string }) => ({ path: rel(t.path), uuid: t.uuid, home: rel(t.home) }))).toEqual([
+        { path: `<base>/home-1/projects/aa-proj/${U1}.jsonl`, uuid: U1, home: '<base>/home-1' },
+        { path: `<base>/home-1/projects/bb-link/${U2}.jsonl`, uuid: U2, home: '<base>/home-1' },
+        { path: `<base>/home-2/projects/dd-proj/${U4}.jsonl`, uuid: U4, home: '<base>/home-2' },
+      ]);   // the linked project's transcript included; nothing from subagents/, the locked or the stray
+      // the same fixture walked with the subagent arm on (a no-op sink that never cuts) hands the same main list: the arm adds no main file
+      const seen: string[] = [];
+      expect(discoverTranscripts([h1, h2], [U1, U2, U3, U4, 'agent-a', 'stray'], { take: (e: { type: string }) => { seen.push(e.type); }, stop: null } as never)).toEqual(got);   // sweep.mjs' JSDoc types the sink as null
+      expect(seen, 'CONTROL: the arm did walk the fixture\'s subagents/').toContain('file');
+    } finally {
+      fs.chmodSync(path.join(h1, 'projects', 'cc-locked'), 0o755);
+    }
+  });
 });

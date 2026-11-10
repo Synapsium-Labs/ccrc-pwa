@@ -2611,6 +2611,7 @@ const GT_BUMPS: readonly string[] = ['apply-in-session', 'needs-tty', 'irreversi
 interface GtForm { form: string; cli: (file: string) => string[]; op: (file: string) => string[] }
 const GT_FORMS: readonly GtForm[] = [
   { form: 'import-apply', cli: () => ['import', '--apply'], op: () => ['--op', 'import', '--apply'] },
+  { form: 'import-agents-apply', cli: () => ['import', '--agents', '--apply'], op: () => ['--op', 'import', '--agents', '--apply'] },
   {
     form: 'import-session-apply',
     cli: (f) => ['import', '--session', ID, '--file', f, '--apply'],

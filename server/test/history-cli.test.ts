@@ -38,7 +38,7 @@ interface Envelope {
   export: Record<string, { horizon_days: number | null; retention_days: number | null; due_blobs: number; overdue_blobs: number; segments: number }>;
   recovering: { step: string; cursor: string } | null; op: { verb: string; pid: number; alive: boolean; start_ms: number } | null;
   pass: { pid: number; start_ms: number; live: boolean } | null;
-  history_off: boolean; shim_mtime_ms: number | null; counters: Record<string, number>;
+  history_off: boolean; agents_armed: boolean; shim_mtime_ms: number | null; counters: Record<string, number>;
   health: { pass: string | null; warn: unknown[]; fail: unknown[] };
 }
 interface StatusRun { code: number | null; env: Envelope; stdout: string; stderr: string; ms: number }
@@ -991,7 +991,8 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     const op = healthPath.join(box.home, '.ccrc', 'history', 'op');
     const acc = healthPath.join(box.home, '.ccrc', 'accounts.sh');
     const sid = healthPath.join(box.home, '.ccrc', 'history', 'store.id');
-    for (const file of [cap, op, acc, sid]) {
+    const ao = healthPath.join(box.home, '.ccrc', 'history', 'agents-on');   // W4: the subagent ingest's marker, read by lstat alone
+    for (const file of [cap, op, acc, sid, ao]) {
       const saved = healthFs.existsSync(file) ? healthFs.readFileSync(file, 'utf8') : null;
       healthFs.rmSync(file, { force: true });
       healthCp.execFileSync('mkfifo', [file]);
@@ -1006,6 +1007,7 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
             expect(r.env!['cap_malformed']).toBe(true);
             expect(r.env!['cap_gb']).toBe(50);
           }
+          if (file === ao) expect(r.env!['agents_armed'], file).toBe(false);
         }
       } finally {
         healthFs.rmSync(file, { force: true });
@@ -1013,6 +1015,62 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
       }
     }
   });
+
+  // W4 P5, P15 (b) (D-8151, D-8155), review 1737 F4: the status envelope's `agents_armed` is the marker's second reader, one `lstat`
+  // handed to lib's agentsArmedOf. A FIFO, a directory and a link to a regular file are not armed, and the reader never opens or
+  // follows: status answers at once (the FIFO row is the one a reader that opens would block on, bounded by timeoutMs; the link
+  // row is the one that tells `stat` from `lstat`).
+  it('agents-on as a FIFO, a directory and a link to a regular file never blocks status, and agents_armed stays false (review 1737 F4)', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-agents-on-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const marker = healthPath.join(box.home, '.ccrc', 'history', 'agents-on');
+    const target = healthPath.join(box.home, 'marker-target');
+    healthFs.writeFileSync(target, '');
+    const plant: Array<[string, () => void]> = [
+      ['a FIFO', () => { healthCp.execFileSync('mkfifo', [marker]); }],
+      ['a directory', () => { healthFs.mkdirSync(marker); }],
+      ['a link to a regular file', () => { healthFs.symlinkSync(target, marker); }],
+    ];
+    for (const [what, make] of plant) {
+      healthFs.rmSync(marker, { recursive: true, force: true });
+      make();
+      const r = statusOf(box, ['--json'], { preloads: [], env: {}, timeoutMs: 8_000 });
+      expect(r.code, what).toBe(0);
+      expect(r.env!['agents_armed'], what).toBe(false);
+    }
+    healthFs.rmSync(marker, { recursive: true, force: true });
+    healthFs.writeFileSync(marker, '');
+    expect(statusOf(box).env!['agents_armed'], 'CONTROL: a regular file arms it').toBe(true);
+  });
+
+  // W4 P5 (D-8159): SA11's doctor half, by its parts. cli.mjs exports healthInputsOf and readHealthExtras for this case. A child process:
+  // importing cli.mjs sets the importing process's umask, so no case imports it in this worker.
+  it('the status envelope carries the marker to the health inputs (SA11\'s doctor half, by its parts)', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-agents-inputs-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const marker = healthPath.join(box.home, '.ccrc', 'history', 'agents-on');
+    const src = [
+      `import { statusEnvelope, readHealthExtras, healthInputsOf } from ${JSON.stringify(pathToFileURL(healthHh.CLI).href)};`,
+      `const home = ${JSON.stringify(box.home)}; const now = Date.now();`,
+      'const env = await statusEnvelope(home, now);',
+      'const x = await readHealthExtras(home, env, now);',
+      'process.stdout.write(JSON.stringify({ armed: env.agents_armed, input: healthInputsOf(env, x, now).agentsArmed }));',
+    ].join('\n');
+    const read = (): { armed: unknown; input: unknown } => {
+      const r = healthCp.spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', src], {
+        env: { ...box.env, NODE_OPTIONS: healthHh.preloadOptions([healthHh.PRELOADS.statfs]), HISTORY_TEST_STATFS: 'plenty' },
+        cwd: box.home, encoding: 'utf8', timeout: 60_000, killSignal: 'SIGTERM',
+      });
+      expect(r.status, r.stderr).toBe(0);
+      return JSON.parse(r.stdout) as { armed: unknown; input: unknown };
+    };
+    healthFs.writeFileSync(marker, '');
+    expect(read(), 'a regular file arms the envelope and the health input').toEqual({ armed: true, input: true });
+    healthFs.rmSync(marker, { force: true });
+    expect(read(), 'no marker: neither').toEqual({ armed: false, input: false });
+  }, 120_000);
 
   it('a regular-file sidecar reached through a symlink is read as the sweep reads it (statSync follows): a held one is journal-unwritable once old', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-link-', { role: 'fleet', shim: true });

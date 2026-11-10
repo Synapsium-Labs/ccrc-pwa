@@ -4,7 +4,8 @@
 // Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md
 // (§6.4 rings by imports, §13 cross-cutting invariants). L1 is a property of
 // this file's IMPORTS, not its path, and history-lib.test.ts reads it off the
-// import block: `node:crypto` is the only import. No `fs`, no `sqlite`, no
+// import block: `node:crypto` and the L0 run-id file `shared/workflow-ids.mjs`
+// (which imports nothing) are the only imports. No `fs`, no `sqlite`, no
 // `child_process`, no environment read, and nothing that imports them —
 // `compact-card.mjs` imports `node:fs`, so a function of its reaches a
 // decision here as an injected parameter, never by import. A decision that
@@ -21,6 +22,9 @@
 // file, so every export added here is declared there in the same commit.
 // `node:crypto` arrives with the ids and digests (canonical JSON, eventKey).
 import { createHash } from 'node:crypto';
+// The workflow run id's one definition (W4 addendum P10, the shared arm): an L0 file that imports nothing, shared with the
+// server's workflow reader, so no loader of this file can reach I/O through it. Re-exported below beside the subagent grammars.
+import { RUN_ID_RE } from '../../shared/workflow-ids.mjs';
 
 // ── exit codes and the reason words (§8.3) ────────────────────────────────
 // D-4169: 4 (writer busy) and 9 (no store on this box)
@@ -98,6 +102,8 @@ export const REFUSALS = Object.freeze(Object.keys(REASONS).filter((w) => REASONS
 const form = (op, irreversible, binding) => Object.freeze({ op, irreversible, binding });
 export const WRITING_FORMS = Object.freeze({
   'import-apply': form('import', false, false),
+  // W4 P6 (the operator's ruling, item 92): the subagent import, a bulk form that is not irreversible, like import-apply.
+  'import-agents-apply': form('import', false, false),
   'import-session-apply': form('import', true, false),
   'prune-apply': form('prune', true, false),
   repair: form('repair', true, false),
@@ -135,6 +141,9 @@ export const SWITCHES = Object.freeze({
   steerLivePrefix: '.ccrc/history-steer-live.',
   steerOnDir: '.ccrc/history/steer-on',
   headlessOn: '.ccrc/history/headless-on',
+  // D-8151 (history-w4-agents-on-marker-name): the subagent ingest's arming marker, read as a regular non-link file only
+  // (agentsArmedOf), with no writer in the tree (P15 (b)).
+  agentsOn: '.ccrc/history/agents-on',
 });
 
 // ── constants (each *chosen* in the spec unless it says measured) ─────────
@@ -408,7 +417,7 @@ const healthEntries = [
   ...healthRows('pass', ['first-tick-pending', 'ok']),
   ...healthRows('warn', [
     'off', 'recovering', 'op-running', 'catching-up', 'lag-unmeasured', 'fts-unavailable', 'cap-malformed',
-    'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
+    'redact-source-unreadable', 'cap-near', 'agents-paused-at-cap', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
     'export-segment-missing', 'export-segment-damaged', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
     'drain-rejected', 'spool-planted', 'export-marks-unchecked',
@@ -442,6 +451,399 @@ export function spoolFileIdOf(name) {
   if (typeof name !== 'string' || name.startsWith('.') || !name.endsWith('.jsonl')) return null;
   const id = name.slice(0, -'.jsonl'.length);
   return idOk(id) ? id : null;
+}
+
+// ── the subagent file grammars (W4 addendum P1, P10, P20) ─────────────────
+// A session's subagent transcripts live under `<session>/subagents/agent-<ID>.jsonl`, and a workflow's under
+// `<session>/subagents/workflows/<RUN>/agent-<ID>.jsonl`, each with an `agent-<ID>.meta.json` companion; a run directory
+// also holds `journal.jsonl`. These are the pure halves of the walk: the names it tells apart, the directories it enters
+// and the files it admits. The walk itself (lstat, listing, the cursors) is the sweep's.
+export { RUN_ID_RE };
+/** The agent id grammar: the hook's `_hook_compact_scope` gate and `CCRC_ID_MAX`, `[A-Za-z0-9_-]`, 1 to 128 chars. */
+export const AGENT_ID_MAX = 128;
+const AGENT_ID_RE = /^[A-Za-z0-9_-]+$/;
+export function agentIdOk(id) {
+  return typeof id === 'string' && id.length >= 1 && id.length <= AGENT_ID_MAX && AGENT_ID_RE.test(id);
+}
+/** The levels of the walk, outermost first: the home's projects root, a project, a session, its `subagents/`, a
+ *  `workflows/` directory and one run's directory. Plan-chosen words (the census names where a refusal happened). */
+export const AGENT_LEVELS = Object.freeze(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
+/** Why a directory is not entered: a symbolic link, something that is not a directory, a directory that cannot be listed. A candidate
+ *  file whose lstat failed other than by absence (final review M5) makes its containing directory `unlistable`: K counts directories alone. */
+export const AGENT_DIR_REASONS = Object.freeze(['link', 'not-dir', 'unlistable']);
+/** Why a candidate file is refused, in the order they are tested (decideAgentFile). */
+export const AGENT_FILE_REASONS = Object.freeze(['run-id', 'name', 'link', 'not-regular']);
+
+const AGENT_TRANSCRIPT_RE = /^agent-(.+)\.jsonl$/;
+const AGENT_META_RE = /^agent-(.+)\.meta\.json$/;
+/** What a name in `subagents/` (`where` 'subagents') or in a run directory (`where` 'run') is. `workflows` is entered from
+ *  `subagents/` only; `journal.jsonl` is the run's journal in a run directory only (in `subagents/` it is just an
+ *  unnamed candidate); `agent-<ID>.meta.json` with a good ID is a companion. Every other name is a candidate, whose `id` is
+ *  `<ID>` for `agent-<ID>.jsonl` with a good ID, else null (the census counts it refused by name). */
+export function classifyAgentName(name, where) {
+  if (where === 'subagents' && name === 'workflows') return { role: 'descend' };
+  if (where === 'run' && name === 'journal.jsonl') return { role: 'journal' };
+  const meta = AGENT_META_RE.exec(name);
+  if (meta && agentIdOk(meta[1])) return { role: 'meta', id: meta[1] };
+  const t = AGENT_TRANSCRIPT_RE.exec(name);
+  return { role: 'candidate', id: t && agentIdOk(t[1]) ? t[1] : null };
+}
+/** The name of an agent's meta companion: the one spelling of `agent-<ID>.meta.json` (AGENT_META_RE reads it back). The
+ *  parameter is Claude Code's agent id, never a ccd session id, so ccd-id-cap's census of names built from a ccd id does not count it. */
+export function metaNameOf(agentId) {
+  return `agent-${agentId}.meta.json`;
+}
+/** The path of an agent's meta: beside its transcript, in the directory `agentFilePath` names, under metaNameOf(agentId). A pure string
+ *  rule (no I/O): the store side and the census both ask it, and neither spells the meta's name. */
+export function metaPathOf(agentFilePath, agentId) {
+  return `${agentFilePath.slice(0, agentFilePath.lastIndexOf('/') + 1)}${metaNameOf(agentId)}`;
+}
+/** Whether the walk enters a directory entry, from its lstat kind and whether it could be listed. A link is never followed. */
+export function decideAgentDir(i) {
+  if (i.kind === 'link') return { enter: false, reason: 'link' };
+  if (i.kind !== 'dir') return { enter: false, reason: 'not-dir' };
+  if (!i.listable) return { enter: false, reason: 'unlistable' };
+  return { enter: true };
+}
+/** Whether a candidate transcript is admitted, tested in AGENT_FILE_REASONS' order, so every candidate in a misnamed run
+ *  directory is `run-id` whatever else is wrong with it. */
+export function decideAgentFile(i) {
+  if (!i.runOk) return { verdict: 'refuse', reason: 'run-id' };
+  if (i.id === null) return { verdict: 'refuse', reason: 'name' };
+  if (i.kind === 'link') return { verdict: 'refuse', reason: 'link' };
+  if (i.kind !== 'file') return { verdict: 'refuse', reason: 'not-regular' };
+  return { verdict: 'admit' };
+}
+/** The identity of a subagent within its parent session (P1): the Agent tool's `<ID>`, or a workflow agent's `<RUN>/<ID>`. */
+export function agentKey(id, runId) {
+  return runId === null ? id : `${runId}/${id}`;
+}
+/** How many bytes of one subagent file are still waiting to be read, the one rule for the tick's withheld count and the dry run's
+ *  forecast (final review M2). `stored` is the live row a path names, `{ dev, ino, offset }`, or null when none stands; `size`, `dev`
+ *  and `ino` are the file's. No row, or a row of another file (device or inode), leaves the whole size waiting; the same file leaves
+ *  the size past its cursor; and a file shorter than its cursor was rewritten or truncated, so it is read again from its start (a
+ *  rescan) and the whole size is waiting. 0 is nothing waiting, an empty file included. */
+export function bytesLeftOf({ stored, size, dev, ino }) {
+  if (stored === null || stored === undefined || stored.dev !== dev || stored.ino !== ino) return size;
+  const offset = Number(stored.offset);
+  return size >= offset ? size - offset : size;
+}
+
+// ── the subagent meta (W4 addendum P17) ───────────────────
+/** The most a meta file is read for (P17): a regular, non-link file of at most 64 KiB. */
+export const META_MAX_BYTES = 65536;
+/** The key of a meta that names the agent's type (W4 act M2, D-8161): measured on every meta of the installed versions. Any other
+ *  key, `agent_type` included, is not the measured field, and the type stays NULL, never guessed. */
+export const AGENT_TYPE_KEY = 'agentType';
+/** What the store keeps of a key's metas (P17 (c), the store side): the first meta read whole that names a link is written once;
+ *  a later one that names a different link is counted `agent_meta_conflict` and writes nothing; one read incompletely counts
+ *  `agent_meta_unreadable:<cause>` and writes nothing. Nothing retries. A meta read whole that names no link says nothing about
+ *  the link. The census reads every holding's meta itself, so these counts are the store's only. */
+export function decideMetaLink({ stored, read }) {
+  if (!read.ok) return { write: null, count: `agent_meta_unreadable:${read.cause}` };
+  if (read.toolUseId === null) return { write: null, count: null };
+  if (stored === null) return { write: read.toolUseId, count: null };
+  return { write: null, count: stored === read.toolUseId ? null : 'agent_meta_conflict' };
+}
+/** The agent type a key's row keeps (P17, D-8161): written once, from the first meta read whole that carries a string under
+ *  AGENT_TYPE_KEY (`read.agentType`); a row that stands is never rewritten and an incomplete read writes nothing. null is
+ *  "write nothing". It is independent of the link: a meta that names no link still gives the type. */
+export function decideMetaType({ stored, read }) {
+  return stored === null && read.ok && read.agentType !== null ? read.agentType : null;
+}
+
+// ── the subagent ingest gates (W4 addendum P6, P15 (b)) ───────────────────
+/** The `meta` key holding when the first W4 tick ran (P6): a subagent file is post-install when its mtime is at or after it. */
+export const INSTALL_META = 'agents_since_ms';
+/** The first W4 tick, armed or not, writes `nowMs`; every later tick writes nothing, so an existing record stands (P6).
+ *  null is "write nothing". */
+export function decideInstallRecord({ existing, nowMs }) {
+  return existing === null ? nowMs : null;
+}
+/** Whether a subagent file predates the install record (P6). No record reads as pre-install, so nothing is ingested by a
+ *  tick before a record exists. An mtime equal to the record is post-install (the record is the first tick's own time). */
+export function isPreInstall(mtimeMs, sinceMs) {
+  return sinceMs === null || mtimeMs < sinceMs;
+}
+/** Whether the arming marker (SWITCHES.agentsOn) arms the ingest: true only for a regular, non-link file. `st` is the
+ *  reader's one lstat as booleans, `{ isFile: st.isFile(), isSymbolicLink: st.isSymbolicLink() }` (never the Stats
+ *  object, whose methods would be truthy), or null when the lstat threw. lib stays free of I/O. */
+export function agentsArmedOf(st) {
+  return st !== null && st.isFile === true && st.isSymbolicLink !== true;
+}
+/** Whether one admitted subagent file is read (P6, P15 (b), P5), the one rule both forms ask (review 1737 F7). Both need
+ *  history-on, no pause, an admitted file and a parent in `knownUuids`. The scan `tick` form also needs the marker and a
+ *  post-install file; the operator's `import` form needs a pre-install file and reads no marker. Any other form reads nothing. */
+export function decideAgentIngest(i) {
+  if (i.historyOff || i.pause !== null || !i.admitted || !i.parentKnown) return false;
+  if (i.form === 'tick') return i.armed && !i.preInstall;
+  if (i.form === 'import') return i.preInstall;
+  return false;
+}
+
+/** The share of the store cap at which subagent capture pauses while main capture goes on to the cap (W4 P5, ruled by the operator,
+ *  item 92, 2026-11-08). */
+export const AGENTS_PAUSE_SHARE = 0.9;
+/** The ratios of the store's size to the source JSONL's, §9.3's measured 0.4 to 0.55: `import --agents`' forecast prints a store
+ *  size at each end (W4 P6). */
+export const AGENTS_STORE_RATIO_LOW = 0.4;
+export const AGENTS_STORE_RATIO_HIGH = 0.55;
+/** The pause order, the one rule (W4 P5, D-8155): subagent capture pauses at 90% of the store cap. Answers `'at-90'` when the marker
+ *  arms the ingest, no other pause stands (`pause` null: neither at the cap nor below the floor, which pause every capture already),
+ *  the cap is measured (`capBytes` over 0: an unmeasured cap pauses nothing by this rule, review 1737 F2) and the store has reached
+ *  its share; else null. The sweep asks it in ingestTick, right after its one read of the marker, and deriveHealth asks it for the
+ *  `agents-paused-at-cap` WARN, so the WARN is decided where the pause applies. */
+export function decideAgentsPause({ armed, pause, sizeBytes, capBytes }) {
+  if (!armed || pause !== null || !(capBytes > 0)) return null;
+  return sizeBytes >= AGENTS_PAUSE_SHARE * capBytes ? 'at-90' : null;
+}
+
+// ── the census's deciders (W4 addendum P11, P12, P17 to P19) ──────────────────────────────────────────────────────────
+// Pure, no I/O. The walk and the store join are census.mjs's; these are the parts and their precedence, the two verdict tables,
+// the sums, the ranges and the reasons a share is withheld (addendum 3.2 and 3.3). The census never turns an unknown into a zero.
+/** The parts of `D` (3.3): `D = R + P + Q + Ad`. `censusPart` also answers `G`, which is outside `D`. */
+export const CENSUS_PARTS = Object.freeze(['R', 'P', 'Q', 'Ad']);
+/** The link verdicts of an admitted unit: linked, unresolved, unmeasured, unnamed. `Ad = L + U + M + X`. */
+export const CENSUS_VERDICTS = Object.freeze(['L', 'U', 'M', 'X']);
+/** The columns the census prints, `D-T` first: the one ever called canonical (P11, ruled). */
+export const CENSUS_COLUMNS = Object.freeze(['D-T', 'D', 'E', 'Ad']);
+/** Why a meta could not be read whole (`MetaRead`'s `cause`), as the census spells them in a reason. */
+export const META_FAILURES = Object.freeze(['absent', 'oversized', 'not-regular', 'unreadable', 'malformed']);
+/** Why a verdict is `M`: P17 (c)'s meta side, P19 (b)'s parent side (the lookup's own four causes included), and the one cause
+ *  P12 (c) adds (`summary-unreadable`: the run summary cannot be read). */
+export const CENSUS_REASONS = Object.freeze([
+  'meta-conflict', ...META_FAILURES.map((c) => `meta-unread:${c}`),
+  'parent-not-stored', 'no-timed-row', 'decode-bound', 'over-cap', 'undecodable',
+  'parent-behind', 'parent-copy-unbound', 'parent-untimed',
+  'summary-unreadable',
+  // a workflow unit while no predicate is settled (`workflowCanonicalVerdict`), and a lookup asked with no run window (the census's own words)
+  'predicate-unsettled', 'no-run-window',
+]);
+/** Why every share is withheld (3.3, "Uncertainty is shown, never folded"): `K` and `identity_collision` are the addendum's own
+ *  names for the unentered-directories population and the disjoint-holdings counter; `partition-sum` is a failed sum.
+ *  `install-record` is D-8162 (history-w4-census-withholds-without-install-record): with no readable install record (P6), no
+ *  admissible holding can be placed in P or Q, so every share is withheld rather than read as if no file were post-install. */
+export const CENSUS_WITHHELD = Object.freeze(['K', 'identity_collision', 'partition-sum', 'install-record']);
+/** P12's settled predicate and the timing of its evidence (D-8161, act M1, measured on Claude Code 2.1.321): a workflow's launching call
+ *  answers at once with a `tool_result` that reads `Workflow launched in background. Task ID: ...` and a line `Run ID: <runId>`, so
+ *  option (b), the run named in a parent user row, is the predicate and its window is `[t0 - 15 min, t0 + 15 min]` around the run's
+ *  first row (`immediate`); 98 of 98 named samples fell within 15 minutes of it. The one place either constant is spelled. */
+export const CENSUS_PREDICATE = 'b';
+export const CENSUS_RUN_WINDOW = 'immediate';
+/** The content shape of a key's bound holdings (3.1), `none` when no bound holding has a stored row (nothing to compare). */
+export const HOLDING_SHAPES = Object.freeze(['none', 'single', 'identical', 'prefix', 'fork', 'disjoint']);
+/** Why a listed holding of an admitted unit is not bound to the store (3.1, "unbound holdings"; plan-chosen words): `unread` (no row
+ *  holds its inode yet, or the one that did was marked gone), `unreadable` (no row, and the file cannot be opened: ingest records no
+ *  row for it either), `replaced` (the path is one the store knows under another inode, or its inode's row is another file by
+ *  sameFileIdentity: another transcript or another birth time), `shrunk` (bound, but now shorter than its cursor).
+ *  D-8163 (history-w4-census-reads-no-transcript): the census opens no transcript file, so what only a read shows stays unmeasured.
+ *  A holding rewritten in place under one inode and birth time with no shrink, or one whose first line changed where no birth time
+ *  is reported, reads as bound until ingest's bindFile next judges it. That is the one way an unbound holding can narrow the range,
+ *  against P18 (a)'s "widens and never narrows". */
+export const HOLDING_UNBOUND_CAUSES = Object.freeze(['unread', 'unreadable', 'replaced', 'shrunk']);
+/** The link search's window (P4, P12 (b)): 15 minutes either side of its anchor; and the most candidates decoded for one search. */
+export const LINK_WINDOW_MS = 15 * 60 * 1000;
+export const LINK_DECODE_MAX = 64;
+
+/** P19 (b)'s two incomplete causes from a parent's holdings, one fact per path the walk lists for its main transcript: `{ bound:
+ *  false }` when no live row of that transcript holds the path (`parent-copy-unbound`), else `{ bound: true, readToEnd, pastEnd }`,
+ *  `readToEnd` when its cursor reached its size at the last tick and `pastEnd` when a stored row of it is timed after the window's
+ *  end (null when not asked: a holding read to its end needs no such row). A bound holding read neither to its end nor past the
+ *  window is `parent-behind`, which comes first. null when the window is complete as far as holdings go. */
+export function parentHoldingsCause(holdings) {
+  let unbound = false;
+  let behind = false;
+  for (const h of holdings) {
+    if (!h.bound) unbound = true;
+    else if (!h.readToEnd && h.pastEnd !== true) behind = true;
+  }
+  if (behind) return 'parent-behind';
+  return unbound ? 'parent-copy-unbound' : null;
+}
+
+/** Why a parent search stopped short of a verdict (P19 (b)'s lookup causes), in the order they are named: the decode bound stopped
+ *  it with a timed candidate left (`decode-bound`), then a candidate over the decode cap (`over-cap`), then one that could not be
+ *  decoded (`undecodable`). null when none holds, and the search answers by its window. */
+export function linkSearchCause({ boundStopped, overCap, undecodable }) {
+  if (boundStopped) return 'decode-bound';
+  if (overCap) return 'over-cap';
+  if (undecodable) return 'undecodable';
+  return null;
+}
+
+/** What a parent search answers once its candidates ran with no match and no lookup cause (P19 (b)): the holdings' cause first
+ *  (`parentHoldingsCause`), then `parent-untimed` when any candidate was an untimed row (it lies outside every window, so the window
+ *  stays incomplete even when it was decoded), else no match in a complete window. */
+export function parentSearchOutcome({ holdingsCause, untimed }) {
+  if (holdingsCause !== null) return { outcome: 'none', complete: false, cause: holdingsCause };
+  if (untimed) return { outcome: 'none', complete: false, cause: 'parent-untimed' };
+  return { outcome: 'none', complete: true };
+}
+
+/** Why an admissible holding of a stored key is not bound (HOLDING_UNBOUND_CAUSES), or null when it is. `row` is the store's row of
+ *  the holding's device and inode, `{ transcriptUuid, agentKey, birthNs, live, offset }`, or null; `holding` is the walk's `{ uuid,
+ *  agentKey, birthNs, size }`, its birth time from the walk's own lstat. A row of another file by sameFileIdentity (another
+ *  transcript, or another birth time) is `replaced`; then a row marked gone is `unread`, and a size below the cursor is `shrunk`.
+ *  With no row, a path the store knows under another inode is `replaced`, and the rest are `unread`, or `unreadable` when the file
+ *  cannot be opened (`readable`, asked only then). The census passes no first-line sha (D-8163). */
+export function holdingUnboundCause({ row, holding, pathStored, readable }) {
+  if (row !== null) {
+    if (!sameFileIdentity({ row, pathUuid: holding.uuid, pathAgentKey: holding.agentKey, birthNs: holding.birthNs, headSha: null })) return 'replaced';
+    if (!row.live) return 'unread';
+    return holding.size < row.offset ? 'shrunk' : null;
+  }
+  if (pathStored) return 'replaced';
+  return readable ? 'unread' : 'unreadable';
+}
+
+/** The part of one unit (3.3, precedence). `G`: a row and no listed holding (outside `D`). Else `Ad` when it has a row; then `P` or
+ *  `Q` only when it has an admissible holding (`P` when every admissible holding is pre-install); else `R`: a unit whose every
+ *  listed holding is refused is `R` whatever the install record is (P18 (a); review 1728 A1). */
+export function censusPart({ hasRow, listed, admissibleMtimes, sinceMs }) {
+  if (hasRow && listed === 0) return 'G';
+  if (hasRow) return 'Ad';
+  if (admissibleMtimes.length === 0) return 'R';
+  return admissibleMtimes.every((m) => isPreInstall(m, sinceMs)) ? 'P' : 'Q';
+}
+
+/** A key's meta evidence (P17 (c), ruled): `{ link }` when every meta read whole names the same link and the stored one, if any,
+ *  agrees; `{ none }` when every one names none and nothing is stored; else `{ unknown: <reason> }`, an `M`. Metas that differ, a
+ *  link beside one naming none, and a stored link the reads no longer equal are `meta-conflict`; a meta not read whole is
+ *  `meta-unread:<cause>` (the first such holding's). A conflict among the whole reads is a fact an unreadable one cannot undo, so
+ *  it comes first. No read at all is a meta absent. */
+export function metaEvidence({ stored, reads }) {
+  const failed = reads.find((r) => !r.ok);
+  const links = new Set(reads.filter((r) => r.ok).map((r) => r.toolUseId));
+  if (stored !== null) links.add(stored);
+  if (links.size > 1) return { unknown: 'meta-conflict' };
+  if (failed !== undefined) return { unknown: `meta-unread:${failed.cause}` };
+  if (reads.length === 0) return { unknown: 'meta-unread:absent' };
+  const [only] = links;
+  return only === null ? { none: true } : { link: only };
+}
+
+/** The parent side (P19 (b), ruled; also a workflow unit's under P12 (b)): `L` on a match, `U` only for no match with the window
+ *  complete, `M` by cause in every other row of the table. */
+function parentVerdict(parent) {
+  if (parent.outcome === 'match') return { v: 'L', reason: null };
+  if (parent.outcome === 'none' && parent.complete === true) return { v: 'U', reason: null };
+  return { v: 'M', reason: parent.cause };
+}
+
+/** An Agent-tool unit's verdict from its two pieces of evidence (3.3): `X` only for a meta that names none; an unknown meta is `M`
+ *  whatever the parent says; a link then takes the parent side. */
+export function linkVerdict({ meta, parent }) {
+  if ('unknown' in meta) return { v: 'M', reason: meta.unknown };
+  if ('none' in meta) return { v: 'X', reason: null };
+  return parentVerdict(parent);
+}
+
+/** A workflow unit's verdict under P12's predicate (3.2). `a`: placement, `L` for every admitted file (it measures nothing). `b`: the
+ *  parent side, `ev` a ParentSearch (the settled predicate, act M1, D-8161). `c`: the run summary, `ev` its state (`exists`,
+ *  `absent`, `unreadable`). `'unavailable'` when the predicate's evidence was not run (`ev` null) or is not a state of the option. */
+export function workflowVerdict(option, ev) {
+  if (option === 'a') return { v: 'L', reason: null };
+  if (ev === null || ev === undefined) return 'unavailable';
+  if (option === 'b') return typeof ev === 'object' ? parentVerdict(ev) : 'unavailable';
+  if (option === 'c') {
+    if (ev === 'exists') return { v: 'L', reason: null };
+    if (ev === 'absent') return { v: 'U', reason: null };
+    if (ev === 'unreadable') return { v: 'M', reason: 'summary-unreadable' };
+  }
+  return 'unavailable';
+}
+
+/** A workflow unit's verdict in the census's canonical column (P12): the settled predicate's (`b` or `c`), read from `options`, the
+ *  verdict under each option or `'unavailable'`. While no predicate is settled (`predicate` null), or the settled one's evidence was
+ *  not run, it is `M` (`predicate-unsettled`): the unit stays in the denominator and out of the numerator, so a share widens and never
+ *  narrows, and `Ad = L + U + M + X` still holds. */
+export function workflowCanonicalVerdict(predicate, options) {
+  const chosen = predicate === 'b' || predicate === 'c' ? options[predicate] : 'unavailable';
+  return chosen === 'unavailable' || chosen === undefined ? { v: 'M', reason: 'predicate-unsettled' } : chosen;
+}
+
+/** The window a run's parent rows are searched in (3.2, "Option (b)'s lookup" step 2; the predicate and its timing settled by act M1,
+ *  D-8161): `immediate`, `[t0 - 15 min, t0 + 15 min]` with `t0` the run's first timed row; `at-end`, `[tEnd, tEnd + 15 min]` with
+ *  `tEnd` its last. null when the anchor is not a finite number (the run has no timed row): no window, which the caller reads as
+ *  `no-timed-row`, an `M`, never a `U`. The literal lives here once. */
+export function workflowWindow(t0, runWindow, tEnd) {
+  const anchor = runWindow === 'at-end' ? tEnd : t0;
+  if (!Number.isFinite(anchor)) return null;
+  return runWindow === 'at-end' ? [anchor, anchor + LINK_WINDOW_MS] : [anchor - LINK_WINDOW_MS, anchor + LINK_WINDOW_MS];
+}
+
+// 3.3's membership table, by column: the units each denominator holds, `I` being the imported part of `Ad`. Keyed by CENSUS_COLUMNS, so a
+// column added there without a row here fails when the module loads.
+const IN_COLUMN_OF = { 'D-T': 'R Q Ad', D: 'R P Q Ad I', E: 'Q Ad I', Ad: 'Ad I' };
+const IN_COLUMN = Object.freeze(Object.fromEntries(CENSUS_COLUMNS.map((c) => [c, Object.freeze(new Set(IN_COLUMN_OF[c].split(' ')))])));
+/** Whether a unit of `part` is in a column's denominator (3.3's membership table). `imported` splits `Ad` into `Ad - I` and `I`. */
+export function inColumn(column, part, imported) {
+  const members = IN_COLUMN[column];
+  return members !== undefined && members.has(part === 'Ad' && imported ? 'I' : part);
+}
+
+/** Whether both partitions hold: `D = R + P + Q + Ad` and `Ad = L + U + M + X`. `failed` names the sums that do not. */
+export function censusSums(c) {
+  const failed = [];
+  if (c.D !== c.R + c.P + c.Q + c.Ad) failed.push('D');
+  if (c.Ad !== c.L + c.U + c.M + c.X) failed.push('Ad');
+  return { ok: failed.length === 0, failed };
+}
+
+/** The units the lower end of a range adds as not linked (P18 (a)): a key with `unbound` holdings not yet read counts that many
+ *  extra units when it has a bound holding, and one fewer when it has none (an unbound holding is then the key's own transcript). */
+export function unboundExtra(keys) {
+  return keys.reduce((n, k) => n + (k.unbound <= 0 ? 0 : k.bound > 0 ? k.unbound : k.unbound - 1), 0);
+}
+
+/** A share as a range (3.3): `L / (den + extraLow)` to `(L + M) / den`, so it widens and never narrows. null for an empty
+ *  denominator, which has no share (never a zero). */
+export function shareRange({ L, M, den, extraLow }) {
+  if (!(den > 0)) return null;
+  return { lo: L / (den + extraLow), hi: (L + M) / den };
+}
+
+/** The reasons every share is withheld (3.3): an unentered directory, an identity collision, a failed partition sum, and an install
+ *  record that is no number (`installRecord` is its milliseconds, `'absent'` or `'damaged'`): with none, every admitted unit reads
+ *  as pre-install and leaves D-T, so a definite share would be a guess. Empty when none. */
+export function censusWithheld({ K, collisions, sumsOk, installRecord }) {
+  const out = [];
+  if (K > 0) out.push('K');
+  if (collisions > 0) out.push('identity_collision');
+  if (!sumsOk) out.push('partition-sum');
+  if (typeof installRecord !== 'number') out.push('install-record');
+  return out;
+}
+
+/** The canonical share (P11, P12): `D-T`'s range, or null while the predicate is unsettled (`predicate` null) or is not one the
+ *  addendum rules (`a` is not chosen and measures nothing), while anything is withheld, or when there is no share or no `D-T`
+ *  range. `shares` is the printed ranges by column. */
+export function canonicalOf({ shares, withheld, predicate }) {
+  if ((predicate !== 'b' && predicate !== 'c') || withheld.length > 0 || shares === null) return null;
+  return shares['D-T'] ?? null;
+}
+
+/** The content shape of a key's bound holdings (3.1), from each holding's ordered entry uuids in the store. `none` when no holding has
+ *  a stored row (no bound holding, or only empty ones: nothing to compare). `disjoint` (two holdings
+ *  of at least one row each and no row in common: an identity collision) outranks the rest; then `identical`; a chain of prefixes
+ *  is `prefix` (growing copies); anything else shares rows and is a `fork`. Hardlinks are one file row, so one list: `single`. */
+export function holdingShape(lists) {
+  if (lists.every((l) => l.length === 0)) return 'none';
+  if (lists.length <= 1) return 'single';
+  for (let i = 0; i < lists.length; i += 1) {
+    for (let j = i + 1; j < lists.length; j += 1) {
+      const a = lists[i];
+      const b = lists[j];
+      if (a.length > 0 && b.length > 0) {
+        const inA = new Set(a);
+        if (!b.some((u) => inA.has(u))) return 'disjoint';
+      }
+    }
+  }
+  const longest = lists.reduce((x, y) => (y.length > x.length ? y : x));
+  const prefixOf = (l) => l.every((u, k) => u === longest[k]);
+  if (!lists.every(prefixOf)) return 'fork';
+  return lists.every((l) => l.length === longest.length) ? 'identical' : 'prefix';
 }
 
 // ── the one role reader (§5.2, O53) ───────────────────────────────────────
@@ -510,6 +912,7 @@ export function historyPaths(home) {
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
     headlessOn: `${h}/${SWITCHES.headlessOn}`,
+    agentsOn: `${h}/${SWITCHES.agentsOn}`,
     ccrcEnv: `${h}/.ccrc/ccrc.env`,
     accountsSh: `${h}/.ccrc/accounts.sh`,
     reg: `${h}/.cc-sessions`,
@@ -1155,6 +1558,18 @@ export function planRun(i) {
   return { arm: 'run', holdWord: null, drain: true, ingest: pause === null, pause };
 }
 
+/** Whether a stored cursor row and a file on disk are one file (§9.2 step 3's identity arms, planFileRead's and the census's one
+ *  rule): the path's uuid and agent key (W4 P1: a transcript is the pair, '' for main, so a file under another key is a recycled
+ *  inode too), then the birth time where both sides report one, compared as BigInt, else the first line's sha where both sides have
+ *  one. A side with neither a birth time nor a first-line sha proves no difference. `row` is `{ transcriptUuid, agentKey, birthNs,
+ *  headSha }`; the census passes no first-line sha (it opens no transcript file: D-8163), as planFileRead's caller does when the
+ *  head is unknown. */
+export function sameFileIdentity({ row, pathUuid, pathAgentKey = '', birthNs, headSha }) {
+  if (pathUuid !== row.transcriptUuid || pathAgentKey !== (row.agentKey ?? '')) return false;
+  if (row.birthNs != null && birthNs != null) return BigInt(row.birthNs) === BigInt(birthNs);
+  return row.headSha == null || headSha == null || row.headSha === headSha;
+}
+
 /** The file planner (§9.2 step 3): resume only with proof that the cursor row
  *  and the file on disk are one file. Identity first — the path's uuid, then
  *  the birth time where the filesystem reports one on both sides, else the
@@ -1163,13 +1578,10 @@ export function planRun(i) {
  *  rescanned onto (DM45). Birth times are compared as BigInt, because a
  *  nanosecond epoch is past 2^53 and two Numbers may round to one.
  *  D-4178 */
-export function planFileRead({ row, stat, pathUuid, headSha, tailShaAtOffset }) {
+export function planFileRead({ row, stat, pathUuid, pathAgentKey = '', headSha, tailShaAtOffset }) {
   if (stat === null) return 'skip';
   if (row === null) return 'rescan';
-  if (pathUuid !== row.transcriptUuid) return 'retire';
-  const births = row.birthNs != null && stat.birthNs != null;
-  if (births && BigInt(row.birthNs) !== BigInt(stat.birthNs)) return 'retire';
-  if (!births && row.headSha !== null && headSha !== null && row.headSha !== headSha) return 'retire';
+  if (!sameFileIdentity({ row, pathUuid, pathAgentKey, birthNs: stat.birthNs, headSha })) return 'retire';
   if (stat.size < row.offset) return 'rescan';
   if (tailShaAtOffset !== row.tailSha) return 'rescan';
   return 'resume';
@@ -1188,6 +1600,7 @@ export function formOf(op, args) {
   switch (op) {
     case 'import':
       if (!has('--apply')) return null;
+      if (has('--agents')) return 'import-agents-apply';   // before the --session/--file branch: parseOpVerbArgs refuses the mix (bad-args)
       return has('--session') || has('--file') ? 'import-session-apply' : 'import-apply';
     case 'prune':
       return has('--apply') ? 'prune-apply' : null;
@@ -1195,6 +1608,8 @@ export function formOf(op, args) {
       return has('--apply') ? 'reparse-apply' : null;
     case 'recall-off':
       return has('--clear-all') ? 'recall-off-clear-all' : 'recall-off';
+    case 'census':
+      return null;   // W4 P16 (a): read-only, never a writing form, so it runs inside a session too
     case 'repair': case 'backup': case 'migrate': case 'adopt': case 'restore': case 'rebuild':
       return op;
     default:
@@ -4164,6 +4579,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'cap-malformed': `write a positive integer (GB) into the cap file, or remove it for the default of ${CAP_DEFAULT_GB}`,
   'redact-source-unreadable': 'make the named secret files readable by this user; a value never yet seen in them goes unredacted meanwhile',
   'cap-near': 'raise the cap before capture pauses at it, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
+  'agents-paused-at-cap': 'subagent capture is paused at 90% of the store cap and main capture continues: raise the cap, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
   'breaker-open': `none needed: the breaker closes by itself; read the sweep for why it opened: ${SWEEP_LOG}`,
   'roster-unreadable': 'make ~/.ccrc/accounts.sh readable (ccrc install regenerates it)',
   'root-is-symlink': 'make ~/.ccrc/history a real 0700 directory: only its db/ may be a link',
@@ -4473,6 +4889,12 @@ export function deriveHealth(h) {
   if (h.redactUnreadable.length > 0) warn.push(item('redact-source-unreadable', `secret source(s) could not be read: ${h.redactUnreadable.join(', ')}`));
   if (h.sizeBytes !== null && h.capturePause !== 'at-cap' && h.sizeBytes * 100 >= capBytes(h.capGb) * CAP_WARN_PCT) {
     warn.push(item('cap-near', `the store is ${h.sizeBytes} bytes, ${Math.floor((h.sizeBytes * 100) / capBytes(h.capGb))}% of its ${h.capGb} GB cap`));
+  }
+  // W4 P5 (D-8155): decided where the pause applies, by decideAgentsPause, from the marker the status envelope carries (`agentsArmed`,
+  // absent reads as false), the standing pause and the size and cap that decide at-cap. From 90% to the cap both WARNs stand; at the
+  // cap at-cap FAILs and both stop (every capture is paused then).
+  if (h.sizeBytes !== null && decideAgentsPause({ armed: h.agentsArmed === true, pause: h.capturePause === '' ? null : h.capturePause, sizeBytes: h.sizeBytes, capBytes: capBytes(h.capGb) }) !== null) {
+    warn.push(item('agents-paused-at-cap', `the store is ${h.sizeBytes} bytes, ${Math.floor((h.sizeBytes * 100) / capBytes(h.capGb))}% of its ${h.capGb} GB cap: subagent capture is paused and main capture continues`));
   }
   if (h.breakerOpen) warn.push(item('breaker-open', 'a breaker is open'));
   if (h.rosterUnreadable) warn.push(item('roster-unreadable', '~/.ccrc/accounts.sh cannot be read, so no account home is discovered'));
@@ -7120,7 +7542,8 @@ function readOpFlags(args, spec) {
 }
 
 /** One operator verb's argv (§8.4), as both doors read it. `import` keeps B1's grammar (`--apply`, and
- *  `--session <id> --file <path>` both or neither, the session an idOk id and the file a `<uuid>.jsonl`).
+ *  `--session <id> --file <path>` both or neither, the session an idOk id and the file a `<uuid>.jsonl`), plus W4 P6's `--agents`
+ *  (a bool: the subagent import, one meaning, so beside `--session` or `--file` it is `bad-args`, before the id grammar can say `bad-id`).
  *  `prune` needs `--older-than <dur>` at or above PRUNE_FLOOR_DAYS. `reparse` takes `--node <full id>` (Task 1's
  *  HISTORY_NODE_ID_RE, the one spelling of a full node id) or `--session <id>`, never both
  *  D-4697 (history-reparse-targets). `restore` takes one bare backup name, refused
@@ -7132,23 +7555,31 @@ export function parseOpVerbArgs(op, args) {
   const ok = (a) => ({ ok: true, args: Object.freeze(a) });
   switch (op) {
     case 'import': {
-      const r = readOpFlags(args, { '--apply': 'bool', '--session': 'value', '--file': 'value' });
+      const r = readOpFlags(args, { '--apply': 'bool', '--session': 'value', '--file': 'value', '--agents': 'bool' });
       if (r === null || r.positional.length > 0) return refuse('bad-args');
       const session = r.flags['--session'] ?? null;
       const file = r.flags['--file'] ?? null;
+      const agents = r.flags['--agents'] === true;
       if ((session === null) !== (file === null)) return refuse('bad-args');
+      if (agents && session !== null) return refuse('bad-args');
       if (session !== null) {
         if (!idOk(session)) return refuse('bad-id');
         const base = file.slice(file.lastIndexOf('/') + 1);
         if (!base.endsWith('.jsonl') || !UUID_RE.test(base.slice(0, -'.jsonl'.length))) return refuse('bad-args');
       }
-      return ok({ op, apply: r.flags['--apply'] === true, session, file });
+      return ok({ op, apply: r.flags['--apply'] === true, session, file, agents });
     }
     case 'migrate':
     case 'repair':
     case 'backup':
     case 'adopt':
       return args.length === 0 ? ok({ op }) : refuse('bad-args');
+    case 'census': {
+      // W4 P16 (a): `--json` alone (a bool); any other argument is bad-args
+      const r = readOpFlags(args, { '--json': 'bool' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      return ok({ op, json: r.flags['--json'] === true });
+    }
     case 'prune': {
       const r = readOpFlags(args, { '--apply': 'bool', '--older-than': 'value' });
       if (r === null || r.positional.length > 0 || r.flags['--older-than'] === undefined) return refuse('bad-args');

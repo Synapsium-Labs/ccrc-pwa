@@ -135,8 +135,9 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     ruling: 'kept with the store; removed only with it (uninstall --purge --purge-history)' },
   // W2-2b (W2-D49; D-5768): headless-on joins the switches. It is the one with content, a store line and one line per
   // listed family, so its tier is its own. L0 imports nothing, so the tier names HEADLESS_LIST_MAX_BYTES as text and
-  // carries its KiB figure; lifecycle.test.ts holds the figure to lib's constant and to the marker grammar.
-  { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on', pattern: 'O',
+  // carries its KiB figure; lifecycle.test.ts holds the figure to lib's constant and to the marker grammar. W4-1 (D-8151): agents-on
+  // joins it, the subagent ingest's arming marker, read only as a regular non-link file (its content is never read).
+  { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on, ~/.ccrc/history/agents-on', pattern: 'O',
     creators: ['operator shell'], collector: null, bound: 'until removed',
     tier: '<64 B each; `headless-on` bounded at 64 KiB (HEADLESS_LIST_MAX_BYTES), one store line plus one line per listed family',
     ruling: 'touched by hand; persists until removed (no writer in the tree, pinned by single-definition.test.ts)' },
