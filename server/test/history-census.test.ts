@@ -14,7 +14,7 @@ import {
   plantAgentTree, resultRows, T0, transcriptRows, untimedRows, variantsOf, whileClosed, type AgentRig, type CensusReport, type CensusUnits, type TreeSpec,
 } from './historyAgentFixtures.js';
 import { holdLock, makeHistoryBox, openStoreRO, recordOpenFlags, runCli, runShim, runSweep, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
-import { historyPaths, WRITING_FORMS } from '../../ccd/history/lib.mjs';
+import { historyPaths, LINK_DECODE_MAX, WRITING_FORMS } from '../../ccd/history/lib.mjs';
 import { closeWriter, getMeta, openReader } from '../../ccd/history/store.mjs';
 import { censusReport, discoverTranscripts } from '../../ccd/history/sweep.mjs';
 import { formatCensus, runCensus } from '../../ccd/history/census.mjs';
@@ -971,11 +971,11 @@ describe('census cost', () => {
     const rig = await rigOf('ccrc-hist-bench-');
     const dfBefore = dfOf(rig.box.home);
     const parents = Math.ceil(BENCH_AGENTS / BENCH_PER_PARENT);
+    // a linked agent is every (BENCH_AGENTS / BENCH_LINKED)th one; its toolUseId is named by no call, so its search runs to the bound
+    const linked = (i: number): boolean => Math.floor(((i + 1) * BENCH_LINKED) / BENCH_AGENTS) > Math.floor((i * BENCH_LINKED) / BENCH_AGENTS);
     const tb = Date.now();
     for (let p = 0; p < parents; p += 1) {
       const ids = Array.from({ length: BENCH_PER_PARENT }, (_, k) => p * BENCH_PER_PARENT + k).filter((i) => i < BENCH_AGENTS);
-      // a linked agent is every (BENCH_AGENTS / BENCH_LINKED)th one; its toolUseId is named by no call, so its search runs to the bound
-      const linked = (i: number): boolean => Math.floor(((i + 1) * BENCH_LINKED) / BENCH_AGENTS) > Math.floor((i * BENCH_LINKED) / BENCH_AGENTS);
       plantAgentTree(rig, {
         slug: SLUG, uuid: uuidOf(1000 + p),
         mainRows: callRows(0x10000 + p * 0x100, Array.from({ length: BENCH_CANDIDATES }, (_, k) => ({ ms: AGENT_T0 - 1000 * (k + 1), ids: [`toolu_p${p}_${k}`] }))),
@@ -1005,6 +1005,8 @@ describe('census cost', () => {
         const ms = Number(process.hrtime.bigint() - t) / 1e6;
         runs.push({ ms, decodes: report.beside.lookups.decodes, peakKb: peakRssKb(false), lines, units: report.units });
         expect(report.units.D, 'each run answers a report over the whole fixture').toBe(BENCH_AGENTS);
+        expect(report.beside.lookups.agentTool, 'CONTROL: every linked unit ran its Agent-tool search').toBe(BENCH_LINKED);
+        expect(report.beside.lookups.decodes, 'CONTROL: every search reached the decode bound').toBe(BENCH_LINKED * LINK_DECODE_MAX);
       } finally { ro.close(); }
     }
     const dfAfter = dfOf(rig.box.home);
