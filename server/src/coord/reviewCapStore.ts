@@ -92,14 +92,14 @@ export type CoordLiftResult =
  *  through `moveItemInTx`, never written here), one `review_cap_lifts` row and one `run_events` row are written. Neither
  *  `askedAt` nor `liftedAt` is ever written, so an older build still reads a raised ask and no lift. */
 export function liftReviewCapByCoordinator(db: DatabaseSync,
-  i: { workRunId: number; byId: string; reason: string; setting: 'on' | 'off'; now: number }): CoordLiftResult {
+  i: { workRunId: number; byId: string; reason: string; now: number }): CoordLiftResult {
   return tx(db, (): CoordLiftResult => {
     const run = db.prepare('SELECT kind, state FROM runs WHERE id = ?').get(i.workRunId) as { kind: string; state: string } | undefined;
     const rounds = reviewCapStatesOf(db, [i.workRunId]).get(i.workRunId)?.rounds ?? 0;
     const gate = reviewCapGate(db, i.workRunId);
     const verdict = coordLiftVerdict({
       kind: run?.kind === 'work' || run?.kind === 'review' ? run.kind : 'unknown',
-      closed: run?.state === 'done' || run?.state === 'failed', rounds, granted: gate.granted, liftedAt: gate.liftedAt, setting: i.setting,
+      closed: run?.state === 'done' || run?.state === 'failed', rounds, granted: gate.granted, liftedAt: gate.liftedAt,
     });
     if (!verdict.ok) return verdict;
     const ask = db.prepare('SELECT askedAt FROM review_cap WHERE workRunId = ? AND askedAt IS NOT NULL AND askHandledAt IS NULL')

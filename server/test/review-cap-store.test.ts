@@ -26,7 +26,7 @@ const rounds = (s: CoordStore, workId: number, n: number): void => { for (let i 
 const count = (s: CoordStore, table: string): number =>
   Number((s.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
 const lift = (s: CoordStore, workRunId: number, over: Partial<Parameters<typeof liftReviewCapByCoordinator>[1]> = {}) =>
-  liftReviewCapByCoordinator(s.db, { workRunId, byId: 'lane-a', reason: REASON, setting: 'on', now: NOW, ...over });
+  liftReviewCapByCoordinator(s.db, { workRunId, byId: 'lane-a', reason: REASON, now: NOW, ...over });
 const row = (s: CoordStore, id: number) =>
   s.db.prepare('SELECT askedAt, liftedAt, granted, askHandledAt FROM review_cap WHERE workRunId = ?').get(id) as
     { askedAt: number | null; liftedAt: number | null; granted: number | null; askHandledAt: number | null } | undefined;
@@ -85,11 +85,10 @@ describe('review cap store (D-8125)', () => {
     expect(reviewCapGate(s.db, id)).toEqual({ liftedAt: NOW, granted: 0 });
   });
 
-  it('the setting off is coord-lift-off and writes nothing', () => {
+  it('a lift needs no setting: there is none to turn it off (D-8165)', () => {
     const s = mk(); const id = workRun(s); rounds(s, id, 3);
-    expect(lift(s, id, { setting: 'off' })).toMatchObject({ ok: false, refused: 'coord-lift-off' });
-    expect(count(s, 'review_cap_lifts')).toBe(0);
-    expect(row(s, id)).toBeUndefined();
+    expect(lift(s, id)).toMatchObject({ ok: true });
+    expect(count(s, 'review_cap_lifts')).toBe(1);
   });
 
   it('a closed work run is run-closed; a review run is not-found; an unknown id is not-found', () => {

@@ -227,12 +227,15 @@ describe('coordLiftReason (D-8125)', () => {
 
 describe('coordLiftVerdict (D-8125)', () => {
   type VerdictInput = Parameters<typeof coordLiftVerdict>[0];
-  const base: VerdictInput = { kind: 'work', closed: false, rounds: 3, granted: 0, liftedAt: null, setting: 'on' };
+  const base: VerdictInput = { kind: 'work', closed: false, rounds: 3, granted: 0, liftedAt: null };
   const refused = (over: Partial<VerdictInput>) => {
     const v = coordLiftVerdict({ ...base, ...over });
     return v.ok ? 'ok' : v.refused;
   };
-  it('the setting off refuses even at the cap', () => { expect(refused({ setting: 'off' })).toBe('coord-lift-off'); });
+  it('the lift is always on (D-8165): the verdict takes no setting and a run at its cap is granted', () => {
+    expect(Object.keys(base)).not.toContain('setting');
+    expect(coordLiftVerdict({ kind: 'work', closed: false, rounds: 3, granted: 0, liftedAt: null })).toEqual({ ok: true, capBefore: 3, capAfter: 6 });
+  });
   it('a review run and an unknown run are not found', () => {
     expect(refused({ kind: 'review' })).toBe('not-found');
     expect(refused({ kind: 'unknown' })).toBe('not-found');

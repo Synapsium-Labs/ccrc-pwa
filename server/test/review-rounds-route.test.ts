@@ -27,7 +27,7 @@ async function rig(cfg: Partial<CcrcConfig> = {}) {
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const base = testDeps(home, recorder().run);
-  const app: FastifyInstance = await buildServer({ ...base, mailToken: ID_GATE_TOKEN, coord, notifyLog, cfg: { ...base.cfg, reviewCapCoordLift: 'on', ...cfg } });
+  const app: FastifyInstance = await buildServer({ ...base, mailToken: ID_GATE_TOKEN, coord, notifyLog, cfg: { ...base.cfg, ...cfg } });
   const open = (program: string, claimedBy: string, over: Record<string, unknown> = {}) =>
     coord.openRun({ program, title: 'T', project: 'demo', wave: 1, waveOf: null, claimedBy, ...over });
   const work = (program = 'prog-a', claimedBy = 'lane-a'): number => (open(program, claimedBy) as { id: number }).id;
@@ -45,7 +45,7 @@ async function rig(cfg: Partial<CcrcConfig> = {}) {
     const res = await app.inject({ method: 'GET', url: '/api/runs' });
     return (res.json() as { runs: { id: number; reviewCap: Record<string, unknown> | null }[] }).runs.find((r) => r.id === id)!;
   };
-  return { app, coord, home, work, round, rounds, post, written, feed, row, open, count };
+  return { app, cfg: { ...base.cfg, ...cfg }, coord, home, work, round, rounds, post, written, feed, row, open, count };
 }
 
 describe('POST /api/runs/:id/review-rounds (D-8125)', () => {
@@ -148,17 +148,12 @@ describe('POST /api/runs/:id/review-rounds (D-8125)', () => {
     expect(Number(events.n)).toBe(2);
   });
 
-  it('R5: the setting off is 409 coord-lift-off naming it, nothing written, and the operator still lifts', async () => {
-    const t = await rig({ reviewCapCoordLift: 'off' }); const id = t.work(); t.rounds(id, 3);
-    const before = t.written();
+  it('R5: the lift is always on (D-8165): a coordinator lift succeeds with no setting, and no config field switches it', async () => {
+    const t = await rig(); const id = t.work(); t.rounds(id, 3);
+    expect(Object.keys(t.cfg)).not.toContain('reviewCapCoordLift');
     const res = await t.post(id, { ...pair('lane-a'), reason: REASON });
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, error: 'coord-lift-off' });
-    expect((res.json() as { detail: string }).detail).toContain('CCRC_REVIEW_CAP_COORD_LIFT');
-    expect(t.written()).toEqual(before);
-    const op = await t.app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: id } });
-    expect(op.statusCode).toBe(200);
-    expect(t.open('prog-a', 'lane-a', { kind: 'review', reviews: id })).toHaveProperty('id');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, capBefore: 3, capAfter: 6 });
   });
 
   it('after the operator lifted the cap a coordinator lift is cap-not-reached', async () => {
@@ -189,12 +184,5 @@ describe('POST /api/runs/:id/review-rounds (D-8125)', () => {
       expect(stored, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
       expect(sent, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
     }
-  });
-});
-
-describe('the door is off unless the box turns it on (D-8125)', () => {
-  it('a server config read from an empty environment carries off, so the door answers coord-lift-off', async () => {
-    const { reviewCapCoordLiftOf } = await import('../src/config.js');
-    expect(reviewCapCoordLiftOf({})).toBe('off');
   });
 });

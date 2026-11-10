@@ -10372,13 +10372,12 @@ const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, orig
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
-export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate' | 'limit-rescue' | 'coordination' | 'admin-merge';
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate' | 'limit-rescue' | 'admin-merge';
 const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
   updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
   'browser-tools': true,
   'memory-gate': true,
   'limit-rescue': true,
-  coordination: true,
   'admin-merge': true,
 };
 export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
@@ -10491,8 +10490,6 @@ export const BOX_SETTING_TABLE = {
   // D-8123: a lone rescue's random wait cap, and the minutes the fleet limit watchdog lets a limit sign stand (both read by ccd on the fleet box).
   CCRC_RESCUE_SOLO_JITTER_S: { cls: 'value', family: 'limit-rescue', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_LIMIT_WATCHDOG_MIN: { cls: 'value', family: 'limit-rescue', roles: ['fleet', 'both'], applies: 'run' },
-  // D-8125: whether a coordinator may extend a reached review-round cap (read by the server).
-  CCRC_REVIEW_CAP_COORD_LIFT: { cls: 'value', family: 'coordination', roles: ['server', 'both'], applies: 'run' },
   // D-8124: the admin-merge door's fleet-wide switch (read by the fleet box's `ccd pr-admin-merge` at each call).
   CCRC_ADMIN_MERGE: { cls: 'value', family: 'admin-merge', roles: ['fleet', 'both'], applies: 'run' },
 } as const satisfies Record<string, BoxSettingSpec>;
@@ -10553,7 +10550,6 @@ export const BOX_SETTING_VALUE_WORDS: Readonly<Partial<Record<BoxSettingName, re
   CCRC_TESTBOX_LOST_RUN: ['local', 'fail'], CCRC_TESTBOX_FALLBACK_INSTALL: ['install', 'refuse'],
   CCRC_BROWSER_MCP_DEFAULT: ['on', 'off'],
   CCRC_WAKE_PRESSURE_GATE: ['warn', 'critical', 'off'],
-  CCRC_REVIEW_CAP_COORD_LIFT: ['on', 'off'],
   CCRC_ADMIN_MERGE: ['auto', 'off'],
 };
 /** `CCRC_BROWSER_MCP_SERVERS`' default (D-8121): the two browser MCP servers' names as Claude Code names them
