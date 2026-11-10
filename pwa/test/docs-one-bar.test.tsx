@@ -119,7 +119,7 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     expect(names[1]!.startsWith('specs')).toBe(true);
     expect(names[1]).toContain('Doc title');
     expect(names.slice(2)).toEqual([DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents]);
-    for (const name of [DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export]) {
+    for (const name of [DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export, DOCS_HEAD_TEXT.exportPlainView]) {
       expect(within(oneBar().querySelector<HTMLElement>('.docs-compact-bar')!).queryByRole('button', { name })).toBeNull();
     }
     expect(within(oneBar().querySelector<HTMLElement>('.docs-compact-bar')!).queryByRole('button', { name: /^Page details/ })).toBeNull();
