@@ -921,3 +921,176 @@ describe('the counted exits (D-7409)', () => {
     expect(readFileSync(path.join(t, 'MANIFEST'), 'utf8')).toBe(m);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// The installer's same-tag re-apply and unpair (D-8166; plan docs/superpowers/plans/2026-11-10-test-box-connect.md,
+// Task TC6; spec §2.7, §2.9, C5, C6, M3). Both run from the installed tree, `<tools>/release/installed`.
+// ---------------------------------------------------------------------------------------------------------------
+
+const installedScript = (b: Box): string => path.join(b.tools, 'release', 'installed', 'deploy', 'testbox', 'install.sh');
+const markerOf = (b: Box): string => path.join(b.root, 'etc', 'ccrc-testbox', 'installed');
+const sha256Of = (p: string): string => run('shasum', ['-a', '256', p]).split(' ')[0]!;
+const reapply = (b: Box, args: string[] = [], script?: string) => exec('bash', [script ?? installedScript(b), '--reapply', ...args], b.env);
+const unpair = (b: Box, script?: string) => exec('bash', [script ?? installedScript(b), '--unpair'], b.env);
+
+describe('the installer: --reapply from the installed tree applies a changed box file at the same tag (D-8166, M3)', () => {
+  let b: Box;
+  beforeAll(async () => {
+    b = makeBox(W);
+    const first = await install(b, { staging: W.staging });
+    expect(first.code, first.stderr).toBe(0);
+  }, 240_000);
+
+  it('--reapply with an unchanged box file and rows changes nothing', async () => {
+    const before = treeOf(b.root);
+    const n = sysLog(b).length;
+    const r = await reapply(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain('nothing to do');
+    expect(treeOf(b.root)).toEqual(before);
+    expect(lines(b).slice(n)).toEqual(QUERIES(b, true));
+  });
+
+  it('--reapply refuses outside the installed tree: the staging tree, and a copy of the installed tree', async () => {
+    const before = treeOf(b.root);
+    const n = sysLog(b).length;
+    const why = `--reapply runs only from the installed tree ${path.join(b.tools, 'release', 'installed')}`;
+    for (const script of [path.join(W.staging, 'deploy', 'testbox', 'install.sh'), path.join(mkTmp('ccrc-tb-copy-'), 'tree')]) {
+      let s = script;
+      if (!s.endsWith('install.sh')) { cpSync(W.staging, s, { recursive: true }); s = path.join(s, 'deploy', 'testbox', 'install.sh'); }
+      const r = await reapply(b, [], s);
+      expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: ${why}, not ${s.slice(0, -'/deploy/testbox/install.sh'.length)}; nothing was written`]);
+    }
+    expect(treeOf(b.root)).toEqual(before);
+    expect(sysLog(b).length).toBe(n);
+  });
+
+  it('--reapply refuses when the marker\'s tag is not the tree\'s', async () => {
+    const marker = readFileSync(markerOf(b), 'utf8');
+    writeFileSync(markerOf(b), marker.replace(BOOT_TAG, 'v0.0.2'));
+    try {
+      const before = treeOf(b.root);
+      const n = sysLog(b).length;
+      const r = await reapply(b);
+      expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: the installed marker names v0.0.2, not this tree's ${BOOT_TAG}; nothing was written`]);
+      expect(treeOf(b.root)).toEqual(before);
+      expect(lines(b).slice(n)).toEqual(QUERIES(b, true));
+    } finally {
+      writeFileSync(markerOf(b), marker);
+    }
+  });
+
+  it('--reapply refuses a box value off its shape before any write', async () => {
+    const file = readFileSync(b.boxFile, 'utf8');
+    writeFileSync(b.boxFile, `${file}CCRC_TESTBOX_RUNS=zero\n`);
+    try {
+      const before = treeOf(b.root);
+      const n = sysLog(b).length;
+      const r = await reapply(b);
+      expect(r.code).toBe(1);
+      expect(r.stderr.trim().split('\n').at(-1)).toBe('ccrc-testbox-install: refused: the box file holds a value that is not its setting\'s shape (above); nothing was written');
+      expect(treeOf(b.root)).toEqual(before);
+      expect(sysLog(b).length).toBe(n);
+    } finally {
+      writeFileSync(b.boxFile, file);
+    }
+  });
+
+  it('--reapply with a changed box file runs phase 5 and records the new sha256', async () => {
+    const n = sysLog(b).length;
+    const key = readFileSync(path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys'), 'utf8');
+    writeFileSync(b.boxFile, `${readFileSync(b.boxFile, 'utf8')}CCRC_TESTBOX_UNIT_MAX=2h\n`);
+    const r = await reapply(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr.split('\n').filter((l) => / phase \d:/.test(l)).map((l) => /phase (\d)/.exec(l)![1])).toEqual(['5', '6']);
+    expect(readFileSync(markerOf(b), 'utf8')).toBe(`release\t${BOOT_TAG}\nbox-sha256\t${sha256Of(b.boxFile)}\n`);
+    // The drop-in follows the box file; the push user's installed key is kept; the service restarts; no node or npm ran again.
+    expect(readFileSync(path.join(b.root, 'etc', 'systemd', 'system', 'ccrc-testbox-run@.service.d', '50-ccrc-testbox.conf'), 'utf8')).toContain('RuntimeMaxSec=2h');
+    expect(readFileSync(path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys'), 'utf8')).toBe(key);
+    const l = lines(b).slice(n);
+    expect(l).toContain('systemctl daemon-reload');
+    expect(l).toContain('systemctl restart ccrc-testbox.service');
+    expect(l.filter((x) => /^systemctl enable --now ccrc-testbox\.service/.test(x))).toEqual([]);
+    expect(nftState(b)).toEqual(RUNNING_SETS);
+    const again = await reapply(b);
+    expect([again.code, again.stderr]).toEqual([0, expect.stringContaining('nothing to do')]);
+  });
+
+  it('--reapply with --repos installs the new rows', async () => {
+    const row = path.join(mkTmp('ccrc-tb-row-'), 'project-b.json');
+    const mirror = path.join(b.root, 'srv', 'mirrors', 'project-b.git');
+    writeFileSync(row, `${JSON.stringify({
+      name: 'project-b', fetchUrl: 'https://testbox.invalid/project-b.git', mirrorPath: mirror,
+      packages: [{ name: 'server', installInputs: ['server/package.json'], commands: ['./node_modules/.bin/vitest'] }], buildOutputs: [], systemTools: [],
+    })}\n`);
+    const r = await reapply(b, ['--repos', row]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('nothing to do');
+    expect(readFileSync(path.join(b.repos, 'project-b.json'), 'utf8')).toBe(readFileSync(row, 'utf8'));
+    expect(existsSync(path.join(mirror, 'HEAD'))).toBe(true);
+    // The installed row of the first install is still there, untouched.
+    expect(readFileSync(path.join(b.repos, 'project-a.json'), 'utf8')).toBe(readFileSync(b.rowFile, 'utf8'));
+    const again = await reapply(b, ['--repos', row]);
+    expect(again.stderr).toContain('nothing to do');
+  });
+
+  it('takes no other argument: --release, --node, --distro and --push-key are the first install\'s', async () => {
+    const before = treeOf(b.root);
+    const r = await exec('bash', [installedScript(b), '--reapply', '--release', BOOT_TAG], b.env);
+    expect([r.code, r.stderr.startsWith('usage: install.sh')]).toEqual([2, true]);
+    expect(treeOf(b.root)).toEqual(before);
+  });
+});
+
+describe('the installer: --unpair removes the pairing and nothing else (D-8166, C6)', () => {
+  let b: Box;
+  let release: string;
+  beforeAll(async () => {
+    b = makeBox(W);
+    release = path.join(b.tools, 'release');
+    const first = await install(b, { staging: W.staging });
+    expect(first.code, first.stderr).toBe(0);
+  }, 240_000);
+
+  const TOKEN = (): string => path.join(b.root, 'var', 'lib', 'ccrc-tb-svc', '.ccrc', 'testbox-service.token');
+
+  it('--unpair refuses outside the installed tree, before any write', async () => {
+    mkdirSync(path.dirname(TOKEN()), { recursive: true });
+    writeFileSync(TOKEN(), 'a'.repeat(64));
+    const before = treeOf(b.root);
+    const n = sysLog(b).length;
+    const r = await unpair(b, path.join(W.staging, 'deploy', 'testbox', 'install.sh'));
+    expect([r.code, r.stderr.startsWith('ccrc-testbox-install: refused: --unpair runs only from the installed tree')]).toEqual([1, true]);
+    expect(treeOf(b.root)).toEqual(before);
+    expect(sysLog(b).length).toBe(n);
+  });
+
+  it('--unpair stops and disables the service and the egress timer', async () => {
+    const n = sysLog(b).length;
+    const r = await unpair(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lines(b).slice(n).filter((x) => x.startsWith('systemctl '))).toEqual(['systemctl disable --now ccrc-testbox.service ccrc-testbox-egress.timer']);
+  });
+
+  it('--unpair empties the push key and removes the token', () => {
+    expect(readFileSync(path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys'), 'utf8')).toBe('');
+    expect(existsSync(TOKEN())).toBe(false);
+  });
+
+  it('--unpair leaves the run root, the mirrors and the release', async () => {
+    expect(statSync(b.tbRoot).isDirectory()).toBe(true);
+    expect(statSync(path.join(b.tbRoot, 'specs')).isDirectory()).toBe(true);
+    expect(existsSync(path.join(b.mirror, 'HEAD'))).toBe(true);
+    expect(existsSync(path.join(b.repos, 'project-a.json'))).toBe(true);
+    expect(existsSync(path.join(release, BOOT_TAG, 'build.json'))).toBe(true);
+    expect(existsSync(installedScript(b))).toBe(true);
+    // A second --unpair is a no-op that still succeeds (the disconnect may be retried).
+    const before = treeOf(b.root);
+    const r = await unpair(b);
+    expect(r.code, r.stderr).toBe(0);
+    expect(treeOf(b.root)).toEqual(before);
+    // An unpaired box has no push key to carry over: --reapply says so.
+    const again = await reapply(b);
+    expect([again.code, again.stderr.trim()]).toEqual([1, 'ccrc-testbox-install: refused: the push user holds no installed key (the box is unpaired); nothing was written']);
+  });
+});
