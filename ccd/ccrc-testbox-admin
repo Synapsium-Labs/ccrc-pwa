@@ -1,0 +1,533 @@
+#!/usr/bin/env bash
+# ccrc-testbox-admin — `ccrc testbox-admin`: the one verb that connects, checks and maintains the test box from the
+# fleet host (D-8166; spec docs/superpowers/specs/2026-11-07-test-box-connect-design.md §2.1, §2.3, T1, T7).
+#
+#   ccrc testbox-admin <sub> [--name=value]... [--from agent|pwa|cli]
+#
+# THE FRAME (this file at TC3). The argument check, the answer shape, the state file, the lock, the detach into a unit,
+# the phase record, the one way to the box (`_tba_ssh`) and the `status` sub. The subs that do work (`key`, `probe`,
+# `pin`, `preflight`, then connect and the rest) are `_tba_run_<sub>` functions later tasks add to this file; a sub with
+# no function yet is refused as a usage error, never half-run.
+#
+# WHERE IT LIVES. `ccd/ccrc` and `ccd/ccd` are growth-listed (server/test/growthCheck.ts), so `ccrc testbox-admin` is
+# one dispatch line in ccd/ccrc to this file, as `ccrc test` is to ccd/ccrc-test. This file sources ccd/ccrc (for
+# `_plat_*`, `_svc_run_detached`, `_tmp_guard`, the one reader) and ccd/testbox-knobs (for `_tb_shape`, `_tb_load`),
+# and has the same guard: sourced, it defines its functions and runs nothing, which is how its tests call them.
+#
+# THE CONTRACT. shared/testbox-admin.ts is the one contract: the sub table, the field grammars, the closed codes, the
+# phases and the status shape. The tables below are its bash twin; server/test/testbox-admin-verb.test.ts runs both on
+# one corpus and holds them equal. A field the sub does not take, a value off its grammar, a value that starts with `-`,
+# holds a `..` path segment or a control byte is refused BEFORE anything runs (exit 2, a usage error, naming the flag
+# and never the value).
+#
+# THE ANSWER. One JSON line on stdout and exit 0 for an answer, a refusal included: `{"ok":true,...}` or
+# `{"ok":false,"code":"<closed code>"}`. Exit 2 is a usage error only. `status` prints the status document itself (the
+# one shared/testbox-admin.ts#readTestboxAdminStatus reads, which refuses any extra field), so it has no `ok` key.
+# Nothing the box said, no path, no address and no key text is ever in an answer: the status says `addressSet`.
+#
+# LINUX ONLY. On macOS every sub but `status` answers `unsupported-os`.
+#
+# THE STATE FILE. ~/.ccrc/testbox-admin.state, KEY=VALUE lines, 0600, replaced whole by a temp and a rename. It holds
+# the connection the `key` sub records, the pinned fingerprint, the box file's digest and the current (or last) act.
+# No secret is ever in it: the access key's private half is its own file, 0600, made by the `key` sub (TC4).
+#
+# THE LOCK. Long acts run in a detached `systemd-run --user` unit that takes `flock -n` on
+# ~/.ccrc/testbox-admin.lock for its whole life. The PARENT never holds the lock, so the unit inherits no descriptor
+# that could pin it (the `_upd_detach` rule); the parent only probes it, and answers `busy` when it is held.
+#
+# THE ONE WAY TO THE BOX is `_tba_ssh`. Every ssh this file runs carries the five options of the plan's Global
+# constraints (pinned known-hosts file, strict host checking, batch mode, identities only, a connect deadline), and
+# ssh's own stderr goes to a temp file that never leaves the fleet host: the caller gets a closed code.
+set -uo pipefail
+
+TBA_HERE="${BASH_SOURCE[0]}"
+[[ "$TBA_HERE" == */* ]] || TBA_HERE="./$TBA_HERE"
+TBA_HERE="$(cd "${TBA_HERE%/*}" && pwd)"
+# shellcheck source=ccrc
+. "$TBA_HERE/ccrc" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/ccrc, so no setting can be read" >&2; exit 1; }
+# shellcheck source=testbox-knobs
+. "$TBA_HERE/testbox-knobs" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/testbox-knobs, so no setting can be checked" >&2; exit 1; }
+PROG="ccrc testbox-admin"
+
+TBA_DIR="$HOME/.ccrc"
+TBA_STATE="$TBA_DIR/testbox-admin.state"
+TBA_LOCK="$TBA_DIR/testbox-admin.lock"
+TBA_KEY="$TBA_DIR/testbox-admin.key"
+TBA_PIN="$TBA_DIR/testbox-known-hosts"
+TBA_PARITY="$TBA_DIR/testbox-parity.json"
+
+# ── the closed vocabularies: shared/testbox-admin.ts, word for word ────────────────────────────────────────────
+TBA_SUBS=(status read key probe pin preflight connect settings-fleet settings-box cancel parity repair apply-release disconnect)
+TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refused host-key-unknown host-key-changed
+  fingerprint-mismatch from-mismatch no-root no-sudo os-mismatch systemd-too-old no-nftables not-xfs-reflink
+  address-not-ip no-egress other-release verify-failed copy-failed box-value-refused install-refused install-failed
+  pair-failed status-not-ok pairing-keys-in-ccrc-env key-in-ccrc-env runs-in-progress idle-deadline cancelled
+  gh-signed-out parity-differs not-connected box-side-skipped)
+TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
+# The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the twenty-eight box keys.
+TBA_FLEET_KEYS=(CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE
+  CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT
+  CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES)
+TBA_BOX_KEYS=(CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX
+  CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY
+  CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX
+  CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER
+  CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM
+  CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN
+  CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX)
+
+_tba_in() {   # <word> <list word>... -> 0 iff the word is in the list
+  local w="$1" x
+  shift
+  for x in "$@"; do [ "$x" = "$w" ] && return 0; done
+  return 1
+}
+_tba_code_ok() { _tba_in "${1-}" "${TBA_CODES[@]}"; }
+_tba_phase_ok() { _tba_in "${1-}" "${TBA_PHASES_ALL[@]}"; }
+
+_tba_phases() {   # <sub> -> its phases in order, one per line; nothing for a sub that has none
+  case "${1-}" in
+    connect) printf '%s\n' verify copy settings install pair check ;;
+    repair|apply-release) printf '%s\n' verify copy install ;;
+    settings-box) printf '%s\n' wait settings install ;;
+    parity) printf '%s\n' legs record ;;
+  esac
+}
+
+# The sub table: one row per field, `flag grammar required repeatable`. Nothing for a sub that takes no field; rc 1 for
+# a word that is no sub.
+_tba_fields() {   # <sub>
+  case "${1-}" in
+    status|read|probe|preflight|cancel|repair|apply-release) ;;
+    key) printf '%s\n' '--address address 1 0' '--port port 0 0' '--login user 0 0' ;;
+    pin) printf '%s\n' '--fingerprint fingerprint 1 0' ;;
+    connect) printf '%s\n' '--set setting-box 1 1' '--repo repo 1 1' ;;
+    settings-fleet) printf '%s\n' '--set setting-fleet 1 1' ;;
+    settings-box) printf '%s\n' '--set setting-box 1 1' '--repo repo 0 1' '--when-idle true 0 0' ;;
+    parity) printf '%s\n' '--pr pr 0 1' ;;
+    disconnect) printf '%s\n' '--replace true 0 0' ;;
+    *) return 1 ;;
+  esac
+}
+
+# ── the grammars: the bash twin of shared/testbox-admin.ts's ─────────────────────────────────────────────────
+_tba_word_ok() {   # <v> -> 0 iff it can ride one word: non-empty, no control byte, not `-`-led, no `..` segment
+  local LC_ALL=C v="${1-}" p
+  [ -n "$v" ] || return 1
+  [[ "$v" != *[[:cntrl:]]* ]] || return 1
+  [[ "$v" != -* ]] || return 1
+  p="/${v//\\//}/"
+  [[ "$p" != */../* ]]
+}
+_tba_is_ipv4() {
+  local re='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$'
+  [[ "${1-}" =~ $re ]]
+}
+_tba_is_ipv6() {
+  local s="${1-}" left right gre='^[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*$' ln rn
+  [ "${#s}" -ge 2 ] && [ "${#s}" -le 39 ] || return 1
+  [[ "$s" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+  [[ "$s" != *:::* ]] || return 1
+  if [[ "$s" != *::* ]]; then
+    [[ "$s" =~ $gre ]] || return 1
+    ln="${s//[^:]/}"
+    [ "${#ln}" -eq 7 ]
+    return
+  fi
+  left="${s%%::*}"; right="${s#*::}"
+  [[ "$right" != *::* ]] || return 1
+  ln=0; rn=0
+  if [ -n "$left" ]; then [[ "$left" =~ $gre ]] || return 1; ln="${left//[^:]/}"; ln=$(( ${#ln} + 1 )); fi
+  if [ -n "$right" ]; then [[ "$right" =~ $gre ]] || return 1; rn="${right//[^:]/}"; rn=$(( ${#rn} + 1 )); fi
+  [ $(( ln + rn )) -le 7 ]
+}
+_tba_is_hostname() {
+  local rest="${1-}" label last="" re='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+  while :; do
+    label="${rest%%.*}"
+    [[ "$label" =~ $re ]] || return 1
+    case "$rest" in *.*) rest="${rest#*.}" ;; *) last="$label"; break ;; esac
+  done
+  [[ "$last" =~ ^[0-9]+$ ]] && return 1
+  return 0
+}
+_tba_is_address() {   # an IP literal or a host name: no port, no user, no brackets
+  local v="${1-}"
+  [ "${#v}" -ge 1 ] && [ "${#v}" -le 253 ] || return 1
+  _tba_is_ipv4 "$v" || _tba_is_ipv6 "$v" || _tba_is_hostname "$v"
+}
+_tba_is_port() { [[ "${1-}" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]; }
+_tba_is_user() { [[ "${1-}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; }
+_tba_is_fingerprint() { [[ "${1-}" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; }
+_tba_is_pr() { [[ "${1-}" =~ ^[1-9][0-9]{0,5}$ ]]; }
+# One `--repo=` value: base64url of a JSON object, at most 8 KiB decoded. The row's own fields (parseRepoRow) are
+# checked again by the box-side reader; here the word must decode to UTF-8 text that parses as one JSON object.
+_tba_repo_ok() {   # <base64url>
+  local LC_ALL=C v="${1-}" b dec=""
+  [[ "$v" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+  [ $(( ${#v} % 4 )) -ne 1 ] || return 1
+  [ "${#v}" -le 10924 ] || return 1
+  b="$(printf '%s' "$v" | tr '_-' '/+')"
+  case $(( ${#b} % 4 )) in 2) b="$b==" ;; 3) b="$b=" ;; esac
+  { dec="$(printf '%s' "$b" | base64 -d 2>/dev/null)"; } 2>/dev/null || return 1
+  [ "${#dec}" -ge 2 ] && [ "${#dec}" -le 8192 ] || return 1
+  [[ "$dec" == \{*\} ]] || return 1
+  if command -v iconv >/dev/null 2>&1; then printf '%s' "$dec" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || return 1; fi
+  if command -v node >/dev/null 2>&1; then
+    printf '%s' "$dec" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const v=JSON.parse(s);process.exit(v!==null&&typeof v==="object"&&!Array.isArray(v)?0:1)}catch{process.exit(1)}})' || return 1
+  fi
+  return 0
+}
+
+# ── the argument check: the bash twin of buildTestboxAdminArgv ──────────────────────────────────────────────────
+# `_tba_parse <sub> [word]...` -> rc 0 and TBA_FROM, TBA_WORDS (the sub's own words, as checked, in the order
+# given), TBA_WHENIDLE; or rc 1 and TBA_BAD naming the flag (or `sub`, or `word`), never a value.
+_tba_parse() {
+  TBA_FROM=cli; TBA_WORDS=(); TBA_BAD=""; TBA_WHENIDLE=0
+  local sub="${1-}" rows w name val flag gram req rep k v seen_from=0 n
+  local -A cnt=() keys=()
+  shift || :
+  rows="$(_tba_fields "$sub")" || { TBA_BAD=sub; return 1; }
+  while [ $# -gt 0 ]; do
+    w="$1"; shift
+    if [ "$w" = --from ] || [[ "$w" == --from=* ]]; then
+      if [ "$w" = --from ]; then [ $# -gt 0 ] || { TBA_BAD=--from; return 1; }; val="$1"; shift; else val="${w#--from=}"; fi
+      [ "$seen_from" = 0 ] && case "$val" in agent|pwa|cli) ;; *) false ;; esac || { TBA_BAD=--from; return 1; }
+      seen_from=1; TBA_FROM="$val"
+      continue
+    fi
+    [[ "$w" == --*=* ]] || { TBA_BAD=word; return 1; }
+    name="${w%%=*}"; val="${w#*=}"
+    gram=""
+    while read -r flag n req rep; do
+      [ "$flag" = "$name" ] && { gram="$n"; break; }
+    done <<<"$rows"
+    [ -n "$gram" ] || { TBA_BAD="$name"; return 1; }
+    cnt[$name]=$(( ${cnt[$name]:-0} + 1 ))
+    [ "$rep" = 1 ] || [ "${cnt[$name]}" -le 1 ] || { TBA_BAD="$name"; return 1; }
+    case "$gram" in
+      address) _tba_word_ok "$val" && _tba_is_address "$val" || { TBA_BAD="$name"; return 1; } ;;
+      port) _tba_word_ok "$val" && _tba_is_port "$val" || { TBA_BAD="$name"; return 1; } ;;
+      user) _tba_word_ok "$val" && _tba_is_user "$val" || { TBA_BAD="$name"; return 1; } ;;
+      fingerprint) _tba_word_ok "$val" && _tba_is_fingerprint "$val" || { TBA_BAD="$name"; return 1; } ;;
+      true) [ "$val" = true ] || { TBA_BAD="$name"; return 1; }; [ "$name" != --when-idle ] || TBA_WHENIDLE=1 ;;
+      pr)
+        _tba_is_pr "$val" || { TBA_BAD="$name"; return 1; }
+        [ -z "${keys[pr:$val]:-}" ] && [ "${cnt[$name]}" -le 20 ] || { TBA_BAD="$name"; return 1; }
+        keys[pr:$val]=1 ;;
+      repo)
+        [ "${cnt[$name]}" -le 4 ] && _tba_repo_ok "$val" || { TBA_BAD="$name"; return 1; } ;;
+      setting-fleet|setting-box)
+        [[ "$val" == *=* ]] || { TBA_BAD="$name"; return 1; }
+        k="${val%%=*}"; v="${val#*=}"
+        if [ "$gram" = setting-fleet ]; then _tba_in "$k" "${TBA_FLEET_KEYS[@]}" || { TBA_BAD="$name"; return 1; }
+        else _tba_in "$k" "${TBA_BOX_KEYS[@]}" || { TBA_BAD="$name"; return 1; }; fi
+        _tba_word_ok "$v" && _tb_shape "$k" "$v" || { TBA_BAD="$name"; return 1; }
+        [ -z "${keys[set:$k]:-}" ] || { TBA_BAD="$name"; return 1; }
+        keys[set:$k]=1 ;;
+      *) TBA_BAD="$name"; return 1 ;;
+    esac
+    TBA_WORDS+=("$w")
+  done
+  while read -r flag gram req rep; do
+    [ -n "$flag" ] || continue
+    [ "$req" != 1 ] || [ "${cnt[$flag]:-0}" -ge 1 ] || { TBA_BAD="$flag"; return 1; }
+  done <<<"$rows"
+  return 0
+}
+
+# ── the answers ────────────────────────────────────────────────────────────────────────────────────────────
+_tba_ok() { printf '{"ok":true%s}\n' "${1:+,$1}"; }                       # [json members]
+_tba_refuse() {   # <closed code>
+  _tba_code_ok "${1-}" || { echo "$PROG: internal error: ${1-} is not a closed code" >&2; exit 70; }
+  printf '{"ok":false,"code":"%s"}\n' "$1"
+}
+_tba_usage_die() { echo "$PROG: $*" >&2; echo "usage: $PROG <sub> [--name=value]... [--from agent|pwa|cli]; subs: ${TBA_SUBS[*]}" >&2; exit 2; }
+
+# ── the state file ──────────────────────────────────────────────────────────────────────────────────────────
+_tba_state_get() {   # <key> -> its value (the last such line), rc 1 when there is none
+  local line v="" found=1
+  [ -f "$TBA_STATE" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "$1="*) v="${line#*=}"; found=0 ;; esac
+  done <"$TBA_STATE"
+  [ "$found" = 0 ] || return 1
+  printf '%s' "$v"
+}
+# `_tba_state_write key=value...` — set the keys (an empty value removes the key), atomically: staged 0600 beside the
+# file and placed by `mv -f`, so a reader sees the old file or the new, never half. A value with a newline or a control
+# byte is refused (rc 1), so one line is always one key.
+_tba_state_write() {
+  local LC_ALL=C kv k line tmp keep=() drop=" "
+  for kv in "$@"; do
+    [[ "$kv" == [a-zA-Z_]*=* ]] || return 1
+    [[ "$kv" != *[[:cntrl:]]* ]] || return 1
+    drop="$drop${kv%%=*} "
+  done
+  if [ -f "$TBA_STATE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] || continue
+      k="${line%%=*}"
+      case "$drop" in *" $k "*) ;; *) keep+=("$line") ;; esac
+    done <"$TBA_STATE"
+  fi
+  [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") || return 1
+  tmp="$TBA_STATE.tmp.$$"
+  _tmp_guard "$tmp"
+  (
+    umask 077
+    {
+      for line in ${keep[@]+"${keep[@]}"}; do printf '%s\n' "$line"; done
+      for kv in "$@"; do [ "${kv#*=}" = "" ] || printf '%s\n' "$kv"; done
+    } >"$tmp"
+  ) 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$TBA_STATE" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+}
+
+# ── acts: one at a time, in phases, learned from the state file ───────────────────────────────────────────────
+# 128 random bits as 32 lowercase hex characters: no /proc and no uuid tool, so it is the same on both userlands.
+_tba_new_id() { od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'; }
+_tba_now_ms() { _plat_epoch_ms; }
+
+_tba_act_begin() {   # <id> <sub> -> the state says this act is running
+  _tba_state_write "act_id=$1" "act_sub=$2" "act_phase=" "act_phases=" "act_t0=" "act_outcome=running" "act_code=" \
+    "act_started=$(_tba_now_ms)" "act_ended="
+}
+_tba_act_mine() { [ -n "${TBA_ACT_ID:-}" ] && [ "$(_tba_state_get act_id 2>/dev/null)" = "$TBA_ACT_ID" ]; }
+# `_tba_phase <name>` — enter a phase; the phase before it is closed with its milliseconds. A no-op outside an act.
+_tba_phase() {
+  _tba_phase_ok "${1-}" || return 1
+  _tba_act_mine || return 0
+  local now prev t0 list
+  now="$(_tba_now_ms)"
+  prev="$(_tba_state_get act_phase 2>/dev/null)"; t0="$(_tba_state_get act_t0 2>/dev/null)"; list="$(_tba_state_get act_phases 2>/dev/null)"
+  if [ -n "$prev" ] && [[ "$t0" =~ ^[0-9]+$ ]]; then list="${list:+$list,}$prev:$(( now - t0 ))"; fi
+  _tba_state_write "act_phase=$1" "act_phases=$list" "act_t0=$now"
+}
+# `_tba_act_end ok|failed [code]` — close the last phase and the act. Only the act that owns the state writes it.
+_tba_act_end() {
+  _tba_act_mine || return 0
+  local now prev t0 list code="${2-}"
+  now="$(_tba_now_ms)"
+  prev="$(_tba_state_get act_phase 2>/dev/null)"; t0="$(_tba_state_get act_t0 2>/dev/null)"; list="$(_tba_state_get act_phases 2>/dev/null)"
+  if [ -n "$prev" ] && [[ "$t0" =~ ^[0-9]+$ ]]; then list="${list:+$list,}$prev:$(( now - t0 ))"; fi
+  _tba_code_ok "$code" || code=""
+  _tba_state_write "act_phases=$list" "act_t0=" "act_outcome=$1" "act_code=$code" "act_ended=$now"
+}
+
+# The lock. `_tba_lock_probe`: 0 free, 1 held, 2 cannot be measured (no flock, no lock file). Never holds.
+_tba_lock_probe() {
+  command -v flock >/dev/null 2>&1 || return 2
+  [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") 2>/dev/null || return 2
+  ( exec 9>>"$TBA_LOCK" || exit 2; flock -n 9 || exit 1 ) 2>/dev/null
+}
+# `_tba_lock` — take the lock for the rest of THIS shell's life: 0 held, 1 busy, 2 cannot be taken.
+_tba_lock() {
+  command -v flock >/dev/null 2>&1 || return 2
+  [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") 2>/dev/null || return 2
+  { exec {TBA_LOCK_FD}>>"$TBA_LOCK"; } 2>/dev/null || return 2
+  flock -n "$TBA_LOCK_FD" || { exec {TBA_LOCK_FD}>&-; return 1; }
+}
+
+_tba_is_long() {   # <sub> -> 0 iff it detaches (settings-box only with --when-idle)
+  case "${1-}" in
+    connect|parity|repair|apply-release) return 0 ;;
+    settings-box) [ "${TBA_WHENIDLE:-0}" = 1 ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# `_tba_detach <sub> [word]...` — hand the act to a transient unit and answer its id. The parent writes `running` first
+# and answers only when the state file says so, so the card never learns an id the state does not hold.
+_tba_detach() {
+  local sub="$1" prc=0 id rc=0 args
+  shift
+  _tba_lock_probe || prc=$?
+  case "$prc" in
+    0) ;;
+    1) _tba_refuse busy; return 0 ;;
+    *) _tba_refuse unsupported-os; return 0 ;;
+  esac
+  id="$(_tba_new_id)"
+  [[ "$id" =~ ^[0-9a-f]{32}$ ]] || { echo "$PROG: could not make an act id" >&2; return 1; }
+  TBA_ACT_ID="$id"
+  _tba_act_begin "$id" "$sub" || { echo "$PROG: could not write the state file" >&2; return 1; }
+  # The checked words reach the unit in a 0600 file, never in the unit's argv: systemd expands `$` and `%` in a unit's
+  # argv, and a setting value (a glob list) may hold either. The unit reads the file, deletes it and checks every word
+  # again.
+  args="$TBA_DIR/testbox-admin.args.$id"
+  ( umask 077; printf '%s\n' "$@" --from "$TBA_FROM" >"$args" ) 2>/dev/null || { rm -f -- "$args"; _tba_act_end failed; echo "$PROG: could not write the unit's arguments" >&2; return 1; }
+  # The agent spawns the verb with HOME, PATH and LANG only, so `systemd-run --user` has no user bus unless this sets it
+  # (ccrc sets both in each function that needs them; `_codex_bus_defaults` is the one place that does).
+  _codex_bus_defaults
+  _svc_run_detached --unit="ccrc-testbox-admin-$sub-$id" /usr/bin/env "CCRC_TBA_ACT=$id" "$HOME/.local/bin/ccrc" \
+    testbox-admin "$sub" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f -- "$args"
+    _tba_act_end failed
+    echo "$PROG: could not start the unit for $sub (systemd-run exited $rc)" >&2
+    return 1
+  fi
+  [ "$(_tba_state_get act_id 2>/dev/null)" = "$id" ] && [ "$(_tba_state_get act_outcome 2>/dev/null)" != "" ] \
+    || { echo "$PROG: the state file does not hold the act" >&2; return 1; }
+  _tba_ok "\"act\":\"$id\""
+}
+# The detached half: runs in the unit, under the lock, and writes its end into the state file. Its own stdout is not an
+# answer to anyone and goes nowhere.
+_tba_unit() {   # <sub> [word]...
+  local sub="$1" lrc=0 rc=0
+  shift
+  TBA_ACT_ID="${CCRC_TBA_ACT-}"
+  [[ "$TBA_ACT_ID" =~ ^[0-9a-f]{32}$ ]] || return 0
+  [ "$(_tba_state_get act_id 2>/dev/null)" = "$TBA_ACT_ID" ] && [ "$(_tba_state_get act_outcome 2>/dev/null)" = running ] || return 0
+  _tba_lock || lrc=$?
+  if [ "$lrc" -ne 0 ]; then
+    if [ "$lrc" = 1 ]; then _tba_act_end failed busy; else _tba_act_end failed unsupported-os; fi
+    return 0
+  fi
+  TBA_CODE=""
+  "_tba_run_$sub" "$@" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then _tba_act_end ok; else _tba_act_end failed "${TBA_CODE:-}"; fi
+  return 0
+}
+
+# ── the one way to the box ────────────────────────────────────────────────────────────────────────────────────
+_tba_seconds() {   # <duration like 60s, 3m, 2h, 1d> -> whole seconds
+  case "${1-}" in
+    *s) echo "${1%s}" ;; *m) echo $(( ${1%m} * 60 )) ;; *h) echo $(( ${1%h} * 3600 )) ;; *d) echo $(( ${1%d} * 86400 )) ;;
+    *) return 1 ;;
+  esac
+}
+# The connect deadline, in seconds: the fleet host's reconnect deadline setting, through the one reader, else its
+# default. A setting that is not its shape keeps the default, as every test box reader does.
+_tba_deadline() {
+  local v
+  _tb_load host >/dev/null 2>&1 || :
+  v="${TBK[CCRC_TESTBOX_RECONNECT_DEADLINE]:-60s}"
+  _tba_seconds "$v" 2>/dev/null || echo 60
+}
+# `_tba_ssh_class <stderr file>` -> the closed code ssh's own lines give. The lines are read here and go no further.
+_tba_ssh_class() {
+  local f="$1"
+  if grep -qiE 'REMOTE HOST IDENTIFICATION HAS CHANGED|Offending .* key' "$f" 2>/dev/null; then echo host-key-changed
+  elif grep -qiE 'host key is known for|Host key verification failed' "$f" 2>/dev/null; then echo host-key-unknown
+  elif grep -qiE 'Permission denied|Too many authentication failures' "$f" 2>/dev/null; then echo auth-refused
+  else echo unreachable; fi
+}
+# `_tba_ssh <command word>...` — run one command on the box. stdout is the command's; stdin passes through (a secret
+# rides it and nothing else); ssh's stderr is read for a code and dropped. rc is the command's, and 255 sets
+# TBA_SSH_CODE to a closed code. rc 97 with TBA_SSH_CODE `not-connected` or `no-access-key` when ccrc has no
+# connection or no key to use. Under a sudo login every command is `sudo -n --` prefixed; each word is quoted for the
+# box's shell with `printf %q`.
+# shellcheck disable=SC2034  # TBA_SSH_CODE is read by the subs that call this (later tasks)
+_tba_ssh() {
+  TBA_SSH_CODE=""
+  local addr port login dl cmd="" w err rc=0
+  addr="$(_tba_state_get address 2>/dev/null)"; port="$(_tba_state_get port 2>/dev/null)"; login="$(_tba_state_get login 2>/dev/null)"
+  _tba_is_address "$addr" || { TBA_SSH_CODE=not-connected; return 97; }
+  _tba_is_port "${port:=22}" || { TBA_SSH_CODE=not-connected; return 97; }
+  _tba_is_user "${login:=root}" || { TBA_SSH_CODE=not-connected; return 97; }
+  [ -f "$TBA_KEY" ] || { TBA_SSH_CODE=no-access-key; return 97; }
+  dl="$(_tba_deadline)"
+  [ "$login" = root ] || cmd="sudo -n -- "
+  for w in "$@"; do cmd="$cmd$(printf '%q' "$w") "; done
+  err="$(mktemp "${TMPDIR:-/tmp}/ccrc-tba-ssh.XXXXXXXX")" || return 97
+  _tmp_guard "$err"
+  LC_ALL=C ssh -p "$port" -i "$TBA_KEY" \
+    -o "UserKnownHostsFile=$TBA_PIN" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o "ConnectTimeout=$dl" "$login@$addr" "${cmd% }" 2>"$err" || rc=$?
+  if [ "$rc" -eq 255 ]; then TBA_SSH_CODE="$(_tba_ssh_class "$err")"; fi
+  rm -f -- "$err"
+  return "$rc"
+}
+
+# ── status ────────────────────────────────────────────────────────────────────────────────────────────────────
+_tba_status_act() {   # -> the act object, or null
+  local id sub phase phases outcome code started ended list="" pair n ms first=1 ph cj ej
+  id="$(_tba_state_get act_id 2>/dev/null)"
+  [[ "$id" =~ ^[0-9a-f]{32}$ ]] || { printf null; return; }
+  sub="$(_tba_state_get act_sub 2>/dev/null)"; _tba_in "$sub" "${TBA_SUBS[@]}" || { printf null; return; }
+  outcome="$(_tba_state_get act_outcome 2>/dev/null)"
+  case "$outcome" in running|ok|failed) ;; *) printf null; return ;; esac
+  started="$(_tba_state_get act_started 2>/dev/null)"; [[ "$started" =~ ^[0-9]+$ ]] || { printf null; return; }
+  ended="$(_tba_state_get act_ended 2>/dev/null)"; [[ "$ended" =~ ^[0-9]+$ ]] && ej="$ended" || ej=null
+  phase="$(_tba_state_get act_phase 2>/dev/null)"; _tba_phase_ok "$phase" && ph="\"$phase\"" || ph=null
+  code="$(_tba_state_get act_code 2>/dev/null)"; _tba_code_ok "$code" && cj="\"$code\"" || cj=null
+  phases="$(_tba_state_get act_phases 2>/dev/null)"
+  local IFS=,
+  for pair in $phases; do
+    n="${pair%%:*}"; ms="${pair#*:}"
+    _tba_phase_ok "$n" && [[ "$ms" =~ ^[0-9]+$ ]] || continue
+    [ "$first" = 1 ] || list="$list,"
+    list="$list{\"name\":\"$n\",\"ms\":$ms}"; first=0
+  done
+  printf '{"id":"%s","sub":"%s","phase":%s,"phases":[%s],"outcome":"%s","code":%s,"startedAt":%s,"endedAt":%s}' \
+    "$id" "$sub" "$ph" "$list" "$outcome" "$cj" "$started" "$ej"
+}
+# The parity record, as its writer left it: one line of JSON. It is passed through only when it has the shape of one,
+# since this file cannot parse JSON; the server's reader (readTestboxParityRecord) is the check that decides.
+_tba_status_parity() {
+  local LC_ALL=C line="" n
+  [ -f "$TBA_PARITY" ] && [ ! -L "$TBA_PARITY" ] || { printf null; return; }
+  n="$(wc -c <"$TBA_PARITY" 2>/dev/null | tr -d ' ')"
+  [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -le 65536 ] || { printf null; return; }
+  line="$(head -n 1 "$TBA_PARITY" 2>/dev/null)"
+  [[ "$line" == '{"v":1,'*'}' ]] && [[ "$line" != *[![:print:]]* ]] || { printf null; return; }
+  [ "$(wc -l <"$TBA_PARITY" | tr -d ' ')" -le 1 ] || { printf null; return; }
+  printf '%s' "$line"
+}
+_tba_status() {
+  local addr login lj fp fj hk sha sj connected=false addrset=false
+  addr="$(_tba_state_get address 2>/dev/null)"
+  [ -z "$addr" ] || addrset=true
+  [ "$(_tba_state_get connected 2>/dev/null)" != 1 ] || connected=true
+  login="$(_tba_state_get login 2>/dev/null)"
+  if [ "$addrset" = false ] || ! _tba_is_user "$login"; then lj=null
+  elif [ "$login" = root ]; then lj='"root"'; else lj='"sudo"'; fi
+  fp="$(_tba_state_get fingerprint 2>/dev/null)"
+  if _tba_is_fingerprint "$fp"; then fj="\"$fp\""; else fj=null; fi
+  if [ "$(_tba_state_get hostkey_changed 2>/dev/null)" = 1 ]; then hk=changed
+  elif [ -s "$TBA_PIN" ]; then hk=pinned
+  else hk=none; fi
+  sha="$(_tba_state_get box_sha256 2>/dev/null)"
+  if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then sj="\"$sha\""; else sj=null; fi
+  printf '{"v":1,"connected":%s,"addressSet":%s,"login":%s,"fingerprint":%s,"hostKey":"%s","boxFileSha256":%s,"act":%s,"boxSettings":null,"boxSettingsAt":null,"parity":%s}\n' \
+    "$connected" "$addrset" "$lj" "$fj" "$hk" "$sj" "$(_tba_status_act)" "$(_tba_status_parity)"
+}
+
+# ── the dispatch ────────────────────────────────────────────────────────────────────────────────────────────────
+_tba_main() {
+  local sub="${1-}"
+  case "$sub" in
+    '') _tba_usage_die "no sub given" ;;
+    -h|--help|help) echo "usage: $PROG <sub> [--name=value]... [--from agent|pwa|cli]; subs: ${TBA_SUBS[*]}"; return 0 ;;
+  esac
+  shift
+  # The detached half: the checked words wait in the file the parent wrote, named by the act id, and are read once.
+  TBA_IN_UNIT=0
+  if [[ "${CCRC_TBA_ACT-}" =~ ^[0-9a-f]{32}$ ]] && [ -f "$TBA_DIR/testbox-admin.args.$CCRC_TBA_ACT" ]; then
+    mapfile -t _tba_unit_words <"$TBA_DIR/testbox-admin.args.$CCRC_TBA_ACT"
+    rm -f -- "$TBA_DIR/testbox-admin.args.$CCRC_TBA_ACT"
+    set -- ${_tba_unit_words[@]+"${_tba_unit_words[@]}"}
+    TBA_IN_UNIT=1
+  fi
+  if ! _tba_parse "$sub" "$@"; then
+    case "$TBA_BAD" in sub) _tba_usage_die "unknown sub: $sub" ;; *) _tba_usage_die "$sub: a flag or value is not accepted ($TBA_BAD)" ;; esac
+  fi
+  if [ "$sub" = status ]; then _tba_status; return 0; fi
+  if [ "$CCD_OS" != linux ]; then _tba_refuse unsupported-os; return 0; fi
+  declare -F "_tba_run_$sub" >/dev/null 2>&1 || _tba_usage_die "$sub is not built in this release"
+  if _tba_is_long "$sub"; then
+    if [ "$TBA_IN_UNIT" = 1 ]; then _tba_unit "$sub" ${TBA_WORDS[@]+"${TBA_WORDS[@]}"}; return 0; fi
+    _tba_detach "$sub" ${TBA_WORDS[@]+"${TBA_WORDS[@]}"}
+    return $?
+  fi
+  "_tba_run_$sub" ${TBA_WORDS[@]+"${TBA_WORDS[@]}"}
+}
+
+# Guard so the file can be `source`d, as ccd/ccrc-test is, to call one function directly.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  _tba_main "$@"
+  exit $?
+fi

@@ -324,9 +324,16 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'server/test/ccrc-settings-verb.test.ts', 'server/test/ccrc-doctor-codex-direct.test.ts', 'pwa/test/box-settings-card.test.tsx', ...BOX_SETTINGS_VERB_CORPUS,
     ...BOX_SETTINGS_V2_FIXTURES,
   ];
+  // The test box connect plan (D-8166) adds readers by task: TC1 the contract and its test, TC2 the overlay's generator and
+  // test, TC3 the verb and its test. Every later task of the plan that adds a holder appends it here, in its own commit.
+  const TC_HOLDERS = [
+    'shared/testbox-admin.ts', 'server/test/testbox-admin-contract.test.ts',
+    'deploy/gen-settings-lib.mjs', 'server/test/testbox-overlay.test.ts',
+    'ccd/ccrc-testbox-admin', 'server/test/testbox-admin-verb.test.ts',
+  ];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,
-    ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS, ...BOX_SETTINGS_W2_HOLDERS,
+    ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS, ...BOX_SETTINGS_W2_HOLDERS, ...TC_HOLDERS,
   ].sort();
   it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB7: the box package; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README; W2: the box settings view\'s table, value words and tests)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
