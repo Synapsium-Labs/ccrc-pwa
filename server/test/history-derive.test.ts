@@ -2743,18 +2743,21 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     }
   }, 240_000);
 
-  it('a subagent boundary whose anchor names no row is a raw leaf, as on main (failure row 24; DM25)', async () => {
+  it('a subagent boundary whose anchor names no row is a raw leaf, counted summary_missing, as on main (failure row 24; DM25)', async () => {
     const rig = await rigOf('ccrc-hist-row24-');
     const agent = seqOf(1, 0xb02, { dropSummary: true });
-    plantA(rig, agent.rows, { main: seqOf(1, 0xb01, { dropSummary: true }).rows });
+    // the main thread keeps its summary, so the one summary_missing the pass folds is the subagent's raw leaf
+    plantA(rig, agent.rows, { main: seqOf(1, 0xb01).rows });
     await rig.tick(armed, { scan: true });
+    expect(counterOf(rig.db, 'summary_missing'), 'CONTROL: nothing is counted before derivation').toBe(0);
     await derive(rig);
     const all = leavesA(rig);
     expect(all.map((l) => ({ main: l.agent_id === '', kind: l.kind, status: l.status }))).toEqual([
-      { main: true, kind: 'raw_leaf', status: 'not-requested' },
+      { main: true, kind: 'native_leaf', status: 'not-requested' },
       { main: false, kind: 'raw_leaf', status: 'not-requested' },
     ]);
     expect(all[1]!.boundary_uuid).toBe(agent.boundaryUuids[0]);
+    expect(counterOf(rig.db, 'summary_missing'), 'DM25: the raw leaf is counted, once').toBe(1);
   }, 120_000);
 
   it('SA9 no card or steer side effects: a subagent boundary is never measured, and no card or steer file is written, consumed or removed for it', async () => {
@@ -2796,15 +2799,77 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     expect(state(), 'no file under card/ or steer/, no counter, no cursor and no breaker row changed').toEqual(before);
   }, 120_000);
 
+  /** The card step's whole day over one session, as the pass runs it: the card measure primed before derivation (so every leaf is above its
+   *  cursor), the leaves derived, then the measure and the writer, with a registered id, a card/ and a steer/ directory for it. With
+   *  `withAgent` the parent also has a subagent whose one boundary is newer (a higher entry_id) than the main thread's last. */
+  async function cardDay(prefix: string, withAgent: boolean): Promise<{
+    agentAfterMain: boolean; leaves: number; measured: unknown; cards: unknown; files: Record<string, string>; cardCounters: unknown; cursor: unknown;
+  }> {
+    const rig = await rigOf(prefix);
+    plantAgentTree(rig, {
+      slug: SLUG_A, uuid: PARENT_A, agents: withAgent ? [{ id: 'a', rows: seqOf(1, 0x922).rows }] : [], parent: 'epoch', mainRows: seqOf(2, 0x921).rows,
+    }, SINCE_A);
+    await rig.tick(armed, { scan: true });
+    const P = historyPaths(rig.box.home);
+    const id = 'lane-a-e1';
+    for (const dir of ['card', 'steer']) fs.mkdirSync(path.join(P.root, dir, id), { recursive: true });
+    fs.mkdirSync(P.reg, { recursive: true });
+    fs.writeFileSync(path.join(P.reg, `${id}.uuid`), PARENT_A);
+    const C = (await import('../../ccd/history/card.mjs')) as unknown as {
+      measureCardDelivery(db: unknown, ictx: object, budget: object): object;
+      consumeAndWriteCards(db: unknown, ictx: object, budget: object): object;
+    };
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const measureAt = RIG_T0 + 7_200_000;
+    C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    await derive(rig);
+    const one = (sql: string): number => Number((rig.db.prepare(sql).get() as { v: number }).v);
+    const mainLast = one("SELECT max(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id = ''");
+    const agentFirst = one("SELECT min(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> ''");
+    const eofMs = one("SELECT max(f.eof_ms) AS v FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.agent_id = ''");
+    const measured = C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    const cards = C.consumeAndWriteCards(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, eofMs, null), S.newBudget());
+    const files: Record<string, string> = {};
+    for (const d of ['card', 'steer']) {
+      for (const n of fs.readdirSync(path.join(P.root, d), { recursive: true, encoding: 'utf8' })) {
+        const full = path.join(P.root, d, n);
+        if (fs.statSync(full).isFile()) files[`${d}/${n}`] = fs.readFileSync(full, 'utf8');
+      }
+    }
+    return {
+      agentAfterMain: withAgent && agentFirst > mainLast, leaves: leavesA(rig).length, measured, cards, files,
+      cardCounters: rig.db.prepare("SELECT name, n FROM counters WHERE name LIKE 'card\\_%' ESCAPE '\\' OR name LIKE 'steer\\_%' ESCAPE '\\' ORDER BY name").all().map((r) => ({ ...r })),
+      cursor: (rig.db.prepare("SELECT cursor FROM derivation_state WHERE step = 'card-measure'").get() as { cursor: string }).cursor,
+    };
+  }
+
+  it('SA9 with the main thread present: a subagent boundary newer than the last main one is not measured, and the card and steer files are what the main thread alone produces', async () => {
+    const alone = await cardDay('ccrc-hist-sa9m-alone-', false);
+    const both = await cardDay('ccrc-hist-sa9m-both-', true);
+    expect(both.agentAfterMain, 'CONTROL: the subagent boundary is newer than the main thread\'s last').toBe(true);
+    expect([alone.leaves, both.leaves], 'CONTROL: the subagent adds one leaf').toEqual([2, 3]);
+    expect(alone.measured, 'CONTROL: the main thread\'s two leaves are measured').toMatchObject({ measured: 2, waiting: 0 });
+    expect(Object.keys(alone.files).length, 'CONTROL: the main thread alone has its card and steer files written').toBeGreaterThan(0);
+    expect(both.measured, 'the measure counts only the main leaves').toEqual(alone.measured);
+    expect(both.cursor, 'and its cursor stops at the main thread\'s last leaf').toEqual(alone.cursor);
+    expect(both.cards).toEqual(alone.cards);
+    expect(both.files, 'no card or steer file written, changed or removed for the subagent boundary').toEqual(alone.files);
+    expect(both.cardCounters).toEqual(alone.cardCounters);
+  }, 240_000);
+
   it('SA27 forked copies of one subagent transcript, and a true conflict: every row stored, transcript_forked counted, each leaf from the copy holding its boundary, one entry with one variant', async () => {
     const rig = await rigOf('ccrc-hist-sa27-');
     const text = (tag: number) => (k: number): string => fixtureSummaryText(k + tag);
     const shared = seqOf(1, 0xc01, { summaryText: text(100) });
     const onlyA = seqOf(1, 0xc02, { summaryText: text(200) });
     const onlyB = seqOf(1, 0xc03, { summaryText: text(300) });
+    // Copy B stops at the shared boundary row: the shared boundary's summary (and what follows it) is a row only copy A holds, then each
+    // copy goes its own way. Both copies hold the shared BOUNDARY, so which copy its leaf is read from decides whether it has a summary.
+    const cut = shared.rows.findIndex((r) => r['uuid'] === shared.boundaryUuids[0]);
+    expect(cut, 'CONTROL: the fixture has rows after the shared boundary that copy B drops').toBeLessThan(shared.rows.length - 1);
     // the same first row, a true conflict: one message uuid with two bodies
     const conflictUuid = String(shared.rows[0]!['uuid']);
-    const changed = shared.rows.map((r, i): Row => (i !== 0 ? r : { ...r, message: { role: 'user', content: [{ type: 'text', text: 'the same uuid, a different body' }] } }));
+    const changed = shared.rows.slice(0, cut + 1).map((r, i): Row => (i !== 0 ? r : { ...r, message: { role: 'user', content: [{ type: 'text', text: 'the same uuid, a different body' }] } }));
     const paths = plantA(rig, [...shared.rows, ...onlyA.rows], { main: false });
     const second = holdAgainIn(paths['a']!, rig.box.homes[0]!, rig.box.homes[1]!, 'copy');
     fs.writeFileSync(second, [...changed, ...onlyB.rows].map((r) => `${JSON.stringify(r)}\n`).join(''));
@@ -2830,5 +2895,20 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     const summaryBlob = (u: string): number => Number((rig.db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(u) as { b: number }).b);
     const leafOf = (u: string): { summary_blob_id: number } => rig.db.prepare('SELECT n.summary_blob_id FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id WHERE e.uuid = ?').get(u) as { summary_blob_id: number };
     for (const sq of [shared, onlyA, onlyB]) expect(Number(leafOf(sq.boundaryUuids[0]!).summary_blob_id), `the leaf of ${sq.boundaryUuids[0]} reads its own copy's summary`).toBe(summaryBlob(sq.summaryUuids[0]!));
+    // Which copy each boundary's leaf is read from: the copy that holds it, and for the boundary both hold, the live copy with the smallest
+    // file_id (lib pickHoldingCopy). That copy is the one with the summary, so a leaf read from the other copy would have none.
+    const fileOf = (u: string): number[] => (rig.db.prepare('SELECT m.file_id AS f FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE e.uuid = ? ORDER BY m.file_id').all(u) as Array<{ f: number }>).map((r) => Number(r.f));
+    const DH = (await import('../../ccd/history/derive.mjs')) as unknown as { holdingCopyOf(db: unknown, b: { entry_id: number; transcript_pk: number }): { file_id: number } | null };
+    const holding = (u: string): number => {
+      const b = rig.db.prepare('SELECT b.entry_id AS entry_id, b.transcript_pk AS transcript_pk FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?').get(u) as { entry_id: number; transcript_pk: number };
+      return Number(DH.holdingCopyOf(rig.db, b)!.file_id);
+    };
+    const withSummary = fileOf(shared.summaryUuids[0]!);
+    expect(withSummary, 'CONTROL: only one copy holds the shared summary').toHaveLength(1);
+    expect(fileOf(shared.boundaryUuids[0]!), 'CONTROL: both copies hold the shared boundary').toHaveLength(2);
+    expect(holding(shared.boundaryUuids[0]!), 'the shared boundary is read from the smallest live file_id, the copy with its summary').toBe(Math.min(...fileOf(shared.boundaryUuids[0]!)));
+    expect(holding(shared.boundaryUuids[0]!)).toBe(withSummary[0]);
+    expect([holding(onlyA.boundaryUuids[0]!)], 'a boundary only one copy holds is read from that copy').toEqual(fileOf(onlyA.boundaryUuids[0]!));
+    expect([holding(onlyB.boundaryUuids[0]!)]).toEqual(fileOf(onlyB.boundaryUuids[0]!));
   }, 240_000);
 });
