@@ -86,7 +86,27 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-10, 17:50Z
+## Current checkpoint — 2026-11-10, 22:15Z
+
+This supersedes the earlier 2026-11-10 checkpoints below where they differ; the current route and the definition of
+done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, W4-2 and W4-3 landed, act M3".
+
+- **W4-2 landed.** #2563 merged through the merge queue at 19:16Z as `6b2330eeb`, at head `d1528cd6e`, after reviews
+  1757 and 1759 and one fix round. Run 1754 closed done after its MERGED mail. It defines D-8168 and D-8169; numbers
+  8170 and 8171 stay unwritten.
+- **W4-3 landed.** #2594 merged at 22:06Z as `e3d91a7b6`, at head `6e904736f`, after reviews 1763 and 1765 and one fix
+  round. Run 1761 closed done. It defines D-8175 and D-8176; numbers 8177 and 8178 stay unwritten. Without
+  `--agents`, every read verb prints what it printed before.
+- **W4-4 is open but held** (run 1767, wave 32, planned; block 8188 to 8191). Act M3 is measured, so its Task 4C runs.
+  Its dispatch waits for the consolidation programme's slot on `ccd/history/lib.mjs`, which opened at 22:08Z: until
+  that programme's redaction PR merges, or for 24 hours if the file stays unclaimed.
+- **The W3 cohort is running** on v0.0.1070. Two releases since its start change the steering surface (W4-2's in
+  v0.0.1078 and W4-3's in v0.0.1088). Neither has reached the session node.
+- **Operator items:** the `steer-on` directory is mode 0700, so doctor's `mode-wrong` is cleared. Item 111 is withdrawn,
+  because W1-l was already met. One question is open: whether the coordinator keeps the programme's Linear tickets in
+  step with this ledger.
+
+### Checkpoint of 2026-11-10, 17:50Z
 
 This supersedes the earlier 2026-11-10 checkpoints below where they differ; the current route and the definition of
 done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, the cohort's start and O11's
@@ -297,11 +317,103 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | #2503 | **merged** 2026-11-10 02:32Z as `0d61d1075` at head `9cd2b8d6a` (run 1714, done; reviews 1726, 1728, 1731, 1735, 1737 and 1739; fix rounds 1 to 5; review cap lifted by the operator, item 133); accepted with the coordinator's note of six build-time corrections (CP-71 met) |
 | 28 | W3-4: the parent add-on and steered node gists (W3 plan Task 4), the other half of the cohort's release (O15) | fleet | #2540 | **merged** 2026-11-10 07:59Z as `6dd3c93b3` at head `07f064f41` (run 1738, done; reviews 1741, 1742, 1743 and 1744; three fix rounds; review cap lifted by the operator, item 134); no D-number written; released with W3-1 in v0.0.1065 |
 | 29 | W4-1: the subagent walk, ingest, the pause order, the marker gate, the import form and the census (W4 plan group W4-1) | fleet | #2554 | **merged** 2026-11-10 16:21Z as `b9731a15a` at head `6fc0ef99b` (run 1745, done; reviews 1749, 1750 and 1752; two fix rounds); defines D-8151 to D-8163; number 8164 unwritten |
-| 30 | W4-2: subagent leaves on their own chain, with no receipt and no card (W4 plan Task 2) | fleet | #2563 | **in review**: wave-done at `02647c0f1` (run 1754, awaiting-review; review run 1757); block of numbers 8168 to 8171 (8168 for `history-w4-sa27-in-w4-2`, 8169 for `history-w4-main-gists-main-only`, 8170 and 8171 held) |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 **merged** (#2554, wave 29); W4-2 in review (#2563, wave 30); no node armed; B4 live still required |
+| 30 | W4-2: subagent leaves on their own chain, with no receipt and no card (W4 plan Task 2) | fleet | #2563 | **merged** 2026-11-10 19:16Z as `6b2330eeb` at head `d1528cd6e` (run 1754, done; reviews 1757 and 1759; one fix round); defines D-8168 and D-8169; numbers 8170 and 8171 unwritten |
+| 31 | W4-3: subagent rows show only under `--agents` (W4 plan Task 3) | fleet | #2594 | **merged** 2026-11-10 22:06Z as `e3d91a7b6` at head `6e904736f` (run 1761, done; reviews 1763 and 1765; one fix round); defines D-8175 and D-8176; numbers 8177 and 8178 unwritten |
+| 32 | W4-4: `touched` (W4 plan Tasks 4A to 4C) | fleet | — | **open, held** (run 1767, planned); block of numbers 8188 to 8191 (8188 and 8189 approved, 8190 and 8191 held); dispatch after the consolidation programme's `lib.mjs` slot |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; steering-surface releases v0.0.1078 and v0.0.1088 not on the node; focused steering spike and per-backend operator arming retained |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1, W4-2 and W4-3 **merged** (#2554, #2563, #2594; waves 29 to 31); W4-4 open and held (wave 32); act M3 measured; no node armed; B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-10, W4-2 and W4-3 landed, act M3
+
+**W4-2 (#2563, run 1754).**
+- Review 1757 read the whole branch at `02647c0f1`. It found no defect in the production diff. It found two arms that no
+  test pinned: `refreshLeaf`'s agent key (F1, important) and `lastBoundary`'s widening (F2).
+- It asked two rulings:
+  - F3, ruled keep: the card's unique-prefix set keeps a session's subagent node ids. `resolveNodeInScope` resolves a
+    prefix among every node of the scope's sessions, so a card's prefix must be unique against them too.
+  - SA27, ruled an erratum: the store keeps two `entry_variants` rows for a true conflict, one per body. The plan's
+    Task 2 block and the addendum's SA27 rows were corrected to two, with no number.
+- The first CI attempt's red was an install test's timeout outside the PR, green on a re-run: a load flake.
+- Fix round 1 (mail 17248) added:
+  - the F1 and F2 pins;
+  - a main-chain differential: one main fixture derived alone and beside subagent boundaries, with every main leaf's
+    and parent's stored fields equal;
+  - a third SA9 row, with the subagent transcript stored first.
+- The card mutant on that SA9 row is equivalent while a main transcript exists. SQLite answers the lookup from the
+  unique index `(cc_session_uuid, agent_id)`, main row first. Review 1759 re-measured that in five fixtures. It rests
+  on the query plan, not on the schema: a second index on `cc_session_uuid` would break it.
+- Review 1759 confirmed nothing and raised three wording advisories:
+  - the plan's `variantsOf` argument, corrected here;
+  - the SA27 test comment, which still argues against "one row" and is carried to the next editor of
+    `history-derive.test.ts`;
+  - the task note's naming of SA27's check, corrected here.
+- Merged 19:16Z.
+
+**W4-3 (#2594, run 1761).**
+- Run 1761 opened before run 1754 closed. Its block is 8175 to 8178: D-8175 is the `agent:<agent_id>` mark on read-verb
+  lines and D-8176 is the carry reread.
+- Rulings at dispatch:
+  - `ccd/history-skill/SKILL.md` has no contract clauses, so the SKILL.md cap of #2565 cannot rise. The new line had to
+    fit by meaning-free trims.
+  - Build question 17306: a family whose only stored rows are subagent rows answers exit 6 without `--agents`. Ruled
+    keep and pin, with no number and no change to the hint.
+- Review 1763 found the default read unchanged: the tip's tests run against the base code red exactly the new cases.
+  It confirmed one finding: the skill's section 5 opening still said every transcript.
+- Fix round 1 (mail 17320) reworded that sentence and paid for it with one more trim; SKILL.md is now 10,672 bytes.
+  It also took five accuracy advisories.
+- Review 1765 found one comment-level claim still too wide: "a default read prepares the statements it prepared
+  before". The coordinator accepted it as a carry:
+  - `agentColumn`'s doc goes to W4-4, which claims `recall.mjs`;
+  - the task note is corrected here.
+- One recorded limit: the exit-6 case's mutants red it on the exit code, before its print assertions.
+- Merged 22:06Z.
+
+**W4-4 (run 1767).**
+- Opened before run 1761 closed. Its block is 8188 to 8191:
+  - number 8188 approves `history-w4-touched-graph-labels`;
+  - number 8189 approves `history-w4-suffix-without-graph`: a relative stored ref of two segments or more, with no
+    `..`, matches by suffix on a segment boundary when no graph loads, and prints match `suffix`. A bare basename never
+    matches without a graph;
+  - 8190 and 8191 are held.
+- Its brief carries the measured fixture size and W4-3's comment carry.
+
+**Act M3 (W4 plan, the coordinator's read-only act), 20:22Z.** The session node's store was opened read-only. It holds:
+- 68,456 `node_refs` rows;
+- 5,697 `nodes`;
+- 10.8 GB in all, at schema version 2, on v0.0.1070.
+There is one session-hosting node. Task 4C's bench fixture takes that count.
+
+**The consolidation programme's two items (mail 17265, acked in 17266).**
+- **ARCH-66, C1l PR 2:** acked, naming R11.
+  - Both history rule sets are built from `shared/redact.mjs`, from the one template `lib.mjs` uses today. Leaving the
+    base behind would make a second copy.
+  - Conditions: every door's output byte-identical; `BELT_VERSION` unchanged; history-lib's (j5) to (j10) cases
+    unedited; the plan's mutant red, plus a mutant on a rule only the base profile lists.
+  - Its slot on `lib.mjs` opened at 22:08Z (mail 17347), between W4-3's merge and W4-4's dispatch.
+- **`EXEC_KINDS` as one definition:** acked with no slot. Nothing under `ccd/history` or `deploy/history-*` imports
+  `shared/roster-json.mjs`.
+
+**Operator items.**
+- **The steer-on chmod:** done; measured 0700 at 19:30Z, both markers regular files.
+- **The W1-l drill:** the operator's details agree with the record above. It ran at 16:28Z on v0.0.1070 in a scratch
+  home, and the recovery step took about 2 s. Item 111 was withdrawn so that it leaves the waiting list.
+- **Whether the coordinator can run such drills:** the rebuild verb refuses inside a session and without a terminal,
+  by design. The coordinator offered two things: a PR that allows `--rebuild` into a home that is provably not the live
+  one, and to run act 5's read-only spike report itself.
+- **Open: Linear.** A peer audit asked the coordinator to keep the CP tickets in step with this ledger. The question is
+  with the operator, and nothing on Linear changes until it is answered.
+
+**Releases since the cohort's tag** that change the steering surface, as of 22:10Z (O11 as amended):
+
+| release | published | steering surface | on the session node |
+|---|---|---|---|
+| v0.0.1078 | 19:18Z | W4-2 (#2563): `derive.mjs`, `lib.mjs`, `lib.d.mts` | no |
+| v0.0.1088 | 22:09Z | W4-3 (#2594): `recall.mjs`, `cli.mjs`, `lib.mjs`, `lib.d.mts` | no |
+
+v0.0.1074 to v0.0.1077 and v0.0.1079 to v0.0.1087 do not change the steering surface. The session node still runs
+v0.0.1070.
 
 ### Latest rulings and evidence — 2026-11-10, the cohort's start and O11's amendment
 
