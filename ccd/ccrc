@@ -13752,6 +13752,34 @@ _codex_lane_word() {   # <id> <key> <refusal code> <words, space-separated>
 _codex_lane_mode()     { _codex_lane_word "${1:-}" bridge lane-mode-unreadable "litellm direct"; }
 _codex_lane_upstream() { _codex_lane_word "${1:-}" upstream lane-upstream-unreadable "backend siwc"; }
 
+# WHETHER ANY CODEX LANE NEEDS THE LITELLM RUNTIME (codex-bridge Stage 4,
+# Task 4): only a lane in `litellm` mode runs on it. rc 0 when a lane of the
+# roster does, its ids in CX_RUNTIME_LANES; rc 1 when none does (every codex
+# lane is `direct`, or the roster has none); rc 2 when it cannot be told (no
+# node, a roster that cannot be read or does not validate, a mode word this
+# ccrc does not know). A caller treats 2 as it treated every box before this
+# question existed: "cannot tell" is never "none".
+# THE ROSTER IS ASKED, through the Node op that resolves a mode as every
+# reader does (`deploy/account-op.mjs codex-modes`), never a lane's lane.json:
+# the install step asks before the lanes' files are rendered, and one box-wide
+# answer is not any one lane's projection. Bash still reads no mode from the
+# roster itself (`single-definition/late-census.test.ts`).
+_codex_runtime_wanted() {
+  local out id mode
+  CX_RUNTIME_LANES=''
+  command -v node >/dev/null 2>&1 || return 2
+  out="$(node "$CCRC_HERE/../deploy/account-op.mjs" codex-modes --file "$HOME/.ccrc/accounts.json" 2>/dev/null)" || return 2
+  while read -r id mode; do
+    [ -n "$id" ] || continue
+    case "$mode" in
+      litellm) CX_RUNTIME_LANES="${CX_RUNTIME_LANES:+$CX_RUNTIME_LANES }$id" ;;
+      direct) ;;
+      *) CX_RUNTIME_LANES=''; return 2 ;;
+    esac
+  done <<< "$out"
+  [ -n "$CX_RUNTIME_LANES" ]
+}
+
 # lane.json equals the roster row, or is made to by the ONE writer:
 # `deploy/models-op.mjs`'s existing `materialise` op. Converged is a no-op —
 # no node, no rewrite — because materialise also rewrites the lane's
@@ -18858,7 +18886,7 @@ _inst_units() {
 # made current (m-spine H4). The cmd_install pin states both reasons.
 _inst_codex_runtime() {
   [ "$INST_ROLE" = server ] && return 0
-  local rt lanes n req before after gen why prev rc=0 lrc=0
+  local rt lanes n req before after gen why prev rc=0 lrc=0 wrc=0
   rt="$(_codex_runtime_cli)"
   lanes="$(_codex_lanes)" || lrc=$?
   # rc 2 is a missing jq, never a bad roster (review C2): `cmd_install`
@@ -18879,6 +18907,15 @@ _inst_codex_runtime() {
     return 0
   fi
   n="$(printf '%s\n' "$lanes" | grep -c .)"
+  # ONLY A LANE IN LITELLM MODE RUNS ON IT (codex-bridge Stage 4, Task 4). When
+  # the roster says none does, nothing is built, and a runtime already on the
+  # box is neither rebuilt nor removed: removing it is the operator's act. When
+  # the modes cannot be told (rc 2) the step builds, as it always has.
+  _codex_runtime_wanted || wrc=$?
+  if [ "$wrc" -eq 1 ]; then
+    echo "install: codex runtime: none — no codex lane runs in litellm mode ($n codex lane(s), all direct), so no LiteLLM runtime is built; one already on this box is left as it is"
+    return 0
+  fi
   if [ ! -x "$rt" ]; then
     echo "install: codex runtime: NOT BUILT — $rt is not on this box, so $n codex lane(s) have no runtime to start from; re-run ccrc install from a complete tree"
     INST_DEGRADED+=(codex-runtime)

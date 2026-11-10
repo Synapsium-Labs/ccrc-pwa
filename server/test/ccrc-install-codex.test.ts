@@ -110,6 +110,36 @@ describe('ccrc install: the codex runtime step, measured in isolation (_inst_cod
     expect(r.degraded).toEqual(['codex-runtime']);
   });
 
+  // Codex bridge Stage 4, Task 4. Only a lane in litellm mode runs on the LiteLLM runtime, so the step asks whether
+  // one does (`_codex_runtime_wanted`, the roster's modes through the Node op) before it builds. `wanted` is recorded
+  // in the calls beside the builder's, so each case shows the question was asked and what followed it.
+  it('every codex lane is direct: one line, the builder is never run, and a runtime already there is left as it is', () => {
+    const r = runRuntimeStep({ wanted: 1, before: G1, after: G2 });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('install: codex runtime: none — no codex lane runs in litellm mode (1 codex lane(s), all direct), so no LiteLLM runtime is built; one already on this box is left as it is\n');
+    expect(r.calls).toEqual(['wanted']);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('a lane in litellm mode builds as before, after the question', () => {
+    const r = runRuntimeStep({ wanted: 0, after: G2 });
+    expect(r.stdout).toBe(`${BUILDING}\ninstall: codex runtime: ${G2} built, probed and current for 1 codex lane(s)\n`);
+    expect(r.calls).toEqual(['wanted', 'python', 'build', 'python']);
+  });
+
+  it('modes that cannot be told build as every install before this one did: cannot tell is never "none"', () => {
+    const r = runRuntimeStep({ wanted: 2, after: G2 });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(`${BUILDING}\ninstall: codex runtime: ${G2} built, probed and current for 1 codex lane(s)\n`);
+    expect(r.calls).toEqual(['wanted', 'python', 'build', 'python']);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('with no codex lane, or a roster that cannot be read, the modes are never asked', () => {
+    expect(runRuntimeStep({ lanes: [], wanted: 1 }).calls).toEqual([]);
+    expect(runRuntimeStep({ lanesRc: 1, wanted: 1 }).calls).toEqual([]);
+  });
+
   it('a box with no builder on PATH degrades and names the missing file', () => {
     const r = runRuntimeStep({ builder: false });
     expect(r.code).toBe(0);

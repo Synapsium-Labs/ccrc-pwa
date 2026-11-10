@@ -691,6 +691,47 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(lib(home, '_codex_tier_stale codex-a bridge; echo "rc=$?"').stdout).toBe('rc=1\n');
   }, 120_000);
 
+  // Codex bridge Stage 4, Task 4: whether any codex lane of the roster runs in litellm mode, the one mode that needs the
+  // LiteLLM runtime. Asked of the ROSTER through `account-op codex-modes`, never of a lane's lane.json.
+  describe('_codex_runtime_wanted (codex bridge Stage 4, Task 4)', () => {
+    const wanted = (home: string): string => lib(home, '_codex_runtime_wanted; echo "rc=$? lanes=[$CX_RUNTIME_LANES]"').stdout;
+
+    it('a direct lane wants no runtime', async () => {
+      const { home } = await bridgeBox({ userManager: false });
+      expect(wanted(home)).toBe('rc=1 lanes=[]\n');
+    });
+
+    it('a litellm lane wants one, and is named', async () => {
+      const { home } = await bridgeBox({ userManager: false, mode: 'litellm' });
+      expect(wanted(home)).toBe('rc=0 lanes=[codex-a]\n');
+    });
+
+    it('the roster decides, not lane.json: a roster switched by hand is read at once, before any render', async () => {
+      const { home } = await bridgeBox({ userManager: false, mode: 'litellm' });
+      const file = join(home, '.ccrc', 'accounts.json');
+      const json = JSON.parse(fs.readFileSync(file, 'utf8')) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+      json.accounts.find((a) => a.id === 'codex-a')!.exec['bridge'] = 'direct';
+      fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+      expect(laneJson(home, 'codex-a')['bridge'], 'the fixture re-rendered lane.json').toBe('litellm');
+      expect(wanted(home)).toBe('rc=1 lanes=[]\n');
+    });
+
+    it('a roster that does not validate cannot tell (rc 2), never "none"', async () => {
+      const { home } = await bridgeBox({ userManager: false });
+      const file = join(home, '.ccrc', 'accounts.json');
+      const json = JSON.parse(fs.readFileSync(file, 'utf8')) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+      json.accounts.find((a) => a.id === 'codex-a')!.exec['bridge'] = 'sideways';
+      fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+      expect(wanted(home)).toBe('rc=2 lanes=[]\n');
+    });
+
+    it('no roster file cannot tell either', async () => {
+      const { home } = await bridgeBox({ userManager: false });
+      fs.rmSync(join(home, '.ccrc', 'accounts.json'));
+      expect(wanted(home)).toBe('rc=2 lanes=[]\n');
+    });
+  });
+
   it('a new gateway key under a running bridge restarts the bridge tier', async () => {
     const { home, proxyPort } = await bridgeBox({ userManager: false });
     const r = cx(home, ['start', 'codex-a']);
