@@ -1879,7 +1879,8 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
   let parents: string[] = [];
 
   const nodeBlock = (id: string, gist: string, expand?: string): string =>
-    steeredBlock({ kind: 'node', id, gist, ...(expand === undefined ? {} : { expand }) }).replace('>', ' depth="1">');
+    // the depth attribute goes into the opening tag only, so the pattern is anchored to it
+    steeredBlock({ kind: 'node', id, gist, ...(expand === undefined ? {} : { expand }) }).replace(/^(<ccrc-node [^>\n]*)>/, '$1 depth="1">');
   const MANY_TOPICS = Array.from({ length: TOPICS_MAX + 1 }, (_, i) => `block topic ${i}`).join(', ');
   const summaryAt = (k: number, parentIds: readonly string[]): string => {
     const g = Math.floor(k / 8);
