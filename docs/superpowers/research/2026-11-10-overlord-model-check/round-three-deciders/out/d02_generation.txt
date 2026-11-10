@@ -1,0 +1,25 @@
+ok  budget: checkpointed 60 + clearing 90 + carded 45 + probing 165 = 360 s
+ok  began `active`, failed in `draining`: all three say `active`
+CE GEN-back: a renewal that began in `degraded` fails in `draining` before the old conversation ended: Table 3.3.11a says back to `active`, the receipt says `degraded`
+ok  began `active`, failed in `clearing`: all three say `active`
+note a renewal that began in `degraded` fails in `clearing`: Figure 2 draws the edge to `active`, the receipt says `degraded`
+note Table 3.3.11a gives `clearing` its seconds ("90, for all tries") and not what follows a timeout; Figure 2 and the receipt do
+note Table 3.3.11a gives `carded` its seconds ("45, with one re-nudge") and not what follows a timeout; Figure 2 and the receipt do
+note Table 3.3.11a gives `probing` its seconds ("165, two rounds at most") and not what follows a timeout; Figure 2 and the receipt do
+CE RNW-order: `overlord`: 19 rows, 524287 non-empty sets of fired triggers; in the table's own order the first match is `soft` while a `hard` row also fired in 259101 of them, e.g. "Soft ceiling: past 60% of the fitted ceiling" before "Model drift: the running model is not the one the generation". A soft answer waits for the preconditions, the budget and the least age.
+CE RNW-order: `coordinator`: 8 rows, 255 non-empty sets of fired triggers; in the table's own order the first match is `soft` while a `hard` row also fired in 90 of them, e.g. "Two compactions in one generation" before "Not local: the conversation is absent on the host that wakes". A soft answer waits for the preconditions, the budget and the least age.
+ok  renewalDue: `worker` has no trigger row, so it is never due
+ok  renewalDue: `reviewer` has no trigger row, so it is never due
+ok  renewalDue: `auditor` has no trigger row, so it is never due
+ok  renewalDue: `replay` has no trigger row, so it is never due
+ok  renewalDue: `plain` has no trigger row, so it is never due
+ok  C50 names the coordinator row "Hard cap: context at 250k tokens or half"
+ok  C50 names the coordinator row "Two compactions in one generation"
+ok  C50 names the coordinator row "A new ccrc install"
+ok  C50 names the coordinator row "A probe failed mid-generation, and a re-"
+CE RNW-c50: Table 3.3.11b gives the coordinator the row "A proactive compaction the PreCompact arm refused" (soft); C50 in Table 13a lists its rows and leaves it out
+ok  C50 names the coordinator row "Not local: the conversation is absent on"
+ok  C50 names the coordinator row "A resumed long conversation"
+ok  C50 names the coordinator row "A wave boundary"
+CE RNW-stale: 5 trigger rows read the context sample. For a stale sample Table 3.3.11b says "unmeasured, never below" and Table 3.6a says "unmeasured": neither says whether the row fires. The two journals beside it say "that trigger is blind".
+== generation machine, renewalDue: domain 4 failure cases; 20 trigger rows x 7 roles, every set of fired triggers (2^19 - 1 for the Overlord, 255 for a coordinator); counterexamples 5; checks passed 15

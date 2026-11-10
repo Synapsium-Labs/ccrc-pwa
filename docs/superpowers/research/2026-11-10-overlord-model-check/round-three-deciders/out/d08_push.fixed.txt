@@ -1,0 +1,3 @@
+ok  total: 80 inputs, one answer each
+note with no briefing time set, a `batchable` push goes out now in 6 inputs where a `blocking-by` push still inside its limit waits (quiet hours, "away until" or a spent budget), e.g. ('no briefing time', 'budget left', 'quiet hours or away', 'console closed')
+== pushAdmission (with the proposed edits): domain 80 inputs; counterexamples 0; checks passed 1

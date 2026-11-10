@@ -1,0 +1,10 @@
+ok  domain: 9 rows x stated class x lineage x raise x grant x entry = 720 inputs
+note item secret, `operatorClass` left out: the sentence gives ['O4', 'unknown'], the floor alone gives ['O4']; held False either way
+note item value, `operatorClass` left out: the sentence gives ['O5', 'unknown'] (held: False), the floor alone gives ['O5'] (held: True)
+note ask operator-only, `operatorClass` left out: the sentence gives ['unknown'], the floor alone gives none; held False either way
+ok  ask cannot-decide, no class named: the release reason states none, so it is held
+ok  every held row admits an act whose every class member is covered
+ok  a `decide` item is triaged only when `unknown` is its whole class
+ok  adding a class member never turns "not held" into "held"
+ok  the effective class contains the floor, the lineage and every raise on all 720 inputs
+== itemClassFloor, class sets, the settling act of mayHold (with the proposed edits): domain 720 inputs; counterexamples 0; checks passed 6

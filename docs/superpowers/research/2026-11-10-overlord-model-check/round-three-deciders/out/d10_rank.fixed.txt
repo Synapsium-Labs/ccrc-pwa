@@ -1,0 +1,10 @@
+ok  decisionRank as three sort keys orders all 435 pairs of 30 rows (ties go to the Overlord's order)
+ok  Table 5.6a and §6.6 give slack the same place: the third sort key
+ok  Pause at `off` -> `off`: not a rung up
+ok  Pause at `chat` -> `chat`: not a rung up
+ok  Pause at `advise` -> `chat`: not a rung up
+ok  Pause at `full` -> `chat`: not a rung up
+note Table 7.5a: 17 rows, 13 of them caps; the other 4 are read by the decider each names
+ok  effectiveRung: 32768 inputs (4 rungs x every set of 13 caps): never above the operator's rung, and a new cap never raises it
+ok  nine restatements of a cap outside Table 7.5a name the rung its row names
+== decisionRank, Pause, effectiveRung (with the proposed edits): domain 435 pairs of queue rows; 4 rungs x Pause; 32768 ladder inputs; counterexamples 0; checks passed 8

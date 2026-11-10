@@ -552,8 +552,10 @@ The model exists. It was written while the spec was reviewed, before any code, a
 library only). It is an explicit-state breadth-first search over holds, readiness, generations, grants and restore,
 with 15 scenarios, 24 switches for readings the text had left open, and 14 planted mutations, 12 of which an invariant
 must catch. A second round, in `round-two/` beside it, covers authority, restore, requests, commands, the push budget
-and playbook entries with six small machines; the spec's later edition wrote its findings in. This task writes no
-third model. It re-runs both against the merged edition and records W0-27.
+and playbook entries with six small machines. A third round, in `round-three-deciders/` and
+`round-three-accounts-privacy/`, enumerates every decider table over its whole domain and models the reservation
+arithmetic, the operator's messages and the privacy rules. The spec's later editions wrote each round's findings in.
+This task writes no new model. It re-runs them against the merged edition and records W0-27.
 
 **Files:**
 - Read: `docs/superpowers/research/2026-11-10-overlord-model-check/` (this task changes nothing in it)
@@ -572,7 +574,9 @@ third model. It re-runs both against the merged edition and records W0-27.
   and ends under the bound of 3,000,000 states. The 12 mutations an invariant should catch are caught, and the 2
   marked "none expected" are not. Then, from `round-two/`: `python3 check.py --matrix` and
   `python3 check.py --mutations` (about 15 and 10 seconds). Expected: every check holds under the safe readings, and
-  all 40 mutations are caught.
+  all 40 mutations are caught. Round three's deciders read one named edition of the spec through `git show`
+  (`common.py`); to run them on the merged edition, set `OVERLORD_SPEC` to the spec file and run `./run_all.sh`. A
+  sentence a check is anchored to may have changed: record each anchor that stops, and whether its rule still holds.
 - [ ] **Step 3: A violation at the defaults is a finding against the spec.** Stop, and mail the coordinator the trace
   that `python3 check.py SCENARIO` prints. Never weaken an invariant to pass. The coordinator rules whether the spec
   or the abstraction moves, and the ruling is a deviation entry. If a scenario hits the bound, cut the scenario down

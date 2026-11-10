@@ -1,0 +1,14 @@
+ok  requests: Table 5.1b and Figure 3 draw the same 27 moves between states
+ok  requests: every state that is not terminal has an exit, and no move leaves a terminal state
+ok  Table 4b: 60 inputs (10 states x 6 run states), one group each
+note Table 4b: a `done`, `failed` or `dropped` request with a linked run awaiting review or landing is drawn in that run's group, not in Done (9 of 18 inputs): the first match wins
+ok  Needs you: the operator can move a `needs-you` request (to blocked, dropped, in-progress, routed)
+ok  Needs you: the operator can move a `done-unverified` request (to done, dropped)
+ok  Needs you: the operator can move a `declined` request (to dropped)
+note act state `shadow` is entered by nothing: the text says so ("In version 1 nothing writes it")
+ok  act states: 10 states, 3 that are left and 7 terminal; every exit named in Table 10.1b is a listed state
+ok  `overlord_acts`: every staged move has a writer
+ok  proposals: 6 states; `open` and `commanded` have exits to every other state, and the other four are terminal
+ok  playbook: 6 states; every state but `graduated` and `retired` has a move out in Table 9.7b
+ok  boot coherence: 12 inputs; only "equal" is coherent, and a journal missing beside no Overlord row has nothing to compare
+== request, act, proposal and playbook states; boot coherence (with the proposed edits): domain 10 request states x 4 actors; 60 group inputs; 10 act states; 6 + 6 states; 12 boot inputs; counterexamples 0; checks passed 11

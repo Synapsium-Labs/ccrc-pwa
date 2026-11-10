@@ -1,0 +1,19 @@
+ok  total: 1296 inputs, each asks or acts
+ok  monotonic: a thinner record, an unknown size, a less reversible act or a lower urgency never moves it to act
+ok  example: reversible, routine, batchable: bound 0.1429 (text 0.14), least clean answers 20 (text "about 20")
+ok  example: compensable, big, batchable: bound 0.0167 (text 0.017), least clean answers 179 (text "about 180")
+ok  example: compensable, big, blocking-now: bound 0.0333 (text 0.033), least clean answers 89 (text "about 90")
+CE ASK-unreachable: the weight for "reversible and routine" (7) is never read: `ask-is-cheaper` is an answer door's word, and every answer is compensable at least (Table 7.1a, §6.7)
+CE ASK-unreachable: the weight for "reversible and big" (20) is never read: `ask-is-cheaper` is an answer door's word, and every answer is compensable at least (Table 7.1a, §6.7)
+CE ASK-example: the text's cheapest case, "a routine, reversible answer", is a cell no answer has. A routine answer is compensable: bound 0.050 on a batchable row, 59 blind answers with none overturned, not "about twenty"
+note least clean blind answers before a routine answer may act: batchable 59, blocking-by 39, blocking-now 29
+note least clean blind answers before a big answer may act: batchable 179, blocking-by 119, blocking-now 89
+ok  12 of 12: lower bound 0.779 (text 78%)
+ok  19 of 19: lower bound 0.854 (text 85%)
+ok  29 of 29: lower bound 0.902 (text 90%)
+ok  a 10% target needs 29 clean answers (text 29)
+ok  a 5% target needs 59 clean answers (text 59)
+ok  17 of 19: lower bound 0.704 (text 0.70)
+note a lower bound of 0.85 over 19 answers needs 19 agreeing (19 of 19 gives 0.854, 18 of 19 gives 0.774)
+note a lower bound of 0.85 over 30 answers needs 29 agreeing (29 of 30 gives 0.851, 28 of 30 gives 0.805)
+== askOrAct: domain 1296 inputs; counterexamples 3; checks passed 11

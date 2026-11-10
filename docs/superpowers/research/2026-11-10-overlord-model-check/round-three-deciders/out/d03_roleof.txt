@@ -1,0 +1,7 @@
+CE ROLE-none: 18 of 864 inputs get no answer: the child mark could not be measured at all (the agent did not answer). §3.3.9 types an unreadable mark and a run of unknown kind, and the tree tells unreadable from unmeasured
+ok  every undecided answer has members of one `SessionRole` view
+CE ROLE-undecided: undecided between `coordinator` and `plain`: the members differ in the long-lived column (coordinator: yes and plain: no), so `renewalDue`, `MAIL_PACE` and the card have no row to read. Read as `coordinator`, a renewal ends the conversation of a session that may be `plain`
+ok  undecided between `reviewer` and `worker`: one answer for every reader
+CE ROLE-compact: the compaction instructions are a column of `FLEET_ROLES` and C51 gives "every session" instructions; the text names five roles and `auditor` has none
+CE ROLE-compact: the compaction instructions are a column of `FLEET_ROLES` and C51 gives "every session" instructions; the text names five roles and `replay` has none
+== roleOf: domain 864 inputs; 2 undecided answers x 4 readers; 7 roles x the compaction column; counterexamples 4; checks passed 2

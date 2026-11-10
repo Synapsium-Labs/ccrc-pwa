@@ -1,0 +1,14 @@
+ok  Table 7.1a: 33 act kinds and the reads row x chat, advise, full: every cell reads allow, shadow, proposal or refuse
+ok  Table 7.1a: no kind is allowed at a lower rung and refused at a higher one
+ok  the note door at `off`: answers
+ok  the note door at `chat`: answers
+ok  the note door at `advise`: answers
+ok  the note door at `full`: answers
+ok  `open-request` has cells with and without a cited message
+ok  `drop-request` is compensable and names its compensator
+ok  overlordMayAct: 2816 inputs, each gets one answer under both encodings
+ok  the prose and Figure 6 agree on all 2816 inputs
+note day one, a relay at `advise`, no record in any cell: prose `allow`, Figure 6 `allow`
+ok  prose: adding a class member never turns a refusal into an allow (1280 base inputs x 2 members)
+ok  prose: no fault (identity, isolation, evidence, size, record, the blind check) moves a refusal to an allow
+== overlordMayAct, Table 7.1a, Figure 6, gate order (with the proposed edits): domain 2816 inputs; 33 act kinds and the reads row x 3 rungs; the note door x 4 rungs; counterexamples 0; checks passed 12
