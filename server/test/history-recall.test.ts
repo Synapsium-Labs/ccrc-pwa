@@ -8253,18 +8253,22 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
     }
   }, HEAVY);
 
-  it('Review Focus 5: a node-id prefix unique without --agents is ambiguous with it (exit 2 bad-args naming both candidates)', () => {
+  it('Review Focus 5: the scope\'s node rules count the main thread\'s nodes only: a prefix unique without --agents is ambiguous with it, display prefixes and covering leaves ignore a subagent node', () => {
     const main = B.main[0]!;
     const clone = `${main.slice(0, 9)}${'0'.repeat(main.length - 9)}`;
-    expect(clone, 'CONTROL: a distinct id').not.toBe(main);
+    expect(clone, 'CONTROL: a distinct id, below the main leaf\'s').not.toBe(main);
+    expect(clone < main).toBe(true);
     const w = B.rig.db;
     w.exec('PRAGMA foreign_keys = OFF');
+    // a subagent node that shares 9 characters of the main leaf's id, and holds a row the main leaf holds
+    const source = w.prepare('SELECT entry_id, ord FROM node_sources WHERE node_id = ? ORDER BY ord LIMIT 1').get(main) as { entry_id: number; ord: number };
     try {
       w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
           span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms)
         SELECT ?, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
           span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms
         FROM nodes WHERE node_id = ?`).run(clone, B.agents[0]!);
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)').run(clone, source.entry_id, source.ord);
       const prefix = main.slice(0, 9);
       const off = cli(B, ['describe', prefix, '--json']);
       expect([off.code, items(off)[0]?.['node_id']], 'unique among the main nodes').toEqual([0, main]);
@@ -8272,7 +8276,15 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
       expect([on.code, on.json?.['reason']], 'ambiguous once the subagent node counts').toEqual([2, 'bad-args']);
       expect(on.stderr + on.stdout).toContain(clone);
       expect(on.stderr + on.stdout).toContain(main);
+      // display prefixes are computed among the nodes the scope reads: the main leaf keeps its 7-character prefix
+      expect(cli(B, ['describe', main]).stdout, 'describe\'s display prefix').toMatch(new RegExp(`^node ${main.slice(0, 7)} native_leaf `, 'm'));
+      // and a row both hold groups under the main leaf, never under the subagent node
+      const grepOff = cli(B, ['grep', 'Segment']).stdout;
+      expect(grepOff, 'CONTROL: the grep reads the row the clone also holds').toMatch(/^── leaf L[0-9a-f]{6} /m);
+      expect(grepOff, 'no group is headed by the subagent node').not.toContain(clone);
+      expect(grepOff).not.toMatch(new RegExp(`^── leaf ${clone.slice(0, 7)}0`, 'm'));
     } finally {
+      w.prepare('DELETE FROM node_sources WHERE node_id = ?').run(clone);
       w.prepare('DELETE FROM nodes WHERE node_id = ?').run(clone);
     }
   }, HEAVY);
