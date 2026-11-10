@@ -210,7 +210,7 @@ describe('doctor: the codex runtime row asks whether a lane needs the runtime (c
   });
 
   it.each([[0, 'a lane runs in litellm mode'], [2, 'the modes cannot be told']] as const)(
-    'wanted %s (%s): an absent runtime is the FAIL it always was', (wanted) => {
+    'wanted %s (%s): an absent runtime is the FAIL it always was', (wanted, _why) => {
       const r = runtimeRow(wanted);
       expect(r.stdout).toContain('asked=check\n');
       expect(r.stdout).toMatch(/^FAIL codex: no isolated LiteLLM runtime is current on this box \(ccgpt-runtime check: absent\)/m);
