@@ -14,7 +14,9 @@ import {
 } from '../src/docs/DocMarkdown';
 import { ReaderFrame, lazyMountReader, type ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
-import type { ReaderLink } from '../src/docs/reader/policy';
+import type { ReaderChrome, ReaderLink } from '../src/docs/reader/policy';
+import { ReaderBarContext, type ReaderBar } from '../src/docs/readerBar';
+import { leafName } from '../src/docs/docsTree';
 import { READER_FALLBACK_NOTE, READER_SHEET_TEXT } from '../src/docs/reader/readerText';
 import { READER_COPY_SHEET_MARKERS_MAX } from '../src/lib/readerLimits';
 import { createFetchQueue } from '../src/docs/fetchQueue';
@@ -78,7 +80,7 @@ interface Harness {
   readonly renderFn: ReturnType<typeof vi.fn<ReaderDeps['render']>>;
   readonly mountFn: ReturnType<typeof vi.fn<ReaderDeps['mount']>>;
   readonly imagesFn: ReturnType<typeof vi.fn<ReaderDeps['images']>>;
-  readonly handle: { destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn> };
+  readonly handle: { destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn> };
   readonly inputs: ReaderMountInput[];
   readonly parser: ReturnType<typeof vi.fn<MarkdownParser>>;
   readonly onDraftAsset: ReturnType<typeof vi.fn<(delta: number) => void>>;
@@ -90,7 +92,7 @@ function harness(over: Partial<{
   outcome: ReaderRenderOutcome; mount: ReaderDeps['mount']; drafts: number;
 }> = {}): Harness {
   const inputs: ReaderMountInput[] = [];
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn() };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
   const renderFn = vi.fn<ReaderDeps['render']>(async () => over.outcome ?? RENDERED);
   const mountFn = vi.fn<ReaderDeps['mount']>(over.mount ?? (async (_el, input) => {
     inputs.push(input);
@@ -125,6 +127,25 @@ function frame(h: Harness, over: { text?: string; bodyKey?: string; pending?: st
 /** The text the open copy sheet shows (the `pre` of its marked text), or '' when there is none. */
 function sheetText(): string {
   return document.querySelector('.docs-reader-sheet-text')?.textContent ?? '';
+}
+
+/** `frame(h)` under a bar slot that asks for `chrome` and publishes to `publish`. */
+function slotted(h: Harness, chrome: ReaderChrome, publish: (bar: ReaderBar | null) => void): ReactNode {
+  return <ReaderBarContext value={{ chrome, publish }}>{frame(h)}</ReaderBarContext>;
+}
+
+/** matchMedia at `width`, as an engine at that width answers a min-width or max-width query. */
+function atWidth(width: number): void {
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*([\d.]+)px/.exec(q);
+    const max = /max-width:\s*([\d.]+)px/.exec(q);
+    const matches = (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1]))
+      && (min !== null || max !== null);
+    return {
+      matches, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
 }
 
 async function ready(h: Harness): Promise<ReaderMountInput> {
@@ -583,5 +604,134 @@ describe('the default reader (spec 4.1)', () => {
     } finally {
       if (saved !== undefined) Object.defineProperty(globalThis, 'Worker', saved);
     }
+  });
+});
+
+describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
+  const lastBar = (publish: ReturnType<typeof vi.fn<(bar: ReaderBar | null) => void>>): ReaderBar | null | undefined =>
+    publish.mock.calls[publish.mock.calls.length - 1]?.[0];
+
+  it('a host-bar slot mounts with ccrc\'s bar and asks for progress', async () => {
+    const h = harness();
+    render(slotted(h, 'host-bar', vi.fn()));
+    const input = await ready(h);
+    expect(input.chrome).toBe('host-bar');
+    expect(typeof input.onProgress).toBe('function');
+  });
+
+  it('a frame-bar slot, and no slot, mount with the frame\'s own bar and ask for no progress; nothing is published', async () => {
+    const h1 = harness();
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h1, 'frame-bar', publish));
+    const i1 = await ready(h1);
+    expect(i1.chrome).toBe('frame-bar');
+    expect(i1.onProgress).toBeUndefined();
+    act(() => { i1.onReady(); });
+    expect(publish.mock.calls.filter((c) => c[0] !== null)).toEqual([]);
+    cleanup();
+    const h2 = harness();
+    render(frame(h2));
+    const i2 = await ready(h2);
+    expect(i2.chrome).toBe('frame-bar');
+    expect(i2.onProgress).toBeUndefined();
+  });
+
+  it('the bar is published at ready, not before', async () => {
+    const h = harness();
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h, 'host-bar', publish));
+    const input = await ready(h);
+    expect(publish.mock.calls.filter((c) => c[0] !== null)).toEqual([]);
+    act(() => { input.onReady(); });
+    expect(lastBar(publish)).not.toBeNull();
+    expect(lastBar(publish)).toBeDefined();
+  });
+
+  it('the bar\'s title is the document\'s own, else the file name', async () => {
+    const titled: ReaderRenderOutcome = {
+      ...RENDERED,
+      result: { ...RENDERED.result, meta: { ...RENDERED.result.meta, title: 'Doc title' } },
+    } as ReaderRenderOutcome;
+    const h1 = harness({ outcome: titled });
+    const p1 = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h1, 'host-bar', p1));
+    const i1 = await ready(h1);
+    act(() => { i1.onReady(); });
+    expect(lastBar(p1)?.title).toBe('Doc title');
+    cleanup();
+    const h2 = harness();
+    const p2 = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h2, 'host-bar', p2));
+    const i2 = await ready(h2);
+    act(() => { i2.onReady(); });
+    expect(lastBar(p2)?.title).toBe(leafName(showOf('# A').path));
+  });
+
+  it('the bar\'s command reaches the mount\'s command', async () => {
+    const h = harness();
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h, 'host-bar', publish));
+    const input = await ready(h);
+    act(() => { input.onReady(); });
+    lastBar(publish)?.command('contents');
+    expect(h.handle.command).toHaveBeenCalledWith('contents');
+  });
+
+  it('progress reaches the bar\'s store and its listeners', async () => {
+    const h = harness();
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h, 'host-bar', publish));
+    const input = await ready(h);
+    act(() => { input.onReady(); });
+    const spy = vi.fn();
+    const bar = lastBar(publish);
+    bar?.progress.subscribe(spy);
+    act(() => { input.onProgress?.(0.4); });
+    expect(bar?.progress.read()).toBe(0.4);
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it('a fallback after ready withdraws the bar, and so does an unmount', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h1 = harness();
+    const p1 = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h1, 'host-bar', p1));
+    const i1 = await ready(h1);
+    act(() => { i1.onReady(); });
+    expect(lastBar(p1)).not.toBeNull();
+    act(() => { i1.onFallback('error'); });
+    expect(lastBar(p1)).toBeNull();
+    cleanup();
+    const h2 = harness();
+    const p2 = vi.fn<(bar: ReaderBar | null) => void>();
+    const { unmount } = render(slotted(h2, 'host-bar', p2));
+    const i2 = await ready(h2);
+    act(() => { i2.onReady(); });
+    expect(lastBar(p2)).not.toBeNull();
+    unmount();
+    expect(lastBar(p2)).toBeNull();
+  });
+
+  it('the slot\'s bar is read as the mount starts: a later change does not remount', async () => {
+    const h = harness();
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    const { rerender } = render(slotted(h, 'host-bar', publish));
+    await ready(h);
+    rerender(slotted(h, 'frame-bar', publish));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('the Docs screen asks for ccrc\'s bar under the compact width and for the frame\'s own above it', async () => {
+    const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
+    atWidth(412);
+    const h1 = harness();
+    render(<DocsScreen path="/docs/demo/specs/a.md" search="" loaders={fakeLoaders({ file: okFile('# Hello') }).loaders} parser={parser} reader={h1.reader} />);
+    expect((await ready(h1)).chrome).toBe('host-bar');
+    cleanup();
+    atWidth(1280);
+    const h2 = harness();
+    render(<DocsScreen path="/docs/demo/specs/a.md" search="" loaders={fakeLoaders({ file: okFile('# Hello') }).loaders} parser={parser} reader={h2.reader} />);
+    expect((await ready(h2)).chrome).toBe('frame-bar');
   });
 });

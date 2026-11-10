@@ -12,7 +12,11 @@
 //   G5  a render timeout: `DocPlain` with the timeout note, and no second parse;
 //   G3  an adapter chunk that does not load, or a mount that rejects for any cause: the fixed note over `DocMarkdown`;
 //   G6  the frame's own `onFallback`: the same, after the mount is destroyed;
-//   G7  a Mermaid chunk that does not load is `mountReader`'s own (it drops the scan and still mounts).
+//   G7  a Mermaid chunk that does not load is `mountReader`'s own on request (it drops the scan and still mounts), and
+//       the library's own after `ready` (every figure stays its source, with the load note).
+// On the Docs screen the mount asks for the bar the screen's slot names (`docs/readerBar.ts`), as it starts; on ccrc's
+// bar the handle (the title, the commands, the progress) is published while the frame is ready (the library 1.1
+// take-up plan, refinement (i)).
 // A body stays where it landed until its `bodyKey` changes (`MarkdownBody` keys this component by it), so a fallback
 // never mounts again. The reason of G3, G4 and G6 is kept for the console and never reaches the page.
 //
@@ -37,9 +41,11 @@ import {
 import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
 import {
-  copyDecision, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink, type ReaderBodyState, type ReaderLink,
+  copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
+  type ReaderBodyState, type ReaderLink,
 } from './reader/policy';
 import { READER_FALLBACK_NOTE, type ReaderHiddenChar } from './reader/readerText';
+import { ReaderBarContext, createReaderProgress, usePublishReaderBar, type ReaderBar } from './readerBar';
 import { leafName } from './docsTree';
 import { copyText } from './share';
 import { READER_BODY, usePublishExportBody } from './exportBody';
@@ -124,6 +130,13 @@ function ReaderShown(): null {
   return null;
 }
 
+/** Publishes the frame's bar for the Docs header while the frame is ready (the take-up plan, refinement (i)). Mounted in
+ *  the ready arm only, so a fallback or an unmount withdraws it. */
+function ReaderBarShown(p: { readonly bar: ReaderBar }): null {
+  usePublishReaderBar(p.bar);
+  return null;
+}
+
 /** A Markdown body in the rich reader. `MarkdownBody` answers the two byte kinds that are not Markdown before it mounts
  *  this, so `null` here has one meaning: that answer was not Markdown, and the caller has shown it already. */
 export function ReaderFrame(p: ReaderFrameProps): ReactNode {
@@ -143,14 +156,17 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
   );
   const [ask, setAsk] = useState<Ask | null>(null);
+  /** The bar this body's frame publishes once ready; `null`: its frame is on its own bar, or not mounted yet. */
+  const [bar, setBar] = useState<ReaderBar | null>(null);
+  const barSlot = useContext(ReaderBarContext);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mountRef = useRef<ReaderMount | null>(null);
   /** The frame theme the frame was last given: the mount's seed, then each `setPrefs`. */
   const seededPrefs = useRef<ReaderThemePref['theme'] | null>(null);
   /** The latest props, for the callbacks the frame holds for its whole life. */
-  const live = useRef({ props: p, link, assets, prefs });
+  const live = useRef({ props: p, link, assets, prefs, barSlot });
   useEffect(() => {
-    live.current = { props: p, link, assets, prefs };
+    live.current = { props: p, link, assets, prefs, barSlot };
   });
 
   // A later change of the DERIVED theme reaches the frame as its `prefs` operation: no remount, so the reading position
@@ -272,6 +288,9 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       }
       dispatch({ e: 'mount' });
       seededPrefs.current = cur.prefs;
+      // The bar is read once, here: the frame keeps it for its life (refinement (f)).
+      const chrome = cur.barSlot?.chrome ?? 'frame-bar';
+      const progress = chrome === 'host-bar' ? createReaderProgress() : null;
       const input: ReaderMountInput = {
         document: {
           result: outcome.result,
@@ -295,6 +314,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           if (!ac.signal.aborted && !landed) dispatch({ e: 'ready' });
         },
         onFallback: (r) => fallBack(String(r)),
+        chrome,
+        ...(progress === null ? {} : { onProgress: (share: number) => progress.set(share) }),
       };
       performance.mark('ccrc-reader-mount-start');
       let m: ReaderMount;
@@ -312,6 +333,13 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       }
       mount = m;
       mountRef.current = m;
+      if (progress !== null) {
+        setBar({
+          title: readerBarTitle(outcome.result.meta.title, leafName(cur.props.show.path)),
+          command: (name) => m.command?.(name),
+          progress,
+        });
+      }
       // The fragment is spent only once the frame is up: a fallback before this keeps it for the plain view's scroll.
       if (cur.props.pendingFragment !== null) cur.props.onFragmentConsumed();
       const latest = live.current.prefs;
@@ -375,6 +403,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           <div className="docs-reader" ref={hostRef} />
           {sheets}
           <ReaderShown />
+          {state.s === 'ready' && bar !== null && <ReaderBarShown bar={bar} />}
         </>
       );
   }

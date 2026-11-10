@@ -44,6 +44,7 @@ import type { ExportRequest, ExportSource } from './export/exportInput';
 import type { ExportWait } from './export/policy';
 import { showBytes } from './objectUrls';
 import type { ExportBody } from './exportBody';
+import type { ReaderBar } from './readerBar';
 import type { ExportAssets } from './export/exportAssets';
 import type { HighlightStore } from '../lib/highlightStore';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness } from './useDocsVisit';
@@ -733,6 +734,8 @@ export function DocsHead(p: {
   readonly plainView?: boolean;
   /** Turns the reader off on this page (refinement (a)); absent or `null`: the screen offers no plain view. */
   readonly onPlainView?: (() => void) | null;
+  /** A ready frame on ccrc's bar (`docs/readerBar.ts`); absent or `null`: no frame on this page takes commands. */
+  readonly readerBar?: ReaderBar | null;
 }): ReactNode {
   const { page, visit, tree } = p;
   const slow = useNow(30_000, tree !== null);
