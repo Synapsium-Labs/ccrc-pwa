@@ -14,7 +14,7 @@
 // DELIVERY id, a different AUTOINCREMENT sequence — see that file's own
 // docstring). This suite imports and fixtures the real thing.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { CCRC_API } from './ccdWsHelpers.js';
 import os from 'node:os';
@@ -35,9 +35,25 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
-const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
+/** SKILL.md alone: the contract, the map of the procedures, and what a compaction keeps. */
+const skillFile = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
 const refs = (name: string): string =>
   readFileSync(path.join(skillDir, 'references', name), 'utf8');
+/** The procedure sections that stood in SKILL.md and now live in reference files it points to, in the order
+ *  they stood there. Each is read from its first `## ` heading, so the title a reference file adds above it is
+ *  left out. A file that is not there reads as empty, so this suite passes on a tree where the sections are
+ *  still in SKILL.md, and on one where they have moved. */
+const PROCEDURE_REFS: readonly string[] = ['api.md', 'wave-steps.md', 'cross-project.md'];
+const procedure = (name: string): string => {
+  const p = path.join(skillDir, 'references', name);
+  if (!existsSync(p)) return '';
+  const text = readFileSync(p, 'utf8');
+  const at = text.search(/^## /m);
+  return at === -1 ? text : text.slice(at);
+};
+/** What the suite calls "the skill": SKILL.md, then those procedure sections. The pins below were written
+ *  when all of it was one file, and each still says what a coordinator must be told, wherever it now reads it. */
+const skill = [skillFile, ...PROCEDURE_REFS.map(procedure)].join('\n');
 /** Every reference this skill ships, FROM THE DIRECTORY — never a hand-typed
  *  list. `install-coordinator-skill.sh`'s `REQUIRED_REFS` is the other
  *  projection of this same directory and is pinned against it in
@@ -57,7 +73,7 @@ const REFERENCE_NAMES: readonly string[] =
   readdirSync(path.join(skillDir, 'references'))
     .filter((n) => n.endsWith('.md'))
     .sort();
-const allSkillText = [skill, ...REFERENCE_NAMES.map(refs)].join('\n');
+const allSkillText = [skillFile, ...REFERENCE_NAMES.map(refs)].join('\n');
 
 /** The route harvest's corpus: SKILL.md + every reference EXCEPT the ones
  *  named here — today only `mail-envelope.md`. That file's only route-shaped
@@ -79,7 +95,7 @@ const allSkillText = [skill, ...REFERENCE_NAMES.map(refs)].join('\n');
  *  harvested here at all: see the foot-of-file describe and D-1001. */
 const ROUTE_CORPUS_EXCLUDES: ReadonlySet<string> = new Set(['mail-envelope.md']);
 const routeSkillText = [
-  skill, ...REFERENCE_NAMES.filter((n) => !ROUTE_CORPUS_EXCLUDES.has(n)).map(refs),
+  skillFile, ...REFERENCE_NAMES.filter((n) => !ROUTE_CORPUS_EXCLUDES.has(n)).map(refs),
 ].join('\n');
 
 /** Every .ts under server/src, read once — the linkage test's corpus. */
@@ -1908,8 +1924,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // its "stdout is the response body" paragraph names `${resp` in PROSE, as
     // the history of what the capture idiom
     // USED TO be, and that sentence is the reason a reader does not reinvent it.
+    //
+    // That paragraph moves with the API section into `api.md`. So the one phrase of it that names the old
+    // idiom is taken out before the scan, and nothing else is: a fence in `api.md` is scanned like any other.
+    const HISTORY = "the `${resp##*$'\\n'}` split that used to be";
     for (const name of REFERENCE_NAMES) {
-      expect(refs(name), `${name} carries the curl-era \${resp clobber`)
+      expect(refs(name).replace(HISTORY, ''), `${name} carries the curl-era \${resp clobber`)
         .not.toContain('${resp');
     }
   });
