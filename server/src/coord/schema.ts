@@ -2476,6 +2476,21 @@ export const MIGRATIONS: readonly string[] = [
     failReason  TEXT, measuredAt INTEGER
   );
   `,
+  // ── 53: user_version 52 -> 53 ─────────────────────────────────────────────
+  // The stored definition of done (D-8126; spec 2026-11-09 §8.1, the autonomy default's wave A2): `programs.doneWhen`, a
+  // JSON array of 1 to 12 strings (`doneWhenOf`, `shared/ledgers.ts`), or NULL for a programme that has none. Its writers
+  // are `setSpecPin` (a pin that carries a list; one without keeps the stored list) and `setDoneWhen` (a modification
+  // that carries one) in `ledgersStore.ts`, and nothing else; its reader is `goalsFor`, which reads a value that does not
+  // parse as `doneWhenOf` accepts as NULL (absence permits; never a throw).
+  //
+  // ONE NULLABLE COLUMN, NOTHING ELSE: an older build opening a file at `user_version 53` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the column, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 52 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE programs ADD COLUMN doneWhen TEXT;   -- JSON array of strings, or NULL; written by setSpecPin and setDoneWhen only
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

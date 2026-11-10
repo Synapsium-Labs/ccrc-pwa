@@ -1490,7 +1490,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the sixty-five machine lanes the
+liveness gate reads the shipped sha out of it), the sixty-six machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1501,7 +1501,7 @@ and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id`, `/api/runs/:id/record`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, and the
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, and the
 one POST of the kind, `/api/testbox/tools-sync`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -4091,11 +4091,20 @@ from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
 `claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
-`asks list|answer|release` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
+`asks list|answer|release`, `goals show` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
+
+**`goals show <slug>` reads a programme's goals** (`GET /api/programmes/:slug/goals`, behind the
+`goals-read-v1` server capability). The route takes either credential: a live console session or the box token, so a
+coordinator reads it cookieless through `ccrc-api` and the console reads the same route with its session; with
+`CCRC_AUTH` off it answers as it always did. The answer is `{ ok, goals, openItems }`. `goals` is the pin
+(`specPath`, `inShort`, `inShortAt`), the modifications and `doneWhen`, the stored definition of done: a list of 1 to 12
+statements of 2,000 characters or fewer, or `null` for a programme with none. `goals pin` stores it with the pin and
+`goals modify` with a modification; a pin that omits it keeps the stored list. `openItems` is each open item cut to
+`id`, `kind`, `title` and `neededBy`, with no reason, answer or secret. Any coordinator may read any programme's pin.
 **The `linear` group** (`linear workspaces|teams|issue|comments|search|statuses|projects|labels|users|create|update|comment`,
 #1444) is how every session works with Linear, in every workspace the operator has added a key for in Settings → Linear:
 the server holds the keys and calls Linear through its proxy routes, so no session signs in to Linear, holds a key or
