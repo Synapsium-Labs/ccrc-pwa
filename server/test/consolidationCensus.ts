@@ -304,6 +304,7 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/coord/dispatch.ts', text: 'const holdRes = await deps.runCcd(holdArgv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/dispatch.ts', text: 'const routeRes = await deps.runCcd(', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
