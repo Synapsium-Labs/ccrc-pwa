@@ -9288,6 +9288,10 @@ EOF
   # `account-openrouter-v2` (N4; accounts plan Task A26): `ccrc account add --provider openrouter` and `credential` on
   # such a lane validate the key first, and `add` takes `--placement` and suggests the models.
   echo account-openrouter-v2
+  # `testbox-admin-v1` (D-8166; test box connect plan TC12): THIS copy of ccd carries the `ccrc testbox-admin` verb the console's
+  # test box card runs (`GET /api/testbox/admin` and `POST /api/testbox/admin/:sub`). It gates a SERVER DECISION, whether to
+  # offer the card's acts at all, so those routes answer `501 unsupported` against a box that has not taken this deploy.
+  echo testbox-admin-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now

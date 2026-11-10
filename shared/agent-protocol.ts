@@ -948,6 +948,12 @@ export type TestboxAdminOpOutcome =
 /** The op's `ok: true` payload; `fleetIdentity` is the node's `~/.ccrc/node-id` through `NODE_ID_RE`, or `null`. */
 export type TestboxAdminOpAnswer = TestboxAdminOpOutcome & { fleetIdentity: string | null };
 
+/** How one `testbox-admin` call ended as the SERVER's seam answers it (`FleetIO.testboxAdmin`, plan TC12): the node's outcome
+ *  (`exited`, `timeout`, `too-large`, `not-started`, `refused`), plus the two the link adds. `unsupported`: an agent that
+ *  does not list the op in `ready.ops`, or answers `bad-request`; nothing ran. `lost`: the frame left and no answer came back
+ *  (the link's deadline, a disconnect, an answer off `readTestboxAdminOpAnswer`'s grammar); the outcome is UNKNOWN. */
+export type TestboxAdminAsked = TestboxAdminOpOutcome | { kind: 'unsupported' } | { kind: 'lost' };
+
 /** THE ONE READER of a `testbox-admin` op's answer. `null` is "no answer to trust", never an outcome. */
 export function readTestboxAdminOpAnswer(raw: unknown): TestboxAdminOpAnswer | null {
   if (typeof raw !== 'object' || raw === null) return null;

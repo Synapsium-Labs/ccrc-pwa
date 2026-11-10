@@ -50,6 +50,19 @@ describe("the operator's act and decline are not in ccrc-api's table", () => {
   });
 });
 
+// D-8166 (test box connect spec §2.1, C14; plan TC12): the test box card's two routes are the console's alone. They put and pin
+// credentials on the fleet host, so a session on the fleet gets no verb that reaches them.
+describe("the test box connect routes are console-only: not in ccrc-api's table", () => {
+  it('no client row reaches /api/testbox/admin, and the client text never spells it', () => {
+    const paths = clientRoutes().map((r) => r.path);
+    for (const door of ['/api/testbox/admin', '/api/testbox/admin/:sub']) {
+      expect(paths, `${door} is a row of the client: a session could connect a test box`).not.toContain(door);
+    }
+    expect(paths.filter((p) => p.startsWith('/api/testbox/admin')), 'a client row reaches the test box admin routes').toEqual([]);
+    expect(fs.readFileSync(CCRC_API, 'utf8')).not.toMatch(/\/api\/testbox\/admin/);
+  });
+});
+
 /** The client with its comments stripped. The negative flag scans below MUST
  *  read this and not the raw file: `ccrc-api`'s own header names every flag it
  *  deliberately does not have ("no `--url`, no `--host`, no `--path`, no

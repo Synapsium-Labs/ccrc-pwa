@@ -1259,6 +1259,54 @@ describe('the accounts surface: twelve session-only doors, no box token (spec 20
   });
 });
 
+// ── the test box connect surface (test box connect plan TC12, D-8166; spec §2.1, C14) ───────────────────────────────────
+//
+// `server/src/testboxAdmin.ts` registers two routes: the status read and the act. Like the accounts doors they are
+// session-only fleet acts behind the account gate (never a box token), so the census is the accounts surface's: every
+// registration is a door in `TESTBOX_ADMIN_DOOR_KEYS`, in both directions; neither file of the surface consults the box
+// token; none is EXEMPT; a planted call is SEEN; and the doors join neither `SESSION_ONLY_ALL` nor `ALL_LANES`, so
+// CLAUDE.md's box-token bullet owes them no sentence.
+describe('the test box connect surface: two session-only doors, no box token (spec 2026-11-10 §2.1, D-8166)', () => {
+  const ADMIN_SRC = read('server/src/testboxAdmin.ts');
+  const ADMIN_FILES = ['server/src/testboxAdmin.ts', 'server/src/testboxAudit.ts'];
+  const TESTBOX_ADMIN_DOOR_KEYS = ['GET /api/testbox/admin', 'POST /api/testbox/admin/:sub'];
+  const REGISTERED = registrationsIn(ADMIN_SRC).map((r) => r.key);
+  const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
+
+  it('testboxAdmin.ts registers exactly the two doors, once each', () => {
+    expect(new Set(REGISTERED).size, 'a test box admin route is registered twice').toBe(REGISTERED.length);
+    expect([...REGISTERED].sort(), 'testboxAdmin.ts and TESTBOX_ADMIN_DOOR_KEYS disagree — a route was added or removed on one side only')
+      .toEqual([...TESTBOX_ADMIN_DOOR_KEYS].sort());
+  });
+
+  it('neither file consults the box token, and no door is EXEMPT (gate.ts, read as text)', () => {
+    for (const rel of ADMIN_FILES) {
+      const src = read(rel);
+      for (const re of GATE_PATTERNS) {
+        expect(re.test(src), `${rel} consults the box token (${re.source}) — a test box admin route would be gated by it`).toBe(false);
+      }
+    }
+    expect(lanesIn(ADMIN_SRC)).toEqual([]);
+    for (const k of TESTBOX_ADMIN_DOOR_KEYS) expect(GATE_SRC, `${k} became EXEMPT`).not.toContain(`  ['${k}',`);
+  });
+
+  it('a box-token call planted after a registration is SEEN — the lane source is live', () => {
+    const LINE = "app.get('/api/testbox/admin', async";
+    expect(ADMIN_SRC, 'the GET registration line moved — re-point this control at it').toContain(LINE);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = ADMIN_SRC.replace(LINE, `${call}\n  ${LINE}`);
+      expect(GATE_PATTERNS.some((re) => re.test(planted)), `a planted ${call} went unseen by the file scan`).toBe(true);
+    }
+  });
+
+  it('the doors join neither the session-only coordination writes nor the box-token lanes', () => {
+    for (const door of TESTBOX_ADMIN_DOOR_KEYS.map(pathOf)) {
+      expect(SESSION_ONLY_ALL, `${door} was counted as a coordination write`).not.toContain(door);
+      expect(ALL_LANES.map(pathOf), `${door} was counted as a box-token lane`).not.toContain(door);
+    }
+  });
+});
+
 // ── the Linear proxy surface (#1444, plan task LK9; spec 2026-10-31 §6.2) ──────────────────────────────────────────────
 //
 // `server/src/linear/proxyRoutes.ts` is the EIGHTH file that registers routes and the fifth lane source: thirteen routes (`link` since D-8141),

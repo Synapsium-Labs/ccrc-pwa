@@ -14212,3 +14212,49 @@ export interface CallView {
 /** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own
  *  (null for the other two classes). */
 export interface CallRecordAnswer { ok: true; id: number; class: CoordCallClass; expiresAt: number | null }
+
+// ── the test box connect routes (test box connect spec §2.1, §2.6, §2.10; plan TC12, D-8166) ───────────────────────────
+import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus } from './testbox-admin.js';
+
+/** The cap word `ccd caps` prints when THIS copy of ccd carries the test box connect surface (the `testbox-admin` verb's
+ *  host). The two routes ask the account gate for it; a fleet that does not print it answers `unsupported`. */
+export const TESTBOX_ADMIN_CAP = 'testbox-admin-v1';
+
+/** The one route word the test box admin routes add (D-8166): the verb refused for a reason of its own (409). Its closed
+ *  code rides `code` (a `TestboxAdminCode`) and, for the codes that name settings, `keys`. Spelled by the card through
+ *  `refusalText`; every other word the routes answer is an existing one (`unsupported`, `fleetFailed`, `outcome-unknown`,
+ *  `bad-request`). */
+export const TESTBOX_ADMIN_ROUTE_REFUSALS = ['testbox-admin-refused'] as const;
+export type TestboxAdminRouteRefusal = (typeof TESTBOX_ADMIN_ROUTE_REFUSALS)[number];
+
+/** One row of the test box ledger (`testbox_events`, spec §2.10) as `GET /api/testbox/admin` lists it. No address, path,
+ *  secret or free text: `code` is a closed word, `fingerprint` the host key's SHA-256 form, `fleetIdentity` the node id. */
+export interface TestboxEventRow {
+  id: number;
+  at: number;
+  actor: string;
+  act: TestboxAct;
+  actId: string | null;
+  outcome: TestboxActOutcome;
+  code: string | null;
+  fingerprint: string | null;
+  fleetIdentity: string | null;
+}
+
+/** What an act may add to its answer beside the re-read status: the one thing the card needs from it. `line` is the
+ *  PUBLIC access line to add to the box (never the private key); `fingerprint` the host key the box presented; `checks`
+ *  the preflight rows (`fixLine` the corrected access line a `from-mismatch` offers); `act` a long act's id. */
+export interface TestboxAdminResult {
+  line?: string;
+  fingerprint?: string;
+  pass?: boolean;
+  checks?: { check: string; ok: boolean; code: TestboxAdminCode | null }[];
+  fixLine?: string;
+  act?: string;
+  cancelled?: boolean;
+}
+
+/** `GET /api/testbox/admin`: the status and the ten newest ledger rows. */
+export interface TestboxAdminAnswer { ok: true; status: TestboxAdminStatus; events: TestboxEventRow[] }
+/** `POST /api/testbox/admin/:sub`: the status RE-READ after the act, the ten newest rows, and what the act may say. */
+export interface TestboxAdminActAnswer extends TestboxAdminAnswer { result: TestboxAdminResult }
