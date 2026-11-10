@@ -74,6 +74,13 @@
 | W1-4b | Step 0's count **open** (a box read of the journal) | W1-4 merged | #2537 (`shared/api.ts`, `schema.ts`, `store.ts`, the skill and its test), #2509 (`routes.ts`, `schema.ts`, `store.ts`) |
 | W1-5 | OA-F4 after deploy (the operator's) | W1-4 and W1-4b merged; P1d **met** | #2537 (`SKILL.md`, `wave-lifecycle.md`, `coordinator-skill.test.ts`, `dispatchDecide.ts`), #2509 (`wave-lifecycle.md`, `coordinator-skill.test.ts`) |
 
+**Merge hold: the behaviour commits of W1-2, W1-3 and W1-4b landed on the coordinator-autonomy branch ahead of three open measurements (D-8126).** The commits for D-6093 (a live resume skips the concurrency check), D-6094 (a stale run is not counted) and D-6096 (a plain dispatch onto the claimant is refused `self-dispatch`, and the in-place bind) exist on the branch while OA-F2's figure, OA-F3's table and W1-4b's Step 0 count are still open, and no departure from 6098 has been entered. Nothing in the tree records those figures, so this branch **does not merge and does not deploy** until each is recorded in the PR body (or here) or the coordinator enters the departure. What each open item guards:
+- **OA-F2** (finished children asleep within 15 minutes, spec §7): D-6093 and D-6094 loosen the fleet's only memory bound, so without the figure the box can be pushed above its memory ceiling. The record is the measured share of finished children asleep within 15 minutes of close, with the date and the sample size.
+- **OA-F3** (are the stale runs' workers busy?): D-6094 stops counting an idle worker older than 2 hours. The record is the table of runs that the 2-hour rule would stop counting, each with its worker's busy or idle reading.
+- **W1-4b Step 0**: D-6096 refuses `self-dispatch` for any live run whose claimant is also the bound session (a reclaim heir). The record is the count of journal dispatches whose `sessionId` equals `claimedBy`; a non-zero count needs a departure from 6098 before the merge.
+
+All three are read-only box reads and operator acts (a worker never touches the box). The entry is the figure, not a statement that a gate was met.
+
 The consolidation, mail-truth, durability and fleet-operations tasks that rev 1 listed as "no PR yet" (P1e, P1f, P1g, DT2, FP9, FM6) have no open PR today; whether each is on `main` is not asserted here, and each task's Step 0 re-runs `gh pr list` and keeps its hunks line-disjoint. #2534 holds only `ccd/ccd`, which no remaining task edits.
 
 ### Amendments from the coordinator-autonomy plan (D-8126), and the operator's answers of 2026-11-09
