@@ -8796,7 +8796,7 @@ export function pickHoldingCopy(files) {
   return best === null ? null : best.fileId;
 }
 
-/** A main transcript's fork counts (§6.1), from what derive.mjs measured over its LIVE copies: each copy's row
+/** A transcript's fork counts, main or subagent (§6.1; W4 addendum P2: derive.mjs passes a subagent transcript's too), from what derive.mjs measured over its LIVE copies: each copy's row
  *  count, the rows in any of them, the rows in a copy that holds one of its leaves' boundaries, and how many copies
  *  hold one. `unspanned` is how many rows no holding copy has: they join no leaf (none while no copy holds a leaf,
  *  when every row is still live tail). `forked` is true when two or more live copies exist and none holds every row

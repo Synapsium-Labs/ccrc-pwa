@@ -2802,14 +2802,22 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
   /** The card step's whole day over one session, as the pass runs it: the card measure primed before derivation (so every leaf is above its
    *  cursor), the leaves derived, then the measure and the writer, with a registered id, a card/ and a steer/ directory for it. With
    *  `withAgent` the parent also has a subagent whose one boundary is newer (a higher entry_id) than the main thread's last. */
-  async function cardDay(prefix: string, withAgent: boolean): Promise<{
+  async function cardDay(prefix: string, withAgent: boolean, subagentStoredFirst = false): Promise<{
     agentAfterMain: boolean; leaves: number; measured: unknown; cards: unknown; files: Record<string, string>; cardCounters: unknown; cursor: unknown;
+    lastMainRowid: number; agentPkBelowMain: boolean;
   }> {
     const rig = await rigOf(prefix);
+    const mainRows = seqOf(2, 0x921).rows;
     plantAgentTree(rig, {
-      slug: SLUG_A, uuid: PARENT_A, agents: withAgent ? [{ id: 'a', rows: seqOf(1, 0x922).rows }] : [], parent: 'epoch', mainRows: seqOf(2, 0x921).rows,
+      slug: SLUG_A, uuid: PARENT_A, agents: withAgent ? [{ id: 'a', rows: seqOf(1, 0x922).rows }] : [], parent: 'epoch', mainRows,
+      ...(subagentStoredFirst ? { main: false } : {}),
     }, SINCE_A);
     await rig.tick(armed, { scan: true });
+    if (subagentStoredFirst) {
+      // the main transcript file appears only now, so its transcripts row is made after the subagent's (a higher transcript_pk)
+      fs.writeFileSync(path.join(rig.box.homes[0]!, 'projects', SLUG_A, `${PARENT_A}.jsonl`), mainRows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+      await rig.tick(armed, { scan: true });
+    }
     const P = historyPaths(rig.box.home);
     const id = 'lane-a-e1';
     for (const dir of ['card', 'steer']) fs.mkdirSync(path.join(P.root, dir, id), { recursive: true });
@@ -2838,6 +2846,8 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     }
     return {
       agentAfterMain: withAgent && agentFirst > mainLast, leaves: leavesA(rig).length, measured, cards, files,
+      lastMainRowid: one("SELECT max(n.rowid) AS v FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.agent_id = '' AND n.depth = 0"),
+      agentPkBelowMain: withAgent && one("SELECT min(transcript_pk) AS v FROM transcripts WHERE agent_id <> ''") < one("SELECT transcript_pk AS v FROM transcripts WHERE agent_id = ''"),
       cardCounters: rig.db.prepare("SELECT name, n FROM counters WHERE name LIKE 'card\\_%' ESCAPE '\\' OR name LIKE 'steer\\_%' ESCAPE '\\' ORDER BY name").all().map((r) => ({ ...r })),
       cursor: (rig.db.prepare("SELECT cursor FROM derivation_state WHERE step = 'card-measure'").get() as { cursor: string }).cursor,
     };
@@ -2865,10 +2875,16 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     `   The subagent traced one gist through the whole fixture run ${k} and wrote it down plainly for the parent thread to read later.`,
     '</summary>',
   ].join('\n');
+  /** AGENT_TEXT's shape with a tag in its sentence: two subagent summaries with two different native gists. */
+  const agentTextOf = (tag: string) => (k: number): string => [
+    '<summary>', '8. Current Work:',
+    `   The ${tag} subagent traced one gist through the whole fixture run ${k} and wrote it down plainly for the parent thread to read later.`,
+    '</summary>',
+  ].join('\n');
   /** The native gist of a subagent summary, as derivation stores it: a probe rig that derives one subagent leaf and reads it back. */
-  async function nativeGistOfAgent(seed: number): Promise<string> {
+  async function nativeGistOfAgent(seed: number, text: (k: number) => string = AGENT_TEXT): Promise<string> {
     const probe = await rigOf('ccrc-hist-d8169-probe-');
-    plantA(probe, seqOf(1, seed, { summaryText: AGENT_TEXT }).rows, { main: seqOf(0, seed + 1).rows });
+    plantA(probe, seqOf(1, seed, { summaryText: text }).rows, { main: seqOf(0, seed + 1).rows });
     await probe.tick(armed, { scan: true });
     await derive(probe);
     const row = probe.db.prepare("SELECT n.gist AS g FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.agent_id <> ''").get() as { g: string } | undefined;
@@ -2877,7 +2893,7 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     expect(row!.g.length).toBeGreaterThanOrEqual(GIST_MIN);
     return row!.g;
   }
-  const leafBlock = (id: string | undefined, gist: string): string => steeredBlock({ ...(id === undefined ? {} : { id }), gist, expand: 'carried, fixture', refs: null });
+  const leafBlock = (id: string | undefined, gist: string, refs: string | null = null): string => steeredBlock({ ...(id === undefined ? {} : { id }), gist, expand: 'carried, fixture', refs });
   const withBlocks = (blocks: string): ((k: number) => string) => (k) => [fixtureSummaryText(k), blocks].join('\n');
 
   it('D-8169 leaf arm: a main leaf whose steered gist equals a subagent leaf\'s native gist stays ok (no carried-copy from another chain)', async () => {
@@ -2887,7 +2903,7 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     await rig.tick(armed, { scan: true });
     await derive(rig);   // the subagent leaf exists BEFORE the main compaction is ingested, so the main leaf's check can see it
     expect(leavesA(rig).map((l) => [l.agent_id !== '', l.kind]), 'CONTROL: the subagent leaf is there first').toEqual([[true, 'native_leaf']]);
-    const main = seqOf(1, 0xd01, { summaryText: withBlocks(leafBlock(undefined, g)), startMs: DAY_BEFORE + 3_600_000 });
+    const main = seqOf(1, 0xd01, { summaryText: withBlocks(leafBlock(undefined, g, 'ccd/history/derive.mjs')), startMs: DAY_BEFORE + 3_600_000 });
     const mainPath = path.join(rig.box.homes[0]!, 'projects', SLUG_A, `${PARENT_A}.jsonl`);
     fs.appendFileSync(mainPath, main.rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
     rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES ('d8169-r1', 'lane-a-e1', ?, '', ?)").run(PARENT_A, DAY_BEFORE + 3_600_000 - 1000);
@@ -2895,8 +2911,7 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     await derive(rig);
     const mainLeaf = leavesA(rig).find((l) => l.agent_id === '' && l.boundary_uuid === main.boundaryUuids[0])!;
     expect(mainLeaf, 'the main leaf is derived').toBeDefined();
-    expect(mainLeaf, 'steered (ok or degraded), never invalid').toMatchObject({ kind: 'steered_leaf' });
-    expect(mainLeaf.status).not.toBe('invalid');
+    expect(mainLeaf, 'steered and ok: the quoted gist is no carried copy').toMatchObject({ kind: 'steered_leaf', status: 'ok' });
     expect(rig.db.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(mainLeaf.node_id), 'the steered gist is the one stored').toEqual({ gist: g });
     expect(counterOf(rig.db, 'carried_copies'), 'a subagent gist is no carried copy').toBe(0);
   }, 240_000);
@@ -2948,6 +2963,145 @@ describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum
     expect(leavesA(rig).map((l) => l.agent_id !== ''), 'the later pass derives the subagent leaf').toEqual([false, true]);
     expect(cursor(), 'and the cursor moves past it').toBeGreaterThanOrEqual(entryOf(main.boundaryUuids[0]!));
   }, 240_000);
+
+  it('SA9 with the main thread present but stored AFTER the subagent (a lower subagent transcript_pk): the measure and the card and steer files are what the main thread alone produces', async () => {
+    const alone = await cardDay('ccrc-hist-sa9f-alone-', false);
+    const both = await cardDay('ccrc-hist-sa9f-both-', true, true);
+    expect(both.agentPkBelowMain, 'CONTROL: the subagent transcript has the lower transcript_pk').toBe(true);
+    expect(both.agentAfterMain, 'CONTROL: and its boundary the lower entry_id').toBe(false);
+    expect([alone.leaves, both.leaves], 'CONTROL: the subagent adds one leaf').toEqual([2, 3]);
+    expect(Object.keys(alone.files).length, 'CONTROL: the main thread alone has its card and steer files written').toBeGreaterThan(0);
+    expect(both.measured, 'the measure counts only the main leaves').toEqual(alone.measured);
+    expect(both.cursor, 'its cursor stands at the main thread\'s last leaf (the subagent leaf has a lower rowid)').toBe(String(both.lastMainRowid));
+    expect(both.cards).toEqual(alone.cards);
+    expect(both.files, 'no card or steer file written, changed or removed for the subagent boundary').toEqual(alone.files);
+    expect(both.cardCounters).toEqual(alone.cardCounters);
+  }, 240_000);
+
+  it('F1 refresh: a subagent leaf refreshed through refreshLeaf (the reparse path) still takes no receipt, though one the parent session holds would match it', async () => {
+    const rig = await rigOf('ccrc-hist-f1-');
+    plantA(rig, seqOf(1, 0x1f02, { summaryText: quoted }).rows, { main: seqOf(1, 0x1f01).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const agentLeaf = leavesA(rig).find((l) => l.agent_id !== '')!;
+    expect(agentLeaf, 'CONTROL: the subagent leaf was derived native, with no receipt').toMatchObject({ kind: 'native_leaf', status: 'not-requested' });
+    // Receipts arrive for the parent session AFTER the leaf was derived: one naming this very leaf, and a generic one. A leaf that asked for
+    // a receipt would pick the exact one and read its quoted block as a steer.
+    const ins = rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES (?, 'lane-a-e1', ?, ?, ?)");
+    ins.run('f1-exact', PARENT_A, agentLeaf.node_id, DAY_BEFORE);
+    ins.run('f1-generic', PARENT_A, '', DAY_BEFORE);
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as { refreshLeaf(db: unknown, ictx: object, id: string): string };
+    const row = (): unknown => rig.db.prepare('SELECT kind, status, gist, topics, directive_flag, capped FROM nodes WHERE node_id = ?').get(agentLeaf.node_id);
+    const before = row();
+    expect(D.refreshLeaf(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, RIG_T0 + 3_600_000, null), agentLeaf.node_id), 'the refresh changes nothing').toBe('unchanged');
+    expect(row()).toEqual(before);
+    expect(row()).toMatchObject({ kind: 'native_leaf', status: 'not-requested' });
+  }, 120_000);
+
+  it('F2 lastBoundary: a subagent boundary above the session\'s last main boundary, once derived, moves the leaves cursor past it', async () => {
+    const rig = await rigOf('ccrc-hist-f2-');
+    plantA(rig, seqOf(1, 0x2f02).rows, { main: seqOf(1, 0x2f01).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const entryOf = (sql: string): number => Number((rig.db.prepare(sql).get() as { v: number }).v);
+    const mainLast = entryOf("SELECT max(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id = ''");
+    const agentB = entryOf("SELECT max(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> ''");
+    expect(agentB, 'CONTROL: the subagent boundary is above the last main one').toBeGreaterThan(mainLast);
+    expect(leavesA(rig).map((l) => l.agent_id !== ''), 'CONTROL: both boundaries have their leaf').toEqual([false, true]);
+    expect(Number(getStep(rig.db, 'leaves', NODE_PARSER_VERSION)?.cursor)).toBe(agentB);
+  }, 120_000);
+
+  it('the main chain is the same with and without subagent rows beside it: every main leaf and parent field, refs, children and sources', async () => {
+    const REFS = 'ccd/history/derive.mjs';
+    const textA = agentTextOf('alpha');
+    const textB = agentTextOf('beta');
+    const gA = await nativeGistOfAgent(0x1a12, textA);   // subagent a's native gist: main leaf 3's steered gist repeats it
+    const gB = await nativeGistOfAgent(0x1a13, textB);   // subagent b's: the parent's node block repeats it
+    const plain = seqOf(8, 0x1a01);
+    const mainPath = (rig: AgentRig): string => path.join(rig.box.homes[0]!, 'projects', SLUG_A, `${PARENT_A}.jsonl`);
+    const jsonl = (rows: object[]): string => rows.map((r) => `${JSON.stringify(r)}\n`).join('');
+    // the eight main leaf ids (the same in every rig that holds these main rows), learned on a probe
+    const probe = await rigOf('ccrc-hist-diff-ids-');
+    plantAgentTree(probe, { slug: SLUG_A, uuid: PARENT_A, agents: [], parent: 'epoch', mainRows: plain.rows }, SINCE_A);
+    await probe.tick(armed, { scan: true });
+    await derive(probe);
+    const ids = leavesA(probe).map((l) => l.node_id);
+    expect(ids, 'CONTROL: eight main leaves on the probe').toHaveLength(8);
+    const pid = parentId(ids);
+    const tsOf = (k: number): number => Date.parse(String(plain.rows.find((r) => r['uuid'] === plain.boundaryUuids[k])!['timestamp']));
+    const nodeBlock = steeredBlock({ kind: 'node', id: pid, gist: gB, expand: 'carried, fixture' }).replace(/^(<ccrc-node [^>\n]*)>/, '$1 depth="1">');
+    const text = (k: number): string => [fixtureSummaryText(k),
+      ...(k === 3 ? [leafBlock(ids[3], gA, REFS)] : []),
+      ...(k === 5 ? [leafBlock(undefined, 'A generic steered gist for the sixth leaf, asked for by a generic receipt in its window.', REFS)] : []),
+      ...(k === 7 ? [leafBlock(ids[7], 'The eighth leaf was steered with its own distinct gist, asked for by an exact receipt.', REFS), nodeBlock] : []),
+    ].join('\n');
+    const main = seqOf(8, 0x1a01, { summaryText: text });
+    const receipts = (rig: AgentRig): void => {
+      const ins = rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES (?, 'lane-a-e1', ?, ?, ?)");
+      ins.run('diff-3', PARENT_A, ids[3]!, tsOf(3) - 500);
+      ins.run('diff-5', PARENT_A, '', tsOf(5) - 500);
+      ins.run('diff-7', PARENT_A, ids[7]!, tsOf(7) - 500);
+    };
+    // rig 1: the main thread alone
+    const alone = await rigOf('ccrc-hist-diff-alone-');
+    plantAgentTree(alone, { slug: SLUG_A, uuid: PARENT_A, agents: [], parent: 'epoch', mainRows: main.rows }, SINCE_A);
+    receipts(alone);
+    await alone.tick(armed, { scan: true });
+    await derive(alone);
+    // rig 2: the same main thread, with subagent boundaries below its first boundary and above its last. Each quotes a block, and the
+    // generic receipt (before every subagent boundary here) is one a subagent leaf WOULD pick if it asked for one.
+    const withQuote = (t: (k: number) => string) => (k: number): string => [t(k), leafBlock(undefined, 'A quoted gist that no steer asked for on a subagent, long enough to be valid.', REFS)].join('\n');
+    const LATE = DAY_BEFORE + 36_000_000;
+    const both = await rigOf('ccrc-hist-diff-both-');
+    plantAgentTree(both, {
+      slug: SLUG_A, uuid: PARENT_A, parent: 'epoch', mainRows: [main.rows[0]!],
+      agents: [
+        { id: 'a', rows: seqOf(1, 0x1a12, { summaryText: withQuote(textA), startMs: LATE }).rows },
+        { id: 'b', rows: seqOf(1, 0x1a13, { summaryText: textB, startMs: LATE + 3_600_000 }).rows },
+      ],
+    }, SINCE_A);
+    receipts(both);
+    await both.tick(armed, { scan: true });                       // the subagents' boundaries are stored first (lower entry_ids)
+    fs.appendFileSync(mainPath(both), jsonl(main.rows.slice(1)));
+    await both.tick(armed, { scan: true });                       // then the main thread's
+    const second = seqOf(1, 0x1a14, { summaryText: withQuote(agentTextOf('gamma')), startMs: LATE + 7_200_000 });
+    fs.appendFileSync(path.join(both.box.homes[0]!, 'projects', SLUG_A, PARENT_A, 'subagents', 'agent-b.jsonl'), jsonl(second.rows));
+    await both.tick(armed, { scan: true });                       // and one more subagent boundary, above the main thread's last
+    await derive(both);
+    const entryOf = (rig: AgentRig, u: string): number => Number((rig.db.prepare('SELECT entry_id AS e FROM entries WHERE uuid = ?').get(u) as { e: number }).e);
+    const sub = (rig: AgentRig): number[] => (rig.db.prepare("SELECT b.entry_id AS e FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> '' ORDER BY b.entry_id").all() as Array<{ e: number }>).map((r) => Number(r.e));
+    const m0 = entryOf(both, main.boundaryUuids[0]!); const m7 = entryOf(both, main.boundaryUuids[7]!);
+    expect(sub(both).filter((e) => e < m0).length, 'CONTROL: subagent boundaries below the first main boundary').toBe(2);
+    expect(sub(both).filter((e) => e > m7).length, 'CONTROL: and one above the last').toBe(1);
+
+    const snap = (rig: AgentRig): unknown => {
+      const nodes = (rig.db.prepare(`SELECT n.node_id AS node_id, n.depth AS depth, n.kind AS kind, n.status AS status, n.gist AS gist, n.topics AS topics,
+          n.earliest_ms AS earliest_ms, n.latest_ms AS latest_ms, n.src_chars AS src_chars, n.desc_count AS desc_count, n.desc_chars AS desc_chars,
+          n.directive_flag AS directive_flag, n.capped AS capped, n.span_start_uuid AS span_start_uuid, n.parser_version AS parser_version, e.uuid AS boundary_uuid
+        FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk LEFT JOIN entries e ON e.entry_id = n.boundary_entry_id
+        WHERE t.agent_id = '' ORDER BY n.depth, n.earliest_ms, n.node_id`).all() as Array<Record<string, unknown>>).map((r) => ({ ...r }));
+      const mainIds = `(SELECT n.node_id FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.agent_id = '')`;
+      const all = (sql: string): unknown[] => rig.db.prepare(sql).all().map((r) => ({ ...r }));
+      return {
+        nodes,
+        refs: all(`SELECT node_id, kind, value, origin FROM node_refs WHERE node_id IN ${mainIds} ORDER BY node_id, kind, value, origin`),
+        children: all(`SELECT node_id, child_id, ord FROM node_children WHERE node_id IN ${mainIds} ORDER BY node_id, ord`),
+        sources: all(`SELECT ns.node_id AS node_id, e.uuid AS uuid, ns.ord AS ord FROM node_sources ns JOIN entries e ON e.entry_id = ns.entry_id WHERE ns.node_id IN ${mainIds} ORDER BY ns.node_id, ns.ord`),
+      };
+    };
+    const a = snap(alone) as { nodes: Array<{ node_id: string; kind: string; status: string; depth: number; gist: string }>; refs: unknown[] };
+    expect(a.nodes.length, 'CONTROL: eight main leaves and their parent').toBe(9);
+    const byId = (id: string) => a.nodes.find((n) => n.node_id === id)!;
+    expect(byId(ids[3]!), 'CONTROL: leaf 3 is steered ok with the exact receipt and refs').toMatchObject({ kind: 'steered_leaf', status: 'ok', gist: gA });
+    expect(byId(ids[5]!), 'CONTROL: leaf 5 takes the generic receipt').toMatchObject({ kind: 'steered_leaf' });
+    expect(byId(ids[7]!), 'CONTROL: leaf 7 is steered ok').toMatchObject({ kind: 'steered_leaf', status: 'ok' });
+    expect(byId(pid), 'CONTROL: the parent takes the node block').toMatchObject({ kind: 'condensed', status: 'ok', gist: gB });
+    expect(a.refs.length, 'CONTROL: refs are stored').toBeGreaterThan(0);
+    expect(snap(both), 'every main leaf and parent field, refs, children and sources equal the main-only run').toEqual(snap(alone));
+    const subLeaves = leavesA(both).filter((l) => l.agent_id !== '');
+    expect(subLeaves.map((l) => [l.kind, l.status]), 'and the three subagent leaves took no receipt').toEqual([['native_leaf', 'not-requested'], ['native_leaf', 'not-requested'], ['native_leaf', 'not-requested']]);
+  }, 360_000);
 
   it('SA27 forked copies of one subagent transcript, and a true conflict: every row stored, transcript_forked counted, each leaf from the copy holding its boundary, one entry with two entry_variants rows (one per body, nothing dropped)', async () => {
     const rig = await rigOf('ccrc-hist-sa27-');
