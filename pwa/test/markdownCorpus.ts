@@ -283,7 +283,7 @@ export const CHAT_MARKS_CASES: readonly CorpusCase[] = [
       '**What to do (either one):**',
       '',
       '1. Merge #651 once CI green.',
-      '2. Read docs/superpowers/specs/2026-11-06-chat-reading-design.md at @4c677d328.',
+      '2. Read docs/superpowers/specs/2026-11-06-chat-reading-design.md at @4c677d328, then org-b/project-b#12.',
       '',
       "**Why I can't do it.** Run 1527 is blocked, review 1544 passed and item 34 is now waiting.",
       '',

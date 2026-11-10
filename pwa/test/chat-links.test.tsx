@@ -16,6 +16,7 @@ import { withSyncHighlight } from './highlightTestStore';
 
 const CTX: ChatRefContext = {
   repo: 'owner-a/repo-a', project: 'project-a', branch: 'ws/one', knownRuns: new Set([12]), knownItems: new Set([3]),
+  runsElsewhere: false,
 };
 
 beforeEach(() => { navigate('/s/sess-a', { replace: true }); });
@@ -260,6 +261,64 @@ describe('a name inside a link draws that link alone (chat reading Task L, D-806
     const { container } = assistant('See `#651` and [`#651`](https://example.com/x).');
     expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual([
       'https://github.com/owner-a/repo-a/issues/651', 'https://example.com/x',
+    ]);
+  });
+});
+
+// Desktop polish Task C21 (D-8172; spec 2026-11-06 R15): a PR or commit name opens the repository the message means, or stays
+// text, in both of the chat's paths. Neutral names: home `owner-a/repo-a`, another `owner-b/repo-b`.
+describe('a PR or commit opens the repository the message means (Task C21, D-8172)', () => {
+  const CROSS: ChatRefContext = { ...CTX, runsElsewhere: true };
+  const screenshot = '#666 (the complete reference) \u2014 OPEN \u2014 `github.com/owner-b/repo-b/pull/666`';
+
+  it('the screenshot case: a bare #666 beside a code span naming another repository\'s #666 opens that repository', () => {
+    const { container } = assistant(screenshot, CROSS);
+    expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['#666', 'https://github.com/owner-b/repo-b/issues/666'],
+    ]);
+  });
+
+  it('a cross-repository coordinator\'s bare #512 with no evidence is text, its owner/repo#12 opens that repository', () => {
+    const { container } = assistant('#512 is green; owner-b/repo-b#12 merged.', CROSS);
+    expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['owner-b/repo-b#12', 'https://github.com/owner-b/repo-b/issues/12'],
+    ]);
+    expect(container.querySelector('.msg-assist')!.textContent).toBe('#512 is green; owner-b/repo-b#12 merged.');
+  });
+
+  it('a single-repository session\'s plain #123 opens the home repository, as before', () => {
+    const { container } = assistant('Merged #123.');
+    expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual(['https://github.com/owner-a/repo-a/issues/123']);
+  });
+
+  it('two qualified names for one number each open their own repository, and the bare #12 between them is text', () => {
+    const { container } = assistant('owner-b/repo-b#12 and owner-c/repo-c#12 both say #12.', CROSS);
+    expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['owner-b/repo-b#12', 'https://github.com/owner-b/repo-b/issues/12'],
+      ['owner-c/repo-c#12', 'https://github.com/owner-c/repo-c/issues/12'],
+    ]);
+  });
+
+  it('a whole code span holding owner/repo#n links there', () => {
+    const { container } = assistant('See `owner-b/repo-b#12`.', CROSS);
+    expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual(['https://github.com/owner-b/repo-b/issues/12']);
+  });
+
+  it('the worker path resolves the same way as the sync path', async () => {
+    const body = `${screenshot}; #512 waits; owner-b/repo-b#12 merged.`;
+    const sync = assistant(body, CROSS).container.querySelector('.msg-assist')!.innerHTML;
+    cleanup();
+    const long = `${body}\n\n${'a'.repeat(CHAT_SYNC_MAX_BYTES)}`;
+    const calls: (() => void)[] = [];
+    vi.spyOn(chatRunner, 'parse').mockImplementation((src) => new Promise<ParseOutcome>((resolve) => {
+      calls.push(() => resolve(parseMarkdown(src, 'chat')));
+    }));
+    const { container } = assistant(long, CROSS);
+    await act(async () => { calls[0]!(); });
+    const viaWorker = container.querySelector('.msg-assist')!;
+    expect(viaWorker.querySelector('p')!.outerHTML).toBe(sync);
+    expect([...viaWorker.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual([
+      'https://github.com/owner-b/repo-b/issues/666', 'https://github.com/owner-b/repo-b/issues/12',
     ]);
   });
 });

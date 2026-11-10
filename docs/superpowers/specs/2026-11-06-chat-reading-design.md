@@ -226,6 +226,7 @@ The operator approved the recommendations on 2026-11-06 in the words "Chat desig
 | R12 | Document links' ref | Default view; the session's branch | The session's branch, as `sessionDocsHref` does, so a spec written on that branch opens. The operator, 2026-11-06 | Agreed |
 | R13 | Names in inline code | Never; when the whole span is one name | When the whole span is one recognised name it links and keeps its code look; any other span never. The operator, 2026-11-06 | Agreed |
 | R14 | D-N, mail, session ids | Now; later | Later: each needs a new read or route (§4.1) | Agreed |
+| R15 | Which repository a PR or commit opens | Always the session's home repository; the repository the message means, or text | The repository the message means, or text, never a wrong one; first that applies wins: `owner/repo#n` opens that repository; a bare name opens the one repository its own message names for it (a pull, issue or commit address, or `owner/repo#n`) and is text where it names two; otherwise it opens the home repository only when the message names no other repository and the session claims no open run whose repository is not the home one, else text. Desktop polish Task C21 (D-8172), 2026-11-10, after the operator's report of a link to the wrong repository | Agreed |
 
 ## Where things stand
 

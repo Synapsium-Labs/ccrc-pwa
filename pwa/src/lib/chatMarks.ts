@@ -11,11 +11,14 @@
 export type MarkKind = 'pr' | 'run' | 'item' | 'doc' | 'commit';
 const MARK_KINDS: readonly MarkKind[] = ['pr', 'run', 'item', 'doc', 'commit'];
 
-/** One recognised name. `id` is the digits, the path or the SHA; `text` is the name as written (`run 1527`). */
+/** One recognised name. `id` is the digits, the path or the SHA; `text` is the name as written (`run 1527`). `repo`, the
+ *  repository as written, is on a `pr` mark only, and only when the name says it (`owner/repo#12`, desktop polish Task C21,
+ *  D-8172); a bare `#12` has none, and `chatRefs.ts` decides which repository, if any, it means. */
 export interface Mark {
   readonly kind: MarkKind;
   readonly id: string;
   readonly text: string;
+  readonly repo?: string;
 }
 
 export function isMarkKind(s: string): s is MarkKind {
@@ -50,10 +53,12 @@ export const ACTION_LEADS: readonly string[] = [
   'what to do', 'to do', 'your call', 'decision needed', 'what i need from you', 'action',
 ];
 
-/** The data attributes the plugin writes, and the only ones: a mark carries a kind and an id, never a URL. */
+/** The data attributes the plugin writes, and the only ones: a mark carries a kind, an id and, when its name says one, a
+ *  repository (Task C21), never a URL. */
 export const MARK_ATTR = {
   kind: 'data-mark-kind',
   id: 'data-mark-id',
+  repo: 'data-mark-repo',
   status: 'data-status',
   lead: 'data-lead',
   afterLead: 'data-after-lead',
@@ -122,6 +127,15 @@ const NOT_BEFORE_COMMIT = '#';
 // The grammar, one sticky pattern per kind, tried in this priority order at each position. A match is a name only
 // when the boundary checks in `nameAt` hold.
 const DOC = /docs\/[A-Za-z0-9._/-]*\.md/y;
+/** What may stand where a GitHub owner and a repository stand, as patterns: the characters of each segment, wider than the
+ *  console's one GitHub grammar (`parseGithubRepo`, `shared/projectAdd.ts`; this file imports nothing), which alone decides
+ *  whether a match IS a repository. A match it refuses opens nothing and stays text. Chat's qualified PR name and its message
+ *  evidence (`chatRepoEvidence.ts`, Task C21) read them from here. */
+export const GITHUB_OWNER_PATTERN = '[A-Za-z0-9-]+';
+export const GITHUB_REPO_PATTERN = '[A-Za-z0-9._-]+';
+/** A PR that names its repository (Task C21, D-8172): `owner/repo#12`. Tried only where a document path may start, so it is
+ *  never the tail of a path or a host (`x/a/b#1`, `github.com/a/b#1`). */
+const QUALIFIED_PR = new RegExp(`(${GITHUB_OWNER_PATTERN})/(${GITHUB_REPO_PATTERN})#(\\d{1,6})`, 'y');
 const PR = /#(\d{1,6})/y;
 const RUN = /(?:run|review)\s+(\d+)/iy;
 const ITEM = /item\s+(\d+)/iy;
@@ -146,6 +160,10 @@ function nameAt(text: string, at: number): { mark: Mark; end: number } | null {
     if (!wordAfter(text, end) && after !== '/' && after !== '-' && !runsOnAfterDot(text, end) && !m[0].split('/').includes('..')) {
       return { mark: { kind: 'doc', id: m[0], text: m[0] }, end };
     }
+  }
+  m = pathOk ? stickyAt(QUALIFIED_PR, text, at) : null;
+  if (m && !wordAfter(text, at + m[0].length)) {
+    return { mark: { kind: 'pr', id: m[3]!, text: m[0], repo: `${m[1]!}/${m[2]!}` }, end: at + m[0].length };
   }
   for (const [re, kind] of KEYWORDS) {
     m = stickyAt(re, text, at);

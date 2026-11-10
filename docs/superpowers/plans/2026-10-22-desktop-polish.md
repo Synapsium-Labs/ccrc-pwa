@@ -3255,6 +3255,16 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 **Acceptance.** Three browser shards run and pass on the PR or in the queue, each one's time recorded in the PR body and in `c19.md` with the before times. **Rollback.** A plain revert.
 
+### Task C21: a chat PR or commit opens the repository the message means, or stays text (D-8172) — now
+
+**Why.** The operator's report of 10 November: a coordinator in one project wrote "#666 ... `github.com/<org-b>/<repo-b>/pull/666`", and the chat linked #666 to the home repository's #666. `refHref` (Task L, D-8062) resolved every PR and commit against the session's home repository, but a coordinator's runs may land in other repositories, and a wrong link is worse than none.
+
+**The change.** The rule, first that applies wins: `owner/repo#n` is a PR name that carries its repository and opens it in any session; a bare `#n` or commit opens the one repository its own message (its whole text) names for it, and is text where it names two; otherwise it opens the home repository only when the message names no other repository and the session claims no open run whose project's repository is not the home one; otherwise it is text. The spec carries it as R15. The receipts are in `c21.md`.
+
+- **D-8172** - `chat-ref-repository-from-the-message`: Task C21, issued on 2026-11-10. A PR or commit name in chat opens the repository its message means, or stays text, instead of always the session's home repository; the message's evidence is read at render time (`chatRepoEvidence.ts`), and the session's runs elsewhere are one boolean on the chat's context (`claimsRunElsewhere`).
+
+**Acceptance.** The cases in `chat-repo-refs.test.ts`, `chat-links.test.tsx`, `message-bubble.test.tsx` and `chat-repo-session.test.tsx` pass, each guard red under its mutant; a single-repository session's plain `#123` links as before. **Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

@@ -24,7 +24,7 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { ChatRefsContext } from '../session/chatRefsContext';
-import type { ChatRefContext } from '../lib/chatRefs';
+import { claimsRunElsewhere, type ChatRefContext } from '../lib/chatRefs';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { heldAskLine } from '../session/askWords';
@@ -317,10 +317,13 @@ export function SessionScreen({
   // none of them changes no context and re-renders no name.
   const runIdsKey = useFleet((s) => s.runs.map((r) => r.id).join(','));
   const itemIdsKey = useFleet((s) => (s.waiting === null ? '' : [...s.waiting.items, ...s.waiting.cleared].map((i) => i.id).join(',')));
+  // Desktop polish Task C21 (D-8172): whether this session claims an open run whose repository is not its home one, read as
+  // one boolean, so a runs or projects frame that does not change the answer changes no context and re-renders no name.
+  const runsElsewhere = useFleet((s) => claimsRunElsewhere(id, repo, s.runs, s.projects));
   const branch = live?.branch ?? null;
   const chatRefs = useMemo((): ChatRefContext => ({
-    repo, project, branch, knownRuns: idSet(runIdsKey), knownItems: idSet(itemIdsKey),
-  }), [repo, project, branch, runIdsKey, itemIdsKey]);
+    repo, project, branch, knownRuns: idSet(runIdsKey), knownItems: idSet(itemIdsKey), runsElsewhere,
+  }), [repo, project, branch, runIdsKey, itemIdsKey, runsElsewhere]);
   const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
   const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
   // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —

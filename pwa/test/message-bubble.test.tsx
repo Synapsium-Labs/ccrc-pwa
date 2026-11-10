@@ -363,6 +363,7 @@ describe('a system message whose first line is blank', () => {
 describe('linkify links names in the operator\'s own text (chat reading Task L)', () => {
   const ctx: ChatRefContext = {
     repo: 'owner-a/repo-a', project: 'project-a', branch: 'ws/one', knownRuns: new Set(), knownItems: new Set(),
+    runsElsewhere: false,
   };
   const html = (text: string, c: ChatRefContext | null = null): string => renderToStaticMarkup(<>{linkify(text, c)}</>);
 
@@ -392,5 +393,18 @@ describe('linkify links names in the operator\'s own text (chat reading Task L)'
       </ChatRefsContext>,
     );
     expect(container.querySelector('.msg-user a')?.getAttribute('href')).toBe('https://github.com/owner-a/repo-a/issues/651');
+  });
+
+  // Desktop polish Task C21 (D-8172): the operator's own text resolves a name by the same rule as the assistant's.
+  it('linkify reads the whole message: a bare #66 beside another repository\'s address of #66 opens that repository', () => {
+    const out = html('is #66 in? https://github.com/owner-b/repo-b/pull/66', ctx);
+    expect(out).toContain('<a href="https://github.com/owner-b/repo-b/issues/66" target="_blank" rel="noopener noreferrer">#66</a>');
+  });
+
+  it('linkify leaves a bare #n as text in a message that names another repository, or in a cross-repository session', () => {
+    expect(html('is #65 in? https://github.com/owner-b/repo-b/pull/66', ctx)).not.toContain('>#65</a>');
+    expect(html('is #65 in?', { ...ctx, runsElsewhere: true })).toBe('is #65 in?');
+    expect(html('is owner-b/repo-b#65 in?', { ...ctx, runsElsewhere: true }))
+      .toBe('is <a href="https://github.com/owner-b/repo-b/issues/65" target="_blank" rel="noopener noreferrer">owner-b/repo-b#65</a> in?');
   });
 });

@@ -11,6 +11,7 @@ import { resetClock } from '../lib/clock';
 import { timeOf } from '../lib/format';
 import { markRuns } from '../lib/chatMarks';
 import { refHref, type ChatRefContext } from '../lib/chatRefs';
+import { messageRepos } from '../lib/chatRepoEvidence';
 import { ChatLink, ChatMarkdown, openExternal } from '../lib/markdown';
 import { ChatRefsContext } from './chatRefsContext';
 import './chat.css';
@@ -21,15 +22,17 @@ const URL_SPLIT = /(https?:\/\/[^\s]+)/g;
 const isUrl = (s: string): boolean => /^https?:\/\//.test(s);
 
 /** Make bare URLs in plain user text tappable (they open externally). With a context (chat reading Task L, D-8062; spec
- *  R9), the text between them is read by `markRuns`, and each name `refHref` resolves becomes a link through `ChatLink`; every
- *  other run, a status word included, stays text, because user text carries no labels. Without a context, today's output. */
+ *  R9), the text between them is read by `markRuns`, and each name `refHref` resolves, with what the whole `text` says about
+ *  repositories (Task C21), becomes a link through `ChatLink`; every other run, a status word included, stays text, because
+ *  user text carries no labels. Without a context, today's output. */
 export function linkify(text: string, ctx: ChatRefContext | null = null): ReactNode[] {
+  const said = ctx === null ? null : messageRepos(text);
   return text.split(URL_SPLIT).flatMap((part, i): ReactNode[] => {
     if (isUrl(part)) return [<ChatLink key={i} target={{ href: part, external: true }}>{part}</ChatLink>];
-    if (ctx === null) return [part];
+    if (ctx === null || said === null) return [part];
     return markRuns(part).map((run, j) => {
       if (run.kind !== 'mark') return run.text;
-      const target = refHref(run.mark, ctx);
+      const target = refHref(run.mark, ctx, said);
       return target === null ? run.mark.text : <ChatLink key={`${i}.${j}`} target={target}>{run.mark.text}</ChatLink>;
     });
   });

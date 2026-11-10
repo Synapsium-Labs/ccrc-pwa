@@ -6,20 +6,49 @@
 // L1, Session Conversation: pure, no React, no store, no DOM. It is a module of its own, not part of `chatMarks.ts`, because the
 // parse worker loads `chatMarks.ts` and `markdown-purity.test.ts` holds that closure free of the Docs and ledger modules this one
 // asks (`docHref`, `itemPath`, `runsRunHref`): another process and its purity boundary (the plan's departure from spec 4.2).
+//
+// Desktop polish Task C21 (D-8172; spec R15): a PR or commit name opens the repository the message means, or stays text, never
+// a wrong repository. A session lives in one project but may coordinate runs whose work lands in other repositories, so its
+// home repository is the answer only when nothing says otherwise. The rule, first that applies wins: a name that says its
+// repository (`owner/repo#12`) opens it; a bare name opens the one repository its own message names for it
+// (`chatRepoEvidence.ts`), and none where it names two; else it opens the home repository only when the message names no other
+// repository and the session claims no open run elsewhere (`claimsRunElsewhere`); else it stays text.
 import { parseGithubRepo } from '../../../shared/projectAdd';
+import { repoLabel, type ProjectRow, type RunSummary } from '../../../shared/api';
 import { docHref, sessionBranchRef } from '../docs/docsLinks';
+import { claimedRunsOf } from '../fleet/runWords';
 import { itemPath } from '../ledgers/ledgerWords';
 import type { Mark } from './chatMarks';
+import { repoKey, type MessageRepos } from './chatRepoEvidence';
 import { runsRunHref } from './routes';
 
 /** What a session's chat knows to resolve a name: its project's measured repository slug (`repoLabel`: null unless the repo is
- *  `named`), its project, the branch its worktree holds, and the runs and items the console holds now. */
+ *  `named`), its project, the branch its worktree holds, the runs and items the console holds now, and whether the session
+ *  claims an open run whose repository is not its home one (`claimsRunElsewhere`, Task C21). */
 export interface ChatRefContext {
   readonly repo: string | null;
   readonly project: string | null;
   readonly branch: string | null;
   readonly knownRuns: ReadonlySet<number>;
   readonly knownItems: ReadonlySet<number>;
+  readonly runsElsewhere: boolean;
+}
+
+/** Whether session `sessionId` claims an open run (`claimedRunsOf`, the coordinator-side reader: `claimedBy`, not closed by
+ *  `isRunClosed`) whose project's repository is not `homeRepo` (Task C21, rule 3b). A run whose project has no `named` repository, or that no project row names, counts as
+ *  elsewhere, and so does every claimed open run before the console has read its projects (`projects === null`): what cannot
+ *  be shown to be home is not home. */
+export function claimsRunElsewhere(
+  sessionId: string,
+  homeRepo: string | null,
+  runs: readonly Pick<RunSummary, 'claimedBy' | 'project' | 'state'>[],
+  projects: readonly ProjectRow[] | null,
+): boolean {
+  const home = homeRepo === null ? null : repoKey(homeRepo);
+  return claimedRunsOf(runs, sessionId).some((run) => {
+    const slug = repoLabel(projects?.find((p) => p.name === run.project)?.repo);
+    return home === null || slug === null || repoKey(slug) !== home;
+  });
 }
 
 /** Where a name opens: `external`, an outside page in a new tab with no opener; else a path inside the console. */
@@ -37,20 +66,48 @@ function heldOrLarge(id: string, known: ReadonlySet<number>): number | null {
   return String(n).length >= SMALL_ID_DIGITS || known.has(n) ? n : null;
 }
 
-/** The address `mark` opens in this session, or null: a PR or commit with no repository `parseGithubRepo` reads, a small run
- *  or item id the console does not hold, or a document path `docHref` refuses (no project, a path outside the four sections). A
- *  document opens at the session's branch when it is in the bare grammar, else the project's default view (R12). */
-export function refHref(mark: Mark, ctx: ChatRefContext): RefTarget | null {
+/** The GitHub page of `mark` in repository `slug`, or null when the console's one GitHub grammar refuses the slug
+ *  (`parseGithubRepo`, review 1586 A1): the address is built from the owner and name it read, never from the slug as written. */
+function githubPage(slug: string | null, mark: Mark): RefTarget | null {
+  const gh = slug === null ? null : parseGithubRepo(slug);
+  if (gh === null) return null;
+  const where = mark.kind === 'pr' ? 'issues' : 'commit';
+  return { href: `https://github.com/${gh.owner}/${gh.repo}/${where}/${mark.id}`, external: true };
+}
+
+/** The repositories `said` names for a bare PR or commit mark, by key: the pages of its number, or the commit addresses where
+ *  one SHA is a prefix of the other. */
+function saidFor(mark: Mark, said: MessageRepos): ReadonlyMap<string, string> {
+  if (mark.kind === 'pr') return said.numbers.get(Number(mark.id)) ?? new Map();
+  const sha = mark.id.toLowerCase();
+  const out = new Map<string, string>();
+  for (const c of said.commits) {
+    if ((c.sha.startsWith(sha) || sha.startsWith(c.sha)) && !out.has(c.key)) out.set(c.key, c.slug);
+  }
+  return out;
+}
+
+/** Task C21's rule for a PR or commit mark, first that applies wins: (1) the repository its name says; (2) the one repository
+ *  its message names for it, or text where it names two; (3) text, where the message names a repository other than the home
+ *  one or the session claims an open run elsewhere; (4) the home repository. */
+function repoPage(mark: Mark, ctx: ChatRefContext, said: MessageRepos): RefTarget | null {
+  if (mark.repo !== undefined) return githubPage(mark.repo, mark);
+  const named = saidFor(mark, said);
+  if (named.size > 0) return named.size === 1 ? githubPage([...named.values()][0]!, mark) : null;
+  const home = ctx.repo === null ? null : repoKey(ctx.repo);
+  if (home === null || ctx.runsElsewhere || [...said.named].some((k) => k !== home)) return null;
+  return githubPage(ctx.repo, mark);
+}
+
+/** The address `mark` opens in this session, its message having said `said` (`messageRepos` of the whole message), or null: a
+ *  PR or commit whose repository Task C21's rule cannot tell or `parseGithubRepo` refuses, a small run or item id the console
+ *  does not hold, or a document path `docHref` refuses (no project, a path outside the four sections). A document opens at the
+ *  session's branch when it is in the bare grammar, else the project's default view (R12). */
+export function refHref(mark: Mark, ctx: ChatRefContext, said: MessageRepos): RefTarget | null {
   switch (mark.kind) {
     case 'pr':
-    case 'commit': {
-      // The console's one GitHub repository grammar (`parseGithubRepo`, review 1586 A1): anything it refuses is no repository
-      // to link into, and the address is built from the owner and name it read, never from the slug as written.
-      const gh = ctx.repo === null ? null : parseGithubRepo(ctx.repo);
-      if (gh === null) return null;
-      const where = mark.kind === 'pr' ? 'issues' : 'commit';
-      return { href: `https://github.com/${gh.owner}/${gh.repo}/${where}/${mark.id}`, external: true };
-    }
+    case 'commit':
+      return repoPage(mark, ctx, said);
     case 'run': {
       const n = heldOrLarge(mark.id, ctx.knownRuns);
       return n === null ? null : { href: runsRunHref(n), external: false };

@@ -6,7 +6,8 @@
 //
 // What it writes:
 //   - a text node becomes `markRuns`' runs: a name is a text node drawn as a `span` carrying `MARK_ATTR.kind` and
-//     `MARK_ATTR.id`, a status word in S3's position a `span` carrying `MARK_ATTR.status`;
+//     `MARK_ATTR.id` (and `MARK_ATTR.repo` when the name says its repository, `owner/repo#12`: desktop polish Task C21),
+//     a status word in S3's position a `span` carrying `MARK_ATTR.status`;
 //   - S2: a `strong` whose whole content is plain text that is a status word carries `MARK_ATTR.status` (a bold holding
 //     inline code or a link is never marked: fix round 1, review 1574 F-B);
 //   - S1: a body cell whose first child is text starting with a status word has that word split off as a status span;
@@ -163,7 +164,9 @@ function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | unde
       pushText(r.text);
     } else if (r.kind === 'mark') {
       marked = true;
-      out.push(span(r.mark.text, { [MARK_ATTR.kind]: r.mark.kind, [MARK_ATTR.id]: r.mark.id }));
+      const attrs: Record<string, string> = { [MARK_ATTR.kind]: r.mark.kind, [MARK_ATTR.id]: r.mark.id };
+      if (r.mark.repo !== undefined) attrs[MARK_ATTR.repo] = r.mark.repo;
+      out.push(span(r.mark.text, attrs));
     } else {
       marked = true;
       out.push(span(r.text, { [MARK_ATTR.status]: r.tone }));

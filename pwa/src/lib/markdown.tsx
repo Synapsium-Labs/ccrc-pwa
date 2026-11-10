@@ -27,9 +27,10 @@ import { remarkAlerts } from './remarkAlerts';
 import { remarkChatMarks } from './remarkChatMarks';
 import { MARK_ATTR, isMarkKind, wholeMark, type Mark } from './chatMarks';
 import { refHref, type RefTarget } from './chatRefs';
+import { messageRepos } from './chatRepoEvidence';
 import { routedHref } from './routes';
 import { inAppClick } from '../fleet/settingsText';
-import { ChatRefsContext } from '../session/chatRefsContext';
+import { ChatRefsContext, MessageReposContext } from '../session/chatRefsContext';
 import { LANG_LABEL, codeLanguage } from './highlightNames';
 import { HighlighterContext, useChatHighlightStore } from './highlighterContext';
 import {
@@ -305,13 +306,14 @@ export function ChatLink({ target, children }: { target: RefTarget; children?: R
  *  code span is decided at render time (R13), where only this tells it it sits inside one. */
 const InsideLinkContext = createContext(false);
 
-/** A recognised name: a link where `refHref` resolves it with the session's context (`ChatRefsContext`), else its text only. No
- *  context (a chat with no session around it), no address, or a place inside a link keeps the name plain text, never a link
- *  that goes nowhere and never a link inside a link. */
+/** A recognised name: a link where `refHref` resolves it with the session's context (`ChatRefsContext`) and what its message
+ *  says (`MessageReposContext`, Task C21), else its text only. No context (a chat with no session around it), no message, no
+ *  address, or a place inside a link keeps the name plain text, never a link that goes nowhere and never a link inside a link. */
 export function ChatRef({ mark, children }: { mark: Mark; children?: ReactNode }): ReactNode {
   const ctx = useContext(ChatRefsContext);
+  const said = useContext(MessageReposContext);
   const insideLink = useContext(InsideLinkContext);
-  const target = ctx === null || insideLink ? null : refHref(mark, ctx);
+  const target = ctx === null || said === null || insideLink ? null : refHref(mark, ctx, said);
   return target === null ? <>{children}</> : <ChatLink target={target}>{children}</ChatLink>;
 }
 
@@ -399,7 +401,11 @@ export const CHAT_COMPONENTS: Components = {
       const kind = attrs[MARK_ATTR.kind];
       const id = attrs[MARK_ATTR.id];
       if (typeof kind !== 'string' || !isMarkKind(kind) || typeof id !== 'string') return <>{props.children}</>;
-      return <ChatRef mark={{ kind, id, text: nodeText(props.children) }}>{props.children}</ChatRef>;
+      // A name that says its repository (`owner/repo#12`, Task C21) carries it; any other carries none.
+      const repo = attrs[MARK_ATTR.repo];
+      const text = nodeText(props.children);
+      const mark: Mark = typeof repo === 'string' ? { kind, id, text, repo } : { kind, id, text };
+      return <ChatRef mark={mark}>{props.children}</ChatRef>;
     }
     return <span {...props} />;
   },
@@ -529,11 +535,15 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, parser = chatPars
   // Chat prewarms its highlighter on its first message's mount (section 4.10's singletons; refinement (p)).
   useEffect(() => { highlighters.chat.prewarm(); }, [highlighters.chat]);
   useEvictAfterCommit(store);
+  // What this message says about repositories, for its PR and commit names (Task C21): read once per text, over the whole text.
+  const said = useMemo(() => messageRepos(text), [text]);
   return (
     <PreHighlightContext value={store}>
-      {utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
-        ? <SyncChatMarkdown text={text} />
-        : <AsyncChatMarkdown text={text} parser={parser} />}
+      <MessageReposContext value={said}>
+        {utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
+          ? <SyncChatMarkdown text={text} />
+          : <AsyncChatMarkdown text={text} parser={parser} />}
+      </MessageReposContext>
     </PreHighlightContext>
   );
 });
