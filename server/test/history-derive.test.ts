@@ -2324,20 +2324,60 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_OK });
   });
 
-  it('a re-roll that cannot read an asked last child\'s summary takes the fresh rollup for a CAPPED steered ok gist (spec 8.3: never keep a gist a cut could have left a prefix in), and the status stays ok', async () => {
+  it('a re-roll that cannot read an asked last child\'s summary takes the fresh rollup for a steered ok gist of GIST_MAX units, capped (the flag) or not (the length, the second check) (spec 8.3: never keep a gist a cut may have left a prefix in), and the status stays ok', async () => {
     const D = await rerollMod();
     const id = parents[G.ok]!;
     const last = ids[7]!;
     const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
     const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
     const capped = `${NODE_OK} ${'and more words of the same steered gist '.repeat(GIST_MAX)}`.slice(0, GIST_MAX);
+    for (const flag of [1, 0]) {
+      const db = openWriter(historyPaths(box.home).dbFile);
+      try {
+        expect(capped.length, 'CONTROL: exactly GIST_MAX units').toBe(GIST_MAX);
+        db.prepare('UPDATE nodes SET gist = ?, capped = ? WHERE node_id = ?').run(capped, flag, id);
+        db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+        expect(rollupOf(id).gist, 'CONTROL: the rollup is not the planted gist').not.toBe(capped);
+        expect(D.rerollParents(db, plain, [last], true), `the belt rewrites the parent (capped ${flag})`).toBeGreaterThan(0);
+        expect({ status: parentRow(id).status, gist: parentRow(id).gist }, `capped ${flag}: the fresh rollup, and the status stands`).toEqual({ status: 'ok', gist: rollupOf(id).gist });
+      } finally {
+        db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+        D.rerollParents(db, plain, [last], false);
+        closeWriter(db);
+      }
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_OK });
+    }
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary takes the fresh rollup for a steered ok gist whose capped flag is set, though a late pair shrank it under GIST_MAX in place (spec 8.3; the flag is the test, the length a second check)', async () => {
+    const D = await rerollMod();
+    const DV = (await import('../../ccd/history/derive.mjs')) as unknown as { rederiveGistsFor(db: unknown, ictx: object, values: readonly string[], budget: object, slice: object): number };
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): object };
+    const id = parents[G.ok]!;
+    const last = ids[7]!;
+    const Y = crypto.randomBytes(32).toString('hex');
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+    const rowid = q<{ r: number }>(box, 'SELECT rowid AS r FROM nodes WHERE node_id = ?', id)[0]!.r;
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const learned = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([Y]).pairs) };
+    // A steered gist as blockFields cut it at GIST_MAX (capped), holding a value whole that was registered only later.
+    const cut = `${NODE_OK} Then ${Y} was used. ${'and more words of the same steered gist '.repeat(GIST_MAX)}`.slice(0, GIST_MAX);
     const db = openWriter(historyPaths(box.home).dbFile);
     try {
-      expect(capped.length, 'CONTROL: exactly GIST_MAX units').toBe(GIST_MAX);
-      db.prepare('UPDATE nodes SET gist = ?, capped = 1 WHERE node_id = ?').run(capped, id);
+      expect(cut.length, 'CONTROL: exactly GIST_MAX units').toBe(GIST_MAX);
+      db.prepare('UPDATE nodes SET gist = ?, capped = 1 WHERE node_id = ?').run(cut, id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rowid);
+      db.prepare("INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, '', '')").run(rowid, cut);
+      // The late-pair fast path finds the condensed parent by the value and redacts it in place: the cut gist shrinks.
+      expect(DV.rederiveGistsFor(db, learned, [Y], S.newBudget(), S.newBudget()), 'CONTROL: the late-pair path touched the parent').toBeGreaterThan(0);
+      const shrunk = parentRow(id);
+      expect(shrunk.gist, 'CONTROL: the value was redacted in place').toContain('[redacted]');
+      expect(shrunk.gist!.length, 'CONTROL: the in-place redaction left the cut gist under GIST_MAX').toBeLessThan(GIST_MAX);
+      expect(Number(shrunk.capped), 'CONTROL: the capped flag survived the shrink').toBe(1);
+      expect(shrunk.status, 'CONTROL: still a steered ok parent').toBe('ok');
       db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
-      expect(rollupOf(id).gist, 'CONTROL: the rollup is not the planted gist').not.toBe(capped);
-      expect(D.rerollParents(db, plain, [last], true), 'the belt rewrites the capped parent').toBeGreaterThan(0);
+      expect(rollupOf(id).gist, 'CONTROL: the rollup is not the shrunk gist').not.toBe(shrunk.gist);
+      expect(D.rerollParents(db, learned, [last], true), 'the belt rewrites the capped parent').toBeGreaterThan(0);
       expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the fresh rollup, and the status stands').toEqual({ status: 'ok', gist: rollupOf(id).gist });
     } finally {
       db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
@@ -2345,6 +2385,30 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
       closeWriter(db);
     }
     expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_OK });
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary keeps a stored degraded steered gist, uncapped and under GIST_MAX, and its status', async () => {
+    const D = await rerollMod();
+    const id = parents[G.wrong]!;
+    const last = ids[G.wrong * 8 + 7]!;
+    const before = parentRow(id);
+    expect({ status: before.status, gist: before.gist, capped: Number(before.capped) }, 'CONTROL: a steered degraded parent, uncapped').toEqual({ status: 'degraded', gist: NODE_WRONG, capped: 0 });
+    expect(NODE_WRONG.length, 'CONTROL: under GIST_MAX').toBeLessThan(GIST_MAX);
+    expect(rollupOf(id).gist, 'CONTROL: the rollup is another gist').not.toBe(NODE_WRONG);
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+      expect(D.rerollParents(db, plain, [last], true), 'the belt finds the parent as a re-roll would write it').toBe(0);
+      D.rerollParents(db, plain, [last], false);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the steered gist and degraded stand, not the rollup').toEqual({ status: 'degraded', gist: NODE_WRONG });
+    } finally {
+      db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+      D.rerollParents(db, plain, [last], false);
+      closeWriter(db);
+    }
+    expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'degraded', gist: NODE_WRONG });
   });
 
   it('a re-roll reads only nodes stored before the parent as carried copies: a later node with the parent\'s gist leaves it ok, an earlier one does not', async () => {

@@ -673,8 +673,9 @@ const UNREADABLE = Object.freeze({ read: 'unreadable' });
  *  - `{ read: 'not-asked' }`: the last child is no exact-receipted depth-0 leaf (a depth-2 parent's last child is a parent
  *    too). The rollup gist and status ok.
  *  - `{ read: 'unreadable' }`: asked, but the summary is gone or unreadable, or the parser threw (counted node_parse_crash; a
- *    busy store and any other SQLite fault are rethrown). A re-roll keeps what the parent stores; createParent has nothing
- *    stored, so it takes the rollup gist and status ok.
+ *    busy store and any other SQLite fault are rethrown). A re-roll keeps the stored status, and the stored gist only when
+ *    parentReroller's unreadable arm allows it (ok or degraded, capped 0, under GIST_MAX), else the fresh rollup;
+ *    createParent has nothing stored, so it takes the rollup gist and status ok.
  *  - `{ read: 'verdict', status, reason, gist, capped }`: gist is the block's (blockFields' cut at GIST_MAX) for ok and
  *    degraded, null for absent and invalid, which keep the rollup gist. Topics, refs, time and counts are never the block's. */
 function steeredNodeOf(db, ictx, budget, { id, sessionPk, lastChildId, beforeRowid }) {
@@ -690,7 +691,8 @@ function steeredNodeOf(db, ictx, budget, { id, sessionPk, lastChildId, beforeRow
   } catch (e) {
     // A parser bug must not wedge parent derivation (a parent that is never made holds its epoch's cursor): as deriveOne and
     // refreshLeaf treat a parser throw, a busy store and any other SQLite fault end the pass, and anything else is counted
-    // node_parse_crash and answers unreadable (a re-roll keeps what it stores; a new parent is the rollup, status ok).
+    // node_parse_crash and answers unreadable (a re-roll keeps the stored status, and the stored gist only as parentReroller's
+    // unreadable arm allows; a new parent is the rollup, status ok).
     if (ictx.isBusy?.(e) === true || e?.code === 'ERR_SQLITE_ERROR') throw e;
     withTx(db, 'NORMAL', () => { bump(db, 'node_parse_crash'); });
     return UNREADABLE;
@@ -967,27 +969,31 @@ function parentReroller(db, ictx, onlyIfChanged = false, runBudget = null) {
     } else if (read.read === 'unreadable') {
       // Asked, but the summary cannot be read now. The stored status always stands. The stored gist stands (re-redacted under the
       // current pairs) ONLY when that status is ok or degraded (a steered gist, the coordinator's ruling of 2026-11-10: a re-roll
-      // keeps the steered gist) AND the gist is provably uncut: its length, counted as capText counts (String(gist).length, in
-      // UTF-16 units), is under GIST_MAX. Spec 8.3 puts redaction before every cut, so a re-roll never keeps a gist that a cut could
-      // have left a prefix in: a value learned after the cut that straddles it would not match the redaction, and its prefix
-      // would stay in the gist and in nodes_fts. A stored gist of GIST_MAX or more takes the fresh rollup, with the stored status
-      // standing. An invalid or absent parent holds the rollup by construction, and a tombstoned summary makes "unreadable"
+      // keeps the steered gist), the stored `capped` flag is 0, AND its length, counted as capText counts (String(gist).length, in
+      // UTF-16 units), is under GIST_MAX. Spec 8.3 puts redaction before every cut, so a re-roll never keeps a gist that a cut
+      // may have left a prefix in: a value learned after the cut that straddles it would not match the redaction, and its prefix
+      // would stay in the gist and in nodes_fts. The flag is the test (review 1743): the late-pair fast path redacts a condensed
+      // node in place (rederiveGistsFor, redactNodeFields), which can shrink a gist cut at GIST_MAX below it, and the flag
+      // survives that shrink. The length is a second check behind the flag. `capped` also carries the rollup's topics and refs
+      // cuts, so a steered gist that was never itself cut can be dropped for the fresh rollup: the safe direction, on a rare
+      // path. Otherwise the parent takes the fresh rollup, with the stored status standing. An invalid or absent parent holds the rollup by construction, and a tombstoned summary makes "unreadable"
       // routine, so it takes the fresh rollup too (a kept rollup goes stale); that narrowing was the worker's own refinement in
-      // fix round 1, and the coordinator adopted it at review 1742. For a kept gist `capped` is the stored flag with the rollup's topics and refs cuts (the
-      // stored flag cannot tell its own gist cut from them, so it stays set once set); a fresh rollup carries its own.
+      // fix round 1, and the coordinator adopted it at review 1742. A kept gist was stored uncapped, so its `capped` is the
+      // rollup's topics and refs cuts; a fresh rollup carries its own.
       // Residual 1, disclosed and not built: a parent created while its last child's summary was already unreadable is stored ok
       // with the rollup gist, and status ok cannot tell that parent from a steered gist; nor can it tell one whose capped steered
       // gist an earlier unreadable re-roll replaced with the fresh rollup (the status ok or degraded stands over a rollup gist).
-      // A later unreadable re-roll therefore keeps such a rollup while it is under GIST_MAX, and the rollup can go stale.
+      // A later unreadable re-roll therefore keeps such a rollup while it is uncapped and under GIST_MAX, and it can go stale.
       // Residual 2, disclosed and not built: a gist that blockFields did cut can still store fewer than GIST_MAX units, because
       // capText's cutBefore stops one short of a surrogate pair at the cut and blockFields' trimEnd drops whitespace at the cut.
-      // A value that straddles such a cut would have to contain that pair or that whitespace.
-      const steered = (self.row.status === 'ok' || self.row.status === 'degraded')
+      // A value that straddles such a cut would have to contain that pair or that whitespace; such a cut sets `capped` all the
+      // same, so the flag refuses it before the length is read.
+      const steered = (self.row.status === 'ok' || self.row.status === 'degraded') && Number(self.row.capped) === 0
         && typeof self.row.gist === 'string' && self.row.gist.length < GIST_MAX;
       r = steered
         ? {
           ...read, status: self.row.status, gist: redactField(self.row.gist, ictx.pairIdx),
-          capped: Number(self.row.capped) === 1 || read.restCapped,
+          capped: read.restCapped,
         }
         : { ...read, status: self.row.status };
     } else {
