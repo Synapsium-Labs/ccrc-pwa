@@ -86,7 +86,27 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-10
+## Current checkpoint — 2026-11-10, 08:10Z
+
+This supersedes the earlier 2026-11-10 checkpoint below where they differ; the current route and the definition of
+done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, W3-4 and W4-1".
+
+- **W3-4 landed.** #2540 merged through the merge queue at 07:59Z as `6dd3c93b3`, at head `07f064f41`, after four
+  reviews: 1741 read the whole branch, and 1742, 1743 and 1744 read fix rounds 1 to 3. Run 1738 closed done after its
+  MERGED mail. W3-4 wrote no D-number, and numbers 8136 to 8138 were never used.
+- **The cohort's release exists.** Prerelease v0.0.1065 (commit `6dd3c93b3`) carries W3-1 and W3-4 and no other W3 PR
+  (O11, O15). The coordinator re-ran act 1 read-only the same day on the installed build, 2.1.322. The anchor is
+  present, and none of 3,873 stored boundaries is precomputed, so O3 stands. The cohort (W3 plan Task 1E, acts 2 to 6)
+  is the operator's: item 135. O4, each backend's compliance bar, waits for its figures.
+- **The W4 plan is accepted and merged** (#2503 at 02:32Z as `0d61d1075`; run 1714 done; CP-71 met). The coordinator's
+  acceptance note lists six build-time corrections.
+- **W4-1 is dispatched** (run 1745, wave 29, 08:00Z): the subagent walk, ingest, the pause order, the marker gate, the
+  import form and the census. Its block is numbers 8151 to 8164: 8151 to 8161 for eleven approved slugs, and 8162
+  to 8164 held. The coordinator measured acts M1 and M2 first (below), so W4-1 carries them.
+- **W1** is as on 2026-11-09: W1-b is re-measured over the week ending 2026-11-15, and W1-l is the operator's drill
+  (item 86), whose result do-item 111 waits for.
+
+### Checkpoint of 2026-11-10, 02:45Z
 
 This supersedes the 2026-11-09 checkpoint below where they differ; the current route and the definition of done above
 stand. The evidence is under "Latest rulings and evidence — 2026-11-09 to 2026-11-10".
@@ -231,12 +251,83 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1236 closed as failed; branch kept |
 | 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **merged** 2026-11-01 19:04:40Z as `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`, exact reviewed head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 **done/released**, item 1/1, review rounds 1/3; review 1321 done/released; accepted MERGED mail preceded final close |
 | 26 | W3-1: the steering spike PR (template, steer file, print and receipt, refs repair, spike report; W3 plan Tasks 1A, 1F, 1B, 1C and 1D). It prints into a compaction only on a session the operator arms | fleet (hook) | #2510 | **merged** 2026-11-10 01:51Z as `683fd7a03` at head `f794eab9e` (run 1713, CP-61, done 01:54Z; reviews 1732 and 1736; one fix round); defines D-8127 to D-8135; numbers 8136 to 8138 held |
-| 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | #2503 (draft) | **in review** (run 1714): reviews 1726, 1728, 1731, 1735 and 1737 with fix rounds 1 to 5; review cap lifted by the operator (item 133); review 6 reads fix round 5's delta and is the last plan round; no W4 build before it is accepted |
-| 28 | W3-4: the parent add-on and steered node gists (W3 plan Task 4), the other half of the cohort's release (O15) | fleet | — | **dispatched** 2026-11-10 01:54Z (run 1738); numbers 8136 to 8138 held for its licensed departures |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 building (wave 28); focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan in review (wave 27, #2503); accepted plan/review and B4 live still required |
+| 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | #2503 | **merged** 2026-11-10 02:32Z as `0d61d1075` at head `9cd2b8d6a` (run 1714, done; reviews 1726, 1728, 1731, 1735, 1737 and 1739; fix rounds 1 to 5; review cap lifted by the operator, item 133); accepted with the coordinator's note of six build-time corrections (CP-71 met) |
+| 28 | W3-4: the parent add-on and steered node gists (W3 plan Task 4), the other half of the cohort's release (O15) | fleet | #2540 | **merged** 2026-11-10 07:59Z as `6dd3c93b3` at head `07f064f41` (run 1738, done; reviews 1741, 1742, 1743 and 1744; three fix rounds; review cap lifted by the operator, item 134); no D-number written; released with W3-1 in v0.0.1065 |
+| 29 | W4-1: the subagent walk, ingest, the pause order, the marker gate, the import form and the census (W4 plan group W4-1) | fleet | — | **dispatched** 2026-11-10 08:00Z (run 1745); block of numbers 8151 to 8164 (8151 to 8161 for its approved slugs, 8162 to 8164 held) |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both; the cohort is the operator's (item 135); focused steering spike and per-backend operator arming retained |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 building (wave 29); B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-10, W3-4 and W4-1
+
+- **The W4 plan landed (CP-71).** Review 1739 read fix round 5's delta. The coordinator accepted the plan with a note,
+  quoted in the plan, that lists six build-time corrections for W4-1 to carry. #2503 merged through the merge queue at
+  02:32Z as `0d61d1075`, at head `9cd2b8d6a`. Run 1714 closed done after its MERGED mail.
+- **Acts M1 and M2 (W4 addendum), measured by the coordinator, read-only, before W4-1's dispatch.**
+  - M2: all 14,163 subagent metas across the box's 19 Claude Code homes carry `agentType` (Claude Code 2.1.311 to
+    2.1.321). So W4-1 sets `AGENT_TYPE_KEY = 'agentType'`.
+  - M1: on 2.1.321, a workflow launch's tool result reads "Workflow launched in background. Task ID: …" with "Run ID:
+    wf_<12>", and it returns at once. Of 200 sampled stored runs, 100 could be measured: 98 were named and timed, all
+    within 15 minutes of the launch (p50 0 s), 2 were untimed, and none was unnamed. So P12 (b)'s window,
+    `[t0 - 15 min, t0 + 15 min]`, holds, and W4-1 builds it.
+- **Review 1741 of W3-4 (the whole branch at `6281aadee`).** It found no live-safety defect: the composition contract,
+  the trigger, the flag rule, scope and rings held, and nine mutants re-measured red. The coordinator ruled fix round 1:
+  - F1: only an EXACT receipt asks for a node block, which is what ruling 342 meant by "receipted" (spec §7.4 item 2;
+    the generic variant never carries the add-on). Derive and the spike report read that fact through one
+    `EXACT_RECEIPT_SQL` in `lib.mjs`, pinned by a parity case. The residual is disclosed, not built: an exact receipt
+    does not prove that the printed file carried the add-on.
+  - F2: Step 6's last-child and receipted conditions were pinned, and `p.depth = 1` was recorded as equivalent.
+  - F3: the node verdict is counted, as `node_status:<status>:<backend>` and `node_reason:<reason>:<backend>`, at
+    createParent only, because the leaf counters move at first derivation only. `addOn`'s compliance is the leaf
+    block's.
+  - F7: the node read's null was split into "nothing asked" and "asked but unreadable now" (the rule against an
+    overloaded null). F6: the carried copies are the nodes stored earlier (a lower rowid). F8: a type arm was added. F4:
+    bare `D2`, `D4` and `D5` labels were removed. F9: no rename.
+  - The grant: one line of `server/test/history-replay.test.ts` (`EXACT_RECEIPT_SQL` in the w6c import pin), claimed
+    by the worker.
+- **Review 1742 (fix round 1's delta, at `a300c0210`).** The coordinator ruled fix round 2:
+  - It adopted, as its own ruling, the worker's narrowing: on an unreadable re-roll, an invalid or absent parent takes
+    the fresh rollup, because a kept rollup goes stale.
+  - A stored gist stands on an unreadable re-roll only when it is under `GIST_MAX` (spec §8.3).
+  - Derive asks on `EXACT_RECEIPT_SQL` alone, and the report adds its own measurability rule; both comments say so.
+  - The budget wiring was pinned, and the tests restore the store in `finally` and pass in any order.
+- **Review 1743 (fix round 2's delta, at `2ac5b3be5`).** It found that the late-pair fast path can shrink a cut gist
+  below `GIST_MAX` in place. The coordinator ruled fix round 3: a stored ok or degraded gist stands on an unreadable
+  re-roll only when its stored `capped` is 0 AND it is under `GIST_MAX`. The flag survives the shrink. It also carries
+  the rollup's topics and refs cuts, so the arm can drop a steered gist that was never itself cut: the safe direction.
+  The degraded keep case was pinned. The review found the surrogate-stop and `trimEnd` residual empty for a registered
+  value.
+- **The review cap (item 134).** The server refused W3-4's fourth review at the cap of three, and the operator lifted it.
+- **Review 1744 (fix round 3's delta, at `07f064f41`).** Every ruling held, and it found no path that keeps a gist a
+  cut could have left a prefix in. One test gap was accepted as a carry (below).
+- **#2540 landed.** The verdict was route Q. The PR was enqueued at 07:39Z with `--match-head-commit` and merged at
+  07:59Z as `6dd3c93b3`. Run 1738 closed done after its MERGED mail.
+- **Act 1, re-run (W3 plan Task 1E), read-only, 2026-11-10.** The installed build is 2.1.322, and its bundle still
+  holds `reuse:"miss_hook"`. None of the 3,873 distinct stored compaction boundaries carries
+  `compactMetadata.precomputed`; the newest 8 were written by 2.1.321. The precompute path is not live, and O3
+  stands. Release v0.0.1065 carries W3-1 and W3-4 and no other W3 PR, so the cohort's prerequisites hold. The cohort
+  is the operator's (item 135).
+- **W4-1's dispatch.** Run 1745 was opened before run 1738's close, so the programme kept an open run, and it was
+  dispatched once 1738's claims were released. Block of numbers 8151 to 8164: 8151 to 8161 number, in order,
+  `history-w4-agents-on-marker-name`, `-active-agents-stored-only`, `-agent-scan-not-rotating`,
+  `-refusals-counted-by-census`, `-agents-pause-and-kill-rule`, `-census-unmapped-parents`,
+  `-agent-import-known-parents-only`, `-import-ignores-marker`, `-sa11-warn-by-parts`, `-ci-node-floor-claims` and
+  `-m1-m2-in-w4-1`; 8162 to 8164 are held. The brief carries the acceptance note's corrections and acts M1 and M2.
+- **Carries and observations from W3-4 (open; no wave owns them yet).**
+  1. The recovery path's parent re-roll, through `sweep.mjs`'s recovery batch, decodes summaries without the run's
+     byte budget (review 1742, F4). `derive.mjs`'s comments name the gap.
+  2. The spike report says nothing when an add-on span's depth-1 parent is not yet derived (review 1741, check 5). No
+     parents-behind word was added, so the operator's cohort reading should allow for it.
+  3. The unreadable arm's refuse half over a degraded parent has no case (review 1744, F1; the code is correct), and
+     neither do review 1743's advisories A1 to A4 and A6, all test-strength items in `history-derive.test.ts`. The next
+     wave that edits that file adds them.
+  4. One of review 1744's lens agents reported, from a read-only count that nobody re-measured, that most stored
+     depth-1 parents carry `capped` 1. If so, an unreadable re-roll usually drops a steered gist for the fresh rollup.
+     That is the safe direction, and the path itself is rare.
+  5. Under `--sequence.shuffle`, seeds 1 and 3 fail DM36 and RB5's parser-throw case in `history-derive.test.ts`,
+     outside the node-steering describe. The worker measured them failing the same way at fix round 1's tip,
+     `a300c0210`, so W3-4's last two rounds did not cause them. No review re-measured this.
 
 ### Latest rulings and evidence — 2026-11-09 to 2026-11-10
 
