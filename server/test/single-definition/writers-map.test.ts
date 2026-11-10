@@ -460,7 +460,7 @@ describe(CAPS_PIN, () => {
   });
 });
 
-// THE COORDINATOR CALL RECORD (D-8126, migration 49). Its table has one writer per column, all in `coordCallsStore.ts`:
+// THE COORDINATOR CALL RECORD (D-8126, migration 55). Its table has one writer per column, all in `coordCallsStore.ts`:
 // `insertCall` the only INSERT, `markCallSeen` the only writer of `seenAt`, `overturnCallTx` of `overturnedAt` and
 // `overturnNote`, `markBlockWoken` of `wokenAt`. MAY ONLY SHRINK: a statement from another function, or a SET naming one
 // of these columns elsewhere, reds here. KNOWN WIDTH: a statement split from its verb across string pieces is not seen.

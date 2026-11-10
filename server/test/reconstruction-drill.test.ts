@@ -386,7 +386,7 @@ describe('the reconstruction drill', () => {
   });
 
   it('coordinator_calls is a table no artifact mirrors: reconstruct() rebuilds none of it (D-8126)', () => {
-    // A call is the coordinator's own record of a decision taken in the operator's name (migration 49). Neither the
+    // A call is the coordinator's own record of a decision taken in the operator's name (migration 55). Neither the
     // ledger, the registry nor `.prhistory` carries one, so a DB loss forgets every call, the Seen marks and the
     // overturns with them, and a live block with it: the PERMISSIVE direction for a block (its thread resumes), the
     // honest one for the rest. It is a named loss here, not a gap to close.
