@@ -19,7 +19,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const status = (over: Partial<TestboxAdminStatus> = {}): TestboxAdminStatus => ({
   v: 1, connected: false, addressSet: false, login: null, fingerprint: null, hostKey: 'none', boxFileSha256: null, act: null,
-  boxSettings: null, boxSettingsAt: null, parity: null, ...over,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null, ...over,
 });
 const act = (over: Partial<NonNullable<TestboxAdminStatus['act']>> = {}): NonNullable<TestboxAdminStatus['act']> => ({
   id: 'a'.repeat(32), sub: 'connect', phase: 'copy', phases: [{ name: 'verify', ms: 800 }], outcome: 'running', code: null,

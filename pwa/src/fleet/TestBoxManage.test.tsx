@@ -26,7 +26,7 @@ const SHA = 'f'.repeat(64);
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const baseStatus = (over: Partial<TestboxAdminStatus> = {}): TestboxAdminStatus => ({
   v: 1, connected: false, addressSet: false, login: null, fingerprint: null, hostKey: 'none', boxFileSha256: null, act: null,
-  boxSettings: null, boxSettingsAt: null, parity: null, ...over,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null, ...over,
 });
 const BOX_ROWS: BoxSettingRow[] = [
   { key: 'CCRC_TESTBOX_RUNS', state: 'ok', value: '2', from: 'default' },
@@ -275,6 +275,23 @@ describe('Settings', () => {
     expect(q('[data-testbox="cancel-wait"]')).toBeNull();
   });
 
+  it('Cancel says too late when the act is past its wait, never Cancelled', async () => {
+    const f = fakeFleet();
+    f.box.on['settings-box'] = () => {
+      f.box.status = connected({ act: actState({ sub: 'settings-box', phase: 'wait', phases: [] }) });
+      return { result: { act: 'a'.repeat(32) } };
+    };
+    f.box.on.cancel = () => ({ result: { cancelled: false } });
+    await mount({ runsInProgress: 2 });
+    await openSettings();
+    typeIn(setting('CCRC_TESTBOX_WORKERS'), '3');
+    await press(q('[data-testbox="settings-save"]'));
+    await press(q('[data-testbox="cancel-wait"]'));
+    expect(f.posts('cancel')).toHaveLength(1);
+    expect(manage().textContent).not.toContain(T.cancelled);
+    expect(manage().textContent).toContain(T.cancelTooLate);
+  });
+
   it('a runs-in-progress refusal from the verb offers Apply when idle too', async () => {
     const f = fakeFleet();
     f.box.on['settings-box'] = () => ({ refuse: refused(409, 'testbox-admin-refused', { code: 'runs-in-progress' }) });
@@ -302,14 +319,18 @@ describe('Repair and Apply release to box', () => {
     expect(q('[data-testbox="disconnect"]')).toBeDisabled();
   });
 
-  it('Apply release to box shows only when the release differs', async () => {
-    fakeFleet();
-    const view = await mount({ releaseDiffers: false });
-    expect(q('[data-testbox="apply-release"]')).toBeNull();
-    view.unmount();
-    const f = fakeFleet();
-    f.box.on['apply-release'] = () => { f.box.status = connected({ act: actState({ sub: 'apply-release' }) }); };
-    await mount({ releaseDiffers: true });
+  it('Apply release to box shows only when the running release differs from the installer marker', async () => {
+    // Equal: nothing to apply. Unread marker or unmeasured box: nothing is said.
+    for (const [rel, tag] of [['v1.2.0', 'v1.2.0'], ['v1.2.0', null], [null, 'v1.1.0']] as const) {
+      fakeFleet(connected({ installedTag: tag }));
+      const view = await mount({ boxRelease: rel });
+      expect(q('[data-testbox="apply-release"]'), `${rel} ${tag}`).toBeNull();
+      view.unmount();
+    }
+    // Tool sync moved the running tree on and left the marker behind: the control shows, with its reason.
+    const f = fakeFleet(connected({ installedTag: 'v1.1.0' }));
+    f.box.on['apply-release'] = () => { f.box.status = connected({ installedTag: 'v1.1.0', act: actState({ sub: 'apply-release' }) }); };
+    await mount({ boxRelease: 'v1.2.0' });
     expect(q('[data-testbox="apply-release-why"]')).not.toBeNull();
     await press(q('[data-testbox="apply-release"]'));
     expect(f.posts('apply-release')).toHaveLength(1);
@@ -428,17 +449,23 @@ describe('the section: Replace returns to step 1 and shows the new fingerprint a
     expect(card().querySelector('[data-testbox="fingerprint"]')!.textContent).toBe(NEW_FP);
   });
 
-  it('Apply release to box shows only when the box\'s release differs from the fleet host\'s', async () => {
+  it('Apply release to box follows the running release against the installer marker, not the fleet host\'s release', async () => {
     atBand('laptop');
-    fakeFleet();
-    const view = render(<TestBoxSection poll={poll(block({ admin: admin() }))} />);
+    // The marker names the running release: tool sync has not moved the tree, so nothing is owed, whatever the fleet host runs.
+    fakeFleet(connected({ installedTag: 'v0.0.899' }));
+    const view = render(<TestBoxSection poll={poll(block({ box: { ...STATUS, release: 'v0.0.899' }, admin: admin() }))} />);
     await settle();
     expect(card().querySelector('[data-testbox="apply-release"]')).toBeNull();
-    view.rerender(<TestBoxSection poll={poll(block({ box: { ...STATUS, release: 'v0.0.899' }, admin: admin() }))} />);
+    view.unmount();
+    // Tool sync moved the tree on and left the marker behind (the fleet host and the box agree): the control is there.
+    fakeFleet(connected({ installedTag: 'v0.0.800' }));
+    const synced = render(<TestBoxSection poll={poll(block({ host: { ...block().host!, release: STATUS.release }, box: STATUS, admin: admin() }))} />);
     await settle();
     expect(card().querySelector('[data-testbox="apply-release"]')).not.toBeNull();
-    // An unmeasured fleet release says nothing about a difference.
-    view.rerender(<TestBoxSection poll={poll(block({ host: null, admin: admin() }))} />);
+    synced.unmount();
+    // The marker unread says nothing about a difference.
+    fakeFleet(connected({ installedTag: null }));
+    render(<TestBoxSection poll={poll(block({ box: STATUS, admin: admin() }))} />);
     await settle();
     expect(card().querySelector('[data-testbox="apply-release"]')).toBeNull();
   });
@@ -459,10 +486,10 @@ describe('the section: Replace returns to step 1 and shows the new fingerprint a
 
 describe('blocked: one line and the one control that resolves it', () => {
   it('a changed host key blocks every control but Confirm and Disconnect', async () => {
-    const f = fakeFleet(connected({ hostKey: 'changed' }));
+    const f = fakeFleet(connected({ hostKey: 'changed', installedTag: 'v1.1.0' }));
     f.box.on.probe = () => ({ result: { fingerprint: NEW_FP } });
     f.box.on.pin = () => { f.box.status = connected(); return { result: { fingerprint: NEW_FP } }; };
-    await mount({ releaseDiffers: true });
+    await mount({ boxRelease: 'v1.2.0' });
     expect(q('[data-blocked="host-key"]')!.textContent).toContain(T.blockedHostKey);
     for (const id of ['settings-toggle', 'repair', 'replace', 'apply-release']) expect(q(`[data-testbox="${id}"]`), id).toBeDisabled();
     expect(q('[data-testbox="disconnect"]')).toBeEnabled();

@@ -25,7 +25,7 @@ const SECOND_LINE = `from="192.0.2.9" ssh-ed25519 ${'C'.repeat(68)} ccrc-testbox
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const baseStatus = (over: Partial<TestboxAdminStatus> = {}): TestboxAdminStatus => ({
   v: 1, connected: false, addressSet: false, login: null, fingerprint: null, hostKey: 'none', boxFileSha256: null, act: null,
-  boxSettings: null, boxSettingsAt: null, parity: null, ...over,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null, ...over,
 });
 const connectAct = (over: Partial<NonNullable<TestboxAdminStatus['act']>> = {}): NonNullable<TestboxAdminStatus['act']> => ({
   id: 'a'.repeat(32), sub: 'connect', phase: 'copy', phases: [{ name: 'verify', ms: 800 }], outcome: 'running', code: null,

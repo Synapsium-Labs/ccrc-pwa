@@ -31,7 +31,7 @@ const bandOf = (width: number): 'phone' | 'laptop' | 'wide' => (width < 900 ? 'p
 
 const FP = `SHA256:${'A'.repeat(43)}`;
 const TOOLS = { node: '22.11.0', npm: '10.9.0', tmux: '3.4', git: '2.43.0', python3: '3.12.3', chrome: '131.0.6778.85' };
-/** A box whose release differs from the fleet host's, so every control, Apply release included, is drawn. */
+/** A box running a tree its installer marker (v0.0.800) does not name, so every control, Apply release included, is drawn. */
 const STATUS: StatusAnswer = {
   t: 'status', state: 'ok', reason: null, serviceVersion: '1.0.0', proto: TESTBOX_PROTO, release: 'v0.0.899', tools: TOOLS,
   sync: { state: 'idle', detail: null, at: '2026-10-30T10:00:00Z' }, runs: { inProgress: 0, limit: 4 }, queueDepth: 0, pristine: [], failedKeys: [],
@@ -50,7 +50,7 @@ const STATUS_ADMIN = {
     { key: 'CCRC_TESTBOX_RUN_MEMORY_MAX', state: 'ok', value: '4G', from: 'file' },
     { key: 'CCRC_TESTBOX_LISTEN', state: 'ok', from: 'file' },
   ],
-  boxSettingsAt: 1, parity: null,
+  boxSettingsAt: 1, installedTag: 'v0.0.800', parity: null,
 };
 const EVENTS = Array.from({ length: 12 }, (_, i) => ({
   id: 12 - i, at: Date.parse('2026-11-10T12:00:00Z') + (12 - i) * 60_000, actor: 'phone a1b2c3d4', act: 'repair', actId: null, outcome: 'ok', code: null,
@@ -216,7 +216,7 @@ describe.each(SKINS)('the connected test box card in %s', (skin) => {
             return m;
           };
 
-          // The connected card: five controls (Apply release is drawn: the box's release differs), the last act one line.
+          // The connected card: five controls (Apply release is drawn: the running release is not the marker's), the last act one line.
           const one = await read('connected');
           await shot('1');
           expect(one.buttons.map((b) => b.name), `${width}px: the controls`).toEqual([T.settings, T.repair, T.replace, T.disconnect, T.applyRelease]);

@@ -73,7 +73,7 @@ afterAll(async () => {
 
 const baseStatus = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   v: 1, connected: false, addressSet: false, login: null, fingerprint: null, hostKey: 'none', boxFileSha256: null, act: null,
-  boxSettings: null, boxSettingsAt: null, parity: null, ...over,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null, ...over,
 });
 
 interface Box { left: number; right: number; top: number; bottom: number; width: number; height: number }

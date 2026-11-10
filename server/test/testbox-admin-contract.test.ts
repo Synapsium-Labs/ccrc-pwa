@@ -418,6 +418,14 @@ const ACT = {
 const read = (v: unknown) => readTestboxAdminStatus(JSON.stringify(v));
 
 describe('the status reader', () => {
+  it('installedTag is a release tag or null, and a status without it (an older verb) reads as null', () => {
+    const ok = read({ ...STATUS, installedTag: 'v1.2.3' });
+    expect(ok.ok && ok.value.installedTag).toBe('v1.2.3');
+    const old = read(STATUS);
+    expect(old.ok && old.value.installedTag).toBeNull();
+    for (const bad of ['1.2.3', 'v1.2', '/etc/x', 'v01.2.3', 5]) expect(read({ ...STATUS, installedTag: bad }).ok, String(bad)).toBe(false);
+  });
+
   it('reads the document the verb prints', () => {
     const r = read({ ...STATUS, act: ACT, parity: PARITY, boxSettingsAt: 1_700_000_000_000, boxSettings: [
       { key: 'CCRC_TESTBOX_WORKERS', state: 'ok', value: '3', from: 'file' },

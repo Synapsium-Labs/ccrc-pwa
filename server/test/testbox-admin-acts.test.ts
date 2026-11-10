@@ -485,6 +485,21 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin read
     expect(text).toContain(`"boxFileSha256":"${SHA}"`);
   });
 
+  it('read records the tag the box\'s installer marker names, and the status reports it as installedTag (tool sync never rewrites it)', () => {
+    const marker = ['^(sudo -n -- )?cat -- /etc/ccrc-testbox/installed$', '0', `release\\tv1.1.0\nbox-sha256\t${SHA}\n`];
+    const h = fixture({}, [marker, ...WITH(['--testbox-knobs', '0', KNOBS])]);
+    connectedTo(h);
+    expect(json(verb(h, 'read', '--from', 'pwa'))).toEqual({ ok: true });
+    const s = status(h);
+    expect(s.ok && s.value.installedTag).toBe('v1.1.0');
+    // an unreadable marker clears it: the card then says nothing about the release
+    const g = fixture({}, [['^(sudo -n -- )?cat -- /etc/ccrc-testbox/installed$', '1', ''], ...WITH(['--testbox-knobs', '0', KNOBS])]);
+    connectedTo(g, ['box_marker_tag=v1.1.0']);
+    expect(json(verb(g, 'read', '--from', 'pwa'))).toEqual({ ok: true });
+    const t = status(g);
+    expect(t.ok && t.value.installedTag).toBeNull();
+  });
+
   it('read leaves the old snapshot when the box cannot be read, and answers ssh\'s code', () => {
     const h = fixture({}, WITH(['--testbox-knobs', '0', KNOBS]));
     connectedTo(h);

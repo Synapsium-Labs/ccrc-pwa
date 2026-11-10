@@ -92,7 +92,7 @@ describe('testboxBlock: the connect surface rides the block as one optional fiel
   const fp = `SHA256:${'A'.repeat(43)}`;
   const admin: TestboxAdminStatus = {
     v: 1, connected: true, addressSet: true, login: 'root', fingerprint: fp, hostKey: 'changed', boxFileSha256: 'a'.repeat(64), act: null,
-    boxSettings: null, boxSettingsAt: null, parity: null,
+    boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null,
   };
 
   it('a status adds admin and moves nothing else', () => {

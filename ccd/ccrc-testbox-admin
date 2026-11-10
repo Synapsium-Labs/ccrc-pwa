@@ -505,7 +505,7 @@ _tba_status_snapshot() {
   fi
 }
 _tba_status() {
-  local addr login lj fp fj hk sha sj connected=false addrset=false
+  local addr login lj fp fj hk sha sj mt mj connected=false addrset=false
   addr="$(_tba_state_get address 2>/dev/null)"
   [ -z "$addr" ] || addrset=true
   [ "$(_tba_state_get connected 2>/dev/null)" != 1 ] || connected=true
@@ -520,8 +520,10 @@ _tba_status() {
   sha="$(_tba_state_get box_sha256 2>/dev/null)"
   if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then sj="\"$sha\""; else sj=null; fi
   _tba_status_snapshot
-  printf '{"v":1,"connected":%s,"addressSet":%s,"login":%s,"fingerprint":%s,"hostKey":"%s","boxFileSha256":%s,"act":%s,"boxSettings":%s,"boxSettingsAt":%s,"parity":%s}\n' \
-    "$connected" "$addrset" "$lj" "$fj" "$hk" "$sj" "$(_tba_status_act)" "$TBA_SNAP_ROWS" "$TBA_SNAP_AT" "$(_tba_status_parity)"
+  mt="$(_tba_state_get box_marker_tag 2>/dev/null)"
+  if [[ "$mt" =~ ^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$ ]]; then mj="\"$mt\""; else mj=null; fi
+  printf '{"v":1,"connected":%s,"addressSet":%s,"login":%s,"fingerprint":%s,"hostKey":"%s","boxFileSha256":%s,"act":%s,"boxSettings":%s,"boxSettingsAt":%s,"installedTag":%s,"parity":%s}\n' \
+    "$connected" "$addrset" "$lj" "$fj" "$hk" "$sj" "$(_tba_status_act)" "$TBA_SNAP_ROWS" "$TBA_SNAP_AT" "$mj" "$(_tba_status_parity)"
 }
 
 # ── the access key, the host key and the preflight (TC4; spec §2.2 steps 2 and 3, §2.3, §2.4 step 1) ───────────────
@@ -1222,6 +1224,19 @@ _tba_cx_unstage() { if [ -n "${CX_STG-}" ]; then _tba_cx_out rm -rf -- "$CX_STG"
 # stderr folded in: its warnings say which setting the reader refused. Each of the 28 rows keeps the box-settings display
 # classes: a path, an address or a list shows as set, never as its text. The snapshot is a display and nothing reads it
 # as an authority. rc 0 with the file written, or rc 1 with TBA_CODE and the old snapshot left as it was.
+# The release tag the box's installed marker names, kept in the state file for the status (`installedTag`): the tag the
+# installer last ran with. Tool sync switches the installed tree and never rewrites the marker, so the card compares this
+# tag with the tree the box runs now to know when **Apply release to box** is needed. Best effort: an unreadable marker
+# clears the key, and the card then says nothing about it.
+_tba_record_marker() {
+  local line tag=""
+  _tba_cx_out cat -- "${TBA_BOX_ENV_PATH%/*}/installed"
+  if [ "$CX_RC" = 0 ]; then
+    while IFS=$'\t' read -r line tag; do [ "$line" = release ] && break; tag=""; done <<<"$CX_OUT"
+  fi
+  [[ "$tag" =~ ^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$ ]] || tag=""
+  _tba_state_write "box_marker_tag=$tag" || :
+}
 _tba_read_snapshot() {
   local line k def val from fileref=0 rows="" first=1 row why sha now tmp
   local -A seen=() froms=() refused=()
@@ -1264,6 +1279,7 @@ _tba_read_snapshot() {
     [ "$first" = 1 ] || rows="$rows,"
     rows="$rows$row"; first=0
   done
+  _tba_record_marker
   now="$(_tba_now_ms)"
   tmp="$TBA_SNAPSHOT.tmp.$$"
   _tmp_guard "$tmp"
@@ -1670,7 +1686,7 @@ _tba_run_disconnect() {
     rm -f -- "$f"
   done
   rm -f -- "$CCRC_TESTBOX_OVERLAY_FILE" "$TBA_PIN" "$TBA_PARITY" "$TBA_SNAPSHOT" "$TBA_CANCEL"
-  _tba_state_write connected= address= port= login= fingerprint= box_sha256= box_root= box_tools= hostkey_changed= parity_stale= \
+  _tba_state_write connected= address= port= login= fingerprint= box_sha256= box_marker_tag= box_root= box_tools= hostkey_changed= parity_stale= \
     || { echo "$PROG: cannot write the state file" >&2; return 1; }
   ( cmd_settings --write ) >/dev/null 2>&1 || :
   if [ "$skipped" = 1 ]; then _tba_log "disconnect: fleet side removed; box side skipped"; else _tba_log "disconnect: fleet side removed"; fi

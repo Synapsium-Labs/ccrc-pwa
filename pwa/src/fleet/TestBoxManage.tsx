@@ -66,8 +66,10 @@ export interface TestBoxManageProps {
   fleetRows?: readonly BoxSettingRow[] | null;
   /** A fleet-side save landed: the Settings page re-reads the nodes, so the rows above are the readers' answer. */
   onFleetChanged?: () => void;
-  /** The box's release differs from the fleet host's: **Apply release to box** is shown (C7). */
-  releaseDiffers?: boolean;
+  /** The release the box's service runs now (the card's block). **Apply release to box** is shown when it differs from the
+   *  tag the box's installer marker names, which the status reports as `installedTag` (C7): tool sync switches the tree and
+   *  never rewrites the marker. Null when the box is unmeasured. */
+  boxRelease?: string | null;
   /** Runs in progress on the box now, from the card's block: the box part of a save waits for none (C13). */
   runsInProgress?: number;
   /** Tests only: the step-up's seams. */
@@ -89,7 +91,7 @@ function refusalKeysOf(err: unknown): string[] {
 }
 
 export function TestBoxManage(p: TestBoxManageProps): ReactNode {
-  const { band, onChanged, onReplaced, fleetRows = null, onFleetChanged, releaseDiffers = false, runsInProgress = 0, stepUpDeps, runningPollMs } = p;
+  const { band, onChanged, onReplaced, fleetRows = null, onFleetChanged, boxRelease = null, runsInProgress = 0, stepUpDeps, runningPollMs } = p;
   const admin = useTestboxAdmin({ runningPollMs });
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
   const line = useResultLine();
@@ -113,6 +115,8 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
 
   // A re-read of the box's settings lands: what was typed is dropped, so the form shows what the box answered (spec §2.6).
   const settingsAt = status?.boxSettingsAt ?? null;
+  // The running tree against the installer's marker: unmeasured, on either side, says nothing.
+  const releaseDiffers = boxRelease !== null && boxRelease !== '' && status?.installedTag != null && status.installedTag !== boxRelease;
   useEffect(() => { setOfferIdle(false); }, [settingsAt]);
 
   /** One act: its answer, or null (a refusal said its sentence on the card's line; a stale step-up shows the step). A refusal
@@ -200,7 +204,9 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
 
   const cancelWait = async (): Promise<void> => {
     const r = await run('cancel', {});
-    if (r !== null) line.say(T.cancelled);
+    if (r === null) return;
+    // Measured from the reply: once the act is past its wait the change lands, and the card says so.
+    line.say(r.cancelled === true ? T.cancelled : T.cancelTooLate);
   };
 
   // -- the controls --------------------------------------------------------------------------------------------------

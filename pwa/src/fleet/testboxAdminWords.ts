@@ -355,6 +355,7 @@ export const TESTBOX_MANAGE_TEXT = {
   waiting: 'Waiting until the box is idle.',
   cancel: 'Cancel',
   cancelled: 'Cancelled.',
+  cancelTooLate: 'Too late to cancel. The change is already being applied to the box.',
   // the sheet
   replaceTitle: 'Replace the test box',
   disconnectTitle: 'Disconnect the test box',

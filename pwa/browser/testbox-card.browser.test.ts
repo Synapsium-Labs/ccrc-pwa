@@ -250,7 +250,7 @@ describe('Settings › Automation › Test box with no box set up, at phone, lap
 const WAITING_BLOCK = { ...BLOCK, admin: { connected: true, hostKey: 'pinned', act: null, parity: 'none' } };
 const CONNECTED_STATUS = {
   v: 1, connected: true, addressSet: true, login: 'root', fingerprint: `SHA256:${'A'.repeat(43)}`, hostKey: 'pinned', boxFileSha256: 'f'.repeat(64),
-  act: null, boxSettings: null, boxSettingsAt: null, parity: null,
+  act: null, boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null,
 };
 
 describe('Settings › Automation › Test box: the switch waits for parity, at phone, laptop and wide (D-8166)', () => {

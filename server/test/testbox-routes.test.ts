@@ -83,7 +83,7 @@ const PIN = `SHA256:${'A'.repeat(43)}`;
 const BOX_SHA = 'a'.repeat(64);
 const adminStatus = (mode: AdminMode): TestboxAdminStatus => ({
   v: 1, connected: true, addressSet: true, login: 'root', fingerprint: PIN, hostKey: 'pinned', boxFileSha256: BOX_SHA, act: null,
-  boxSettings: null, boxSettingsAt: null,
+  boxSettings: null, boxSettingsAt: null, installedTag: null,
   parity: mode === 'none' ? null : {
     v: 1, result: 'pass', prs: [], fixtures: [], release: 'v0.0.900', toolsKey: 'k', fingerprint: PIN,
     boxFileSha256: mode === 'mismatch' ? 'b'.repeat(64) : BOX_SHA, at: 1,

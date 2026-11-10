@@ -619,6 +619,9 @@ export interface TestboxAdminStatus {
   act: TestboxActState | null;
   boxSettings: BoxSettingRow[] | null;
   boxSettingsAt: number | null;
+  /** The release tag the box's installed marker names (the tag the installer last ran with); null when unread. Tool sync
+   *  switches the installed tree without rewriting it, so a running release other than this one needs **Apply release**. */
+  installedTag: string | null;
   parity: TestboxParityRecord | null;
 }
 
@@ -662,6 +665,7 @@ function pick<K extends string>(map: Record<K, true>, v: unknown, at: string): K
 }
 function orNull<T>(v: unknown, each: (x: unknown) => T): T | null { return v === null ? null : each(v); }
 
+const RELEASE_TAG_RE = /^v(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})$/;
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const ACT_ID_RE = /^[0-9a-f]{32}$/;
 const REPO_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -767,9 +771,11 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
   let raw: unknown;
   try { raw = JSON.parse(json); } catch { return { ok: false, reason: 'not JSON' }; }
   try {
-    const o = exact(raw, 'status', [
+    // `installedTag` was added after the first status shape: a status without it (an older verb) reads as null.
+    const o = exact(raw && typeof raw === 'object' && !Array.isArray(raw) && !Object.hasOwn(raw, 'installedTag')
+      ? { ...(raw as Obj), installedTag: null } : raw, 'status', [
       'v', 'connected', 'addressSet', 'login', 'fingerprint', 'hostKey', 'boxFileSha256', 'act', 'boxSettings',
-      'boxSettingsAt', 'parity',
+      'boxSettingsAt', 'installedTag', 'parity',
     ]);
     if (o['v'] !== 1) refuse('v', 'not 1');
     const login = o['login'];
@@ -794,6 +800,7 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
         act: orNull(o['act'], (x) => actState(x, 'act')),
         boxSettings: rows,
         boxSettingsAt: orNull(o['boxSettingsAt'], (x) => int(x, 'boxSettingsAt')),
+        installedTag: orNull(o['installedTag'], (x) => (typeof x === 'string' && RELEASE_TAG_RE.test(x) ? x : refuse('installedTag', 'not a release tag'))),
         parity: orNull(o['parity'], (x) => parityRecord(x, 'parity')),
       },
     };

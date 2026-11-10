@@ -182,8 +182,6 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
   const waitsForParity = admin !== undefined && admin.parity !== 'pass' && block.switch !== 'on';
   // A Replace's disconnect landed: the flow that mounts next opens at step 1 (TC16, spec §2.9).
   const [replacing, setReplacing] = useState(false);
-  // The box runs a release other than the fleet host's: **Apply release to box** is offered (C7). Unmeasured says nothing.
-  const releaseDiffers = box !== null && block.host?.release != null && block.host.release !== box.release;
 
   const flip = (on: boolean): void => {
     if (switching) return;
@@ -240,7 +238,7 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
       {flow && <TestBoxConnect band={band} onChanged={poll.reload} begin={replacing} />}
       {admin?.connected === true && (
         <TestBoxManage band={band} onChanged={poll.reload} onReplaced={() => setReplacing(true)} fleetRows={fleetRows} onFleetChanged={onFleetChanged}
-          releaseDiffers={releaseDiffers} runsInProgress={box?.runs.inProgress ?? 0} />
+          boxRelease={box?.release ?? null} runsInProgress={box?.runs.inProgress ?? 0} />
       )}
       <div className="testbox-head" data-testbox="head">
         <div className="testbox-switch" data-testbox="switch">

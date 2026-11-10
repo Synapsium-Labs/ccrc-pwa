@@ -37,7 +37,7 @@ const RECORD: TestboxParityRecord = {
 };
 const STATUS: TestboxAdminStatus = {
   v: 1, connected: true, addressSet: true, login: 'root', fingerprint: FP, hostKey: 'pinned', boxFileSha256: SHA, act: null,
-  boxSettings: null, boxSettingsAt: null, parity: RECORD,
+  boxSettings: null, boxSettingsAt: null, installedTag: null, parity: RECORD,
 };
 const act = (over: Partial<TestboxActState>): TestboxActState => ({
   id: 'c'.repeat(32), sub: 'connect', phase: null, phases: [], outcome: 'ok', code: null, startedAt: 1, endedAt: 2, ...over,
