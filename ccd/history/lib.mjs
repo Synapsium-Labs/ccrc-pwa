@@ -506,6 +506,23 @@ export function agentKey(id, runId) {
   return runId === null ? id : `${runId}/${id}`;
 }
 
+// ── the subagent meta (W4 addendum P17) ───────────────────
+/** The most a meta file is read for (P17): a regular, non-link file of at most 64 KiB. */
+export const META_MAX_BYTES = 65536;
+/** The key of a meta that names the agent's type (W4 act M2, D-8161): measured on every meta of the installed versions. Any other
+ *  key, `agent_type` included, is not the measured field, and the type stays NULL, never guessed. */
+export const AGENT_TYPE_KEY = 'agentType';
+/** What the store keeps of a key's metas (P17 (c), the store side): the first meta read whole that names a link is written once;
+ *  a later one that names a different link is counted `agent_meta_conflict` and writes nothing; one read incompletely counts
+ *  `agent_meta_unreadable:<cause>` and writes nothing. Nothing retries. A meta read whole that names no link says nothing about
+ *  the link. The census reads every holding's meta itself, so these counts are the store's only. */
+export function decideMetaLink({ stored, read }) {
+  if (!read.ok) return { write: null, count: `agent_meta_unreadable:${read.cause}` };
+  if (read.toolUseId === null) return { write: null, count: null };
+  if (stored === null) return { write: read.toolUseId, count: null };
+  return { write: null, count: stored === read.toolUseId ? null : 'agent_meta_conflict' };
+}
+
 // ── the subagent ingest gates (W4 addendum P6, P15 (b)) ───────────────────
 /** The `meta` key holding when the first W4 tick ran (P6): a subagent file is post-install when its mtime is at or after it. */
 export const INSTALL_META = 'agents_since_ms';

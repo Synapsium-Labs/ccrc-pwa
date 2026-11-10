@@ -7,13 +7,14 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  agentRig, agentRows, agentKeys, armed, CENSUS_WALK_FIGURES, counterNames, fixtureRows, LANE_ROSTER, mainRows, noMarker, offsetOf,
-  plantAgentTree, plantMarker, recordOpenFlagsAsync, runIdsOf, sidecarsOf, T0, type AgentRig, type TreeSpec,
+  agentRig, agentRows, agentKeys, agentTypeOf, aliasesOf, armed, CENSUS_WALK_FIGURES, counterNames, counterOf, fileRowsOf, fixtureRows,
+  holdAgainIn, LANE_ROSTER, linkOf, mainRows, membershipsPerEntry, noMarker, offsetOf, plantAgentTree, plantMarker, recordOpenFlagsAsync,
+  runIdsOf, sidecarsOf, T0, transcriptRows, variantsOf, type AgentRig, type TreeSpec,
 } from './historyAgentFixtures.js';
 import { makeHistoryBox, openStoreRO, plantSession, plantTranscript, runDriver, skipOnDarwin } from './historyHelpers.js';
-import { agentIdOk, capBytes, historyPaths } from '../../ccd/history/lib.mjs';
+import { agentIdOk, capBytes, historyPaths, META_MAX_BYTES } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
-import { behindStats, discoverTranscripts } from '../../ccd/history/sweep.mjs';
+import { behindStats, discoverTranscripts, readAgentMeta } from '../../ccd/history/sweep.mjs';
 
 skipOnDarwin();
 
@@ -326,6 +327,190 @@ describe('the install record under the pass itself (review 1731, F3)', () => {
       expect(agentRows(db)).toBe(1);
       expect(getMeta(db, 'agents_since_ms'), 'and the record did not move').toBe(String(since));
     } finally { db.close(); }
+  });
+});
+
+describe('the subagent meta, its lifecycle and agent_type (W4 addendum P17, SA6, SA16)', () => {
+  const metaPathOf = (agentPath: string): string => agentPath.replace(/\.jsonl$/, '.meta.json');
+  const one = async (prefix: string, meta: TreeSpec['agents'][number]['meta']): Promise<{ rig: AgentRig; aPath: string }> => {
+    const rig = await rigOf(prefix);
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x1000, { meta })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    expect(agentKeys(rig.db), 'CONTROL: the transcript was ingested whatever its meta').toEqual(['a']);
+    return { rig, aPath: paths['a']! };
+  };
+
+  it('a meta read whole stores its link once, and its type from the measured field', async () => {
+    const { rig } = await one('ccrc-hist-meta-ok-', { toolUseId: 'toolu_01', agentType: 'general-purpose' });
+    expect(linkOf(rig.db, 'a')).toBe('toolu_01');
+    expect(agentTypeOf(rig.db, 'a')).toBe('general-purpose');
+    expect(counterNames(rig.db).filter((n) => n.startsWith('agent_meta'))).toEqual([]);
+  });
+
+  it('SA16 agent_type: a meta without the measured field is NULL', async () => {
+    // the fixture meta carries an agent_type key, which is not the measured field (act M2 measured agentType, D-8161)
+    const { rig } = await one('ccrc-hist-sa16-null-', { toolUseId: 'toolu_02', agent_type: 'general-purpose' });
+    expect(agentTypeOf(rig.db, 'a')).toBeNull();
+    expect(linkOf(rig.db, 'a'), 'CONTROL: the meta was read whole').toBe('toolu_02');
+  });
+
+  it('SA16 agent_type: with the field act M2 names, its value', async () => {
+    const { rig } = await one('ccrc-hist-sa16-value-', { toolUseId: 'toolu_03', agentType: 'general-purpose' });
+    expect(agentTypeOf(rig.db, 'a')).toBe('general-purpose');
+  });
+
+  it.each([[7], [{ x: 1 }], [['a']], [true], [null]] as const)('agentType %j, not a string, is NULL and never coerced', async (value) => {
+    const { rig } = await one('ccrc-hist-sa16-type-', { toolUseId: 'toolu_04', agentType: value });
+    expect(agentTypeOf(rig.db, 'a')).toBeNull();
+    expect(linkOf(rig.db, 'a'), 'CONTROL: the meta was read whole').toBe('toolu_04');
+  });
+
+  it('a meta naming no link leaves the link NULL and counts nothing', async () => {
+    const { rig } = await one('ccrc-hist-meta-nolink-', { agentType: 'x' });
+    expect(linkOf(rig.db, 'a')).toBeNull();
+    expect(agentTypeOf(rig.db, 'a')).toBe('x');
+    expect(counterNames(rig.db).filter((n) => n.startsWith('agent_meta'))).toEqual([]);
+  });
+
+  it.each([
+    ['no meta file', 'absent', undefined],
+    ['absent', 'absent', 'absent'],
+    ['oversized', 'oversized', 'oversized'],
+    ['malformed', 'malformed', 'malformed'],
+  ] as const)('SA6: a meta that is %s leaves the link NULL, counts agent_meta_unreadable:<cause> once, and the transcript is ingested (%s)', async (_what, cause, meta) => {
+    const { rig } = await one(`ccrc-hist-meta-${cause}-`, meta);
+    expect(linkOf(rig.db, 'a')).toBeNull();
+    expect(counterOf(rig.db, `agent_meta_unreadable:${cause}`)).toBe(1);
+    expect(counterNames(rig.db).filter((n) => n.startsWith('agent_meta'))).toEqual([`agent_meta_unreadable:${cause}`]);
+  });
+
+  it('a meta that is a link, and one that is a directory, are not regular: agent_meta_unreadable:not-regular', async () => {
+    const rig = await rigOf('ccrc-hist-meta-link-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x1010, { meta: 'absent' }), agent('b', 0x1011, { meta: 'absent' })] }, SINCE);
+    const real = path.join(path.dirname(paths['a']!), 'real-meta');
+    fs.writeFileSync(real, JSON.stringify({ toolUseId: 'toolu_05' }));
+    fs.symlinkSync(real, metaPathOf(paths['a']!));
+    fs.mkdirSync(metaPathOf(paths['b']!));
+    await rig.tick(armed, { scan: true });
+    expect(agentKeys(rig.db)).toEqual(['a', 'b']);
+    expect(linkOf(rig.db, 'a'), 'a link is never followed').toBeNull();
+    expect(counterOf(rig.db, 'agent_meta_unreadable:not-regular')).toBe(2);
+  });
+
+  it('nothing retries: a meta that became whole later is not read by a later tick, and no tick recounts', async () => {
+    const { rig, aPath } = await one('ccrc-hist-meta-noretry-', 'oversized');
+    fs.writeFileSync(metaPathOf(aPath), JSON.stringify({ toolUseId: 'toolu_06' }));
+    fs.appendFileSync(aPath, fixtureRows(0x1020, 1).map((r) => `${JSON.stringify(r)}\n`).join(''));
+    await rig.tick(armed, { scan: true });
+    await rig.tick(armed, { scan: true });
+    expect(linkOf(rig.db, 'a')).toBeNull();
+    expect(counterOf(rig.db, 'agent_meta_unreadable:oversized')).toBe(1);
+  });
+
+  it('a workflow agent\'s meta is the one beside its file, in its run directory', async () => {
+    const rig = await rigOf('ccrc-hist-meta-run-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [], runs: [{ id: RUN, agents: [agent('x', 0x1030, { meta: { toolUseId: 'toolu_07' } })] }] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    expect(linkOf(rig.db, `${RUN}/x`)).toBe('toolu_07');
+  });
+
+  describe('several holdings of one key (P17 (c), SA24, SA25)', () => {
+    /** One agent `a` with three rows in the first home, ingested by a first armed scan tick. */
+    const held = async (prefix: string, meta: TreeSpec['agents'][number]['meta'] = { toolUseId: 'toolu_10' }): Promise<{ rig: AgentRig; first: string; fromHome: string; otherHome: string }> => {
+      const rig = await rigOf(prefix);
+      const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x1100, { n: 3, meta })] }, SINCE);
+      await rig.tick(armed, { scan: true });
+      expect(fileRowsOf(rig.db, 'a'), 'CONTROL: set-up stored one holding').toBe(1);
+      return { rig, first: paths['a']!, fromHome: rig.box.homes[0]!, otherHome: rig.box.homes[1]! };
+    };
+
+    it('SA24 hardlinked holdings: one file row, two aliases, one membership per message', async () => {
+      const { rig, first, fromHome, otherHome } = await held('ccrc-hist-sa24-');
+      const second = holdAgainIn(first, fromHome, otherHome, 'link');
+      expect(fs.statSync(second).ino, 'CONTROL: one inode').toBe(fs.statSync(first).ino);
+      await rig.tick(armed, { scan: true });
+      const { db } = rig;
+      expect(fileRowsOf(db, 'a')).toBe(1); expect(aliasesOf(db, 'a')).toBe(2);
+      expect(transcriptRows(db, 'a')).toBe(1); expect(membershipsPerEntry(db, 'a')).toEqual([1, 1, 1]);
+      expect(counterOf(db, 'agent_meta_conflict'), 'both holdings name the same link').toBe(0);
+    });
+
+    it('SA25 identical copies: two file rows, one transcript, a membership in each, no variant', async () => {
+      const { rig, first, fromHome, otherHome } = await held('ccrc-hist-sa25-');
+      const second = holdAgainIn(first, fromHome, otherHome, 'copy');
+      expect(fs.statSync(second).ino, 'CONTROL: two inodes').not.toBe(fs.statSync(first).ino);
+      await rig.tick(armed, { scan: true });
+      const { db } = rig;
+      expect(fileRowsOf(db, 'a')).toBe(2); expect(aliasesOf(db, 'a')).toBe(2);
+      expect(transcriptRows(db, 'a')).toBe(1); expect(membershipsPerEntry(db, 'a')).toEqual([2, 2, 2]);
+      expect(variantsOf(db, 'a')).toBe(0);
+      expect(agentKeys(db)).toEqual(['a']);
+    });
+
+    it('a further holding whose meta names a different link: the first link stands and agent_meta_conflict is counted', async () => {
+      const { rig, first, fromHome, otherHome } = await held('ccrc-hist-meta-conflict-');
+      holdAgainIn(first, fromHome, otherHome, 'copy', { toolUseId: 'toolu_other' });
+      await rig.tick(armed, { scan: true });
+      expect(linkOf(rig.db, 'a')).toBe('toolu_10');
+      expect(counterOf(rig.db, 'agent_meta_conflict')).toBe(1);
+      await rig.tick(armed, { scan: true });
+      expect(counterOf(rig.db, 'agent_meta_conflict'), 'and a later tick does not recount it').toBe(1);
+    });
+
+    it('a further holding whose meta is absent counts agent_meta_unreadable:absent and writes nothing', async () => {
+      const { rig, first, fromHome, otherHome } = await held('ccrc-hist-meta-second-absent-');
+      holdAgainIn(first, fromHome, otherHome, 'copy', 'absent');
+      await rig.tick(armed, { scan: true });
+      expect(linkOf(rig.db, 'a')).toBe('toolu_10');
+      expect(counterOf(rig.db, 'agent_meta_unreadable:absent')).toBe(1);
+    });
+
+    it('the first meta read whole that names a link is written, though an earlier holding\'s was incomplete', async () => {
+      const { rig, first, fromHome, otherHome } = await held('ccrc-hist-meta-late-link-', 'malformed');
+      expect(linkOf(rig.db, 'a')).toBeNull();
+      holdAgainIn(first, fromHome, otherHome, 'copy', { toolUseId: 'toolu_11', agentType: 'Explore' });
+      await rig.tick(armed, { scan: true });
+      expect(linkOf(rig.db, 'a')).toBe('toolu_11');
+      expect(agentTypeOf(rig.db, 'a')).toBe('Explore');
+      expect(counterOf(rig.db, 'agent_meta_unreadable:malformed')).toBe(1);
+      expect(counterOf(rig.db, 'agent_meta_conflict')).toBe(0);
+    });
+  });
+});
+
+describe('readAgentMeta (W4 addendum P17)', () => {
+  const dirOf = (): string => fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'ccrc-hist-meta-'));
+  it('answers the link and the type of a whole object, and the cause of anything else', () => {
+    const dir = dirOf();
+    const put = (name: string, text: string): string => { const p = path.join(dir, name); fs.writeFileSync(p, text); return p; };
+    expect(readAgentMeta(put('ok.json', '{"toolUseId":"t","agentType":"x"}'))).toEqual({ ok: true, toolUseId: 't', agentType: 'x' });
+    expect(readAgentMeta(put('empty-link.json', '{"toolUseId":""}'))).toEqual({ ok: true, toolUseId: null, agentType: null });
+    expect(readAgentMeta(put('num-link.json', '{"toolUseId":5}'))).toEqual({ ok: true, toolUseId: null, agentType: null });
+    expect(readAgentMeta(put('empty-obj.json', '{}'))).toEqual({ ok: true, toolUseId: null, agentType: null });
+    for (const [name, text] of [['array.json', '[1]'], ['null.json', 'null'], ['str.json', '"x"'], ['num.json', '5'], ['bad.json', '{not'], ['blank.json', '']] as const) {
+      expect(readAgentMeta(put(name, text)), name).toEqual({ ok: false, cause: 'malformed' });
+    }
+    expect(readAgentMeta(path.join(dir, 'missing.json'))).toEqual({ ok: false, cause: 'absent' });
+    expect(readAgentMeta(path.join(dir, 'missing', 'x.json')), 'a parent that is not there').toEqual({ ok: false, cause: 'absent' });
+    expect(readAgentMeta(dir), 'a directory').toEqual({ ok: false, cause: 'not-regular' });
+    fs.symlinkSync(path.join(dir, 'ok.json'), path.join(dir, 'link.json'));
+    expect(readAgentMeta(path.join(dir, 'link.json')), 'a link').toEqual({ ok: false, cause: 'not-regular' });
+    expect(readAgentMeta(put('over.json', `{"pad":"${'x'.repeat(META_MAX_BYTES)}"}`))).toEqual({ ok: false, cause: 'oversized' });
+  });
+  it('a file of exactly META_MAX_BYTES is read, one byte more is oversized', () => {
+    const dir = dirOf();
+    const body = (len: number): string => { const head = '{"toolUseId":"t","pad":"'; const tail = '"}'; return head + 'x'.repeat(len - head.length - tail.length) + tail; };
+    const at = path.join(dir, 'at.json'); fs.writeFileSync(at, body(META_MAX_BYTES));
+    const over = path.join(dir, 'over.json'); fs.writeFileSync(over, body(META_MAX_BYTES + 1));
+    expect(fs.statSync(at).size).toBe(META_MAX_BYTES);
+    expect(readAgentMeta(at)).toEqual({ ok: true, toolUseId: 't', agentType: null });
+    expect(readAgentMeta(over)).toEqual({ ok: false, cause: 'oversized' });
+  });
+  it('a FIFO is not regular and is never blocked on', () => {
+    const dir = dirOf();
+    const fifo = path.join(dir, 'fifo.json');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    expect(readAgentMeta(fifo)).toEqual({ ok: false, cause: 'not-regular' });
   });
 });
 

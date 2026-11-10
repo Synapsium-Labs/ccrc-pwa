@@ -148,6 +148,13 @@ export function classifyAgentName(name: string, where: 'subagents' | 'run'): Age
 export function decideAgentDir(i: { kind: 'dir' | 'link' | 'file' | 'other'; listable: boolean }): { enter: true } | { enter: false; reason: AgentDirReason };
 export function decideAgentFile(i: { kind: 'file' | 'link' | 'dir' | 'other'; id: string | null; runOk: boolean }): { verdict: 'admit' } | { verdict: 'refuse'; reason: AgentFileReason };
 export function agentKey(id: string, runId: string | null): string;
+export const META_MAX_BYTES: 65536;
+/** The meta key that names a subagent's type, measured by act M2 (D-8161). */
+export const AGENT_TYPE_KEY: string;
+export type MetaFailure = 'absent' | 'oversized' | 'not-regular' | 'unreadable' | 'malformed';
+export type MetaRead = { ok: true; toolUseId: string | null; agentType: string | null } | { ok: false; cause: MetaFailure };
+export type MetaCount = 'agent_meta_conflict' | `agent_meta_unreadable:${MetaFailure}`;
+export function decideMetaLink(i: { stored: string | null; read: MetaRead }): { write: string | null; count: MetaCount | null };
 export const INSTALL_META: 'agents_since_ms';
 export function decideInstallRecord(i: { existing: number | null; nowMs: number }): number | null;
 export function isPreInstall(mtimeMs: number, sinceMs: number | null): boolean;

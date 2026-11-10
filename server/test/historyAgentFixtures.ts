@@ -243,3 +243,51 @@ export function sidecarsOf(db: DatabaseSync, uuid: string): number {
 }
 /** The census's own figure names (build question history-w4-refusals-counted-by-census): a tick counts none of them. */
 export const CENSUS_WALK_FIGURES = ['agent_file_refused', 'agent_dir_refused', 'agent_meta_orphan'];
+
+// Task 1D (P17): probes over one agent key's row, its holdings and its memberships. `key` is the agent key, `<ID>` or `<RUN>/<ID>`.
+/** The key's parent_tool_use_id, or null. */
+export function linkOf(db: DatabaseSync, key: string): string | null {
+  return (db.prepare('SELECT parent_tool_use_id AS v FROM transcripts WHERE agent_id = ?').get(key) as { v: string | null }).v;
+}
+/** The key's agent_type, or null. */
+export function agentTypeOf(db: DatabaseSync, key: string): string | null {
+  return (db.prepare('SELECT agent_type AS v FROM transcripts WHERE agent_id = ?').get(key) as { v: string | null }).v;
+}
+/** transcripts rows of the key. */
+export function transcriptRows(db: DatabaseSync, key: string): number { return n(db, 'SELECT count(*) AS n FROM transcripts WHERE agent_id = ?', key); }
+/** Live ingest_files rows bound to the key's transcript. */
+export function fileRowsOf(db: DatabaseSync, key: string): number {
+  return n(db, "SELECT count(*) AS n FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk WHERE t.agent_id = ? AND i.source_key = ''", key);
+}
+/** file_paths aliases of those rows. */
+export function aliasesOf(db: DatabaseSync, key: string): number {
+  return n(db, "SELECT count(*) AS n FROM file_paths fp JOIN ingest_files i ON i.file_id = fp.file_id JOIN transcripts t ON t.transcript_pk = i.transcript_pk WHERE t.agent_id = ? AND i.source_key = ''", key);
+}
+/** For each entry of the key's transcript, in line order of its first membership, how many memberships it has. */
+export function membershipsPerEntry(db: DatabaseSync, key: string): number[] {
+  return (db.prepare(`SELECT count(m.file_id) AS c FROM entries e JOIN transcripts t ON t.transcript_pk = e.transcript_pk
+    LEFT JOIN memberships m ON m.entry_id = e.entry_id WHERE t.agent_id = ? GROUP BY e.entry_id ORDER BY min(m.line), e.entry_id`).all(key) as Array<{ c: number }>).map((r) => r.c);
+}
+/** entry_variants rows under the key's transcript. */
+export function variantsOf(db: DatabaseSync, key: string): number {
+  return n(db, 'SELECT count(*) AS n FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id JOIN transcripts t ON t.transcript_pk = e.transcript_pk WHERE t.agent_id = ?', key);
+}
+/** A counter's value, 0 when it holds none. */
+export function counterOf(db: DatabaseSync, name: string): number {
+  return n(db, 'SELECT coalesce(sum(n), 0) AS n FROM counters WHERE name = ?', name);
+}
+/** The same agent file, and its meta beside it, held a second time under `toHome`, at the same project, session and run
+ *  directories: a hardlink tree when `how` is 'link', a copy when 'copy'. `meta` replaces the copy's meta (an object is written,
+ *  'absent' leaves none); omitted, the meta is copied as it stands. Answers the new agent file's path. */
+export function holdAgainIn(fromPath: string, fromHome: string, toHome: string, how: 'link' | 'copy', meta?: object | 'absent'): string {
+  const rel = path.relative(fromHome, fromPath);
+  const to = path.join(toHome, rel);
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  if (how === 'link') fs.linkSync(fromPath, to); else fs.copyFileSync(fromPath, to);
+  const fromMeta = fromPath.replace(/\.jsonl$/, '.meta.json');
+  const toMeta = to.replace(/\.jsonl$/, '.meta.json');
+  if (meta === 'absent') return to;
+  if (meta !== undefined) fs.writeFileSync(toMeta, JSON.stringify(meta));
+  else if (fs.existsSync(fromMeta)) { if (how === 'link') fs.linkSync(fromMeta, toMeta); else fs.copyFileSync(fromMeta, toMeta); }
+  return to;
+}

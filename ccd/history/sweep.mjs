@@ -71,7 +71,7 @@ import {
   decideReplayMark, replayWriterLayout, planReplayLayout, formatReplayLayout, widestReplayRanges,
   carryHoldAdvice,
   // W4 P1, P6, P15 (b), P20: the subagent walk's grammar, its identity and the ingest gates.
-  RUN_ID_RE, classifyAgentName, decideAgentDir, decideAgentFile, agentKey, INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
+  RUN_ID_RE, classifyAgentName, decideAgentDir, decideAgentFile, agentKey, META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
   // W2-1 Task 4 (W2-D30): the presence record's lib decisions.
   RECALL_OFF_KEYS, RECALL_OFF_SCAN_MAX, recallOffStateOf, planRecallOffObservation, recallOffReplayRows,
 } from './lib.mjs';
@@ -1997,6 +1997,56 @@ export function ensureAgentTranscript(db, uuid, key, runId) {
   return db.prepare('SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ?').get(uuid, key).transcript_pk;
 }
 
+/** A subagent's meta file, read bounded (W4 P17): an `lstat` of a regular, non-link file, at most META_MAX_BYTES + 1 bytes read
+ *  through an O_NOFOLLOW open, parsed as a JSON object. Answers the link it names (`toolUseId`, a non-empty string, else null)
+ *  and its type (the string under AGENT_TYPE_KEY, else null: a value of another type is not coerced), or why it could not be
+ *  read whole. The census reads every holding's meta through this one reader. */
+export function readAgentMeta(path) {
+  let st;
+  try { st = lstatSync(path); } catch (e) { return { ok: false, cause: e?.code === 'ENOENT' || e?.code === 'ENOTDIR' ? 'absent' : 'unreadable' }; }
+  if (!st.isFile()) return { ok: false, cause: 'not-regular' };
+  if (st.size > META_MAX_BYTES) return { ok: false, cause: 'oversized' };
+  let text;
+  let fd = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_NOCTTY);
+    // a swap to a non-regular file between the lstat and the open reads as one
+    if (!fstatSync(fd).isFile()) return { ok: false, cause: 'not-regular' };
+    const buf = Buffer.alloc(META_MAX_BYTES + 1);
+    let n = 0;
+    for (;;) {
+      const got = readSync(fd, buf, n, buf.length - n, null);
+      if (got === 0) break;
+      n += got;
+      if (n > META_MAX_BYTES) return { ok: false, cause: 'oversized' };
+    }
+    text = buf.subarray(0, n).toString('utf8');
+  } catch (e) {
+    return { ok: false, cause: e?.code === 'ENOENT' ? 'absent' : e?.code === 'ELOOP' ? 'not-regular' : 'unreadable' };
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* read already answered */ } }
+  }
+  let doc;
+  try { doc = JSON.parse(text); } catch { return { ok: false, cause: 'malformed' }; }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, cause: 'malformed' };
+  const link = doc.toolUseId;
+  const type = doc[AGENT_TYPE_KEY];
+  return { ok: true, toolUseId: typeof link === 'string' && link !== '' ? link : null, agentType: typeof type === 'string' ? type : null };
+}
+
+/** W4 P17 (c), the store side: when a holding of a subagent key is first bound (a path the store has not met), its meta is read
+ *  and decideMetaLink rules what the key's row keeps. The first link read whole is written once; a different one later is
+ *  counted `agent_meta_conflict`; an incomplete read is counted `agent_meta_unreadable:<cause>`; nothing retries. The type is
+ *  written once too, from the field AGENT_TYPE_KEY names. Runs inside bindFile's transaction. */
+function bindAgentMeta(db, transcriptPk, key, filePath) {
+  const read = readAgentMeta(join(dirname(filePath), `agent-${key.slice(key.lastIndexOf('/') + 1)}.meta.json`));
+  const stored = db.prepare('SELECT parent_tool_use_id AS link FROM transcripts WHERE transcript_pk = ?').get(transcriptPk).link;
+  const d = decideMetaLink({ stored, read });
+  if (d.write !== null) db.prepare('UPDATE transcripts SET parent_tool_use_id = ? WHERE transcript_pk = ? AND parent_tool_use_id IS NULL').run(d.write, transcriptPk);
+  if (read.ok && read.agentType !== null) db.prepare('UPDATE transcripts SET agent_type = ? WHERE transcript_pk = ? AND agent_type IS NULL').run(read.agentType, transcriptPk);
+  if (d.count !== null) bump(db, d.count);
+}
+
 /** After a retire: the old row's paths that now resolve to the new file move with it (§9.2). A path that resolves
  *  elsewhere, or nowhere, keeps naming the old row. */
 function repointPaths(db, fromId, toId, st) {
@@ -2078,8 +2128,11 @@ export function bindFile(db, f, nowMs) {
           .run(size, f.st.mtimeNs, birth, head, fileId);
       }
     }
+    // W4 P17 (c): a subagent path the store has not met is a further holding of its key: its meta is read once, here
+    const firstHolding = agentKeyOf !== '' && db.prepare('SELECT 1 AS x FROM file_paths WHERE path = ?').get(f.path) === undefined;
     db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?) ON CONFLICT (path) DO UPDATE SET file_id = excluded.file_id, last_seen_ms = excluded.last_seen_ms')
       .run(f.path, fileId, nowMs);
+    if (firstHolding) bindAgentMeta(db, boundTranscript, agentKeyOf, f.path);
     return { fileId, transcriptPk: boundTranscript, action, offset };
   });
 }

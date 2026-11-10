@@ -22,6 +22,7 @@ import {
   AGENT_ID_MAX, RUN_ID_RE, AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
   agentIdOk, classifyAgentName, decideAgentDir, decideAgentFile, agentKey,
   INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
+  META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink,
 } from '../../ccd/history/lib.mjs';
 import {
   canonicalJson, JSON_DEPTH_MAX, JSON_NODES_MAX, jsonWithinStructureBound, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
@@ -12282,5 +12283,28 @@ describe('the subagent ingest gates (W4 addendum P6, P15 (b))', () => {
     expect(read({ pathAgentKey: undefined }), 'an absent key reads as main').toBe('retire');
     expect(read({ row: { ...row, agentKey: '' }, pathAgentKey: 'a' }), 'a subagent path onto a main row').toBe('retire');
     expect(read({ row: { transcriptUuid: U, birthNs: 7n, headSha: 'aa', offset: 100, tailSha: 'bb' }, pathAgentKey: undefined }), 'a row with no key reads as main').toBe('resume');
+  });
+});
+
+// W4 addendum P17 (c), the store side: what a key's metas write (Task 1D).
+describe('the subagent meta\'s store side (W4 addendum P17 (c))', () => {
+  const okRead = (toolUseId: string | null, agentType: string | null = null): libPlan.MetaRead => ({ ok: true, toolUseId, agentType });
+  it('the measured values: a 64 KiB bound and the key act M2 measured (D-8161)', () => {
+    expect(META_MAX_BYTES).toBe(65536);
+    expect(AGENT_TYPE_KEY).toBe('agentType');
+  });
+  it.each([
+    [null, okRead('t1'), { write: 't1', count: null }],
+    ['t1', okRead('t2'), { write: null, count: 'agent_meta_conflict' }],
+    [null, { ok: false, cause: 'oversized' }, { write: null, count: 'agent_meta_unreadable:oversized' }],
+    ['t1', okRead('t1'), { write: null, count: null }],
+    [null, okRead(null), { write: null, count: null }],
+    ['t1', okRead(null), { write: null, count: null }],
+    ['t1', { ok: false, cause: 'absent' }, { write: null, count: 'agent_meta_unreadable:absent' }],
+    [null, { ok: false, cause: 'malformed' }, { write: null, count: 'agent_meta_unreadable:malformed' }],
+    [null, { ok: false, cause: 'not-regular' }, { write: null, count: 'agent_meta_unreadable:not-regular' }],
+    [null, { ok: false, cause: 'unreadable' }, { write: null, count: 'agent_meta_unreadable:unreadable' }],
+  ] as const)('decideMetaLink(%j, %j) is %j (P17 (c), the store side)', (stored, read, want) => {
+    expect(decideMetaLink({ stored, read: read as libPlan.MetaRead })).toEqual(want);
   });
 });
