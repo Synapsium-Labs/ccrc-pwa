@@ -146,7 +146,7 @@ export type ReaderMountProfile = 'lab-draw';
 export type ReaderE17Reading = 'holds' | 'does-not-hold' | 'not-measured';
 
 /** The reading this build's draw was decided on (the take-up plan, refinement (b)): every block the operator sent reads
- *  `holds` on its `mermaid` line, or one reads `does not hold`, or none was measured. Two blocks arrived (2026-11-10),
+ *  `holds` on its `mermaid` line, or one reads `does not hold`, or none was measured. Two blocks arrived (2026-11-06),
  *  both from the reader lab's `auto` mode on library build 0079625cc30a, and both are kept:
  *  block 1: "reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a"
  *  and "mermaid            does not hold (longest gap 217 ms, all six together; worst single: figure 4, 150 ms)";
