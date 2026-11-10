@@ -327,10 +327,9 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
       // not narrow a distinction it received, and this field distinguishes by
       // PRESENCE. Its own spread rather than a member of `extra`, whose value
-      // type is `number` and must stay so: `by` is the project's NAME.
+      // type is `number` and must stay so: `by` is the project's NAME. `detail` (D-6096, `self-dispatch`) is the same.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
         ...(r.by === undefined ? {} : { by: r.by }),
-        // D-6096: `self-dispatch`'s words, by presence, like `by` and `key` (an adapter may not narrow what it received).
         ...(r.detail === undefined ? {} : { detail: r.detail }),
         ...(r.key === undefined ? {} : { key: r.key }), ...(r.holder === undefined ? {} : { holder: r.holder }) });
     }
@@ -1778,9 +1777,9 @@ export function registerCoordRoutes(
     // fleet act is composed, so none of the dispatch's deps below are built for it, and the skill self-install (which
     // belongs to a bound WORKER) never runs for it. Any `inPlace` value but `true` is malformed.
     if (body.inPlace !== undefined) {
-      if (body.inPlace !== true) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'inPlace: must be true when given' });
+      if (body.inPlace !== true) return refuseRoute(reply, 'bad-request', { detail: 'inPlace: must be true when given' });
       if (typeof body.by !== 'string' || body.by === '' || typeof body.byUuid !== 'string' || body.byUuid === '') {
-        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'inPlace: by and byUuid (the claimant) are required' });
+        return refuseRoute(reply, 'bad-request', { detail: 'inPlace: by and byUuid (the claimant) are required' });
       }
       const by = body.by;
       const byUuid = body.byUuid;

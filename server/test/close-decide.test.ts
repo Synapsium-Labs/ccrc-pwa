@@ -178,14 +178,14 @@ describe('decideClose, the close step (the work close’s hold)', () => {
   it('a non-final close holds for the next wave with the wave+1 reason', async () => {
     const c = store(); const id = working(c);
     const d = await act(c, id, { final: false });
-    expect(d.kind === 'go' ? [d.plan.fleet.verb, d.plan.released] : null).toEqual(['wsHold', false]);
+    expect(d.kind === 'go' ? [d.plan.fleet?.verb, d.plan.released] : null).toEqual(['wsHold', false]);
   });
   it('a failed close with archive archives, unless the workspace is a finished child (the release wins)', async () => {
     const c = store(); const id = working(c);
     const a = await act(c, id, { state: 'failed', archive: true, final: false });
-    expect(a.kind === 'go' ? a.plan.fleet.verb : null).toBe('wsArchive');
+    expect(a.kind === 'go' ? a.plan.fleet?.verb : null).toBe('wsArchive');
     const r = await act(c, id, { state: 'failed', archive: true, final: false, gate: async () => RECLAIM_GATE });
-    expect(r.kind === 'go' ? [r.plan.fleet.verb, r.plan.released] : null).toEqual(['wsRelease', true]);
+    expect(r.kind === 'go' ? [r.plan.fleet?.verb, r.plan.released] : null).toEqual(['wsRelease', true]);
   });
   it('a sibling hands the claim over with its own reason, never an archive or a release', async () => {
     const c = store(); const id = working(c);
@@ -194,7 +194,7 @@ describe('decideClose, the close step (the work close’s hold)', () => {
     c.markDispatched(s.id, 'demo-w', 'w', 'ws/w', false);
     for (const to of ['dispatched', 'working'] as const) c.advance(s.id, to, 'coordinator');
     const d = await act(c, id, { state: 'failed', archive: true });
-    expect(d.kind === 'go' ? [d.plan.fleet.verb, d.plan.released] : null).toEqual(['wsHold', false]);
+    expect(d.kind === 'go' ? [d.plan.fleet?.verb, d.plan.released] : null).toEqual(['wsHold', false]);
   });
   it('gate order: the sibling read, then the child gate (not called on an unreadable list)', async () => {
     const c = store(); const id = working(c); const trace: string[] = [];
@@ -228,7 +228,7 @@ describe('decideClose, the abandon step', () => {
     c.markDispatched(s.id, 'demo-w', 'w', 'ws/w', false);
     for (const to of ['dispatched', 'working'] as const) c.advance(s.id, to, 'coordinator');
     const d = await act(c, id);
-    expect(d.kind === 'go' ? [d.plan.fleet.verb, d.plan.released] : null).toEqual(['wsHold', false]);
+    expect(d.kind === 'go' ? [d.plan.fleet?.verb, d.plan.released] : null).toEqual(['wsHold', false]);
   });
   it('gate order: the sibling read, then the child gate', async () => {
     const c = store(); const id = working(c); const trace: string[] = [];
