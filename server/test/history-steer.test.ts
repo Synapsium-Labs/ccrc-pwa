@@ -389,7 +389,7 @@ describe('the parent add-on in the steer composer (spec 7.1; W3 Task 4, O14)', (
   });
   const kids = (gist: string, n = 7): SteerPrev[] => Array.from({ length: n }, (_, k) => child(k + 1, gist));
   const prevOf = (gist: string): SteerPrev => ({ ...okPrev, range: RANGE_36, gist });
-  /** The add-on as D5 counts it: from the LF that joins it to the previous part to the end of the text (the plan's count). */
+  /** The add-on as the plan counts it: from the LF that joins it to the previous part to the end of the text (the plan's count). */
   const addOnOf = (text: string): string => text.slice(text.indexOf(INSTRUCTION.split('\n')[0]!) - 1);
   /** A child the composer cannot read: a slot with no quote. */
   const filler = (k: number): SteerPrev => child(100 + k, '', { status: 'unreadable', kind: '' });
