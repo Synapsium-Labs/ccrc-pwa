@@ -113,3 +113,31 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(blocks).toEqual(['@media (max-width: 899.98px) {']);
   });
 });
+
+describe('the one bar in docs.css (the take-up plan, refinements (j), (k), (l))', () => {
+  it('the bar positions the reading line; the title, a tool and the line carry their declarations; no selector of the block names a width', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-one-bar .docs-compact-bar'), 'position')).toBe('relative');
+    const title = ruleIn(docsCss, '.docs-title');
+    expect(declValue(title, 'flex')).toBe('1 1 auto');
+    expect(declValue(title, 'min-width')).toBe('0');
+    expect(declValue(title, 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(title, 'background')).toBe('none');
+    expect(declValue(ruleIn(docsCss, ".docs-title[aria-expanded='true']"), 'background')).toBe('var(--bg-pressed)');
+    const tool = ruleIn(docsCss, '.docs-tool');
+    expect(declValue(tool, 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(tool, 'min-width')).toBe('var(--tap-min)');
+    // The line: 2 px of the accent at the bar's bottom edge (the padding box ends above the divider, so -1px puts its
+    // bottom at the bar's), inside the bar's height, with no motion and no fade.
+    const line = ruleIn(docsCss, '.docs-read');
+    expect(declValue(line, 'position')).toBe('absolute');
+    expect(declValue(line, 'inset-block-end')).toBe('-1px');
+    expect(declValue(line, 'block-size')).toBe('2px');
+    expect(declValue(line, 'background')).toBe('var(--accent)');
+    for (const prop of ['transition', 'opacity', 'height', 'margin']) expect(declValue(line, prop), prop).toBeNull();
+    for (const sel of [
+      '.docs-one-bar .docs-compact-bar', '.docs-title', ".docs-title[aria-expanded='true']", '.docs-title-dot', '.docs-tool', '.docs-read',
+    ]) {
+      expect(selectorsOf(docsCss, sel).join(' '), sel).not.toMatch(/@media|\d\s*px|width/);
+    }
+  });
+});

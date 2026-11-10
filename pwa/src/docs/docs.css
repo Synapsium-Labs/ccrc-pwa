@@ -463,9 +463,9 @@
 .docs-export-facts dt, .docs-export-facts dd { margin: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .docs-export-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
 
-/* — the compact head (the phone-header plan of 2026-11-03). A leaf page under 600 CSS px draws one row, `CompactHead` in
-   DocsHead.tsx, and the head's component alone decides when (`headLayoutFor`). So every rule here keys on the head's own
-   classes and none on a width: a tablet and a desktop never render them, and a phone's listings keep the rules above.
+/* — the compact and one-bar heads (the phone-header and library 1.1 take-up plans). `docsHeadWords#headLayoutFor`
+   is the sole layout policy; DocsHead renders its answer. The rules key on classes, never viewport width: a phone-born
+   one bar persists on widening, while a desk-born reader keeps the full head. Listings keep their own rules above.
    The row is back (`.docs-back`), two lines naming where and what, Share and Export as icons (`.docs-action`, as in the
    full header, given a whole tap's width here), and Page details (`.docs-more`); the panel under it holds the crumbs,
    the truth line and the link actions, closed until Page details opens it. While the tree slot is not `ok` the head is
@@ -523,6 +523,42 @@
 .docs-more-dot[data-tone='warn'], .docs-more-dot[data-tone='failed'] { background: var(--status-attention); }
 .docs-more-panel { display: grid; gap: var(--sp-2); min-width: 0; padding-block-end: var(--sp-2); }
 .docs-more-panel[hidden] { display: none; }
+/* — the one bar (the library 1.1 take-up plan): a leaf whose reader frame is ready on ccrc's bar, drawn by `OneBar` and
+   decided by `headLayoutFor` alone, so no rule here keys on a width. It is the compact row's box (one tap tall, its 1 px
+   divider inside) holding back, the title (`.docs-title`: the row's first line above the document's title, the
+   freshness dot before it; it opens the details panel), the reader's tools (`.docs-tool`) and the reading line
+   (`.docs-read`: 2 px of the accent along the bar's bottom edge, over the divider and inside the bar's height, its
+   inline size the share read; an absolute box is placed against the bar's padding box, which ends above the divider,
+   so `inset-block-end: -1px` brings the line's bottom to the bar's). GROUNDS: the bar, the title and the tools paint nothing, so they sit on body's
+   --bg-page as the row does (design/audit.mjs registers `.docs-title` and `.docs-tool` there); an open `.docs-title`
+   paints its own pressed ground and ink and is measured on it; the dot and the line paint fills and set no ink. No
+   transition and no opacity: nothing here moves or fades. — */
+.docs-one-bar .docs-compact-bar { position: relative; }
+.docs-title {
+  flex: 1 1 auto; min-width: 0; min-height: var(--tap-min);
+  display: flex; flex-direction: column; justify-content: center;
+  margin: 0; padding: 0 var(--sp-1); border: 0; border-radius: var(--r-md);
+  background: none; color: var(--ink-primary); font: inherit; text-align: start; cursor: pointer;
+}
+.docs-title[aria-expanded='true'] { background: var(--bg-pressed); color: var(--ink-primary); }
+.docs-title-dot {
+  display: inline-block; inline-size: var(--sp-2); block-size: var(--sp-2); margin-inline-end: var(--sp-1);
+  border-radius: var(--r-full); vertical-align: middle;
+}
+.docs-title-dot[data-tone='ok'] { background: var(--status-done); }
+.docs-title-dot[data-tone='warn'], .docs-title-dot[data-tone='failed'] { background: var(--status-attention); }
+.docs-tool {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--tap-min); min-width: var(--tap-min);
+  border: 0; border-radius: var(--r-md);
+  background: none; color: var(--ink-secondary);
+  cursor: pointer;
+}
+.docs-read {
+  position: absolute; inset-inline-start: 0; inset-block-end: -1px; block-size: 2px;
+  background: var(--accent); pointer-events: none;
+}
 /* "Formatting…" lies over the frame's host instead of taking a line above it, so the frame does not move when the
    reader is ready. It paints the page's own ground, so its registered ink (.doc-formatting, on --bg-page) holds there. */
 .docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) { position: relative; }

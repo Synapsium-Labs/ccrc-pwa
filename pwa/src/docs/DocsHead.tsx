@@ -8,10 +8,11 @@
 // (spec 4.17) follows Share on a leaf: exportStateFor decides, and ExportSheet builds and saves.
 // Under DOCS_COMPACT_QUERY (600 CSS px) a leaf page draws the compact head instead (the phone-header plan of 2026-11-03):
 // one row of back, where and what, Share and Export as icons, and Page details, which opens a panel holding the crumbs,
-// the truth line and the link actions (`CompactHead`). Every other page, and every page at a wider viewport, draws the
-// header above as one row and one dense line (desk-nav Part B, D-8101): back, the crumbs and the actions share the row
-// (GitHub, Share and Export an icon beside their words, the words giving way first when the row is short, `HeadRow`),
-// and the truth line sits under it on one line.
+// the truth line and the link actions (`CompactHead`). A leaf whose reader frame is ready on ccrc's bar draws the one bar
+// (`OneBar`, the library 1.1 take-up plan): back, the title opening that panel with worded actions, the reader's tools,
+// and the reading line; this phone-born bar remains on widening. Other pages retain the existing header: at a wider
+// viewport, one row and one dense line (desk-nav Part B, D-8101), with back, crumbs and actions sharing `HeadRow`, action
+// words giving way first, and the dense truth line below. A desktop-born reader keeps its frame bar on narrowing.
 import {
   useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type CSSProperties, type KeyboardEvent, type ReactNode,
@@ -26,11 +27,11 @@ import { formatAge } from '../fleet/formatReset';
 import { NO_SUBSCRIPTION, openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
-import { Icon, useNow } from '@ccrc/ui';
+import { Icon, useNow, type IconName } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
 import { ROW_STAGES, fullHeadFormFor, headLayoutFor, type FullHeadForm, type RowStage } from './docsHeadWords';
 import {
-  DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
+  DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
   failureSentence, fillSentence, kib, relationSentence, servedRefText, shortCommit, slotSentence, worktreeLabel,
 } from './docsText';
 import { SECTION_LABEL, docsPathKind, githubTargetFor } from './docsTree';
@@ -44,10 +45,11 @@ import type { ExportRequest, ExportSource } from './export/exportInput';
 import type { ExportWait } from './export/policy';
 import { showBytes } from './objectUrls';
 import type { ExportBody } from './exportBody';
-import type { ReaderBar } from './readerBar';
 import type { ExportAssets } from './export/exportAssets';
 import type { HighlightStore } from '../lib/highlightStore';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness } from './useDocsVisit';
+import { oneBarTools, type ReaderCommand } from './reader/policy';
+import type { ReaderBar, ReaderProgress } from './readerBar';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 type TreePage = Exclude<DocsPageLocation, { kind: 'index' }>;
@@ -365,6 +367,12 @@ export type FreshDot = 'ok' | 'warn' | 'failed' | null;
 
 export function freshDot(state: FreshChipState): FreshDot {
   return state === 'ok' ? 'ok' : state === 'never' ? 'warn' : state === 'failed' ? 'failed' : null;
+}
+
+/** Page details' words for a dot (phone-header refinement (f)): the ⋯ button's name, and the hidden tail of the one bar's
+ *  title (the take-up plan, refinement (k)). */
+function moreName(dot: FreshDot): string {
+  return dot === 'failed' ? DOCS_HEAD_TEXT.moreFailed : dot === 'warn' ? DOCS_HEAD_TEXT.moreNever : DOCS_HEAD_TEXT.more;
 }
 
 /** Share's words (spec 4.5): "Share", or "Updating to <short>…" while the leaf moves to `pinFor`'s pin. The full header's
@@ -750,8 +758,21 @@ export function DocsHead(p: {
   const slot = visit.tree;
   const receivedAt = slot?.s === 'ok' ? slot.receivedAt : now;
   const compactWidth = useMediaQuery(DOCS_COMPACT_QUERY);
+  const bar = p.readerBar ?? null;
+  const layout = headLayoutFor(compactWidth, page, bar !== null && tree !== null);
+  // The take-up plan, refinement (f): a leaf whose frame takes commands draws the one bar once the tree is `ok` (its
+  // panel needs the tree); while it is not, the width-based head stands in (compact only at a compact width). Keyed by the page.
+  if (layout === 'one-bar' && page.kind === 'path' && tree !== null && bar !== null) {
+    return (
+      <OneBar
+        key={docsPageUrl(page)} page={page} visit={visit} tree={tree} bar={bar} receivedAt={receivedAt} now={now} crumbs={crumbs}
+        leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null} pageStore={p.pageStore ?? null}
+        exportAssets={p.exportAssets ?? null} onPlainView={p.onPlainView ?? null}
+      />
+    );
+  }
   // Phone-header refinement (a): a leaf page at the compact width draws one row. Keyed by the page, so a navigation closes its panel.
-  if (headLayoutFor(compactWidth, page) === 'compact' && page.kind === 'path') {
+  if (layout === 'compact' && page.kind === 'path') {
     return (
       <CompactHead
         key={docsPageUrl(page)} page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} crumbs={crumbs}
@@ -956,15 +977,23 @@ function CompactLabel(p: {
 }): ReactNode {
   return (
     <p className="docs-compact-label">
-      <span className="docs-compact-where">
-        <span className="docs-compact-where-text">
-          <span className="docs-compact-where-crumb">{p.where}</span>
-          {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
-        </span>
-        {p.badge !== null && <>{SEP}{p.badge.badged ? <span className="docs-badge">{p.badge.word}</span> : p.badge.word}</>}
-      </span>
+      <CompactWhere where={p.where} refText={p.refText} badge={p.badge} />
       <span className="docs-compact-name">{p.name}</span>
     </p>
+  );
+}
+
+/** The label's first line, the row's and the one bar's (the take-up plan, refinement (h)): the parent crumb, a served ref
+ *  that is not origin/HEAD, then the draft badge beside the text. */
+function CompactWhere(p: { readonly where: string; readonly refText: string | null; readonly badge: RowBadge | null }): ReactNode {
+  return (
+    <span className="docs-compact-where">
+      <span className="docs-compact-where-text">
+        <span className="docs-compact-where-crumb">{p.where}</span>
+        {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
+      </span>
+      {p.badge !== null && <>{SEP}{p.badge.badged ? <span className="docs-badge">{p.badge.word}</span> : p.badge.word}</>}
+    </span>
   );
 }
 
@@ -1051,7 +1080,7 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
         )}
         <button
           ref={toggle} type="button" className="docs-more" aria-expanded={open} aria-controls={panelId}
-          aria-label={dot === 'failed' ? DOCS_HEAD_TEXT.moreFailed : dot === 'warn' ? DOCS_HEAD_TEXT.moreNever : DOCS_HEAD_TEXT.more}
+          aria-label={moreName(dot)}
           onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}
         >
           <Icon name="ellipsis" size={20} />
@@ -1074,5 +1103,75 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
         {exportNote !== null && <p className="docs-note">{exportNote}</p>}
       </div>
     </>
+  );
+}
+
+/** The tools' glyphs (refinement (j)): icons already vendored, so nothing is fetched. */
+const TOOL_ICON: Record<ReaderCommand, IconName> = {
+  jump: 'search', settings: 'settings', contents: 'layout-list', outline: 'list-checks',
+};
+
+/** The reading line (refinement (l)): the frame's share, along the bar's bottom edge. Only this element reads the store. */
+function ReadLine(p: { readonly progress: ReaderProgress }): ReactNode {
+  const share = useSyncExternalStore(p.progress.subscribe, p.progress.read, p.progress.read);
+  return <span className="docs-read" aria-hidden="true" style={{ inlineSize: `${Math.round(share * 1000) / 10}%` }} />;
+}
+
+/** The one bar (the library 1.1 take-up plan, refinements (f) to (l)): a leaf whose reader frame is ready on ccrc's bar.
+ *  Back; the title (the label's first line above the document's own title, the freshness dot before it), which opens the
+ *  details panel, a disclosure as the row's Page details is; the reader's tools, each running its command in the tap
+ *  itself; the reading line. The panel holds the crumbs, the truth line and the full header's actions, in §4.5's order.
+ *  "Updated to", which answers a re-list, stays under the bar, outside the panel. No plain-view note: choosing Export's
+ *  plain view unmounts the reader, which withdraws the bar, so that note is under option 1's row (refinement (f)). */
+function OneBar(p: Omit<CompactProps, 'plainView'> & { readonly tree: DocsTreeOk; readonly bar: ReaderBar }): ReactNode {
+  const { page, visit, tree, bar } = p;
+  const file = visit.file;
+  const [open, setOpen] = useState(false);
+  const title = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+  const dot = freshDot(freshnessChip(tree, p.receivedAt, visit.freshness, p.now).state);
+  const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !open) return;
+    e.stopPropagation();
+    setOpen(false);
+    title.current?.focus();
+  };
+  return (
+    <header className="docs-head docs-compact docs-one-bar">
+      <div className="docs-compact-bar">
+        <BackButton page={page} />
+        <button
+          ref={title} type="button" className="docs-title" aria-expanded={open} aria-controls={panelId}
+          onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}
+        >
+          <CompactWhere where={p.crumbs.at(-2)?.label ?? ''} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)} />
+          <span className="docs-compact-name">
+            {dot !== null && <span className="docs-title-dot" data-tone={dot} aria-hidden="true" />}
+            {bar.title}
+          </span>
+          <span className="sr-only">{moreName(dot)}</span>
+        </button>
+        {oneBarTools(page.section).map((t) => (
+          <button key={t} type="button" className="docs-tool" aria-label={DOCS_TOOL_TEXT[t]} onClick={() => bar.command(t)}>
+            <Icon name={TOOL_ICON[t]} size={20} />
+          </button>
+        ))}
+        <ReadLine progress={bar.progress} />
+      </div>
+      <div
+        id={panelId} className="docs-more-panel" role="region" aria-label={DOCS_HEAD_TEXT.more} onKeyDown={onKeyDown}
+        hidden={!open}
+      >
+        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />
+        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
+        <Actions
+          page={page} tree={tree} file={file} leafImage={p.leafImage} exportBody={p.exportBody} pageStore={p.pageStore}
+          exportAssets={p.exportAssets} onPlainView={p.onPlainView} form="stacked"
+        />
+      </div>
+      {visit.updatedTo !== null && (
+        <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
+      )}
+    </header>
   );
 }

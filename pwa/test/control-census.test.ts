@@ -499,6 +499,11 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-more':
     "TOKEN. Page details, the compact row's last button (the phone-header plan of 2026-11-03), which opens the panel "
     + 'holding the crumbs, the truth line and the link actions.',
+  'docs/DocsHead.tsx <button> docs-title':
+    "TOKEN. The one bar's title (the library 1.1 take-up plan), which opens the details panel holding the crumbs, the "
+    + 'truth line and the actions.',
+  'docs/DocsHead.tsx <button> docs-tool':
+    "TOKEN. One of the reader's tools on the one bar (quick jump, contents, a plan's Outline), which runs the frame's command.",
   'docs/DocsHead.tsx <button> docs-action docs-share':
     "TOKEN. Share (spec 4.16), after View on GitHub: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',

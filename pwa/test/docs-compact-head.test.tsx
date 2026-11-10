@@ -86,15 +86,19 @@ afterEach(() => {
 
 describe('which header a page draws (refinements (a), (b))', () => {
   it.each([
-    [true, '/docs/demo/specs/a.md', 'compact'],
-    [true, '/docs/demo/specs/d/x.md?ref=main', 'compact'],
-    [true, '/docs/demo/specs/d/', 'full'],
-    [true, '/docs/demo/specs', 'full'],
-    [true, '/docs/demo', 'full'],
-    [true, '/docs', 'full'],
-    [false, '/docs/demo/specs/a.md', 'full'],
-  ] as const)('compact width %s, %s: %s', (compactWidth, url, want) => {
-    expect(headLayoutFor(compactWidth, pageAt(url))).toBe(want);
+    [true, '/docs/demo/specs/a.md', false, 'compact'],
+    [true, '/docs/demo/specs/d/x.md?ref=main', false, 'compact'],
+    [true, '/docs/demo/specs/d/', false, 'full'],
+    [true, '/docs/demo/specs', false, 'full'],
+    [true, '/docs/demo', false, 'full'],
+    [true, '/docs', false, 'full'],
+    [false, '/docs/demo/specs/a.md', false, 'full'],
+    [true, '/docs/demo/specs/a.md', true, 'one-bar'],
+    [false, '/docs/demo/plans/p.md', true, 'one-bar'],
+    [true, '/docs/demo/specs/d/', true, 'full'],
+    [true, '/docs/demo/specs', true, 'full'],
+  ] as const)('compact width %s, %s, takes commands %s: %s', (compactWidth, url, takesCommands, want) => {
+    expect(headLayoutFor(compactWidth, pageAt(url), takesCommands)).toBe(want);
   });
 
   it('the compact width is under 600 CSS px, and only DocsHead.tsx spells it under pwa/src', () => {

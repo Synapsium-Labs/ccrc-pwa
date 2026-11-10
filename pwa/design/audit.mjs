@@ -1235,6 +1235,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the compact row's Page details button while closed: `background: none` in the unpainted .docs-compact-bar, so --bg-page, as .docs-back beside it. Open, `.docs-more[aria-expanded='true']` paints --bg-pressed with --ink-primary and is measured on that ground as a self-grounded rule of its own",
   },
+  '.docs-title': {
+    under: ['var(--bg-page)'],
+    why: "the one bar's title while closed (the library 1.1 take-up plan): `background: none` in the unpainted .docs-compact-bar inside .docs-head on .docs-screen, so --bg-page, as .docs-back beside it. Open, `.docs-title[aria-expanded='true']` paints --bg-pressed with --ink-primary and is measured on that ground as a self-grounded rule of its own",
+  },
+  '.docs-tool': {
+    under: ['var(--bg-page)'],
+    why: "one of the reader's tools on the one bar (the library 1.1 take-up plan), an icon button with `background: none` in the unpainted .docs-compact-bar, so --bg-page, the .docs-more reasoning",
+  },
   '.docs-truth': {
     under: ['var(--bg-page)'],
     why: "the truth line (served ref, commit, how the ref was chosen, a leaf's source and size), a <p> in the unpainted .docs-head, so --bg-page",

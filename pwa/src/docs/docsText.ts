@@ -10,6 +10,7 @@ import type {
   DocsTreeOk, EntryBadge, GithubLink, WithheldReason,
 } from '../../../shared/docs';
 import { isDocsFailureWord, type DocsClientSlot } from './failures';
+import type { ReaderCommand } from './reader/policy';
 import type { ImagePin } from './docsLinks';
 import type { ShareFields, ShareNote, ShareNoteLine, ShareRefusal } from './share';
 import type { ExportMissing, ExportPlain, ExportWait } from './export/policy';
@@ -468,6 +469,15 @@ export const DOCS_HEAD_TEXT = {
   worktreeWorkspace: 'workspace {name}',
   worktreeOther: 'another worktree',
 } as const;
+
+/** The reader's tools as the one bar names them (the library 1.1 take-up plan, refinement (j)): each the accessible name
+ *  of an icon button, the library's own words for its bar's tools. */
+export const DOCS_TOOL_TEXT: Record<ReaderCommand, string> = {
+  jump: 'Quick jump',
+  settings: 'Reading settings',
+  contents: 'Contents',
+  outline: 'Outline',
+};
 
 /** Why View on GitHub gives no link (spec 3.11's refusals), as "View on GitHub: {reason}". */
 export const GITHUB_REFUSAL_TEXT: Record<Extract<GithubLink, { ok: false }>['why'], string> = {
