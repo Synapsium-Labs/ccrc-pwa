@@ -4745,6 +4745,8 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     expect(one('claimed-by-another')).toContain('references/resume.md');
     // Row 28, 29, 30, 31.
     expect(one('home-mismatch')).toContain('ccrc-api goals show');
+    expect(one('home-mismatch')).toContain('raise an item');
+    expect(one('home-mismatch')).not.toContain('open under a new slug');
     expect(one('claimant-is-a-worker')).toContain('not acting as a coordinator');
     expect(one('project-mismatch', 0)).toContain('without `sessionId`');
     expect(one('project-mismatch', 0)).toContain('`ccrc-api calls record`');
@@ -4756,6 +4758,11 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     expect(one('ambiguous-dispatch')).toContain('dead-dispatch pass');
     expect(one('hookstate-unmeasurable')).toContain('three times over about 15 minutes');
     expect(one('status-unmeasurable')).toContain('three times over about 15 minutes');
+    // A `planned` run has no `closing` edge: the path is an end request, never a close.
+    expect(one('hookstate-unmeasurable')).toContain('raise an end request');
+    expect(one('hookstate-unmeasurable')).not.toContain('close the run as failed');
+    expect(one('status-unmeasurable')).toContain('raise an end request');
+    expect(one('status-unmeasurable')).not.toContain('close the run as failed');
     // Row 34.
     expect(one('project-mismatch', 1)).toContain('end request');
     expect(one('project-mismatch', 1)).toContain('park the thread');
@@ -4779,6 +4786,7 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     expect(one('ejection-not-merging')).toContain('act on the state it is in');
     expect(one('cap-review-rounds')).toContain('runs review-rounds');
     expect(one('cap-review-rounds')).toContain('`coord-lift-off`');
+    expect(one('cap-review-rounds')).toContain('open the review once');
     expect(one('cap-review-rounds')).toContain('`cap-not-reached`');
     expect(one('cap-review-rounds')).toContain('`no-review-rounds-door`');
     expect(one('cap-review-rounds')).toContain('A 404 `not-found` is a wrong id or a run that is not a work run');

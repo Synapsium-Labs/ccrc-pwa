@@ -346,16 +346,20 @@ not after.
    hold and land with known limits. Extending first means the open is never
    refused, so the operator is never asked or pushed. The extension's
    refusals: `coord-lift-off` means the operator switched lifts off on this
-   box (the default): keep the cap, park the thread behind the server's ask
-   and work the others; `cap-not-reached` means there is nothing to lift: open
+   box (the default): keep the cap and open the review ONCE anyway, so the
+   server refuses it `cap-review-rounds` and raises its ask to the operator
+   (the ask exists only after that refused open; if the open does not raise
+   it, raise an item yourself), then park the thread behind that ask and work
+   the others; `cap-not-reached` means there is nothing to lift: open
    the review; `no-review-rounds-door` (the local refusal when the cap file lacks
    `review-rounds-v1`) means an older server, a block of class P4, so record the
    block with `wakeOn: update`; `not-your-programme` and `run-closed` are not
    retried (re-read the run and your claim), and `not-found` (a 404) means the
    id is wrong or not a work run, the review run's id being the easy mistake:
    re-read it with `runs list` and lift on the work run's id.
-   `cap-review-rounds` on an open means you opened without deciding: do not
-   retry the open. The server has told the operator (one ask, with the last
+   `cap-review-rounds` on an open means you opened without deciding, except
+   after `coord-lift-off`, where that one open is how the ask is raised: do
+   not retry the open. The server has told the operator (one ask, with the last
    review's open findings); a late extension still closes that ask, but the
    operator has already been pushed once, so decide at the cap, not at the
    refusal. A bare `400 bad-request` with no `detail` on

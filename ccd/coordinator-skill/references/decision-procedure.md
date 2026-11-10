@@ -150,8 +150,9 @@ characters, grants 3 more rounds and closes the operator’s open ask on that ru
   limit is reversible and the rest of the programme needs it.
 
 The door’s refusals:
-- `coord-lift-off`: the operator has switched coordinator lifts off. Lifting stays the operator’s for that run; the
-  thread parks behind the server’s existing ask and other threads continue.
+- `coord-lift-off`: the operator has switched coordinator lifts off. Lifting stays the operator’s for that run. The server raises its ask only when a review open is refused
+  `cap-review-rounds`, so open the review once now (it is refused and the ask is raised; if no ask appears, raise an
+  item yourself), never again, then park the thread behind that ask while other threads continue.
 - `cap-not-reached`: nothing to lift. Open the review.
 - `no-review-rounds-door`: an older server without the door (the local refusal when the cap file lacks
   `review-rounds-v1`). That is P4; record it with `wakeOn: update`.
