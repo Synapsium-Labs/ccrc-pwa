@@ -694,6 +694,20 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(m, 'schema v1 declares no nodes.kind CHECK').not.toBeNull();
     expect(m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).sort()).toEqual(kinds.sort());
   });
+
+  // W4 addendum P7 (Task 3, AG2). It counts declarations, not files (review 1728, A2): a read option is declared as
+  // `'--x': readOpt(`, so the import arm's op flag `'--agents': 'bool'` (Task 1F) is not one, and a second read-option
+  // declaration inside lib.mjs reds as well as one in another module.
+  const AGENTS_READ_DECL = /'--agents'\s*:\s*readOpt\(/g;
+  it('AG2 one flag list: --agents is declared once, and every read verb derives it', async () => {
+    const decls = HISTORY_MJS.flatMap((f) => [...readFileSync(f, 'utf8').matchAll(AGENTS_READ_DECL)].map(() => rel(f)));
+    expect(decls).toEqual(['ccd/history/lib.mjs']);
+    const l = await lib();
+    const options = l['READ_OPTIONS'] as Record<string, { options: Record<string, unknown> }>;
+    const verbs = l['READ_VERBS'] as readonly string[];
+    expect(verbs.length, 'CONTROL: the read verbs are listed').toBeGreaterThan(0);
+    for (const v of verbs) expect(Object.keys(options[v]!.options), `${v} derives --agents from the common list`).toContain('--agents');
+  });
 });
 
 describe('ccrc history: process.env is read by name, from an allow-list (spec 2026-10-05 §10.1 Seams)', () => {

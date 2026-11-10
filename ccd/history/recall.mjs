@@ -56,7 +56,7 @@ import { basename as xbasename } from 'node:path';
  * @property {string | null} gen                       the generation the counter line names: a UUID, or null
  * @property {{ kind: 'family' | 'project' | 'workspace', id: string, generation: string | null,
  *   project: string | null, workdir: string | null, sessionPks: number[], transcriptPks: number[],
- *   families: ScopeFamily[] }} scope
+ *   families: ScopeFamily[], agents?: boolean }} scope   `agents` (W4 addendum P7): the scope reads subagent transcripts and their nodes too; absent reads as false
  * @property {string[]} scopeArgs                      the argv that reproduces this scope on a next: line
  * @property {import('./lib.mjs').PairIndex} pairIdx
  */
@@ -84,6 +84,44 @@ export function inParts(xs) {
 const marks = (xs) => xs.map(() => '?').join(', ');
 /** A time at minute precision, locale-free. */
 const isoOf = (ms) => (ms === null || ms === undefined ? 'unknown' : `${new Date(Number(ms)).toISOString().slice(0, 16)}Z`);
+
+// ── The subagent rows' scope (W4 addendum P7; D-8175) ────────────────────────────────────────────────────────────────────
+// A family's subagent transcripts (transcripts.agent_id <> '') and the nodes derived from them are read only under
+// `--agents`. ONE spelling of "a main-thread transcript" (MAIN_TRANSCRIPTS) serves both the scope's transcript list
+// (transcriptsOf; grep, expand's uuid targets, the header counts and the regex child all follow it) and every select over
+// `nodes` (mainOnlyAnd). The node term tests the node's own transcript, so a store with no subagent row selects exactly what it
+// selected before, and under --agents no term is added, so the statement is the one it was.
+
+/** The transcripts of the main thread: the one spelling of the filter. */
+const MAIN_TRANSCRIPTS = "SELECT transcript_pk FROM transcripts WHERE agent_id = ''";
+
+/** Whether this read's scope includes the subagent rows (`--agents`); a context with no such key reads as false. */
+const agentsOn = (rc) => rc.scope.agents === true;
+
+/** ` AND <col> IN (main transcripts)` over a transcript_pk column; '' under --agents. */
+function mainOnlyAnd(rc, col) {
+  return agentsOn(rc) ? '' : ` AND ${col} IN (${MAIN_TRANSCRIPTS})`;
+}
+
+/** A select-list tail naming a node's agent_id (its transcript's), only under --agents: '' otherwise, so a default read prepares the
+ *  statement it prepared before. `col` is the node's transcript_pk column. */
+function agentColumn(rc, col) {
+  return agentsOn(rc) ? `, (SELECT t.agent_id FROM transcripts t WHERE t.transcript_pk = ${col}) AS agent_id` : '';
+}
+
+/** The mark a human line carries for a subagent row (D-8175): ` agent:<agent_id>` as one display string (displayToken, then
+ *  escaped as text), right after the row's id and kind; '' for a main row, and always '' without --agents. */
+function agentMark(rc, agentId) {
+  if (!agentsOn(rc) || agentId === null || agentId === undefined || agentId === '') return '';
+  return ` agent:${escapeXmlText(displayToken(agentId, rc.pairIdx))}`;
+}
+
+/** The --json item field for the same row: `{ agent_id }`, the display string for a subagent row and null for a main one, and no
+ *  field at all without --agents (a default read's items are what they were). */
+function agentField(rc, agentId) {
+  if (!agentsOn(rc)) return {};
+  return { agent_id: agentId === null || agentId === undefined || agentId === '' ? null : displayToken(agentId, rc.pairIdx) };
+}
 
 // ── The as-of cut's reads (W2-2a Task 3; W2-D35, W2-D36, W2-D38) ────────────────────────────────────────────────────
 // The cut (lib's asOfCut) rides on rc.scope.cut, read through cutOf and bound through cutBinds (both below bindFor, Task
@@ -182,13 +220,15 @@ export function familiesOf(db, sel) {
 }
 
 /** The transcripts of these families that hold rows: those of CONFIRMED epochs only (an unconfirmed clear epoch
- *  is in no scope, DM46). */
-export function transcriptsOf(db, sessionPks) {
+ *  is in no scope, DM46). The main thread's only, unless `agents` (W4 addendum P7): a subagent transcript shares its parent's
+ *  cc_session_uuid, so the join alone would name it. */
+export function transcriptsOf(db, sessionPks, agents = false) {
   const out = new Set();
   for (const part of inParts(sessionPks)) {
     const rows = db.prepare('SELECT DISTINCT t.transcript_pk AS transcript_pk FROM epochs e '
       + 'JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid '
       + `WHERE e.session_pk IN (${marks(part)}) AND e.confirmed_ms IS NOT NULL `
+      + `${agents ? '' : `AND t.transcript_pk IN (${MAIN_TRANSCRIPTS}) `}`
       + 'AND EXISTS (SELECT 1 FROM entries x WHERE x.transcript_pk = t.transcript_pk)').all(...part);
     for (const r of rows) out.add(Number(r.transcript_pk));
   }
@@ -257,7 +297,7 @@ function nodeLine(rc, n, level, show) {
   const id = show(n.node_id);
   const gist = typeof n.gist === 'string' && n.gist !== '' ? foldOneLine(redactForDisplay(n.gist, rc.pairIdx)).trim() : '';
   const body = gist === '' ? '(no gist)' : recallEnvelope({ src: 'node', id, ts: n.earliest_ms ?? null, role: n.kind, text: gist });
-  return `${'  '.repeat(level + 1)}${id} ${n.kind} depth=${n.depth} ${isoOf(n.earliest_ms)}..${isoOf(n.latest_ms)} ${body}`;
+  return `${'  '.repeat(level + 1)}${id} ${n.kind}${agentMark(rc, n.agent_id)} depth=${n.depth} ${isoOf(n.earliest_ms)}..${isoOf(n.latest_ms)} ${body}`;
 }
 
 /** A complete JSON item for one retained node. Display redaction happens before JSON serialisation, then the
@@ -269,6 +309,7 @@ function nodeItem(n, parentById, family, rc) {
     ccrc_id: f === undefined ? null : f.ccrcId, generation: f === undefined ? null : f.generation, epoch_seq: Number(n.epoch_seq),
     earliest_ms: n.earliest_ms ?? null, latest_ms: n.latest_ms ?? null,
     gist: typeof n.gist === 'string' ? redactForDisplay(n.gist, rc.pairIdx) : null,
+    ...agentField(rc, n.agent_id),
   };
 }
 
@@ -321,7 +362,7 @@ export function runTree(rc, a) {
   const cols = selectColumns(rc.version, 'nodes', NODE_COLS, rc.schema);
   const stored = [];
   for (const part of inParts(rc.scope.sessionPks)) {
-    stored.push(...db.prepare(`SELECT ${cols} FROM nodes n WHERE n.session_pk IN (${marks(part)}) AND EXISTS (SELECT 1 FROM epochs e WHERE e.session_pk = n.session_pk AND e.seq = n.epoch_seq AND e.confirmed_ms IS NOT NULL)`).all(...part));
+    stored.push(...db.prepare(`SELECT ${cols}${agentColumn(rc, 'n.transcript_pk')} FROM nodes n WHERE n.session_pk IN (${marks(part)})${mainOnlyAnd(rc, 'n.transcript_pk')} AND EXISTS (SELECT 1 FROM epochs e WHERE e.session_pk = n.session_pk AND e.seq = n.epoch_seq AND e.confirmed_ms IS NOT NULL)`).all(...part));
   }
   // W2-D35: a node the as-of cut hides is absent (W2-D36): not listed, not counted in N, and no display prefix below is
   // measured against it.
@@ -617,11 +658,12 @@ function hintLine(text) {
   return text.startsWith('hint: ') ? text.slice('hint: '.length) : text;
 }
 
-/** The flags that reproduce this call's scope in a `next:` line. */
+/** The flags that reproduce this call's scope in a `next:` line, `--agents` last when the call read the subagent rows too. */
 function scopeArgs(rc) {
-  if (rc.scope.kind === 'project') return ['--project'];
-  if (rc.scope.kind === 'workspace') return ['--workspace'];
-  return rc.scope.id === rc.id ? [] : ['--session', rc.scope.id];
+  const agents = agentsOn(rc) ? ['--agents'] : [];
+  if (rc.scope.kind === 'project') return ['--project', ...agents];
+  if (rc.scope.kind === 'workspace') return ['--workspace', ...agents];
+  return rc.scope.id === rc.id ? agents : ['--session', rc.scope.id, ...agents];
 }
 
 /** An ISO time, or `?` for none. */
@@ -633,17 +675,21 @@ function iso(ms) {
  *  RV19). A node outside it is exit 2 out-of-scope, never 3; prefix uniqueness is computed among the scope's
  *  nodes. Node ids are hex after the kind letter, so `wanted + 'g'` bounds the prefix range on the primary key. */
 export function resolveNodeInScope(rc, wanted) {
-  const stored = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)} FROM nodes
+  // W4 addendum P7: a subagent node, without --agents, is a node outside the scope: `main` says which side it falls on, and the
+  // prefix rule below counts only the nodes the scope reads (Review Focus 5), so an id unique among the main thread's stays unique.
+  const stored = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)},
+      transcript_pk IN (${MAIN_TRANSCRIPTS}) AS main FROM nodes
     WHERE node_id >= ? AND node_id < ?`).all(wanted, `${wanted}g`);
   // W2-D36: a node the as-of cut hides is absent BEFORE scope, so it is neither in scope nor out of it. It answers 3, never
   // out-of-scope, and never makes a prefix ambiguous. One filter for describe, grep --node and expand's node target.
   const hiddenHere = cutHiddenNodes(rc, stored.map((x) => x.node_id));
   const rows = hiddenHere.size === 0 ? stored : stored.filter((x) => !hiddenHere.has(x.node_id));
   const mine = new Set(rc.scope.sessionPks);
+  const read = (x) => mine.has(x.session_pk) && (agentsOn(rc) || Number(x.main) === 1);
   const verdict = resolveScopedId({
     wanted,
-    inScope: rows.filter((x) => mine.has(x.session_pk)).map((x) => x.node_id),
-    outOfScope: rows.filter((x) => !mine.has(x.session_pk)).map((x) => x.node_id),
+    inScope: rows.filter(read).map((x) => x.node_id),
+    outOfScope: rows.filter((x) => !read(x)).map((x) => x.node_id),
   });
   switch (verdict.kind) {
     case 'ok': return { ok: true, id: verdict.id };
@@ -790,19 +836,32 @@ function hitFamilies(rc, hits) {
 /** A hit's human line: its snippet inside the untrusted-content envelope, which escapes it (§8.3, P30). The id and the
  *  role go in as display strings, so a 300,000-character uuid cannot pass the cap and the envelope escapes each once.
  *  `family` (hitFamilies; widened scopes only) is an attribute of the envelope. */
-function hitLine(rc, hit, snippet, family) {
+function hitLine(rc, hit, snippet, family, agentId) {
   const id = hit.uuid === null || hit.uuid === undefined ? `sidecar:${nameShown(rc, hit.name)}` : idShown(rc, hit.uuid);
-  return `  ${recallEnvelope({ src: hit.provenance, id, ts: hit.ts_ms, role: idShown(rc, hit.role), text: snippet, ...(family === undefined ? {} : { family }) })}`;
+  const mark = agentMark(rc, agentId);   // a hit line opens with its envelope, so a subagent row's mark leads it (D-8175)
+  return `${mark === '' ? '  ' : ` ${mark} `}${recallEnvelope({ src: hit.provenance, id, ts: hit.ts_ms, role: idShown(rc, hit.role), text: snippet, ...(family === undefined ? {} : { family }) })}`;
 }
 
 /** A hit's --json item: JSON escaping only (§8.3). A uuid, role or provenance of the shape of every real one is an exact
  *  copy; any other is the bounded, redacted display form, as describe and expand carry it (D-4597). */
-function hitItem(rc, hit, snippet, nodeId, family) {
+function hitItem(rc, hit, snippet, nodeId, family, agentId) {
   return {
     entry_uuid: idShown(rc, hit.uuid), node_id: nodeId, ts_ms: hit.ts_ms, role: idShown(rc, hit.role), provenance: idShown(rc, hit.provenance), snippet,
     sidecar: nameShown(rc, hit.name), ...(family === undefined ? {} : { family: { ccrc_id: family.id, generation: family.generation, first_seen_ms: family.firstSeenMs } }),
+    ...agentField(rc, agentId),
     trust: 'untrusted',
   };
+}
+
+/** The agent_id of each hit's transcript, under --agents only (D-8175): a map from transcript_pk to the stored id, '' for the
+ *  main thread. Empty without --agents, where no hit comes from a subagent and no line or item names one. */
+function hitAgents(rc, hits) {
+  const out = new Map();
+  if (!agentsOn(rc) || hits.length === 0) return out;
+  const tpks = [...new Set(hits.map((h) => h.transcript_pk).filter((x) => x !== null && x !== undefined))];
+  const rows = rc.db.prepare('SELECT transcript_pk, agent_id FROM transcripts WHERE transcript_pk IN (SELECT value FROM json_each(?))').all(JSON.stringify(tpks));
+  for (const r of rows) out.set(Number(r.transcript_pk), r.agent_id);
+  return out;
 }
 
 /** The group key of rows no leaf covers yet: grep's live tail (§8.4). */
@@ -818,8 +877,8 @@ function asOfOf(rc) {
 const STALE_CURSOR = 'that --cursor belongs to another query, scope or filter; run the query again without it';
 
 /** What a grep cursor is bound to: the query, the scope, every filter and, only under an as-of cut, its boundary
- *  (W2-D37). A cursor from another query, scope or cut, or from none, is refused, never applied to the wrong list. With no
- *  cut the key is the one every earlier build printed. */
+ *  (W2-D37), and, only under --agents, that flag (W4 addendum P7). A cursor from another query, scope or cut, or from none, is
+ *  refused, never applied to the wrong list. With no cut and no --agents the key is the one every earlier build printed. */
 function grepKey(rc, a) {
   const asof = asOfOf(rc);
   return sha256Hex(canonicalJson({
@@ -827,6 +886,7 @@ function grepKey(rc, a) {
     scope: [rc.scope.kind, rc.scope.id, rc.scope.generation],
     role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs, node: a.node, sort: a.sort, recall: a.includeRecall,
     ...(asof === null ? {} : { asof }),
+    ...(agentsOn(rc) ? { agents: true } : {}),
   })).slice(0, 20);
 }
 
@@ -861,12 +921,12 @@ function grepArgv(rc, a, cursor) {
   return out.map((x) => redactField(x, rc.pairIdx));
 }
 
-/** Display prefixes for every node of the scope (§6.1): unique within the scope, never shorter than
- *  NODE_ID_DISPLAY_MIN. Under an as-of cut, computed over the visible nodes only (W2-D35), so a hidden neighbour never
+/** Display prefixes for every node of the scope (§6.1): unique within the scope (the main thread's nodes unless --agents, W4
+ *  addendum P7), never shorter than NODE_ID_DISPLAY_MIN. Under an as-of cut, computed over the visible nodes only (W2-D35), so a hidden neighbour never
  *  lengthens a visible node's prefix. */
 function scopePrefixes(rc) {
   const ids = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id'], rc.schema)} FROM nodes
-    WHERE session_pk IN (SELECT value FROM json_each(?))`).all(JSON.stringify(rc.scope.sessionPks)).map((r) => r.node_id);
+    WHERE session_pk IN (SELECT value FROM json_each(?))${mainOnlyAnd(rc, 'transcript_pk')}`).all(JSON.stringify(rc.scope.sessionPks)).map((r) => r.node_id);
   const hiddenPre = cutHiddenNodes(rc, ids);
   return displayPrefixes(hiddenPre.size === 0 ? ids : ids.filter((id) => !hiddenPre.has(id)));
 }
@@ -883,15 +943,15 @@ function coveringLeaves(rc, entryIds) {
   if (cutOf(rc) === null) {
     const rows = rc.db.prepare(`SELECT ns.entry_id AS entry_id, min(ns.node_id) AS node_id
       FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
-      JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk'])} ON n.node_id = ns.node_id
-      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))
+      JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk', 'transcript_pk'])} ON n.node_id = ns.node_id
+      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))${mainOnlyAnd(rc, 'n.transcript_pk')}
       GROUP BY ns.entry_id`).all(JSON.stringify(entryIds), JSON.stringify(rc.scope.sessionPks));
     return new Map(rows.map((r) => [r.entry_id, r.node_id]));
   }
   const pairs = rc.db.prepare(`SELECT ns.entry_id AS entry_id, ns.node_id AS node_id
       FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
-      JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk'])} ON n.node_id = ns.node_id
-      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))`)
+      JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk', 'transcript_pk'])} ON n.node_id = ns.node_id
+      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))${mainOnlyAnd(rc, 'n.transcript_pk')}`)
     .all(JSON.stringify(entryIds), JSON.stringify(rc.scope.sessionPks));
   const hiddenLeaves = cutHiddenNodes(rc, pairs.map((r) => r.node_id));
   const out = new Map();
@@ -903,13 +963,13 @@ function coveringLeaves(rc, entryIds) {
   return out;
 }
 
-/** The time range and gist of each group's leaf. A leaf the as-of cut hides has no head (W2-D35), so neither its range nor
- *  its gist can print. Exported as a test seam (the describePageEnd precedent): renderHits hands it only ids coveringLeaves
+/** The time range and gist of each group's leaf (and, under --agents, its agent_id). A leaf the as-of cut hides has no head
+ *  (W2-D35), so neither its range nor its gist can print. Exported as a test seam (the describePageEnd precedent): renderHits hands it only ids coveringLeaves
  *  has already cut, so no read verb can show this guard red on its own. */
 export function leafHeads(rc, ids) {
   if (ids.length === 0) return new Map();
-  const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'earliest_ms', 'latest_ms', 'gist'], rc.schema)}
-    FROM nodes WHERE node_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids));
+  const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'earliest_ms', 'latest_ms', 'gist'], rc.schema, 'n')}${agentColumn(rc, 'n.transcript_pk')}
+    FROM nodes n WHERE n.node_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids));
   const hiddenHeads = cutHiddenNodes(rc, ids);
   return new Map(rows.filter((r) => !hiddenHeads.has(r.node_id)).map((r) => [r.node_id, r]));
 }
@@ -942,7 +1002,7 @@ function renderHits(rc, pool, termsOf, a, page, deps = {}) {
     } else {
       const n = heads.get(g);
       const shown = pre.get(g) ?? g;
-      text = `── leaf ${shown} ${iso(n?.earliest_ms ?? null)} → ${iso(n?.latest_ms ?? null)}`;
+      text = `── leaf ${shown}${agentMark(rc, n?.agent_id)} ${iso(n?.earliest_ms ?? null)} → ${iso(n?.latest_ms ?? null)}`;
       if (n !== undefined && n.gist !== null) {
         const gist = foldOneLine(redactForDisplay(n.gist, rc.pairIdx)).trim();
         const cut = snippetLine(gist);
@@ -954,8 +1014,10 @@ function renderHits(rc, pool, termsOf, a, page, deps = {}) {
   };
   const families = hitFamilies(rc, hits);
   const familyOfHit = (h) => families.get(Number(h.transcript_pk));
-  const lines = hits.map((h, i) => hitLine(rc, h, snippets[i], familyOfHit(h)));
-  const items = hits.map((h, i) => hitItem(rc, h, snippets[i], groupOf[i] === LIVE_TAIL ? null : groupOf[i], familyOfHit(h)));
+  const agents = hitAgents(rc, hits);
+  const agentOfHit = (h) => agents.get(Number(h.transcript_pk));
+  const lines = hits.map((h, i) => hitLine(rc, h, snippets[i], familyOfHit(h), agentOfHit(h)));
+  const items = hits.map((h, i) => hitItem(rc, h, snippets[i], groupOf[i] === LIVE_TAIL ? null : groupOf[i], familyOfHit(h), agentOfHit(h)));
   const grouped = (k) => {
     const order = [];
     const members = new Map();
@@ -1145,7 +1207,7 @@ const DESCRIBE_LIST_RESERVE = 4000;
 const DESCRIBE_STALE_CURSOR = 'that --cursor pages another node, or ran past its summary; describe the node again with --full';
 
 function nodeRow(rc, id) {
-  return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', DESCRIBE_NODE_COLS, rc.schema)} FROM nodes WHERE node_id = ?`).get(id);
+  return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', DESCRIBE_NODE_COLS, rc.schema, 'n')}${agentColumn(rc, 'n.transcript_pk')} FROM nodes n WHERE n.node_id = ?`).get(id);
 }
 
 function refsOf(rc, id) {
@@ -1357,11 +1419,11 @@ export function runDescribe(rc, a, deps = {}) {
   /** A window of the raw summary as shown: redacted with its margins, never the whole summary first. */
   const shownSummary = (from, to) => redactDisplayWindow(summary, from, to, rc.pairIdx);
   const env = (src, text) => recallEnvelope({ src, id: disp(id), ts: n.latest_ms, role: null, text });
-  const nodeLine = `node ${disp(id)} ${n.kind} depth ${n.depth} status ${n.status} ${iso(n.earliest_ms)} → ${iso(n.latest_ms)} producer ${producer}`
+  const nodeLine = `node ${disp(id)} ${n.kind}${agentMark(rc, n.agent_id)} depth ${n.depth} status ${n.status} ${iso(n.earliest_ms)} → ${iso(n.latest_ms)} producer ${producer}`
     + `${n.directive_flag === 1 ? ' directive-flag' : ''}${n.capped === 1 ? ' capped' : ''}`;
   const base = {
     node_id: id, kind: n.kind, depth: n.depth, status: n.status, parent_id: parent,
-    earliest_ms: n.earliest_ms, latest_ms: n.latest_ms, producer,
+    earliest_ms: n.earliest_ms, latest_ms: n.latest_ms, producer, ...agentField(rc, n.agent_id),
   };
   const tailArgs = [...scopeArgs(rc), ...(a.json ? ['--json'] : [])];
 
@@ -1561,6 +1623,8 @@ function expandStmts(rc) {
   const q = (sql) => rc.db.prepare(sql);
   const s = {
     node: q(`SELECT ${cols('nodes', ['node_id', 'kind', 'session_pk'])} FROM nodes WHERE node_id = ?`),
+    // A row's agent_id (D-8175): asked only under --agents, once per entry shown.
+    agentOf: q('SELECT agent_id FROM transcripts WHERE transcript_pk = ?'),
     entryById: q(`SELECT ${cols('entries', EXPAND_ENTRY_COLS)} FROM entries WHERE entry_id = ?`),
     entryByUuid: q(`SELECT ${cols('entries', EXPAND_ENTRY_COLS)} FROM entries WHERE uuid = ?`),
     hop: q(`SELECT ${cols('entries', ['parent_uuid', 'blob_id'])} FROM entries WHERE uuid = ?`),
@@ -1885,9 +1949,12 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   const id = isEntry ? uuidShown : `${uuidShown}/${nameTok}`;
   const t = isEntry ? expandEntryText(rc, e) : expandSidecarText(rc, s, it.blobId);
   const ts = e.ts_ms === null ? '-' : new Date(Number(e.ts_ms)).toISOString();
+  // D-8175: under --agents a row of a subagent transcript carries `agent:<agent_id>` right after its id, and its --json item `agent_id`.
+  const agentId = agentsOn(rc) ? (s.agentOf.get(e.transcript_pk)?.agent_id ?? '') : '';
+  const mark = agentMark(rc, agentId);
   const lead = isEntry
-    ? `── ${pos}/${total} ${e.type === '' ? 'raw' : tx(e.type)}${e.role ? `/${tx(e.role)}` : ''} ${tx(src)} ${asText(uuidShown)} ${ts}`
-    : `── ${pos}/${total} sidecar ${asText(nameTok)} of ${asText(uuidShown)}`;
+    ? `── ${pos}/${total} ${e.type === '' ? 'raw' : tx(e.type)}${e.role ? `/${tx(e.role)}` : ''} ${tx(src)} ${asText(uuidShown)}${mark} ${ts}`
+    : `── ${pos}/${total} sidecar ${asText(nameTok)} of ${asText(uuidShown)}${mark}`;
   const causes = t.causes ?? [];   // every entry answer carries its variant causes (expandEntryText); a sidecar's non-text answer carries none
   const shownCauses = causes.slice(0, listPrefix(causes.length, (i) => Math.max(`variant cause=${tx(causes[i])}`.length, JSON.stringify({ cause: tok(causes[i]) }).length) + 1)).map(tok);
   const tail = [
@@ -1896,7 +1963,7 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   ];
   const base = {
     kind: it.kind, uuid: uuidShown, ...(isEntry ? {} : { name: nameShownHere }), type: tok(e.type), role: tok(e.role),
-    ts_ms: e.ts_ms === null ? null : Number(e.ts_ms), provenance: tok(src), trust: 'untrusted',
+    ts_ms: e.ts_ms === null ? null : Number(e.ts_ms), provenance: tok(src), ...agentField(rc, agentId), trust: 'untrusted',
   };
   // The sidecar names are shown one at a time and only as far as the list reaches: an entry can have thousands.
   const sidecarName = (i) => nameShown(rc, it.sidecars[i].name);

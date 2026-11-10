@@ -83,6 +83,18 @@ describe('the history skill: its text (spec §8.5; the text half of C23)', () =>
     for (const s of CONTRACT) expect(flat, `missing: ${s.slice(0, 56)}…`).toContain(s);
   });
 
+  // W4 addendum P7 (Task 3): the one sentence that says when to pass --agents, in "5. Scope". It names no writing form
+  // (the test below holds that for the whole file).
+  const AGENTS_SKILL_LINE = "Pass `--agents` when what you need may sit in a subagent's or a workflow agent's own work, such as a delegated search or review whose result the main thread only summarised; without it every verb reads the main thread only.";
+  it('the skill says when to pass --agents, in the Scope section', () => {
+    expect(flat).toContain(AGENTS_SKILL_LINE);
+    const at = skill.indexOf('## 5. Scope');
+    const line = flat.indexOf(AGENTS_SKILL_LINE);
+    expect(at, 'CONTROL: the Scope section exists').toBeGreaterThan(-1);
+    expect(line, 'the sentence sits inside section 5, before section 6').toBeGreaterThan(flat.indexOf('## 5. Scope'));
+    expect(line).toBeLessThan(flat.indexOf('## 6. Trust'));
+  });
+
   it('has the ten sections §8.5 lists, numbered 1..10, in order', () => {
     const heads = [...skill.matchAll(/^## (\d+)\. (.+)$/gm)].map((m) => [Number(m[1]), m[2]!]);
     expect(heads).toEqual(SECTIONS.map((t, i) => [i + 1, t]));
