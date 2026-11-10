@@ -1,0 +1,7 @@
+{
+  "file": "server/src/watch.ts",
+  "maxDelta": 59,
+  "d": "D-8077",
+  "reason": "the run-close lane's wiring across the branch: sweepRunClose, its act-time listing, the lane's memory and the crash row's off switch and its would-close reading (Task 25 and Task 26); measured +59 net code lines against the merge-base; the deciders are in new coord/ and shared/ files, only the wiring is here",
+  "added": "2026-11-09"
+}

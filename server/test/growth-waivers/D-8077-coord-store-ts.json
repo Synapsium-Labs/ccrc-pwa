@@ -1,0 +1,7 @@
+{
+  "file": "server/src/coord/store.ts",
+  "maxDelta": 168,
+  "d": "D-8077",
+  "reason": "the run-close lane's durable facts and the three-state arming row: anchors, warnings, the closes tally, run_close_settings and run_close_refusals (Task 25, Task 26 and the refusal-detail prefix of Task 27); measured +168 net code lines against the merge-base; the deciders are in new coord/ and shared/ files, only the wiring is here",
+  "added": "2026-11-09"
+}
