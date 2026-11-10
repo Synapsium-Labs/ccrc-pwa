@@ -36,6 +36,7 @@ import { operatorSecretRows, withOperatorSecretRows } from './coord/ledgersSecre
 import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
+import { COORDINATOR_SKILL_REVISION } from '../../shared/api.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
@@ -377,6 +378,7 @@ setInterval(() => { accountAudit.sweep(Date.now()); linearJournal.sweep(Date.now
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
+watcher.announceSkillRollout(COORDINATOR_SKILL_REVISION);   // D-8126: one rollout mail per coordinator per skill revision
 perf.start();
 await app.listen({ host: cfg.host, port: cfg.port });
 tokenDriver.start();

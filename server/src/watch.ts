@@ -69,6 +69,7 @@ import {
 } from './coord/rundefs.js';
 import { blockWakeDue, type CallRow } from './coord/coordCalls.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
+import { runSkillRollout } from './skillRolloutLane.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
   briefNotTakenSubject, briefNotTakenTag, briefStep, type UnlandedBrief,
@@ -1440,6 +1441,18 @@ export class FleetWatcher {
       this.timer = null;
     }
     this.deps.perf?.stop();
+  }
+
+  /** D-8126 (autonomy plan A9-3): the rollout mail, once at server start. `index.ts` calls it beside `start()`; the pass is
+   *  `skillRolloutLane.ts`'s, and its once-only record is the feed row written here. A coord-less server mails nothing. */
+  announceSkillRollout(revision: string): string[] {
+    const coord = this.deps.coord;
+    if (coord === undefined) return [];
+    return runSkillRollout({
+      coord,
+      record: (e, dedupeKey) => this.pushOne({ kind: 'coord', sessionId: e.sessionId, project: '', title: e.title, body: e.body,
+        recordAlways: true, recordOnly: true, dedupeKey }, this.activeProjects),
+    }, revision).sent;
   }
 
   /**

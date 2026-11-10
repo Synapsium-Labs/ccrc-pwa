@@ -11996,6 +11996,11 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
 export const SERVER_CAPS: readonly ServerCap[] = Object.keys(SERVER_CAP_MAP) as ServerCap[];
 
+/** D-8126: the revision of the coordinator skill's contract this build carries. The server sends each running
+ *  coordinator ONE rollout mail per revision at start (`coord/skillRollout.ts`); a later contract change bumps this word
+ *  and the mail goes out again. */
+export const COORDINATOR_SKILL_REVISION = 'clause-21';
+
 /** The file's name, under `~/.ccrc` (the node's ccrc directory). */
 export const SERVER_CAPS_FILE = 'server-caps';
 
