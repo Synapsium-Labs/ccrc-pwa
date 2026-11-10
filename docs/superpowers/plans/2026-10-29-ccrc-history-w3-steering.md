@@ -6,6 +6,8 @@
 > **Accepted on 2026-11-09.** The operator accepted this plan on 2026-11-09 (programme item 121), after review 1702. Before the merge, the coordinator ran Task 1E's act 1 read-only the same day, on Claude Code 2.1.319, the installed version. The anchor `reuse:"miss_hook"` is still present, and that version records a precomputed compaction as `compactMetadata.precomputed` on its boundary row. The history store keeps no copy of that field, so act 1 counted the boundary rows in the transcripts of every Claude Code home on the session-hosting node: none of the 3,793 distinct rows carries it, and 177 of them were written by 2.1.319. So the precompute path is not live, and O3 stands as ruled.
 >
 > The caution box below was written before these two acts, as was the precompute row under "Measured on the base", which records the base. The box's "held draft", "is not accepted" and "has not been performed", and every line that waits for this plan's acceptance or for act 1, describe the plan before them. The acceptance authorises this document's merge and the build of the PRs it orders, each with its own review. Every other gate in the box stands as written, O4 and the operator's arming among them.
+>
+> **Amended on 2026-11-10** by the coordinator, after review 1736 of W3-1: the lane-word lines (Global Constraints, the `history-steer-hook-copies` slug, Task 1C and D-8130) say that W3-1 spells no lane word, Task 3 carries the lane-words parity case and its mutant, and the PR table says that a W3 PR adding a history test claims `ci.yml`.
 
 > [!CAUTION]
 > **A held draft. It authorises nothing.** It was drafted under programme item CP-60 and is not accepted. On 2026-11-08 the operator (items 90, 91 and 96) and the coordinator (the programme ledger) ruled every row its decision table then held but O4. The operator ruled O23 and O24, added afterwards from reviews 1686 and 1690, on 2026-11-09 (items 117 and 118), so O4 alone is open. The rulings select options. They accept neither this plan nor any build.
@@ -70,7 +72,7 @@ Programme: `docs/superpowers/programs/ccrc-history.md`, Stage 6 (CP-60 to CP-63)
 - **The hook always exits 0** and never blocks a compaction. A failure or an undecided input prints nothing (§7.7). The one exception is an absent steer file on an armed main scope, which prints the generic variant.
 - **The hook never consumes the steer file** (PX13). Only the sweep's card step consumes, deletes or withdraws one. The guard is a static scan over resolved names plus a behavioural check, both in `session-hook-steer.test.ts` (Task 1C).
 - **Byte bounds are bytes.** Every bounded hook read runs under `LC_ALL=C`, set as a function-local, so `read -N` counts bytes in every locale. A NUL byte is the exception: `read` drops it and does not count it (Task 1C, gate 6).
-- **Lane words are lib's `BACKENDS`** (`['anthropic', 'other', 'unknown']`), the one declaration `switches-history.test.ts` pins. The hook spells them again, under a parity pin. `unknown` is never armed, and the breaker reads open for it.
+- **Lane words are lib's `BACKENDS`** (`['anthropic', 'other', 'unknown']`), the one declaration `switches-history.test.ts` pins. The hook spells them again, under a parity pin, from W3-3, the first wave whose hook reads a lane marker; W3-1 reads none and spells none (D-8130). `unknown` is never armed, and the breaker reads open for it.
 - **Values, verbatim from the spec:**
 
   | Value | Setting |
@@ -185,6 +187,7 @@ All test paths are under `server/test/`. The rows are in build order: W3-4 comes
 - Every PR that grows `ccd/session-hook.sh` runs `GROWTH_CHECK=1` growth-check in its gate. A waiver counts only once it is committed.
 - Every W3 PR that edits `ccd/session-hook.sh` (W3-1, W3-2 and W3-3) runs the tail rule's PR-time check in its gate (Task 1C Step 4). It is a gate command, not a committed test, so it binds W3's own edits and retires with W3.
 - Every PR runs `deviation-refs` after `git fetch origin main`, plus `dtbd`, `citations` and `anchors`.
+- A W3 PR that adds a `server/test/history-*.test.ts` file also adds it to `ci.yml`'s node-floor Test list (`ci-pipeline.test.ts` pins that list), and so claims `.github/workflows/ci.yml` whole; the claims rule serialises it with W4. W3-1 added its three new files under a coordinator grant. W3-2, W3-3 and W3-4 add none as planned.
 
 **Predecessor contracts:**
 - W3-4 needs W3-1 merged, for its `composeSteerFile`. It merges and is released with W3-1 before the cohort (O15). It does not wait for W3-2: during the cohort no breaker exists, for leaf or add-on spans, and the safety is the operator's watch (Task 1E, act 4) and the removal of `steer-on/<id>`.
@@ -274,7 +277,7 @@ What the rulings do:
   - `isoOf` also formats single instants, on the `family … first-seen=` and `epoch … started=` lines, so a range function cannot replace it. Only the `tree` line's range is a range.
   - Until the instant format has one home, it has two spellings, and Task 1A's range case holds them equal through `tree`'s output.
   - A proposal for `recall.mjs`'s next editor (its first editor's carry): lib holds the instant format once, and `isoOf`'s three uses and `nodeRangeText` all call it, with every verb's output pinned unchanged. This plan refactors no source.
-- `history-steer-hook-copies`, a recorded second spelling. The hook carries the template's first line, the generic variant and the lane words as constants, each parity-pinned against lib. They are legitimately different, because they live in another process: bash cannot import `lib.mjs`;
+- `history-steer-hook-copies`, a recorded second spelling. The hook carries the template's first line, the generic variant and the lane words as constants, each parity-pinned against lib. They are legitimately different, because they live in another process: bash cannot import `lib.mjs`. W3-1 built the first two; the lane words come with W3-3 (D-8130, Task 3);
 - `history-steer-recall-off-tail-copy`, **taken by O9 (a)**: a second spelling of the recall-off gate, forced by the tail rule, recorded as legitimately different under it, and held equal by a parity matrix;
 - `history-steer-breaker-first-derivation`. A breaker transition is applied only at a leaf's first derivation, so a re-derivation in place never moves it. A rebuilt store replays it, on the boundary clock (O16 (a), `history-steer-breaker-on-rebuild`), and counts each leaf as the rebuilt store reads it (O24 (a), ruled 2026-11-09);
 - `history-steer-spike-report`, **taken by O5**: `history-counters.mjs spike`;
@@ -618,7 +621,7 @@ The card's per-session step already measures, decides and acts for the next comp
 - Test: `session-hook-steer.test.ts` (new); `session-hook.test.ts` (the S16 scope cases and the spool cases are the characterization pins); `session-hook-compact-carry.test.ts`; `single-definition/switches-history.test.ts`.
 
 **Interfaces:**
-- Consumes: `STEER_FIRST_LINE`, `STEER_GENERIC_TEXT`, `STEER_FILE_MAX` and `BACKENDS` from `lib.mjs` at W3-1's own head.
+- Consumes: `STEER_FIRST_LINE`, `STEER_GENERIC_TEXT`, `STEER_FILE_MAX` and `BACKENDS` from `lib.mjs` at W3-1's own head. The tests read `BACKENDS`; the hook spells no lane word in W3-1 (D-8130).
 - Produces:
   - `_hook_history_pre`;
   - receipts of exactly `{"v":1,"ev":"steer","id":"<id>","sid":"<psid>","leaf":"<L… or empty>"[,"gen":"<uuid>"][,"ts":<ms>]}`.
@@ -708,7 +711,7 @@ The card's per-session step already measures, decides and acts for the next comp
 
     Each row runs through SessionStart(compact), where the card line is served or withheld, and through PreCompact, where the print happens or not, and asserts the same withhold verdict. That equality is the spec's requirement, and the matrix runs through the tail copy O9 (a) builds;
   - narrowed: `PreCompact prints nothing unless armed and scope main`, the two existing pins, and README's two sentences as amended;
-  - parity: `HISTORY_STEER_FIRST_LINE`, `HISTORY_STEER_GENERIC` and the hook's lane words equal lib's `STEER_FIRST_LINE`, `STEER_GENERIC_TEXT` and `BACKENDS`;
+  - parity: `HISTORY_STEER_FIRST_LINE` and `HISTORY_STEER_GENERIC` equal lib's `STEER_FIRST_LINE` and `STEER_GENERIC_TEXT`. The hook spells no lane word in W3-1 (D-8130): a case asserts that its non-comment code names no `history-steer-live` marker, so the first wave that reads one fails it until it spells the lane words and pins them against `BACKENDS` (Task 3);
   - `switches-history.test.ts`:
     - `HOLDERS` lists `ccd/session-hook.sh` beside `ccd/history/lib.mjs` for `history-steer-off` and `steer-on`;
     - `PENDING_EMITTERS` loses `steer`, so the emitter check now requires the hook to emit it.
@@ -1025,7 +1028,8 @@ Only after all four does the hook build `steer/.lanes/$w`, and it reads that fil
     - a `.wrapper` that fills `_ct_read`'s 128-char window → `unknown`;
   - `a lane file whose account left the roster is removed; --roster-unreadable removes none`;
   - `the shim emits one --lane per rostered account from CCRC_ANTHROPIC_BACKEND`, with fixture accounts `lane-a` (anthropic) and `lane-b` (other), and no account name in source;
-  - `HOLDERS` lists `ccd/session-hook.sh` for `history-steer-live`.
+  - `HOLDERS` lists `ccd/session-hook.sh` for `history-steer-live`;
+  - the lane words (D-8130's deferred parity): `the hook's lane words equal lib's BACKENDS less unknown, in order`. It replaces W3-1's case "the lane words: W3-1 reads no history-steer-live marker, so the hook spells none" in `session-hook-steer.test.ts`, which this task's lane read turns red by design.
 - [ ] **Step 2: Run them: they fail.**
 - [ ] **Step 3: Implement** the four changes and widen the lifecycle row.
 - [ ] **Step 4: Run them, then `session-hook*` and `history-sweep.test.ts`: all pass.** Then run growth-check armed and the tail rule's PR-time check (Task 1C Step 4), and these mutants, each killed by the case named:
@@ -1033,7 +1037,8 @@ Only after all four does the hook build `steer/.lanes/$w`, and it reads that fil
   - (b) `unknown` armed by a live marker (PX27);
   - (c) the lane taken from the steer file (Review Focus 2);
   - (d) a lane file kept after its account left;
-  - (e) an unreadable `.wrapper` defaulting to `anthropic` (the `.wrapper` row).
+  - (e) an unreadable `.wrapper` defaulting to `anthropic` (the `.wrapper` row);
+  - (f) one hook lane word changed (`other` spelled `others`) (the lane-words parity case).
 - [ ] **Step 5: Commit** `feat(history): per-backend lanes and arming (spec §7.2, §7.5)`.
 
 ### Task 4: The parent add-on and steered node gists (W3-4)
@@ -1207,7 +1212,7 @@ W3-1 (run 1713) defines the nine below: the eight departures the coordinator app
 - **D-8127 — `history-steer-module`** (2026-11-09). The steer file's IO lives in a new `ccd/history/steer.mjs`, called from `card.mjs`'s card step, not from `sweep.mjs` as §7.6 says; the decisions stay in lib.
 - **D-8128 — `history-steer-on-the-card-lifecycle`** (2026-11-09). The steer file shares the card's lifecycle: `decideCardFile` gains an `artifact` argument rather than a second decider, and each withdrawal arm unlinks both artifacts.
 - **D-8129 — `history-steer-range-text`** (2026-11-09). A slot's range is the `tree` verb's text, `isoOf(earliest)..isoOf(latest)`, at most 36 ASCII chars; lib gains `nodeRangeText` with that spelling, so the instant format has two spellings until it has one home.
-- **D-8130 — `history-steer-hook-copies`** (2026-11-09). The hook carries the template's first line and the generic variant as constants, each parity-pinned against lib: legitimately different, because bash cannot import `lib.mjs`. W3-1 spells no lane word, because it reads no `history-steer-live.*` marker (gate 4), so Task 1C's lane-word parity item and the `BACKENDS` it consumes are not built here. The hook's lane words and their parity case come with the wave that first reads a lane marker in the hook.
+- **D-8130 — `history-steer-hook-copies`** (2026-11-09). The hook carries the template's first line and the generic variant as constants, each parity-pinned against lib: legitimately different, because bash cannot import `lib.mjs`. W3-1 spells no lane word, because it reads no `history-steer-live.*` marker (gate 4), so Task 1C's lane-word parity item is not built here. The hook's lane words and their parity case come with the wave that first reads a lane marker in the hook, W3-3 (Task 3's lane-words case).
 - **D-8131 — `history-steer-recall-off-tail-copy`** (2026-11-09, taken by O9 (a)). A second spelling of the recall-off gate in the hook's tail, forced by the tail rule, recorded as legitimately different under it and held equal by a parity matrix.
 - **D-8132 — `history-steer-spike-report`** (2026-11-09, taken by O5). The spike report is `history-counters.mjs spike`, its existing owner.
 - **D-8133 — `history-steer-spike-per-leaf-figures`** (2026-11-09). The spike's headroom and `analysis_only` figures are evaluated per leaf from stored summaries with lib's own rules, never from the node-wide counters, which carry no session or time.

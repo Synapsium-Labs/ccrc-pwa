@@ -86,7 +86,28 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-09
+## Current checkpoint — 2026-11-10
+
+This supersedes the 2026-11-09 checkpoint below where they differ; the current route and the definition of done above
+stand. The evidence is under "Latest rulings and evidence — 2026-11-09 to 2026-11-10".
+
+- **W3-1 landed (CP-61's spike PR).** #2510 merged through the merge queue on 2026-11-10 at 01:51Z as `683fd7a03`, at
+  head `f794eab9e`, after reviews 1732 (the whole branch) and 1736 (fix round 1's delta). Run 1713 closed done at
+  01:54Z, after its MERGED mail. W3-1 defines D-8127 to D-8135. Nothing is armed: the hook prints only for a session
+  carrying `steer-on/<id>`, which only the operator writes, and no `history-steer-live.*` marker is read yet.
+- **W3-4 is dispatched** (run 1738, wave 28, 01:54Z): the parent add-on and steered node gists, W3 plan Task 4. Under
+  O15 it merges and is released with W3-1 before the spike cohort. Numbers 8136 to 8138 stay held for its departures.
+- **The W4 plan (run 1714, #2503, a draft docs PR) is in review.** Five reviews (1726, 1728, 1731, 1735 and 1737) and
+  five fix rounds have run. The operator lifted the run's review cap (item 133), and the lift stands for the run.
+  Review 6 reads fix round 5's delta only, and it is the last plan round: a plan-text defect left after it is corrected
+  at build time under the plan's anchor rule (the coordinator's ruling, 2026-11-10).
+- **The spike cohort** (W3 plan Task 1E, the operator's acts) waits on W3-4's merge and on one release carrying W3-1
+  and W3-4. O4, each backend's compliance bar, waits for its figures.
+- **The W3 plan's lane-word text** is corrected in this update (review 1736, below).
+- **W1** is as on 2026-11-09: W1-b is re-measured over the week ending 2026-11-15, and W1-l is the operator's drill
+  (item 86), whose result do-item 111 waits for.
+
+### Checkpoint of 2026-11-09
 
 This supersedes the 2026-11-07 checkpoint below where they differ; the current route and the definition of done above
 stand. The evidence is under "Latest rulings and evidence — 2026-11-08 to 2026-11-09".
@@ -209,12 +230,76 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1233 closed as failed; branch kept |
 | 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1236 closed as failed; branch kept |
 | 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **merged** 2026-11-01 19:04:40Z as `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`, exact reviewed head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 **done/released**, item 1/1, review rounds 1/3; review 1321 done/released; accepted MERGED mail preceded final close |
-| 26 | W3-1: the steering spike PR (template, steer file, print and receipt, refs repair, spike report; W3 plan Tasks 1A, 1F, 1B, 1C and 1D). It prints into a compaction only on a session the operator arms | fleet (hook) | — | **dispatched** 2026-11-09 19:43Z (run 1713, CP-61); deviation numbers 8127 to 8138 |
-| 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | — | **dispatched** 2026-11-09 19:43Z (run 1714); a draft docs PR; no W4 build before it is accepted |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 building (wave 26); focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan drafting (wave 27); accepted plan/review and B4 live still required |
+| 26 | W3-1: the steering spike PR (template, steer file, print and receipt, refs repair, spike report; W3 plan Tasks 1A, 1F, 1B, 1C and 1D). It prints into a compaction only on a session the operator arms | fleet (hook) | #2510 | **merged** 2026-11-10 01:51Z as `683fd7a03` at head `f794eab9e` (run 1713, CP-61, done 01:54Z; reviews 1732 and 1736; one fix round); defines D-8127 to D-8135; numbers 8136 to 8138 held |
+| 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | #2503 (draft) | **in review** (run 1714): reviews 1726, 1728, 1731, 1735 and 1737 with fix rounds 1 to 5; review cap lifted by the operator (item 133); review 6 reads fix round 5's delta and is the last plan round; no W4 build before it is accepted |
+| 28 | W3-4: the parent add-on and steered node gists (W3 plan Task 4), the other half of the cohort's release (O15) | fleet | — | **dispatched** 2026-11-10 01:54Z (run 1738); numbers 8136 to 8138 held for its licensed departures |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 building (wave 28); focused steering spike and per-backend operator arming retained |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan in review (wave 27, #2503); accepted plan/review and B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-09 to 2026-11-10
+
+- **W3-1's build grants (the coordinator, 2026-11-09).** Each was asked by the worker, ruled from the plan and main,
+  and is listed in #2510's body:
+  - `server/test/history-replay.test.ts`: the w6c import-pin lines (`makePairIndex`) and the `spike` line in
+    `COUNTER_SUBCOMMANDS`;
+  - `server/test/session-hook-append-race.test.ts`: the reader, the driver and `set -T`, after Task 1C's move;
+  - `server/test/single-definition/ask-digest.test.ts`: two pins placed by function and anchor side, with CONTROLs,
+    after the hook's third `uuid_re` was folded into `_hook_history_pre`;
+  - `.github/workflows/ci.yml`: two lines in the node-floor Test list for W3-1's new history tests;
+  - D-8135 (`history-steer-hook-growth`), licensed from the held block, with its waiver `maxDelta` of 120 lines.
+- **Review 1732 of W3-1 (the whole branch at `082b134c5`).** Live safety, the tail rule, the growth waiver, scope and
+  seven re-measured mutants held. The coordinator ruled fix round 1:
+  - F1, the lane words: a measured correction. Gate 4 says W3-1 reads no `history-steer-live.*` marker, so the hook has
+    nothing for a lane word to gate. D-8130's text now says W3-1 spells none, and the hook's lane words and their
+    parity case come with the first wave that reads a lane marker.
+  - F2 and F3, the uuid census: the words were narrowed to what the census measures, a `uuid_re=` assignment. The
+    guard was not widened.
+  - A1 (a sweep comment), A2 (the plan's two numbering sentences) and A5 (a pin for `activeFiles`' seen-path half,
+    measured red under its mutant) were fixed in the same round.
+  - A3 (the grants above sit outside the plan's PR table) and A4 (Task 1C's mutant (c) is killed by a source pin,
+    because a `{` file already fails the first-line check) are recorded here and need no change.
+- **Review 1736 of W3-1 (fix round 1's delta, `082b134c5..f794eab9e`).** The five rulings held. Its two findings were
+  plan text outside the ruled edit: four lines still said W3-1 builds lane words, and Task 3 named no lane-word parity
+  case. The coordinator accepted the PR, landed it, and corrected the plan in this update: Global Constraints, the
+  `history-steer-hook-copies` slug, Task 1C and D-8130 now say W3-1 spells no lane word; Task 3 gains the lane-words
+  case and mutant (f); and the PR table says that a W3 PR adding a history test claims `ci.yml` (from review 1737's
+  A6). The case "the lane words: W3-1 reads no history-steer-live marker, so the hook spells none" in
+  `session-hook-steer.test.ts` fails as soon as the hook reads a lane marker, so W3-3 cannot skip the parity case.
+- **The W4 plan's review rounds (run 1714).** The coordinator's rulings, each recorded in the plan where it applies:
+  - Fix round 1 (review 1726): the first W4 tick writes the install record; the tick and the import admit one set;
+    `capture_paused_agents_at_cap` does not join W1's kill rule, and the 90% WARN is its watch (the coordinator's
+    ruling under P5, which the operator may override); "arming waits for W4-4" is a recommendation only.
+  - Fix round 2 (review 1728): filter, not gate. `behindPaths`, `behindFiles` and `behindRows` select main rows only
+    (P3). The mutant practice is ruled (a saved copy and its sha, one edit, the named case red, a restore from the copy
+    checked by `cmp`). The import admits `knownUuids` parents literally. The 90% WARN fires only when armed and no other
+    pause stands.
+  - Fix round 3 (review 1731): the import asks `decideAgentsPause` with `armed: true`; the install record is written in
+    the pass's run arm before the ingest gate; `cli.mjs` joins the plan with one marker helper; the import lists files
+    through the extended walk.
+  - Fix round 4 (review 1735): on P10's shared arm, lib's import pins admit the L0 `shared/workflow-ids.mjs`; the
+    filter extends to the sidecar gate `notCaughtUp`; the 90% pause is decided inside `ingestTick`, so the marker keeps
+    two readers; SA1 keeps "never opened"; and a guard audit placed every test the plan's additions meet in its owning
+    task.
+  - Fix round 5 (review 1737): the 90% pause needs a measured cap; SA11's doctor half is proven by its decider and its
+    status wiring, since no fixture store reaches 90% of a whole-GB cap (build question
+    `history-w4-sa11-warn-by-parts`); `decideAgentIngest` takes a form input, `tick` or `import`, with a truth table;
+    one reachable fan-in guard for SA8; the ci.yml widening is build question `history-w4-ci-node-floor-claims`.
+  - Review 6 reads fix round 5's delta only and is the last plan round. Each review found a new layer of one family,
+    a stated rule meeting a guard or a code path the plan had not read. The build waves meet those under the plan's
+    anchor rule, as measured corrections, each PR with its own reviews.
+- **Item 133, the review cap on run 1714.** The coordinator's fourth review open was refused at the cap on 2026-11-09 at
+  21:55Z, and item 133 asked the operator to lift it. The operator used Lift cap at 22:45Z without ticking the item, so
+  the coordinator withdrew it as done. The lift stands for the run: the fifth review's open, on 2026-11-10, was not refused.
+- **#2510's landing.** The landing verdict read route Q (the merge queue, squash, never admin). The coordinator enqueued
+  #2510 with `--match-head-commit f794eab9e` at 01:14Z. The server's merged mail arrived this time (it had not for
+  #1876).
+- **Observations for the operator.**
+  - For CP-63: O17 (a) counts an unclosed `<analysis>` before a normalised `Summary:` as a cut shape, so on a backend
+    that leaves `<analysis>` open the headroom figure over-counts. That is the safe direction. #2510's body states it.
+  - A follow-up candidate: the hook spells the UUID grammar inline at several places on main, outside W3-1's diff. A
+    census of the grammar, rather than of `uuid_re=` assignments, would consolidate them.
 
 ### Latest rulings and evidence — 2026-11-08 to 2026-11-09
 
