@@ -104,7 +104,12 @@ describe('ccd pr-template (D-8147)', () => {
     expect(calls[2]).toBe(`api repos/owner/repo/contents/${REL}?ref=${TIP} --jq .path`);
     expect(calls[3]).toBe(`api repos/owner/repo/git/ref/heads/${BRANCH} --jq .object.sha`);
     expect(calls[4]).toBe(`api -X POST repos/owner/repo/git/refs -f ref=refs/heads/${BRANCH} -f sha=${TIP} --jq .ref`);
-    expect(calls[5]).toMatch(new RegExp(`^api -X PUT repos/owner/repo/contents/${REL.replace(/\./g, '\\.')} -f message=Add a pull request template that names the Linear ticket -f content=\\S+ -f branch=${BRANCH} --jq \\.commit\\.sha$`));
+    // Plain prefix and suffix checks around the base64 content, no regex built from a path.
+    const put = calls[5]!;
+    const putHead = `api -X PUT repos/owner/repo/contents/${REL} -f message=Add a pull request template that names the Linear ticket -f content=`;
+    const putTail = ` -f branch=${BRANCH} --jq .commit.sha`;
+    expect(put.startsWith(putHead) && put.endsWith(putTail)).toBe(true);
+    expect(put.slice(putHead.length, put.length - putTail.length)).toMatch(/^\S+$/);
     expect(Buffer.from(fs.readFileSync(path.join(h.home, 'gh-put-content'), 'utf8'), 'base64').toString('utf8')).toBe(TEMPLATE);
     const create = h.ghCalls().find((c) => c.startsWith('pr create'))!;
     expect(create).toContain('--repo owner/repo');
