@@ -262,6 +262,7 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     const badge = entryView(e, tree.drafts, 'ref').badge;
     expect(badge, 'the fixture opens a badged draft').not.toBeNull();
     expect(document.querySelector('.docs-one-bar .docs-title .docs-compact-where .docs-badge')?.textContent).toBe(ENTRY_BADGE_TEXT[badge!]);
+    expect(document.querySelector('.docs-one-bar .docs-title .docs-compact-where-ref')?.textContent, 'the served ref, not origin/HEAD').toContain('main');
   });
 
   it('before ready, and at a wide width with no frame on ccrc\'s bar, the head is as before', async () => {
