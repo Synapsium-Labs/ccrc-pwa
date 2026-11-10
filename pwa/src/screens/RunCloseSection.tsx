@@ -143,7 +143,7 @@ function TurnOnSheet({ g, nowMs, busy, onConfirm, onClose }: {
     <Sheet open onClose={busy ? () => {} : onClose} title={RUN_CLOSE_WORDS.sheetTitle} footer={footer}>
       <div className="rc-sheet" data-testid="run-close-sheet">
         <p className="rc-sub">{RUN_CLOSE_GROUP_TITLE[g.group]}</p>
-        {list === null ? <p className="rc-note">{RUN_CLOSE_WORDS.noList}</p> : (
+        {list === null ? <p className="rc-note">{g.group === 'claimant-crashed' ? RUN_CLOSE_WORDS.noList : RUN_CLOSE_WORDS.noListYet}</p> : (
           <>
             <p className="rc-count" data-testid="run-close-sheet-count">{runCloseCountLine(list.would.length, list.now)}</p>
             <RunList label="Would close" items={list.would.map((w) => ({
