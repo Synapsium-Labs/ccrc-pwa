@@ -32,7 +32,7 @@ The mapping pass said 11 replace and 24 partial. The verify pass moved F32 to re
 The three corrections that matter most:
 
 1. **Child approvals are switched off on 2.1.321.** `APPROVAL_HOOK_VERSIONS` in `shared/api.ts` allows only 2.1.296 to 2.1.302.
-2. **The menu may not appear on the fleet.** Every fleet session runs `--remote-control`. The docs say those sessions do not start the usage-limit wait on their own, and the menu has to be opened by hand.
+2. **The menu may not appear on the fleet.** Every fleet session runs `--remote-control`. (Not so: the fleet runs without it, and Q3 keeps it off; see §6.1.) The docs say those sessions do not start the usage-limit wait on their own, and the menu has to be opened by hand.
 3. **"Dialog open" disappears while delegated work runs.** Claude Code writes `busy` with no `waitingFor` instead, which is the usual state of a coordinator.
 
 Section 7 lists every tmux call site by class and maps each class to a fact, so the inventory can be checked for completeness.
@@ -293,7 +293,7 @@ The role split sits on top of the slices. It does not replace them.
   3. Decide where the shared harness code lives. Neither option in the plan is open today.
      - The plan's home rule (Task 7) says a new function must sit in a library of its own context. Only C1, C2, C3, C4, C5, C7 and C9 get a home, so a "harness" library that serves several contexts has none.
      - Kernel (K) code has no home and stays in `ccd/ccd`. But Task 8 (ruled Q8) caps `ccd/ccd` at 10 new lines per PR, with no waivers. `host_send_keys`, `host_capture`, `observe_gate` and their version and hook-event tables will not fit in 10 lines.
-     - So the shared gates need one of two things. Either an operator ruling adds a harness context (a new row value in `ccd/contexts.tsv` and a home in Task 7). Or each piece lives in one owning context (for example `observe_gate` in C3 `conversation`), and the other contexts call across it, which the cross-context count in `ccd-contexts.test.ts` must then allow. This is operator question 13.
+     - So the shared gates need one of two things. Either an operator ruling adds a harness context (a new row value in `ccd/contexts.tsv` and a home in Task 7). Or each piece lives in one owning context (for example `observe_gate` in C3 `conversation`), and the other contexts call across it, which the cross-context count in `ccd-contexts.test.ts` must then allow. This is operator question 13. Ruled: a Session host context (§6.1 Q13).
 - **Lane:** role PRs count as "features" under the lane rule, so moves yield to them.
 - **Work that can start without the lane:** `session-hook.sh`, the hook installer, the server readers and `shared/api.ts`.
 
@@ -301,26 +301,26 @@ The role split sits on top of the slices. It does not replace them.
 
 | Step | Change | Value | Risk | Measure first |
 |---|---|---|---|---|
-| 0 | Version policy: approvals allowlist, plus per-event per-version contract captures for every channel used in steps 1-9 | High | Low | Fleet version spread (workers are not rolled); hook calls vs request rows; one rig capture per live version |
+| 0 | Version policy: approvals allowlist, plus per-event per-version contract captures for every channel used in steps 1-9. Ruled: every idle session rolls and each session's build is tracked (§6.1 Q1) | High | Low | Fleet version spread (workers are not rolled); hook calls vs request rows; one rig capture per live version |
 | 0b | Pin `disableAllHooks:false` in the account-deny `--settings` file; register ConfigChange | High | Low | Grep fleet repos' `.claude/settings*.json` for `disableAllHooks` and `statusLine`; one rig run with a repo that sets it to true |
-| 1 | Register Notification; capture StopFailure | High | Low | Does StopFailure fire at a real limit? Wait or menu with `--remote-control`? Which Notification types fire in a tmux pane where ccd sends keys, and how late? |
+| 1 | Register Notification; capture StopFailure. The `--remote-control` question is dropped (§6.1 Q3) | High | Low | Does StopFailure fire at a real limit? Wait or menu with `--remote-control`? Which Notification types fire in a tmux pane where ccd sends keys, and how late? |
 | 2 | Shadow logging of pane vs event verdicts | High | None | A week of disagreements, coordinator vs worker; how often a pane is in copy-mode when ccd or the server types |
 | 3 | ctx %, model, effort from the sidecar; `refreshInterval` converge | Medium | Low | Sidecar age; CPU per render |
-| 4 | Pre-accept startup gates | Medium | Medium | Gate hits per type; which resume dialog appears; does a saved `tui` reach fleet sessions, and what does `capture-pane -S` return from a fullscreen pane? |
+| 4 | Pre-accept startup gates, official settings only (§6.1 Q2) | Medium | Medium | Gate hits per type; which resume dialog appears; does a saved `tui` reach fleet sessions, and what does `capture-pane -S` return from a fullscreen pane? |
 | 5 | `CCRC_SESSION_ID`, transcript latch, EXECPATH version | Low | Low | Hook latency; uuid mismatch rate |
 | 6 | Drop pane greps from idle gates; add a compacting refusal | Medium | Medium | Zero true-busy misses in step 2; stale status files after crashes (pid dead, file present) |
-| 7 | Event-based limit and menu sign | High | Medium | Step 1 captures; coordinator limit hits with delegated work; does the three-continuation stop open the menu or write `waiting`? |
+| 7 | Event-based limit and menu sign. The native wait is pinned off, so ccd always swaps (§6.1 Q4) | High | Medium | Step 1 captures; coordinator limit hits with delegated work; does the three-continuation stop open the menu or write `waiting`? |
 | 8 | Hook-raised asks, gated on status=waiting | Medium | Medium | PermissionRequest for AskUserQuestion on the current build |
-| 9 | Inbox socket for nudges | Medium | Medium | Wire format and token use; that `accept` delivers with no dialog; behaviour when the permission mode class differs; how reliably nudges are acted on; does an inbox message or mod turn end an armed wait? Prerequisite: operator question 5, and a ccd verb (not agent whitelist growth) as the sending path. Run as one probe with the Overlord's W0 item (§8 A3) |
-| 10 | tmux servers per session or project | High | High | Server RSS; wedge/crash counts; default-socket grep guard |
-| 11 | Mod spike | Medium | High | Each call's behaviour on a private socket |
+| 9 | Inbox socket for nudges. Ruled: refuse now; later a password-gated fast path beside ccrc mail, after the probe (§6.1 Q5) | Medium | Medium | Wire format and token use; that `accept` delivers with no dialog; behaviour when the permission mode class differs; how reliably nudges are acted on; does an inbox message or mod turn end an armed wait? Prerequisite: operator question 5, and a ccd verb (not agent whitelist growth) as the sending path. Run as one probe with the Overlord's W0 item (§8 A3) |
+| 10 | tmux servers per session or project. Ruled: one server, one lookup function and a CI guard now (§6.1 Q8) | High | High | Server RSS; wedge/crash counts; default-socket grep guard |
+| 11 | Mod spike. Parked (§6.1 Q7) | Medium | High | Each call's behaviour on a private socket |
 
 Live probes still owed:
 
 - StopFailure at a real limit;
-- what a `--remote-control` pane shows at a limit;
+- what a `--remote-control` pane shows at a limit (dropped, §6.1 Q3);
 - the status file during the menu with delegated work running;
-- the status file's `needs`/`tempo` fields during the limit menu on a `--remote-control` fleet session;
+- the status file's `needs`/`tempo` fields during the limit menu on a `--remote-control` fleet session (dropped, §6.1 Q3);
 - the Esc cancel line on disk;
 - `updatedInput.answers` closing an ask;
 - the idle-compaction trigger value;
@@ -345,6 +345,24 @@ Live probes still owed:
 11. Billing and headless hosting. The draft cited a note that `-p` and the SDK still bill to the subscription "for now". The saved 2.1.321 docs do not say that, and do not say how `-p` or Agent SDK use is billed at all. They say only that an `ANTHROPIC_API_KEY` is always used in `-p` when present, and that `-p` runs, Agent SDK runs and background sessions never get the usage-limit wait. Check the current billing terms before reopening headless hosting. Until then, interactive stays the rule.
 12. Approve a probe budget on a test box?
 13. Does the harness layer get its own context in the file-split plan, or does each piece live in one owning context?
+
+### 6.1 Rulings (operator, 2026-11-10)
+
+- **Q1, versions: a minimum version with an automatic capture, and every idle session rolls.** A build is trusted once a test-box capture of its hook and status-file output passes the replay tests, and each new build gets that capture automatically. Every idle session, not only coordinators, rolls onto the newest installed build as soon as it is idle. This reverses the 2026-10-29 coordinators-only roll rule. The console shows each session's running build next to the latest expected build.
+- **Q2, `.claude.json`: keep the ruling.** ccrc never writes Claude Code's account file. The start-up keystroke answers stay, and step 4 covers official settings only.
+- **Q3, Remote Control: off on the fleet, as a recorded rule.** The report's Remote Control branches are dropped: the `/rc active` ready marker and the Remote Control-only limit-menu path. The fleet already runs without the flag, so the "every fleet session runs `--remote-control`" premise in §1 and §9 does not hold. ccrc's own app stays the only remote way in.
+- **Q4, the limit wait: pinned off, always swap.** `autoContinueAtUsageLimit` is pinned off in the `--settings` file ccd passes to every spawn. ccd always swaps the session to an account with room. The operator gets the options, such as waiting until the reset, only when no account has room. Once that has been seen working, the four screen-read holds are deleted: D-2229, D-2369, the rescue near-wait and the stale-Enter check.
+- **Q5, the inbox: refuse now, keep typed nudges.** `crossSessionInbound` is set to refuse in the spawn settings, and nudges stay typed behind the idle check. Later, after one test-box probe shared with the Overlord's W0 item, the inbox becomes an extra fast path for Claude Code sessions only. It is password-gated, so only ccrc can deliver through it and never any same-user process. ccrc mail stays the record and the channel every lane uses, other lanes included, and the typed nudge stays the fallback. A failure on either path loses nothing, because the mail is already stored.
+- **Q6, idle compaction: keep both.** ccd pins idle compaction on in its start-up settings and reads the statusline's cache expiry time instead of assuming 55 minutes.
+- **Q7, a ccrc mod: parked** until the architecture refactor and steps 0-9 are done. The refactor was measured on 2026-11-10: every wave is done and two small items remain, both waiting on another programme's ack.
+- **Q8, tmux servers: keep one server.** Every tmux call goes through one lookup function now, with a CI guard against new raw calls, so a later split is a config change.
+- **Q9, the draft guard: keep it.** The copy-mode and width checks join the draft check in one shared check that logs each refusal.
+- **Q10, `ws-rm`: no busy gate.** It stays as it is: only a person at a terminal runs it, and the UI and server already use the guarded archive path.
+- **Q11, headless hosting: stays closed.** Interactive Claude Code stays the rule.
+- **Q12, live probes: on the test box only,** with a scratch account, its own config folder and tmux socket, one test at a time, owned by the harness programme. They wait for the test box rebuild and the scratch account.
+- **Q13, file split: a Session host context.** One new context in `ccd/contexts.tsv` with a home library (for example `ccd/lib/sessionhost.sh`) owns hosting, observing and driving behind the one interface of §8 A4. Its PRs are ordered against slices 6, 9, 12 and 13.
+
+The recommendation in §8 now reads under these rulings.
 
 ## 7. Touchpoint census
 
@@ -499,7 +517,7 @@ Until it passes, `deliver` in the ccd adapter is today's typed one-line nudge be
   - H2 and Table 11.1c gain the `observe` facet.
   - Table 3.6a gains the new OBSERVE files, or states that they stay ccd-internal.
   - §14's W0 row cites the merged probe matrix above.
-  - This report's §6 Q5 is answered "not for the Overlord" by H4.
+  - This report's §6 Q5 is answered "not for the Overlord" by H4, and ruled "refuse now" for the fleet (§6.1 Q5).
 
 ## 9. Found along the way
 
@@ -521,6 +539,6 @@ Until it passes, `deliver` in the ccd adapter is today's typed one-line nudge be
 
 ### Other notes
 
-- **Remote Control changes limit behaviour twice.** The docs say Remote Control sessions do not start the usage-limit wait on their own, and that their workflow agents fail at a limit instead of pausing. Both apply to every fleet session (operator question 3).
+- **Remote Control changes limit behaviour twice.** The docs say Remote Control sessions do not start the usage-limit wait on their own, and that their workflow agents fail at a limit instead of pausing. Both would apply to every fleet session that ran it; Q3 keeps it off (§6.1).
 - **The billing note was stale.** The saved 2.1.321 docs say nothing about `-p` or Agent SDK use billing to the subscription "for now". They say only three things. An `ANTHROPIC_API_KEY` always wins in `-p` when present. `-p` runs, Agent SDK runs and background sessions get no usage-limit wait. API-key and usage-based billing is metered per request. Operator question 11 is reworded to match.
 - **The server has no pid-reuse guard.** `procStart` is used only by ccd's child-record check, never by the server (F01). This matters once OBSERVE reads `sessions/<pid>.json` without a pane to anchor it (§4, end events).
