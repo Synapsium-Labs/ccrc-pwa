@@ -1120,6 +1120,7 @@ export function nodeIndexTexts(fields: { gist: string | null; topics: readonly s
 export function directionOfSummaryRow(row: unknown): 'from' | 'up_to' | null;
 export function blockFields(block: Block): { gist: string | null; topics: string[]; refs: { kind: string; value: string; origin: 'model' }[]; capped: boolean };
 export interface SteerReceipt { readonly leafId: string; readonly tsMs: number }
+export function leafPolicy(agentId: string): { receipt: boolean };
 export function pickReceipt(receipts: readonly SteerReceipt[], w: { id: string; afterMs: number | null; uptoMs: number | null }): SteerReceipt | null;
 export function pickHoldingCopy(files: readonly { fileId: number; live: boolean; holds: boolean }[]): number | null;
 export function forkCounts(i: { liveSizes: readonly number[]; unionSize: number; coveredSize: number; holdingCopies: number }): { unspanned: number; forked: boolean };

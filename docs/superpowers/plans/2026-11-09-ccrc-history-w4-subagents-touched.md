@@ -1013,9 +1013,9 @@ it('SA9 no card or steer side effects', () => {
 it('a subagent boundary whose anchor names no row is raw_leaf', () => { /* failure row 24, DM25's rule */ });
 it('SA27 forked copies and a true conflict', () => {
   // two holdings sharing a prefix, then different rows: every row stored, transcript_forked counted,
-  // each leaf from the copy that holds its boundary; one message uuid with two bodies: one entry, one entry_variants row
+  // each leaf from the copy that holds its boundary; one message uuid with two bodies: one entry, two entry_variants rows (one per body, nothing dropped)
   expect(counter(db, 'transcript_forked')).toBeGreaterThan(0);
-  expect(variantsOf(db, conflictUuid)).toBe(1);
+  expect(variantsOf(db, conflictUuid)).toBe(2);
 });
 ```
 
@@ -1274,3 +1274,8 @@ W4-1 (run 1745) defines the thirteen below, all dated 2026-11-10: D-8151 to D-81
 - **D-8161 — `history-w4-m1-m2-in-w4-1`** (2026-11-10). Acts M1 and M2 were measured before W4-1's build (the coordinator, 2026-11-10), so W4-1 carries their results instead of a follow-up PR: `AGENT_TYPE_KEY = 'agentType'` with SA16's second row run, and the workflow predicate (b) with the window `[t0 − 15 min, t0 + 15 min]` with SA14's (b) rows run.
 - **D-8162 — `history-w4-census-withholds-without-install-record`** (2026-11-10). With no readable install record (P6), no admissible holding can be placed in P or Q, so `censusWithheld` adds a fourth reason, `install-record`, and every share is withheld rather than read as if no file were post-install; it withholds more, never less.
 - **D-8163 — `history-w4-census-reads-no-transcript`** (2026-11-10). `runCensus` opens no file but the metas it is handed (addendum section 3.1), so it judges a holding bound by lib's one identity rule with no first-line sha: a holding rewritten in place under one inode and birth time with no shrink, or one whose first line changed where no birth time is reported, reads as bound until ingest's `bindFile` next judges it, the one way an unbound holding can narrow the range, against P18 (a)'s "widens and never narrows".
+
+W4-2 (run 1754) defines two, dated 2026-11-10: D-8168, the departure the coordinator approved for it and numbered at dispatch, and D-8169, which the coordinator licensed while it was built.
+
+- **D-8168 — `history-w4-sa27-in-w4-2`** (2026-11-10). SA27 moves from W4-1 to W4-2, against section 8's pin split: at the base `derive.mjs` reads `agent_id = ''` only, so `transcript_forked` and a subagent leaf's span exist only once W4-2 widens derive's boundary and file statements.
+- **D-8169 — `history-w4-main-gists-main-only`** (2026-11-10). Under P2 (own chain), `derive.mjs`' `priorGists` and `otherGists` read the nodes of the session's main transcripts only (`agent_id = ''`), so a main leaf's steered-gist check and a parent's node block never compare against a subagent leaf's gist; a statement change beyond Task 2's "only the boundary and file statements widen".
