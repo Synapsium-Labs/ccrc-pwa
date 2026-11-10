@@ -971,13 +971,13 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     itLinux('a failed start leaves the lane down and names the way back', async () => {
       const { home, start } = await litellmUp();
       const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
-      // The incoming tier refuses: a python3 that says 3.8 when asked its version (the real one for everything else).
-      fs.writeFileSync(join(home, '.local', 'bin', 'python3'),
-        `#!/bin/bash\ncase "$*" in *version_info*) echo 3.8; exit 0 ;; esac\nexec "${PY_ABS}" "$@"\n`, { mode: 0o755 });
+      // The incoming tier refuses at its start, past what the switch asks before its stops (the interpreter): the
+      // bridge package has lost its entry file. An interpreter that is missing or too old no longer reaches here.
+      fs.rmSync(join(home, 'ccrc', 'ccd', 'codexbridge', '__init__.py'));
       const r = cx(home, ['switch', 'codex-a', 'direct']);
       expect(r.code).not.toBe(0);
       expect(r.stdout).toBe('');
-      expect(r.stderr).toMatch(/^ccrc codex: python-too-old: /m);
+      expect(r.stderr).toMatch(/^ccrc codex: bridge-absent: /m);
       expect(r.stderr).toMatch(/^ccrc codex: lane-down: codex-a is not serving: the switch to direct recorded the mode and rendered lane\.json, but the start of its direct tiers failed \(exit 1, said above\)\. Nothing this switch stopped was restarted, .*'ccrc codex status codex-a' shows what runs\. .*ccrc codex switch codex-a litellm$/m);
       await eventually(() => !alive(lit) && !alive(shim), 'the litellm-mode tiers to exit');
       expect(execOf(home)['bridge']).toBe('direct');
