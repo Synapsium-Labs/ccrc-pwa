@@ -1005,7 +1005,7 @@ _tba_cx_push_key() {
 _tba_cx_settings() {
   local b nm
   _tba_cx_push_key || { TBA_CODE=pair-failed; return 1; }
-  _tba_cx_out sh -c 'umask 077; p=$1; d=$(dirname "$p"); install -d -m 0755 -o root -g root "$d" && t=$(mktemp "$d/.ccrc.env.XXXXXXXX") && { cat >"$t" && chmod 600 "$t" && chown root:root "$t" && mv -f "$t" "$p"; } || { rm -f -- "$t"; exit 1; }' sh "$TBA_BOX_ENV_PATH" <"$CX_BOXENV"
+  _tba_cx_out sh -c 'umask 077; p=$1; d=$(dirname "$p"); install -d -m 0755 -o root -g root "$d" && t=$(mktemp "$d/.ccrc.env.XXXXXXXX") && { cat >"$t" && if [ -f "$p" ] && cmp -s "$t" "$p"; then rm -f "$t"; else chmod 600 "$t" && chown root:root "$t" && mv -f "$t" "$p"; fi; } || { rm -f -- "$t"; exit 1; }' sh "$TBA_BOX_ENV_PATH" <"$CX_BOXENV"
   [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
   local i=0
   for b in "${CX_REPOS[@]}"; do
