@@ -4508,3 +4508,66 @@ describe('the coordinator skill: clauses 4, 11, 19 and 20 read the goals first (
     expect(skill).toContain(`\n20. ${c}\n`);
   });
 });
+
+describe('references/decision-procedure.md (D-8126, wave A5 task 3)', () => {
+  const dp = (): string => refs('decision-procedure.md');
+
+  it('ships in the directory and in the text corpus every census scans', () => {
+    expect(REFERENCE_NAMES).toContain('decision-procedure.md');
+    expect(allSkillText).toContain(dp());
+  });
+
+  it('names no destructive verb, no review-cap string and none of the operator doors, in any skill file', () => {
+    expect(dp()).toContain('SAFETY-listed verbs');
+    for (const name of REFERENCE_NAMES) {
+      const t = refs(name);
+      expect(t, `${name} names ws-reap`).not.toContain('ws-reap');
+      expect(t, `${name} names ws-rm`).not.toContain('ws-rm');
+      expect(t, `${name} names ws-gc --prune`).not.toContain('ws-gc --prune');
+    }
+    for (const [name, t] of [['SKILL.md', skill], ...REFERENCE_NAMES.map((n) => [n, refs(n)] as const)] as const) {
+      expect(t, `${name} contains review-cap`).not.toContain('review-cap');
+      expect(t, `${name} names /api/digest/correct`).not.toContain('/api/digest/correct');
+      expect(t, `${name} names /api/programmes/`).not.toContain('/api/programmes/');
+      expect(t, `${name} names /api/coord/programmes/`).not.toContain('/api/coord/programmes/');
+    }
+  });
+
+  it('names the two client verbs the procedure reads and records with', () => {
+    expect(dp()).toContain('ccrc-api goals show');
+    expect(dp()).toContain('ccrc-api calls record');
+  });
+
+  it('lists the five standing operator preferences', () => {
+    const t = dp();
+    expect(t).toContain('A screen works at every width');
+    expect(t).toContain('Improve what exists first');
+    expect(t).toContain('Dependencies go to the latest major');
+    expect(t).toContain('The review-round cutoff');
+    expect(t).toContain('A card is a glance');
+  });
+
+  it('states the split rule exactly once', () => {
+    expect(dp().split('The split rule').length - 1).toBe(1);
+    expect(dp()).toContain('Each part is classed on its own');
+  });
+
+  it('lists O1 to O6 and P1 to P4, with comments on others’ PRs and mirrored tracker writes as routine', () => {
+    const t = dp();
+    for (const k of ['O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'P1', 'P2', 'P3', 'P4']) expect(t, k).toContain(`**${k}.`);
+    expect(t).toContain('Comments on other people’s PRs and issues in public repositories');
+    expect(t).toContain('tracker writes that mirror to public GitHub issues');
+    expect(t).toMatch(/are not in this class: they are routine/);
+    expect(t).toContain('1, 2, 4, 8, 15 and 30 minutes');
+  });
+
+  it('carries the six tie-breakers in order and the lift-or-land rule', () => {
+    const t = dp();
+    const order = ['Reversible beats irreversible', 'Smaller blast radius beats larger', 'Extend what exists',
+      'The standing operator preferences', 'Cheaper in time and fleet capacity', 'would have recommended'];
+    let at = -1;
+    for (const s of order) { const i = t.indexOf(s); expect(i, s).toBeGreaterThan(at); at = i; }
+    expect(t).toContain('coord-lift-off');
+    expect(t).toContain('cap-not-reached');
+  });
+});

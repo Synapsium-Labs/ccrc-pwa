@@ -368,3 +368,20 @@ describe('the deploy ships the skill, agent-side — and no longer ships the tok
     expect(tracked, 'a real token must never be committed to this repo').toBe('');
   });
 });
+
+describe('install-coordinator-skill: the decision procedure reference (D-8126)', () => {
+  it('refuses a source that has every reference but decision-procedure.md, touching nothing', () => {
+    const partial = mkTmp('ccrc-skillsrc-nodp-');
+    fs.cpSync(SRC, partial, { recursive: true });
+    fs.rmSync(path.join(partial, 'references', 'decision-procedure.md'));
+    expect(() => execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude')],
+      { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: partial } })).toThrow();
+    expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(false);
+    fs.rmSync(partial, { recursive: true, force: true });
+  });
+
+  it('installs decision-procedure.md into every home', () => {
+    run();
+    for (const d of HOMES) expect(fs.existsSync(skill(d, 'references', 'decision-procedure.md'))).toBe(true);
+  });
+});
