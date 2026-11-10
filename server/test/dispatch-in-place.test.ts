@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
+import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
@@ -144,5 +145,64 @@ describe('characterization: today a self-claimed run is dispatched and closed li
     const b = build();
     const r = await resolveDoneBranch(b.base, { sessionId: BOSS, project: PROJECT, branch: 'feat/sibling' });
     expect(r).toMatchObject({ ok: true, branch: `ws/${BOSS}`, provenance: '' });
+  });
+});
+
+describe('the column and the store call (D-6096)', () => {
+  it('the migration is one nullable column and nothing else', () => {
+    // Found by its text, never by a slot number: the slot is the next free one when this lands (D-6096).
+    const at = MIGRATIONS.findIndex((m) => /ADD COLUMN inPlace\b/.test(m));
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(MIGRATIONS.filter((m) => /\binPlace\b/.test(m.replace(/--.*$/gm, '')))).toHaveLength(1);
+    const entry = MIGRATIONS[at]!;
+    expect(entry).toMatch(/ALTER TABLE runs ADD COLUMN inPlace INTEGER;/);
+    expect(entry.replace(/--.*$/gm, '').match(/ALTER TABLE|CREATE |NOT NULL|CHECK|DEFAULT/g)).toEqual(['ALTER TABLE']);
+    const b = build();
+    const col = (b.coord.db.prepare('PRAGMA table_info(runs)').all() as { name: string; notnull: number; type: string }[])
+      .find((c) => c.name === 'inPlace');
+    expect(col).toMatchObject({ type: 'INTEGER', notnull: 0 });
+  });
+
+  it('bindInPlace moves planned to working in one transaction, binds the claimant and charges no slot', () => {
+    const b = build();
+    const id = b.open();
+    expect(b.coord.bindInPlace(id, BOSS, 'feat/sibling')).toEqual({ ok: true, from: 'dispatched', to: 'working' });
+    const run = okRun(b.coord.run(id))!;
+    expect(run).toMatchObject({ state: 'working', sessionId: BOSS, branch: 'feat/sibling', resumed: false, inPlace: true,
+      dispatchedAt: null, workspace: null });
+    expect(b.coord.runEvents(id).map((e) => [e.fromState, e.toState, e.detail])).toEqual([
+      ['planned', 'dispatched', 'in-place'], ['dispatched', 'working', 'in-place'],
+    ]);
+    // an in-place run takes no concurrency slot: neither the count nor the rows it counts (D-8792) see it
+    expect(b.coord.capsUsage().running).toBe(0);
+    expect(b.coord.capsCountedRuns()).toEqual([]);
+  });
+
+  it('bindInPlace clears the admission stamp the cap left on the run', () => {
+    const b = build();
+    const id = b.open();
+    const stamp = () => b.coord.db.prepare(
+      'SELECT admissionWaitSince AS since, lastRefusedAt, admissionWokenAt AS wokenAt FROM runs WHERE id = ?').get(id);
+    b.coord.stampAdmissionWait(id, 1000);
+    expect(stamp()).toMatchObject({ since: 1000, lastRefusedAt: 1000 });
+    expect(b.coord.admissionWaiters().map((w) => w.runId)).toEqual([id]);
+    b.coord.bindInPlace(id, BOSS, 'feat/sibling');
+    expect(stamp()).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
+    expect(b.coord.admissionWaiters()).toEqual([]);
+  });
+
+  it('a run that is not planned is refused bad-transition with nothing written', () => {
+    const b = build();
+    const id = b.open({ session: 'demo-worker', state: 'dispatched' });
+    const before = JSON.stringify(okRun(b.coord.run(id)));
+    expect(b.coord.bindInPlace(id, BOSS, 'feat/sibling')).toMatchObject({ ok: false, error: 'bad-transition', from: 'dispatched' });
+    expect(JSON.stringify(okRun(b.coord.run(id)))).toBe(before);
+    expect(b.coord.runEvents(id)).toHaveLength(1);
+  });
+
+  it('an ordinary run carries no inPlace field on the wire', () => {
+    const b = build();
+    const id = b.open({ session: 'demo-worker', state: 'dispatched' });
+    expect(okRun(b.coord.run(id))).not.toHaveProperty('inPlace');
   });
 });
