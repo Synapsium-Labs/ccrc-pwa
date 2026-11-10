@@ -339,31 +339,48 @@ describe('fix round 2: gh commands, emphasis and the unread spellings (Task C21,
   });
 });
 
-// Task C20 (D-8187): review 1762's carried findings on the evidence reader. Every reproduction in the report is a row.
-describe('Task C20: the gh reader, reserved pages and the commit index (review 1762)', () => {
+// Task C20 (D-8187): reviews 1762 and 1766 on the evidence reader. Every reproduction in either report is a row.
+describe('Task C20: the gh reader, reserved pages and the commit index (reviews 1762 and 1766)', () => {
   const home = (n: number): string => issue('org-a/project-a', n);
   const rows = (table: [string, [string, string | null][]][]): void => {
     for (const [text, expected] of table) expect(links(text, HOME), text).toEqual(expected);
   };
 
-  it('F1: a boolean flag takes no value, and a word starting with # is never the command\'s number', () => {
+  // Review 1766 F2 and F5: the flags gh 2.103.3's own help lists with no value type (c20.md), as this test's own copy, so a
+  // flag dropped from the reader's list reds its row.
+  const BOOLEANS_API = ['--allow-escape-sequences', '--include', '-i', '--paginate', '--silent', '--slurp', '--verbose'];
+  const BOOLEANS_OTHER = [
+    '--admin', '--allow-escape-sequences', '--approve', '--auto', '--comments', '--conflict-status', '--create-if-none',
+    '--delete-branch', '-d', '--delete-last', '--detach', '--disable-auto', '--draft', '--dry-run', '--edit-last', '--editor',
+    '--fail-fast', '--fill', '--fill-first', '--fill-verbose', '--force', '-f', '--merge', '--name-only',
+    '--no-maintainer-edit', '--patch', '--rebase', '--recurse-submodules', '--remove-milestone', '--remove-parent',
+    '--remove-type', '--request-changes', '--required', '--squash', '--undo', '--watch', '--web', '-w', '--yes',
+  ];
+
+  it('F1 (review 1762): review 1762\'s reproductions, and a word starting with # ends the command (review 1766 F7)', () => {
     rows([
       ['gh pr merge --squash 40 -R owner-b/repo-b #12 is next', [['#12', null]]],
       ['gh pr view --web 40 -R owner-b/repo-b #12 merged', [['#12', null]]],
       ['gh pr list -R owner-b/repo-b #12 is ours and merged', [['#12', null]]],
       ['gh pr create --repo owner-b/repo-b #12 was home', [['#12', null]]],
-      // The boolean flag no longer swallows the command's own number.
+      // The known give-up of the old direction: --squash is a boolean, so 40 is the command's own number.
       ['gh pr merge --squash 40 -R owner-b/repo-b and #40', [['#40', issue('owner-b/repo-b', 40)]]],
-      // A flag of the list takes the next word as its value, so the number after it is still the command's own.
       ['gh issue close --reason completed 12 -R owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
       ['gh pr list --limit 12 -R owner-b/repo-b and #12', [['#12', null]]],
       ['gh pr view 12 -R owner-b/repo-b #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      // A flag written with `=` holds its own value, so the next word is the command's own.
+      ['gh pr view --repo=owner-b/repo-b 12 and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      // gh api has two positionals: the word after its path is prose, so a later flag is not read.
+      ['gh api user then -R owner-b/repo-b and #12', [['#12', home(12)]]],
       // A quoted '#12' reaches gh as its number, as the shell passes it.
       ["gh pr view '#12' -R owner-b/repo-b and #12", [['#12', issue('owner-b/repo-b', 12)], ['#12', issue('owner-b/repo-b', 12)]]],
+      // An unquoted #-word is a shell comment: the command ends there, and what follows it is not read.
+      ['`gh pr list -R owner-b/repo-b # 12 open`; #12 is ours', [['#12', null]]],
+      ['gh pr view #12 40 -R owner-b/repo-b; #40', [['#12', home(12)], ['#40', home(40)]]],
     ]);
   });
 
-  it('F2: a boolean flag before a gh api path leaves the path read', () => {
+  it('F2 (review 1762): a boolean flag before a gh api path leaves the path read', () => {
     rows([
       ['gh api --paginate repos/owner-b/repo-b/pulls/12/comments and #12', [['#12', issue('owner-b/repo-b', 12)]]],
       ['gh api --paginate /repos/owner-b/repo-b/issues/12 #12', [['#12', issue('owner-b/repo-b', 12)]]],
@@ -376,26 +393,77 @@ describe('Task C20: the gh reader, reserved pages and the commit index (review 1
     ]);
   });
 
-  it('F3: a quote with no closing one before the line\'s end voids its command, and a later command is still read', () => {
+  it('F2 (review 1766): a flag gh has with a value keeps the repository named after it', () => {
+    const b = (n: number): string => issue('owner-b/repo-b', n);
     rows([
-      ["gh pr view 12 (it's green), then `gh pr view 40 -R owner-b/repo-b` and #12", [['#12', null]]],
-      ["I checked gh pr view 12 and it's green. Then gh pr view 40 -R owner-b/repo-b and #12", [['#12', null]]],
-      // The voided command names nothing, so its bare name is decided as if it were absent, as on main.
-      ["gh pr view 12 -R owner-b/repo-b and it's green, #12", [['#12', home(12)]]],
-      ["gh pr view 12 -R 'owner-b/repo-b\n#12", [['#12', home(12)]]],
-      // A quote closed only on a later line is open at its own line's end.
-      ["gh pr view 12 (it's green)\n`gh pr view 40 -R owner-b/repo-b` and it's #12", [['#12', null]]],
-      // Two apostrophes close each other, as the shell reads them: `-c` takes the quoted run as its value, so the one command
-      // is PR 12 in owner-b (the report's third shape).
-      ["gh pr view 12 -c it's fine; also gh pr view 40 we're -R owner-b/repo-b. #12", [['#12', issue('owner-b/repo-b', 12)]]],
+      ['`gh pr comment 123 --body-file f.md --repo owner-b/repo-b`: #123', [['#123', b(123)]]],
+      ['```\ngh pr comment 123 --body-file f.md --repo owner-b/repo-b\n```\nPosted on #123.', [['#123', b(123)]]],
+      ['gh pr edit 40 --add-label ready --repo owner-b/repo-b and #40', [['#40', b(40)]]],
+      ['gh pr checks 40 --watch --interval 30 --repo owner-b/repo-b. #40 is green.', [['#40', b(40)]]],
+      ['gh pr merge 40 --squash --subject "fix: x" -R owner-b/repo-b and #40', [['#40', b(40)]]],
+      ['gh pr diff 40 --color never -R owner-b/repo-b #40', [['#40', b(40)]]],
+      ['gh pr edit 40 --milestone v2 -R owner-b/repo-b and #40', [['#40', b(40)]]],
+      ['gh issue close 12 -r completed -R owner-b/repo-b and #12', [['#12', b(12)]]],
+      ['gh api --cache 1h repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
+      ['gh pr merge 40 --match-head-commit abc1234 -R owner-b/repo-b and #40', [['abc1234', null], ['#40', b(40)]]],
+      // A digit value is the flag's, never the command's number.
+      ['`gh issue list --milestone 3 --repo owner-b/repo-b`; #3 is ours', [['#3', null]]],
     ]);
   });
 
-  it('F6: a word that is exactly a quoted flag is that flag; a flag inside a quoted argument is none', () => {
+  it('F5 (review 1766): each of gh\'s boolean flags leaves the next word the command\'s own; any other flag takes it', () => {
+    for (const flag of BOOLEANS_OTHER) {
+      const text = `gh pr view ${flag} 12 -R owner-b/repo-b and #12`;
+      expect(links(text, HOME), text).toEqual([['#12', issue('owner-b/repo-b', 12)]]);
+    }
+    for (const flag of BOOLEANS_API) {
+      const text = `gh api ${flag} repos/owner-b/repo-b/pulls/12 and #12`;
+      expect(links(text, HOME), text).toEqual([['#12', issue('owner-b/repo-b', 12)]]);
+    }
+    rows([
+      // A flag gh does not list as a boolean takes the next word, so 12 is its value and the command names no number.
+      ['gh pr view --not-a-gh-flag 12 -R owner-b/repo-b and #12', [['#12', null]]],
+      ['gh pr view 12 --not-a-gh-flag x -R owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      // -i is a boolean in gh api only: in pr checks it takes the interval.
+      ['gh pr checks 40 -i 30 -R owner-b/repo-b and #40', [['#40', issue('owner-b/repo-b', 40)]]],
+    ]);
+  });
+
+  it('F3 (review 1762 F3, review 1766 F1): an open quote voids its command only inside the command\'s own words', () => {
+    const b = (n: number): string => issue('owner-b/repo-b', n);
+    rows([
+      ["gh pr view 12 (it's green), then `gh pr view 40 -R owner-b/repo-b` and #12", [['#12', null]]],
+      ["I checked gh pr view 12 and it's green. Then gh pr view 40 -R owner-b/repo-b and #12", [['#12', null]]],
+      // A quote in the prose after the command touches nothing the command read.
+      ["gh pr view 12 -R owner-b/repo-b and it's green, #12", [['#12', b(12)]]],
+      ["Ran gh pr view 40 -R owner-b/repo-b and it's green, so #40 can land.", [['#40', b(40)]]],
+      ["gh pr checks 40 --repo owner-b/repo-b shows it's green and #40 is ready", [['#40', b(40)]]],
+      ["gh api repos/owner-b/repo-b/pulls/40 and it's merged. #40", [['#40', b(40)]]],
+      ["gh pr view 12 -R owner-b/repo-b it's red; #12", [['#12', b(12)]]],
+      ["gh pr view 40 -R owner-b/repo-b doesn't show #40 as merged", [['#40', b(40)]]],
+      ["gh pr view 12 -R owner-b/repo-b and #12 it's green", [['#12', b(12)]]],
+      ['gh pr view 12 -R owner-b/repo-b and "green, #12', [['#12', b(12)]]],
+      // A quote left open inside the command's own words voids it: the command names nothing, and its bare name is decided
+      // as if the command were absent.
+      ["gh pr view 12 -R 'owner-b/repo-b\n#12", [['#12', home(12)]]],
+      ["gh pr view 12 -R owner-b/repo-b --body 'oops\n#12", [['#12', home(12)]]],
+      // A quote that closes only on a later line is open at its own line's end.
+      ["gh pr view 12 -R 'owner-b/repo-b\nmore' and #12", [['#12', home(12)]]],
+      // Two apostrophes close each other, as the shell reads them: `-c` takes the quoted run as its value, so the one command
+      // is PR 12 in owner-b (review 1762's third shape).
+      ["gh pr view 12 -c it's fine; also gh pr view 40 we're -R owner-b/repo-b. #12", [['#12', b(12)]]],
+    ]);
+  });
+
+  it('F6 and F9: a word that is exactly a quoted flag is that flag; a flag\'s value or a quoted argument is no flag', () => {
     rows([
       ["gh pr view 12 '--repo' owner-b/repo-b and #12", [['#12', issue('owner-b/repo-b', 12)]]],
       ['gh pr view 12 "--repo" owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
       ['gh pr view 12 --body "--repo owner-b/repo-b" and #12', [['#12', home(12)]]],
+      // Review 1766 F9: the word after a flag that takes a value is that value, even when it is spelled as a flag.
+      ['gh pr comment 12 -R owner-b/repo-b --body "--repo=owner-c/repo-c" and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ["gh pr comment 12 -R owner-b/repo-b --body '-R' owner-c/repo-c and #12", [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh pr comment 12 --body "--repo=owner-c/repo-c" and #12', [['#12', home(12)]]],
     ]);
   });
 
@@ -404,14 +472,20 @@ describe('Task C20: the gh reader, reserved pages and the commit index (review 1
       ['![shot](https://github.com/user-attachments/assets/0f1e2d3c) fixed in #12', [['#12', home(12)]]],
       ['see https://github.com/orgs/org-b/projects/3 and #12', [['#12', home(12)]]],
       ['see https://github.com/Settings/profile and #12', [['#12', home(12)]]],
+      // Review 1766 F8, recorded: on a pull path too, where main opened a page that does not exist.
+      ['https://github.com/topics/x/pull/12 and #12', [['#12', home(12)]]],
     ]);
     expect([...messageRepos('https://github.com/orgs/org-b/projects/3 github.com/topics/x').named]).toEqual([]);
   });
 
-  it('F9: a full stop followed by an upper-case letter ends a flag\'s value', () => {
+  it('F9 (review 1762, ruled again by review 1766 F3): a flag value with a full stop before an upper-case letter is unknown', () => {
     rows([
-      ['gh pr view 12 -R owner-b/repo-b.Then #12', [['#12', issue('owner-b/repo-b', 12)]]],
-      ['gh pr view 12 --repo=owner-b/repo-b.Next #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh pr view 12 -R owner-b/repo-b.Then #12', [['#12', null]]],
+      ['gh pr view 12 --repo=owner-b/repo-b.Next #12', [['#12', null]]],
+      ['gh pr view 12 -R owner-b/Lib.Json and #12', [['#12', null]]],
+      ['gh pr view 12 -R vercel/next.JS and #12', [['#12', null]]],
+      // A lower-case extension is a repository name as before.
+      ['gh pr view 12 -R owner-b/Chart.js and #12', [['#12', issue('owner-b/Chart.js', 12)]]],
     ]);
   });
 
@@ -426,7 +500,7 @@ describe('Task C20: the gh reader, reserved pages and the commit index (review 1
   });
 
   it('F3: the gh reader stays linear over 1 MiB of apostrophes and quotes', () => {
-    // Many commands, each closing a quote or leaving one open, and no line break anywhere.
+    // Many commands, each closing a quote or leaving one open, all on one line but for the one shape that ends in a break.
     for (const unit of ["gh pr view 1 'a'; ", 'gh -b "a" | ', "gh pr view 1 it's ", "gh pr view 1 it's\n", "gh '"]) {
       const text = unit.repeat(Math.ceil((1 << 20) / unit.length));
       const t = performance.now();

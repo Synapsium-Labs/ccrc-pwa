@@ -135,10 +135,14 @@ const GH_API_PATH = new RegExp(`^/?repos/(${SEG})/(${SEG})(?:/(?:pulls|issues)/(
 /** `GH_REPO=o/r`, the environment `gh` reads its repository from. */
 const GH_REPO_ENV = /GH_REPO=(['"]?)([^\s'"`;&|]+)/g;
 
-/** One word of a `gh` command: its text with quotes removed, and whether any of it was quoted. */
+/** What a word of a `gh` command is: a flag, the value of the flag before it, or a positional. */
+type Role = 'flag' | 'value' | 'positional';
+
+/** One word of a `gh` command: its text with quotes removed, whether any of it was quoted, and its role. */
 interface Word {
   readonly text: string;
   readonly quoted: boolean;
+  readonly role: Role;
 }
 
 /** Whether the character at `at` ends a `gh` command, outside quotes (review 1760 F1): a backtick, a line break, `;`, `&`, `|`, or
@@ -151,27 +155,76 @@ function endsCommand(text: string, at: number): boolean {
   return next === '' || /\s/.test(next);
 }
 
-/** The words of the `gh` command whose arguments start at `from`, and where the command ends: at `endsCommand`, at the next
- *  unquoted `gh` word (whose start it answers, so that word is read as a command of its own), or at the text's end. Quotes group
- *  a word and hide what is in them, so `--body "see -R o/r"` holds no flag. A quote with no closing one before the line's end
- *  (a prose apostrophe: `it's green`) voids the command, which then holds no words and ends just past that quote, so the reader
- *  scans on from there and a later command is still read (review 1762 F3). One forward scan: a quote's search reads up to the
- *  next quote of its kind, which a closed quote consumes, and a void one is never reached again, so each stretch is read about
- *  once however many quotes the message holds. */
+/** The flags `gh` itself has as booleans (Task C20 fix round 1, review 1766 F2), by the command group they are read in: `api`,
+ *  or `other` for every `pr` and `issue` command. Every other flag written without `=` takes the next word as its value, so a
+ *  flag the list does not know costs the command a word, never a repository it named. Source: `gh` 2.103.3's own help for
+ *  `api` and for each `pr` and `issue` command (c20.md): a flag listed with no value type. A short form that takes a value in
+ *  another `pr` or `issue` command (`-a`, `-c`, `-e`, `-m`, `-r`, `-s`) is left out; `-i` is `--include` in `api` but takes
+ *  the interval in `pr checks`, so it is a boolean in `api` only. */
+const GH_BOOLEAN_FLAGS: { readonly api: ReadonlySet<string>; readonly other: ReadonlySet<string> } = {
+  api: new Set(['--allow-escape-sequences', '--include', '-i', '--paginate', '--silent', '--slurp', '--verbose']),
+  other: new Set([
+    '--admin', '--allow-escape-sequences', '--approve', '--auto', '--comments', '--conflict-status', '--create-if-none',
+    '--delete-branch', '-d', '--delete-last', '--detach', '--disable-auto', '--draft', '--dry-run', '--edit-last', '--editor',
+    '--fail-fast', '--fill', '--fill-first', '--fill-verbose', '--force', '-f', '--merge', '--name-only',
+    '--no-maintainer-edit', '--patch', '--rebase', '--recurse-submodules', '--remove-milestone', '--remove-parent',
+    '--remove-type', '--request-changes', '--required', '--squash', '--undo', '--watch', '--web', '-w', '--yes',
+  ]),
+};
+
+/** Whether the flag `flag`, read in command group `group`, takes the next word as its value: written without `=`, and not one
+ *  of `gh`'s booleans for that group (`GH_BOOLEAN_FLAGS`). */
+const takesValue = (flag: string, group: 'api' | 'other'): boolean => !flag.includes('=') && !GH_BOOLEAN_FLAGS[group].has(flag);
+
+/** The own words of the `gh` command whose arguments start at `from`, each with its role, and where the command ends. A
+ *  command ends at `endsCommand`, at the next unquoted `gh` word (whose start it answers, so that word is read as a command of
+ *  its own), at an unquoted word starting with `#` (a shell comment; review 1766 F7), or at the first bare word past its
+ *  positionals (`gh pr|issue <verb> <n>` has three, `gh api <path>` two): there prose or another program begins
+ *  (`gh pr view 12 then cp -R o/r`), and nothing after it is read as the command's. The word after a flag that takes a value
+ *  (`takesValue`) is that value, never a flag of its own (review 1766 F9). Quotes group a word and hide what is in them, so
+ *  `--body "see -R o/r"` holds no flag. A quote with no closing one before its line's end voids the command only when it
+ *  begins inside the command's own words: the command then holds no words and ends just past that quote, so a later command
+ *  is still read (review 1762 F3); a prose apostrophe past the command touches nothing it read (review 1766 F1). One forward
+ *  scan: a quote's search reads up to the next quote of its kind, which a closed quote consumes, and a void one is never
+ *  reached again, so each stretch is read about once however many quotes the message holds. */
 function ghWords(text: string, from: number): { words: Word[]; end: number } {
   const words: Word[] = [];
+  let positionals = 0;
+  let room = 3;
+  let group: 'api' | 'other' = 'other';
+  let expecting = false;
   let cur = '';
   let quoted = false;
+  let reading = false;
   let start = from;
   let i = from;
-  /** Closes the word being read; true when it is an unquoted `gh`, which starts the next command. */
+  /** Whether the word being read stands past the command's positionals, where only a flag is still the command's own. */
+  const past = (): boolean => !expecting && positionals === room;
+  /** Closes the word being read: true when the command ends at its start (an unquoted `gh`, or a word past the positionals
+   *  that is no flag), else it joins the command's words with its role. */
   const close = (): boolean => {
-    if (cur === '' && !quoted) return false;
+    if (!reading) return false;
     const word = { text: cur, quoted };
+    reading = false;
     cur = '';
     quoted = false;
     if (!word.quoted && word.text === 'gh') return true;
-    words.push(word);
+    if (expecting) {
+      words.push({ ...word, role: 'value' });
+      expecting = false;
+    } else if (word.text.startsWith('-')) {
+      words.push({ ...word, role: 'flag' });
+      expecting = takesValue(word.text, group);
+    } else if (positionals === room) {
+      return true;
+    } else {
+      words.push({ ...word, role: 'positional' });
+      if (positionals === 0 && word.text === 'api') {
+        group = 'api';
+        room = 2;
+      }
+      positionals += 1;
+    }
     return false;
   };
   for (; i < text.length; i += 1) {
@@ -181,10 +234,16 @@ function ghWords(text: string, from: number): { words: Word[]; end: number } {
       if (close()) return { words, end: start };
       continue;
     }
-    if (cur === '' && !quoted) start = i;
+    if (!reading) {
+      if (c === '#') return { words, end: i };
+      reading = true;
+      start = i;
+    }
     if (c === '"' || c === "'") {
       const shut = text.indexOf(c, i + 1);
-      if (shut === -1 || text.slice(i + 1, shut).includes('\n')) return { words: [], end: i + 1 };
+      if (shut === -1 || text.slice(i + 1, shut).includes('\n')) {
+        return past() ? { words, end: start } : { words: [], end: i + 1 };
+      }
       cur += text.slice(i + 1, shut);
       quoted = true;
       i = shut;
@@ -196,66 +255,33 @@ function ghWords(text: string, from: number): { words: Word[]; end: number } {
   return { words, end: i };
 }
 
-/** Whether `w` is a flag (`-R`, `--repo`, `--web`): a word starting with a dash once the shell has removed its quotes. */
-const isFlag = (w: Word | undefined): boolean => w !== undefined && w.text.startsWith('-');
+/** A sentence's start inside a flag's value: a full stop followed by an upper-case letter. */
+const SENTENCE_IN_VALUE = /\.(?=[A-Z])/;
 
-/** The `gh` flags that take a value, so the word after one is that value (review 1762 F1 and F2). Every other flag is boolean
- *  (`--web`, `--squash`, `--auto`, `--paginate`, `-i`), and the word after it is the command's own: `gh pr merge --squash 40`
- *  is PR 40, and `gh api --paginate repos/o/r/pulls/12` reads its path. A short form is listed where one of `gh`'s commands
- *  gives it a value, even where another gives it none. */
-const GH_VALUE_FLAGS: ReadonlySet<string> = new Set([
-  '-R', '--repo', '-b', '--body', '-t', '--title', '-B', '--base', '-H', '--head', '--header', '-X', '--method', '-f', '-F',
-  '--field', '--raw-field', '-q', '--jq', '--json', '-c', '--comment', '-l', '--label', '-a', '--assignee', '-L', '--limit',
-  '--reason', '--state', '--template', '--input', '--hostname',
-]);
-
-/** Whether `w` is a flag that takes the next word as its value (`GH_VALUE_FLAGS`; a `--flag=value` word holds its own). */
-const takesValue = (w: Word | undefined): boolean => w !== undefined && GH_VALUE_FLAGS.has(w.text);
-
-/** A flag's value up to a full stop followed by an upper-case letter, where a sentence begins (review 1762 F9):
- *  `-R o/r.Then #12` names `o/r`. */
-function flagValue(value: string): string {
-  const stop = /\.(?=[A-Z])/.exec(value);
-  return stop === null ? value : value.slice(0, stop.index);
-}
-
-/** The command's own words: up to the first bare word past its positionals (`gh pr|issue <verb> <n>` has three, `gh api <path>`
- *  two), where prose or another program begins (`gh pr view 12 then cp -R o/r`). The word after a flag that takes a value
- *  (`takesValue`) is that value; the word after any other flag is the command's own. An unquoted word starting with `#` is
- *  prose, never a positional (review 1762 F1): `gh pr list -R o/r #12 is ours` gives `#12` no repository, since `pr list`
- *  takes no number and the shell would read `#12` as a comment. */
-function ownWords(words: readonly Word[]): { own: readonly Word[]; positionals: readonly Word[] } {
-  const room = words[0]?.text === 'api' ? 2 : 3;
-  const positionals: Word[] = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const w = words[i]!;
-    if (isFlag(w) || takesValue(words[i - 1]) || (!w.quoted && w.text.startsWith('#'))) continue;
-    if (positionals.length === room) return { own: words.slice(0, i), positionals };
-    positionals.push(w);
-  }
-  return { own: words, positionals };
-}
-
-/** What one `gh` command says: the repository of its LAST `--repo`, `--repo=` or `-R` flag (as `gh` takes it, its value read
- *  by `flagValue`), or of its `gh api` path, and the number that repository is evidence for: a `gh pr|issue <verb> <n>`
- *  command's own number, or the API path's. */
+/** What one `gh` command says: the repository of its LAST `--repo`, `--repo=` or `-R` flag (as `gh` takes it), or of its `gh api`
+ *  path, and the number that repository is evidence for: a `gh pr|issue <verb> <n>` command's own number, or the API path's. A
+ *  flag value holding a full stop followed by an upper-case letter (`-R o/r.Then`, or a real `owner/Lib.Json`) is a repository
+ *  the chat cannot tell, never cut to a shorter name (review 1766 F3). */
 function ghCommand(words: readonly Word[]): { repo: SaidRepo; number: string | null } | null {
-  const { own, positionals } = ownWords(words);
-  const [head, verbOrPath, third] = positionals;
+  const [head, verbOrPath, third] = words.filter((w) => w.role === 'positional');
   if (head?.text === 'api' && verbOrPath !== undefined) {
     const m = GH_API_PATH.exec(verbOrPath.text);
     if (m !== null) return { repo: said(`${m[1]!}/${m[2]!}`), number: m[3] ?? null };
   }
   let flag: string | null = null;
-  // A quoted argument is one word, so a flag inside it (`--body "see -R o/r"`) is never a word of its own; a word that is
-  // exactly a quoted flag (`'-R'`) reaches `gh` as that flag once the shell removes its quotes.
-  own.forEach((w, i) => {
-    if ((w.text === '--repo' || w.text === '-R') && i + 1 < own.length) flag = flagValue(own[i + 1]!.text);
-    else if (w.text.startsWith('--repo=')) flag = flagValue(w.text.slice('--repo='.length));
+  // A quoted argument is one word, so a flag inside it (`--body "see -R o/r"`) is never a word of its own, and neither is a
+  // flag's value (`--body "--repo=o/r"`); a word that is exactly a quoted flag (`'-R'`) reaches `gh` as that flag once the
+  // shell removes its quotes.
+  words.forEach((w, i) => {
+    if (w.role !== 'flag') return;
+    const next = words[i + 1];
+    if ((w.text === '--repo' || w.text === '-R') && next?.role === 'value') flag = next.text;
+    else if (w.text.startsWith('--repo=')) flag = w.text.slice('--repo='.length);
   });
   if (flag === null) return null;
+  const repo = SENTENCE_IN_VALUE.test(flag) ? unknown(flag) : said(flag);
   const numbered = (head?.text === 'pr' || head?.text === 'issue') && third !== undefined && /^#?\d+$/.test(third.text);
-  return { repo: said(flag), number: numbered ? third.text.replace('#', '') : null };
+  return { repo, number: numbered ? third.text.replace('#', '') : null };
 }
 
 /** One message's evidence, read in one forward pass of each reader over its raw text. */

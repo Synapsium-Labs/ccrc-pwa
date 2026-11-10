@@ -394,6 +394,45 @@ describe('a PR or commit opens the repository the message means (Task C21, D-817
     }
   });
 
+  // Task C20 fix round 1 (review 1766 F4): a qualified name on a middle line of a list item, a quote, an alert or a table cell,
+  // or with an escape on both sides of it in its node, is still a name: the source is searched for it, not lined up.
+  const b12 = 'https://github.com/owner-b/repo-b/issues/12';
+  const contained: [string, [string, string][]][] = [
+    ['- first line\n  owner-b/repo-b#12 second\n  third and #12', [['owner-b/repo-b#12', b12], ['#12', b12]]],
+    ['> first\n> owner-b/repo-b#12 second\n> third #12', [['owner-b/repo-b#12', b12], ['#12', b12]]],
+    ['1. first line\n   owner-b/repo-b#12 second\n   third #12', [['owner-b/repo-b#12', b12], ['#12', b12]]],
+    ['> [!NOTE]\n> Fixed in owner-b/repo-b#12\n> see #12', [['owner-b/repo-b#12', b12], ['#12', b12]]],
+    ['| x \\| owner-b/repo-b#12 \\| y | #12 |', [['owner-b/repo-b#12', b12], ['#12', b12]]],
+    ['| a | b |\n|---|---|\n| x \\| owner-b/repo-b#12 \\| y | #12 |', [['owner-b/repo-b#12', b12], ['#12', b12]]],
+    ['a \\* b owner-b/repo-b#12 and #12 then \\*', [['owner-b/repo-b#12', b12], ['#12', b12]]],
+    ['- first\n  second owner-b/repo-b#12\n  third', [['owner-b/repo-b#12', b12]]],
+    // Only the node's own range counts: the escaped name stays text though a later node holds the name unescaped.
+    ['see owner-b/repo-b\\#12 then *x* owner-b/repo-b#12', [['owner-b/repo-b#12', b12]]],
+  ];
+  const linked = (c: HTMLElement): [string, string][] => anchors(c).map((a) => [a.textContent ?? '', a.getAttribute('href') ?? '']);
+
+  it('a qualified name inside a container or between escapes keeps its link, on the sync path', () => {
+    for (const [text, expected] of contained) {
+      const { container } = assistant(text);
+      expect(linked(container), text).toEqual(expected);
+      cleanup();
+    }
+  });
+
+  it('a qualified name inside a container or between escapes keeps its link, on the worker path', async () => {
+    for (const [text, expected] of contained) {
+      const calls: (() => void)[] = [];
+      vi.spyOn(chatRunner, 'parse').mockImplementation((src) => new Promise<ParseOutcome>((resolve) => {
+        calls.push(() => resolve(parseMarkdown(src, 'chat')));
+      }));
+      const { container } = assistant(`${text}\n\n${'a'.repeat(CHAT_SYNC_MAX_BYTES)}`);
+      await act(async () => { calls[0]!(); });
+      expect(linked(container), text).toEqual(expected);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('a whole code span holding owner/repo#n links there', () => {
     const { container } = assistant('See `owner-b/repo-b#12`.', CROSS);
     expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual(['https://github.com/owner-b/repo-b/issues/12']);
