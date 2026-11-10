@@ -1,0 +1,44 @@
+| machine | mutation | scenario | expected | caught by | states |
+|---|---|---|---|---|---|
+| grant | commit_skips_grant | staging VOID_WHEN=lazy | A2 | A2 | 17946 |
+| grant | commit_skips_rung | staging-ladder VOID_WHEN=lazy | A2 | A2 | 14418 |
+| grant | commit_skips_fence | staging-body VOID_WHEN=lazy | A2 I5 | A2 I5 | 11592 |
+| grant | expiry_never | grant  | A9 | A9 | 20382 |
+| grant | server_clears_latch | ladder  | A1 | A1 | 3645 |
+| grant | overlord_raises_rung | ladder  | A1 | A1 | 2916 |
+| grant | veto_counts_unobserved | staging  | A7 | A7 | 38910 |
+| grant | eight_hours_never | staging  | L1 | L1 | 18276 |
+| grant | skew_unguarded | expiry  | A1 A2 | A1 A2 | 83350 |
+| grant | rebind_no_latch | grant  | A3 | A3 | 15339 |
+| grant | live_tap_revives_revoked | grant  | A10 | A10 A4 | 43971 |
+| grant | hold_kept_without_grant | staging  | A11 | A11 | 20064 |
+| grant | no_fence | staging-body OLD_CALLER=True | I5 | A2 I5 L1 V2 | 24952 |
+| restore | boot_coherence_skipped | restore-db  | I7 | I3 I7 R1 | 89864 |
+| restore | witness_ignored | restore-volume  | I7 | I3 I7 R1 | 13144 |
+| restore | confirm_takes_laxer | restore-db  | I7 | I7 | 183702 |
+| restore | confirm_keeps_grant_live | restore-db  | I7b | I7b | 142661 |
+| restore | rollfwd_widening | restore-db TRAILING=literal | W1 | W1 | 171336 |
+| restore | no_designation_check | restore-body  | D2 | D2 | 3501 |
+| request | nudge_while_taken | operator  | S4 | S3 S4 | 25586 |
+| request | overlord_moves_taken | operator  | S4 | S4 S8 | 32066 |
+| request | nudges_unbounded | life  | S5 L1 | L1 L1r S5 | 74772 |
+| request | news_resets_forever | life  | S5 | S5 | 76836 |
+| request | off_keeps_unacked | ladder  | S6 | S6 | 29164 |
+| request | route_without_answer | life  | S8 | S8 | 157008 |
+| command | command_never_expires | command  | L2 | L2 | 1227 |
+| command | act_after_expiry | command  | S2 | S2 | 3551 |
+| command | act_ignores_moved_target | command STALE_DETECT=open-only | S2 | S2 | 3479 |
+| command | tap_ignores_moved_target | command STALE_DETECT=open-only | S2 | S2 | 2246 |
+| command | tap_on_terminal | command  | S2 S5 | S2 S5 S8 | 5390 |
+| command | retry_spends_again | command  | I3 | I3 | 2579 |
+| outbox | deferral_ignores_deadline | by  | P1 | L5 P1 | 130 |
+| outbox | budget_blocks_now | now  | P1 | L5 P1 | 138 |
+| outbox | reach_without_outbox | by  | I2 | I2 P1 | 146 |
+| outbox | sender_stuck | now  | P1 L5 | L5 P1 | 102 |
+| outbox | boot_drops_deferral | batch  | L5 | L5 | 1054 |
+| practice | canary_needs_nothing | narrow  | PR4 | PR4 | 249 |
+| practice | widen_auto | widen  | PR4 | PR4 | 838 |
+| practice | serve_retired | narrow  | PR6 | PR6 | 365 |
+| practice | breach_ignored | narrow  | PR6 | PR6 | 479 |
+
+not caught: 0

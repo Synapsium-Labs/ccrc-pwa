@@ -2,7 +2,7 @@
 
 Spec: `docs/superpowers/specs/2026-11-09-overlord-design.md` (the hardened edition, H1 to H39)
 Plans: `docs/superpowers/plans/2026-11-10-overlord/`, one file per piece, listed under Waves
-Research: `docs/superpowers/research/2026-11-10-overlord-model-check/` (the model check of invariants I1 to I10)
+Research: `docs/superpowers/research/2026-11-10-overlord-model-check/` (two model checks of the spec's machines)
 Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 
 ## Waves
@@ -12,6 +12,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The hardened edition of the spec, on top of rev 8 | #2513 | merged |
 | spec | The model check's fixes: 24 unsettled readings and one design fault | #2529 | merged |
 | spec | The builders' gaps closed, and the ratchet's scope put to the operator | #2533 | merged |
+| spec | The second model check's fixes: 38 findings in authority, restore, requests and pushes; I11 and I12 | #2538 | in review |
 | W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | The skill-size ratchet | #2530 (draft); plan `w1a-skill-ratchet.md` | built. Waits for the operator's ruling on its scope |
@@ -50,10 +51,16 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 - **No D-numbers are defined yet.** The spec defines none, and the plans name each recorded decision
   `D-TBD-<slug>`. The programme mints real numbers through the ledger door when its run opens, and replaces each
   slug in the same act. Until then the plans cannot merge: `server/test/dtbd.test.ts` fails on a concrete slug.
-- **The spec was model-checked.** An explicit-state model of the hold, readiness, generation and push machines
-  explored 1.86 million states over 15 scenarios. Every invariant holds under one consistent set of readings. The
-  text had left 24 readings unsettled, and one finding was a design fault. #2529 writes each settled reading into
-  the spec. The model is a prototype for the simulator's first model, which the simulator plan ports.
+- **The spec was model-checked, twice.** The first model covers the hold, readiness, generation and push machines:
+  1.86 million states over 15 scenarios, 24 readings the text had left unsettled, and one design fault. #2529 writes
+  each settled reading into the spec. The second covers authority, restore, requests, commands, the push budget and
+  playbook entries: 2.07 million states over 73 runs and 38 findings, one a blocker (a restore that lost acts read
+  as coherent). #2538 writes those in, and adds two invariants, because 31 of 40 planted faults broke none of I1 to
+  I10. The first model is the simulator's first model, which the simulator plan moves under the test tree. The
+  second is W1's authority and restore model, done early.
+- **Three calls in #2538 are the operator's to overturn.** A renewal voids a staged act. After a boot the rung is
+  capped at `advise`, not `chat`, until a witness answers. The Overlord cannot drop a request that waits on the
+  operator.
 - **The operator's directions to the hardening review** are recorded in the spec's §2: built to run in containers; a
   decision model for the yes-or-no questions code cannot decide; accounts reserved for the Overlord and never
   fenced off, with auto memory off for every role.

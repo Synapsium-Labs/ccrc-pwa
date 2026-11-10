@@ -94,16 +94,16 @@ later, as Table 11.7b's simulator row says).
   ring and one context, read from the `ring-context-map` block of
   `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`. Test code is outside the map, and this piece
   adds no `server/src` file, so it needs no row.
-- **The first model, in the tree as research.** `docs/superpowers/research/2026-11-10-overlord-model-check/model.py` (1 228 lines) and `check.py` (648 lines), Python standard library
-  only (`sys`, `time`, `array`, `collections`), an explicit-state breadth-first search over holds, readiness,
-  generations, grants and restore, with 15 scenarios, 24 ambiguity switches and 14 planted mutations (12 expected to
-  be caught, 2 marked "none expected"), and a bound of 3 000 000 states (`explore`'s `max_states`). Its headers cite
-  an earlier draft of the spec, not this edition. Its matrix, measured 2026-11-10 on a dev laptop: at
-  the defaults every scenario holds every invariant and ends under the bound. Ten finish in 1.1 s or less (push,
-  pause, race, asks, value, lineage, nohold, deadpush, restore, rebind); core and grants take about 3 s; renewal,
-  genmachine and readiness about 12 s each. The mutation table has not been re-run on this draft. An earlier draft
-  measured `rebind MUTATION=no_fence` caught by I5. `python3 -I check.py` fails with
-  `ModuleNotFoundError: No module named 'model'`, because `-I` drops the script's directory from `sys.path`.
+- **The first model, in the tree as research.** `docs/superpowers/research/2026-11-10-overlord-model-check/model.py`
+  (1 228 lines) and `check.py` (648 lines), Python standard library only (`sys`, `time`, `array`, `collections`), an
+  explicit-state breadth-first search over holds, readiness, generations, grants and restore, with 15 scenarios, 24
+  ambiguity switches and 14 planted mutations (12 expected to be caught, 2 marked "none expected"), and a bound of 3
+  000 000 states (`explore`'s `max_states`). Its headers cite an earlier draft of the spec, not this edition. Its
+  matrix, measured 2026-11-10 on a dev laptop: at the defaults every scenario holds every invariant and ends under the
+  bound. Ten finish in 1.1 s or less (push, pause, race, asks, value, lineage, nohold, deadpush, restore, rebind);
+  core and grants take about 3 s; renewal, genmachine and readiness about 12 s each. The mutation table has not been
+  re-run on this draft. An earlier draft measured `rebind MUTATION=no_fence` caught by I5. `python3 -I check.py` fails
+  with `ModuleNotFoundError: No module named 'model'`, because `-I` drops the script's directory from `sys.path`.
 
 ## Global Constraints
 
@@ -822,3 +822,8 @@ W1 (the invariant monitor reuses `Invariant` and `SequenceLine`, and the real-la
    this design exists yet. Recommendation: the renewal piece adds them to `server/test/sim/` with `renewalDue`.
 5. **M24's count of seeds run and red.** Nothing records it yet. Recommendation: leave it to W1's monitor, which owns
    M24's other figures.
+6. **Round two's machines.** A second model, in `round-two/` of the research directory, covers authority, restore,
+   requests, commands, the push budget and playbook entries. Its whole matrix runs in about 15 seconds.
+   Recommendation: it moves under the test tree with W1's authority and restore model, where Table 11.7b places it,
+   not in this piece. This piece's monitor and scenarios name I1 to I12: the spec's later edition added I11 (only
+   the operator widens authority) and I12 (every open request has a follow-up time).
