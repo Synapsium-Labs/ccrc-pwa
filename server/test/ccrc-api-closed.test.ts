@@ -14,6 +14,7 @@ import { CCRC_API, harnessBin } from './ccdWsHelpers.js';
 import { clientRoutes } from './ccrcApiTable.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { mkTmp } from './tmpHelpers.js';
+import { waveLifecycleText } from './waveLifecycle.js';
 
 const root = path.join(import.meta.dirname, '..', '..');
 const corpusFiles = (): string[] => {
@@ -192,8 +193,8 @@ describe('the corpora no longer invoke curl', () => {
   });
 
   it('executes ask examples with no valid default and exact expanded calls', () => {
-    const lifecycle = fs.readFileSync(path.join(
-      root, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+    // The lifecycle is one file or one per step: `waveLifecycleText` reads either.
+    const lifecycle = waveLifecycleText();
     const askBlocks = executableBlocks(lifecycle)
       .filter((block) => /"\$API"\s+asks\s+(?:answer|release)\b/.test(block));
     expect(askBlocks, 'the lifecycle must carry answer and release examples').toHaveLength(2);
