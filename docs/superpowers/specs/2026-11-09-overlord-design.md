@@ -5250,10 +5250,10 @@ The coordinator skill gains three clauses, each pinned verbatim by `coordinator-
   says an older build does, and every row reaches the operator as today.
 - **Its size grows only by its clauses.** The size ratchet test covers the coordinator's `SKILL.md` too (§11.3). Each
   pull request that adds one of these clauses may raise the file's cap by that clause's bytes and no more. The
-  contract must also end inside what a compaction keeps, and that rule has no raise. With its contract moved first,
-  the coordinator's ends about 650 bytes short of the bound. So the clauses this design adds do not fit beside the
-  contract as it stands: its clauses are shortened first, in a pull request of its own that changes the pin suite
-  with them, and the operator approves that wording. A new clause
+  contract must also end inside what a compaction keeps, and that rule has no raise. With its contract moved first
+  and its notes moved out of the section, the coordinator's ends about 2,300 bytes short of the bound. That is room
+  for three or four clauses of ordinary length. Past that, existing clauses are shortened first, in a pull request
+  of its own that changes the pin suite with them, and the operator approves that wording. A new clause
   also changes the count word in the skill's prose. Those bytes lie outside the clause's line, so the same pull
   request offsets them inside the same file. M31 tracks the files' bytes, not their caps.
 
