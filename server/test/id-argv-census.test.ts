@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 48 id-taking calls across 15 files.
+// THE CLAIM: 49 id-taking calls across 15 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;

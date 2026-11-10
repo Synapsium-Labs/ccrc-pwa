@@ -27,7 +27,7 @@ key, set and shown in the console and readable by sessions.
   `public` is public, nothing measured is `unknown`), `ticketRefOfBranch`, `trackerIdsIn`, `parseLinkingWrite`,
   `visibilityDue`. Every rule about the convention is decided here and nowhere else.
 - **L3** `server/src/coord/linkingStore.ts` (new, `reviewCapStore.ts`'s idiom): one table, `project_linking`
-  (migration 50), with two writers of two facts: the operator's settings (team key, override) and the measured reading
+  (migration 52), with two writers of two facts: the operator's settings (team key, override) and the measured reading
   (visibility, slug, template, when).
 - **L4** `server/src/linking/routes.ts` (new): `POST /api/projects/:project/linking` (the operator's write),
   `POST /api/projects/:project/pr-template` (the operator's template PR) and `GET /api/linking` (a session's read, box
@@ -82,7 +82,7 @@ key, set and shown in the console and readable by sessions.
 
 - **D-8147 (2026-11-09)** — the linking standard: each project carries a Linear team key and a visibility override,
   set from Settings › Security › Project linking and the add-project sheet and stored in `coord.db`'s
-  `project_linking` (migration 50); ccrc reads the repository's GitHub visibility through `ccd repo-visibility` on the
+  `project_linking` (migration 52); ccrc reads the repository's GitHub visibility through `ccd repo-visibility` on the
   PR sweep, cached 24 h, and the override wins; sessions read both with `ccrc-api linking show` (`GET /api/linking`, a
   box-token lane). A private project (measured `private` or `internal`, or overridden private) puts the ticket id in the
   branch, the PR body (`Closes`/`Refs KEY-123`) and commits (`Related: KEY-123`); a public or unmeasured project never
@@ -131,7 +131,7 @@ key, set and shown in the console and readable by sessions.
 | `shared/linking.ts` | new: words, wire types, refusal words, `LINKING_TEMPLATE_PATH` |
 | `shared/api.ts` | `ProjectRow.linking?: ProjectLinkingWire` (one line and its docstring line) |
 | `server/src/linking/policy.ts` | new: L1 deciders |
-| `server/src/coord/schema.ts` | migration 50: `project_linking` |
+| `server/src/coord/schema.ts` | migration 52: `project_linking` |
 | `server/src/coord/linkingStore.ts` | new: the table's SQL; `CoordStore` gains one-line delegates |
 | `server/src/linking/routes.ts` | new: the three routes |
 | `server/src/linking/visibilityLane.ts` | new: one measurement per sweep tick |
