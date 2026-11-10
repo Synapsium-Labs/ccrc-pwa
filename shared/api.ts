@@ -6772,6 +6772,11 @@ export function routeForBrowserCap(r: RouteFields | null, browserOk: boolean): {
  * account", because an unreadable marker or ledger is not a spent one. A
  * workspace with no marker is refused only when the registry cannot be listed.
  *
+ * `self-dispatch` (D-6096) — a plain `POST /api/runs/:id/dispatch` of a run whose bound session IS its claimant: it
+ * would `ensure`, hold and `/clear` the coordinator's own workspace. Refused before any read or fleet act, with a
+ * `detail` naming the other door: the same route with `inPlace: true`, `by`, `byUuid` and the sibling worktree's
+ * `branch`, which binds the run to its claimant with no fleet act at all.
+ *
  * `status-unmeasurable` and `worker-starting` are the dispatch resume arm's
  * live gate (D-5238): the `/clear` is typed only when the fail-closed turn
  * verdict (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`.
@@ -6798,7 +6803,8 @@ export type RunRefuseCode =
   | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'
   // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
   // into an epic with an open declared ticket no run holds must name one.
-  | 'ticket-required';
+  | 'ticket-required'
+  | 'self-dispatch';   // D-6096: a plain dispatch of a run onto the session that claims it; bind it in place instead
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6811,7 +6817,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
-  'ticket-required': true,
+  'ticket-required': true, 'self-dispatch': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
