@@ -119,18 +119,9 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
     _pane_box_draft() { printf ''; };`;
   const READY = '? for shortcuts\n❯ ';
 
-  it('the settle journals its /effort before it types it', () => {
+  it('the settle types and journals no effort: the default rides the spawn argv (D-8149)', () => {
     seed();
-    h.sh(`${STUBS} _inject_spawn_effort cc-${ID}`, { PANE_TEXT: READY });
-    // The box default is `high` since coordinator clause 19 (operator ruling 2026-10-25).
-    expect(h.calls()).toContain(`tmux send-keys -t =cc-${ID}: -l /effort high`);
-    expect(typedRows()).toHaveLength(1);
-    expect(typedRows()[0]).toMatch(/^\d{10} effort high$/);
-  });
-
-  it('a session whose record carries an effort types nothing and journals nothing', () => {
-    seed(); record({ effort: 'high' });
-    h.sh(`${STUBS} _inject_spawn_effort cc-${ID}`, { PANE_TEXT: READY });
+    expect(h.sh('type _inject_spawn_effort 2>&1 || true')).toMatch(/not found/);
     expect(typedRows()).toEqual([]);
   });
 
@@ -543,16 +534,6 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
   });
 
   // ── the spec's four mutation rows ──
-
-  it('the settle /effort on a session with no effort field is not promoted', () => {
-    seed();
-    h.sh(`sleep() { :; }; tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) printf '? for shortcuts\\n❯ \\n' ;; esac; return 0; };
-      _pane_box_draft() { printf ''; }; _inject_spawn_effort cc-${ID}`);
-    const t = now() + 2;
-    writeTranscript([cmd(t, 'effort', 'high'), ack(t, EFFORT_ACK('high'))]);   // the box default the settle typed
-    keep();
-    expect(h.reg(ID, 'effort'), 'the box default became an operator choice').toBeNull();
-  });
 
   it('control: the same /effort an hour from any journalled keystroke is the operator\'s', () => {
     seed();

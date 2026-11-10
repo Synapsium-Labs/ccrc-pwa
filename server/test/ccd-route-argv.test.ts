@@ -218,14 +218,15 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid'))).toBe(false);
   });
 
-  it('a dispatched worker (--no-rc) without --route gets NO row — the spawn line is byte-identical to today', () => {
+  it('a dispatched worker (--no-rc) without --route gets NO row — the spawn line carries no routing flag but the box-default --effort (D-8149)', () => {
     h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc demo`);
     expect(record('demo-quiet-mesa')).toEqual([null, null, null, null]);
     expect(routeRows()).toHaveLength(0);
     const line = composed(newSessions()[0]!);
-    for (const tok of ['--model', '--settings', '--effort', 'CLAUDE_CODE_SUBAGENT_MODEL']) {
+    for (const tok of ['--model', '--settings', 'CLAUDE_CODE_SUBAGENT_MODEL']) {
       expect(line, tok).not.toContain(tok);
     }
+    expect(line.match(/--effort \S+/g)).toEqual(['--effort high']);
   });
 
   it('an operator ws-add (no --no-rc, no --route) gets the coordinator row, journaled as the default', () => {

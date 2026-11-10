@@ -128,7 +128,7 @@ describe('_ws_unsupervise records a deliberate stop', () => {
       _reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199`);
     h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} agent`);
     expect(h.reg(ID, 'stopped')).not.toBeNull();
-    h.sh(`_accept_first_run_prompts() { return 0; }; _inject_spawn_effort() { :; };
+    h.sh(`_accept_first_run_prompts() { return 0; };
       tmux() { :; }; _spawn ${ID} resume`);
     expect(h.reg(ID, 'stopped')).toBeNull();
   });

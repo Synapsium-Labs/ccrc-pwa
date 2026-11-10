@@ -122,7 +122,7 @@ describe('a started session has $HOME/.local/bin on its PATH (D-8050)', () => {
     const lines = spawnLines('claude');
     const report = runPane(lines[1]!);
     expect(report.pid).toBe(report.panePid);
-    expect(report.args).toBe(`3:--session-id ${UUID} --dangerously-skip-permissions`);
+    expect(report.args).toBe(`5:--effort high --session-id ${UUID} --dangerously-skip-permissions`);
   });
 
   it('a workdir reached through a link keeps its logical spelling, as the pane entered it', () => {

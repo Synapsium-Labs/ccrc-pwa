@@ -20,22 +20,6 @@ const sendKeys = (): string[] => h.calls().filter((l) => l.includes('send-keys')
 const READY = '? for shortcuts\n❯ ';
 const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ ';
 
-describe('_inject_spawn_effort stands down on an armed auto-continue (D-2229)', () => {
-  it('types nothing into a session waiting out a limit', () => {
-    h.sh(`${STUBS} _inject_spawn_effort cc-test`, { PANE_TEXT: ARMED });
-    expect(sendKeys()).toEqual([]);
-  });
-  it('control: a ready pane gets /effort', () => {
-    h.sh(`${STUBS} _inject_spawn_effort cc-test`, { PANE_TEXT: READY });
-    expect(sendKeys().some((k) => k.includes('-l /effort'))).toBe(true);
-  });
-  it('types nothing into an open dialog: no box on screen refuses (D-8116)', () => {
-    const err = h.sh(`${TMUX_STUBS} _inject_spawn_effort cc-test 2>&1`, { PANE_TEXT: DIALOG() });
-    expect(sendKeys()).toEqual([]);
-    expect(err).toContain('no input box on screen (a dialog is open), skipped /effort');
-  });
-});
-
 describe('_pane_auto_continue_armed', () => {
   it.each([
     ['continuing automatically at 11:50am', true],
@@ -277,18 +261,17 @@ describe('_redrive_after_spawn', () => {
   });
 });
 
-describe('_spawn_settle calls the re-drive after the effort injection (the wiring)', () => {
+describe('_spawn_settle calls the re-drive on a clean landing (the wiring)', () => {
   beforeEach(seed);
   const SETTLE = `${STUBS}
     _accept_first_run_prompts() { return \${ACCEPT_RC:-0}; };
-    _inject_spawn_effort() { echo "effort $1" >> "$HOME/ccd-calls"; };
     _lc_done() { :; };`;
-  it('on a clean landing the re-drive runs, after /effort', () => {
+  it('on a clean landing the re-drive runs', () => {
     writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
     h.sh(`${SETTLE} _spawn_settle ${ID} 1`, { PANE_TEXT: READY });
     const calls = h.calls();
     // The target here is `_tmux myid`, not `cc-test` — match on the typed text alone.
-    expect(calls.findIndex((c) => c.startsWith('effort '))).toBeLessThan(calls.findIndex((c) => c.includes('-l Continue from where')));
+    expect(calls.some((c) => c.includes('-l Continue from where'))).toBe(true);
     expect(sendKeys().some((k) => k.includes('-l Continue from where you left off.'))).toBe(true);
     expect(sendKeys().some((k) => k.endsWith(' Enter'))).toBe(true);
   });

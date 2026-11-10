@@ -446,7 +446,6 @@ _spawn_start	C2
 _spawn_settle	C2
 _spawn	C2
 _spawn_workdirid_pending	C2
-_inject_spawn_effort	C3
 _transcript_stalled_pair	C3
 _transcript_limit_banner	C3
 _transcript_last_turn_ts	C3

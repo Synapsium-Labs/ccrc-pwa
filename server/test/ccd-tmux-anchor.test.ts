@@ -549,8 +549,9 @@ describe('D-3525 — the census: every ccd target is spelled by the exact builde
     }
   });
 
-  it('_spawn_settle hands _inject_spawn_effort the id, not only the name (wave 9 M8)', () => {
-    expect(functions(CCD_SRC).get('_spawn_settle')).toContain('_inject_spawn_effort "$tname" "$id"');
+  it('_spawn_settle types no effort of its own: the box default rides the spawn argv (D-8149)', () => {
+    expect(functions(CCD_SRC).get('_spawn_settle')).not.toContain('_inject_spawn_effort');
+    expect(functions(CCD_SRC).has('_inject_spawn_effort')).toBe(false);
   });
 
   it('the keepalive\'s one probe is the exact form, sanitised the way `_tmux_at` sanitises', () => {

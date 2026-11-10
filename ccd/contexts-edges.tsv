@@ -54,9 +54,6 @@ _hib_wake_clear -> _reg_set
 _idle_for_keystroke -> _cfg_dir_to
 _idle_for_keystroke -> _reg_get
 _idle_for_keystroke -> _tmux_t
-_inject_spawn_effort -> _route_effort_for
-_inject_spawn_effort -> _route_get
-_inject_spawn_effort -> _tmux_at
 _limit_dated -> _transcript_path
 _limit_read -> _transcript_limit_banner
 _operator_choice_keep -> _reg_set
@@ -139,8 +136,6 @@ _session_probe -> _tmux_t
 _session_state -> _sup_fresh
 _spawn_settle -> _accept_first_run_prompts
 _spawn_settle -> _authdead_clear_on_spawn
-_spawn_settle -> _inject_spawn_effort
-_spawn_settle -> _is_anthropic_backend
 _spawn_settle -> _lc_done
 _spawn_settle -> _redrive_after_spawn
 _spawn_settle -> _reg_get
