@@ -86,7 +86,28 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-10, 08:10Z
+## Current checkpoint — 2026-11-10, 16:25Z
+
+This supersedes the earlier 2026-11-10 checkpoints below where they differ; the current route and the definition of
+done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, W4-1's reviews and landing".
+
+- **W4-1 landed.** #2554 merged through the merge queue at 16:21Z as `b9731a15a`, at head `6fc0ef99b`, after three
+  reviews: 1749 read the whole branch, and 1750 and 1752 read fix rounds 1 and 2. Run 1745 closed done after its MERGED
+  mail. It defines D-8151 to D-8163: eleven slugs numbered at dispatch, and D-8162 and D-8163 licensed in fix round 1.
+  Number 8164 stays unwritten. No tick captures a subagent file until the operator sets a node's `agents-on` marker,
+  which no code writes; the one other reader is the operator's own `import --agents --apply`, which reads no marker
+  (D-8158).
+- **W4-2 is dispatched** (run 1754, wave 30, 16:22Z): subagent leaves on their own chain, with no receipt and no card
+  (W4 plan Task 2). Its block is numbers 8168 to 8171: 8168 for `history-w4-sa27-in-w4-2`, and 8169 to 8171 held.
+- **The cohort has not started.** The operator ticked item 135 before 14:52Z. The coordinator re-measured and returned
+  it at 14:53Z:
+  the session node runs v0.0.1070, which the coordinator accepts as the cohort's tag (it carries W3-1 and W3-4 and no
+  other W3 PR, and no history code or hook changed since v0.0.1065). But no `steer-on/` marker exists, so act 3 is not
+  done. The next release carries W4-1's ingest code, so the node stays on v0.0.1070 for the cohort.
+- **W1** is as on 2026-11-09: W1-b is re-measured over the week ending 2026-11-15, and W1-l is the operator's drill
+  (item 86), whose result do-item 111 waits for.
+
+### Checkpoint of 2026-11-10, 08:10Z
 
 This supersedes the earlier 2026-11-10 checkpoint below where they differ; the current route and the definition of
 done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, W3-4 and W4-1".
@@ -253,11 +274,97 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 26 | W3-1: the steering spike PR (template, steer file, print and receipt, refs repair, spike report; W3 plan Tasks 1A, 1F, 1B, 1C and 1D). It prints into a compaction only on a session the operator arms | fleet (hook) | #2510 | **merged** 2026-11-10 01:51Z as `683fd7a03` at head `f794eab9e` (run 1713, CP-61, done 01:54Z; reviews 1732 and 1736; one fix round); defines D-8127 to D-8135; numbers 8136 to 8138 held |
 | 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | #2503 | **merged** 2026-11-10 02:32Z as `0d61d1075` at head `9cd2b8d6a` (run 1714, done; reviews 1726, 1728, 1731, 1735, 1737 and 1739; fix rounds 1 to 5; review cap lifted by the operator, item 133); accepted with the coordinator's note of six build-time corrections (CP-71 met) |
 | 28 | W3-4: the parent add-on and steered node gists (W3 plan Task 4), the other half of the cohort's release (O15) | fleet | #2540 | **merged** 2026-11-10 07:59Z as `6dd3c93b3` at head `07f064f41` (run 1738, done; reviews 1741, 1742, 1743 and 1744; three fix rounds; review cap lifted by the operator, item 134); no D-number written; released with W3-1 in v0.0.1065 |
-| 29 | W4-1: the subagent walk, ingest, the pause order, the marker gate, the import form and the census (W4 plan group W4-1) | fleet | — | **dispatched** 2026-11-10 08:00Z (run 1745); block of numbers 8151 to 8164 (8151 to 8161 for its approved slugs, 8162 to 8164 held) |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both; the cohort is the operator's (item 135); focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 building (wave 29); B4 live still required |
+| 29 | W4-1: the subagent walk, ingest, the pause order, the marker gate, the import form and the census (W4 plan group W4-1) | fleet | #2554 | **merged** 2026-11-10 16:21Z as `b9731a15a` at head `6fc0ef99b` (run 1745, done; reviews 1749, 1750 and 1752; two fix rounds); defines D-8151 to D-8163; number 8164 unwritten |
+| 30 | W4-2: subagent leaves on their own chain, with no receipt and no card (W4 plan Task 2) | fleet | — | **dispatched** 2026-11-10 16:22Z (run 1754); block of numbers 8168 to 8171 (8168 for `history-w4-sa27-in-w4-2`, 8169 to 8171 held) |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort is the operator's (item 135, returned 14:53Z: no session armed yet); focused steering spike and per-backend operator arming retained |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 **merged** (#2554, wave 29); W4-2 building (wave 30); no node armed; B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-10, W4-1's reviews and landing
+
+**A shared file with a peer programme (11:43Z).** The desktop-polish coordinator asked to edit `.github/workflows/ci.yml`
+while W4-1's claim held it, to split the browser leg into three queue shards (its Task C19). W4-1's only edit to that
+file was two lines in another job, the node-floor job's Test list. The coordinator
+consented to C19 editing that block alone, whichever landed first; W4-1's claim stood. C19 landed first (#2553); #2554
+merged cleanly beside it.
+
+**Review 1749 (whole branch at `b6c550e1a`).** The marker gate (two readers, no writer), every main-capture select
+(`agent_id = ''`), the one admitted set, the pause order, the install record and P10's shared arm held; 12 of 13
+mutants were red. The coordinator's rulings, fix round 1:
+- F1, a hardlinked holding over-counted the withheld count and the import dry run (a path-only lookup): fixed by the
+  inode row and a once-per-physical-file count.
+- F5, the two subagent arms of `skipped` had no red test (mutant m13 survived): one case per arm.
+- F3, the census's bound test was a weaker copy of lib's identity rule: `planFileRead`'s identity arms became one lib
+  decider, `sameFileIdentity`, which the census calls without a first-line sha. The plan's `runCensus` contract (it
+  opens no file but the metas) and the addendum's section 3.1 (the census reads no transcript file) stand, so D-8163
+  (`history-w4-census-reads-no-transcript`) states what stays unmeasured: a holding rewritten in place under one inode
+  and birth time with no shrink, or a first line changed where no birth time exists, reads as bound until ingest next
+  judges it. That is the one way an unbound holding can narrow the range, against P18 (a)'s "widens and never
+  narrows". The operator may override it by ordering the reads.
+- F4, the census's decisions sat in L4 `census.mjs`: moved to lib as pure deciders in the same PR.
+- F2, a fourth withholding reason (no readable install record): kept, as D-8162
+  (`history-w4-census-withholds-without-install-record`). It withholds more, never less.
+- F6, a subagent row reusing a parent's message uuid would share the parent's entry (`ENTRY_UPSERT` is keyed by uuid
+  alone). The coordinator measured the session node read-only the same day: across 19 homes, 14,367 subagent files and
+  their 585 parent sessions (17.5 GiB read), no subagent row reuses a uuid of its parent or of a sibling, and none of
+  488,265 uuid-less subagent lines repeats a parent line. No subagent of type `fork` exists on the node, so a
+  context-inheriting one is unmeasured. No code change: a comment at `ENTRY_UPSERT` states it, and the coordinator
+  repeats the measurement on each node before it is armed.
+- Not in the round, carried: `deploy/history-gate.mjs`' `GATE_CODE_FILES` does not hash `shared/workflow-ids.mjs`,
+  which lib now imports (the gate reads nothing that depends on `RUN_ID_RE`; for the gate's next editor). Advisories:
+  `beside.physicalUnmeasured` cannot be reached on a real walk; the `bytesLeftOf` guard matches two spellings only;
+  the `partition-sum` withholding has no live reach. `ccrc-containment.test.ts`' loopback-curl case fails on a box
+  whose curl (8.18) accepts `--url=` and exits 7 where the case expects 2: not W4-1's, and CI is green.
+
+**Review 1750 (fix round 1's delta to `05b326a94`).** Rulings 2 to 7 held, 6 of 6 mutants red. F1: the new
+waiting-bytes lookup took the inode row without the live and identity checks ingest makes before resuming one. Fix
+round 2: the lookup asks `sameFileIdentity` too, and a row that fails counts the file's whole size. Advisories fixed in
+the same round: the Deviations header (thirteen, not eleven), a space restored on a code line, and a guard that both
+arms call the one lookup.
+
+**Review 1752 (fix round 2's delta to `6fc0ef99b`), accepted with carries.** The round held, 5 of 5 mutants red. Its
+two findings are the seam of the coordinator's own ruling, which said the lookup takes "the row bindFile resumes":
+- F1: ingest does resume a row marked gone when its inode reappears, but the lookup counts that file whole. The
+  withheld count and the dry-run forecast over-count, the conservative direction.
+- F2: where no birth time exists, the lookup's no-first-line-sha rule leaves a first line changed in place uncounted
+  (D-8163's family, unstated for this reader). The advisories: the guard matches one spelling, and an in-place rewrite
+  under one inode and birth time is uncounted.
+
+Neither moves a byte of capture; both are counters and a forecast. The coordinator accepted them rather than open a
+fourth review. Carried to the next PR that holds `sweep.mjs`: drop or justify the live gate, reword the comment, the
+task note and the two test titles, and state the no-birth-time residual for this reader.
+
+**The landing.** The verdict at `BOUND_S=0` read `ROUTE Q method=squash admin=never`; `gh pr merge 2554
+--match-head-commit 6fc0ef99b` enqueued it, and it merged at 16:21Z as `b9731a15a`. W4-2's run (1754) was opened
+before run 1745 closed, so the programme never stood without an open run.
+
+**W4-1's task note** (`docs/superpowers/plans/2026-11-09-ccrc-history-w4-subagents-touched/w4-1.md`), folded here:
+- act F1, the shared arm: the release tree and the fallback push both carry `shared/`;
+- act F2, the census at G14's size (1,454 subagent transcripts in 181 parents of 8 and one of 6): p50 201 ms, p95
+  226 ms, 17,664 decodes, about 352 MB peak RSS, warm runs over small bodies, so a floor, not a general p95;
+- act F3: doctor relays every health word, so the new WARN needs no edit there.
+
+Statements the ledger keeps:
+- SA33's untimed-only parent is `M`, as the plan says (the addendum's parent table reads it as decided);
+- SA23's "writes nothing" excludes SQLite's reader sidecars and the shim's lock;
+- the census reads bodies through `derive.mjs`' `blobReadStmts`, which `late-census` pins;
+- a parent read to its end at the last tick counts as read past its window, so an `M` can read as `U`: the upper end
+  can be too low, and the lower end is untouched;
+- SA24's and SA32's CONTROLs describe states the code cannot reach;
+- an armed scan lists each project's session directories before its filter, unbudgeted. Review 1749 measured about
+  5 µs a directory warm, so a cut needs an extreme tree or a slow cold filesystem; the first armed node measures it;
+- arming late ingests the whole gap since the install record at once, so the operator reads that node's census `Q`
+  first;
+- W4-2 inherits the subagent `boundaries` backlog W4-1's ingest writes, and raw lines keyed by the parent's uuid.
+
+**Item 135 (before 14:52Z to 14:53Z).** The operator ticked it. The coordinator re-measured read-only:
+- the session node runs v0.0.1070 (`fb106808a`), moved from the console at 13:10Z. It is accepted as the cohort's tag:
+  it carries W3-1 and W3-4 and no other W3 PR, and nothing under `ccd/history`, the hook or `deploy/history-*` changed
+  since v0.0.1065;
+- `~/.ccrc/history/steer-on/` did not exist, so act 3 was not done.
+
+The item was returned with that note: acts 2 and 3, then tick again, and keep the node on v0.0.1070 for the cohort.
 
 ### Latest rulings and evidence — 2026-11-10, W3-4 and W4-1
 
