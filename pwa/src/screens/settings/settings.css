@@ -199,6 +199,45 @@
 .testbox-card:not([data-band='phone']) .testbox-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .testbox-tables--side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 
+/* Automation's Test box connect flow (test box connect plan TC15, D-8166; spec 2026-11-07 §2.2's width table). Layout only: every
+   word wears `.settings-note`, `.settings-catalogue--amber` or inherits the card's ink. The band is the flow's `data-band` (the
+   card's one read). Phone: one column, the steps a numbered list with only the current step open inside its item, every button
+   full width, the key line wrapping inside its block with Copy under it. Laptop: the step list on the left and the current step
+   on the right, the act's button at the end of its state line, settings a two-column form. Wide: a third area beside them, the
+   ledger's recent acts. A key line or a fingerprint is one long token, so it wraps anywhere rather than push the card sideways. */
+.testbox-connect { display: grid; gap: var(--pad-card); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
+.testbox-connect-grid { display: grid; gap: var(--pad-card); min-width: 0; }
+.testbox-steps { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding-inline-start: 1.5em; list-style: decimal; }
+.testbox-steps > li { min-width: 0; }
+.testbox-steps > li[data-state='current'] > .testbox-step-name { font-weight: var(--weight-semibold); }
+.testbox-step-open, .testbox-step-panel { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-step-open { margin-top: calc(var(--pad-card) / 2); }
+.testbox-connect-body { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-connect-stateline { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-connect-text { margin: 0; overflow-wrap: anywhere; }
+.testbox-connect-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-key-line {
+  display: block; min-width: 0; padding: calc(var(--pad-card) / 2); overflow-wrap: anywhere; word-break: break-all; white-space: pre-wrap;
+  font-family: var(--family-mono); font-size: var(--fs-meta); background: var(--bg-raised); border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+}
+.testbox-checks, .testbox-phases { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.testbox-checks > li, .testbox-phases > li { overflow-wrap: anywhere; }
+.testbox-phases { counter-reset: phase; }
+.testbox-form { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-field { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-field > label { overflow-wrap: anywhere; }
+.testbox-family, .testbox-repo { min-width: 0; margin: 0; padding: 0; border: 0; }
+.testbox-repo { display: grid; gap: calc(var(--pad-card) / 2); padding-top: calc(var(--pad-card) / 2); border-top: 1px solid var(--edge-subtle); }
+.testbox-offers { display: flex; flex-wrap: wrap; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-connected { margin: 0; font-weight: var(--weight-semibold); }
+.testbox-connect:not([data-band='phone']) .testbox-connect-grid { grid-template-columns: minmax(11rem, 1fr) minmax(0, 2fr); align-items: start; column-gap: var(--pad-card); }
+.testbox-connect[data-band='wide'] .testbox-connect-grid { grid-template-columns: minmax(8.5rem, 0.7fr) minmax(0, 2.2fr) minmax(8.5rem, 0.9fr); }
+.testbox-connect:not([data-band='phone']) .testbox-connect-stateline { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.testbox-connect:not([data-band='phone']) .testbox-connect-row { grid-template-columns: repeat(2, auto); justify-content: start; }
+/* The form is two columns at the laptop band, where the step's panel has room for two; at the wide band the panel shares the
+   settings card with the step list and the ledger (a settings card is narrower than the window), so it keeps one. */
+.testbox-connect[data-band='laptop'] .testbox-form { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--pad-card); }
+
 /* Security › Linear (#1444, spec §10.3's table). Layout only, but for the team chip, which sets its ink and its ground
    together. The band is the card's `data-band` (`LinearSection`'s one read of the desk and wide queries), so each band's
    layout is one selector here. Phone: the name on its own line with the state under it, the controls a full-width row of

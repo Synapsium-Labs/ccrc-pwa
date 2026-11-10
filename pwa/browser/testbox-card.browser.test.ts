@@ -17,6 +17,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { TESTBOX_PROTO, type StatusAnswer } from '../../shared/testbox';
 import { TESTBOX_TEXT } from '../src/fleet/TestBoxSection';
+import { TESTBOX_CONNECT_TEXT } from '../src/fleet/testboxAdminWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
@@ -237,6 +238,57 @@ describe('Settings › Automation › Test box with no box set up, at phone, lap
         expect(Math.abs(note.left - m.state.left)).toBeLessThanOrEqual(1);
         expect(note.right).toBeLessThanOrEqual(m.stateLine.right + 0.5);
         expect(m.button).toBeNull();
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+/** A connected box whose parity has not passed (D-8166, TC15): the block's admin says so, and the flow's own read agrees. */
+const WAITING_BLOCK = { ...BLOCK, admin: { connected: true, hostKey: 'pinned', act: null, parity: 'none' } };
+const CONNECTED_STATUS = {
+  v: 1, connected: true, addressSet: true, login: 'root', fingerprint: `SHA256:${'A'.repeat(43)}`, hostKey: 'pinned', boxFileSha256: 'f'.repeat(64),
+  act: null, boxSettings: null, boxSettingsAt: null, parity: null,
+};
+
+describe('Settings › Automation › Test box: the switch waits for parity, at phone, laptop and wide (D-8166)', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      const posts: unknown[] = [];
+      await ctx.route('**/api/testbox', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, testbox: WAITING_BLOCK }) }));
+      await ctx.route('**/api/testbox/admin', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, status: CONNECTED_STATUS, events: [] }) }));
+      await ctx.route('**/api/testbox/switch', async (r) => {
+        posts.push(r.request().postDataJSON());
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, requested: true }) });
+      });
+      try {
+        await page.goto(server!.origin + '/settings/automation');
+        const section = page.getByRole('region', { name: TITLE });
+        await expect.poll(() => section.locator('[data-testbox="switch-waits"]').count(), { timeout: 20_000 }).toBe(1);
+        const m = await section.evaluate(measure);
+        const waits = await section.evaluate((el) => {
+          const n = el.querySelector('[data-testbox="switch-waits"]')!;
+          const r = n.getBoundingClientRect();
+          const sw = el.querySelector('[data-testbox="switch"]')!.getBoundingClientRect();
+          return { text: n.textContent, left: r.left, right: r.right, switchLeft: sw.left, switchRight: sw.right, visible: n.checkVisibility() };
+        });
+        expect(m.band).toBe(view.band);
+        expect(waits.text).toBe(TESTBOX_CONNECT_TEXT.switchWaits);
+        expect(waits.visible).toBe(true);
+        expect(waits.left).toBeGreaterThanOrEqual(waits.switchLeft - 0.5);
+        expect(waits.right).toBeLessThanOrEqual(waits.switchRight + 0.5);
+        expect(m.card.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.card.clientWidth);
+        expect(m.overflowing, 'an element inside the card scrolls sideways').toEqual([]);
+        expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
+        // On is drawn disabled and a tap on it sends nothing; Off is never gated.
+        expect(await section.getByRole('radio', { name: T.on }).isDisabled()).toBe(true);
+        expect(await section.getByRole('radio', { name: T.off }).isEnabled()).toBe(true);
+        await section.getByRole('radio', { name: T.on }).click({ force: true, timeout: 1500 }).catch(() => undefined);
+        await page.waitForTimeout(200);
+        expect(posts).toEqual([]);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

@@ -15,6 +15,11 @@
 //     queue, fallbacks), the versions table open under it, the rest behind the disclosure;
 //   * wide: the same, with the versions table and the pristine-installs table open side by side.
 // Every table is one shape (`TestboxTable`), so the four are one block written once.
+//
+// THE CONNECT SURFACE (D-8166, TC15). A block that carries `admin` (a server with the connect routes) mounts `TestBoxConnect`
+// above the card while no box is connected or parity has not passed, and draws the switch's On disabled, with the sentence
+// that says why, until the record passes: the server refuses `{on: true}` the same way (`parity-required`), and turning the
+// switch OFF is never gated. A block without `admin` is an older server and is drawn as it always was.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, RadioFieldset, Section, Skeleton, elapsedWords, useDesk, useMediaQuery, useNow } from '@ccrc/ui';
@@ -25,6 +30,8 @@ import { ApiError, api, apiErrorText } from '../lib/api';
 import { isRecord } from '../lib/wire';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, UNCONFIRMED_TEXT, useResultLine } from './settingsText';
+import { TestBoxConnect } from './TestBoxConnect';
+import { TESTBOX_CONNECT_TEXT } from './testboxAdminWords';
 import type { TestboxBlock, TestboxPoll } from './useTestboxView';
 
 /** The wide band's query: the width at which the shell's other wide layouts start (`tokens.css`'s 1600). */
@@ -158,6 +165,9 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
   const switchLine = useResultLine();
   const syncLine = useResultLine();
   const box = block.box;
+  const admin = block.admin;
+  const flow = admin !== undefined && (!admin.connected || admin.parity !== 'pass');
+  const waitsForParity = admin !== undefined && admin.parity !== 'pass' && block.switch !== 'on';
 
   const flip = (on: boolean): void => {
     if (switching) return;
@@ -211,6 +221,7 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
   return (
     <>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{T.stale}</p>}
+      {flow && <TestBoxConnect band={band} onChanged={poll.reload} />}
       <div className="testbox-head" data-testbox="head">
         <div className="testbox-switch" data-testbox="switch">
           <RadioFieldset<'on' | 'off'>
@@ -219,9 +230,10 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
             value={block.switch === 'unknown' ? null : block.switch}
             disabled={switching}
             onPick={(v) => flip(v === 'on')}
-            options={[{ value: 'on', label: T.on }, { value: 'off', label: T.off }]}
+            options={[{ value: 'on', label: T.on, disabled: waitsForParity }, { value: 'off', label: T.off }]}
           />
           <p className="settings-note">{T.switchNote}</p>
+          {waitsForParity && <p className="settings-note" data-testbox="switch-waits">{TESTBOX_CONNECT_TEXT.switchWaits}</p>}
           {block.switch === 'unknown' && <p className={SETTINGS_AMBER_NOTE}>{T.switchUnknown}</p>}
           <ResultLine line={switchLine.line} />
         </div>
