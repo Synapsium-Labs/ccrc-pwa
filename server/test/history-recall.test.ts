@@ -8288,7 +8288,10 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
       const grepOff = cli(B, ['grep', 'Segment']).stdout;
       expect(grepOff, 'CONTROL: the grep reads the row the clone also holds').toMatch(/^── leaf L[0-9a-f]{6} /m);
       expect(grepOff, 'no group is headed by the subagent node').not.toContain(clone);
-      expect(grepOff).not.toMatch(new RegExp(`^── leaf ${clone.slice(0, 7)}0`, 'm'));
+      // every group header is headed by a main leaf: the display prefix of one of the main thread's leaves, whatever its digits
+      for (const h of grepOff.split('\n').filter((l) => l.startsWith('── leaf '))) {
+        expect(B.main.some((id) => h.startsWith(`── leaf ${id.slice(0, 7)} `)), `${h} is headed by a main leaf`).toBe(true);
+      }
     } finally {
       w.prepare('DELETE FROM node_sources WHERE node_id = ?').run(clone);
       w.prepare('DELETE FROM nodes WHERE node_id = ?').run(clone);
@@ -8329,8 +8332,15 @@ describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only unde
     expect(rows.filter((r) => r.a === '' && r.n > 0), 'CONTROL: no main-thread row is stored').toEqual([]);
     expect(rows.filter((r) => r.a === AGENT && r.n > 0).length, 'CONTROL: the subagent\'s rows are').toBe(1);
     const off = cli(C, ['grep', NEEDLE]);
-    expect([off.code, off.json?.['reason']]).toEqual([6, undefined]);
+    // exit 6 carries no reason word; what it prints is the refusal line (cli.mjs refusalLine over EXIT_MEANING[6]) and, with --json, its envelope
+    expect(off.code).toBe(6);
+    expect(off.stdout.trim(), 'the refusal line, unchanged').toBe('exit 6: not indexed yet: the first tick has not created the store, or this store has no rows yet');
     expect(`${off.stdout}${off.stderr}`, 'no subagent text without --agents').not.toMatch(/quokka|wombat|agent:/);
+    const offJson = cli(C, ['grep', NEEDLE, '--json']);
+    expect(offJson.code).toBe(6);
+    expect(offJson.json, 'the --json envelope: exit 6, no reason, no scope, no items').toMatchObject({ exit: 6, scope: null, items: [], shown: 0, total: 0 });
+    expect(offJson.json).not.toHaveProperty('reason');
+    expect(offJson.stdout, 'no subagent text in the envelope').not.toMatch(/quokka|wombat|agent:/);
     const on = cli(C, ['grep', NEEDLE, '--agents']);
     expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
     expect(on.stdout).toContain(NEEDLE);
