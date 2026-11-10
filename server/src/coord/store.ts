@@ -1840,7 +1840,7 @@ const feedDedupeHash = (key: string): string => createHash('sha256').update(key)
 interface StallRunSqlRow {
   idText: string; kind: string; state: string; sessionId: string | null; claimedBy: string | null;
   dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
-  reviewsText: string | null; project: string; workspace: string | null;
+  reviewsText: string | null; project: string; workspace: string | null; inPlace?: number | null;
 }
 
 /**
@@ -3056,14 +3056,19 @@ export class CoordStore {
       const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
       if (!adv.ok) return adv;
       for (const title of input.items) this.addWorkItem(input.runId, title, []);
-      for (const key of input.intents ?? []) {
-        this.db.prepare(
-          'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
-          'SELECT id, project, ?, claimedBy, dispatchedAt FROM runs WHERE id = ?',
-        ).run(key, input.runId);
-      }
+      for (const key of input.intents ?? []) this.holdLandingIntent(input.runId, key, null);
       return adv;
     });
+  }
+
+  /** The ONE writer of `landing_intents` (D-7614 wave 5g; D-8126 gave it a second caller, `bindInPlace`): a hold on `key`
+   *  for the run's project, set by the run's claimant at `at`, or at the run's own `dispatchedAt` when `at` is null. A
+   *  repeated key throws on the primary key, so the caller's transaction rolls back. */
+  private holdLandingIntent(runId: number, key: string, at: number | null): void {
+    this.db.prepare(
+      'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
+      'SELECT id, project, ?, claimedBy, COALESCE(?, dispatchedAt) FROM runs WHERE id = ?',
+    ).run(key, at, runId);
   }
 
   /** The landing intents held in a project for these keys: every row whose run is not terminal, ordered by key then run
@@ -3905,12 +3910,8 @@ export class CoordStore {
       this.db.prepare('UPDATE runs SET branch = ?, resumed = 0, inPlace = 1 WHERE id = ?').run(branch, runId);
       // Landing intents (D-8086), as `dispatchRun` writes them; `dispatchedAt` is null for an in-place run, so the hold is
       // stamped with the bind's own time.
-      for (const key of intents) {
-        this.db.prepare(
-          'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
-          'SELECT id, project, ?, claimedBy, ? FROM runs WHERE id = ?',
-        ).run(key, Date.now(), runId);
-      }
+      const at = Date.now();
+      for (const key of intents) this.holdLandingIntent(runId, key, at);
       return this.advanceInner(runId, 'working', 'coordinator', 'inPlace');
     });
   }
@@ -4241,12 +4242,12 @@ export class CoordStore {
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
       'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace, inPlace FROM runs ' +
       `WHERE state NOT IN ${INACTIVE_RUN_STATES_SQL} AND sessionId IS NOT NULL ORDER BY id`,
     ).all() as unknown as
       { idText: string; kind: string; state: string; sessionId: string; claimedBy: string | null;
         dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
-        reviewsText: string | null; project: string; workspace: string | null }[];
+        reviewsText: string | null; project: string; workspace: string | null; inPlace: number | null }[];
     return this.stallRunRowsOf(rows);
   }
 
@@ -4265,7 +4266,7 @@ export class CoordStore {
       }
       runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId ?? '', claimedBy: r.claimedBy,
         dispatchedAt, program: r.program, wave: nums.nums.wave, waveOf: nums.nums.waveOf,
-        project: r.project, workspace: r.workspace });
+        project: r.project, workspace: r.workspace, ...(r.inPlace === 1 ? { inPlace: true as const } : {}) });
     }
     return { ok: true, runs };
   }
@@ -4278,7 +4279,7 @@ export class CoordStore {
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
       'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace, inPlace FROM runs ' +
       `WHERE claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
     ).all(claimedBy) as unknown as StallRunSqlRow[];
     return this.stallRunRowsOf(rows);

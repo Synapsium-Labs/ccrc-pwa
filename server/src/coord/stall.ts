@@ -198,7 +198,10 @@ export function parseStallDetail(detail: string | null): Omit<StallNotice, 'at'>
 
 export interface StallRunRow { readonly id: number; readonly kind: string; readonly state: string; readonly sessionId: string;
   readonly claimedBy: string | null; readonly dispatchedAt: number | null; readonly program: string; readonly wave: number;
-  readonly waveOf: number | null; readonly project: string; readonly workspace: string | null }
+  readonly waveOf: number | null; readonly project: string; readonly workspace: string | null;
+  /** D-8126: the run is an in-place run (`CoordStore.bindInPlace`): its `sessionId` is its claimant and no worker was
+   *  started (`dispatchedAt` is null). Such a run is no WORKER subject; its session is judged as a coordinator. */
+  readonly inPlace?: true }
 /** `runId` is null for run-less mail: a session notice, or a peer's mail that wave 2's per-session read carries. */
 export interface StallMailRow { readonly id: number; readonly at: number; readonly runId: number | null; readonly fromId: string;
   readonly toId: string; readonly kind: string; readonly subject: string }
@@ -228,6 +231,9 @@ function stallOutranks(a: StallRunRow, b: StallRunRow): boolean {
 export function stallSubjects(rows: readonly StallRunRow[]): StallSubject[] {
   const bySession = new Map<string, StallRunRow[]>();
   for (const r of rows) {
+    // D-8126: an in-place run has no worker to judge, and its session is its claimant. Taking it as a worker subject
+    // would hold `unmeasured` (no `dispatchedAt`) every sweep AND hide the session from the coordinator rungs.
+    if (r.inPlace === true) continue;
     const group = bySession.get(r.sessionId);
     if (group === undefined) bySession.set(r.sessionId, [r]);
     else group.push(r);

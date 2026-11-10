@@ -96,6 +96,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'the in-place bind (bindRunInPlace) compares the claimant of the ONE planned run it was handed with the caller: an attribute of one run row, no session is asked which run is its (D-8126)' },
   { file: 'server/src/coord/dispatch.ts', text: 'run.sessionId !== by',
     why: 'the in-place bind (bindRunInPlace) refuses a planned run already bound to another session: it reads the one run row it holds, and no session is asked which run is its (D-8126)' },
+  { file: 'server/src/coord/dispatch.ts', text: 'run.sessionId !== run.claimedBy',
+    why: 'dispatchRun hands the admission decision one fact about the ONE run row it holds, whether its recorded session is not its own claimant (a run bound elsewhere); no session is asked which run is its (D-8126)' },
   { file: 'server/src/coord/dispatchDecide.ts', text: 'run.sessionId === run.claimedBy',
     why: 'the self-dispatch refusal compares two fields of the ONE run being dispatched (bound to its own claimant): no session is asked which run is its (D-6096, D-8126)' },
   { file: 'server/src/coord/dispatchDecide.ts', text: 'r.id === f.sessionId',

@@ -56,9 +56,9 @@ export interface FleetWatcherView {
  *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
-  | 'absorbParkEscalation' | 'activeClaims' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
-  | 'activeRunWorkers' | 'admissionWaiters' | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blockClaimants' | 'blocksToWake' | 'bumpReplayCount' | 'caps'
-  | 'cancelDeliveriesTo' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
+  | 'absorbParkEscalation' | 'activeClaims' | 'activeRunWorkers' | 'admissionWaiters' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
+  | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blockClaimants' | 'blocksToWake' | 'bumpReplayCount'
+  | 'cancelDeliveriesTo' | 'caps' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
   | 'childStaleActivity' | 'claimDigestDay' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
@@ -73,7 +73,7 @@ export type WatcherCoordMember =
   | 'journalGenerations' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'liveBlocksOf'
-  | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markAdmissionWoken' | 'markApprovalOperatorRows' | 'markBlockWoken'
+  | 'mailOrigin' | 'mailQueuedSince' | 'markAdmissionWoken' | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markBlockWoken'
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markUnreachable' | 'maxMailDeliveryId'
   | 'maxRunEventId' | 'mergingRuns' | 'node' | 'nodeByLabel' | 'nodes' | 'noteDispatchRefusal' | 'noteGate'

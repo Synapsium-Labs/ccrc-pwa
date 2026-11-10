@@ -61,10 +61,10 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(outside[0]!.source.replace(/\s+/g, ' ')).toMatch(/VALUES \(\?, \?, \?, \?, \?, NULL, 'pinned', \?, \?\)/);
   });
 
-  it('every write of landing_intents is an INSERT inside dispatchRun, the one writer (5g)', () => {
+  it('every write of landing_intents is an INSERT inside holdLandingIntent, the one writer (5g; D-8126: dispatchRun and bindInPlace both call it)', () => {
     const all = allWrites(/^landing_intents$/);
     expect(all.length).toBeGreaterThanOrEqual(1);
-    expect(all.filter((q) => !inSymbol('CoordStore.dispatchRun')(q)).map((q) => `${q.verb} ${q.file}:${q.text}`)).toEqual([]);
+    expect(all.filter((q) => !inSymbol('CoordStore.holdLandingIntent')(q)).map((q) => `${q.verb} ${q.file}:${q.text}`)).toEqual([]);
     expect(all.map((q) => q.verb)).toEqual(['INSERT']);
   });
 
