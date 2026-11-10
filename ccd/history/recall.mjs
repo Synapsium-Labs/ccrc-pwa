@@ -26,7 +26,7 @@ import {
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
   guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths, asOfEntrySql, asOfBinds, asOfCut,
-  DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, foldOneLine, topicsOfColumn,
+  DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, foldOneLine, topicsOfColumn, nodeRangeText,
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -297,7 +297,7 @@ function nodeLine(rc, n, level, show) {
   const id = show(n.node_id);
   const gist = typeof n.gist === 'string' && n.gist !== '' ? foldOneLine(redactForDisplay(n.gist, rc.pairIdx)).trim() : '';
   const body = gist === '' ? '(no gist)' : recallEnvelope({ src: 'node', id, ts: n.earliest_ms ?? null, role: n.kind, text: gist });
-  return `${'  '.repeat(level + 1)}${id} ${n.kind}${agentMark(rc, n.agent_id)} depth=${n.depth} ${isoOf(n.earliest_ms)}..${isoOf(n.latest_ms)} ${body}`;
+  return `${'  '.repeat(level + 1)}${id} ${n.kind}${agentMark(rc, n.agent_id)} depth=${n.depth} ${nodeRangeText(n.earliest_ms, n.latest_ms)} ${body}`;
 }
 
 /** A complete JSON item for one retained node. Display redaction happens before JSON serialisation, then the
@@ -452,11 +452,14 @@ export function runTree(rc, a) {
 //    (RANK_POOL), so exit 3 means zero in-scope matches, never zero in a global top-N (C27).
 //  - Each arm is driven from the scope's transcripts, not from the box's match: it carries its own
 //    `transcript_pk IN :tpks` term, the entry and variant arms read `entries` through `INDEXED BY entries_ts`, and every
-//    blob term carries a unary `+`, so no blob-led index can drive an arm and a family's grep costs what its scope holds
-//    (D-7095 (history-grep-scope-first)).
+//    blob term carries a unary `+`, so no blob-led index can drive an arm and the rows a family's grep reads cost what its
+//    scope holds (D-7095 (history-grep-scope-first)). The MATCH is not scope-bound: see `total` below.
 //  - Rank (BM25) is read only by a sort whose ORDER BY names it; recency reads none.
 //  - total is `count(*) OVER ()` on the ranked statement's own rows, read from its first row: the true count of every
-//    in-scope matching referrer, the N of "shown K of N" (§8.3), with the global match run once.
+//    in-scope matching referrer, the N of "shown K of N" (§8.3), from the one statement. The MATCH itself runs once per
+//    arm that tests it, not once: `m` is inlined into each of the three arms (EXPLAIN QUERY PLAN shows a `LIST SUBQUERY`
+//    over `SCAN blobs_fts` under each, and no shared materialisation), so a recency sort scans blobs_fts three times and a
+//    sort that ranks adds the `rk` scan, four (measured, SQLite 3.53.4; D-8176).
 //  - Every select names its columns through selectColumns, so a store older than this code answers NULL
 //    for a column it lacks (§6.11, DM44); none is a wildcard projection (C43).
 // ---------------------------------------------------------------------------------------------
@@ -585,7 +588,8 @@ export function asOfCutOf(rc, asof) {
  *  `entries` through `INDEXED BY entries_ts` (with an `entries_ts` row in sqlite_stat1, which the writer's `PRAGMA optimize`
  *  writes, the planner would otherwise plan `SCAN entries`), and each tests its blob against the match with a unary `+`, which
  *  takes the blob-led indexes (entries_blob, entries_blob_prov, entry_variants_blob, sidecars_blob) out of the planner's
- *  choices. So a family's grep costs what its scope holds, never what the box's match holds. The sidecar arm names no index.
+ *  choices. So the rows a family's grep reads cost what its scope holds, never what the box's match holds; the match itself is a
+ *  box-wide read of blobs_fts, made once per arm that tests it (three times, and a fourth with `rk`; see rankedAndCounted). The sidecar arm names no index.
  *  Measured, with no statistics, or statistics that spread the sidecars across transcripts, it plans on
  *  sqlite_autoindex_sidecars_1 (transcript_pk=?); with statistics that put a large share of the table on one transcript
  *  (as the plan-pin case's fixture does) it plans SCAN sidecars. No blob-led index drives it either way (shipped as built:
@@ -736,8 +740,9 @@ function grepParams(rc, a, nodes, extra) {
 }
 
 /** The ranked pool and the true count, from ONE statement: `total` is the window count on every row, read from the first
- *  (0 when there is none) and stripped from each pooled row, so the pool keeps exactly its nine columns and the global
- *  match runs once. `all.pool` is at least 1, since the count rides on the first row. Exported as a test seam (the
+ *  (0 when there is none) and stripped from each pooled row, so the pool keeps exactly its nine columns and the count needs no
+ *  second statement. The MATCH is not run once: `m` is inlined into each arm that tests it, so blobs_fts is scanned three times
+ *  for a recency sort and four with `rk` (EXPLAIN QUERY PLAN, SQLite 3.53.4; D-8176). `all.pool` is at least 1, since the count rides on the first row. Exported as a test seam (the
  *  `leafHeads` precedent). When blobs_fts vanished between the gate and the statement (a `doctor --repair` drop and
  *  recreate), the answer is 7 fts-pending, never exit 1 (review focus 5). */
 export function rankedAndCounted(rc, matchSql, sort, all) {
