@@ -11,9 +11,10 @@
 // and 46 of 203 queue jobs were cancelled at that timeout (2026-10-30 to 11-02), each ejecting its entry. CI runs it as
 // `--shard=i/n` now, and `shard` below replaces vitest's hash split with a balanced one: longest file first onto the
 // least-loaded shard, by the whole-file times `FILE_MS` measured in CI. CI runs three shards since D-8167 (two shards
-// had grown to 14 to 19 minutes each); nothing here reads the count, which arrives as vitest's `--shard=i/n`. A file
-// the table does not name costs the table's median, so a new file is placed, never dropped. `test/browser-leg.test.ts` pins that each name in both lists
-// is a browser file, so a renamed one reds rather than silently dropping out.
+// had grown to 14 to 19 minutes each); nothing here fixes the count: `shard` reads it from vitest's `--shard=i/n`. A
+// file the table does not name costs the table's median, so a new file is placed, never dropped.
+// `test/browser-leg.test.ts` pins that each name in both lists is a browser file, so a renamed one reds rather than
+// silently dropping out.
 import path from 'node:path';
 import { BaseSequencer, type TestSpecification } from 'vitest/node';
 

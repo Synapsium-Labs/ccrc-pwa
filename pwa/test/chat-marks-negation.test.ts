@@ -193,8 +193,8 @@ describe('a zero count joined or spaced carries no label (review 1601 F1, F2; de
     ['tests passed: 0%'],
     ['tests passed: 0 of twelve'],
     // The plurals `tens`, `hundreds` and `thousands` are counts too (Task C16 fix round 1, review 1722 F5; Task C18,
-    // review 1723 F2): A4's word end must not cut them. Other plurals ("0 of dozens", "0 of millions") are not number
-    // words here, and keep a label as they did on main.
+    // review 1723 F2): A4's word end must not cut them. These rows pin those three only; other plurals such as dozens
+    // and millions keep a label as on main.
     ['tests failed: 0 of hundreds of cases'],
     ['CI passed: 0 of thousands'],
     ['tests failed: 0 of tens of thousands'],

@@ -114,8 +114,9 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
           // The badge is the one count every door reads: one open item waits on the operator, one session asks nothing.
           expect(within(bar!).getByRole('button', { name: 'Waiting, 1 waiting on you' })).toHaveAttribute('data-command', 'go-waiting');
           expect(within(bar!).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
-          // Each door is named by the word it shows: its place's title, or the place's `short` word where it has one
-          // ("Waiting", review 1722), and that word begins its name (review 1723 N1).
+          // Each door is named by the word it shows, and that word begins its name (review 1723 N1): a place door shows its
+          // place's title, or the place's `short` word where it has one ("Waiting", review 1722); the Search door
+          // (`open-palette`) shows "Search", named "Search and commands" (review 1740 F6).
           for (const door of bar!.querySelectorAll<HTMLElement>('[data-command]')) {
             const word = door.querySelector('.phone-bar-word')?.textContent ?? '';
             expect(word, door.getAttribute('data-command')!).not.toBe('');

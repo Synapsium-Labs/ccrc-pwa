@@ -3259,11 +3259,41 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 **Why.** The operator's report of 10 November: a coordinator in one project wrote "#666 ... `github.com/<org-b>/<repo-b>/pull/666`", and the chat linked #666 to the home repository's #666. `refHref` (Task L, D-8062) resolved every PR and commit against the session's home repository, but a coordinator's runs may land in other repositories, and a wrong link is worse than none.
 
-**The change.** The rule, first that applies wins: `owner/repo#n` is a PR name that carries its repository and opens it in any session; a bare `#n` or commit opens the one repository its own message (its whole text) names for it, and is text where it names two; otherwise it opens the home repository only when the message names no other repository and the session claims no open run whose project's repository is not the home one; otherwise it is text. The spec carries it as R15. The receipts are in `c21.md`.
+**The change.** The rule, first that applies wins: `owner/repo#n` is a PR name that carries its repository and opens it in any session; a bare `#n` or commit opens the one repository its own message (its whole text) names for it, and is text where it names two or one it cannot tell; otherwise it opens the home repository only when the message names no other repository and the session claims no open run whose project's repository is not the home one; otherwise it is text. The spec carries it as R15. The receipts are in `c21.md`.
 
 - **D-8172** - `chat-ref-repository-from-the-message`: Task C21, issued on 2026-11-10. A PR or commit name in chat opens the repository its message means, or stays text, instead of always the session's home repository; the message's evidence is read at render time (`chatRepoEvidence.ts`), and the session's runs elsewhere are one boolean on the chat's context (`claimsRunElsewhere`).
 
 **Acceptance.** The cases in `chat-repo-refs.test.ts`, `chat-links.test.tsx`, `message-bubble.test.tsx` and `chat-repo-session.test.tsx` pass, and every mutant of the chosen set is killed (`c21.md` records the set and the count); a single-repository session's plain `#123` links as before. **Rollback.** A plain revert.
+
+### Task C20: the carried sweep of reviews 1740, 1747 and 1762 (D-8187) — now
+
+**Why.** Three reviews carried small findings, each already reviewed and graded (b): review 1740 (Task C18), review 1747
+(Task C19) and review 1762 (Task C21, round 3). They land in one pull request; nothing new is designed. Every item was
+re-anchored on `main` at `45015062b`, after C21 landed. The receipts are in `c20.md`.
+
+**Items, and what was done.**
+- **A, review 1762 (chat repository evidence).** F1 and F2: one list of `gh`'s value-taking flags (`GH_VALUE_FLAGS`);
+  any other flag is boolean, and an unquoted word starting with `#` is prose, never the command's number. F3: a quote left
+  open at its line's end voids its command, and the reading goes on after the quote. F4: a qualified name whose source
+  span does not spell it (an escape or an entity inside it) stays text, on the sync and worker paths. F5: the commit index
+  is an exact-SHA map and a sorted range, with a budget pin measured against the old bucket; `c21.md`'s claim is
+  corrected. F6: rows pin a word that is exactly a quoted flag, and R15 says so. F7: Task C21's paragraph says "or one it
+  cannot tell". F8: a reserved first path segment (`RESERVED_OWNERS`) names no repository. F9: a full stop followed by an
+  upper-case letter ends a flag's value. F10: the four arms are pinned, the long comment line is wrapped, the double blank
+  line is gone, and `SaidRepo` is exported. A mutation pass over the new guards is recorded in `c20.md`.
+- **B, review 1740 (tests and comments).** F1: two census rows (`obj.t.remove(home)`, `$t.remove(home)`). F2: the
+  plurals comment names what its rows pin. F4: the "hundreds" comment is reworded. F5: the long line is wrapped. F6: the
+  phone bar comment names the Search door. F9: recorded only.
+- **C, reviews 1740 and 1747 (receipts).** `c18.md` (F3, F7, F8) and `c19.md` (F1) are corrected in place, and
+  `slowFirst.ts`'s comment says what is true and is re-flowed (1747 F4). Review 1747 F2 and F3 were in a PR body only.
+
+Not in this task: the Docs head items (review 1723 N5, review 1725 F4), whose files another programme holds, and the
+browser-suite growth watch, which is the coordinator's.
+
+- **D-8187** - `carried-sweep-1740-1747-1762`: Task C20, issued on 2026-11-10. The carried findings of reviews 1740, 1747 and 1762 land in one task: the chat evidence reader's `gh` flags, quotes, escapes, reserved pages and commit index, two census rows, comment fixes, and corrected receipts. Departures are named by slug in `c20.md`.
+
+**Acceptance.** Every item is fixed, or recorded as fixed already or as record-only, in `c20.md`; every reproduction of
+review 1762 is a row; the mutation count is recorded. **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)
 

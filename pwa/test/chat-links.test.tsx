@@ -343,6 +343,57 @@ describe('a PR or commit opens the repository the message means (Task C21, D-817
     ]);
   });
 
+  // Task C20 (D-8187; review 1762 F10): the leading edge of a text node under `_`: the name opens the node, the source puts
+  // `_` right before it, and the bare #12 beside it is the message's, so neither reader counts the qualified name.
+  it('a qualified name at the start of a _ emphasis node is no name either', () => {
+    const { container } = assistant('_org-b/repo-b#12 and #12 more_');
+    expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['#12', 'https://github.com/owner-a/repo-a/issues/12'],
+    ]);
+  });
+
+  // Task C20 (D-8187; review 1762 F4): an escape or an entity inside a qualified name decodes to a name the raw-text evidence
+  // reader never counted, so the grammar refuses it too: one message never opens #12 in two repositories.
+  const escaped = ['see owner-b/repo-b\\#12 and #12', 'see owner-b/repo-b&#35;12 and #12'];
+  it('an escape or an entity inside a qualified name leaves it text, on the sync path', () => {
+    for (const text of escaped) {
+      const { container } = assistant(text);
+      expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')]), text).toEqual([
+        ['#12', 'https://github.com/owner-a/repo-a/issues/12'],
+      ]);
+      expect(container.querySelector('.msg-assist p')!.textContent, text).toBe('see owner-b/repo-b#12 and #12');
+      cleanup();
+    }
+    // An escape elsewhere in the same text node, before or after the name, leaves it read from the node's other end.
+    for (const text of ['a \\* b, owner-b/repo-b#12 and #12', 'owner-b/repo-b#12 and #12, a \\* b']) {
+      const { container } = assistant(text);
+      expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')]), text).toEqual([
+        ['owner-b/repo-b#12', 'https://github.com/owner-b/repo-b/issues/12'],
+        ['#12', 'https://github.com/owner-b/repo-b/issues/12'],
+      ]);
+      cleanup();
+    }
+  });
+
+  it('an escape or an entity inside a qualified name leaves it text, on the worker path', async () => {
+    for (const text of escaped) {
+      const sync = assistant(text).container.querySelector('.msg-assist p')!.outerHTML;
+      cleanup();
+      const calls: (() => void)[] = [];
+      vi.spyOn(chatRunner, 'parse').mockImplementation((src) => new Promise<ParseOutcome>((resolve) => {
+        calls.push(() => resolve(parseMarkdown(src, 'chat')));
+      }));
+      const { container } = assistant(`${text}\n\n${'a'.repeat(CHAT_SYNC_MAX_BYTES)}`);
+      await act(async () => { calls[0]!(); });
+      expect(container.querySelector('.msg-assist p')!.outerHTML, text).toBe(sync);
+      expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')]), text).toEqual([
+        ['#12', 'https://github.com/owner-a/repo-a/issues/12'],
+      ]);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('a whole code span holding owner/repo#n links there', () => {
     const { container } = assistant('See `owner-b/repo-b#12`.', CROSS);
     expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual(['https://github.com/owner-b/repo-b/issues/12']);

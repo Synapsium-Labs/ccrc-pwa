@@ -51,4 +51,12 @@ describe("chat's marks have one recogniser table and one plugin (chat reading Ta
     }
     expect(holders(decl('claimsRunElsewhere')), 'claimsRunElsewhere').toEqual(['pwa/src/lib/chatRefs.ts']);
   });
+
+  // Task C20 (D-8187; review 1762 F1, F2 and F8): which gh flags take a value, and which first path segments are GitHub's own
+  // pages, are each one list, so a second list beside the reader cannot drift from it unnoticed.
+  it('the gh value flags and the reserved owners are each declared once (Task C20)', () => {
+    for (const name of ['GH_VALUE_FLAGS', 'RESERVED_OWNERS']) {
+      expect(holders(decl(name)), name).toEqual(['pwa/src/lib/chatRepoEvidence.ts']);
+    }
+  });
 });

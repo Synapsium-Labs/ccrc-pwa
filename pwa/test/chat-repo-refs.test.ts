@@ -20,6 +20,10 @@ const COMMIT_BOUND_MS = 500;
 const REPEAT_N = 20_000;
 const REPEAT_BOUND_MS = 500;
 const NAMED_BOUND_MS = 600;
+// Task C20 (review 1762 F5 and F3): measured against their mutants in c20.md.
+const SHARED_PREFIX_N = 12_000;
+const SHARED_PREFIX_BOUND_MS = 500;
+const GH_QUOTES_BOUND_MS = 1500;
 
 const HOME: ChatRefContext = {
   repo: 'org-a/project-a', project: 'project-a', branch: null, knownRuns: new Set(), knownItems: new Set(), runsElsewhere: false,
@@ -332,6 +336,143 @@ describe('fix round 2: gh commands, emphasis and the unread spellings (Task C21,
     expect(links('__owner-b/repo-b#12__ then #12', HOME)).toEqual([['#12', home(12)]]);
     expect(links('*owner-b/repo-b#12* then #12', HOME))
       .toEqual([['owner-b/repo-b#12', issue('owner-b/repo-b', 12)], ['#12', issue('owner-b/repo-b', 12)]]);
+  });
+});
+
+// Task C20 (D-8187): review 1762's carried findings on the evidence reader. Every reproduction in the report is a row.
+describe('Task C20: the gh reader, reserved pages and the commit index (review 1762)', () => {
+  const home = (n: number): string => issue('org-a/project-a', n);
+  const rows = (table: [string, [string, string | null][]][]): void => {
+    for (const [text, expected] of table) expect(links(text, HOME), text).toEqual(expected);
+  };
+
+  it('F1: a boolean flag takes no value, and a word starting with # is never the command\'s number', () => {
+    rows([
+      ['gh pr merge --squash 40 -R owner-b/repo-b #12 is next', [['#12', null]]],
+      ['gh pr view --web 40 -R owner-b/repo-b #12 merged', [['#12', null]]],
+      ['gh pr list -R owner-b/repo-b #12 is ours and merged', [['#12', null]]],
+      ['gh pr create --repo owner-b/repo-b #12 was home', [['#12', null]]],
+      // The boolean flag no longer swallows the command's own number.
+      ['gh pr merge --squash 40 -R owner-b/repo-b and #40', [['#40', issue('owner-b/repo-b', 40)]]],
+      // A flag of the list takes the next word as its value, so the number after it is still the command's own.
+      ['gh issue close --reason completed 12 -R owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh pr list --limit 12 -R owner-b/repo-b and #12', [['#12', null]]],
+      ['gh pr view 12 -R owner-b/repo-b #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      // A quoted '#12' reaches gh as its number, as the shell passes it.
+      ["gh pr view '#12' -R owner-b/repo-b and #12", [['#12', issue('owner-b/repo-b', 12)], ['#12', issue('owner-b/repo-b', 12)]]],
+    ]);
+  });
+
+  it('F2: a boolean flag before a gh api path leaves the path read', () => {
+    rows([
+      ['gh api --paginate repos/owner-b/repo-b/pulls/12/comments and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh api --paginate /repos/owner-b/repo-b/issues/12 #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh api -i repos/owner-b/repo-b/pulls/12 #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['`gh api --paginate repos/owner-b/repo-b/pulls/12/comments` and #12 has 3 comments', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['```\ngh api --paginate repos/owner-b/repo-b/pulls/12/comments\n```\nand #12 has 3 comments', [['#12', issue('owner-b/repo-b', 12)]]],
+      // The controls: a flag that takes a value, and no flag.
+      ['gh api -X GET repos/owner-b/repo-b/pulls/12 and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ["gh api -H 'Accept: x' repos/owner-b/repo-b/pulls/12 and #12", [['#12', issue('owner-b/repo-b', 12)]]],
+    ]);
+  });
+
+  it('F3: a quote with no closing one before the line\'s end voids its command, and a later command is still read', () => {
+    rows([
+      ["gh pr view 12 (it's green), then `gh pr view 40 -R owner-b/repo-b` and #12", [['#12', null]]],
+      ["I checked gh pr view 12 and it's green. Then gh pr view 40 -R owner-b/repo-b and #12", [['#12', null]]],
+      // The voided command names nothing, so its bare name is decided as if it were absent, as on main.
+      ["gh pr view 12 -R owner-b/repo-b and it's green, #12", [['#12', home(12)]]],
+      ["gh pr view 12 -R 'owner-b/repo-b\n#12", [['#12', home(12)]]],
+      // A quote closed only on a later line is open at its own line's end.
+      ["gh pr view 12 (it's green)\n`gh pr view 40 -R owner-b/repo-b` and it's #12", [['#12', null]]],
+      // Two apostrophes close each other, as the shell reads them: `-c` takes the quoted run as its value, so the one command
+      // is PR 12 in owner-b (the report's third shape).
+      ["gh pr view 12 -c it's fine; also gh pr view 40 we're -R owner-b/repo-b. #12", [['#12', issue('owner-b/repo-b', 12)]]],
+    ]);
+  });
+
+  it('F6: a word that is exactly a quoted flag is that flag; a flag inside a quoted argument is none', () => {
+    rows([
+      ["gh pr view 12 '--repo' owner-b/repo-b and #12", [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh pr view 12 "--repo" owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh pr view 12 --body "--repo owner-b/repo-b" and #12', [['#12', home(12)]]],
+    ]);
+  });
+
+  it('F8: a reserved first path segment names no repository, and the bare name follows the other rules', () => {
+    rows([
+      ['![shot](https://github.com/user-attachments/assets/0f1e2d3c) fixed in #12', [['#12', home(12)]]],
+      ['see https://github.com/orgs/org-b/projects/3 and #12', [['#12', home(12)]]],
+      ['see https://github.com/Settings/profile and #12', [['#12', home(12)]]],
+    ]);
+    expect([...messageRepos('https://github.com/orgs/org-b/projects/3 github.com/topics/x').named]).toEqual([]);
+  });
+
+  it('F9: a full stop followed by an upper-case letter ends a flag\'s value', () => {
+    rows([
+      ['gh pr view 12 -R owner-b/repo-b.Then #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh pr view 12 --repo=owner-b/repo-b.Next #12', [['#12', issue('owner-b/repo-b', 12)]]],
+    ]);
+  });
+
+  it('F10: a line break ends a command; an extension is compared in lower case; an all-digit segment is refused', () => {
+    rows([
+      ['gh pr view -R owner-b/repo-b\n12 more, and #12', [['#12', null]]],
+      ['gh pr view -R owner-b/repo-b\n\n12 more, and #12', [['#12', null]]],
+      ['Org/notes.TS#3 and #3', [['Org/notes.TS#3', null], ['#3', null]]],
+      ['2024/2025#3 and #3', [['2024/2025#3', null], ['#3', null]]],
+      ['abc/12345#5 and #5', [['abc/12345#5', null], ['#5', null]]],
+    ]);
+  });
+
+  it('F3: the gh reader stays linear over 1 MiB of apostrophes and quotes', () => {
+    // Many commands, each closing a quote or leaving one open, and no line break anywhere.
+    for (const unit of ["gh pr view 1 'a'; ", 'gh -b "a" | ', "gh pr view 1 it's ", "gh pr view 1 it's\n", "gh '"]) {
+      const text = unit.repeat(Math.ceil((1 << 20) / unit.length));
+      const t = performance.now();
+      messageRepos(text);
+      expect(performance.now() - t, unit).toBeLessThan(GH_QUOTES_BOUND_MS);
+    }
+  });
+
+  // F5: distinct SHAs sharing one seven-character prefix cost one range each (c20.md has the measured margin against the
+  // bucket scan it replaced).
+  it('F5: commit addresses sharing a seven-character prefix stay cheap, the bare SHA and the bare prefix alike', () => {
+    const shas = Array.from({ length: SHARED_PREFIX_N }, (_, i) => `abcdef1${i.toString(16).padStart(8, '0')}`);
+    const one = messageRepos(shas.map((sha) => `https://github.com/org-b/project-b/commit/${sha} ${sha}`).join('\n'));
+    let t = performance.now();
+    const hrefs = shas.map((sha) => refHref({ kind: 'commit', id: sha, text: sha }, HOME, one)?.href ?? '');
+    let took = performance.now() - t;
+    expect(hrefs.every((h, i) => h === `https://github.com/org-b/project-b/commit/${shas[i]!}`)).toBe(true);
+    expect(took).toBeLessThan(SHARED_PREFIX_BOUND_MS);
+    const many = messageRepos(shas.map((sha, i) => `https://github.com/org-b/project-${i}/commit/${sha} abcdef1`).join('\n'));
+    t = performance.now();
+    for (let i = 0; i < SHARED_PREFIX_N; i += 1) {
+      expect(refHref({ kind: 'commit', id: 'abcdef1', text: 'abcdef1' }, HOME, many)).toBeNull();
+    }
+    took = performance.now() - t;
+    expect(took).toBeLessThan(SHARED_PREFIX_BOUND_MS);
+  });
+
+  it('F5: a commit name still meets an address whose SHA is shorter or longer than its own', () => {
+    const said = messageRepos('github.com/org-b/project-b/commit/abcdef12 and github.com/org-c/project-c/commit/1234567890ab'
+      + ' and github.com/org-b/project-b/commit/fedcba9');
+    const commit = (sha: string): string | null => refHref({ kind: 'commit', id: sha, text: sha }, HOME, said)?.href ?? null;
+    expect(commit('abcdef1234')).toBe('https://github.com/org-b/project-b/commit/abcdef1234');
+    expect(commit('abcdef1')).toBe('https://github.com/org-b/project-b/commit/abcdef1');
+    expect(commit('1234567')).toBe('https://github.com/org-c/project-c/commit/1234567');
+    expect(commit('abcdef13')).toBeNull();
+    expect(commit('fedcba98')).toBe('https://github.com/org-b/project-b/commit/fedcba98');
+    const two = messageRepos('github.com/org-b/project-b/commit/abcdef12 github.com/org-c/project-c/commit/abcdef1234');
+    expect(refHref({ kind: 'commit', id: 'abcdef123', text: 'abcdef123' }, HOME, two)).toBeNull();
+    expect(refHref({ kind: 'commit', id: 'abcdef12ff', text: 'abcdef12ff' }, HOME, two)?.href)
+      .toBe('https://github.com/org-b/project-b/commit/abcdef12ff');
+    // Two addresses of one repository sort before a third repository's: the range still tells two.
+    const three = messageRepos(['abcdef10', 'abcdef11'].map((sha) => `github.com/org-b/project-b/commit/${sha}`).join(' ')
+      + ' github.com/org-c/project-c/commit/abcdef12');
+    expect(refHref({ kind: 'commit', id: 'abcdef1', text: 'abcdef1' }, HOME, three)).toBeNull();
+    expect(refHref({ kind: 'commit', id: 'abcdef11', text: 'abcdef11' }, HOME, three)?.href)
+      .toBe('https://github.com/org-b/project-b/commit/abcdef11');
   });
 });
 

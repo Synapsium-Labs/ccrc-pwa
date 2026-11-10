@@ -42,7 +42,6 @@ interface MdNode {
   position?: { start?: { offset?: number }; end?: { offset?: number } };
 }
 
-
 /** The node types the walk never enters: a name inside one is not prose. */
 const SKIP: ReadonlySet<string> = new Set([
   'inlineCode', 'code', 'link', 'linkReference', 'image', 'imageReference', 'definition', 'html',
@@ -168,9 +167,24 @@ function edgeQualified(node: MdNode, from: number, to: number, source: string | 
   return to === (node.value ?? '').length && end !== undefined && wordAfter(source, end);
 }
 
+/** Whether the message's SOURCE spells the qualified name `text` at `from`..`to` of text node `node` as the node holds it, read
+ *  from the node's start or from its end (review 1762 F4). An escape or an entity inside the name (`owner/repo\#12`,
+ *  `owner/repo&#35;12`) decodes to a name the raw-text evidence reader (`chatRepoEvidence.ts`) never counted, so the grammar
+ *  refuses it too and the two agree. An escape elsewhere in the node shifts one side only, so the other still reads the name;
+ *  one on both sides of it refuses the name, which stays text. A node with no position or a plugin run with no source keeps
+ *  the node's own reading. */
+function sourceSpells(node: MdNode, from: number, to: number, text: string, source: string | null): boolean {
+  const start = node.position?.start?.offset;
+  const end = node.position?.end?.offset;
+  if (source === null || start === undefined || end === undefined) return true;
+  if (source.slice(start + from, start + to) === text) return true;
+  const len = (node.value ?? '').length;
+  return source.slice(end - (len - from), end - (len - to)) === text;
+}
+
 /** A text node as `markRuns`' runs (`blockRuns`' when its block made them); `null` when there is nothing to mark. Where
  *  `labels` is false (a header cell) a status run stays text, joined to the text beside it, and only names are marked. A
- *  qualified name the source's boundary refuses (`edgeQualified`) stays text. */
+ *  qualified name the source's boundary refuses (`edgeQualified`) or does not spell (`sourceSpells`) stays text. */
 function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | undefined, source: string | null): MdNode[] | null {
   const out: MdNode[] = [];
   let marked = false;
@@ -185,7 +199,8 @@ function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | unde
     at += r.kind === 'mark' ? r.mark.text.length : r.text.length;
     if (r.kind === 'text' || (r.kind === 'status' && !labels)) {
       pushText(r.text);
-    } else if (r.kind === 'mark' && r.mark.repo !== undefined && edgeQualified(node, from, at, source)) {
+    } else if (r.kind === 'mark' && r.mark.repo !== undefined
+      && (edgeQualified(node, from, at, source) || !sourceSpells(node, from, at, r.mark.text, source))) {
       pushText(r.mark.text);
     } else if (r.kind === 'mark') {
       marked = true;
