@@ -1,5 +1,5 @@
 // The coordinator call record's SQL (D-8126, coordinator-autonomy-default plan Task A3-2, spec §8.2): `coordinator_calls`
-// (migration 49). It sits beside `store.ts` in the same ring and context (Coordination), as `ledgersStore.ts` does: every
+// (migration 55). It sits beside `store.ts` in the same ring and context (Coordination), as `ledgersStore.ts` does: every
 // function takes the store's `DatabaseSync` and is synchronous, and `CoordStore` keeps one-line delegates of the same names.
 //
 // One writer per column, and nothing else writes the table:
