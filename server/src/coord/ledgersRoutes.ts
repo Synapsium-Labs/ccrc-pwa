@@ -27,9 +27,9 @@ import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
 import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import {
-  ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
+  ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  earlierTickBlocks, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  actAbandons, earlierTickBlocks, isCloseRefusedAction, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -540,11 +540,14 @@ const ACT_IN_FLIGHT_DETAIL = (id: number): string => `item ${id} is being acted 
 const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
 
 /** Why an operator's `act` or `decline` cannot take an item, or null: it must be open (`nextItemState`'s word), not held (the
- *  operator never saw a held item), and carry an `end-run` action, the one verb that may abandon today. */
+ *  operator never saw a held item), and carry an action that may abandon (`act`: `end-run`, or `close-refused` with an abandoning
+ *  door) or an `end-run` (`decline`). */
 function endRunItemRefusal(item: ItemRow, act: 'act' | 'decline', now: number): { why: RouteRefusal; detail: string } | null {
   const verdict = nextItemState(item.state, act, 'operator', { programmeHasOpenRun: true });
   if (!verdict.ok) return { why: verdict.why, detail: `item ${item.id} is ${item.state}, not open` };
-  if (!isEndRunAction(item.action)) return { why: 'not-open', detail: `item ${item.id} carries no action the operator can ${act}` };
+  // `act` abandons: an end request, or a refused close with an abandoning door. `decline` applies to an end request alone.
+  const may = act === 'decline' ? isEndRunAction(item.action) : actAbandons(item.action);
+  if (!may) return { why: 'not-open', detail: `item ${item.id} carries no action the operator can ${act}` };
   if (item.heldUntil !== null && item.heldUntil > now) return { why: 'not-open', detail: `item ${item.id} is held and is not yet on the operator's list` };
   return null;
 }
@@ -629,7 +632,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.useSecretRoute, { detail: 'a secret is given on its own route; it never rides a tick' });
     }
     // An item that carries an action is answered by `act` or `decline` alone; a tick would strand it in `checking`, where both are refused.
-    if (isEndRunAction(item.action)) return refuseRoute(reply, 'not-open', { detail: `item ${id} is ended with Abandon run or Keep the run, not ticked` });
+    if (item.action !== null) return refuseRoute(reply, 'not-open', { detail: `item ${id} is answered with the controls on its row, not ticked` });
     if (item.heldUntil !== null && item.heldUntil > deps.now()) return refuseRoute(reply, 'not-open', { detail: `item ${id} is held and is not yet on the operator's list` });
     const verdict = nextItemState(item.state, 'tick', 'operator', { programmeHasOpenRun: false });
     if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${item.state}, not open` });
@@ -651,11 +654,12 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   });
 
   /**
-   * `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10, "The act"): the operator's Abandon run on an end-request item.
+   * `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10, "The act"): the operator's Abandon run on an end-request item, and Abandon or Abandon anyway on a refused-close item (Task 27,
+   * D-8077; `endRunItemRefusal` says which items may). Decline stays an end request's alone.
    * SESSION ONLY and BODY-LESS: no box token, and no field of the request is read, so a caller cannot name another run or an
    * archive (the abandon route's own rule, D-280). The whole act runs inside `withAbandon`'s coordMutex hold, in the spec's
-   * order: read the item (open, not held, carrying an action that may abandon: `end-run`); run the abandon arm as the operator
-   * with `abandon:requested:<item>`; move the item `act` (open to done); and a run that had already closed closes the item
+   * order: read the item (open, not held, carrying an action that may abandon); run the abandon arm as the operator
+   * with `abandon:requested:<item>` (`abandon:refused:<item>` on a refused-close item, which no session asked for); move the item `act` (open to done); and a run that had already closed closes the item
    * with a note and is success. The abandon's fleet act runs before its commit, so the item's move is a second step: a death
    * between the two is mended by `settleEndRequestsOfClosedRuns` on the next read. A refusal of the arm is the abandon route's
    * answer, sent as it sends it, and the item stays raised.
@@ -688,7 +692,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       actingItems.set(coord, holds);
       holds.add(id);
       try {
-        const outcome = await abandon(runId, `abandon:requested:${id}`);
+        const outcome = await abandon(runId, `${isCloseRefusedAction(item.action) ? ABANDON_REFUSED_PREFIX : ABANDON_REQUESTED_PREFIX}${id}`);
         if (!outcome.ok) return deps.sendClose(reply, outcome);
         let moved = coord.moveItem(id, 'act', 'operator', {}, deps.now(), { programmeHasOpenRun: true });
         // The run is abandoned either way. A refused move is mended with a settle; an item the mender already closed is fine;

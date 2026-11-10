@@ -59,24 +59,62 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
   settle: { actor: 'ccrc', from: ['open', 'checking'], to: 'done' },
 };
 
-/** The typed action an item carries, written by the server alone (`raiseItem`; `parseRaise` never reads one). Today only
- *  `end-run`: the operator's `act` abandons the run and `decline` keeps it. `stuckReason` is the reason the run was stuck
- *  under when the request was raised, so a later request can tell a changed reason from a repeat. */
-export type ItemAction = { verb: 'end-run'; runId: number; stuckReason: StuckReason | null };
+/** The ways an operator can answer a refused close (spec 2026-11-04 §12.2, A19): every door but one opens a page or a sheet that
+ *  already exists, and `abandon-anyway` opens §9.1's sheet and reuses `act`. */
+export type ItemDoor = 'open-pr' | 'hand-to-coordinator' | 'abandon' | 'abandon-anyway' | 'open-worker' | 'open-coordinator';
+const ITEM_DOOR_MAP: Record<ItemDoor, true> = {
+  'open-pr': true, 'hand-to-coordinator': true, abandon: true, 'abandon-anyway': true, 'open-worker': true, 'open-coordinator': true,
+};
+export const ITEM_DOORS = Object.keys(ITEM_DOOR_MAP) as readonly ItemDoor[];
+export const isItemDoor = (v: unknown): v is ItemDoor => typeof v === 'string' && (ITEM_DOORS as readonly string[]).includes(v);
+/** At least one door: an item with none does not compile (the ruling: a Waiting on you item carries a control that works). */
+export type ItemDoors = readonly [ItemDoor, ...ItemDoor[]];
+/** The doors that end the run through the operator's `act`. */
+export const ABANDONING_DOORS: readonly ItemDoor[] = ['abandon', 'abandon-anyway'];
+
+/** The typed action an item carries, written by the server alone (`raiseItem`; `parseRaise` never reads one). `end-run`: the
+ *  operator's `act` abandons the run and `decline` keeps it; `stuckReason` is the reason the run was stuck under when the
+ *  request was raised, so a later request can tell a changed reason from a repeat. `close-refused`: a close an armed lane
+ *  refused, with the doors the operator may take; only an abandoning door reaches `act`, and `decline` applies to `end-run` alone. */
+export type ItemAction =
+  | { verb: 'end-run'; runId: number; stuckReason: StuckReason | null }
+  | { verb: 'close-refused'; runId: number; doors: ItemDoors };
 /** The `end-run` action, and the one place its verb is spelled for the readers that ask which action an item carries. */
 export type EndRunAction = Extract<ItemAction, { verb: 'end-run' }>;
 export const isEndRunAction = (a: ItemAction | null): a is EndRunAction => a !== null && a.verb === 'end-run';
 export const endRunAction = (runId: number, stuckReason: StuckReason | null): EndRunAction => ({ verb: 'end-run', runId, stuckReason });
+/** The `close-refused` action. */
+export type CloseRefusedAction = Extract<ItemAction, { verb: 'close-refused' }>;
+export const isCloseRefusedAction = (a: ItemAction | null): a is CloseRefusedAction => a !== null && a.verb === 'close-refused';
+export const closeRefusedAction = (runId: number, doors: ItemDoors): CloseRefusedAction => ({ verb: 'close-refused', runId, doors });
+/** Can the operator's `act` abandon the run for this action: an `end-run`, or a `close-refused` with an abandoning door. */
+export const actAbandons = (a: ItemAction | null): boolean =>
+  a !== null && (a.verb === 'end-run' || a.doors.some((d) => ABANDONING_DOORS.includes(d)));
 /** Reads a stored action column; null when it is not an `ItemAction`. The one reader of the column's JSON. */
 export function parseItemAction(text: string): ItemAction | null {
   let v: unknown;
   try { v = JSON.parse(text); } catch { return null; }
   if (typeof v !== 'object' || v === null) return null;
   const o = v as Record<string, unknown>;
-  if (o['verb'] !== 'end-run' || typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
+  if (typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
+  if (o['verb'] === 'close-refused') {
+    const doors = o['doors'];
+    if (!Array.isArray(doors) || doors.length === 0 || !doors.every(isItemDoor)) return null;
+    return closeRefusedAction(o['runId'], doors as unknown as ItemDoors);
+  }
+  if (o['verb'] !== 'end-run') return null;
   const reason = o['stuckReason'];
   if (reason !== null && !isStuckReason(reason)) return null;
   return { verb: 'end-run', runId: o['runId'], stuckReason: reason };
+}
+
+/** The run's name as the console says it on a row: its own title, else the programme's, and the wave in words. The server writes the
+ *  title of an item about a run (an end request, a refused close), so it spells the console's words here once. */
+export function itemRunName(run: { program: string; programTitle: string; runTitle?: string | null; wave: number; waveOf: number | null; kind: RunKind }): string {
+  const own = typeof run.runTitle === 'string' && run.runTitle.trim() !== '' ? run.runTitle : null;
+  const programme = own ?? (run.programTitle.trim() !== '' ? run.programTitle : run.program);
+  const wave = run.waveOf === null ? `wave ${run.wave}` : `wave ${run.wave} of ${run.waveOf}`;
+  return `${programme} · ${run.kind === 'review' ? `review of wave ${run.wave}` : wave}`;
 }
 
 /** The states an item still waits in: the states some row of `ITEM_TRANSITIONS` leaves, in `ITEM_STATES` order
@@ -150,7 +188,7 @@ export interface ItemView {
    *  `{unreadable: true}`: the box cannot read the slot (a directory it cannot search, an I/O error; review 1418 F2), so
    *  whether a value is stored is not known: neither stored nor nothing stored. */
   secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null; tail: '' } | { unreadable: true } | null;
-  /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run` today. `null` on an ordinary item, and
+  /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run` or `close-refused`. `null` on an ordinary item, and
    *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
   action?: ItemAction | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null; actor?: ItemActor }[];
@@ -579,3 +617,9 @@ export function outsideDocLink(texts: readonly string[]): string | null {
   }
   return null;
 }
+
+/** The detail the operator's act writes on the run it abandons (D-8076, D-8077): the item's id follows. An end request's act says
+ *  a session asked; a refused-close item's act says ccrc held the close, and no session asked for anything. The run's own
+ *  transition leaves both to the act, which closes its item itself. */
+export const ABANDON_REQUESTED_PREFIX = 'abandon:requested:';
+export const ABANDON_REFUSED_PREFIX = 'abandon:refused:';

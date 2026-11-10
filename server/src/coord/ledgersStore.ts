@@ -11,7 +11,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
-  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, isEndRunAction, nextItemState, parseItemAction, recommendationOf,
+  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, isCloseRefusedAction, isEndRunAction, nextItemState, parseItemAction, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
@@ -162,7 +162,7 @@ function moveItemInTx(
   const verdict = nextItemState(row.state, act, actor, ctx);
   if (!verdict.ok) return verdict;
   // An item that carries an action ends by `act`, `decline`, `withdraw` or `settle`; a tick, confirm or return would strand it.
-  if (isEndRunAction(row.action) && (act === 'tick' || act === 'confirm' || act === 'return')) return { ok: false, why: 'not-open' };
+  if (row.action !== null && (act === 'tick' || act === 'confirm' || act === 'return')) return { ok: false, why: 'not-open' };
   const closes = verdict.to === 'done' || verdict.to === 'withdrawn' || verdict.to === 'dismissed';
   const answer = act === 'tick' && fields.answer !== undefined ? fields.answer : row.answer;
   const note = act === 'return' && fields.note !== undefined ? fields.note : row.note;
@@ -217,6 +217,23 @@ export function openEndRequestsOf(db: DatabaseSync, runId: number): ItemRow[] {
   ).all(runId) as unknown as ItemRowRaw[]).map(itemRowOf).filter((i) => isEndRunAction(i.action));
 }
 
+/** Every item of a run that carries an action (an end request or a refused close) and still waits, held or not, oldest first.
+ *  A run that starts or ends handles all of them. */
+export function openActionItemsOf(db: DatabaseSync, runId: number): ItemRow[] {
+  const states = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');
+  return (db.prepare(
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE runId = ? AND action IS NOT NULL AND state IN (${states}) ORDER BY id`,
+  ).all(runId) as unknown as ItemRowRaw[]).map(itemRowOf).filter((i) => i.action !== null);
+}
+
+/** The refused-close items that still wait, held or not, oldest first: the lane re-measures them each pass (`settle`). */
+export function openCloseRefusedItems(db: DatabaseSync): ItemRow[] {
+  const states = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');
+  return (db.prepare(
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE action IS NOT NULL AND state IN (${states}) ORDER BY id`,
+  ).all() as unknown as ItemRowRaw[]).map(itemRowOf).filter((i) => isCloseRefusedAction(i.action));
+}
+
 /** The newest end request of a run raised BY THIS ASKER that ended in a decline or a withdraw: who asked, when it ended and
  *  the reason it was raised under (A24). Scoped to the asker, so two parties to one run taking turns cannot hide each
  *  other's ended request from the repeat rule. An item settled `done` is not one. */
@@ -245,7 +262,7 @@ export function reviewWorkersOf(db: DatabaseSync, runId: number): string[] {
  *  `note`, inside the transaction the CALLER holds. The move is `moveItemInTx`'s, the only writer of the state. */
 export function settleEndRequestsInTx(db: DatabaseSync, runId: number, note: string, now: number): number {
   let settled = 0;
-  for (const item of openEndRequestsOf(db, runId)) {
+  for (const item of openActionItemsOf(db, runId)) {
     const res = moveItemInTx(db, item.id, 'settle', 'ccrc', { note }, now, { programmeHasOpenRun: true });
     if (res.ok) settled += 1;
   }
@@ -267,7 +284,7 @@ export function settleEndRequestsOfClosedRuns(db: DatabaseSync, note: string, no
   for (const { id } of ids) {
     const res = tx(db, () => {
       const item = itemById(db, id);
-      if (item === null || !isEndRunAction(item.action)) return null;
+      if (item === null || item.action === null) return null;
       return moveItemInTx(db, id, 'settle', 'ccrc', { note }, now, { programmeHasOpenRun: true });
     });
     if (res?.ok === true) settled += 1;
