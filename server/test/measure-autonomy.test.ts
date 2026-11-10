@@ -502,9 +502,12 @@ describe('measure-autonomy transcripts --pinned-from-server', () => {
       '#!/bin/sh',
       `echo "$*" >> '${log}'`,
       'case "$1 $2" in',
-      '  "runs list") echo \'[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"},{"id":3,"program":"pinned-one"}]\' ;;',
+      '  "runs list") case "$*" in',
+      '    "runs list --closed 1") echo \'[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"},{"id":3,"program":"pinned-one"},{"id":4,"program":"pinned-closed","state":"closed"}]\' ;;',
+      '    *) echo \'[{"id":1,"program":"pinned-one"},{"id":2,"program":"loose-one"}]\' ;;',
+      '  esac ;;',
       '  "goals show") case "$3" in',
-      '    pinned-one) echo \'{"goals":{"program":"pinned-one","specPath":"docs/spec.md","modifications":[]},"openItems":[],"bigCalls":[]}\' ;;',
+      '    pinned-one|pinned-closed) echo \'{"goals":{"program":"pinned-one","specPath":"docs/spec.md","modifications":[]},"openItems":[],"bigCalls":[]}\' ;;',
       '    *) echo \'{"goals":{"program":"loose-one","specPath":null,"modifications":[]},"openItems":[],"bigCalls":[]}\' ;;',
       '  esac ;;',
       '  *) echo "unexpected verb" >&2; exit 9 ;;',
@@ -514,7 +517,7 @@ describe('measure-autonomy transcripts --pinned-from-server', () => {
   };
   const rootWith = (): string => {
     const dir = mkTmp('ccrc-autonomy-pin-');
-    for (const [name, body] of [['pinned-one', coordOn('pinned-one', 30)], ['loose-one', coordOn('loose-one', 45)]] as const) {
+    for (const [name, body] of [['pinned-one', coordOn('pinned-one', 30)], ['loose-one', coordOn('loose-one', 45)], ['pinned-closed', coordOn('pinned-closed', 18)]] as const) {
       const sub = path.join(dir, name);
       mkdirSync(sub, { recursive: true });
       writeFileSync(path.join(sub, `${name}.jsonl`), body);
@@ -528,12 +531,12 @@ describe('measure-autonomy transcripts --pinned-from-server', () => {
     const r = run(['transcripts', '--root', rootWith(), '--out', out, '--pinned-from-server', '--ccrc-api', bin]);
     expect(r.status, r.stderr).toBe(0);
     const t = rows(r.stdout);
-    expect(t['pinned-programmes']).toBe('1');
-    expect(t['m2']).toMatch(/^count=1 /);
-    expect(t['m2']).toContain('hours=0.5');
-    expect(t['dialog']).toMatch(/^count=2 /);   // the unfiltered census is still printed
+    expect(t['pinned-programmes']).toBe('2');   // a programme whose runs have all closed still counts
+    expect(t['m2']).toMatch(/^count=2 /);
+    expect(t['m2']).toContain('hours=0.8');
+    expect(t['dialog']).toMatch(/^count=3 /);   // the unfiltered census is still printed
     const calls = readFileSync(log, 'utf8').trim().split('\n').sort();
-    expect(calls).toEqual(['goals show loose-one', 'goals show pinned-one', 'runs list']);
+    expect(calls).toEqual(['goals show loose-one', 'goals show pinned-closed', 'goals show pinned-one', 'runs list --closed 1']);
   });
 
   it('refuses any other verb before the client runs', () => {
@@ -543,7 +546,7 @@ describe('measure-autonomy transcripts --pinned-from-server', () => {
       `spec = importlib.util.spec_from_file_location('ma', ${JSON.stringify(SCRIPT)})`,
       'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
       `m.CCRC_API_BIN = ${JSON.stringify(bin)}`,
-      'for verb in (["mail", "send"], ["runs", "open"], ["goals", "pin", "x"], ["goals", "show"], ["runs", "list", "--all"]):',
+      'for verb in (["mail", "send"], ["runs", "open"], ["goals", "pin", "x"], ["goals", "show"], ["runs", "list"], ["runs", "list", "--all"], ["runs", "list", "--closed", "0"]):',
       '    try:',
       '        m.ccrc_api(verb)',
       '    except SystemExit as e:',

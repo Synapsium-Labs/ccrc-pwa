@@ -376,11 +376,11 @@ SLUG_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 
 
 def ccrc_api(args):
-    """Run the read-only client with ONE of the two verbs this census needs, `runs list` and `goals show <slug>`, and
-    return its JSON. Any other argument list is refused (exit 2) before the client is started."""
-    ok = (list(args) == ['runs', 'list']) or (len(args) == 3 and args[0] == 'goals' and args[1] == 'show' and SLUG_RE.match(args[2]) is not None)
+    """Run the read-only client with ONE of the two verbs this census needs, `runs list --closed 1` and
+    `goals show <slug>`, and return its JSON. Any other argument list is refused (exit 2) before the client is started."""
+    ok = (list(args) == ['runs', 'list', '--closed', '1']) or (len(args) == 3 and args[0] == 'goals' and args[1] == 'show' and SLUG_RE.match(args[2]) is not None)
     if not ok:
-        fail(f'the client verb {" ".join(args[:2])!r} is not one this census runs (runs list, goals show <slug> only)')
+        fail(f'the client verb {" ".join(args[:2])!r} is not one this census runs (runs list --closed 1, goals show <slug> only)')
     try:
         p = subprocess.run([CCRC_API_BIN] + list(args), capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as e:
@@ -394,8 +394,10 @@ def ccrc_api(args):
 
 
 def pinned_programmes():
-    """Slugs of the programmes with a pinned spec, read through `runs list` and `goals show`."""
-    runs = ccrc_api(['runs', 'list'])
+    """Slugs of the programmes with a pinned spec, read through `runs list --closed 1` and `goals show`. The list
+    includes CLOSED runs (the server answers every active run and the newest closed ones), because a dialog of the
+    window can belong to a programme whose runs have all closed since; an open-only list undercounts M2."""
+    runs = ccrc_api(['runs', 'list', '--closed', '1'])
     if isinstance(runs, dict):
         runs = runs.get('runs') or []
     slugs = sorted({r['program'] for r in runs if isinstance(r, dict) and isinstance(r.get('program'), str) and SLUG_RE.match(r['program'])})
