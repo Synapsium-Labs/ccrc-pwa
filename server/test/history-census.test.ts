@@ -11,12 +11,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   agentKeys, agentRig, agentRows, AGENT_T0, armed, callRows, censusOf, counterNames, counterOf, fixtureRows, holdAgainIn, linkOf, membershipsPerEntry,
-  plantAgentTree, resultRows, T0, transcriptRows, untimedRows, variantsOf, whileClosed, type AgentRig, type CensusReport, type TreeSpec,
+  plantAgentTree, resultRows, T0, transcriptRows, untimedRows, variantsOf, whileClosed, type AgentRig, type CensusReport, type CensusUnits, type TreeSpec,
 } from './historyAgentFixtures.js';
 import { holdLock, makeHistoryBox, openStoreRO, recordOpenFlags, runCli, runShim, runSweep, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
 import { historyPaths, WRITING_FORMS } from '../../ccd/history/lib.mjs';
-import { closeWriter, getMeta } from '../../ccd/history/store.mjs';
-import { discoverTranscripts } from '../../ccd/history/sweep.mjs';
+import { closeWriter, getMeta, openReader } from '../../ccd/history/store.mjs';
+import { censusReport, discoverTranscripts } from '../../ccd/history/sweep.mjs';
 import { formatCensus, runCensus } from '../../ccd/history/census.mjs';
 
 skipOnDarwin();
@@ -941,4 +941,84 @@ describe('SA23 the census verb writes nothing and answers lib\'s exits', () => {
     expect(r.stdout.trim().split('\n').at(-1)).toBe('{"rc":2,"reason":"roster-unreadable"}');
     expect(r.stdout, 'no report').not.toContain('census ');
   });
+});
+
+// ── Task 1I: the census's cost at G14's size (act F2; plan 2026-11-09, W4-1) ───────────────────────────────────────────────────
+// A bench, skipped unless HISTORY_BENCH=1: `HISTORY_BENCH=1 ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-census.test.ts -t "census cost"`.
+// ONE fixture is built (the volume is shared by every session) and the census runs BENCH_RUNS times over it, each run as the verb runs it:
+// a read-only handle, the walk, then runCensus, then the report's lines. It asserts only that each run answers a report; the figures
+// (wall time, decodes, peak RSS, fixture bytes, df before and after) are printed for the report. Bodies are a few hundred bytes: the cost
+// lives in rows, decodes and lookups, not in bytes.
+const BENCH = process.env['HISTORY_BENCH'] === '1';
+const BENCH_RUNS = 5;
+const BENCH_AGENTS = 1454;             // G14's subagent transcripts, each with a meta
+const BENCH_LINKED = 276;              // of which carry a toolUseId, as G14 counted
+const BENCH_PER_PARENT = 8;            // subagents per parent session (several, as on a real node)
+const BENCH_CANDIDATES = 64;           // candidate rows in every parent's window: the decode bound (LINK_DECODE_MAX) is reached
+const BENCH_MAX_BYTES = 300_000_000;   // the controller's ceiling on the fixture's bytes (below the plan's 500 MB)
+
+const dfOf = (p: string): string => spawnSync('df', ['-k', p], { encoding: 'utf8' }).stdout.trim().split('\n').slice(1).join(' ');
+const duOf = (p: string, apparent: boolean): number => Number(spawnSync('du', ['-sk', ...(apparent ? ['--apparent-size'] : []), p], { encoding: 'utf8' }).stdout.split('\t')[0]) * 1024;
+/** Peak resident set since the last reset, in KiB: /proc VmHWM after writing 5 to clear_refs (Linux), else the process's maxRSS so far. */
+function peakRssKb(reset: boolean): number {
+  if (reset) { try { fs.writeFileSync('/proc/self/clear_refs', '5'); } catch { /* the figure is then the process-wide high-water mark */ } }
+  try { return Number(/VmHWM:\s+(\d+) kB/.exec(fs.readFileSync('/proc/self/status', 'utf8'))![1]); } catch { return process.resourceUsage().maxRSS; }
+}
+const pct = (xs: number[], q: number): number => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.ceil(q * s.length) - 1)]!; };
+
+describe('census cost', () => {
+  it.skipIf(!BENCH)(`census cost at G14's size: ${BENCH_AGENTS} subagents, ${BENCH_LINKED} linked, ${BENCH_CANDIDATES} candidates per parent`, async () => {
+    const rig = await rigOf('ccrc-hist-bench-');
+    const dfBefore = dfOf(rig.box.home);
+    const parents = Math.ceil(BENCH_AGENTS / BENCH_PER_PARENT);
+    const tb = Date.now();
+    for (let p = 0; p < parents; p += 1) {
+      const ids = Array.from({ length: BENCH_PER_PARENT }, (_, k) => p * BENCH_PER_PARENT + k).filter((i) => i < BENCH_AGENTS);
+      // a linked agent is every (BENCH_AGENTS / BENCH_LINKED)th one; its toolUseId is named by no call, so its search runs to the bound
+      const linked = (i: number): boolean => Math.floor(((i + 1) * BENCH_LINKED) / BENCH_AGENTS) > Math.floor((i * BENCH_LINKED) / BENCH_AGENTS);
+      plantAgentTree(rig, {
+        slug: SLUG, uuid: uuidOf(1000 + p),
+        mainRows: callRows(0x10000 + p * 0x100, Array.from({ length: BENCH_CANDIDATES }, (_, k) => ({ ms: AGENT_T0 - 1000 * (k + 1), ids: [`toolu_p${p}_${k}`] }))),
+        agents: ids.map((i) => agent(`b${i}`, 0x40000 + i, { n: 2, meta: linked(i) ? { toolUseId: `toolu_bench_${i}`, agentType: 'Explore' } : { agentType: 'Explore' } })),
+      }, SINCE);
+    }
+    // ingest as the pass does, scan ticks until every subagent and every parent is stored
+    let ticks = 0;
+    const stored = (): number => (rig.db.prepare("SELECT count(*) AS n FROM transcripts WHERE agent_id = '' AND cc_session_uuid LIKE 'c1000000-%'").get() as { n: number }).n;
+    while ((agentRows(rig.db) < BENCH_AGENTS || stored() < parents) && ticks < 400) { await rig.tick(armed, { scan: true }); ticks += 1; }
+    const build = { agentRows: agentRows(rig.db), parents: stored(), ticks, ms: Date.now() - tb };
+    expect(build.agentRows, 'CONTROL: the whole fixture was ingested').toBe(BENCH_AGENTS);
+    expect(build.parents, 'CONTROL: every parent was ingested').toBe(parents);
+    const candidateRows = (rig.db.prepare("SELECT count(*) AS n FROM entries WHERE type = 'assistant' AND tool_name IS NOT NULL").get() as { n: number }).n;
+    const bytesAllocated = duOf(rig.box.home, false);
+    const bytesApparent = duOf(rig.box.home, true);
+    expect(bytesAllocated, 'the fixture stays under its ceiling').toBeLessThan(BENCH_MAX_BYTES);
+    // the census over the store, as the verb runs it: a read-only handle, censusReport, then the lines
+    const runs: Array<{ ms: number; decodes: number; peakKb: number; lines: number; units: CensusUnits }> = [];
+    for (let r = 0; r < BENCH_RUNS; r += 1) {
+      const ro = openReader(historyPaths(rig.box.home).dbFile);
+      try {
+        peakRssKb(true);
+        const t = process.hrtime.bigint();
+        const report = censusReport(ro, rig.box.homes, rig.box.home) as unknown as CensusReport;
+        const lines = formatCensus(report as never).length;
+        const ms = Number(process.hrtime.bigint() - t) / 1e6;
+        runs.push({ ms, decodes: report.beside.lookups.decodes, peakKb: peakRssKb(false), lines, units: report.units });
+        expect(report.units.D, 'each run answers a report over the whole fixture').toBe(BENCH_AGENTS);
+      } finally { ro.close(); }
+    }
+    const dfAfter = dfOf(rig.box.home);
+    const walls = runs.map((r) => r.ms);
+    const figures = {
+      shape: { subagents: BENCH_AGENTS, metas: BENCH_AGENTS, linked: BENCH_LINKED, parents, subagentsPerParent: BENCH_PER_PARENT, candidatesPerWindow: BENCH_CANDIDATES, candidateRowsStored: candidateRows },
+      build,
+      bytes: { allocated: bytesAllocated, apparent: bytesApparent },
+      df: { before: dfBefore, after: dfAfter },
+      runs: runs.map((r) => ({ wallMs: Math.round(r.ms), decodes: r.decodes, peakRssKb: r.peakKb, lines: r.lines })),
+      units: runs[0]!.units,
+      wallMs: { p50: Math.round(pct(walls, 0.5)), p95: Math.round(pct(walls, 0.95)) },
+      peakRssKb: { p50: pct(runs.map((r) => r.peakKb), 0.5), p95: pct(runs.map((r) => r.peakKb), 0.95) },
+    };
+    process.stderr.write(`BENCH_FIGURES ${JSON.stringify(figures)}\n`);
+  }, 1_800_000);
 });
