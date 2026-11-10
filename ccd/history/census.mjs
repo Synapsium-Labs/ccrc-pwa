@@ -8,14 +8,15 @@
 // share is withheld (Task 1G). This module measures the facts they take and tallies what they answer. It writes nothing, not even
 // a counter: a walk refusal is a figure of THIS census, recomputed each run, never a tick's counter (D-8154).
 //
-// It reads bodies through `unbrotli` from store.mjs, as derive.mjs does (lib cannot decompress), and runs statements on the handle it
-// is given, so `node:sqlite` stays store.mjs's alone (the ring case).
+// It reads bodies through derive.mjs's `blobReadStmts` and `bodyOf` (lib cannot decompress, and each blob SELECT is spelled once, in
+// derive: single-definition's late-census), and runs statements on the handle it is given, so `node:sqlite` stays store.mjs's
+// alone (the ring case).
 import {
   AGENT_LEVELS, CENSUS_COLUMNS, HOLDING_SHAPES, LINK_DECODE_MAX, LINK_WINDOW_MS, agentKey, blobOverDecodeCap, canonicalOf, censusPart, censusSums,
-  censusWithheld, holdingShape, inColumn, isPreInstall, jsonWithinStructureBound, linkVerdict, metaEvidence, shareRange, toolUsesOf, unboundExtra,
+  censusWithheld, holdingShape, inColumn, isPreInstall, linkVerdict, metaEvidence, shareRange, toolUsesOf, unboundExtra,
   workflowVerdict, workflowWindow,
 } from './lib.mjs';
-import { unbrotli } from './store.mjs';
+import { blobReadStmts, bodyOf } from './derive.mjs';
 
 /** Why a listed holding of an admitted unit is not bound to the store (3.1, "unbound holdings"; plan-chosen words): `unread` (no row
  *  holds its inode yet, or the one that did was marked gone), `unreadable` (no row, and the file cannot be opened: ingest records
@@ -49,15 +50,15 @@ function stmts(db) {
       + "WHERE p.path = ? AND f.transcript_pk = ? AND f.source_key = '' AND f.status = 'live'"),
     pastEnd: db.prepare('SELECT 1 AS x FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? AND e.ts_ms > ? LIMIT 1'),
     // the candidate selects: each at most LINK_DECODE_MAX + 1 rows, so a 65th says the bound stopped the search
-    toolUseTimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len, b.z IS NULL AS tomb FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
+    toolUseTimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
       + "WHERE e.transcript_pk = ? AND e.type = 'assistant' AND e.tool_name IS NOT NULL AND e.ts_ms BETWEEN ? AND ? ORDER BY e.ts_ms DESC, e.entry_id DESC LIMIT ?"),
-    toolUseUntimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len, b.z IS NULL AS tomb FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
+    toolUseUntimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
       + "WHERE e.transcript_pk = ? AND e.type = 'assistant' AND e.tool_name IS NOT NULL AND e.ts_ms IS NULL ORDER BY e.entry_id DESC LIMIT ?"),
-    userTimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len, b.z IS NULL AS tomb FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
+    userTimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
       + "WHERE e.transcript_pk = ? AND e.type = 'user' AND e.ts_ms BETWEEN ? AND ? ORDER BY abs(e.ts_ms - ?), e.entry_id DESC LIMIT ?"),
-    userUntimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len, b.z IS NULL AS tomb FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
+    userUntimed: db.prepare("SELECT e.blob_id AS blob_id, b.raw_len AS raw_len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id "
       + "WHERE e.transcript_pk = ? AND e.type = 'user' AND e.ts_ms IS NULL ORDER BY e.entry_id DESC LIMIT ?"),
-    blobZ: db.prepare('SELECT z FROM blobs WHERE blob_id = ?'),
+    blobs: blobReadStmts(db),   // derive's one spelling of the blob reads (late-census: each blob SELECT is spelled once)
   };
   STMTS.set(db, s);
   return s;
@@ -76,20 +77,13 @@ function candidateRows(s, timed, untimed) {
   return [...first, ...rest];
 }
 
-/** One candidate's body, parsed: `{ body }`, or `{ err }` with `over-cap` (never decoded) or `undecodable` (a tombstone, a blob that
- *  does not decompress within its stored length, or one over the JSON structure bound or not JSON). */
-function bodyOfRow(s, row) {
+/** One candidate's body, parsed: `{ body }`, or `{ err }` with `over-cap` (never decoded: decided from the stored raw_len before any
+ *  read) or `undecodable` (derive's bodyOf answers null for a tombstone, a blob that does not decompress within its stored length,
+ *  or one that is not JSON). `budget.bytes` takes the compressed bytes read, as bodyOf's other callers' budgets do. */
+function bodyOfRow(s, row, budget) {
   if (blobOverDecodeCap(row.raw_len)) return { err: 'over-cap' };
-  if (row.tomb === 1) return { err: 'undecodable' };
-  const z = s.blobZ.get(row.blob_id)?.z;
-  if (z === undefined || z === null) return { err: 'undecodable' };
-  try {
-    const bytes = unbrotli(z, row.raw_len);
-    if (!jsonWithinStructureBound(bytes)) return { err: 'undecodable' };
-    return { body: JSON.parse(bytes.toString('utf8')) };
-  } catch {
-    return { err: 'undecodable' };
-  }
+  const body = bodyOf(s.blobs, row.blob_id, budget);
+  return body === null ? { err: 'undecodable' } : { body };
 }
 
 /** Decode the candidates, newest or nearest first, at most LINK_DECODE_MAX of them (a body over the cap is passed over and still
@@ -101,7 +95,7 @@ function searchRows(s, rows, test, tally) {
   let overCap = false;
   let undecodable = false;
   for (let i = 0; i < limit; i += 1) {
-    const d = bodyOfRow(s, rows[i]);
+    const d = bodyOfRow(s, rows[i], tally);
     if (d.err === 'over-cap') { overCap = true; continue; }
     if (d.err !== undefined) { undecodable = true; continue; }
     tally.decodes += 1;
@@ -142,7 +136,7 @@ function afterCandidates(s, pk, holdings, end, r) {
  *  among its timed rows in `[t0 - 15 min, t0]` (newest first) and then its untimed named-tool rows, at most LINK_DECODE_MAX decodes
  *  together? `holdings` are the paths the walk lists for the parent's main transcript (the window is complete only when every one is
  *  bound and read past `t0`). `t0` is the subagent's first timed row, null when it has none. `tally.decodes` counts the decodes. */
-export function agentToolSearch(db, parentUuid, toolUseId, t0, holdings, tally = { decodes: 0 }) {
+export function agentToolSearch(db, parentUuid, toolUseId, t0, holdings, tally = { decodes: 0, bytes: 0 }) {
   const s = stmts(db);
   const pk = s.mainPk.get(parentUuid)?.transcript_pk;
   if (pk === undefined) return unmeasured('parent-not-stored');
@@ -184,7 +178,7 @@ function namesRun(body, runId) {
  *  whole token? Candidates are the timed user rows in the window nearest `anchor` first, then the untimed ones, at most
  *  LINK_DECODE_MAX decodes together; the outcomes are agentToolSearch's, and a null `window` (the run has no timed row) is
  *  `no-timed-row`. */
-export function workflowLookup(db, parentUuid, runId, window, holdings, anchor, tally = { decodes: 0 }) {
+export function workflowLookup(db, parentUuid, runId, window, holdings, anchor, tally = { decodes: 0, bytes: 0 }) {
   const s = stmts(db);
   const pk = s.mainPk.get(parentUuid)?.transcript_pk;
   if (pk === undefined) return unmeasured('parent-not-stored');
@@ -355,7 +349,7 @@ export function runCensus(db, walk, deps) {
     const window = workflowWindow(t?.lo ?? null, runWindow ?? 'immediate', t?.hi ?? null);
     const anchor = runWindow === 'at-end' ? t?.hi ?? 0 : t?.lo ?? 0;
     lookups.workflow += 1;
-    const tl = { decodes: 0 };
+    const tl = { decodes: 0, bytes: 0 };
     const r = workflowLookup(db, u.uuid, u.runId, window, holdingsOf(u.uuid), anchor, tl);
     lookups.decodes += tl.decodes;
     runCache.set(ck, r);
@@ -373,7 +367,7 @@ export function runCensus(db, walk, deps) {
       let parent = null;
       if ('link' in meta) {
         lookups.agentTool += 1;
-        const tl = { decodes: 0 };
+        const tl = { decodes: 0, bytes: 0 };
         parent = agentToolSearch(db, u.uuid, meta.link, firstTs(u.row.transcript_pk), holdingsOf(u.uuid), tl);
         lookups.decodes += tl.decodes;
       }

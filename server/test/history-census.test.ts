@@ -13,7 +13,7 @@ import {
   agentKeys, agentRig, agentRows, AGENT_T0, armed, callRows, censusOf, counterNames, counterOf, fixtureRows, holdAgainIn, linkOf, membershipsPerEntry,
   plantAgentTree, resultRows, T0, transcriptRows, untimedRows, variantsOf, whileClosed, type AgentRig, type CensusReport, type TreeSpec,
 } from './historyAgentFixtures.js';
-import { holdLock, makeHistoryBox, openStoreRO, recordOpenFlags, runCli, runShim, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
+import { holdLock, makeHistoryBox, openStoreRO, recordOpenFlags, runCli, runShim, runSweep, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
 import { historyPaths, WRITING_FORMS } from '../../ccd/history/lib.mjs';
 import { closeWriter, getMeta } from '../../ccd/history/store.mjs';
 import { discoverTranscripts } from '../../ccd/history/sweep.mjs';
@@ -153,6 +153,16 @@ describe('SA2 Agent-tool link, bounded decode (P4)', () => {
     expect(report.units).toMatchObject({ L: 0, U: 0, M: 1 });
     expect(report.reasons).toEqual({ 'over-cap': 1 });
     expect(report.beside.lookups.decodes, 'CONTROL: nothing was decoded').toBe(0);
+  });
+});
+
+describe('a candidate that cannot be decoded (P4)', () => {
+  it('a pruned body (a tombstone) is unmeasured (undecodable), never unresolved', async () => {
+    const { rig } = await one('ccrc-hist-sa2-tomb-', { meta: { toolUseId: tau(11) }, parentRows: calls(0x3107, { before: 60_000, ids: [tau(11)] }) });
+    rig.db.prepare("UPDATE blobs SET z = NULL, pruned_ms = 1 WHERE blob_id = (SELECT blob_id FROM entries WHERE type = 'assistant' AND tool_name IS NOT NULL)").run();
+    const report = censusOf(rig);
+    expect(report.units).toMatchObject({ L: 0, U: 0, M: 1 });
+    expect(report.reasons).toEqual({ undecodable: 1 });
   });
 });
 
@@ -605,7 +615,7 @@ describe('what the store keeps of a key held more than once', () => {
       expect(c.reasons).toEqual({ 'meta-unread:absent': 1 });
     });
 
-    it.each([['oversized'], ['malformed']] as const)('SA28 one holding whose meta is %s is M (meta-unread:%s); a second holding that names a link leaves it M', async (cause) => {
+    it.each([['oversized'], ['malformed']] as const)('SA28 one holding whose meta is %s is M (meta-unread:<cause>); a second holding that names a link leaves it M', async (cause) => {
       const { rig, first, a, b } = await twice(`ccrc-hist-sa28-${cause}-`, { meta: cause });
       let c = censusOf(rig);
       expect(verdictOf(c)).toBe('M');
@@ -834,5 +844,18 @@ describe('SA23 the census verb writes nothing and answers lib\'s exits', () => {
     expect(runCli(rig.box, ['census', 'x']).code).toBe(2);
     const release = holdLock(rig.box);
     try { expect(runCli(rig.box, ['census']).code).toBe(4); } finally { release(); }
+  });
+
+  it('an unreadable roster knows no home, so the census refuses it (roster-unreadable) instead of reporting no units', async () => {
+    const rig = await rigOf('ccrc-hist-sa23-roster-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x4803, { meta: {} })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    closeWriter(rig.db);
+    const ok = runSweep(rig.box, ['--op', 'census']);
+    expect(ok.code, `CONTROL: with the roster read, it runs\n${ok.stderr}`).toBe(0);
+    const r = runSweep(rig.box, ['--op', 'census', '--roster-unreadable'], { homes: [] });
+    expect(r.code).toBe(2);
+    expect(r.stdout.trim().split('\n').at(-1)).toBe('{"rc":2,"reason":"roster-unreadable"}');
+    expect(r.stdout, 'no report').not.toContain('census ');
   });
 });
