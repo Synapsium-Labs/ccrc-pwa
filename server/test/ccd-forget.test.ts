@@ -133,7 +133,8 @@ describe('ccd forget', () => {
       expect(fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '', 'nothing was unsupervised or killed')
         .not.toMatch(/unsupervise|kill-session/);
     } finally {
-      // On reverted code the purge removes the field, so a bare stat here would throw over the assertion's message.
+      // On reverted code the purge removes a file or link field (its `rm -f` cannot remove a directory), so a bare stat
+      // here would throw over the assertion's message (review 1733 F2).
       if (fs.existsSync(field) && fs.lstatSync(field).isFile()) fs.chmodSync(field, 0o644);
     }
   });
