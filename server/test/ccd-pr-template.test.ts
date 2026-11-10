@@ -117,15 +117,49 @@ describe('ccd pr-template (D-8147)', () => {
     expect(r.stderr).toMatch(/gh pr create failed/);
     noTemp();
     fs.rmSync(path.join(h.home, 'gh-create-fail'));
-    // A push the origin refuses: the branch exists there with other history (the failed create left it).
+    // The branch the failed create left on origin is reused: no second push, only the PR.
     expect(hasBranch()).toBe(true);
-    fs.rmSync(path.join(h.home, 'gh-created'), { force: true });
+    noTemp();
+  });
+
+  it('retries after a failed create: reuses the branch on origin and only opens the PR', () => {
+    setup();
+    put('gh-create-fail', '');
+    expect(run('--project demo --team KEY').code).toBe(1);
+    fs.rmSync(path.join(h.home, 'gh-create-fail'));
+    const tip = h.git(origin(), 'rev-parse', `refs/heads/${BRANCH}`);
     const main = path.join(h.home, 'projects', 'demo');
     fs.writeFileSync(path.join(main, 'x.txt'), 'x\n');
     h.git(main, 'add', 'x.txt'); h.git(main, 'commit', '-m', 'x'); h.git(main, 'push', 'origin', 'main');
-    const r2 = run('--project demo --team KEY');
-    expect(r2.code).toBe(1);
-    expect(r2.stderr).toMatch(/push failed/);
+    const r = run('--project demo --team KEY');
+    expect(r.code, r.stderr).toBe(0);
+    expect(h.git(origin(), 'rev-parse', `refs/heads/${BRANCH}`)).toBe(tip);
+    expect(h.ghCalls().filter((c) => c.startsWith('pr create'))).toHaveLength(2);
+    noTemp();
+  });
+
+  it('opens a new PR over a leftover branch when the earlier PR was closed unmerged', () => {
+    setup();
+    expect(run('--project demo --team KEY').code).toBe(0);
+    const tip = h.git(origin(), 'rev-parse', `refs/heads/${BRANCH}`);
+    fs.rmSync(path.join(h.home, 'gh-created'));
+    put('gh-rows.json', JSON.stringify([{ ...openRow, state: 'CLOSED' }]));
+    const r = run('--project demo --team KEY');
+    expect(r.code, r.stderr).toBe(0);
+    expect(h.git(origin(), 'rev-parse', `refs/heads/${BRANCH}`)).toBe(tip);
+    expect(h.ghCalls().filter((c) => c.startsWith('pr create'))).toHaveLength(2);
+    noTemp();
+  });
+
+  it('still reports a push refusal when the leftover branch does not hold the template', () => {
+    const main = setup();
+    h.git(main, 'checkout', '-q', '-b', BRANCH);
+    fs.writeFileSync(path.join(main, 'other.txt'), 'o\n');
+    h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'other'); h.git(main, 'push', 'origin', BRANCH);
+    h.git(main, 'checkout', '-q', 'main');
+    const r = run('--project demo --team KEY');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/push failed/);
     noTemp();
   });
 

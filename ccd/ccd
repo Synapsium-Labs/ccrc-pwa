@@ -11742,6 +11742,14 @@ sys.exit(0 if any(r.get("state") == "OPEN" for r in json.load(sys.stdin)) else 1
 _pr_template_open() {   # worktree slug default-branch team -> the PR rows on stdout; returns (never dies) so the caller removes the worktree
   local wt=$1 slug=$2 def=$3 team=$4 rows rc reason
   local rel; rel=$(_pr_template_rel)
+  # A branch left on origin by an earlier try (the PR was closed unmerged, or `gh pr create` failed after the push) is
+  # reused, never pushed over: a fresh commit would be a sibling of it and the unforced push would be refused every time.
+  local have=0 lsout
+  if lsout=$(_plat_timeout "$PR_GH_TIMEOUT" git -C "$wt" ls-remote origin "refs/heads/ccrc/linking-template" 2>/dev/null) && [[ -n "$lsout" ]]; then
+    _plat_timeout "$PR_GH_TIMEOUT" git -C "$wt" fetch --quiet origin "refs/heads/ccrc/linking-template" 2>/dev/null \
+      && git -C "$wt" cat-file -e "FETCH_HEAD:$rel" 2>/dev/null && have=1
+  fi
+  if (( have == 0 )); then
   mkdir -p "$(dirname "$wt/$rel")"
   cat > "$wt/$rel" <<EOF
 <!-- Linking: name this PR's Linear ticket so Linear links it and acts on merge. -->
@@ -11758,6 +11766,7 @@ EOF
     || { echo "pr-template: git commit failed" >&2; return 1; }
   git -C "$wt" push origin "HEAD:refs/heads/ccrc/linking-template" >/dev/null \
     || { echo "pr-template: push failed for ccrc/linking-template — nothing was opened" >&2; return 1; }
+  fi
   _plat_timeout "$PR_GH_TIMEOUT" gh pr create --repo "$slug" --head ccrc/linking-template --base "$def" \
     --title "Add a pull request template that names the Linear ticket" \
     --body "Adds the pull request template, so each PR names its Linear ticket." >/dev/null \
