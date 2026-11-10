@@ -334,10 +334,10 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       expect(r.read!.h, 'the reading line is 2 px tall').toBeCloseTo(2, 1);
       expect(Math.abs(r.read!.bottom - r.bar.bottom), 'the line ends at the bar\'s bottom edge').toBeLessThanOrEqual(0.5);
 
-      // Recorded, never asserted: whether the 2 px line paints over the bottom edge of an inset keyboard focus ring (the
-      // title's, then the first tool's). The outline box is the control's box grown by its outline offset and width. The
-      // frame is scrolled to its end first, so the line spans the bar. (The line is `pointer-events: none`, so a hit test
-      // cannot see which one paints on top; the boxes' intersection is the figure.)
+      // The 2 px line and an inset keyboard focus ring (the title's, then the first tool's) share the bar's bottom 2 px. The
+      // outline box is the control's box grown by its outline offset and width, and the boxes' intersection is recorded.
+      // Which one paints on top is asserted: the line is `pointer-events: none`, so for one hit test it is made hittable,
+      // and a hit test follows paint order. The frame is scrolled to its end first, so the line spans the bar.
       const scrolled = await (await page.locator('.docs-reader iframe').elementHandle())!.contentFrame();
       await scrolled!.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       await page.waitForFunction(() => {
@@ -356,7 +356,12 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
           const cs = getComputedStyle(a);
           const grow = Number.parseFloat(cs.outlineOffset) + Number.parseFloat(cs.outlineWidth);
           const out = { top: b.top - grow, bottom: b.bottom + grow, left: b.left - grow, right: b.right + grow };
+          const line = document.querySelector<HTMLElement>('.docs-one-bar .docs-read')!;
+          line.style.pointerEvents = 'auto';
+          const hit = document.elementFromPoint((b.left + b.right) / 2, Math.max(read.top, out.bottom - 1) + 0.25);
+          line.style.pointerEvents = '';
           return {
+            lineOnTop: hit === line,
             focused: a.className || a.getAttribute('aria-label'), outline: `${cs.outlineStyle} ${cs.outlineWidth} offset ${cs.outlineOffset}`,
             box: { top: b.top, bottom: b.bottom }, outlineBox: out, read: { top: read.top, bottom: read.bottom, left: read.left, right: read.right },
             readOverBox: read.top < b.bottom && read.bottom > b.top && read.left < b.right && read.right > b.left,
@@ -365,6 +370,9 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
         }));
       }
       console.log(`L11-FIGURE refined 412x915 focus-ring ${JSON.stringify(rings)}`);
+      for (const ring of rings as { focused: string; lineOnTop: boolean }[]) {
+        expect(ring.lineOnTop, `${ring.focused}: the reading line paints under the focused control's ring`).toBe(false);
+      }
     });
   }, 120_000);
 

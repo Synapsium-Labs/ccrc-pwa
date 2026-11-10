@@ -533,7 +533,9 @@
    --bg-page as the row does (design/audit.mjs registers `.docs-title` and `.docs-tool` there); an open `.docs-title`
    paints its own pressed ground and ink and is measured on it; the dot and the line paint fills and set no ink. No
    transition and no opacity: nothing here moves or fades. — */
-.docs-one-bar .docs-compact-bar { position: relative; }
+/* The bar is its own stacking context, so the reading line (z-index -1 inside it) paints over the bar's ground and
+   divider but under its controls, and a focused control's inset ring stays whole along the bottom edge. */
+.docs-one-bar .docs-compact-bar { position: relative; isolation: isolate; }
 .docs-title {
   flex: 1 1 auto; min-width: 0; min-height: var(--tap-min);
   display: flex; flex-direction: column; justify-content: center;
@@ -557,7 +559,7 @@
 }
 .docs-read {
   position: absolute; inset-inline-start: 0; inset-block-end: -1px; block-size: 2px;
-  background: var(--accent); pointer-events: none;
+  background: var(--accent); pointer-events: none; z-index: -1;
 }
 /* "Formatting…" lies over the frame's host instead of taking a line above it, so the frame does not move when the
    reader is ready. It paints the page's own ground, so its registered ink (.doc-formatting, on --bg-page) holds there. */

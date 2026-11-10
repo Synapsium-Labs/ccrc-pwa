@@ -135,6 +135,9 @@ function widthMediaBodies(css: string): string[] {
 describe('the one bar in docs.css (the take-up plan, refinements (j), (k), (l))', () => {
   it('the bar positions the reading line; the title, a tool and the line carry their declarations; no selector of the block names a width', () => {
     expect(declValue(ruleIn(docsCss, '.docs-one-bar .docs-compact-bar'), 'position')).toBe('relative');
+    // The bar is its own stacking context and the line sits under its controls, so a focused control's inset ring is
+    // whole along the bottom edge (the browser file asserts the paint order).
+    expect(declValue(ruleIn(docsCss, '.docs-one-bar .docs-compact-bar'), 'isolation')).toBe('isolate');
     const title = ruleIn(docsCss, '.docs-title');
     expect(declValue(title, 'flex')).toBe('1 1 auto');
     expect(declValue(title, 'min-width')).toBe('0');
@@ -151,6 +154,7 @@ describe('the one bar in docs.css (the take-up plan, refinements (j), (k), (l))'
     expect(declValue(line, 'inset-block-end')).toBe('-1px');
     expect(declValue(line, 'block-size')).toBe('2px');
     expect(declValue(line, 'background')).toBe('var(--accent)');
+    expect(declValue(line, 'z-index')).toBe('-1');
     for (const prop of ['transition', 'opacity', 'height', 'margin']) expect(declValue(line, prop), prop).toBeNull();
     for (const sel of [
       '.docs-one-bar .docs-compact-bar', '.docs-title', ".docs-title[aria-expanded='true']", '.docs-title-dot', '.docs-tool', '.docs-read',
