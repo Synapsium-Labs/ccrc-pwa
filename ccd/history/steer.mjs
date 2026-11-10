@@ -49,16 +49,40 @@ function prevStmt(db) {
 
 const finiteOrNull = (v) => v === null || (typeof v === 'number' && Number.isFinite(v));
 
-/** The epoch's newest level-0 node of one copy, as composeSteerFile's `prev`, or null when the copy has none (nothing to
- *  quote). `epoch` is derive.mjs's epochOfUuid answer (`session_pk`, `seq`). The stored `directive_flag` maps by the closed
- *  rule: 0 is flag false, 1 is flag true, anything else is unreadable. A row that cannot be read answers `status: 'unreadable'`,
- *  which composeSteerFile quotes nothing for, and never throws through the card step:
+/** One stored node row as a steer part reads it, or why it cannot be read. The one validator `prevLeafOf` and `childrenOf` share,
+ *  so the two readers hold the same validity rules and the same closed flag rule (W3 Task 1A Step 3: 0 is flag false, 1 is flag
+ *  true, anything else is unreadable). `{ ok: true, id, range, kind, status, gist, flag }`, or `{ ok: false, id }` where `id` is
+ *  the row's own `node_id` once that is on the node grammar, else null. A row is unreadable when it has:
  *    - a `node_id` off the node grammar (`^[LN][0-9a-f]{20}$`);
  *    - a kind outside lib's node kinds, or a status outside lib's status words;
- *    - an instant that is neither null nor a finite number, or one `nodeRangeText` cannot spell (out of the date range);
  *    - a `directive_flag` that is neither 0 nor 1;
- *    - a steered leaf with a `gist` that is not text;
- *    - a read of the row that fails (the store's own error). */
+ *    - an instant that is neither null nor a finite number, or one `nodeRangeText` cannot spell (out of the date range);
+ *    - a steered leaf of status ok with a `gist` that is not text. */
+function readStoredNode(row) {
+  if (typeof row.node_id !== 'string' || !HISTORY_NODE_ID_RE.test(row.node_id)) return { ok: false, id: null };
+  const bad = { ok: false, id: row.node_id };
+  if (!NODE_KINDS.includes(row.kind) || !PARSE_STATUS.includes(row.status)) return bad;
+  if (row.directive_flag !== 0 && row.directive_flag !== 1) return bad;
+  if (!finiteOrNull(row.earliest_ms) || !finiteOrNull(row.latest_ms)) return bad;
+  let range;
+  try {
+    range = nodeRangeText(row.earliest_ms, row.latest_ms);
+  } catch {
+    return bad;
+  }
+  if (typeof row.gist !== 'string' && row.kind === 'steered_leaf' && row.status === 'ok') return bad;
+  return {
+    ok: true, id: row.node_id, range, kind: row.kind, status: row.status, gist: typeof row.gist === 'string' ? row.gist : '',
+    flag: row.directive_flag === 1,
+  };
+}
+
+const stored = ({ ok, ...part }) => part;
+
+/** The epoch's newest level-0 node of one copy, as composeSteerFile's `prev`, or null when the copy has none (nothing to
+ *  quote). `epoch` is derive.mjs's epochOfUuid answer (`session_pk`, `seq`). A row that cannot be read (readStoredNode's rules)
+ *  answers `status: 'unreadable'`, which composeSteerFile quotes nothing for, and never throws through the card step; so does a
+ *  read of the row that fails (the store's own error). */
 export function prevLeafOf(db, copyFileId, epoch) {
   let row;
   try {
@@ -67,25 +91,41 @@ export function prevLeafOf(db, copyFileId, epoch) {
     return unreadablePrev(null);
   }
   if (row === undefined) return null;
-  if (typeof row.node_id !== 'string' || !HISTORY_NODE_ID_RE.test(row.node_id)) return unreadablePrev(null);
-  if (!NODE_KINDS.includes(row.kind) || !PARSE_STATUS.includes(row.status)) return unreadablePrev(row.node_id);
-  if (row.directive_flag !== 0 && row.directive_flag !== 1) return unreadablePrev(row.node_id);
-  if (!finiteOrNull(row.earliest_ms) || !finiteOrNull(row.latest_ms)) return unreadablePrev(row.node_id);
-  let range;
-  try {
-    range = nodeRangeText(row.earliest_ms, row.latest_ms);
-  } catch {
-    return unreadablePrev(row.node_id);
-  }
-  if (typeof row.gist !== 'string' && row.kind === 'steered_leaf' && row.status === 'ok') return unreadablePrev(row.node_id);
-  return {
-    id: row.node_id, range, kind: row.kind, status: row.status, gist: typeof row.gist === 'string' ? row.gist : '',
-    flag: row.directive_flag === 1,
-  };
+  const node = readStoredNode(row);
+  return node.ok ? stored(node) : unreadablePrev(node.id);
 }
 
 function unreadablePrev(id) {
   return { id: id ?? '', range: '', kind: '', status: 'unreadable', gist: '', flag: false };
+}
+
+const CHILD_STMTS = new WeakMap();
+
+function childStmt(db) {
+  let s = CHILD_STMTS.get(db);
+  if (s === undefined) {
+    s = db.prepare(`SELECT node_id, kind, status, gist, earliest_ms, latest_ms, directive_flag FROM nodes WHERE node_id = ?`);
+    CHILD_STMTS.set(db, s);
+  }
+  return s;
+}
+
+/** The stored rows of a parent's children, as composeSteerFile's `children` (W3 Task 4, spec §7.1): one entry per id, in the
+ *  order of `ids`. (Not store.mjs's `childrenOf`, which lists a parent's children by its edges: the names meet only here.) The
+ *  rows are read by readStoredNode, so the closed flag rule and the validity rules are `prevLeafOf`'s, written once. A row that
+ *  is missing, or cannot be read, answers `{ id, range: 'unknown..unknown', kind: '', status: 'unreadable', gist: '', flag: false }`
+ *  under the id asked for: the slot always prints an id and a range, and nothing of the child is quoted. It never throws. */
+export function childrenOf(db, ids) {
+  return ids.map((id) => {
+    let row;
+    try {
+      row = childStmt(db).get(id);
+    } catch {
+      row = undefined;
+    }
+    const node = row === undefined ? null : readStoredNode(row);
+    return node !== null && node.ok ? stored(node) : { id, range: nodeRangeText(null, null), kind: '', status: 'unreadable', gist: '', flag: false };
+  });
 }
 
 /** The steer file, whole: `text` and one LF, 0600, by `writeFileAtomic`'s temp and rename. The caller made the directory

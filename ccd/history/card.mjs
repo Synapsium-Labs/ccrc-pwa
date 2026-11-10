@@ -37,7 +37,7 @@ import {
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx, writeFileAtomic } from './store.mjs';
 import { epochCopySlots, epochOfUuid, holdingCopyOf } from './derive.mjs';
-import { prevLeafOf, readSteerFile, writeSteerFile } from './steer.mjs';
+import { childrenOf, prevLeafOf, readSteerFile, writeSteerFile } from './steer.mjs';
 
 /** A path's kind by lstat, never following a link: 'dir', 'file', 'link', 'other', 'absent' (ENOENT), or
  *  'unmeasured' (any other failure; never read as absent). */
@@ -347,19 +347,34 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, roots, out) {
 }
 
 /** The steer file's prediction: the card's own prediction with the steer text as its `line` (decideCardFile compares a file's
- *  text with it, as it compares a card line), composed by lib from the leaf id and the previous leaf's stored row. A skip stays
- *  a skip. The text is composed, and the previous leaf read, only when a write is possible (`mayWrite`): decideCardFile reads
+ *  text with it, as it compares a card line), composed by lib from the leaf id, the previous leaf's stored row and, when the
+ *  card predicts a parent (`parentKind` predicted: this leaf completes a group), the parent's id and the stored rows of the
+ *  group's other seven children (W3 Task 4: the add-on). A skip stays a skip. The text is composed, and the rows read, only
+ *  when a write is possible (`mayWrite`): decideCardFile reads
  *  `prediction.line` for nothing but a write or the keep of an identical file, and off end-of-file the verdict of every arm
  *  (absent: none; this leaf, as written or re-rendered: keep; another leaf, junk or unreadable: delete) is the same without
  *  it, because a steer file this writer composed names its own leaf whole. The line is then `undefined`, which no file's text
- *  equals (an empty file's is `''`, an unreadable one's `null`), so a junk file is still deleted. */
+ *  equals (an empty file's is `''`, an unreadable one's `null`), so a junk file is still deleted.
+ *  A composer that throws (the add-on does not fit its bounds: a defect, the coordinator's ruling on the compose failure) makes the steer prediction a skip named
+ *  `compose-failed`, with the leaf as its plain id so a file that named another leaf still reads consumed: decideCardFile
+ *  deletes any standing file, as for every skip, and the caller counts `steer_compose_failed`. The card's own prediction is
+ *  untouched. Answers `{ prediction, composeFailed }`. */
 function steerPredictionOf(db, ictx, p, mayWrite) {
   const prediction = p.prediction;
-  if (prediction.act !== 'write') return prediction;
-  if (!mayWrite) return { ...prediction, line: undefined };
+  if (prediction.act !== 'write') return { prediction, composeFailed: false };
+  if (!mayWrite) return { prediction: { ...prediction, line: undefined }, composeFailed: false };
   const prev = p.copy === null || p.epoch === null ? null : prevLeafOf(db, p.copy.file_id, p.epoch);
-  const { text } = composeSteerFile({ leafId: prediction.leafId, prev, children: [], pairIdx: ictx.pairIdx });
-  return { ...prediction, line: text };
+  const parent = prediction.parentKind === 'predicted';
+  try {
+    const { text } = composeSteerFile({
+      leafId: prediction.leafId, prev, pairIdx: ictx.pairIdx,
+      children: parent ? childrenOf(db, prediction.children.slice(0, -1)) : [],
+      parentId: parent ? prediction.parentId : undefined,
+    });
+    return { prediction: { ...prediction, line: text }, composeFailed: false };
+  } catch {
+    return { prediction: { act: 'skip', reason: 'compose-failed', plainLeafId: prediction.leafId }, composeFailed: true };
+  }
 }
 
 /** The steer file for one (id, uuid), on the card's lifecycle (W3 Task 1B). A `steer/<id>` that is a link or not a directory is
@@ -370,7 +385,11 @@ function steerPredictionOf(db, ictx, p, mayWrite) {
  *                             failed write: not while it stands, so the next tick decides it again);
  *    steer_write_failed       the write (or its directory) failed;
  *    steer_unrecorded_removed the card's generation record was due and not acted on, and this file went with the prediction;
- *    steer_cleanup_failed     the id's other files could not all be removed after a write that landed.
+ *    steer_cleanup_failed     the id's other files could not all be removed after a write that landed;
+ *    steer_compose_failed     the composer threw (the parent add-on missed a bound at its floor, a defect): the steer
+ *                             prediction is a skip, any standing file goes, and the count is once per evaluation that may
+ *                             write (end-of-file with the run's budget left: `mayWrite`; none elsewhere, where nothing is
+ *                             composed); never a `card_skipped:*`, and the card is untouched.
  *  A CONSUMED file whose replacement cannot be written is unlinked too, so the hook never serves the last compaction's id as
  *  this one's (D-5059's arm). */
 function steerArtifact(db, ictx, id, uuid, p, atEof, mayWrite, recorded) {
@@ -382,7 +401,8 @@ function steerArtifact(db, ictx, id, uuid, p, atEof, mayWrite, recorded) {
   }
   const file = steerFileOf(ictx.home, id, uuid);
   const current = dirKind === 'absent' ? { state: 'absent' } : readSteerFile(file);
-  const prediction = steerPredictionOf(db, ictx, p, mayWrite);
+  const { prediction, composeFailed } = steerPredictionOf(db, ictx, p, mayWrite);
+  if (composeFailed) bump(db, 'steer_compose_failed');
   const d = decideCardFile({ current, prediction, atEof: mayWrite, artifact: 'steer' });
   const countConsumed = () => { bump(db, 'steer_consumed'); };
   // The file goes: a record that was due and is not acted on, or a consumed file whose replacement cannot be written (an unlink

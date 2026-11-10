@@ -31,7 +31,7 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor } from '../ccd/history/lib.mjs';
+import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXACT_RECEIPT_SQL, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor } from '../ccd/history/lib.mjs';
 import { StoreError, blobPlainTextMeasured, openReader, userVersion } from '../ccd/history/store.mjs';
 import { epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
@@ -1072,7 +1072,8 @@ export function combineCommand(flags) {
 // status, the receipts' footprints, the stored model refs, the headroom figures (`summaryUnclosed`, `cutShapes`,
 // `cutUntestable`, `analysisOnly`), the compaction durations and the manual echo, each beside O21's baseline. It states
 // figures and never a pass or fail: the operator reads the gate at CP-63. It prints counts and aggregates only, never
-// text, and it opens the store read-only (openCounterStore).
+// text, and it opens the store read-only (openCounterStore). The report is `{ perBackend, baseline, addOn }`; `addOn` is the
+// cohort's figures over the add-on spans alone (O15, W3-4), which `perBackend` counts too.
 //
 // Every figure is read per span from stored rows. The node-wide `counters` table is never read for a figure, since it
 // keeps one cumulative count per name with no session and no time column (W2-D87). O18's ruling lets the node-wide
@@ -1117,6 +1118,11 @@ function spikeStmts(db) {
     exact: db.prepare(`SELECT r.ts_ms AS ts_ms, p.ts_source AS ts_source FROM steer_receipts r
       LEFT JOIN spool_receipts p ON p.event_key = r.event_key WHERE r.leaf_id = ? ORDER BY r.ts_ms, r.event_key`),
     exactOfSession: db.prepare("SELECT leaf_id, ts_ms FROM steer_receipts WHERE cc_session_uuid = ? AND leaf_id <> ''"),
+    // O15: lib's EXACT_RECEIPT_SQL, the one predicate for "a node block was asked" that derive reads too (no second spelling here)
+    exactAsked: db.prepare(EXACT_RECEIPT_SQL),
+    // O15: is this leaf the LAST child (max ord) of a depth-1 parent, the span a steered group's add-on is written for
+    addOnLeaf: db.prepare(`SELECT 1 AS hit FROM node_children nc JOIN nodes p ON p.node_id = nc.node_id
+      WHERE nc.child_id = ? AND p.depth = 1 AND nc.ord = (SELECT max(c2.ord) FROM node_children c2 WHERE c2.node_id = nc.node_id) LIMIT 1`),
     modelRefs: db.prepare("SELECT count(*) AS n FROM node_refs WHERE node_id = ? AND origin = 'model'"),
     newestTick: db.prepare('SELECT files_behind FROM ticks ORDER BY ts_ms DESC, tick_id DESC LIMIT 1'),
     pairs: db.prepare('SELECT len, sha256 FROM redact_hashes'),
@@ -1506,7 +1512,16 @@ function compareUnclosed(coh, base) {
 }
 
 /** The spike report (spec §7.5; plan Task 1D). `db` is a read handle (openCounterStore's); `sessions` are `ccrc_id`s;
- *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text.
+ *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text. Returns `{ perBackend,
+ *  baseline, addOn }`: `addOn` is the cohort's figures over the spans a W3-4 add-on was printed for (O15), computed by
+ *  spikeFigures with the cohort's run words so it reads like the cohort's. Such a span is RECEIPTED (newSpan's `receipted`),
+ *  has an EXACT steer receipt (lib's EXACT_RECEIPT_SQL, which derive's node read asks too: the leaf's own id, since the
+ *  generic text carries no add-on and is printed whenever the card skips), and its leaf is the last child of a depth-1
+ *  parent. A span without all three stays out of `addOn`. Those spans stay in `perBackend` too, and the fixed gates read
+ *  `perBackend`. `addOn`'s compliance is the LEAF block's (spikeFigures reads the leaf's status); the node block's verdict is
+ *  carried by the `node_status:*` counters, and spikeFigures' result has no field for it. `addOn` carries no
+ *  `summaryUnclosed.comparison` and no `durationMs.addedP50` or `echoChars.addedP50`: O19 and §10.7's added p50 compare
+ *  the cohort with the baseline, over `perBackend` only.
  *  @param {{ db: object, sessions: string[], sinceMs: number, untilMs: number }} a */
 export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   if (!Array.isArray(sessions) || sessions.length === 0 || !sessions.every((x) => typeof x === 'string' && x !== '')) throw new TypeError('spikeReport: sessions are ccrc ids');
@@ -1565,11 +1580,21 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
     ...(producerUnknown > 0 ? ['producer-unknown'] : []), ...(uncopied > 0 ? ['boundary-uncopied'] : [])];
   const perBackend = {};
   const baseline = {};
+  const addOn = {};
+  /** O15: a cohort span whose leaf holds an EXACT receipt (s.exactAsked, lib's EXACT_RECEIPT_SQL: "asked" is that shared SQL,
+   *  the same one derive's node read asks) and is the last child of a depth-1 parent (read-only, from node_children). The report
+   *  adds its own measurability rule on top, `x.receipted` (newSpan's: spikeFigures needs a measured leaf), which derive does not
+   *  apply: an asked last child whose leaf did not parse gets a node verdict from derive and is left out here. An unreceipted
+   *  span, or one with only the generic receipt, was never printed an add-on. Residual, the
+   *  over-count direction: an exact receipt does not prove the printed file carried the add-on (EXACT_RECEIPT_SQL's comment
+   *  says why), so a span can be counted here though nothing was asked. */
+  const isAddOn = (x) => x.receipted && s.exactAsked.get(x.leaf.id) !== undefined && s.addOnLeaf.get(x.leaf.id) !== undefined;
   for (const be of BACKENDS) {
     const pick = (side) => ({ placed: sides[side].placed.filter((x) => x.backend === be), untimed: sides[side].untimed.filter((x) => x.backend === be) });
     const c = pick('cohort');
     const b = pick('baseline');
     perBackend[be] = spikeFigures(rs, s, shared, { side: 'cohort', spans: c.placed, untimed: c.untimed, runWords: cohortWords, run });
+    addOn[be] = spikeFigures(rs, s, shared, { side: 'cohort', spans: c.placed.filter(isAddOn), untimed: c.untimed.filter(isAddOn), runWords: cohortWords, run });
     baseline[be] = spikeFigures(rs, s, shared, { side: 'baseline', spans: b.placed, untimed: b.untimed, runWords: [...sweepWords, ...attributionWords, ...(b.untimed.length > 0 ? ['boundary-untimed'] : [])], run });
   }
   for (const be of BACKENDS) {
@@ -1585,7 +1610,7 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
     const bech = b.echoChars.set;
     c.echoChars.addedP50 = ce.state === 'measured' && bech.state === 'measured' ? measured(ce.value.p50 - bech.value.p50) : unmeasured('echo-absent');
   }
-  return { perBackend, baseline };
+  return { perBackend, baseline, addOn };
 }
 
 // ── the spike arm (O5): `history-counters.mjs spike --db <history.db> --session <id> [--session <id>] --since <ms> --until <ms> --out <file>`

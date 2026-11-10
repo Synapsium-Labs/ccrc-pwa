@@ -201,6 +201,21 @@ function remove(p: Planted, sql: string, ...args: Array<number | string>): void 
   }
 }
 
+/** A parent node over planted leaves (a `condensed` row at `depth`, its node_children in the order given), as derive stores one. */
+function addParent(p: Planted, parentKey: string, childKeys: string[], depth = 1): void {
+  const db = store.openWriter(p.dbFile);
+  try {
+    db.exec('BEGIN');
+    const first = db.prepare('SELECT session_pk, epoch_seq, transcript_pk FROM nodes WHERE node_id = ?').get(nid(childKeys[0])) as R;
+    db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, parser_version, created_ms)
+      VALUES (?, ?, ?, ?, 'condensed', ?, 'ok', 'a rollup', 1, ?)`).run(nid(parentKey), Number(first.session_pk), Number(first.epoch_seq), Number(first.transcript_pk), depth, T0 + 50_000_000);
+    childKeys.forEach((k, i) => { db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)').run(nid(parentKey), nid(k), i + 1); });
+    db.exec('COMMIT');
+  } finally {
+    store.closeWriter(db);
+  }
+}
+
 interface Opts { sessions?: string[]; since?: number; until?: number }
 /** spikeReport over a planted store, through the counter's own read-only open. */
 function spike(p: Planted, o: Opts = {}): R {
@@ -417,6 +432,64 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
     } finally {
       rs.close();
     }
+  });
+
+  it('spike reports add-on spans apart', () => {
+    const keys = (p: string, n: number): string[] => Array.from({ length: n }, (_, i) => `${p}${i + 1}`);
+    const k = keys('k', 8);
+    const p = plant({ sessions: [
+      { id: 'cohort', spans: [
+        ...k.map((x) => S(x, { status: x === 'k8' ? 'degraded' : 'ok' })),
+        S('m1', { status: 'ok' }), S('m2', { status: 'ok' }), S('z1'),
+        S('d1', { status: 'ok' }), S('d2', { status: 'ok' }),
+        S('u1', { status: 'ok' }), S('u2'),
+        S('g1', { status: 'ok' }), S('g2', { status: 'ok' }), S('solo', { status: 'ok' }),
+        S('e1', { status: 'ok' }), S('e2', { status: 'ok' }), S('f1', { status: 'ok' }), S('f2', { status: 'parse-failed' }),
+        S('o1', { status: 'ok', model: MODEL_O }), S('o2', { status: 'ok', model: MODEL_O }),
+      ] },
+      { id: 'base-1', spans: [S('b1', { status: 'ok' }), S('b2', { status: 'ok' })] },
+    ], receipts: [
+      // the add-on is printed with an EXACT receipt (the leaf's own id); k8, m2 and o2 carry one, and so does solo, which has no parent yet
+      { session: 'cohort', leaf: 'k8', ts: T0 + 500 }, { session: 'cohort', leaf: 'm2', ts: T0 + 500 }, { session: 'cohort', leaf: 'o2', ts: T0 + 500 },
+      { session: 'cohort', leaf: 'solo', ts: T0 + 500 },
+      // e1 has an exact receipt but is not the last child of its parent; f2 is the last child and has one, but its leaf did not parse
+      { session: 'cohort', leaf: 'e1', ts: T0 + 500 }, { session: 'cohort', leaf: 'f2', ts: T0 + 500 },
+      // g2 had only the generic receipt (leaf ''), whose text carries no add-on
+      { session: 'cohort', leaf: '', ts: T0 + 500 },
+    ] });
+    addParent(p, 'P1', k);
+    addParent(p, 'P2', ['m1', 'm2']);
+    // P3 is a depth-2 parent over leaves, which production cannot make. d2 holds no exact receipt, so the receipt keeps it out of
+    // addOn, not the depth word: this pins nothing about depth, and `p.depth = 1` in addOnLeaf stays an EQUIVALENT mutant (the coordinator's ruling)
+    addParent(p, 'P3', ['d1', 'd2'], 2);
+    addParent(p, 'P4', ['o1', 'o2']);
+    // an unreceipted last child was never printed, so it carried no add-on: counted in perBackend, kept out of addOn
+    addParent(p, 'P6', ['u1', 'u2']);
+    // a receipted last child with only a generic receipt: counted in perBackend, kept out of addOn (solo has a receipt but no parent yet)
+    addParent(p, 'P7', ['g1', 'g2']);
+    // an exact-receipted leaf that is not the last child of its parent was not the span the add-on was written for (Step 6's last-child condition)
+    addParent(p, 'P8', ['e1', 'e2']);
+    // an exact-receipted last child whose leaf did not parse is not receipted as newSpan reads it (Step 6's receipted condition)
+    addParent(p, 'P9', ['f1', 'f2']);
+    // a baseline span that is the last child of a depth-1 parent is not an add-on span of the cohort
+    addParent(p, 'P5', ['b1', 'b2']);
+    const r = spike(p);
+    // the add-on spans: k8 (the eighth leaf), m2, and the other backend's o2; each is counted in the cohort's figures too
+    expect(Object.keys(r).sort()).toEqual(['addOn', 'baseline', 'perBackend']);
+    expect(A(r).population.spans).toBe(8 + 3 + 2 + 2 + 3 + 4);
+    expect(A(r).compliance.receipted).toBe(8 + 2 + 2 + 1 + 3 + 3);
+    expect(A(r).population.parseFailed, 'CONTROL: f2 is the parse-failed leaf').toBe(1);
+    expect(r.addOn.anthropic.population.spans).toBe(2);
+    expect(r.addOn.anthropic.population.notRequested).toBe(0);
+    expect(A(r).population.notRequested).toBe(2);
+    expect(r.addOn.anthropic.compliance.receipted).toBe(2);
+    expect(r.addOn.anthropic.compliance.all.status).toMatchObject({ ok: 1, degraded: 1 });
+    expect(r.addOn.anthropic.compliance.all.ok_degraded).toEqual({ num: 2, den: 2 });
+    expect(r.addOn.other.population.spans).toBe(1);
+    expect(r.perBackend.other.population.spans).toBe(2);
+    expect(r.addOn.unknown.population.spans).toBe(0);
+    // the baseline side has no add-on figure and its span stays a plain baseline span
+    expect(r.baseline.anthropic.population.spans).toBe(2);
   });
 
   describe('the ruled rows (O17 to O22)', () => {

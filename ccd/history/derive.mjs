@@ -14,10 +14,10 @@
 import { closeSync, readSync } from 'node:fs';
 import { HEADING_RE, fencedRanges, mineTokens } from '../compact-card.mjs';
 import {
-  LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
-  directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
+  LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, capText, classifyRef, decideLeafId, directionOfSummaryRow,
+  directiveFlag, eofAfterBoundary, EXACT_RECEIPT_SQL, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeBlockStatus, nodeIndexTexts,
   parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
-  secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, REPARSE_MAX_TARGETS, topicsOfColumn, stampAtOrBefore,
+  secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, GIST_MAX, GIST_MIN, REPARSE_MAX_TARGETS, topicsOfColumn, stampAtOrBefore,
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx } from './store.mjs';
 
@@ -604,7 +604,16 @@ function parentStmts(db) {
       bounds: db.prepare('SELECT entry_id, transcript_pk FROM boundaries WHERE transcript_pk = ? ORDER BY ord'),
       leafAt: db.prepare('SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0 AND rowid <= ?'),
       exists: db.prepare('SELECT 1 AS x FROM nodes WHERE node_id = ?'),
-      node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars FROM nodes WHERE node_id = ?'),
+      node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, capped FROM nodes WHERE node_id = ?'),
+      /** The node path's carried-copy set: every OTHER node of the session, at any depth (the leaf path's priorGists is depth 0),
+       *  stored BEFORE the parent (a lower rowid; spec §7.4 item 5 says an earlier gist). Bind (session_pk, node_id, the parent's rowid). */
+      otherGists: db.prepare('SELECT gist FROM nodes WHERE session_pk = ? AND node_id <> ? AND gist IS NOT NULL AND rowid < ?'),
+      kidSummary: db.prepare('SELECT depth, status, summary_blob_id FROM nodes WHERE node_id = ?'),
+      /** Whether a node block was asked of a last child: lib's EXACT_RECEIPT_SQL, the one predicate the spike report reads too. */
+      exactReceipt: db.prepare(EXACT_RECEIPT_SQL),
+      /** A leaf's boundary, as holdingCopy and copyPlan take it: the producer of a last child is read off its holding copy. */
+      leafBoundary: db.prepare('SELECT n.boundary_entry_id AS entry_id, n.transcript_pk AS transcript_pk, e.uuid AS uuid '
+        + 'FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id WHERE n.node_id = ? AND n.depth = 0'),
       refs: db.prepare('SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid'),
       rowidOf: db.prepare('SELECT rowid AS r FROM nodes WHERE node_id = ?'),
       insNode: db.prepare('INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, '
@@ -647,8 +656,106 @@ function insertNodeFts(db, ictx, rowid, gist, topics, refs) {
   db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(rowid, t.gist, t.topics, t.refs);
 }
 
+/** The parent statuses only a node verdict writes: a re-roll that finds nothing was asked returns them to ok. */
+const FORMER_VERDICTS = new Set(['degraded', 'invalid', 'absent']);
+/** No node block was asked, and the read that cannot read one: two answers, never one null (the overloaded-null rule). */
+const NOT_ASKED = Object.freeze({ read: 'not-asked' });
+const UNREADABLE = Object.freeze({ read: 'unreadable' });
+
+/** A depth-1 parent's steered node gist (spec §6.3, §7.1; W3 steering plan Task 4), the ONE reader createParent and
+ *  parentReroller share. The block rides the summary of the parent's LAST child, and a node block is ASKED only when that
+ *  child is a depth-0 leaf holding an EXACT receipt (lib's EXACT_RECEIPT_SQL: a steer_receipts row whose leaf_id is the
+ *  child's id, the coordinator's ruling of 2026-11-10; the generic variant never carries the add-on). The child's stored
+ *  summary is read as leafFields reads it (textOf), redacted whole with the current pairs, parsed, and the node block
+ *  selected by the parent's id; nodeBlockStatus judges it on its id and gist alone, with every node of the session stored
+ *  BEFORE this parent (a lower rowid than `beforeRowid`, any depth) as the carried copies.
+ *  Answers one of three, never a bare null:
+ *  - `{ read: 'not-asked' }`: the last child is no exact-receipted depth-0 leaf (a depth-2 parent's last child is a parent
+ *    too). The rollup gist and status ok.
+ *  - `{ read: 'unreadable' }`: asked, but the summary is gone or unreadable, or the parser threw (counted node_parse_crash; a
+ *    busy store and any other SQLite fault are rethrown). A re-roll keeps the stored status, and the stored gist only when
+ *    parentReroller's unreadable arm allows it (ok or degraded, capped 0, under GIST_MAX), else the fresh rollup;
+ *    createParent has nothing stored, so it takes the rollup gist and status ok.
+ *  - `{ read: 'verdict', status, reason, gist, capped }`: gist is the block's (blockFields' cut at GIST_MAX) for ok and
+ *    degraded, null for absent and invalid, which keep the rollup gist. Topics, refs, time and counts are never the block's. */
+function steeredNodeOf(db, ictx, budget, { id, sessionPk, lastChildId, beforeRowid }) {
+  const ps = parentStmts(db);
+  const kid = ps.kidSummary.get(lastChildId);
+  if (kid === undefined || Number(kid.depth) !== 0 || ps.exactReceipt.get(lastChildId) === undefined) return NOT_ASKED;
+  if (kid.summary_blob_id === null) return UNREADABLE;
+  let sel;
+  try {
+    const text = textOf(stmts(db), kid.summary_blob_id, budget);
+    if (text === null) return UNREADABLE;
+    sel = selectBlock({ blocks: parseBlocks(redactField(text, ictx.pairIdx)), kind: 'node', computedId: id, generic: false });
+  } catch (e) {
+    // A parser bug must not wedge parent derivation (a parent that is never made holds its epoch's cursor): as deriveOne and
+    // refreshLeaf treat a parser throw, a busy store and any other SQLite fault end the pass, and anything else is counted
+    // node_parse_crash and answers unreadable (a re-roll keeps the stored status, and the stored gist only as parentReroller's
+    // unreadable arm allows; a new parent is the rollup, status ok).
+    if (ictx.isBusy?.(e) === true || e?.code === 'ERR_SQLITE_ERROR') throw e;
+    withTx(db, 'NORMAL', () => { bump(db, 'node_parse_crash'); });
+    return UNREADABLE;
+  }
+  // The carried-copy set is read only for a block whose gist can reach that arm of nodeBlockStatus (it is every node of the
+  // session stored before this parent, the parents included: a last child that carries the previous parent's block forward is
+  // a carried copy).
+  const reaches = sel.block !== null && typeof sel.block.gist === 'string' && sel.block.gist.trim().length >= GIST_MIN;
+  const prior = reaches ? new Set(ps.otherGists.all(sessionPk, id, beforeRowid).map((r) => gistSha(r.gist))) : new Set();
+  const verdict = nodeBlockStatus({ block: sel.block, idMismatch: sel.idMismatch, priorGistShas: prior });
+  if (verdict.status !== 'ok' && verdict.status !== 'degraded') return { read: 'verdict', status: verdict.status, reason: verdict.reason, gist: null, capped: false };
+  const fields = blockFields(sel.block);
+  // `capped` is the gist's own cut: the block's topics line is never stored on a parent, so its cut is not the parent's.
+  return { read: 'verdict', status: verdict.status, reason: verdict.reason, gist: fields.gist, capped: capText(sel.block.gist.trim(), GIST_MAX).capped };
+}
+
+/** A parent as it is stored: the rollup of its children (redacted whole), its gist replaced by a steered node gist when
+ *  steeredNodeOf reads a verdict, the status that read gives (ok when it reads none), and `capped` made of the final gist's
+ *  cut and the rollup's topics and refs cuts (never the block's own topics cut). The rollup gist's own cap does not count when the block's gist replaces it.
+ *  `read` is steeredNodeOf's answer: 'verdict' (with the verdict's `reason`), 'not-asked', or 'unreadable' (which also carries
+ *  `restCapped`, the cut of the rollup's topics and refs alone, for a re-roll that keeps the stored gist). Without a verdict the
+ *  status is ok, which createParent stores and the re-roll weighs against the stored status (parentReroller). */
+function parentFields(db, ictx, budget, { id, sessionPk, kids, lastChildId, beforeRowid }) {
+  const r = parentRollup(kids);
+  const node = steeredNodeOf(db, ictx, budget, { id, sessionPk, lastChildId, beforeRowid });
+  if (node.read === 'not-asked') return { ...r, status: 'ok', read: 'not-asked' };
+  if (node.read === 'unreadable') return { ...r, status: 'ok', read: 'unreadable', restCapped: parentRollup(kids.map((k) => ({ ...k, gist: null }))).capped };
+  if (node.gist === null) return { ...r, status: node.status, read: 'verdict', reason: node.reason };
+  // The rollup's `capped` folds its gist cut in with the topics and refs cuts; with the gist replaced only the latter two stay.
+  const others = parentRollup(kids.map((k) => ({ ...k, gist: null }))).capped;
+  return { ...r, gist: node.gist, capped: node.capped || others, status: node.status, read: 'verdict', reason: node.reason };
+}
+
+/** The producer of a depth-0 leaf, as leafFields derives it for the leaf counters: the first real assistant row after the
+ *  leaf's summary row in the copy that holds its boundary (producerOfCopy). Read only for a parent that has a verdict to count.
+ *  `pass` is the caller's cache for one fan-in run (fanInLevels makes one per holding copy's slot list): copyPlan keeps the
+ *  copy it last read, so every counted parent of the run shares ONE read of the copy's rows and ONE decode of its kept blobs,
+ *  not one per parent. The bound is one copyPlan per holding copy per run, whatever the number of counted parents. */
+function producerOfLeafNode(db, budget, pass, leafNodeId) {
+  const b = parentStmts(db).leafBoundary.get(leafNodeId);
+  if (b === undefined) return 'unknown';
+  const s = stmts(db);
+  const holding = holdingCopy(s, pass, b);
+  if (holding === null) return 'unknown';
+  const copy = copyPlan(s, pass, holding.file_id, budget);
+  const pick = copy.picks.get(b.uuid);
+  if (pick === undefined) return 'unknown';
+  const summaryAt = pick.uuid === null ? undefined : copy.index.get(pick.uuid);
+  return producerOfCopy(copy.rows, summaryAt ?? copy.index.get(b.uuid));
+}
+
+/** The counters a node verdict adds, in the leaf path's form under node_ names and with the last child's producer
+ *  (spec §7.4 item 10 and §7.7: compliance by status and by reason, each by producer): `node_status:<status>:<backend>`, and
+ *  `node_reason:<reason>:<backend>` when the status is not ok. These verdict counters are folded at createParent only, as the
+ *  leaf path folds its own at deriveOne only: a re-roll and a reparse fold none again (measured, history-derive.test.ts).
+ *  node_parse_crash is another word: steeredNodeOf can still count it on a re-roll or a belt pass. */
+function nodeVerdictCounts(db, budget, pass, lastChildId, r) {
+  const backend = producerOfLeafNode(db, budget, pass, lastChildId);
+  return [`node_status:${r.status}:${backend}`, ...(r.reason === null ? [] : [`node_reason:${r.reason}:${backend}`])];
+}
+
 /** The parent of `childIds` at `depth`, unless it exists. Returns its id, or null when it was there. */
-function createParent(db, ictx, childIds, depth) {
+function createParent(db, ictx, childIds, depth, budget, pass) {
   const s = parentStmts(db);
   const id = parentId(childIds);
   if (s.exists.get(id) !== undefined) return null;
@@ -657,14 +764,23 @@ function createParent(db, ictx, childIds, depth) {
   // Each child is read through redactedRollup, as a re-roll reads it: a child still stored unredacted (a pruned leaf, a
   // sibling a later batch rewrites) must not have the parent's GIST_MAX or TOPIC_CHARS cut land inside a value (spec §6.3
   // caps rule 6, SE1; D-4610 (history-reroll-from-redacted-children)).
-  const r = parentRollup(kids.map((k) => redactedRollup(ictx, k.rollup)));
+  // Only a depth-1 parent can carry a node block: its last child is a leaf.
+  // Nothing is stored yet, so the carried copies are every stored node (a rowid below the bound that no row reaches).
+  const r = depth === 1
+    ? parentFields(db, ictx, budget, {
+      id, sessionPk: first.session_pk, kids: kids.map((k) => redactedRollup(ictx, k.rollup)), lastChildId: childIds[childIds.length - 1],
+      beforeRowid: Number.MAX_SAFE_INTEGER,
+    })
+    : { ...parentRollup(kids.map((k) => redactedRollup(ictx, k.rollup))), status: 'ok', read: 'not-asked' };
+  const counts = r.read === 'verdict' ? nodeVerdictCounts(db, budget, pass, childIds[childIds.length - 1], r) : [];
   withTx(db, 'NORMAL', () => {
-    s.insNode.run(id, first.session_pk, first.epoch_seq, first.transcript_pk, 'condensed', depth, 'ok', r.gist, JSON.stringify(r.topics),
+    s.insNode.run(id, first.session_pk, first.epoch_seq, first.transcript_pk, 'condensed', depth, r.status, r.gist, JSON.stringify(r.topics),
       r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars, directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0,
       NODE_PARSER_VERSION, ictx.nowMs);
     childIds.forEach((c, i) => { s.insChild.run(id, c, i); });
     for (const ref of r.refs) s.insRef.run(id, ref.kind, ref.value, ref.origin);
     if (ictx.fts === true) insertNodeFts(db, ictx, s.rowidOf.get(id).r, r.gist, r.topics, r.refs);
+    for (const c of counts) bump(db, c);
   });
   return id;
 }
@@ -674,6 +790,8 @@ function createParent(db, ictx, childIds, depth) {
  *  group because one large epoch must remain resumable; a retry finds prior parents through parentOf and mints only
  *  the groups still absent. */
 function fanInLevels(db, ictx, level0, budget) {
+  // One cache for the whole run over this holding copy's slots: the producer of a counted parent's last child is read off it.
+  const pass = { copy: null, epochs: new Map(), files: new Map() };
   let made = 0;
   let level = level0;
   for (let depth = 0; depth < MAX_FAN_DEPTH && level.length > 0; depth += 1) {
@@ -681,7 +799,7 @@ function fanInLevels(db, ictx, level0, budget) {
     const slots = level.map((id) => ({ nodeId: id, final: id !== null, parented: id !== null && parentOf(db, id) !== null }));
     for (const group of planFanIn({ slots, width })) {
       if (!parentsBudgetLeft(budget)) return { made, complete: false };
-      if (createParent(db, ictx, group, depth + 1) !== null) made += 1;
+      if (createParent(db, ictx, group, depth + 1, budget, pass) !== null) made += 1;
     }
     const next = [];
     for (const id of level) {
@@ -799,18 +917,19 @@ function redactedRollup(ictx, c) {
 }
 
 /** Whether a stored node's gist, topics and refs (as a set) are the ones a re-roll would write: the belt's test for a
- *  parent it leaves alone. */
-function sameParentFields(stored, rolled) {
+ *  parent it leaves alone: the status is part of it, the steered gist is the rolled gist, and `rolled` is what
+ *  parentFields answers. */
+function sameParentFields(stored, rolled, storedStatus) {
   const refSet = (refs) => refs.map((x) => `${x.kind}\u0000${x.value}\u0000${x.origin}`).sort().join('\n');
-  return stored.gist === rolled.gist && JSON.stringify(stored.topics) === JSON.stringify(rolled.topics)
+  return storedStatus === rolled.status && stored.gist === rolled.gist && JSON.stringify(stored.topics) === JSON.stringify(rolled.topics)
     && refSet(stored.refs) === refSet(rolled.refs);
 }
 
 /** The writer of one condensed node's re-roll: the node from its children as they are stored now, each child's fields
  *  redacted whole first (redactedRollup), in one transaction with its node_refs and its nodes_fts row. Answers whether
- *  the node has any child to roll up, and, with `onlyIfChanged`, whether it wrote: a node whose gist, topics and refs the
+ *  the node has any child to roll up, and, with `onlyIfChanged`, whether it wrote: a node whose gist, topics, refs and status the
  *  re-roll would leave as they are is not touched. */
-function parentReroller(db, ictx, onlyIfChanged = false) {
+function parentReroller(db, ictx, onlyIfChanged = false, runBudget = null) {
   const s = parentStmts(db);
   // A child row that is gone (a damaged store: node_children.child_id is RESTRICT, and doctor --repair keeps an existing FK
   // violation as its baseline) is skipped, so the parent is rebuilt fail-closed from the children that remain and storedNode
@@ -823,16 +942,70 @@ function parentReroller(db, ictx, onlyIfChanged = false) {
   // from the transcripts still on disk; that, or a restore of a backup that predates the cut, is the way back.
   const kidsOf = db.prepare('SELECT nc.child_id AS child_id FROM node_children nc JOIN nodes n ON n.node_id = nc.child_id WHERE nc.node_id = ? ORDER BY nc.ord');
   const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
-    + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ? WHERE node_id = ?');
+    + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ?, status = ? WHERE node_id = ?');
   const dropRefs = db.prepare('DELETE FROM node_refs WHERE node_id = ?');
+  // The byte budget the summary decode of a steered parent's last child is charged to: the caller's, when a budgeted run
+  // reaches the re-roller (the belt's node step, the late-pair fast path), as createParent charges the parents budget. A caller
+  // with no budget gets a local one that nothing reads: `reparse --apply` runs unbudgeted, and the recovery's condensed pass does
+  // run under a budget (recoverReindex runs under run.budget) but recoverNodesBatch in sweep.mjs, which calls rerollNodes and
+  // reparseFailClosed, is not handed it and does not pass it on.
+  const budget = runBudget ?? { bytes: 0 };
   return (id) => {
-    const kids = kidsOf.all(id).map((r) => redactedRollup(ictx, storedNode(db, r.child_id).rollup));
+    // The last child is the last LIVE row (kidsOf joins nodes, so a dangling row is skipped). If the true last child is gone, the
+    // leaf read instead is an earlier one, which the steer file never asked for a node block, so it answers absent and the
+    // rollup of the children that remain stands: a damaged store fails closed, as the rebuild above does.
+    const kidIds = kidsOf.all(id).map((r) => r.child_id);
+    const kids = kidIds.map((c) => redactedRollup(ictx, storedNode(db, c).rollup));
     if (kids.length === 0) return false;
-    const r = parentRollup(kids);
-    if (onlyIfChanged && sameParentFields(storedNode(db, id).rollup, r)) return false;
+    const self = storedNode(db, id);
+    // Depth-1 parents only: a depth-2 parent's last child is no leaf, and steeredNodeOf answers not-asked for it. The carried
+    // copies are the nodes stored before this parent (a lower rowid), as at createParent every node then stored.
+    const read = parentFields(db, ictx, budget, {
+      id, sessionPk: self.row.session_pk, kids, lastChildId: kidIds[kidIds.length - 1], beforeRowid: s.rowidOf.get(id).r,
+    });
+    let r;
+    if (read.read === 'verdict') {
+      r = read;
+    } else if (read.read === 'unreadable') {
+      // Asked, but the summary cannot be read now. The stored status always stands. The stored gist stands (re-redacted under the
+      // current pairs) ONLY when that status is ok or degraded (a steered gist, the coordinator's ruling of 2026-11-10: a re-roll
+      // keeps the steered gist), the stored `capped` flag is 0, AND its length, counted as capText counts (String(gist).length, in
+      // UTF-16 units), is under GIST_MAX. Spec 8.3 puts redaction before every cut, so a re-roll never keeps a gist that a cut
+      // may have left a prefix in: a value learned after the cut that straddles it would not match the redaction, and its prefix
+      // would stay in the gist and in nodes_fts. The flag is the test (review 1743): the late-pair fast path redacts a condensed
+      // node in place (rederiveGistsFor, redactNodeFields), which can shrink a gist cut at GIST_MAX below it, and the flag
+      // survives that shrink. The length is a second check behind the flag. `capped` also carries the rollup's topics and refs
+      // cuts, so a steered gist that was never itself cut can be dropped for the fresh rollup: the safe direction, on a rare
+      // path. Otherwise the parent takes the fresh rollup, with the stored status standing. An invalid or absent parent holds the rollup by construction, and a tombstoned summary makes "unreadable"
+      // routine, so it takes the fresh rollup too (a kept rollup goes stale); that narrowing was the worker's own refinement in
+      // fix round 1, and the coordinator adopted it at review 1742. A kept gist was stored uncapped, so its `capped` is the
+      // rollup's topics and refs cuts; a fresh rollup carries its own.
+      // Residual 1, disclosed and not built: a parent created while its last child's summary was already unreadable is stored ok
+      // with the rollup gist, and status ok cannot tell that parent from a steered gist; nor can it tell one whose capped steered
+      // gist an earlier unreadable re-roll replaced with the fresh rollup (the status ok or degraded stands over a rollup gist).
+      // A later unreadable re-roll therefore keeps such a rollup while it is uncapped and under GIST_MAX, and it can go stale.
+      // Residual 2, disclosed and not built: a gist that blockFields did cut can still store fewer than GIST_MAX units, because
+      // capText's cutBefore stops one short of a surrogate pair at the cut and blockFields' trimEnd drops whitespace at the cut.
+      // A value that straddles such a cut would have to contain that pair or that whitespace; such a cut sets `capped` all the
+      // same, so the flag refuses it before the length is read.
+      const steered = (self.row.status === 'ok' || self.row.status === 'degraded') && Number(self.row.capped) === 0
+        && typeof self.row.gist === 'string' && self.row.gist.length < GIST_MAX;
+      r = steered
+        ? {
+          ...read, status: self.row.status, gist: redactField(self.row.gist, ictx.pairIdx),
+          capped: read.restCapped,
+        }
+        : { ...read, status: self.row.status };
+    } else {
+      // Nothing was asked ("unchanged from today": today's re-roll never wrote a status): a stored former verdict (degraded, invalid,
+      // absent) goes back to ok with the rollup gist, and any other stored status (ok, or what a store from another build holds)
+      // stays as it is, so it is neither rewritten for its status nor compared by it.
+      r = { ...read, status: FORMER_VERDICTS.has(self.row.status) ? 'ok' : self.row.status };
+    }
+    if (onlyIfChanged && sameParentFields(self.rollup, r, self.row.status)) return false;
     withTx(db, 'NORMAL', () => {
       setParent.run(r.gist, JSON.stringify(r.topics), r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars,
-        directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0, NODE_PARSER_VERSION, id);
+        directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0, NODE_PARSER_VERSION, r.status, id);
       dropRefs.run(id);
       for (const ref of r.refs) s.insRef.run(id, ref.kind, ref.value, ref.origin);
       if (ictx.fts === true) {
@@ -856,9 +1029,11 @@ const REROLL_CHUNK = 500;
  *  Every caller that rewrites nodes in place passes the ids it rewrote, so a parent cut through a value is rebuilt on
  *  every path that can leave one; the cost is bounded by the ancestors of the set, as the rewrite is by the set.
  *  Returns how many parents it rewrote; with `onlyIfChanged`, a parent whose re-roll is what it stores is left untouched
- *  and not counted (the belt's call, D-4610, H-154). */
-export function rerollParents(db, ictx, nodeIds, onlyIfChanged = false) {
-  const reroll = parentReroller(db, ictx, onlyIfChanged);
+ *  and not counted (the belt's call, D-4610, H-154). `budget` is the run's, when one reaches this call (the belt's node step passes its
+ *  slice, the late-pair fast path the run's): a steered parent's summary decode is charged to it. A caller with no budget passes none
+ *  and the re-roller keeps a local one. */
+export function rerollParents(db, ictx, nodeIds, onlyIfChanged = false, budget = null) {
+  const reroll = parentReroller(db, ictx, onlyIfChanged, budget);
   // A derived DAG may share a child between valid parents. Walk every reverse edge, not parentOf's deterministic
   // convenience answer; UNION makes this terminate even if a damaged table contains a cycle.
   // The seeds go to the query in chunks of REROLL_CHUNK ids (a test lowers it with ictx.rerollChunk): one IN list over
@@ -887,8 +1062,10 @@ export function rerollParents(db, ictx, nodeIds, onlyIfChanged = false) {
  *  condensed pass uses it, so a parent whose stored gist a past cut left a value's prefix in is rebuilt from clean
  *  children, which a field rewrite alone can never heal. Returns how many it rewrote.
  *  D-4610 (history-reroll-from-redacted-children) */
-export function rerollNodes(db, ictx, nodeIds) {
-  const reroll = parentReroller(db, ictx);
+export function rerollNodes(db, ictx, nodeIds, budget = null) {
+  // The recovery's condensed pass reaches here from recoverNodesBatch (sweep.mjs), which is not handed recoverReindex's budget
+  // and so passes none: this re-roller keeps a local one until that caller passes the run's budget on.
+  const reroll = parentReroller(db, ictx, false, budget);
   let n = 0;
   for (const id of nodeIds) if (reroll(id)) n += 1;
   return n;
@@ -1017,6 +1194,7 @@ export function refreshLeaf(db, ictx, nodeId, pass = { copy: null, epochs: new M
  *  were skipped (read as nothing by refreshLeaf, so neither unchanged nor re-derived; D-4602
  *  (history-reparse-counts-skips-and-rethrows-store-faults), HB1 H-54). */
 export function reparseLeaves(db, ictx, nodeIds) {
+  // `reparse --apply` runs with no run budget, so the re-roll below keeps a local one.
   const pass = { copy: null, epochs: new Map(), files: new Map() };
   let changed = 0;
   let failed = 0;
@@ -1129,13 +1307,14 @@ export function redactNodeFields(db, ictx, nodeIds) {
  *  at the pair). So one bad summary holds neither, and only `reparse` re-derives it again. Re-deriving twice is
  *  idempotent. Answers how many leaves changed. */
 export function reparseFailClosed(db, ictx, nodeIds) {
+  // recoverNodesBatch (sweep.mjs) is not handed recoverReindex's run budget and does not pass it on: the re-roll keeps a local one.
   return reparseSome(db, ictx, nodeIds, () => true).changed;
 }
 
 /** reparseFailClosed's body with a stop: `more()` is asked before each leaf, and the first false ends the walk. The
  *  re-roll covers the leaves ATTEMPTED (a leaf it never reached is no part of it). Answers how many leaves changed and
  *  which were attempted, in order, so the late-pair fast path (rederiveGistsFor) can leave the rest to the belt. */
-function reparseSome(db, ictx, nodeIds, more) {
+function reparseSome(db, ictx, nodeIds, more, budget = null) {
   let changed = 0;
   const attempted = [];
   for (const id of nodeIds) {
@@ -1152,7 +1331,7 @@ function reparseSome(db, ictx, nodeIds, more) {
     // 'failed': refreshLeaf caught a parser throw itself and wrote the leaf parse-failed (Task 21, RB5), counted once.
     if (r === 'updated' || r === 'failed') changed += 1;
   }
-  if (attempted.length > 0) rerollParents(db, ictx, attempted);
+  if (attempted.length > 0) rerollParents(db, ictx, attempted, false, budget);
   return { changed, attempted };
 }
 
@@ -1238,7 +1417,7 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
   // the belt (below).
   const more = () => parentsBudgetLeft(slice) && parentsBudgetLeft(budget);
   let cut = false;
-  const reached = leaves.length > 0 ? reparseSome(db, ictx, leaves, more) : { changed: 0, attempted: [] };
+  const reached = leaves.length > 0 ? reparseSome(db, ictx, leaves, more, budget) : { changed: 0, attempted: [] };
   if (reached.attempted.length < leaves.length) cut = true;
   // A parent the re-derivation re-rolled takes its children's gists as they are now. A node the match found that no
   // re-derivation reaches is rewritten in place, and so is every leaf it tried: a leaf refreshLeaf had to skip (its
@@ -1258,7 +1437,7 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
     const batch = todo.slice(at, at + BELT_NODE_BATCH);
     redactNodeFields(db, ictx, batch);
     const inPlace = batch.filter((id) => restSet.has(id));
-    if (inPlace.length > 0) rerollParents(db, ictx, inPlace);
+    if (inPlace.length > 0) rerollParents(db, ictx, inPlace, false, budget);
     touched += batch.length;
   }
   // Whatever the path did not reach stays owed to the belt: its node step is reopened from the first node, in the
@@ -1282,7 +1461,7 @@ const BELT_NODE_BATCH = 64;
  *  no row yet is Task 9's backfill's, and refs are compared as sets (node_refs has no stored order). This is the one
  *  mechanism that re-derives nodes_fts. rederiveGistsFor's phrase search cannot find a letter-glued or escape-glued
  *  value; this step needs no search. Before that check each condensed node of the batch is rebuilt from its redacted
- *  children when the rebuild differs from its stored gist, topics or refs (a prefix an old cut left in a parent, which no
+ *  children when the rebuild differs from its stored gist, topics, refs or status (a prefix an old cut left in a parent, which no
  *  field rewrite can mask), and the ancestors of every node the step rewrote are re-rolled (D-4610
  *  (history-reroll-from-redacted-children)). The cursor is the last nodes.rowid read, committed after each batch
  *  (D-4730 (history-reindex-subcursor-idempotent)). Answers whether the step is complete (or was never opened). */
@@ -1291,7 +1470,7 @@ export function beltNodesStep(db, ictx, slice) {
   if (step === null || step.completedMs !== null) return true;
   const sel = db.prepare('SELECT rowid AS rid, node_id, kind, gist, topics FROM nodes WHERE rowid > ? ORDER BY rowid LIMIT ?');
   const fieldsOf = db.prepare('SELECT gist, topics FROM nodes WHERE node_id = ?');
-  const rerollIfChanged = parentReroller(db, ictx, true);
+  const rerollIfChanged = parentReroller(db, ictx, true, slice);
   const refsOf = db.prepare('SELECT value FROM node_refs WHERE node_id = ?');
   const ftsRow = ictx.fts === true ? db.prepare('SELECT gist, topics, refs FROM nodes_fts WHERE rowid = ?') : null;
   const changes = (s) => s !== null && s !== undefined && redactField(s, ictx.pairIdx) !== s;
@@ -1318,7 +1497,7 @@ export function beltNodesStep(db, ictx, slice) {
     // order (a child before its parent; nodes are never deleted and every rewrite is an UPDATE), before the dirty check below
     // so that check reads the re-rolled fields. A generation that opens therefore heals a prefix a past cut left in a
     // parent, which a field rewrite can never mask, and rewrites no parent whose re-roll is what it stores (D-4610).
-    // Residual (H-217): the test compares gist, topics and refs only, so a parent whose rollup text is unchanged keeps
+    // Residual (H-217): the test compares gist, topics, refs and status only, so a parent whose rollup text is unchanged keeps
     // desc_chars counted from the child's raw gist (recall's cost estimate is off by |V| minus the mark until a reparse) and
     // keeps its parser_version stamp.
     for (const n of batch) {
@@ -1335,7 +1514,7 @@ export function beltNodesStep(db, ictx, slice) {
       redactNodeFields(db, ictx, dirty);
       // The ancestors of every node it rewrote are rebuilt from redacted children, as the fast path does, and an ancestor whose
       // re-roll is what it stores is left alone (a node dirty for its index row alone changes none; D-4610, H-154).
-      rerollParents(db, ictx, dirty, true);
+      rerollParents(db, ictx, dirty, true, slice);
     }
     after = Number(batch[batch.length - 1].rid);
     withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), null); });

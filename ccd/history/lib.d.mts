@@ -799,7 +799,17 @@ export function escapeArchive(s: string): string;
 export function quoteGist(gist: string, pairIdx: PairIndex, max?: number): string | null;
 export function nodeRangeText(earliestMs: number | null, latestMs: number | null): string;
 export interface SteerPrev { id: string; range: string; kind: string; status?: string | undefined; gist: string; flag: boolean }
-export function composeSteerFile(i: { leafId: string; prev: SteerPrev | null; children: readonly unknown[]; pairIdx: PairIndex }): { text: string; bytes: number };
+/** The parent add-on's instruction text, with `{PARENT_ID}` where the parent's id goes (W3 Task 4). */
+export const PARENT_ADDON_INSTRUCTION: string;
+/** The floor of the add-on's searched quote cap, in chars; the ceiling is PREV_GIST_MAX. */
+export const PARENT_QUOTE_CAP_MIN: 40;
+/** The largest cap in [PARENT_QUOTE_CAP_MIN, PREV_GIST_MAX] for which a monotone `fits` holds, or null; at most 9 calls. */
+export function searchLargestCap(fits: (cap: number) => boolean): number | null;
+/** `parentId` (a string) adds the parent add-on over `children`, the parent's stored children oldest first, under both byte
+ *  and char bounds; absent or null, no add-on. Throws a RangeError when `children` is not FAN_IN.leaf - 1 long, or the add-on does not fit at PARENT_QUOTE_CAP_MIN. */
+export function composeSteerFile(i: {
+  leafId: string; prev: SteerPrev | null; children: readonly SteerPrev[]; parentId?: string | null | undefined; pairIdx: PairIndex;
+}): { text: string; bytes: number };
 // --- W3 Task 1B: the steer file on the card's lifecycle (spec §7.1, §9.4)
 export const STEER_DIR: 'steer';
 export function steerIdOk(id: string): boolean;
@@ -817,6 +827,10 @@ export function selectBlock(i: { blocks: readonly Block[]; kind: 'leaf' | 'node'
 export type BlockStatus = 'ok' | 'degraded' | 'invalid' | 'absent' | 'not-requested';
 export function blockStatus(i: { receipt: boolean; block: Block | null; idMismatch: boolean; priorGistShas: ReadonlySet<string> }):
   { status: BlockStatus; reason: BlockReason | null };
+/** The one predicate for "a node block was asked": a steer_receipts row whose leaf_id is the parent's last child. Bind that id. */
+export const EXACT_RECEIPT_SQL: string;
+export function nodeBlockStatus(i: { block: Block | null; idMismatch: boolean; priorGistShas: ReadonlySet<string> }):
+  { status: Exclude<BlockStatus, 'not-requested'>; reason: BlockReason | null };
 export function summaryParts(text: string): { bodyStart: number; opens: number; unclosed: boolean; analysisSurvives: boolean };
 export function summaryRowFor(i: {
   boundaryUuid: string; anchorUuid: string | null; rows: readonly { uuid: string; isCompactSummary: boolean; isEcho: boolean }[];
@@ -1101,8 +1115,9 @@ export interface CardPredictionInputs {
   plainBoundOther: boolean; slots: readonly CardSlot[]; newestCondensed: string | null; familyIds: readonly string[];
 }
 export type CardPrediction =
-  | { act: 'write'; line: string; leafId: string; parentId: string | null; parentKind: 'predicted' | 'newest-condensed' | null }
+  | { act: 'write'; line: string; leafId: string; parentId: string | null; parentKind: 'predicted' | 'newest-condensed' | null; children: string[] }
   | { act: 'skip'; reason: 'fork-qualified'; plainLeafId: string }
+  | { act: 'skip'; reason: 'compose-failed'; plainLeafId: string }
   | { act: 'skip'; reason: 'no-epoch' | 'no-rows' };
 export function predictedSpanStart(i: { firstRowUuid: string | null; lastBoundary: CardBoundary | null }): string | null;
 export function planCardPrediction(i: CardPredictionInputs): CardPrediction;
