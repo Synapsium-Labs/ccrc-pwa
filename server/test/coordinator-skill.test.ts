@@ -4625,7 +4625,7 @@ describe('the coordinator skill: every stop gets its recovery or its class (D-81
   // say "do it yourself unless a named reason applies"; no "wait to be woken" for a cap remains anywhere in the skill.
   it('the cap-concurrency entry states the ruling, the tree rule, the in-place bind, routed asks and all seven reasons (D-6097)', () => {
     const w = wrong();
-    const at = w.indexOf('- **A dispatch or a send-back is refused `cap-concurrency`.**');
+    const at = w.indexOf('- **A dispatch is refused `cap-concurrency`.**');
     expect(at, 'the cap entry is gone').toBeGreaterThanOrEqual(0);
     const e = w.slice(at, w.indexOf('- **A worker has gone dead mid-wave.**'));
     expect(e).toContain('Do not stop.');
@@ -4639,6 +4639,10 @@ describe('the coordinator skill: every stop gets its recovery or its class (D-81
     expect(e).toContain('never start a full suite while another runs on the box');
     expect(e).toContain('end your turn when one arrives');
     expect(e).toContain('the server mails you once the cap has room');
+    // D-8126: the in-place bind is a dispatch of a `planned` run only; a send-back (bound to the worker) gets no bind.
+    expect(e).toContain('This is for a dispatch of a `planned` run only.');
+    expect(e).toContain('has no in-place bind and carries no `detail`');
+    expect(e).not.toContain('or a send-back is refused');
     const reasons = [
       '1. The refused run is a review',
       '2. Wrong repository',

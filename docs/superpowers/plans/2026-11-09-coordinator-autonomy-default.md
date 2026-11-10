@@ -1131,7 +1131,7 @@ read-only); W1-5 after A5. **Operator acts:** a server deploy per task; OA-F4 af
 | A8-2 | W1-3 (D-6094) | none |
 | A8-3 | W1-4 (D-6095) | the wake-on-free also marks the woken coordinator's live `capacity` block calls woken (`markBlockWoken`), so A6's executor and the rung read them as cleared (P7); a failing test: a refused coordinator with a `capacity` block is mailed once and its block reads woken |
 | A8-4 | W1-4b (D-6096) | the in-place bind refuses under the operator's pause (D-6096 holds); a test pins that non-dispatch acts (close, advance, landing) are not refused by the pause |
-| A8-5 | W1-5 (D-6097) | reason 6 worded to clause 4 (the operator's answer 2); the skill's `cap-concurrency` entry and the description rewritten (rows 18, 27), which A5 left (P11); the pin that A5-4 added is replaced by the new words' pin |
+| A8-5 | W1-5 (D-6097) | reason 6 worded to clause 4 (the operator's answer 2); the skill's `cap-concurrency` entry and the description rewritten (rows 18, 27), which A5 left (P11); the pin that A5-4 added is replaced by the new words' pin. **Fix-forward (D-8126):** the advance route's cap refusal (a send-back, the run bound to the worker) carries no `detail`, and the skill's in-place-bind text is scoped to a dispatch of a `planned` run, because `bindRunInPlace` accepts nothing else; fleet-capacity W1-5's Files line is corrected to match |
 
 Each task's commit lines are that plan's, citing its own D-number and D-8126.
 

@@ -3355,7 +3355,9 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');   // asleep: a send-back would wake it
     const res = await postAdvance(app, id, SEND_BACK);
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1, detail: capConcurrencyDetail(1, 1) } });
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+    // A send-back's refusal carries no in-place-bind `detail`: the run is bound to the worker, not `planned`.
+    expect((res.json() as { reject: Record<string, unknown> }).reject).not.toHaveProperty('detail');
     // The run did not move.
     expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
   });

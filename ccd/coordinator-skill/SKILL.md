@@ -651,11 +651,16 @@ is never read by this session.
   waves, while non-dispatch work continues: landing already-reviewed PRs,
   reviews and docs. Absent: the registry was unlistable, a fault retried with
   backoff and a time wake, then dispatch again. Do not touch the file.
-- **A dispatch or a send-back is refused `cap-concurrency`.** Do not stop. The
+- **A dispatch is refused `cap-concurrency`.** Do not stop. The
   operator's ruling (2026-10-20): a coordinator whose dispatch is refused does
   that wave itself, now, following the worker skill clauses it would brief a
   worker with (one PR, wave-done evidence, no merge without review), unless one
   of the seven reasons below applies. The refusal's own `detail` says the same.
+  This is for a dispatch of a `planned` run only. A send-back refused
+  `cap-concurrency` (the run sits at `awaiting-review`, bound to the worker) has
+  no in-place bind and carries no `detail`: do not edit the worker's branch
+  yourself; end your turn, the server mails you when there is room, then retry
+  the send-back.
   - *The tree rule.* Work in a plain `git worktree add` sibling inside your own
     workspace directory, cut from `origin/main`: a git act, not a `ccd ws-*`
     verb. Your own checkout and the programme ledger (normally dirty) are never
