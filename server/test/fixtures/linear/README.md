@@ -39,6 +39,8 @@ the HTTP status, every response header in the order Linear sent it, the parsed `
 | `error-401-revoked-key` | the capture's own key, after the operator revoked it | `KEY_CHECK_QUERY` |
 | `error-429-ratelimited-constructed` | **constructed, not recorded**: see below | `KEY_CHECK_QUERY` |
 | `mutation-attachment-link-url-constructed` | **constructed, not recorded**: see below | `LINEAR_DOCUMENTS.link` |
+| `read-{initiative-by-id,project-by-id,project-statuses,initiatives-probe,initiatives-by-name,projects-by-name,changed-initiatives,changed-projects,changed-milestones,changed-issues,team-open-issues,issue-owned}-constructed` | **constructed, not recorded**: the hierarchy reads (D-8180), see below | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
+| `mutation-{initiative-create,initiative-update,initiative-to-project-create,initiative-to-project-delete,project-create,project-update,project-milestone-create,project-milestone-update,issue-relation-create}-constructed` | **constructed, not recorded**: the hierarchy mutations (D-8180), see below | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
 
 ## What the fixtures show
 
@@ -99,6 +101,16 @@ a URL, an optional title; the payload carries `success` and the `attachment`). I
 complexity and rate-limit headers are copied from the recorded comment mutation as illustrative values. It is to be
 replaced by a recorded `mutation-attachment-link-url.json` against a throwaway issue, after which the exception in
 `linear-fixtures.test.ts` goes. The file's `constructed` field says the same.
+
+## The constructed hierarchy answers
+
+The 21 `*-constructed.json` files for `LINEAR_HIERARCHY_DOCUMENTS` (D-8180) were **not recorded**: the hierarchy
+documents were written before any session may call Linear. Each is built from the document `ops.ts` sends and Linear's
+published schema. Every id is a fixture id (kind word 8 for an object the capture has no kind for: an initiative, a
+milestone, a project status, a link, a relation), and the files carry no `x-complexity` and no rate-limit header, so no
+number in them is a measurement. Each has an `AWAITING_RECAPTURE` row in `linear-fixtures.test.ts`, and FX2 (the
+operator's capture) replaces it with a recorded file and removes the row. The initiatives probe's "off" answer is
+unrecorded until then, which is why `readInitiativesProbe` answers `unknown`, never `off`, for anything but nodes.
 
 ## The scrub
 

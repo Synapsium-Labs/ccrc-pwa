@@ -94,6 +94,10 @@ export const LINEAR_WEB_ORIGIN = 'https://linear.app';
  *  create or an update sends, after the `linear-egress` pass. It names no session, account, box, workspace or team. */
 export const LINEAR_PROVENANCE_LINE = '— written by a ccrc fleet session';
 
+/** THE CCRC PROVENANCE LINE (D-8180): appended by `withCcrcProvenance` (`hierarchyOps.ts`) to a text ccrc's own plan
+ *  sync writes (an initiative, project, milestone or issue description), where no fleet session wrote it. */
+export const LINEAR_CCRC_PROVENANCE_LINE = '— kept by ccrc from its plan';
+
 /** Which strip each shaped string takes (spec §6.5): `line` for every one-line string, `multiline` for the two
  *  markdown fields only. A column of the shaper's table; `linear-ops.test.ts` pins it. */
 export const LINEAR_STRIPS = Object.freeze({
@@ -114,6 +118,63 @@ const SEARCH_FIELDS = 'id identifier title priority createdAt updatedAt team { k
 const PAGE_INFO = 'pageInfo { hasNextPage endCursor }';
 /** What a resolve selects of an issue (§4.5, R9): its id, its current identifier and its current team. */
 const RESOLVED_FIELDS = 'id identifier team { id key }';
+
+// ── the hierarchy documents (D-8180; design 2026-11-10 §5, §8.1) ──
+
+/** What each hierarchy answer selects; `hierarchyOps.ts`'s shapers read exactly these fields. */
+const INITIATIVE_FIELDS = 'id name description status updatedAt projects(first: 50) { nodes { id } }';
+const PROJECT_FIELDS = 'id name description updatedAt status { id type } teams(first: 20) { nodes { key } } '
+  + 'initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } }';
+const MILESTONE_FIELDS = 'id name description targetDate sortOrder updatedAt project { id } creator { id }';
+const NAMED_FIELDS = 'id name createdAt creator { id }';
+const HIERARCHY_ISSUE_FIELDS = 'id identifier title description updatedAt team { key } state { type } project { id } '
+  + `projectMilestone { id } parent { id } labels(first: ${LINEAR_ISSUE_LABELS_MAX}) { nodes { id } }`;
+const HIERARCHY_PAGE = 'first: 100, after: $after';
+
+/**
+ * EVERY HIERARCHY DOCUMENT (D-8180), written here and nowhere else (`single-definition/linear-ops.test.ts`). No
+ * document deletes or archives an object: `initiativeToProjectDelete` removes a link between two objects and nothing
+ * else (design §8.1). Spread into {@link LINEAR_DOCUMENTS}. A constructed fixture stands behind each until FX2 records it.
+ */
+export const LINEAR_HIERARCHY_DOCUMENTS = Object.freeze({
+  initiativeById: `query InitiativeById($id: String!) { initiative(id: $id) { ${INITIATIVE_FIELDS} } }`,
+  projectById: `query ProjectById($id: String!) { project(id: $id) { ${PROJECT_FIELDS} } }`,
+  projectStatuses: 'query ProjectStatuses { projectStatuses(first: 50) { nodes { id name type } } }',
+  initiativesProbe: 'query InitiativesProbe { initiatives(first: 1) { nodes { id } } }',
+  initiativesByName: 'query InitiativesByName($name: String!) { '
+    + `initiatives(filter: { name: { eq: $name } }, first: 10) { nodes { ${NAMED_FIELDS} } } }`,
+  projectsByName: 'query ProjectsByName($name: String!) { '
+    + `projects(filter: { name: { eq: $name } }, first: 10) { nodes { ${NAMED_FIELDS} teams(first: 20) { nodes { key } } } } }`,
+  changedInitiatives: 'query ChangedInitiatives($since: DateTimeOrDuration!, $after: String) { '
+    + `initiatives(filter: { updatedAt: { gt: $since } }, ${HIERARCHY_PAGE}) { nodes { ${INITIATIVE_FIELDS} } ${PAGE_INFO} } }`,
+  changedProjects: 'query ChangedProjects($since: DateTimeOrDuration!, $after: String) { '
+    + `projects(filter: { updatedAt: { gt: $since } }, ${HIERARCHY_PAGE}) { nodes { ${PROJECT_FIELDS} } ${PAGE_INFO} } }`,
+  changedMilestones: 'query ChangedMilestones($since: DateTimeOrDuration!, $after: String) { '
+    + `projectMilestones(filter: { updatedAt: { gt: $since } }, ${HIERARCHY_PAGE}) { nodes { ${MILESTONE_FIELDS} } ${PAGE_INFO} } }`,
+  changedIssues: 'query ChangedIssues($since: DateTimeOrDuration!, $teams: [String!]!, $after: String) { '
+    + 'issues(filter: { updatedAt: { gt: $since }, team: { key: { in: $teams } } }, '
+    + `${HIERARCHY_PAGE}) { nodes { ${HIERARCHY_ISSUE_FIELDS} } ${PAGE_INFO} } }`,
+  teamOpenIssues: 'query TeamOpenIssues($team: String!, $after: String) { '
+    + 'issues(filter: { team: { key: { eq: $team } }, state: { type: { nin: ["completed", "canceled"] } } }, '
+    + `${HIERARCHY_PAGE}) { nodes { ${HIERARCHY_ISSUE_FIELDS} } ${PAGE_INFO} } }`,
+  issueOwned: `query IssueOwned($id: String!) { issue(id: $id) { ${HIERARCHY_ISSUE_FIELDS} } }`,
+  initiativeCreate: 'mutation InitiativeCreate($input: InitiativeCreateInput!) { '
+    + 'initiativeCreate(input: $input) { success initiative { id } } }',
+  initiativeUpdate: 'mutation InitiativeUpdate($id: String!, $input: InitiativeUpdateInput!) { '
+    + 'initiativeUpdate(id: $id, input: $input) { success initiative { id } } }',
+  initiativeToProjectCreate: 'mutation InitiativeToProjectCreate($input: InitiativeToProjectCreateInput!) { '
+    + 'initiativeToProjectCreate(input: $input) { success initiativeToProject { id } } }',
+  initiativeToProjectDelete: 'mutation InitiativeToProjectDelete($id: String!) { initiativeToProjectDelete(id: $id) { success } }',
+  projectCreate: 'mutation ProjectCreate($input: ProjectCreateInput!) { projectCreate(input: $input) { success project { id } } }',
+  projectUpdate: 'mutation ProjectUpdate($id: String!, $input: ProjectUpdateInput!) { '
+    + 'projectUpdate(id: $id, input: $input) { success project { id } } }',
+  projectMilestoneCreate: 'mutation ProjectMilestoneCreate($input: ProjectMilestoneCreateInput!) { '
+    + 'projectMilestoneCreate(input: $input) { success projectMilestone { id } } }',
+  projectMilestoneUpdate: 'mutation ProjectMilestoneUpdate($id: String!, $input: ProjectMilestoneUpdateInput!) { '
+    + 'projectMilestoneUpdate(id: $id, input: $input) { success projectMilestone { id } } }',
+  issueRelationCreate: 'mutation IssueRelationCreate($input: IssueRelationCreateInput!) { '
+    + 'issueRelationCreate(input: $input) { success issueRelation { id } } }',
+} as const);
 
 /**
  * EVERY DOCUMENT THE KEY CAN RUN, each a constant written here. The census (`linear-ops.test.ts`) holds that every
@@ -151,6 +212,7 @@ export const LINEAR_DOCUMENTS = Object.freeze({
     + `projects(first: ${LINEAR_DIRECTORY_PAGE_SIZE}, after: $after) { nodes { id name } ${PAGE_INFO} } }`,
   directoryUsers: 'query DirectoryUsers($after: String) { viewer { id } '
     + `users(first: ${LINEAR_DIRECTORY_PAGE_SIZE}, after: $after) { nodes { id name displayName active } ${PAGE_INFO} } }`,
+  ...LINEAR_HIERARCHY_DOCUMENTS,
 } as const);
 
 /** The four directory collections, in the order the refresher reads them, each with its page document. */

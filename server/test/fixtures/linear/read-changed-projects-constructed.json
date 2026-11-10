@@ -1,0 +1,78 @@
+{
+  "name": "read-changed-projects-constructed",
+  "documentSource": "code",
+  "document": "query ChangedProjects($since: DateTimeOrDuration!, $after: String) { projects(filter: { updatedAt: { gt: $since } }, first: 100, after: $after) { nodes { id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } } } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "since": "2026-11-02T14:56:22.000Z",
+    "after": null
+  },
+  "requestBody": "{\"query\":\"query ChangedProjects($since: DateTimeOrDuration!, $after: String) { projects(filter: { updatedAt: { gt: $since } }, first: 100, after: $after) { nodes { id name description updatedAt status { id type } teams(first: 20) { nodes { key } } initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } } } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"since\":\"2026-11-02T14:56:22.000Z\",\"after\":null}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631382098,
+  "receivedAtMs": 1793631382429,
+  "sentAt": "2026-11-02T14:56:22.098+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ]
+  ],
+  "body": {
+    "data": {
+      "projects": {
+        "nodes": [
+          {
+            "id": "00000000-0004-4000-8000-000000000001",
+            "name": "Epic A",
+            "description": "An epic.",
+            "updatedAt": "2026-11-02T14:56:22.000Z",
+            "status": {
+              "id": "00000000-0008-4000-8000-000000000003",
+              "type": "started"
+            },
+            "teams": {
+              "nodes": [
+                {
+                  "key": "AAA"
+                }
+              ]
+            },
+            "initiatives": {
+              "nodes": [
+                {
+                  "id": "00000000-0008-4000-8000-000000000001"
+                }
+              ]
+            },
+            "projectMilestones": {
+              "nodes": [
+                {
+                  "id": "00000000-0008-4000-8000-000000000002",
+                  "name": "Wave 1",
+                  "description": null,
+                  "targetDate": "2026-12-01",
+                  "sortOrder": 1,
+                  "updatedAt": "2026-11-02T14:56:22.000Z",
+                  "creator": {
+                    "id": "00000000-0005-4000-8000-000000000001"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"projects\":{\"nodes\":[{\"id\":\"00000000-0004-4000-8000-000000000001\",\"name\":\"Epic A\",\"description\":\"An epic.\",\"updatedAt\":\"2026-11-02T14:56:22.000Z\",\"status\":{\"id\":\"00000000-0008-4000-8000-000000000003\",\"type\":\"started\"},\"teams\":{\"nodes\":[{\"key\":\"AAA\"}]},\"initiatives\":{\"nodes\":[{\"id\":\"00000000-0008-4000-8000-000000000001\"}]},\"projectMilestones\":{\"nodes\":[{\"id\":\"00000000-0008-4000-8000-000000000002\",\"name\":\"Wave 1\",\"description\":null,\"targetDate\":\"2026-12-01\",\"sortOrder\":1,\"updatedAt\":\"2026-11-02T14:56:22.000Z\",\"creator\":{\"id\":\"00000000-0005-4000-8000-000000000001\"}}]}}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}\n",
+  "constructed": "NOT RECORDED (D-8180). Built from the document ops.ts sends and Linear's published schema; every id is a fixture id and the headers carry no complexity or rate-limit numbers. FX2 re-captures this file against a throwaway workspace and replaces it with a recorded one before its numbers are relied on."
+}
