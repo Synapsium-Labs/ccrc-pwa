@@ -2,7 +2,7 @@
 // the two ways Escape could reach through the palette to the session header.
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, SKINS, Sheet } from '@ccrc/ui';
 import { AUTH_VERDICTS, type RunSummary } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
@@ -14,6 +14,8 @@ import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
 import { useLocation } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
 import { Composer } from '../src/session/Composer';
+import { SettingsDataProvider } from '../src/screens/settings/SettingsDataProvider';
+import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
 import { CONTENT_ID, FLEET_ID, focusShownLandmark } from '../src/skins/frame';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { useFleetStore } from '../src/stores/fleet';
@@ -394,6 +396,47 @@ describe('the keys on a desktop session screen', () => {
     render(<><div role="dialog" data-state="closed" /><Composer id="x" onSend={vi.fn()} pending={[]} /></>);
     await settle();
     expect(document.activeElement?.tagName).toBe('TEXTAREA');
+  });
+});
+
+describe('the Settings index doors to the two diagnostics', () => {
+  const mount = (): void => {
+    window.history.replaceState(null, '', '/settings');
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    render(
+      <>
+        <SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>
+        <CommandLayer openNewSession={vi.fn()} />
+      </>,
+    );
+  };
+  const link = (name: RegExp): HTMLElement =>
+    within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('link', { name });
+
+  it.each([
+    ['Reader lab', /^Reader lab/, '/settings/reader-lab'],
+    ['Measure highlighting', /^Measure highlighting/, '/settings/measure-highlighting'],
+  ] as const)('%s: a click runs its command and lands on its route', (_label, name, href) => {
+    mount();
+    const a = link(name);
+    expect(a).toHaveAttribute('href', href);
+    act(() => { fireEvent.click(a); });
+    expect(window.location.pathname).toBe(href);
+  });
+
+  it.each([
+    ['Reader lab', /^Reader lab/],
+    ['Measure highlighting', /^Measure highlighting/],
+  ] as const)('%s: a meta, ctrl, shift or alt click each leaves the page where it is', (_label, name) => {
+    for (const mod of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
+      mount();
+      const a = link(name);
+      let notPrevented = false;
+      act(() => { notPrevented = fireEvent.click(a, { [mod]: true }); });
+      expect(notPrevented, `${mod}: default left alone`).toBe(true);
+      expect(window.location.pathname, mod).toBe('/settings');
+      cleanup();
+    }
   });
 });
 

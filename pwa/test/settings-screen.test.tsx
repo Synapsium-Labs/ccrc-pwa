@@ -30,6 +30,9 @@ import { AUTO_LABELS, CHANNEL_SENTENCES } from '../src/screens/settings/updatesW
 import { NOTIFY_LABELS } from '../src/screens/settings/NotificationsSection';
 import { unarmedExposure } from '../src/screens/settings/SignInGateCard';
 import { renderSettings } from './settingsHost';
+import { CommandLayer } from '../src/command/CommandLayer';
+import { SettingsDataProvider } from '../src/screens/settings/SettingsDataProvider';
+import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
 import { App } from '../src/app';
 import { render } from '@testing-library/react';
 import {
@@ -2384,8 +2387,27 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
     renderSettings(null);
     const nav = screen.getByRole('navigation', { name: 'Settings sections' });
-    const rows = within(nav).getAllByRole('link').map((a) => a.getAttribute('data-section'));
+    const rows = Array.from(nav.querySelectorAll('a[data-section]')).map((a) => a.getAttribute('data-section'));
     expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
+  });
+
+  it('the index\'s two diagnostic rows follow the five sections and open their pages on a click; a modified click opens nothing here', () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    navigate('/settings');
+    render(<><SettingsDataProvider active><SettingsScreen /></SettingsDataProvider><CommandLayer openNewSession={vi.fn()} /></>);
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+    expect(Array.from(nav.querySelectorAll('a[data-diagnostic]')).map((a) => a.getAttribute('href')))
+      .toEqual(['/settings/reader-lab', '/settings/measure-highlighting']);
+    expect(within(nav).getAllByRole('link')).toHaveLength(7);
+    for (const mod of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
+      fireEvent.click(within(nav).getByRole('link', { name: /^Reader lab/ }), { [mod]: true });
+      expect(location.pathname, mod).toBe('/settings');
+    }
+    fireEvent.click(within(nav).getByRole('link', { name: /^Reader lab/ }));
+    expect(location.pathname).toBe('/settings/reader-lab');
+    navigate('/settings');
+    fireEvent.click(within(nav).getByRole('link', { name: /^Measure highlighting/ }));
+    expect(location.pathname).toBe('/settings/measure-highlighting');
   });
 
   it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, Browser tools (D-8121), Roll idle sessions (D-7453), Stop leftovers (D-7902), Leftover processes (D-7994), Worktrees left behind (D-8114), Backups (D-7860), Work in transcript folders (D-7898), then Test box (D-7412), each a card under the page heading', async () => {

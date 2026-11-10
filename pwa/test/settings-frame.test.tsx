@@ -51,7 +51,7 @@ describe('the index and the section routes', () => {
     renderSettings(null);
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
-    const links = within(index()).getAllByRole('link');
+    const links = Array.from(index().querySelectorAll('a[data-section]'));
     expect(links.map((a) => a.getAttribute('href'))).toEqual(SETTINGS_SECTIONS.map((s) => `/settings/${s.id}`));
     for (const a of links) {
       expect(a).toHaveClass('settings-index-row');
@@ -102,7 +102,7 @@ describe('the index and the section routes', () => {
     render(<SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>);
     const line = screen.getByText('That section does not exist.');
     expect(line.compareDocumentPosition(index()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(index()).getAllByRole('link')).toHaveLength(5);
+    expect(Array.from(index().querySelectorAll('a[data-section]'))).toHaveLength(5);
   });
 
   it('headings nest h1, h2, h3 with no level skipped (the Automation page, its twelve cards)', () => {
@@ -110,6 +110,104 @@ describe('the index and the section routes', () => {
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
     expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
+  });
+});
+
+const DIAGNOSTICS = [
+  { label: 'Reader lab', href: '/settings/reader-lab', command: 'go-reader-lab', id: 'reader-lab',
+    purpose: 'Measure reader responsiveness and sandbox checks on this device.' },
+  { label: 'Measure highlighting', href: '/settings/measure-highlighting', command: 'go-measure-highlighting',
+    id: 'measure-highlighting', purpose: 'Measure code-highlighting performance on this device.' },
+] as const;
+
+const diagnosticRow = (label: string): HTMLElement =>
+  within(index()).getByRole('link', { name: new RegExp(`^${label}`) });
+
+describe('the two diagnostics under the five sections (library 1.1 take-up, Task 9)', () => {
+  it('Settings still has exactly five sections', () => {
+    expect(SETTINGS_SECTIONS).toHaveLength(5);
+  });
+
+  it('Reader lab is discoverable after the five ordinary sections', () => {
+    pendingReads();
+    renderSettings(null);
+    const nav = index();
+    const ordinary = nav.querySelectorAll('a[data-section]');
+    expect(ordinary).toHaveLength(5);
+    const lab = diagnosticRow('Reader lab');
+    expect(lab).toHaveAttribute('href', '/settings/reader-lab');
+    expect(lab).toHaveAttribute('data-command', 'go-reader-lab');
+    expect(lab).toHaveAttribute('data-diagnostic', 'reader-lab');
+    expect(lab).not.toHaveAttribute('data-section');
+    expect(lab).not.toHaveAttribute('aria-current');
+    expect(lab.querySelector('.settings-index-name')?.textContent).toBe('Reader lab');
+    expect(lab.querySelector('.settings-index-purpose')?.textContent).toBe(DIAGNOSTICS[0].purpose);
+    expect(lab.querySelector('.settings-index-status')).toBeNull();
+    expect(ordinary[4]!.compareDocumentPosition(lab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('Measure highlighting is discoverable after the five ordinary sections', () => {
+    pendingReads();
+    renderSettings(null);
+    const nav = index();
+    const ordinary = nav.querySelectorAll('a[data-section]');
+    expect(ordinary).toHaveLength(5);
+    const hl = diagnosticRow('Measure highlighting');
+    expect(hl).toHaveAttribute('href', '/settings/measure-highlighting');
+    expect(hl).toHaveAttribute('data-command', 'go-measure-highlighting');
+    expect(hl).toHaveAttribute('data-diagnostic', 'measure-highlighting');
+    expect(hl).not.toHaveAttribute('data-section');
+    expect(hl).not.toHaveAttribute('aria-current');
+    expect(hl.querySelector('.settings-index-name')?.textContent).toBe('Measure highlighting');
+    expect(hl.querySelector('.settings-index-purpose')?.textContent).toBe(DIAGNOSTICS[1].purpose);
+    expect(hl.querySelector('.settings-index-status')).toBeNull();
+    expect(ordinary[4]!.compareDocumentPosition(hl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the index holds exactly two diagnostic rows and seven links, the diagnostics last and in order', () => {
+    pendingReads();
+    renderSettings(null);
+    expect(index().querySelectorAll('a[data-diagnostic]')).toHaveLength(2);
+    const links = within(index()).getAllByRole('link');
+    expect(links).toHaveLength(7);
+    expect(links.slice(5).map((a) => a.getAttribute('data-diagnostic'))).toEqual(['reader-lab', 'measure-highlighting']);
+  });
+
+  describe.each(DIAGNOSTICS)('$label: a click', (d) => {
+    const mountWithLayer = (): void => {
+      pendingReads();
+      navigate('/settings');
+      render(
+        <>
+          <SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>
+          <CommandLayer openNewSession={vi.fn()} />
+        </>,
+      );
+    };
+
+    it('an ordinary click is prevented and goes to its route through the command', () => {
+      mountWithLayer();
+      const a = diagnosticRow(d.label);
+      let notCancelled = true;
+      act(() => { notCancelled = fireEvent.click(a); });
+      expect(notCancelled, 'the click was default-prevented').toBe(false);
+      expect(location.pathname).toBe(d.href);
+    });
+
+    it.each([['metaKey'], ['ctrlKey'], ['shiftKey'], ['altKey']] as const)('a %s click is left to the browser: not prevented, no command, no navigation', (mod) => {
+      mountWithLayer();
+      const a = diagnosticRow(d.label);
+      const seen: string[] = [];
+      const on = (e: Event): void => { seen.push((e as CustomEvent<string>).detail); };
+      window.addEventListener('ccrc:command', on);
+      let notCancelled = false;
+      try {
+        act(() => { notCancelled = fireEvent.click(a, { [mod]: true }); });
+      } finally { window.removeEventListener('ccrc:command', on); }
+      expect(notCancelled, 'the click was left alone').toBe(true);
+      expect(seen).toEqual([]);
+      expect(location.pathname).toBe('/settings');
+    });
   });
 });
 

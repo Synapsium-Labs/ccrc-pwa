@@ -40,6 +40,12 @@ export const SETTINGS_INDEX_TEXT = {
       + 'came back, and clearing what dead sessions leave behind.',
     security: 'Who can open this console, and the key the fleet box uses to call this server.',
   } satisfies Record<SettingsSectionId, string>,
+  /** The two diagnostic rows under the five sections (library 1.1 take-up, Task 9): pages under Settings that are not
+   *  sections, so they are not `purpose` keys. */
+  diagnosticPurpose: {
+    'reader-lab': 'Measure reader responsiveness and sandbox checks on this device.',
+    'measure-highlighting': 'Measure code-highlighting performance on this device.',
+  },
   notFound: 'That section does not exist.',
   navLabel: 'Settings sections',
 } as const;

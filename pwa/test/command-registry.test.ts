@@ -10,7 +10,7 @@ import {
 import { baseCommands, fleetOrder, GO_TO, SESSION_COMMANDS } from '../src/command/commands';
 import { runEntries } from '../src/command/runEntries';
 import { sessionEntries } from '../src/command/sessionEntries';
-import { matchRoute, ROUTES } from '../src/lib/routes';
+import { matchRoute, ROUTES, SETTINGS_SECTIONS } from '../src/lib/routes';
 import { fleetSession } from './fleetFixture';
 import { fleetTree } from '../src/fleet/fleetTree';
 import type { FleetSession, RunSummary } from '../../shared/api';
@@ -72,6 +72,15 @@ describe('the base commands', () => {
     expect(GO_TO.map((g) => g.id)).toContain('go-docs');
     const ids = new Set(baseCommands().map((c) => c.id));
     for (const go of GO_TO) expect(ids.has(go.id), go.id).toBe(true);
+  });
+
+  it('the two Settings diagnostics keep their own routes and Go to commands, and are not sections (library 1.1 take-up, Task 9)', () => {
+    expect(SETTINGS_SECTIONS).toHaveLength(5);
+    for (const [id, path] of [['go-reader-lab', '/settings/reader-lab'], ['go-measure-highlighting', '/settings/measure-highlighting']] as const) {
+      expect(GO_TO.find((g) => g.id === id)?.path, id).toBe(path);
+      expect(matchRoute(path)?.route.id, path).toBe(id.slice(3));
+      expect(SETTINGS_SECTIONS.some((s) => `go-${s.id}` === id), id).toBe(false);
+    }
   });
 
   it('offers R19\'s measurement page under Settings, and the oracle\'s rule admits a planted page under a top route and none under no top route (W5h-a)', () => {
