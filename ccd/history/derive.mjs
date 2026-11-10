@@ -97,7 +97,10 @@ function stmts(db) {
     paths: db.prepare('SELECT path FROM file_paths WHERE file_id = ? ORDER BY path'),
     receipts: db.prepare('SELECT leaf_id, ts_ms FROM steer_receipts WHERE cc_session_uuid = ? ORDER BY ts_ms, event_key'),
     nodeBound: db.prepare('SELECT boundary_entry_id FROM nodes WHERE node_id = ?'),
-    priorGists: db.prepare('SELECT node_id, gist FROM nodes WHERE session_pk = ? AND depth = 0 AND gist IS NOT NULL'),
+    // D-8169 (history-w4-main-gists-main-only): the carried-copy set of a main leaf's steered gist reads the session's MAIN nodes only (nodes.transcript_pk
+    // is NOT NULL, so the inner join drops none of them): a subagent leaf is on its own chain (W4 addendum P2), and a gist it merely quotes is no carried copy.
+    priorGists: db.prepare(`SELECT n.node_id AS node_id, n.gist AS gist FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk
+      WHERE n.session_pk = ? AND n.depth = 0 AND n.gist IS NOT NULL AND t.agent_id = ''`),
     leafBoundaries: db.prepare('SELECT boundary_entry_id FROM nodes WHERE transcript_pk = ? AND depth = 0 AND boundary_entry_id IS NOT NULL'),
     insNode: db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
         summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
@@ -612,7 +615,10 @@ function parentStmts(db) {
       node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, capped FROM nodes WHERE node_id = ?'),
       /** The node path's carried-copy set: every OTHER node of the session, at any depth (the leaf path's priorGists is depth 0),
        *  stored BEFORE the parent (a lower rowid; spec §7.4 item 5 says an earlier gist). Bind (session_pk, node_id, the parent's rowid). */
-      otherGists: db.prepare('SELECT gist FROM nodes WHERE session_pk = ? AND node_id <> ? AND gist IS NOT NULL AND rowid < ?'),
+      // D-8169 (history-w4-main-gists-main-only): MAIN nodes only, as priorGists. A parent's transcript_pk is its first child's (createParent), a main
+      // transcript, so the inner join keeps every main leaf and parent this statement reads today; W3-4's bound (`rowid < ?`) is unchanged.
+      otherGists: db.prepare(`SELECT n.gist AS gist FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk
+        WHERE n.session_pk = ? AND n.node_id <> ? AND n.gist IS NOT NULL AND n.rowid < ? AND t.agent_id = ''`),
       kidSummary: db.prepare('SELECT depth, status, summary_blob_id FROM nodes WHERE node_id = ?'),
       /** Whether a node block was asked of a last child: lib's EXACT_RECEIPT_SQL, the one predicate the spike report reads too. */
       exactReceipt: db.prepare(EXACT_RECEIPT_SQL),
