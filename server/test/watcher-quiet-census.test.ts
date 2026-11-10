@@ -32,10 +32,12 @@ const BUILDS = new RegExp(['new Fleet', 'Watcher\\('].join(''));
 /** The teardown forms (see the header): `closeDelegation(` and `drainTick(` are partial, so they are not here. */
 const QUIETS = /\b(quietAtTestEnd|quietWatcher|drainWatcher)\(/;
 /** `watcherTeardown()` (`watcherTeardown.ts`, D-6179) quiets what it tracks, through `quietWatcher`, in its `remove`:
- *  a file that registers it counts only when it also calls a `remove(` (review 1724 F2). */
-const TEARDOWN_REGISTERED = /\bwatcherTeardown\(/;
-const TEARDOWN_REMOVED = /\.remove\(/;
-const quiets = (src: string): boolean => QUIETS.test(src) || (TEARDOWN_REGISTERED.test(src) && TEARDOWN_REMOVED.test(src));
+ *  a file that registers it counts only when the name it is bound to calls that `remove(` (review 1724 F2), never for
+ *  another `.remove(` in the file (review 1733 F1; D-8150). */
+const TEARDOWN_REGISTERED = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*watcherTeardown\(/g;
+const teardownRemoved = (src: string): boolean =>
+  [...src.matchAll(TEARDOWN_REGISTERED)].some(([, name]) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\.remove\\(`).test(src));
+const quiets = (src: string): boolean => QUIETS.test(src) || teardownRemoved(src);
 
 /** Every `.ts` file under `server/test`, relative to it, sorted. `node_modules` and fixture trees are not entered. */
 function testFiles(): string[] {
@@ -195,6 +197,10 @@ describe('every test that builds a FleetWatcher quiets it, or is exempt with its
     const tracked = midTest.replace(build, `const w = t.track(${build.slice(10, -1)});`);
     expect(quiets(`const t = watcherTeardown(); ${tracked}`), 'watcherTeardown() never removed').toBe(false);
     expect(quiets(`const t = watcherTeardown(); afterEach(() => t.remove(home)); ${tracked}`), 'watcherTeardown() removed').toBe(true);
+    // Review 1733 F1: only the registered teardown's own remove counts, never another `.remove(` in the file.
+    expect(quiets(`const t = watcherTeardown(); el.classList.remove('x'); ${tracked}`), 'an unrelated .remove(').toBe(false);
+    expect(quiets(`const t = watcherTeardown(); afterEach(() => list.remove(home)); ${tracked}`), 'another handle removed, whose name ends in the teardown\'s').toBe(false);
+    expect(quiets(`let teardown = watcherTeardown(); afterEach(() => teardown.remove(home)); ${tracked}`), 'a let binding removed').toBe(true);
   });
 
   it('EXEMPT only shrinks: every entry still builds a watcher and still quiets none, and its size is pinned', () => {
