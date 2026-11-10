@@ -641,6 +641,9 @@ describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
     const publish = vi.fn<(bar: ReaderBar | null) => void>();
     render(slotted(h, 'host-bar', publish));
     const input = await ready(h);
+    // Let the mount promise settle and React commit whatever it leads to, so "not before" is measured after the
+    // mount has landed, not merely after the mount was asked for.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(publish.mock.calls.filter((c) => c[0] !== null)).toEqual([]);
     act(() => { input.onReady(); });
     expect(lastBar(publish)).not.toBeNull();
