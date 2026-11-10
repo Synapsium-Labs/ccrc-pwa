@@ -51,13 +51,13 @@ Climb one rung at a time; stop when you have what you need.
    text no compaction covers yet.
 2. `"$HOME/.local/bin/ccrc" history describe <id or pasted line>` shows one node: its gist,
    topics, refs and files, and one line per child or source with `chars=` and `fits=in|over`, so
-   you know what an expand costs before you run it. It takes a node id, an id prefix, or a whole
+   you know an expand's cost before running it. It takes a node id, an id prefix, or a whole
    line pasted from your context, passed in single quotes, with each ' in it written as `'\''`.
 3. `"$HOME/.local/bin/ccrc" history expand <id>` prints the real text in order: a node's sources,
    or one message whole. `--around <message uuid> --before 5 --after 5` shows the neighbourhood of
-   one hit. A tool output over 2,000 characters is cut, with a summary of its shape; expand that
+   a hit. A tool output over 2,000 characters is cut, with a summary of its shape; expand that
    message's uuid for all of it.
-4. Delegate (section 7) when the answer needs more than two expands.
+4. Delegate (section 7) when the answer needs more than one or two expands.
 
 `"$HOME/.local/bin/ccrc" history tree` lists this family's epochs and nodes: a map, not a search.
 
@@ -144,7 +144,7 @@ text stays out of your context. Brief it like this:
     TRUNCATED: yes or no, and what a cap or an unfollowed cursor left unread.
     UNRESOLVED: what you could not find or settle.
 
-The subagent's own calls are bounded by the same 20,000-character cap as yours. Before you rely
+The subagent's own calls are bounded by the same 20,000-character cap as yours. Before relying
 on a CITED quote for an exact value, check it with one expand.
 
 ## 8. Ids out of prose
