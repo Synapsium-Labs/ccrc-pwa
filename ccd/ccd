@@ -11707,13 +11707,13 @@ cmd_repo_visibility() {   # ccd repo-visibility --project <p>  (D-8147)
 
 cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
   # A branch and a pull request that add the pull request template to a PRIVATE repository, on the operator's tap. Fixed
-  # arity. Never a push to the default branch (one refspec, `refs/heads/ccrc/linking-template`, never forced), refused on a
-  # public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a refusal. No worktree, no
-  # checkout and no ref moves: the commit is built from objects (see `_pr_template_open`).
+  # arity. Never a push to the default branch (the one ref it creates is `refs/heads/ccrc/linking-template`, created and
+  # never moved), refused on a public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a
+  # refusal. Every write happens on GitHub through `gh api`: ccd writes no object, ref or file on this machine.
   [[ $# -eq 4 && $1 == --project && $3 == --team ]] || die "usage: ccd pr-template --project <p> --team <KEY>"
   _ws_project_valid "$2" || die "bad project"
   [[ "$4" =~ ^[A-Z][A-Z0-9_]{0,15}$ ]] || die "bad team key"
-  local main="$PROJECTS_ROOT/$2" team=$4 slug meta vis def rows rc reason
+  local main="$PROJECTS_ROOT/$2" team=$4 slug meta vis def rows rc reason tip
   slug=$(_gh_repo_slug "$main") || { printf '{"reason":"no-remote"}\n'; return 1; }
   meta=$(_gh_repo_meta "$slug") || { printf '{"reason":"%s"}\n' "$meta"; return 1; }
   vis=${meta%%$'\t'*}; def=${meta#*$'\t'}
@@ -11725,58 +11725,59 @@ cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
   _gh_rows_ok "$rows" || { printf '{"reason":"bad-answer"}\n'; return 1; }
   if printf '%s' "$rows" | python3 -c 'import json, sys
 sys.exit(0 if any(r.get("state") == "OPEN" for r in json.load(sys.stdin)) else 1)'; then printf '%s\n' "$rows"; return 0; fi
-  _plat_timeout "$PR_GH_TIMEOUT" git -C "$main" fetch --quiet origin "refs/heads/$def" 2>/dev/null \
-    || die "could not fetch $def from origin — nothing was pushed"
-  local tip; tip=$(git -C "$main" rev-parse --verify 'FETCH_HEAD^{commit}') || die "could not read $def — nothing was pushed"
-  if git -C "$main" cat-file -e "$tip:$(_pr_template_rel)" 2>/dev/null; then
-    printf '{"reason":"template-exists"}\n'; return 1
-  fi
-  _pr_template_open "$main" "$tip" "$slug" "$def" "$team"
+  tip=$(_gh_api "repos/$slug/git/ref/heads/$def" --jq .object.sha) && [[ "$tip" =~ ^[0-9a-f]{40,64}$ ]] \
+    || die "could not read $def on GitHub — nothing was created"
+  _gh_api "repos/$slug/contents/$(_pr_template_rel)?ref=$def" --jq .path >/dev/null; rc=$?
+  if (( rc == 0 )); then printf '{"reason":"template-exists"}\n'; return 1; fi
+  (( rc == 2 )) || die "could not read the template on $def — nothing was created"
+  _pr_template_open "$slug" "$def" "$team" "$tip"
 }
 
-_pr_template_open() {   # main-checkout default-tip slug default-branch team -> the PR rows on stdout; returns (never dies)
-  # ONE COMMIT, BUILT FROM OBJECTS. ccd writes no `git commit` (the reclaim region's `_ws_reclaim_commit_tree` is the only
-  # commit-tree line in this file, and its callers are pinned), and needs no worktree: the template is a blob, a temporary
-  # index (never the checkout's own) holds the default branch's tree plus that blob, and the commit object is written by
-  # `hash-object -t commit`, which checks its form. The one thing that leaves the machine is a push of that sha to
-  # `refs/heads/ccrc/linking-template`; no local ref and no working tree move.
-  local main=$1 tip=$2 slug=$3 def=$4 team=$5 rows rc reason
-  local rel; rel=$(_pr_template_rel)
-  # A branch left on origin by an earlier try (the PR was closed unmerged, or `gh pr create` failed after the push) is
-  # reused, never pushed over: a fresh commit would be a sibling of it and the unforced push would be refused every time.
-  local have=0 lsout
-  if lsout=$(_plat_timeout "$PR_GH_TIMEOUT" git -C "$main" ls-remote origin "refs/heads/ccrc/linking-template" 2>/dev/null) && [[ -n "$lsout" ]]; then
-    _plat_timeout "$PR_GH_TIMEOUT" git -C "$main" fetch --quiet origin "refs/heads/ccrc/linking-template" 2>/dev/null \
-      && git -C "$main" cat-file -e "FETCH_HEAD:$rel" 2>/dev/null && have=1
+# One `gh api` call under the GitHub timeout: stdout on rc 0; rc 2 and nothing when GitHub answers 404; rc 1 and ONE
+# reason word (`_gh_fail_reason`'s, `unavailable` for a timeout) otherwise. The linking verbs' only GitHub reader/writer.
+_gh_api() {   # gh-api-args... -> stdout
+  local errf out rc err
+  errf=$(_plat_mktemp)
+  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh api "$@" 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 0 )); then printf '%s\n' "$out"; return 0; fi
+  if (( rc == 124 )); then printf '%s\n' unavailable; return 1; fi
+  case "$err" in *"HTTP 404"*|*"Not Found"*) return 2 ;; esac
+  _gh_fail_reason "$err"; return 1
+}
+
+_pr_template_open() {   # slug default-branch team default-tip -> the PR rows on stdout; returns (never dies)
+  # GITHUB-SIDE CREATION. ccd's only commit writer is the reclaim region's `_ws_reclaim_commit_tree` (its callers are
+  # pinned), so this builds no commit: it asks GitHub to create the branch at the default branch's tip and to put the
+  # template file on it, then opens the PR. A branch left by an earlier try (the PR was closed unmerged, or `gh pr create`
+  # failed) is reused, never recreated: it holds the template, so only the PR is opened. A branch without the template
+  # gets the file put on it (a commit on ccrc's own branch, never on the default branch).
+  local slug=$1 def=$2 team=$3 tip=$4 br=ccrc/linking-template rows rc reason out have=0 rel
+  rel=$(_pr_template_rel)
+  out=$(_gh_api "repos/$slug/git/ref/heads/$br" --jq .object.sha); rc=$?
+  if (( rc == 2 )); then
+    out=$(_gh_api -X POST "repos/$slug/git/refs" -f ref="refs/heads/$br" -f sha="$tip" --jq .ref) \
+      || { echo "pr-template: could not create $br ($out) — nothing was opened" >&2; return 1; }
+  elif (( rc != 0 )); then echo "pr-template: could not read $br ($out) — nothing was opened" >&2; return 1
+  else
+    out=$(_gh_api "repos/$slug/contents/$rel?ref=$br" --jq .path); rc=$?
+    case $rc in 0) have=1 ;; 2) ;; *) echo "pr-template: could not read $br ($out) — nothing was opened" >&2; return 1 ;; esac
   fi
   if (( have == 0 )); then
-    local body blob tree sha idx stamp
-    body=$(printf '%s\n' \
+    local content
+    content=$(printf '%s\n' \
       "<!-- Linking: name this PR's Linear ticket so Linear links it and acts on merge. -->" \
       "<!-- Closes $team-<n> when merging this PR meets the ticket's acceptance; Refs $team-<n> when a live check is still owed. -->" \
-      "Closes $team-" "" "## Summary" "" "## Test plan")
-    idx=$(_plat_mktemp_d) || { echo "pr-template: could not make a scratch index" >&2; return 1; }
-    idx="$idx/index"
-    blob=$(printf '%s\n' "$body" | git -C "$main" hash-object -w --stdin) && [[ "$blob" =~ ^[0-9a-f]{40,64}$ ]] \
-      || { rm -rf "${idx%/index}"; echo "pr-template: could not write the template" >&2; return 1; }
-    tree=$(GIT_INDEX_FILE="$idx" git -C "$main" read-tree "$tip" \
-      && GIT_INDEX_FILE="$idx" git -C "$main" update-index --add --cacheinfo "100644,$blob,$rel" \
-      && GIT_INDEX_FILE="$idx" git -C "$main" write-tree) && [[ "$tree" =~ ^[0-9a-f]{40,64}$ ]] \
-      || { rm -rf "${idx%/index}"; echo "pr-template: could not build the tree" >&2; return 1; }
-    rm -rf "${idx%/index}"
-    stamp="$(date +%s) +0000"
-    sha=$(printf 'tree %s\nparent %s\nauthor ccrc <ccrc@ccrc.invalid> %s\ncommitter ccrc <ccrc@ccrc.invalid> %s\n\n%s\n' \
-      "$tree" "$tip" "$stamp" "$stamp" "Add a pull request template that names the Linear ticket" \
-      | git -C "$main" hash-object -t commit -w --stdin) && [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]] \
-      || { echo "pr-template: could not write the commit" >&2; return 1; }
-    _plat_timeout "$PR_GH_TIMEOUT" git -C "$main" push origin "$sha:refs/heads/ccrc/linking-template" >/dev/null 2>&1 \
-      || { echo "pr-template: push failed for ccrc/linking-template — nothing was opened" >&2; return 1; }
+      "Closes $team-" "" "## Summary" "" "## Test plan" | base64 | tr -d '\n')
+    out=$(_gh_api -X PUT "repos/$slug/contents/$rel" -f message="Add a pull request template that names the Linear ticket" \
+      -f content="$content" -f branch="$br" --jq .commit.sha) \
+      || { echo "pr-template: could not put the template on $br ($out) — nothing was opened" >&2; return 1; }
   fi
-  _plat_timeout "$PR_GH_TIMEOUT" gh pr create --repo "$slug" --head ccrc/linking-template --base "$def" \
+  _plat_timeout "$PR_GH_TIMEOUT" gh pr create --repo "$slug" --head "$br" --base "$def" \
     --title "Add a pull request template that names the Linear ticket" \
     --body "Adds the pull request template, so each PR names its Linear ticket." >/dev/null \
-    || { echo "pr-template: gh pr create failed — ccrc/linking-template is on origin, but no PR was opened" >&2; return 1; }
-  rows=$(_gh_pr_list "$slug" ccrc/linking-template); rc=$?
+    || { echo "pr-template: gh pr create failed — $br is on GitHub, but no PR was opened" >&2; return 1; }
+  rows=$(_gh_pr_list "$slug" "$br"); rc=$?
   if (( rc != 0 )); then
     reason="${rows##*\"reason\":\"}"; echo "pr-template: the PR was opened, but reading it back failed (${reason%%\"*})" >&2; return 1
   fi
