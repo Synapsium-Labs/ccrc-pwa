@@ -92,7 +92,7 @@ accounts off for it.
 - **The numbers could be shaped by the thing they measure.** Evaluation now rests on blind answers, sealed predictions
   and replay (H30), and the operator's own oversight is measured too (H36).
 - **Nothing verified that the machines compose.** A model, property tests, a deterministic simulator and one invariant
-  monitor now carry thirteen stated invariants (H33).
+  monitor now carry sixteen stated invariants (H33).
 - **Five things were added because the best systems have them, or none does yet:** a rule for when asking is cheaper
   than acting (H34), an attention budget (H35), a fleet playbook that learns from measured outcomes (H37), a portfolio
   with the operator's rank and sealed forecasts (H38), and engagement the operator can set for each programme (H39).
@@ -791,7 +791,7 @@ weakest.*
   outcome before the Overlord's `why`, and never runs the judged model (`auditorModelFor`, §3.4). Agreement with the
   operator is measured by replay and sealed predictions, never by past answers the Overlord could read. §9.5 states
   all of it. Verdicts land in `overlord_audits`, on the Overlord place and in the digest. The audit under its floor
-  (Table 11.5b), or down ten points, latches the ladder at `advise` (§7.5).
+  (Table 11.5b), or down ten points, latches the ladder at `advise` (§7.5). A gap with no verdict caps it there too.
 
 #### 3.3.6 Memory over months
 
@@ -1236,7 +1236,9 @@ fenced off (C46).
   - **Its readers are never Fable.** The launch profile sets the subagent model to `sonnet` and turns forks off (§3.2).
     Long reading never runs on the main model.
   - **The auditor never runs the judged model.** One decider, `auditorModelFor`, takes the generation's model and never
-    returns it. A judge on another model shares fewer of the Overlord's blind spots.
+    returns it. It answers `opus` for a generation on `fable`, and `sonnet`, the readers' class, for one on `opus`:
+    `fable` is the operator's choice for the designated session alone (D-6790). A judge on another model shares
+    fewer of the Overlord's blind spots.
 
 - **H16. The model fallback has one owner: ccd's.** ccd already drops a session from Fable to Opus when it settles on
   a lane or account that cannot serve Fable, and restores it later. A decider on the server for the same fact would be
@@ -1806,7 +1808,9 @@ listed options cannot pass an instruction on. That fits the trust model (§3.8).
   - **Bounded calls.** A 2-second deadline covers the whole call, with at most one retry. The request is validated
     before it is sent. There is no long-context mode.
   - **Answers come first, then the act.** Decision-model answers are gathered before the act's transaction and passed
-    in to `overlordMayAct` (§7.1). A model is never called inside a transaction.
+    in to `overlordMayAct` (§7.1). A model is never called inside a transaction. The transaction reads the row's
+    arming, key and line itself, and applies the line as it stands. An answer gathered under another key, or before
+    the line was last admitted, is no clear yes.
   - **Three directions for each row.** Fail open: the row is advice, and the Overlord decides without it. Fail closed:
     the row is a gate, and the matter goes up a tier. Skipped when the operator has not armed it: the code checks
     stand alone, and the act row records that the check did not run. A gate the server sent back to shadow is not
@@ -1827,23 +1831,30 @@ listed options cannot pass an instruction on. That fits the trust model (§3.8).
   - **Why a bound.** Small-sample temperature fits moved calibration the wrong way on two of three workloads (arXiv
     2609.26550).
   - **The line's key.** A line is keyed by the host and model id, the row's revision and its request shape. Any change
-    sends the row back to shadow.
+    sends the row back to shadow. A change of host or model id keeps the row's labels: they are the operator's
+    verdicts on states. The server asks those states again and admits a line by the bound. A change of the row's
+    revision or request shape drops them. After a change or a drift, the operator can arm the row again only once
+    a line has been admitted again.
   - **Easing a gate is an authority change.** A refit that makes a gate easier to pass is journalled in the authority
-    journal (§7.6), and needs the operator's tap.
+    journal (§7.6), and needs the operator's tap. So does switching an armed gate off: it lets through what the gate
+    deferred. Both keep the step-up (§11.2).
   - **Labels come only from the operator or from measured rows.** A label comes from an event under the sign-in cookie,
     or from a measured row: `operator-answer`, `overturn`, `routed-to` or `label-queue`. A label never comes from a
     model. An Overlord decision taken with the mark in view is never a label. `routed-to` is the owner that accepted
     the read-back and did not decline, or the owner after the operator's own re-route. It is never the Overlord's
     first choice alone.
   - **The label queue.** Up to ten one-tap cards a week across all rows, with the model's answer hidden, behind the
-    operator's own items. They are the operator's own one-tap cards, never rows of the Overlord's inbox. It ships in
-    W2, with the first rows, so they gather labels from the start. This waits on the operator (Waiting on you, item
-    5).
+    operator's own items. They are the operator's own one-tap cards, never rows of the Overlord's inbox. The server
+    shares the ten: a gate row before an advice row, then the row nearest its line, and each row with a case waiting
+    gets a card at least every fourth week. It ships in W2, with the first rows, so they gather labels from the
+    start. This waits on the operator (Waiting on you, item 5).
   - **Asked well.** One condition per yes-or-no question. Every choice and every pair is asked in both orders in one
     request, with opaque option ids. When the two framings disagree, the answer is `unsure`. Code does every count and
     date comparison first. Untrusted text goes only under a field named `quoted`.
   - **Never asked twice.** There is one answer per key: the row's revision, the model id and the state hash. It is
-    recorded and reused. Sessions see a band, never a number. M19 reports calibration for each row.
+    recorded and reused, while the line it was gathered under stands. Once a line is admitted again, an earlier
+    record is asked again. The anchor set, the canary and a line's admission are asked each time, and never served
+    from the record. Sessions see a band, never a number. M19 reports calibration for each row.
   - **Why it is asked that way.** As their authors report (read 2026-11-09): choice probabilities are well calibrated,
     and a single yes-or-no is slightly under-confident. Many yes-or-no questions at once are over-confident in yes
     (arXiv 2609.37647). Rewording one rule moved accuracy by 24 points (arXiv 2610.11392). The vendor's own
@@ -1874,7 +1885,7 @@ listed options cannot pass an instruction on. That fits the trust model (§3.8).
 | `readback.omits`, `readback.adds` | A yes-or-no pair | Does the read-back leave out, or add, something the request says? | Fail open: a flag in the inbox | A false mark* | 10%* | `label-queue`* | Yes | W2, in shadow |
 | `goals.conflict` | Yes or no | Do these two programmes' goals conflict? Asked only behind code signals | Fail open: the code signals stand | A false mark* | 10%* | `operator-answer`* | No | W2, in shadow |
 | `precedent.same` | One choice over code's top five and none | Is this the same question as an earlier one? It marks "similar" only | Fail open: evidence still needs the code match | A false mark* | 10%* | `label-queue`* | No | W3 |
-| `grant.inside` | Yes or no, blind | Is this answer inside the grant's scope? A strict yes line | Fail closed when armed. Skipped when the operator has not armed it | A false yes* | 5%* | `overturn` | No | W3 |
+| `grant.inside` | Yes or no, blind | Is this answer inside the grant's scope? A strict yes line | Fail closed when armed. Skipped when the operator has not armed it | A false yes* | 5%* | `overturn`, `label-queue`* | No | W3 |
 | `answer.maps` | One choice among the options | Which option does the operator's free-text answer mean? It counts only when the operator confirms with one tap | Fail open: the operator picks | A false mark* | 10%* | `operator-answer`* | Yes | W3 |
 | `passage.instructs` | Yes or no, behind a code pattern list | Does this passage give instructions to an AI? A mark adds a flag, and a no means nothing | Fail open | A false mark* | 10%* | `label-queue`* | No | W3 |
 | `audit.follows`, `audit.outcome`, `audit.cited-supports` | Yes or no, with a reference in the state | Did the act follow its procedure? Did the outcome match? Do the cited ids support the act? | Fail open: the judge's verdict stands | A false mark* | 10%* | `label-queue`* | `audit.cited-supports` only* | W3 |
@@ -2207,7 +2218,7 @@ rows, so a quiet Overlord cannot make the operator's view quiet.
 
 | Cadence | Time | What the server composes |
 |---|---|---|
-| Daily | About two minutes | The "since you were last here" block and the decision queue |
+| Daily | About two minutes | The "since you were last here" block and the decision queue. The label cards sit behind it, ten a week at most (§3.7) |
 | Weekly | About ten minutes | One Week page: the weekly check (§9.6); the track record per kind and scope; overturns; ladder changes and drills; grants expiring; the top entries by influence; programmes not opened in 30 days whose goals or scope changed |
 | Monthly | Not fixed | Grant renewals and the judge's labels (§7.2, §9.5); "Your decisions", a pull page |
 
@@ -2960,7 +2971,10 @@ it: the evidence floor and the ask-or-act decider.
   above the evidence floor.
   - **The rule.** The Overlord acts only when `U x W_wrong <= lambda x W_ask`.
   - **`U`** is the one-sided 95% upper bound on the operator disagreeing in this cell. A cell is the act kind, the
-    evidence class and the scope. Its record comes from blind answers, weekly spot-checks (§9.6) and overturns.
+    evidence class and the scope. The scope is the fleet for an answer of class none. For an answer under a grant it
+    is the grant's scope, a programme's row and its incarnation (§7.2). Its
+    record comes from blind answers, weekly spot-checks (§9.6) and overturns, and one answer is one case. A blind
+    answer joins the cell of the evidence class the server derives from the ids its sealed prediction cites.
   - **`W_wrong`** is the cost of a wrong act, from one L0 table: by reversibility, and by routine or big (Table
     11.5b).
   - **`W_ask`** is the cost of asking, from the row's urgency class (Table 11.5b).
@@ -3103,7 +3117,7 @@ What changes after day one, and in what order:
 - **Over-asking is caught.** An item with no class gets a triage hold. The Overlord sends it back with the goal that
   answers it, or escalates it. It answers such an item only after its coordinator raises it again with a class.
 - **An O-class question is settled only under a grant.** A grant proposal needs at least 19 blind answers, spread
-  over five days and distinct subjects, and starts in shadow (§7.2).
+  over five days and five subjects, and starts in shadow (§7.2).
 
 M1 (§12) is measured against that reality. It counts only `blind` and `examined` answers, with no half credit for a
 recommendation accepted unchanged. An answer taken with the recommendation in view is partly the Overlord marking its
@@ -3206,7 +3220,8 @@ downsides of each. It may argue its point if it truly disagrees, and the operato
     rank cannot bury a row.
   - **Bundles are the server's.** Related decisions may be bundled so the operator decides a question once. The
     server renders a bundle's members. A bundle never spans classes and never includes O2 or O4. One tap must not
-    answer what the operator never read.
+    answer what the operator never read. A bundle's answer is one case in every record of §9.5, whatever the number
+    of its members.
   - **Prepared before asked.** The Overlord prepares a brief ahead, as background work (§6.8), when a decision is
     coming: a wave nearing its end, a cap about to bind, an account near its limit, or a goal about to be met.
   - **When the operator is asked** is the attention budget's, not the Overlord's (§4.2).
@@ -3373,9 +3388,9 @@ serve in time, a fair share for each programme, and a packet that lets the commo
   - **Labelling cards are not the Overlord's.** They are the operator's own one-tap cards (§3.7), never rows of
     this inbox.
   - **One wake.** A single coalesced nudge, "3 held, the first lapses in 140 s", replaces a mail for each row.
-  - **Drills arrive the same way.** A drill (§7.5) is served by every Overlord read that would show a real row of
-    that kind: the inbox, the packet, the board's counts, and the item, ask and mail reads. So it looks like a real
-    row until grading.
+  - **Drills arrive the same way.** A drill (§7.5) is served by every Overlord read that would show a real row of that
+    kind: the inbox, the packet, the board's counts, the item, ask and mail reads, and the sequence read. So it looks
+    like a real row until grading.
   - **What ships when.** The inbox ships in W1, with band 1 and probes, because nudge-and-read needs a read door from
     the first day. The coalesced wake ships with it. W2 adds band 3. W3's first step adds band 2 with the rows that
     wait for a brief. Its second step, the hold tier, adds held rows, packets, admission, drills and background work
@@ -3590,14 +3605,17 @@ a grant holds, how it lives, and how it tightens by itself.
   Every grant expires after 30 days. `overlordMayAct` reads `expiresAt` against `now` at each call: the lane's
   write of `expired` is the record, not the gate.
 - **Renewal is not one tap.** Its door is `POST /api/overlord/grants/:id/renew`. The renewal sheet shows three acts
-  from the grant's last period as blind spot-checks. Renew is enabled after the operator answers them. With no answer
-  by the expiry, the grant becomes `expired`. Renewing it later starts it again in `shadow`.
+  from the grant's last period as spot-checks: the question and its options, without the Overlord's pick. The
+  operator watched each act's veto window, so these answers are `examined` at most. They check the operator's
+  attention, and are never evidence. Renew is enabled after the operator answers them. With fewer than three acts in
+  the period there is no renewal. With no renewal by the expiry, the grant becomes `expired`. Renewing it later
+  starts it again in `shadow`.
 - **Suspension has two kinds, as the ladder has.** A suspended grant reads as absent. The console shows it beside the
   act that tripped it.
 
 | Cause | Kind | What lifts it |
 |---|---|---|
-| a generation is off the model the grant names, and that model's replay has not passed | condition | the condition ending |
+| a generation is off the model class the grant names | condition | a generation on that class |
 | the caller's identity strength is below the grant's | condition | the condition ending |
 | since boot, no witness off the server's volume has answered (§7.6) | condition | the first such witness answering |
 | an act under the grant is `overturned` | latch | the operator only |
@@ -3643,11 +3661,13 @@ server suspends without being asked.*
   Anything short of a clear yes answers `defer`, and the matter goes to the operator. Where the operator has not
   armed it, the check is skipped: the code checks and the veto window stand, and the act row records that it did
   not run. A check the server sent back to shadow is not skipped: it answers `defer` (§3.7). The commit of a
-  staged act reads that record and asks nothing again: if the check is armed at the commit and the row holds no
-  clear yes, the act is `voided`. Why blind: a monitor that cannot read the agent's reasoning cannot be talked
-  round by it, and Anthropic built its own action classifier that way (2026-03-25).
+  staged act reads that record and asks nothing again. The act is `voided` if the check is armed at the commit and
+  the row holds no clear yes, if the check stands in shadow at the commit, or if the record was gathered under
+  another key or before the row's line was last admitted (§3.7). Why blind: a monitor that cannot read the agent's
+  reasoning cannot be talked round by it, and Anthropic built its own action classifier that way (2026-03-25).
 - **Evidence is an interval, for one effect and one scope.** The server computes it from blind answers only: the count,
-  the one-sided 95% lower bound, and the window. It needs spread: at least five days and distinct subjects. The floor is
+  the one-sided 95% lower bound, and the window. The window is rolling, and its length is a starting value (Table
+  11.5b): a case older than it counts no more. It needs spread: at least five days and five subjects. The floor is
   the gates table's (§9.5): 19 blind cases and a lower bound of 0.85. Why: 12 agreeing cases out of 12 prove no more
   than 78% agreement at 95% confidence. 19 of 19 prove 85%, and 29 of 29 prove 90%.
 - **The Overlord may propose a grant, never take one.** `propose-grant` files a proposal with the server's evidence.
@@ -3804,6 +3824,7 @@ capability (arXiv 2506.12469), and set so that it moves down by itself.
 |---|---|---|
 | three answers `overturned` in 24 hours | latch | cap `advise` |
 | the audit under its floor (Table 11.5b), or down ten points | latch | cap `advise` |
+| no audit verdict for longer than the audit gap (Table 11.5b) | condition | cap `advise` |
 | an act ceiling hit | latch | cap `advise` |
 | a missed drill | latch | answers return to shadow |
 | the third unwitnessed write in a day | latch | cap `advise`, one push |
@@ -3837,8 +3858,13 @@ condition lifts by itself. A latch is cleared only by the operator.*
   (Table 11.5b). A source shed for exceeding its fair share (§6.8) steps nothing with its ceiling hits.
 - **Drills.** Drills test whether the card is heeded, as canaries test whether it was read.
   - They are rows of a table of their own, `overlord_drills`. Every Overlord read that would show a real row of that
-    kind serves the drill too: the inbox, the packet, the board's counts, and the item, ask and mail reads. No console
-    read, no other session and no older build can see one.
+    kind serves the drill too: the inbox, the packet, the board's counts, the item, ask and mail reads, and the
+    sequence read. No console read, no other session and no older build can see one.
+  - A drill's lines in `overlord_sequence` carry its mark in a column the cursor read does not serve. The invariant
+    monitor reads the mark, and holds a drill to none of a real row's invariants.
+  - A drill is seated only as a row the tier would make at that moment: as a held row only while `mayHold` would
+    hold a real row of that kind, and only when admission can serve it beside every row already held. It counts in
+    admission as a row does. It counts in no ceiling, no `max-per-day`, no settle share and no breaker count.
   - Each is built from a real past case, changed, and seated on an open run of a live programme. The mark sits where
     no Overlord read shows it until grading.
   - A lapsed drill is void, and never pushes. Drill text never enters notes or precedents.
@@ -3894,7 +3920,7 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
   - grants created, revoked, suspended and expired;
   - designate, rebind and retire;
   - changes of the ladder, engagement, ceilings and arming;
-  - a decision-model refit that eases a gate;
+  - a decision-model refit that eases a gate, and an armed gate row switched off;
   - commands consumed, practice retirements, and each confirmed restore;
   - the operator's withdraw and take of a request. They take back what a request authorises, and a request's other
     moves are in no journal. After a restore a request takes the stricter of its row and the journal.
@@ -4427,20 +4453,46 @@ when the operator sees the recommendation first. So every gate reads evidence th
 | Gate | Least cases | Rule |
 |---|---|---|
 | A kind of answer leaves shadow | 30 operator answers that were `blind` or `examined`, each with a shadow answer or a sealed prediction filed before it | the one-sided 95% lower bound of normalised agreement is at least 0.85 |
-| A grant proposal, per effect and scope | 19 blind, spread over at least five days and distinct subjects, with a cap on cases from one programme | the same bound |
-| A change of model, skill or card template | the replay set, which holds only `blind` or `examined` answers | the bound is no lower than the last generation's less 0.05, and the scenario suite passes |
+| A grant proposal, per effect and scope | 19 blind, on at least five days and five subjects | the same bound |
+| A change of model, skill or card template | the replay set, which holds only `blind` or `examined` answers | for each armed kind, the bound over its replayed cases is no lower than the bound the operator armed it on, less 0.05; and the scenario suite passes |
 
 *Table 9.5a. The gates. Each is a floor on a measured bound, never a date and never a stated confidence.*
+
+| What is earned | What it takes | In answers of that kind |
+|---|---|---|
+| A kind of answer leaves shadow | 30 answers that count, with at most one miss | 30 if the operator examines every accept. About 115 if three accepts in five are examined, about 300 at two in five, and never under one in five |
+| A routine answer in a cell, given alone | 59 blind answers with none overturned at `lambda` 1, or 19 at 3 | About 470 questions of that cell at one blind in eight, or about 150 |
+| A big answer in a cell, given alone | 179 at `lambda` 1, or 59 at 3 | About 1,430, or about 470 |
+| A grant proposal | 19 blind answers on one effect in one programme, all agreeing | About 150 such questions there. So a proposal is rare, and a grant normally starts at the operator's own door (§7.2) |
+| A decision-model line | 29 labels beyond the line, or 59 for a gate | At ten cards a week across every row, the last line is admitted after about nine months |
+
+*Table 9.5b. What each kind of trust takes to earn, at the starting values of Table 11.5b. The first row assumes a true
+agreement of 0.95.*
+
+- **Trust is slow to earn on purpose, and the dials are the operator's.** At the starting values the Overlord mostly
+  briefs and recommends for its first months (Table 9.5b). Three things change that: `lambda` (§6.3), the blind
+  share (§6.6), and how much of what they accept the operator examines. A cell for an answer of class none is the
+  fleet's, so every programme's blind answers count towards it (§6.3). A cell that acts has no blind sample of its
+  own any more, so the weekly spot-checks are its record from then on (§9.6).
 
 - **Shadow ends on evidence, never on a date.** Each kind of answer (`answer-ask`, `answer-item`) is armed by itself.
   Passing its gate makes it eligible. The operator arms it from an item that shows the count, the bound and every
   disagreement in full (§7.5). Arming is an authority journal record (§7.6).
   - No row is held below `full`, and none for a kind that is not armed live. So an answer in shadow is always a
     sealed prediction, filed with a brief (§6.5).
+  - The first gate's count leans against the Overlord, on purpose. Every disagreement is `examined`, and an accept
+    counts only when the operator examined it. So a kind is armed only while the operator examines what they
+    accept. At a true agreement of 0.95 the gate cannot pass while fewer than one accept in five is examined, and
+    takes about 300 answers at two in five. The arming item shows the count of `glanced` accepts beside the bound.
 - **A change must pass the replay before it answers.** The model class advances, and the skill and the card template
   change with releases. Each change swaps the operator's proxy for an untested one. So the renewal trigger "evaluation
   due" (Table 3.3.11b) asks for one renewal, and the third gate holds answers in shadow until the replay passes. The
   fallback class is replayed at each release, ahead of need (§3.4).
+  - **A replay that fails is the operator's.** It raises one item with the count, the bound and every answer that
+    changed. The lane does not run that digest again by itself. The kind stays in shadow on that digest until a later
+    digest passes, or the operator arms it from that item, behind the step-up (§7.5). That arming is the digest's
+    pass for that kind, and sets the gate's reference.
+  - **A kind armed on a digest the replay has not passed** stays in shadow until that replay passes.
 - **Replay as of the question's date.** The server serves the operator model, the goals and the ledgers as they stood
   before the question was asked. The question's own sources are left out. The model keeps time (C43), which makes this
   possible.
@@ -4455,18 +4507,28 @@ when the operator sees the recommendation first. So every gate reads evidence th
     (§3.4), and it gets the Overlord's answer for every input of the serviceability answer, the billing fact
     included. Its use counts against the reserve. The lane runs it only on a reserved account under the soft line,
     and only while no renewal is due. When no reserved account is under the soft line, it waits.
+  - Each run names the class it replays: the designation's class, or the fallback class under it, and no other.
+    The replay lane writes that as the body's route class, as the operator's doors write the designated session's
+    (§3.4).
   - It is not designated and holds no door that acts, so R7's one Overlord stands (Waiting on you, item 12).
 - **Sealed predictions.** For each item it escalates, the Overlord files its predicted answer before the operator
   answers: the option, the classes and the entries it weighed (`seal-prediction`, §7.1).
-  - The server refuses a prediction filed after the operator answered (`prediction-late`), and scores each one.
-  - The denominator is every escalated item in the cell. A missing prediction, where the Overlord had its triage
-    window, is a miss.
-  - An item the operator answered sooner than that is counted apart. Coverage is shown beside the score.
+  - A row takes one prediction. A second call returns the first and changes nothing. The server refuses one filed
+    after the operator's first pick or answer (`prediction-late`), and scores each one.
+  - The denominator is every item and ask of the kind that reached the operator, escalated or marked "brief
+    pending". A missing prediction is a miss where the row stood on the operator's list, with the Overlord `ready`,
+    past its brief deadline (§6.8) before the operator answered. A miss counts as a disagreement in every bound of
+    Table 9.5a, and not towards the first gate's 30 cases.
+  - A row the operator answered sooner than that is counted apart. Coverage is shown beside the score.
   - A prediction scored against an answer that was neither `blind` nor `examined` is reported apart, as anchored,
     and counts for no gate.
   - This measures judgement going forward, and nothing the Overlord can read holds the answer.
+  - A question the Overlord raised itself (`raise-item`) is scored and reported apart. It counts for no gate, no
+    cell, no grant evidence and no consistency pair: the Overlord chose its wording and its options.
 - **The blind sample.** The server shows about one escalation in eight without the recommendation (§6.6).
-  - It is two-step: the operator picks, the recommendation is revealed, and the operator keeps or switches.
+  - It is two-step: the operator picks, the recommendation is revealed, and the operator keeps or switches. The blind
+    answer is the first pick, and every score of a blind answer reads it. A switch after the reveal changes the row's
+    answer and counts in the switch rate. It is never agreement.
   - It is stratified by class and act kind. Estimates are weighted by the inverse of the sampling rate.
   - The Overlord states a recommendation only in a brief, never in the chat or a summary. An answer is scored `blind`
     only when the console's events show that no chat text the Overlord wrote after the filing was on screen before
@@ -4478,7 +4540,8 @@ when the operator sees the recommendation first. So every gate reads evidence th
   2411.10109). So agreement is divided by the operator's own consistency, measured on near-duplicate questions they
   answered at least a week apart. That ratio is "normalised agreement" in Table 9.5a.
   - Consistency is measured only on pairs that pass the precedent's code match (§6.3).
-  - Below 20 such pairs the divisor is 1.
+  - Below 20 such pairs the divisor is 1. From 20 pairs it is the one-sided 95% upper bound of the consistency
+    rate, so a thin sample cannot ease a gate.
   - Normalised agreement is capped at 1.
 - **A judge that cannot be talked round, and is itself checked.**
   - The judge is the `auditor` role: a launch profile of its own, a scoped read of the store, and a row the audit lane
@@ -4488,7 +4551,8 @@ when the operator sees the recommendation first. So every gate reads evidence th
   - The server chooses the sample: every act under a grant or a command, every big answer, every start, and a random
     share of the rest.
   - The operator labels twenty audit rows a quarter. The judge's scores are advisory while its agreement with those
-    labels is low.
+    labels is low. Until the first labels its agreement is unmeasured, which is not low: its scores latch as Table
+    7.5a says.
   - Known-bad rows are seeded, and the judge's detection rate is reported.
   - The decision model adds referenced checks only (`audit.follows`, `audit.outcome`, `audit.cited-supports`). It
     never scores prose against a rubric (§3.7).
@@ -4519,18 +4583,21 @@ short, regular and measured, and steps the Overlord down when it lapses (H36).
   section defines the weekly check those cadences carry, and what the server does when oversight thins.
 - **A weekly check of about five minutes.** It is offered on the Overlord place and the Week page. It is never pushed
   more than once. It holds five cards at most:
-  - **Three spot-checks** of recent Overlord answers the operator never saw. Each shows the question and options
-    without the Overlord's pick, then reveals it. A disagreement opens Overturn (§10.3). Each is a blind answer, and
-    counts as evidence (§9.5), under the blind sample's test: the console's events show that no chat text the
-    Overlord wrote about that answer was on screen before the pick. Otherwise it is `examined` at most.
+  - **Three spot-checks** of recent Overlord answers the operator never saw, drawn from the cells that acted, the
+    cell with the fewest checks for its acts first. Each shows the question and options
+    without the Overlord's pick, then reveals it. A disagreement opens Overturn (§10.3), and the two are one case,
+    not two. Each is a blind answer, and counts as evidence (§9.5), under a test code can run: the console's events
+    show that no chat text the Overlord wrote after that answer, naming the row by its id or its title, was on
+    screen before the pick. Otherwise it is `examined` at most.
   - **One seeded wrong call:** a real past question with a deliberately wrong answer. It is marked as a drill,
-    revealed at once and never acted on (Waiting on you, item 9).
+    revealed at once and never acted on (Waiting on you, item 9). It adds no case, no consistency pair, no label and
+    no overturn to any record. Its catch feeds M27 alone.
   - **One closed-form state question** about the fleet.
   - Up to two cards may instead ask "Still true?" about a heavily cited entry (§9.3). No answer is not a confirmation.
 - **What never counts as agreement.** A default that took effect, a veto window that expired unseen, and a "You
   decide" (§3.8). A bulk Seen is `glanced`, not examined. So is a tap from a push, unless it picks another option
   than the recommended one (§6.6).
-- **Grant renewal is oversight too.** A grant renews only after the operator answers three blind spot-checks from its
+- **Grant renewal is oversight too.** A grant renews only after the operator answers three spot-checks of acts from its
   last period (§7.2). With no answer by the expiry, the grant becomes `expired`. Renewing it later starts it again in
   `shadow`.
 - **Oversight health feeds the ladder.** When oversight thins, the server narrows what the Overlord may do alone. It
@@ -4731,7 +4798,7 @@ the answer fields: its chosen option, cited ids and stated probability.*
 | `pending` | Written before an effect outside the database | `done`, `refused` or `unknown` |
 | `unknown` | The settle could not measure the effect. Its question goes to the operator | `done` or `refused`, only by a measurement |
 | `refused`, for an answer | The effect did not happen: the boot pass measured no key press, or the door refused it | Terminal. Its question goes to the operator, unless the row has already closed, so a row never stays open with nobody holding it |
-| `staged` | A grant-backed O3 answer waits out its veto window (§7.2) | `effective` (the veto clock), `vetoed` (the operator's Veto before the commit; a Veto after it overturns the act, §10.3), `voided` (a change of authority, the mint of a later generation, a cited entry that is no longer `active`, a blind check armed since the staging with no clear yes on the row, or eight hours with the window not run out; each returns the row to the operator with a push that says so) or `preempted` (the operator answering first, Answer now included; its outcome is `concurred` when the operator picks the same option) |
+| `staged` | A grant-backed O3 answer waits out its veto window (§7.2) | `effective` (the veto clock), `vetoed` (the operator's Veto before the commit; a Veto after it overturns the act, §10.3), `voided` (a change of authority, the mint of a later generation, a cited entry that is no longer `active`, a blind check that is armed at the commit with no clear yes on the row, or stands in shadow, or holds a record from another key or line, or eight hours with the window not run out; each returns the row to the operator with a push that says so) or `preempted` (the operator answering first, Answer now included; its outcome is `concurred` when the operator picks the same option) |
 | `done`, `refused`, `effective`, `vetoed`, `voided`, `preempted`, `shadow` | Settled. `shadow` is kept so the log's words never change. In version 1 nothing writes it: a shadow answer is a sealed prediction (§9.5), and a shadow grant is scored from those predictions (§7.2) | none |
 
 *Table 10.1b. The act states. `done`, `refused`, `effective`, `vetoed`, `voided`, `preempted` and `shadow` are
@@ -4814,7 +4881,7 @@ builds no stream of its own (H3, H27, H33).
   (#277, #464) can carry the same sequence later, so an outside collector rebuilds the Overlord's history with no new
   mechanism.
 - **One invariant monitor** (L1) reads that sequence: in the tests, in the simulator and on the live server. It checks
-  I1 to I8 and I10 to I13 everywhere. I9 compares against a build without the Overlord, so only the simulator checks it,
+  I1 to I8 and I10 to I16 everywhere. I9 compares against a build without the Overlord, so only the simulator checks it,
   by running each seed both ways. A violation is a latch on the ladder: cap `advise`, and one operator item (§7.5). It
   ships in W1, and M24 counts its findings.
 
@@ -5046,7 +5113,7 @@ one fixed order, so the first refusal is the same on every door.
 | Group | Who calls | Credential | Verb class (#279) | Census |
 |---|---|---|---|---|
 | The Overlord's doors | The designated session, through the door process | `CallerIdentity` (today: the box token, then attribution), then the fence | `view` for reads, `operate` for acts | `EXEMPT` with one reason each, like the claim lanes |
-| The operator's doors | The signed-in console | The cookie. Designate, rebind, retire, selecting `fable` as the designation's model class, grants (a grant, a grant leaving shadow, a renewal), the command tap, a rung up, clearing a latch, arming a kind of answer, re-arming a kind bypassed for a programme, returning a grant from a latched suspension, raising a programme's engagement, arming a decision-model row, a decision-model refit that eases a gate, the decision model's key (set from Settings into a server-level slot of the operator-secrets store), the isolation opt-in, Confirm the restore, the name list and wipe add the account gate's step-up | `admin` | The session-only set |
+| The operator's doors | The signed-in console | The cookie. Designate, rebind, retire, selecting `fable` as the designation's model class, grants (a grant, a grant leaving shadow, a renewal), the command tap, a rung up, clearing a latch, arming a kind of answer, re-arming a kind bypassed for a programme, returning a grant from a latched suspension, raising a programme's engagement, arming a decision-model row, switching an armed gate row off, a decision-model refit that eases a gate, the decision model's key (set from Settings into a server-level slot of the operator-secrets store), the isolation opt-in, Confirm the restore, the name list and wipe add the account gate's step-up | `admin` | The session-only set |
 | The coordinator-facing doors | The owning programme's coordinator | The box token and attribution, then "the caller is the owning coordinator" | `operate` | Their own prefix, in the census |
 | The hook's reports | The hook of a long-lived session | The box token and attribution, a short timeout | `view` | `EXEMPT` |
 | The server's own bodies (replay, auditor) | A row its lane wrote, which `roleOf` reads | A per-run key the lane issues at launch, as the act key is | `view` only | `EXEMPT`, one reason each |
@@ -5266,7 +5333,9 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | `W_ask`: batchable 1, `blocking-by` 1.5, `blocking-now` 2 | The cost of asking in `askOrAct` | W3 | n/a |
 | Set by the plan before W1 | The read rate ceilings per door | W1 | wall |
 | Set by the plan before W2 | Each act kind's ceiling per programme and in all | W2 | wall |
+| Set by the plan before W3 | The window of a grant's evidence: the age past which a blind case counts no more | W3 | wall |
 | Set by the plan before W3 | The audit score under which the ladder latches at `advise` | W3 | n/a |
+| Set by the plan before W3 | The audit gap: the days with no audit verdict that cap the ladder at `advise` | W3 | wall |
 
 *Table 11.5b. Starting values.*
 
@@ -5344,7 +5413,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `history-unreachable` | The history door | No connected agent, or more than one, serves the history store | C47, H3 |
 | `coordinator-paused` | Start, re-kick | The coordinator pause stands | C7 |
 | `mail-disabled` | The answer doors | `mail-disabled` stands | C7 |
-| `prediction-late` | `seal-prediction` | The prediction was filed after the operator answered | C20 |
+| `prediction-late` | `seal-prediction` | The prediction was filed after the operator's first pick or answer | C20 |
 | `reference-unknown` | The note door (a handover note's thread), `goals modify` | The reference names no row; or, at `goals modify`, it is not a live grant, an answered item of this programme, or a relayed request this programme owns | C37, C19 |
 | `proposal-limit` | The propose doors | More than one open proposal for one target, or more than three open `propose-command` proposals in all | C59, H8 |
 | `kickoff-names-overlord` | Start, re-kick | The kickoff names the `ccrc-overlord` skill | C4, R7 |
@@ -5374,7 +5443,7 @@ per guard proves the guard exists, not that the machines compose (H33).
   invariants are stated once, as predicates, and checked by tools that compose the machines. I11 and I12 were added
   after a model of the authority and request machines: planted faults that widened authority without the operator,
   or left a request with no clock, broke none of I1 to I10. I13 was added after a model of the privacy and message
-  machines, for the same reason.
+  machines, for the same reason. I14 to I16 were added after a model of the evidence, the gates and the judges.
 
 | # | Invariant |
 |---|---|
@@ -5388,9 +5457,12 @@ per guard proves the guard exists, not that the machines compose (H33).
 | I8 | After a crash at any step, the next card lists every unsettled message and open hold |
 | I9 | While `mayHold` is false, the pushes and states of question rows equal those of a build without the Overlord |
 | I10 | Every open row is on the operator's list at all times |
-| I11 | Authority widens only by the operator. The effective rung, a grant's state and a kind's arming widen only in the transaction of an operator's step-up door, or when a condition measurably ends |
+| I11 | Authority widens only by the operator. The effective rung, a grant's state, a kind's arming and a gate row of the decision model widen only in the transaction of an operator's step-up door, or when a condition measurably ends |
 | I12 | Every open request outside `needs-you`, `done-unverified` and `blocked` has a follow-up time, or is a parent with at least one open child, each of which meets this invariant itself |
 | I13 | After a restore, the store serves no entry and no message that the privacy journal or a witness records as retired, replaced or wiped, and no id is issued twice |
+| I14 | No answer is delivered, and no grant is used, renewed or proposed, while a latch or a condition of Table 7.2a or Table 7.5a forbids it, or on a digest and class the replay has not passed. The server narrows in the transaction that records the cause |
+| I15 | An agreement joins a gate, a cell or a grant's evidence once, and only from an operator's answer scored `blind`, or for the first gate `examined`, against a prediction sealed before the first pick. A drill, a seeded call, a "You decide", an `unmeasured` answer and a question the Overlord raised add nothing |
+| I16 | A drill, the replay body and the auditor cause no effect: no mail, no key press, no push and no act that counts. An armed gate row of the decision model lets an act through only on a clear yes gathered under its current key and line |
 
 *Table 11.7a. The invariants. The invariant monitor (§10.4) checks the same predicates in production, except I9, which
 only the simulator checks, by running each seed both ways.*
@@ -5400,7 +5472,7 @@ only the simulator checks, by running each seed both ways.*
 | A small model, explored exhaustively within bounds and written before the code | First the composition of holds, readiness, generations and restarts, with I5's generation part; then authority and restore, where I5's term and act key join | W0; W1 |
 | Stateful property tests over the real L1 deciders | Each machine: exactly once, never lost, monotonic, fails towards the operator | With each machine's wave |
 | Exhaustive tests of first-match deciders, with a monotonicity property | `overlordReadiness`, `itemClassFloor`, `overlordMayAct`, `renewalDue`, `followUpDue`, `mayHold` | With each |
-| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I13 under faults | Skeleton in W1a: the new deciders on the fake ports, with crash and gap injection. The real lanes join once the watcher's runner reads `Clock`. Restore injection joins with the first decider that reads a restore |
+| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I16 under faults | Skeleton in W1a: the new deciders on the fake ports, with crash and gap injection. The real lanes join once the watcher's runner reads `Clock`. Restore injection joins with the first decider that reads a restore |
 | The invariant monitor on the live sequence, `overlord_sequence` | The same predicates in production, except I9 | W1 |
 | The scenario suite and the replay | The Overlord's behaviour (§9.5) | W3 |
 | Mutation testing of each new L1 decider, with a score floor that only rises | That the tests would catch a broken guard | Daily, from W1a |
@@ -5498,7 +5570,7 @@ changed a call from its rev 8 form. §13.1 lists every H call.
 | C23 | A missing Overlord | queue for it, release at once | No hold unless `mayHold` is true, and it reads the readiness word and the breaker. A retention table by cause decides what each fault does to standing holds. Most faults release them in one grouped push. A dead Overlord also gets one push with a Restart control | Proposed | H18, H20 |
 | C24 | A busy Overlord | longer windows, shorter turns | A fault to fix, not a reason to wait. An inbox in one order of four bands (§6.8), one coalesced wake, its own row in `MAIL_PACE`, packets, an earliest-deadline-first admission test, classes of work, a fair share per source and the load lines. A kind it rarely settles stops being held | Proposed | H2, H19, H39 |
 | C25 | How authority is described | prose in the skill, a table | One L0 act catalogue the server enforces: class, reversibility, grant, verb class, compensating act, ceilings, least identity strength and one cell per rung. `answer-item` and `answer-ask` are carriers; what a grant covers is the effect | Proposed | H17, H24, H25, H28 |
-| C26 | How the list relaxes | a mode, a trust level, per-act grants | Grants per effect, scoped to a programme's row and incarnation, with conditions. A grant starts in shadow and goes live on the operator's tap. It expires in 30 days, and renews only after three blind spot-checks. The server suspends, and only the operator re-arms. An O3 answer under a grant is staged with a veto. Evidence is a lower bound from blind answers | Proposed | H26, H27, H30 |
+| C26 | How the list relaxes | a mode, a trust level, per-act grants | Grants per effect, scoped to a programme's row and incarnation, with conditions. A grant starts in shadow and goes live on the operator's tap. It expires in 30 days, and renews only after three spot-checks of its acts. The server suspends, and only the operator re-arms. An O3 answer under a grant is staged with a veto. Evidence is a lower bound from blind answers | Proposed | H26, H27, H30 |
 | C27 | Identity | a new token, attribution | One port, `CallerIdentity`, says who calls and how strongly: `attributed`, `workload` or `operator`. Today that is attribution, so no irreversible effect passes an Overlord door, and a `shared-user` server caps the ladder at `advise`. `identity-too-weak` lifts when a session credential is verified on the call. Identity is not authority | Proposed | H2, H8, H28 |
 | C28 | Spawn limits | none, a cap | The fleet's limits, with a start admitted as an automatic wake is. `overlordLiveProgrammes` (3 by default) bounds what it started, inside `portfolioFocus` (4 by default), which caps live programmes outside `background`. The refusals are `overlord-cap` and `portfolio-full`. Pending starts count | Proposed | H24, H38 |
 | C29 | Where the operator model lives | `coord.db`, its own file, the fleet box | Its own file, `operator-model.db`, on the server, out of the sessions' reach. It ships in W1 with the operator's messages and the read ledger. What the Overlord reads still sits in its transcripts and history: on a `shared-user` box the boundary is that user, in a container its own volume. A privacy journal outside snapshots stops a restore un-wiping | Proposed | H7, H10, H27, H29, H31 |
@@ -5737,7 +5809,7 @@ mechanism leaves something open, the row says what is left.
 | Memory loss over a long life | It loses threads across programmes and months | Generations renewed from rows before the context grows long. The anchor, the card and append-only notes. Closed-book probes and a fitted ceiling. A generation that fails to start is `degraded`, never silently active |
 | A restore revives authority | A snapshot brings back a revoked grant, an old designation or a cleared latch | The authority journal, which no snapshot carries. Boot coherence reads the act journal against the act rows too. A witness epoch, with the journals' heads, held outside the volume. An agent on the server's own host is no witness, because the same snapshot restores its copy. After each boot, grants read as suspended and the rung is capped at `advise` until one witness off the server's volume has answered; on one box that is the first signed-in console. Boot coherence refuses `authority-rolled-back` until the operator's "Confirm the restore" door, behind the step-up, runs the restore in one transaction: the term rises, each field takes the stricter of database and journal, every grant stays latched, the reconciliation pass runs, and the epoch is set above every witness's. The ladder's `chat` cap then stays as a latch the operator clears. Each act the act journal holds and the table lacks gets a row with `divergedAt`, and the asks, items and requests it touched go to the operator |
 | The decision model is wrong, down or leaks | A wrong class, a missed flag, or private text sent out | It may only narrow, and each row states which way it fails. A line is admitted only by a measured bound, and labels come only from the operator. An injection canary before arming, and an anchor set after. `private-state` rows run only on a local or zero-retention host. Both egress checks run on every text field before it is sent to a `hosted` model, and a hit answers `not-asked`. The operator arms each row, under a daily ceiling |
-| Agreement is inflated | Authority widens on numbers the Overlord shaped, or that a tired operator gave | Only blind or examined answers count. A sealed prediction is filed on every escalated item. One scored against an answer that was neither blind nor examined is reported apart, as anchored, and counts for no gate. The Overlord states a recommendation only in a brief, never in the chat or a summary, and an answer is scored blind only when none of its chat text since the filing was on screen before the pick. Replay as of a date runs in a replay body. Agreement is set against the operator's own consistency. When fatigue is measured, decisions move to on-tap |
+| Agreement is inflated | Authority widens on numbers the Overlord shaped, or that a tired operator gave | Only blind or examined answers count. A sealed prediction is due on every item and ask that reaches the operator, and a missing one is a miss. One scored against an answer that was neither blind nor examined is reported apart, as anchored, and counts for no gate. The Overlord states a recommendation only in a brief, never in the chat or a summary, and an answer is scored blind only when none of its chat text since the filing was on screen before the pick. Replay as of a date runs in a replay body. Agreement is set against the operator's own consistency. When fatigue is measured, decisions move to on-tap |
 | Tripwires used to deny the Overlord | Someone trips latches on purpose to hold it at `advise` or `chat` | A step down only returns routing to today's, so the cost is availability, never safety. Tripwires refuse and count before they latch. `superseded` feeds no tripwire, and the breaker counts only lapses and releases the Overlord caused. Each step is logged with its cause, and only the operator clears a latch (M21) |
 | The operator's oversight decays | The operator waves everything through, and every measure still looks good | A weekly check of about five minutes, with blind spot-checks and a seeded wrong call. Supervision debt sends new big answers up as briefs, and missed checks pause grant renewals and proposals. Fatigue is measured. M27 reports whether oversight is real |
 | Fable's cap or cost | Its accounts run out sooner, or Fable bills usage credits | A reserved share on each of its accounts, so no other session spends what it needs. Fable billed to credits is unservable for it. ccd's model fallback moves it to Opus, and back after ccd's hold-down (Table 11.5b). Off its model, the ladder drops one rung until replay passes. M11 watches it |
@@ -5831,7 +5903,8 @@ mechanism leaves something open, the row says what is left.
       asking. It starts at 1, and a kind of decision with no record always asks. In numbers: at 1 the Overlord
       answers a routine question alone only after about sixty blind answers of yours in that cell with none
       overturned, and a big one after about 180. At 3 those are about twenty and about sixty. About one
-      escalation in eight is blind, so at 1 the Overlord mostly briefs and recommends for its first months.
+      escalation in eight is blind, so at 1 the Overlord mostly briefs and recommends for its first months. A cell
+      for a routine answer is the fleet's, not one programme's: rule whether it should be narrower (Table 9.5b).
   16. **The scope of the skill-size ratchet (H37, §11.3).** The test is built and waits for you. It binds every
       programme: once it merges, a pull request that grows a skill file fails in the merge queue, unless it adds a
       pinned clause or puts the new text in a new reference file. Measured on `main` over 14 days, the coordinator
