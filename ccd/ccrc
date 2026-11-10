@@ -1945,6 +1945,16 @@ BOX_INTENT_FILE="$HOME/.ccrc/update-intent"
 # (single-definition.test.ts, "one ~/.ccrc/exposure.env").
 CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"
 
+# ── THE TEST BOX OVERLAY, WHICH THE TEST BOX CARD WRITES (D-8166, spec §2.6) ──
+# `~/.ccrc/testbox.env` — ccrc-OWNED: the Test box card's verb (`ccrc testbox-admin`) writes the fleet-side test box
+# settings here, so connecting a test box never edits the operator's `ccrc.env`. ccrc's one reader, `_ccrc_knob`,
+# learns it for the sixteen fleet-host test box keys alone (`TB_OVERLAY_KEYS`, one literal list, the keys
+# `_tb_host_table` in ccd/testbox-knobs reads; the 28 box keys never meet it) and only for a key `ccrc.env` does not
+# name: ccrc.env wins, and an environment value still wins outside `file` mode. Both are copied into the generated
+# ccd/lib/ccrc-settings.sh (deploy/gen-settings-lib.mjs).
+CCRC_TESTBOX_OVERLAY_FILE="$HOME/.ccrc/testbox.env"
+TB_OVERLAY_KEYS=(CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES)
+
 # ── THE CADDYFILE, WHICH `expose` REGENERATES ON EVERY RUN ────────────────
 # `~/.ccrc/Caddyfile` — ccrc-OWNED, the REGENERATE class: `cmd_expose`
 # rewrites it whole from the origin and CCRC_PORT on every run, and nothing in
@@ -22423,6 +22433,11 @@ _ccrc_knob() {   # <KEY> <default> [file]
     # spelling, `CCRC_EXPOSURE_FILE=`: the model's own refusal of an undecidable ccrc.env compares its source with that path.
     if [ "$g" = 1 ] || { [ "$g" = 4 ] && [ "${CCD_OS:-linux}" = darwin ] && [ "$key" = CCRC_BACKUP_DATA_KEEP ]; }; then CCRC_EXPOSURE_FILE="$f/." _box_unit_env "$key" 2>/dev/null; case $? in 0) KNOB="$BUE_VAL"; if [ -n "$KNOB" ]; then KNOB_FROM=file; elif [ "$BUE_NAMED" = 1 ]; then KNOB_FROM=empty; fi ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
     [ -z "$why" ] || { KNOB=""; KNOB_WHY="$key cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
+  fi
+  # D-8166: a fleet-host test box key the file does not name reads the overlay, by this same function with the overlay as the file
+  # (so its scan and model are ccrc.env's, and a sentence it cannot decide names the overlay). Never from the overlay's own call.
+  if [ -z "$KNOB" ] && [ -z "$KNOB_FROM" ] && [ "$f" != "$CCRC_TESTBOX_OVERLAY_FILE" ] && [[ " ${TB_OVERLAY_KEYS[*]} " == *" $key "* ]]; then
+    BOX_ENV_FILE="$CCRC_TESTBOX_OVERLAY_FILE" _ccrc_knob "$key" "$2" file; return
   fi
   [ -n "$KNOB" ] || { KNOB="$2"; KNOB_FROM="${KNOB_FROM:-default}"; }
 }

@@ -1362,7 +1362,10 @@ in `ccrc.env` survives a reboot. A line that reader refuses, or a value a sweep 
 line naming the setting, where it came from and what was refused; a server-role box runs none of these sweeps.
 The test box's 44 settings (D-7403, D-7451; see **The test box**) are box-wide, so each is read in `file` mode only
 (an environment value is ignored, with a warning), checked against its shape, and kept at its default with a warning
-naming the file when it is not that shape. Sixteen are the fleet host's, read from `~/.ccrc/ccrc.env`: `CCRC_TESTBOX_URL`, `CCRC_TESTBOX_TOKEN_FILE`, `CCRC_TESTBOX_GIT_URL_BASE`, `CCRC_TESTBOX_GIT_KEY`, `CCRC_TESTBOX_UNTRACKED_FILE_MAX`, `CCRC_TESTBOX_SNAPSHOT_MAX`, `CCRC_TESTBOX_STATUS_DEADLINE`, `CCRC_TESTBOX_RECONNECT_DEADLINE`, `CCRC_TESTBOX_LOST_RUN`, `CCRC_TESTBOX_QUEUE_LIMIT`, `CCRC_TESTBOX_QUEUE_WAIT`, `CCRC_TESTBOX_BUDGET`, `CCRC_TESTBOX_DENY_GLOBS`, `CCRC_TESTBOX_POLL`, `CCRC_TESTBOX_FALLBACK_INSTALL` and `CCRC_TESTBOX_TIMES`. The other
+naming the file when it is not that shape. Sixteen are the fleet host's, read from `~/.ccrc/ccrc.env`: `CCRC_TESTBOX_URL`, `CCRC_TESTBOX_TOKEN_FILE`, `CCRC_TESTBOX_GIT_URL_BASE`, `CCRC_TESTBOX_GIT_KEY`, `CCRC_TESTBOX_UNTRACKED_FILE_MAX`, `CCRC_TESTBOX_SNAPSHOT_MAX`, `CCRC_TESTBOX_STATUS_DEADLINE`, `CCRC_TESTBOX_RECONNECT_DEADLINE`, `CCRC_TESTBOX_LOST_RUN`, `CCRC_TESTBOX_QUEUE_LIMIT`, `CCRC_TESTBOX_QUEUE_WAIT`, `CCRC_TESTBOX_BUDGET`, `CCRC_TESTBOX_DENY_GLOBS`, `CCRC_TESTBOX_POLL`, `CCRC_TESTBOX_FALLBACK_INSTALL` and `CCRC_TESTBOX_TIMES`. The Test box card may also write these sixteen, and these
+alone, into `~/.ccrc/testbox.env` (D-8166), which ccrc's one reader reads after `ccrc.env` and only for a key `ccrc.env` does not name;
+its lines are read by the same rules as `ccrc.env`'s, so a line it cannot decide refuses that key alone, and a value from it
+reads as `file`. The other
 twenty-eight are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
 (`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE` and `CCRC_TESTBOX_UNIT_MAX`. `ccrc test --testbox-knobs host|box` prints either table, one
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
@@ -7106,7 +7109,7 @@ re-applies the box's own limits when it ends. The PWA control for the cap and th
 
 A second, separate box can run the fleet host's tests instead of `ccrctests.slice` (spec
 `docs/superpowers/specs/2026-10-28-test-box-design.md`; plan `docs/superpowers/plans/2026-10-29-test-box.md`). Everything
-below ships **off**: with no `CCRC_TESTBOX_URL` in `~/.ccrc/ccrc.env`, or with the switch off, `ccrc test` is exactly
+below ships **off**: with no `CCRC_TESTBOX_URL` in `~/.ccrc/ccrc.env` (or in `~/.ccrc/testbox.env`, the file the Test box card writes the fleet host's test box settings into), or with the switch off, `ccrc test` is exactly
 the wrapper **Test containment** describes, its output, exit status and the processes it starts unchanged.
 
 **What runs where** (spec §2.5). The box takes one test file or a set whose estimated time is under
