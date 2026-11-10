@@ -104,7 +104,8 @@ function mainOnlyAnd(rc, col) {
 }
 
 /** A select-list tail naming a node's agent_id (its transcript's), only under --agents: '' otherwise, so a default read prepares the
- *  statement it prepared before. `col` is the node's transcript_pk column. */
+ *  statements it prepared before, with one exception: `resolveNodeInScope`'s select always carries a `main` column (results unchanged).
+ *  `col` is the node's transcript_pk column. */
 function agentColumn(rc, col) {
   return agentsOn(rc) ? `, (SELECT t.agent_id FROM transcripts t WHERE t.transcript_pk = ${col}) AS agent_id` : '';
 }
@@ -741,8 +742,9 @@ function grepParams(rc, a, nodes, extra) {
 
 /** The ranked pool and the true count, from ONE statement: `total` is the window count on every row, read from the first
  *  (0 when there is none) and stripped from each pooled row, so the pool keeps exactly its nine columns and the count needs no
- *  second statement. The MATCH is not run once: `m` is inlined into each arm that tests it, so blobs_fts is scanned three times
- *  for a recency sort and four with `rk` (EXPLAIN QUERY PLAN, SQLite 3.53.4; D-8176). `all.pool` is at least 1, since the count rides on the first row. Exported as a test seam (the
+ *  second statement. On the FTS path the MATCH is not run once: `m` is inlined into each arm that tests it, so blobs_fts is
+ *  scanned three times for a recency sort and four with `rk` (EXPLAIN QUERY PLAN, SQLite 3.53.4; D-8176). The regex path
+ *  (`REGEX_MATCH`, a `json_each` list) reads no blobs_fts. `all.pool` is at least 1, since the count rides on the first row. Exported as a test seam (the
  *  `leafHeads` precedent). When blobs_fts vanished between the gate and the statement (a `doctor --repair` drop and
  *  recreate), the answer is 7 fts-pending, never exit 1 (review focus 5). */
 export function rankedAndCounted(rc, matchSql, sort, all) {

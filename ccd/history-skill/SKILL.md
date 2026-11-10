@@ -100,7 +100,7 @@ not lost: the store still holds them.
 ## 5. Scope
 
 By default every verb answers for this session's family: every epoch across `/clear` and every
-transcript of this session id's current generation. A swap to another account needs no flag: the
+main-thread transcript of its current generation. A swap to another account needs no flag: the
 family carries across it.
 
 - `--project` widens to every family of this session's project. Use it only if the family
