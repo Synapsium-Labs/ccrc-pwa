@@ -16,8 +16,13 @@
 // its own class. All three only read through the fleet io (the test box poll: the testbox op, a registry listing and
 // the runs-log day files) and keep the answer in memory: none writes a log (nor a file) today, so none can cause the
 // teardown flake. Nor does it see the synchronous tail a sweep runs after its row's run settles (the delegation frame's
-// emit, a few microtasks after the slot clears). A tick-fired writer that logs must run through a row (or be awaited by
-// `settled()`) before this guard can see it.
+// emit, a few microtasks after the slot clears). Nor the calls the collector lane's pass QUEUES and never awaits
+// (`watch.ts`, `collectLearn`'s `learnCollect` and `collectAct`'s `retireExecutor(… collectTempRoot …)`): they settle on
+// the session queue, after the `collect` row's run has ended, and each can `console.warn` (a failed fold, a job that
+// threw). That writer class is latent today: `collectPass` returns early unless `ccd caps` grants the collect verb and the
+// reclaim-pause cap, `testDeps` builds neither, and the one fixture that arms the lane (`collectLaneFixture.ts`) awaits
+// its own jobs (review 1724 F4). A tick-fired writer that logs must run through a row (or be awaited by `settled()`)
+// before this guard can see it.
 //
 // `guardQuietAtTestEnd` registers, for the test running now, a check that NO row has a run in flight when it ends. It
 // does not wait for them: a case that ticks drains the watcher itself (`drainTick`), and a case that forgot goes red
@@ -61,3 +66,29 @@ export const drainWatcher = async (w: FleetWatcher): Promise<void> => {
 
 /** `tick()`, then everything `drainWatcher` covers settled. */
 export const drainTick = async (w: FleetWatcher): Promise<void> => { await w.tick(); await drainWatcher(w); };
+
+/** What `quietWatcher` waits for. `lanes: false` is for a file whose cases hold a `LANE_SCHEDULE` row's run that never
+ *  settles ON PURPOSE (a single-flight or overlap characterization): waiting on the rows would wait forever, so only
+ *  what `settled()` covers (the server-caps beat, the inventory run, its dispatch run) is awaited, and the delegation
+ *  lane closed. A row held that way never settles, so it never writes. */
+export interface QuietOptions { readonly lanes?: boolean }
+
+/** D-8140 (C17 item 1): the watcher stopped and QUIET, awaited. Its cadence is stopped, everything `drainWatcher`
+ *  covers has settled (with `lanes: false`, what `settled()` covers), and the delegation lane is closed with its sweeps awaited
+ *  (`closeDelegation`, D-7878), which neither `settled()` nor any `LANE_SCHEDULE` row covers, and which is the most
+ *  common late writer (its compaction line). Terminal: a watcher quieted here is not ticked again. */
+export const quietWatcher = async (w: FleetWatcher, o: QuietOptions = {}): Promise<void> => {
+  w.stop();
+  if (o.lanes !== false) await drainWatcher(w); else await w.settled();
+  await w.closeDelegation();
+};
+
+/** D-8140 (C17 item 1): call from inside a test (a rig builder does) for every watcher the test builds. When the test
+ *  ends, `quietWatcher` runs as part of it, so a writer `tick()` fired (the server-caps beat, the inventory run, a
+ *  delegation pass) warns inside the test, never after the file has finished, where vitest's console rpc may already
+ *  be closing ("EnvironmentTeardownError: Closing rpc while onUserConsoleLog was pending" on a shard whose tests all
+ *  passed). A watcher built in `beforeAll` is quieted in `afterAll` with `quietWatcher` instead. Returns `w`. */
+export const quietAtTestEnd = (w: FleetWatcher, o: QuietOptions = {}): FleetWatcher => {
+  onTestFinished(() => quietWatcher(w, o));
+  return w;
+};

@@ -22,6 +22,7 @@ import { queueFor, type CcdPrLine } from '../src/prstate.js';
 import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -115,7 +116,7 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   const deps = { ...testDeps(home, runnerFor(() => out)), coord, notifyLog: log,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
     viewers: { isVisible: () => opts.visible === true } as never };
-  let w = new FleetWatcher(deps, new Bus(), 10_000);
+  let w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
   const sweep = async (next?: string): Promise<void> => {
     if (next !== undefined) out = next;
     w.kick('pr');
@@ -124,7 +125,7 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   };
   /** A server restart: a NEW watcher — every in-memory latch empty — over the
    *  SAME coord.db, which is what a rollout or a crash leaves behind. */
-  const restart = (): void => { w.stop(); w = new FleetWatcher(deps, new Bus(), 10_000); };
+  const restart = (): void => { w.stop(); w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000)); };
   const stop = (): void => { w.stop(); };
   const queueFeed = () => coord.feedEvents(200).filter((e) => e.kind === 'queue');
   const mail = () => coord.mailForRecipient(COORDINATOR);

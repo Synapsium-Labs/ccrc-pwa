@@ -1575,3 +1575,15 @@ describe('delegation wave 5 PR8b: the adoption switch vocabulary is declared onc
     expect(isDelegationAdoptRefusal('sign-in-unarmed')).toBe(false);
   });
 });
+
+// The admin-merge door's worker test (D-8124): `ccd pr-admin-merge` judges a caller's hold with the session hook's own wave shape.
+describe('the admin-merge door reads a hold as the session hook does', () => {
+  it('ccd AM_HOLD_WAVE_RE is session-hook.sh CCRC_HOLD_WAVE_RE, byte for byte', () => {
+    const read = (file: string, name: string): string => {
+      const m = new RegExp(`^${name}='([^']*)'$`, 'm').exec(readFileSync(path.join(ccrcRoot, 'ccd', file), 'utf8'));
+      if (!m) throw new Error(`${file} no longer assigns ${name} as one single-quoted line`);
+      return m[1]!;
+    };
+    expect(read('ccd', 'AM_HOLD_WAVE_RE')).toBe(read('session-hook.sh', 'CCRC_HOLD_WAVE_RE'));
+  });
+});

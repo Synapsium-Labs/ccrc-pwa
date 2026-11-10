@@ -938,3 +938,18 @@ describe('layer 4c — the testbox ops are not an exec path, and their bodies ha
     expect(src).toMatch(/from '\.\/testbox\/exec\.js'/);
   });
 });
+
+// The admin-merge door (D-8124) is a SESSION verb: a coordinator runs it from its own Bash, and no server route or argv
+// builder may name it, so the agent's whitelist never grants it.
+describe('the admin-merge door is not a server verb', () => {
+  it('no server argv builder names pr-admin-merge: the door is a session verb, never the server\'s', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+    const holders = walk(root).filter((f) => f.endsWith('.ts') && readFileSync(f, 'utf8').includes('pr-admin-merge'));
+    expect(holders).toEqual([]);
+  });
+});

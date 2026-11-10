@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { callsIn, inlinedSourceOf, sourceOfSymbol, sqlStatementsIn, sqlStatementsInFile, symbolOf, REPO_ROOT } from './scan/symbols.js';
+import { callsIn, inlinedSourceOf, parsedFile, sourceOfSymbol, sqlStatementsIn, sqlStatementsInFile, symbolOf, REPO_ROOT } from './scan/symbols.js';
 
 const FIXTURE = [
   'export class Watcher {',
@@ -177,3 +177,29 @@ const SQL_FIXTURE = [
   '}',
   '',
 ].join('\n');
+
+// C17 item 4 (D-8140, boot-mutant-census-race): a census walks `server/src` and parses every file it listed, and
+// `boot.test.ts` writes `server/src/__boot_control_mutant__.ts` and removes it. A removal between the listing and
+// the read was ENOENT on whichever shard ran the two together. `parsedFile` treats a `__`-prefixed basename as that
+// transient mutant: an empty parse, read from nothing.
+describe('scan/symbols.ts parsedFile never reads a transient `__` mutant (D-8140)', () => {
+  let dir = '';
+  beforeAll(() => { dir = mkdtempSync(path.join(tmpdir(), 'scan-symbols-mutant-')); });
+  afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('a `__`-prefixed file that has already gone parses as empty, and one that stands is not read', () => {
+    const gone = path.join(dir, '__boot_control_mutant__.ts');
+    expect(parsedFile(gone).calls, 'listed, then removed: no ENOENT').toEqual([]);
+    const standing = path.join(dir, '__standing_mutant__.ts');
+    writeFileSync(standing, 'export function f(): void { markLeaseCarrier(); }\n');
+    expect(parsedFile(standing).calls, 'a mutant beside the sources is never one of them').toEqual([]);
+    expect(parsedFile(standing).symbols).toEqual([]);
+  });
+
+  it('control: any other file that is gone still throws ENOENT, and one that stands is read', () => {
+    expect(() => parsedFile(path.join(dir, 'gone.ts'))).toThrow(/ENOENT/);
+    const real = path.join(dir, 'real.ts');
+    writeFileSync(real, 'export function f(): void { markLeaseCarrier(); }\n');
+    expect(parsedFile(real).calls.map((c) => c.callee)).toEqual(['markLeaseCarrier']);
+  });
+});

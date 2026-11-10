@@ -581,10 +581,10 @@ never enqueued (gh would arm auto-merge instead). On route U the set is empty an
 | Route | When | Spelling | Method flag | `--admin` |
 |---|---|---|---|---|
 | **Q — native queue** | a `merge_queue` rule applies to the base, with one queue method | `gh pr merge <pr> --match-head-commit <handoffCommit>`, after every discovered required check passes on the head (5.7.3) and `--required` exits 0, then the read-back and the disarm rule (§5.2, `wave-lifecycle.md` §5) | none: the queue's method applies | never |
-| **G — gated direct merge** | no queue rule; the required set is not empty, or another gate applies (5.7.3) | `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, after every required check passes on the head, with `<method>` from 5.7.2; on a merge-commits-only repository, exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>` | exactly one, from the method set | never (amended 2026-10-28: the approval licence is retired, below); a missing required approval is the stop `approval-missing` |
-| **U — ungated direct merge** | no queue rule; the required set is empty; no other gate applies; and every source was read, or read 3b stood in for read 3 | `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>` | exactly one, from the method set | never (amended 2026-10-28: the approval licence is retired, below); a missing required approval is the stop `approval-missing` |
+| **G — gated direct merge** | no queue rule; the required set is not empty, or another gate applies (5.7.3) | `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, after every required check passes on the head, with `<method>` from 5.7.2; on a merge-commits-only repository, exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>` | exactly one, from the method set | never on a route; an `approval-missing` stop may go to the admin-merge door (D-8124, below) (amended 2026-10-28: the approval licence is retired, below); a missing required approval is the stop `approval-missing` |
+| **U — ungated direct merge** | no queue rule; the required set is empty; no other gate applies; and every source was read, or read 3b stood in for read 3 | `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>` | exactly one, from the method set | never on a route; an `approval-missing` stop may go to the admin-merge door (D-8124, below) (amended 2026-10-28: the approval licence is retired, below); a missing required approval is the stop `approval-missing` |
 
-**No `--admin`, and a missing approval stops** (amended 2026-10-28). No route passes `--admin`. Ruling 5 (§11, the
+**No `--admin` on a route, and a missing approval stops** (amended 2026-10-28; one door added 2026-11-09, D-8124). No route passes `--admin`. Ruling 5 (§11, the
 amendment of 2026-10-25) puts `--admin` and GitHub API merge or enqueue calls under the repository's external policy
 authority, and until that authority answers (wave 2b) a coordinator never uses them. So no answer read here licenses
 `--admin`: not a missing approval, not `enforce_admins`, and not a ruleset's `current_user_can_bypass`, which the
@@ -601,6 +601,14 @@ first. The procedure decides it after read 5, so a direct route that will stop h
 first, and a `WAIT` or `RED` line comes before it. Under read 3b classic protection's approvals cannot be read, so a classic approval is
 left to GitHub there, and GitHub's refusal is the stop. Route Q is unchanged: its enqueue never passes `--admin`.
 `--admin` is never a fallback either: a fallback is `--admin` after a refusal.
+
+The one exception (amended 2026-11-09, D-8124; §11, decisions 18 to 21) is not a route. On `STOP approval-missing`, and on no other
+stop, a coordinator runs `ccd pr-admin-merge` once. That verb performs the checks itself (the setting is on; the caller is a
+coordinator; the fleet's identity is a repository admin; the base has no merge queue; the PR is open, not a draft and at the
+head; no review requests changes; every required check is green on that head), merges with `--admin --match-head-commit`,
+and journals it, or refuses with a typed reason, and the stop stands. It is the only place `--admin` is spelled, and it is
+reached by a verb rather than by loosening the hook, whose deny of a raw `--admin` and of `gh api` merges stands in every
+session. A repository with a merge queue is never admin-merged, so route Q is untouched.
 
 Until this amendment, this subsection stated an approval licence. It allowed `--admin` on a direct route when an
 approval the fleet cannot give was required and missing, every required check had passed, and `--admin` could skip
@@ -662,7 +670,7 @@ changes nothing. The coordinator says in its turn's text which stop fired and wh
 | A required check cannot be verified | a required name pinned to an App shows on the head only as a commit status |
 | A required check has not reported within the bound | the wait of 5.7.3 has ended, and a fresh read 5 still shows a required name as not reported |
 | A red required check nothing here can reach | a required check red on the head that is not the PR's own and is not a GitHub Actions run, or one still red after the one rerun. (Amended 2026-10-30, D-7588, the operator's answer to D-7536's question: where that red is `main`'s own and already fixed on `main`, the coordinator takes the new-head route itself, a fix round for one clean merge of `main` and then a review run scoped to that merge. Where either fact cannot be shown, it stays this stop.) |
-| A required approval is missing (`approval-missing`; amended 2026-10-28, replacing "The approval licence fails") | on route G or U only, never on route Q: any `pull_request` rule of read 2, or read 3's classic protection, has `required_approving_review_count` above 0, and read 1's `reviewDecision` is anything but exactly `APPROVED`, empty or absent included. It is decided after read 5, so a `WAIT` or `RED` line comes first. A standing request for changes stops earlier (`changes-requested`); once the operator has answered ignore to that stop, a missing approval still stops here. The line is `STOP approval-missing: route G needs an approval the fleet cannot give, and --admin is never used` (or `route U`). It means the merge needs an approval the fleet cannot give, and with no `--admin` GitHub could only refuse it (5.7.4) |
+| A required approval is missing (`approval-missing`; amended 2026-10-28, replacing "The approval licence fails") | on route G or U only, never on route Q: any `pull_request` rule of read 2, or read 3's classic protection, has `required_approving_review_count` above 0, and read 1's `reviewDecision` is anything but exactly `APPROVED`, empty or absent included. It is decided after read 5, so a `WAIT` or `RED` line comes first. A standing request for changes stops earlier (`changes-requested`); once the operator has answered ignore to that stop, a missing approval still stops here. The line is `STOP approval-missing: route G needs an approval the fleet cannot give; only the admin-merge door may land it (D-8124)` (or `route U`). It means the merge needs an approval the fleet cannot give, and with no `--admin` GitHub could only refuse it; the coordinator tries the admin-merge door once (5.7.4) |
 | GitHub refuses the merge | any rule GitHub enforces at merge (reviews, signatures, deployments, code scanning, required workflows) and the coordinator does not. No route passes `--admin`, so the coordinator never works around a refusal. Under read 3b it is also the stop for an approval kept in classic protection, which that read cannot show (amended 2026-10-28) |
 
 (Amended 2026-10-28.) The shipped procedure (`wave-lifecycle.md` §5b) stops on more than this table lists. It stops
@@ -850,6 +858,8 @@ A stage whose metric has not moved two weeks after rollout is retired or redesig
 
 **Amendment 2026-10-25 (ruling R5, overturned).** The operator overturned "no unattended lander": "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". Unattended landing is now the goal when every safeguard holds (§3, R5): the native merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to the operator's overturn: workers still never merge their own PR. Stages 3 to 5 are untouched here; whether to withdraw them is a separate operator decision. Where stage text says a landing never comes from a timer or the PWA (§5.5), R5 as amended governs. Rulings of the same day, recorded with it: **ruling 5** — governance of merges (who may merge, `--admin`, GitHub API merges, bypass) belongs to the repository's external policy authority, not to ccrc text; ccrc provides the enforcement points. It supersedes the wave lifecycle's pointer to the narrow approval licence (§5.7.4, §11 item 10): `--admin` and GitHub API merge or enqueue calls are governed by that authority, and until it answers (wave 2b) a coordinator never uses them. **Ruling 2** — the live queue's grouping (build 2, merge 3) is accepted; one release may cover several commits. **Ruling 3** — the two private repositories should drop strict protection; the native queue is not available on their plan, so how they land is open. Ledger: D-6857. (Answered 2026-10-30: they land by a direct merge once the PR's own checks pass, route G of §5.7.4, and nothing tests a PR combined with `main` there before it lands; the strict-protection flip stays the operator's, R10. Ledger, Decisions, 2026-10-30 23:24; recorded here 2026-11-06.)
 
+**Amendment 2026-11-09 (D-8124).** The operator answered for the policy authority that ruling 5 left open. The blanket "no `--admin` in any session" (§3's coordinator row, §5.2, §5.7.4, the session hook's merge deny) has one exception, rulings 18 to 21 below, and nothing else changes: the hook still refuses a raw `gh pr merge --admin` and every `gh api` merge in every session; the exception is a single ccrc verb, `ccd pr-admin-merge`, that makes every check itself (the macOS-legs and queue reasoning for a repository with a queue stays true, since such a repository is never admin-merged). Ledger: D-8124.
+
 **Amendment 2026-10-28 (§5.7 follows ruling 5).** No ruling is new here, and the record above stands as written.
 Wave 3e (#1127) shipped the landing verdict without the approval licence, as ruling 5 requires, and review runs 1138
 and 1141 read it. So §5.7 now says what shipped: read 6 is retired, no route passes `--admin`, and a direct route
@@ -905,6 +915,29 @@ Decided on wave 5g's plan, 2026-11-07 (each as the plan proposed; D-8080, D-8081
 17. **Intents are not journalled.** They live in `coord.db` with the runs that hold them, and `landing.log` carries
     no intent record (§5.5, §7). A hold ends with its run, and the journal's parser refuses a record kind it does not
     know, so an intent record would stop an older build that reads `landing.log` from starting.
+
+Decided on the operator's ruling, 2026-11-09 (D-8124):
+
+18. **Which repositories.** Every repository where ccrc's GitHub identity holds admin permission, detected from the repository read
+    (`permissions.admin`), with no per-repository switch. One box setting, `CCRC_ADMIN_MERGE` (`auto` or `off`, default `auto`),
+    turns the door off fleet-wide.
+19. **A repository with a merge queue is never admin-merged.** A base branch with a queue (a ruleset's `merge_queue` rule, or GitHub's `mergeQueue` read for the branch)
+    lands through the queue, so a repository that lands through its queue keeps doing so.
+20. **Conditions, all read at merge time on the exact head.** Every required check green on that head; no review in the
+    changes-requested state; the PR not a draft; the merge pinned with `--match-head-commit <sha>`; the repository's allowed method
+    respected, a merge commit preferred and a squash only where the repository allows nothing else (a squash beside a rebase, with
+    no merge commit, is a refusal). "Green" is GitHub's own passing set (`success`, `neutral`, `skipped`), as the verdict reads it.
+    `--admin` also gets past strict up-to-date, required workflows, code scanning, required deployments, signed commits and
+    conversation resolution, and a branch lock or an update restriction, so the door refuses a base that carries any rule it
+    cannot judge (it admits only the ruleset rule types it reads, and refuses every other, including types GitHub adds later, and
+    classic `lock_branch`), and under strict up-to-date a head that is behind the base. The door also lands only a PR from a branch
+    of the repository itself (not a fork) that the fleet's own GitHub identity opened: the approval it stands in for is the human
+    gate against code nobody here wrote, so an outside contributor's PR is refused (`cross-repo`, `not-fleet-pr`) however green.
+21. **Who, and through what.** Coordinators only; a worker still cannot merge at all. The hook keeps refusing a raw `--admin` and
+    `gh api` merges, and the one gated door is `ccd pr-admin-merge`, which refuses with a typed reason and journals each call.
+    The coordinator skill sends it the `approval-missing` stop and no other. The caller is derived from the process (the default
+    tmux socket by path, the pane's process an ancestor of the door's own, the account's home from the password database), not from
+    environment variables the command line sets.
 
 ## 12. Failure modes named
 

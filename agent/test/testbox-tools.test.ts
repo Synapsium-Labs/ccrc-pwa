@@ -885,11 +885,14 @@ function driver(b: Box, o: {
   let ticks = 0;
   let release: () => void = () => undefined;
   const idle = new Promise<void>((r) => { release = r; });
+  // D-8140 (C17 item 5): the takeover asks for the service's idle only after it has closed admissions, so a call here
+  // is the settled condition a test waits on (the script's takeover file appears before the unit has even exited).
+  let idleAsked = false;
   const live = o.live ?? [];
   const waiting: RunSubmit[] = [];
   const submitted: { f: RunSubmit; conn: { send(f: unknown): void; refuse(r: string): void } }[] = [];
   const served: ServedService = {
-    status: okStatus, idle: () => idle, tick: async () => { ticks++; }, liveRuns: () => live, waiting: () => waiting,
+    status: okStatus, idle: () => { idleAsked = true; return idle; }, tick: async () => { ticks++; }, liveRuns: () => live, waiting: () => waiting,
     submit: (f, conn) => { if (o.submit !== undefined) o.submit(f, conn); submitted.push({ f, conn }); },
   };
   const t = new ToolSync({
@@ -898,7 +901,7 @@ function driver(b: Box, o: {
     wait: o.wait ?? (async () => undefined),
   });
   t.serve(served);
-  return { t, units, exits, ticks: () => ticks, release: () => release(), live, waiting, submitted, svcRoot };
+  return { t, units, exits, ticks: () => ticks, release: () => release(), idleAsked: () => idleAsked, live, waiting, submitted, svcRoot };
 }
 
 describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
@@ -916,9 +919,12 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     const p = d.t.request(frameOf(NEW_TAG));
     await new Promise((r) => setTimeout(r, 50));
     for (let i = 0; i < 600 && d.units.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
-    // Until the run ends, the takeover waits: current already names the new set, the old node is still there.
-    for (let i = 0; i < 1200 && !existsSync(path.join(b.tools, 'takeover')); i++) await new Promise((r) => setTimeout(r, 50));
-    await new Promise((r) => setTimeout(r, 50));
+    // Until the run ends, the takeover waits: current already names the new set, the old node is still there. Wait for
+    // the takeover itself to begin that wait, never for the script's takeover file and a delay: the script writes that
+    // file before its report and its exit, and the driver closes admissions only once the unit's exit is read (D-8140).
+    for (let i = 0; i < 1200 && !d.idleAsked(); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(d.idleAsked(), 'the takeover began waiting for the run').toBe(true);
+    expect(existsSync(path.join(b.tools, 'takeover'))).toBe(true);
     expect(d.exits).toEqual([]);
     expect(d.t.admitting(), 'the takeover admits no run').toBe(false);
     expect(linkOf(path.join(b.tools, 'release', 'installed'))).toBe(NEW_TAG);

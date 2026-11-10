@@ -26,6 +26,7 @@ import { DEAD_LIFECYCLES, type LifecycleInput } from '../../shared/api.js';
 import type { PushPayload } from '../src/push.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 import { okRun } from './coordReadHelpers.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 
@@ -551,7 +552,7 @@ const watcher = async (): Promise<{ w: FleetWatcher; s: CoordStore; home: string
   const sent: PushPayload[] = [];
   const deps: Deps = { ...testDeps(home, goneRunner), coord: s,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
-  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000));   // D-8140: nothing it fires outlives the test
   await w.tick();
   return { w, s, home, sent };
 };

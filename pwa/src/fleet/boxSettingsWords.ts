@@ -71,6 +71,7 @@ export const BOX_SETTING_FAMILY_TEXT: Readonly<Record<BoxSettingFamily | 'other'
   'memory-gate': 'Memory gate',
   'limit-rescue': 'Limit rescue',
   coordination: 'Coordination',
+  'admin-merge': 'Admin merge',
   other: 'Other settings',
 };
 

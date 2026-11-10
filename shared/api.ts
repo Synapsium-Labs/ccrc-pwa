@@ -9250,6 +9250,7 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
+  | 'workspace-unreadable'     // forget (D-8140): the row's workspace field could not be read, so whether it is a workspace is unproven; nothing removed
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands // @anchor purge-refusal-union
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
@@ -9295,6 +9296,8 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'This session is still running. Stop it first, then try again.',
   'session-verdict-unknown':
     'tmux did not answer, so ccrc cannot tell whether this session is still running. Nothing was removed.',
+  'workspace-unreadable':
+    'ccrc could not read whether this session is a workspace, so it removed nothing.',
   'spawn-failed':
     'The undo landed, but the session did not come back up. The workspace and its branch are intact.',
   // D-2605. The act itself COMPLETED — this token only ever rides a `_lc_fail`
@@ -10364,13 +10367,14 @@ const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, orig
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
-export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate' | 'limit-rescue' | 'coordination';
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate' | 'limit-rescue' | 'coordination' | 'admin-merge';
 const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
   updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
   'browser-tools': true,
   'memory-gate': true,
   'limit-rescue': true,
   coordination: true,
+  'admin-merge': true,
 };
 export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
 
@@ -10484,6 +10488,8 @@ export const BOX_SETTING_TABLE = {
   CCRC_LIMIT_WATCHDOG_MIN: { cls: 'value', family: 'limit-rescue', roles: ['fleet', 'both'], applies: 'run' },
   // D-8125: whether a coordinator may extend a reached review-round cap (read by the server).
   CCRC_REVIEW_CAP_COORD_LIFT: { cls: 'value', family: 'coordination', roles: ['server', 'both'], applies: 'run' },
+  // D-8124: the admin-merge door's fleet-wide switch (read by the fleet box's `ccd pr-admin-merge` at each call).
+  CCRC_ADMIN_MERGE: { cls: 'value', family: 'admin-merge', roles: ['fleet', 'both'], applies: 'run' },
 } as const satisfies Record<string, BoxSettingSpec>;
 export type BoxSettingName = keyof typeof BOX_SETTING_TABLE;
 /** The widened view every consumer reads, so `BOX_SETTING_SPECS[k].roles.includes('server')` compiles for every key (C18). */
@@ -10533,6 +10539,7 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'on or off',
   'space-separated repository keys (<name>-<8 hex digits>)',
   'warn, critical or off',
+  'auto or off',
 ] as const;
 export type BoxSettingRefusalWord = typeof BOX_SETTING_REFUSAL_WORDS[number];
 
@@ -10542,6 +10549,7 @@ export const BOX_SETTING_VALUE_WORDS: Readonly<Partial<Record<BoxSettingName, re
   CCRC_BROWSER_MCP_DEFAULT: ['on', 'off'],
   CCRC_WAKE_PRESSURE_GATE: ['warn', 'critical', 'off'],
   CCRC_REVIEW_CAP_COORD_LIFT: ['on', 'off'],
+  CCRC_ADMIN_MERGE: ['auto', 'off'],
 };
 /** `CCRC_BROWSER_MCP_SERVERS`' default (D-8121): the two browser MCP servers' names as Claude Code names them
  *  (`plugin:<plugin>:<server key>`), measured from `claude -p`'s init event (2.1.318; the plans note of 2026-11-08). The

@@ -38,7 +38,7 @@ export const CCD_REFUSAL_TOKENS = [
   'bad-args', 'bad-session-id', 'dirty-tree', 'flock-unavailable', 'foreign-worktree', 'held', 'hibernated',
   'in-progress', 'incomplete-registry', 'is-a-workspace', CCD_LOCK_UNOPENABLE, 'nested-checkouts-present',
   'no-such-session', 'not-a-workspace', 'not-archived', 'run-id-malformed', 'scratch-unwritable', 'session-live',
-  'session-verdict-unknown', 'tip-unreadable', 'token-malformed', 'tree-unreadable', 'worktree-missing',
+  'session-verdict-unknown', 'tip-unreadable', 'token-malformed', 'tree-unreadable', 'workspace-unreadable', 'worktree-missing',
 ] as const;
 export type CcdRefusalToken = (typeof CCD_REFUSAL_TOKENS)[number];
 
