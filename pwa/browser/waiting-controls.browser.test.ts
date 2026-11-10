@@ -61,7 +61,7 @@ const FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
     '/api/runs': RUNS, '/api/claims': [], '/api/waiting': { ok: true, waiting: WAITING },
-    '/api/coord/review-cap/101': { ok: true, askedAt: NOW - MIN, liftedAt: null, ask: { run: 101, rounds: 3, cap: 3, lastReview: null } },
+    '/api/coord/review-cap/101': { ok: true, askedAt: NOW - MIN, liftedAt: null, ask: { run: 101, rounds: 3, cap: 3, lastReview: { reviewRunId: null, summary: null, report: null, findings: { state: 'unnamed' } } } },
   },
   fleetFrames: [
     { type: 'fleet', sessions: withRunBinding(SESSIONS as never[], RUNS as never[]) }, { type: 'runs', runs: RUNS },
