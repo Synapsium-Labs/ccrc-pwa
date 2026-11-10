@@ -164,6 +164,11 @@ export interface AgentIngestInputs {
   form: 'tick' | 'import'; armed: boolean; historyOff: boolean; pause: string | null; admitted: boolean; preInstall: boolean; parentKnown: boolean;
 }
 export function decideAgentIngest(i: AgentIngestInputs): boolean;
+/** The share of the store cap at which subagent capture pauses (W4 P5). */
+export const AGENTS_PAUSE_SHARE: 0.9;
+/** The pause order's one rule (W4 P5, D-8155): `'at-90'` when armed, no other pause stands, the cap is measured (over 0) and the size has reached
+ *  `AGENTS_PAUSE_SHARE` of it; else null. */
+export function decideAgentsPause(i: { armed: boolean; pause: string | null; sizeBytes: number; capBytes: number }): 'at-90' | null;
 /** What the subagent arm of the walk hands over (W4 P20). Paths stay in memory; nothing prints them. */
 export type AgentWalkEntry =
   | { type: 'file'; home: string; slug: string; uuid: string; runId: string | null; id: string | null; path: string; verdict: 'admit' | 'refuse'; reason: AgentFileReason | null; mtimeMs: number }
@@ -507,6 +512,8 @@ export interface HealthInputs {
   readonly userVersion: number | null;
   readonly codeVersion: number;
   readonly historyOff: boolean;
+  /** W4 P15 (b), P5: whether the subagent ingest's arming marker stands (the status envelope's `agents_armed`); optional, read as false when absent. */
+  readonly agentsArmed?: boolean;
   readonly recovering: null | { readonly step: string; readonly cursor: string; readonly cursorUnmovedTicks: number };
   readonly op: null | { readonly verb: string; readonly pid: number; readonly alive: boolean };
   /** D-5016: the scheduled pass's marker as status measured it; `live` only when its identity measured equal. */

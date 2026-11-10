@@ -21,7 +21,7 @@ import {
   UUID_RE, WRITER_RE, idOk, readBoxEnvValue, historyPaths,
   AGENT_ID_MAX, RUN_ID_RE, AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
   agentIdOk, classifyAgentName, decideAgentDir, decideAgentFile, agentKey,
-  INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
+  INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest, AGENTS_PAUSE_SHARE, decideAgentsPause,
   META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, decideMetaType,
 } from '../../ccd/history/lib.mjs';
 import {
@@ -4547,6 +4547,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['cap-malformed', 'warn', { capMalformed: true }],
     ['redact-source-unreadable', 'warn', { redactUnreadable: ['/home/u/.cc-secrets/fixture.env'] }],
     ['cap-near', 'warn', { sizeBytes: 41 * 2 ** 30 }],
+    ['agents-paused-at-cap', 'warn', { sizeBytes: 45 * 2 ** 30, agentsArmed: true }],   // W4 P5 (D-8155): 90% of the 50 GB cap, armed
     ['breaker-open', 'warn', { breakerOpen: true }],
     ['roster-unreadable', 'warn', { rosterUnreadable: true }],
     ['root-is-symlink', 'warn', { rootIsSymlink: true }],
@@ -4714,7 +4715,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('each remedy names the real command and path in this build, as the operator\'s (whole-branch fix 1 item C)', () => {
     const R = healthLib.HEALTH_REMEDIES;
     const out = 'from a terminal outside any session';
-    for (const w of ['at-cap', 'cap-near']) {
+    for (const w of ['at-cap', 'cap-near', 'agents-paused-at-cap']) {
       expect(R[w], w).toContain('ccrc history prune --older-than <age> --apply');
       expect(R[w], w).toContain(out);
     }
@@ -5324,6 +5325,23 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const r = healthLib.deriveHealth(base({ capturePause: 'at-cap', sizeBytes: 50 * 2 ** 30 }));
     expect(words(r, 'fail')).toContain('at-cap');
     expect(words(r, 'warn')).not.toContain('cap-near');
+  });
+  // W4 P5 (D-8155), review 1728 A3; SA11's doctor half by its parts (D-8159, review 1737 F3): the WARN is decided where the pause
+  // applies, by decideAgentsPause, from the marker the status envelope carries, the standing pause and the size and cap.
+  it('agents-paused-at-cap is decided where the pause applies (review 1728, A3; SA11\'s doctor half, by its parts)', () => {
+    const h90 = { sizeBytes: Math.ceil(0.9 * 50 * 2 ** 30) };
+    const h100 = { sizeBytes: 50 * 2 ** 30 };
+    expect(words(healthLib.deriveHealth(base({ ...h90, agentsArmed: false })), 'warn'), 'unarmed: no pause').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ ...h90 })), 'warn'), 'an absent agentsArmed reads as false').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ ...h90, agentsArmed: true, capturePause: 'low-disk' })), 'warn'), 'under a low-disk pause').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ sizeBytes: Math.ceil(0.9 * 50 * 2 ** 30) - 1, agentsArmed: true })), 'warn'), 'under 90%').not.toContain('agents-paused-at-cap');
+    expect(words(healthLib.deriveHealth(base({ ...h90, agentsArmed: true })), 'warn')).toEqual(expect.arrayContaining(['agents-paused-at-cap', 'cap-near']));
+    const at = healthLib.deriveHealth(base({ ...h100, agentsArmed: true, capturePause: 'at-cap' }));
+    expect(words(at, 'fail')).toContain('at-cap');
+    expect(words(at, 'warn')).not.toContain('agents-paused-at-cap');
+    expect(words(at, 'warn')).not.toContain('cap-near');
+    const item = healthLib.deriveHealth(base({ ...h90, agentsArmed: true })).warn.find((i) => i.word === 'agents-paused-at-cap')!;
+    expect(item.remedy).toBe(healthLib.HEALTH_REMEDIES['agents-paused-at-cap']);
   });
   it('fts-pending is derivation in progress, not unavailable: no WARN', () => {
     expect(healthLib.deriveHealth(base({ fts: 'fts-pending' })).pass).toBe('ok');
@@ -12269,6 +12287,22 @@ describe('the subagent ingest gates (W4 addendum P6, P15 (b))', () => {
     ['import', { preInstall: true, admitted: false }, false],              // I6 an import that ignored `admitted` would read a refused file
   ] as const)('decideAgentIngest(%s, %j) is %s', (form, d, want) => {
     expect(decideAgentIngest({ form, ...OK, ...d })).toBe(want);
+  });
+
+  // W4 P5 (D-8155): the pause order. Subagent capture pauses at 90% of the store cap while main capture continues; the one rule.
+  const CAP = 2 ** 30;
+  it('AGENTS_PAUSE_SHARE is 0.9', () => {
+    expect(AGENTS_PAUSE_SHARE).toBe(0.9);
+  });
+  it.each([
+    [true, null, 0.9, 'at-90'], [true, null, 0.9 - 1e-9, null], [false, null, 0.95, null],
+    [true, 'at-cap', 1, null], [true, 'low-disk', 0.95, null],
+  ] as const)('decideAgentsPause(armed %s, pause %s, share %s) is %s', (armed, pause, share, want) => {
+    expect(decideAgentsPause({ armed, pause, sizeBytes: share * CAP, capBytes: CAP })).toBe(want);
+  });
+  it('decideAgentsPause pauses nothing on an unmeasured cap (review 1737 F2)', () => {
+    expect(decideAgentsPause({ armed: true, pause: null, sizeBytes: 0, capBytes: 0 })).toBeNull();   // makeIngestCtx's defaults
+    expect(decideAgentsPause({ armed: true, pause: null, sizeBytes: 5, capBytes: 0 }), 'a size over an unmeasured cap').toBeNull();
   });
 
   it('planFileRead compares the path\'s agent key with the row\'s as it compares the uuid: another key retires the row (W4 P1)', () => {

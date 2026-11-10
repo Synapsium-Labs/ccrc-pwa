@@ -754,11 +754,11 @@ describe('ccrc history: no .mjs writes a switch through its symbolic spelling (s
   });
 
   // W4 P15 (b) (D-8151). The subagent ingest's arming marker has no writer in the tree and two readers, each one `lstat` handed to
-  // lib's agentsArmedOf: the sweep's ingest gate, in `ingestTick`, and the status envelope's health input in cli.mjs (Task 1E adds
-  // that one to READERS). `SWITCHES`' own entry is written `agentsOn: '…'`, as `headlessOn`'s is, so the `.agentsOn` needle does
+  // lib's agentsArmedOf: the sweep's ingest gate, in `ingestTick`, and the status envelope's health input in cli.mjs's `boxFacts`
+  // (`agents_armed`, which `healthInputsOf` reads; Task 1E). `SWITCHES`' own entry is written `agentsOn: '…'`, as `headlessOn`'s is, so the `.agentsOn` needle does
   // not find it; HOLDERS and KEYS guard it. KNOWN WIDTH: a reader that aliases the field (`const f = P.agentsOn`) names it on
   // the line of the alias, which is still a line this scan counts.
-  const READERS = ['ccd/history/lib.mjs historyPaths', 'ccd/history/sweep.mjs ingestTick'];
+  const READERS = ['ccd/history/lib.mjs historyPaths', 'ccd/history/sweep.mjs ingestTick', 'ccd/history/cli.mjs boxFacts'];
   /** The `.agentsOn` code lines of the given .mjs texts, each as `<file> <enclosing top-level function>`. */
   const agentsOnLines = (files: ReadonlyArray<{ file: string; text: string }>): string[] =>
     files.flatMap((f) => {
@@ -774,7 +774,7 @@ describe('ccrc history: no .mjs writes a switch through its symbolic spelling (s
   const ccdMjs = (): Array<{ file: string; text: string }> =>
     ALL_MJS.filter((f) => rel(f).startsWith('ccd/')).map((f) => ({ file: rel(f), text: readFileSync(f, 'utf8') }));
 
-  it('the arming marker is named by exactly its readers: historyPaths\' field and one line of ingestTick, and no writer', () => {
+  it('the arming marker is named by exactly its readers: historyPaths\' field, one line of ingestTick and one of the status envelope, and no writer', () => {
     expect(agentsOnLines(ccdMjs()).sort(), 'a new line names the marker: a reader this design does not list, or a writer').toEqual([...READERS].sort());
     // CONTROL: a third reader planted in the scanned text is seen (mutant (o): one in scheduledPassBody)
     const planted = [...ccdMjs(), { file: 'ccd/history/sweep.mjs', text: 'async function scheduledPassBody() {\n  const m = lstatSync(historyPaths(home).agentsOn);\n}\n' }];

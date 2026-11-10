@@ -72,6 +72,8 @@ import {
   carryHoldAdvice,
   // W4 P1, P6, P15 (b), P20: the subagent walk's grammar, its identity and the ingest gates.
   RUN_ID_RE, classifyAgentName, decideAgentDir, decideAgentFile, agentKey, META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, decideMetaType, INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
+  // W4 P5 (D-8155): the pause order's one rule, and the cap's byte count the pass hands to the tick.
+  decideAgentsPause, capBytes,
   // W2-1 Task 4 (W2-D30): the presence record's lib decisions.
   RECALL_OFF_KEYS, RECALL_OFF_SCAN_MAX, recallOffStateOf, planRecallOffObservation, recallOffReplayRows,
 } from './lib.mjs';
@@ -3895,6 +3897,10 @@ export async function tick(db, ctx) {
   // The tick's one ingest context (Task 19), made once and shared by the secrets, the ingest, the launch facts and
   // the ticks row. It is built here, right after the outbox flush, so the secrets step can set its pairIdx (plan task 22).
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir));
+  // W4 P5: the pass's own pause, size and cap, which ingestTick reads to decide the subagent pause (the context is built with 0 and 0).
+  ictx.pause = ctx.pause ?? null;
+  ictx.sizeBytes = ctx.sizeBytes ?? 0;
+  ictx.capBytes = ctx.capBytes ?? 0;
   // A node rewrite deletes nodes_fts rows, whose term bytes stay until FTS5 merges them: the rewrite registers the merge
   // step inside its own transaction, as the blob re-index does (D-4609 (history-nodes-fts-merged-after-rewrite)).
   registerNodesMerge(ictx, db);
@@ -4245,6 +4251,10 @@ export function passCtx(o) {
     rosterUnreadable: o.parsed.rosterUnreadable,
     pause: o.pause,
     ingest: o.ingest,
+    // W4 P5 (D-8155): the size and cap the pass measured for planRun, which tick() hands to the ingest context so ingestTick can ask
+    // decideAgentsPause. A pass that ingests nothing, or an operator pass, hands none: 0 and 0 pause nothing by that rule.
+    sizeBytes: o.sizeBytes ?? 0,
+    capBytes: o.capBytes ?? 0,
     // deps.budget is an in-process limit (maxMs, maxBytes, chunkBytes) for tests only; absent, lib's run budget applies
     // (W1-B2 Task 25; slug history-test-seams-not-env).
     budget: newBudget(o.now, o.deps.budget ?? {}),
@@ -4446,7 +4456,7 @@ async function scheduledPassBody(parsed, deps, out, P, now, role) {
     // cap, below the floor) or roster state. The run arm alone writes it: a migrate, recover or hold pass returned above.
     recordAgentsInstall(db, now());
     fixModes(db, P);
-    const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: run.pause, ingest: run.ingest });
+    const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: run.pause, ingest: run.ingest, sizeBytes, capBytes: capBytes(cap.gb) });
     let busy = false;
     try {
       await tick(db, ctx);
@@ -5233,6 +5243,14 @@ function tickStmts(db) {
       st.setReadBigInts(true);
       return st;
     })(),
+    // W4 P3 (D-8152): the same columns for the subagent rows of the uuids whose main file this tick's activeFiles took, with the row's
+    // agent key and run id. Stored holdings only: a file with no row waits for a scan tick. Its text carries no json_each-and-DENSE_RANK
+    // join of activeRows' own, and its filter is the other way round (`<>`), so activeRows stays the one statement of that shape.
+    activeAgentRows: (() => {
+      const st = db.prepare(`SELECT f.file_id AS fileId, f.dev AS dev, f.ino AS ino, f.offset AS offset, f.size AS size, f.mtime_ns AS mtimeNs, p.path AS path, t.cc_session_uuid AS uuid, t.agent_id AS agentKey, t.workflow_run_id AS runId FROM transcripts t JOIN ingest_files f ON f.transcript_pk = t.transcript_pk JOIN file_paths p ON p.file_id = f.file_id WHERE t.cc_session_uuid IN (SELECT value FROM json_each(?)) AND t.agent_id <> '' AND f.source_key = '' AND f.status = 'live' ORDER BY f.mtime_ns DESC, f.file_id, p.path`);
+      st.setReadBigInts(true);
+      return st;
+    })(),
     tickIns: db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, ?, ?, ?)'),
     factless: db.prepare(`SELECT e.cc_session_uuid AS uuid, min(p.path) AS path FROM epochs e
       JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid AND t.agent_id = ''
@@ -5336,7 +5354,7 @@ function statActive(path) {
 function activeFiles(db, ctx, seen, budget) {
   const uuids = [...registeredUuids(ctx.home)];
   // No registered uuid: no row can name one, so the statement is not run (review 1065 F10).
-  if (uuids.length === 0) return { files: [], complete: true };
+  if (uuids.length === 0) return { files: [], complete: true, statted: 0 };
   const files = [];
   const stat = ctx.activeStat ?? statActive;
   const max = ctx.activeStatMax ?? ACTIVE_STAT_MAX;
@@ -5348,7 +5366,7 @@ function activeFiles(db, ctx, seen, budget) {
     if (home === undefined) continue;
     if (seen.has(row.path)) { fileIds.add(row.fileId); continue; }   // taken this tick already: the file's other paths are not offered
     if (statted >= max) break;
-    if (budget !== null && !budgetLeft(budget)) return { files, complete: false };
+    if (budget !== null && !budgetLeft(budget)) return { files, complete: false, statted };
     statted += 1;
     const verdict = decideActiveRead({
       row: { dev: row.dev, ino: row.ino, offset: Number(row.offset), size: row.size === null ? null : Number(row.size), mtimeNs: row.mtimeNs },
@@ -5361,7 +5379,57 @@ function activeFiles(db, ctx, seen, budget) {
     if (verdict !== 'skip') fileIds.add(row.fileId);
     if (verdict === 'read') files.push({ path: row.path, uuid: row.uuid, home });
   }
-  return { files, complete: true };
+  return { files, complete: true, statted };
+}
+
+/** W4 P3 (D-8152), the between-scans pass for subagent files: the stored holdings of the subagents of the uuids whose main file
+ *  `activeFiles` took this tick (`parents`), stated with what is left of the per-tick stat cap after the tick's main files (`room`,
+ *  so main files take precedence), each by its first path that a stat measures, ruled by lib's decideActiveRead and then by
+ *  decideAgentIngest (form 'tick', so the marker, history-off and the 90% pause reach it as they reach the scan tick's agent arm).
+ *  A subagent file with no row waits for a scan tick. A file the pause alone withholds is counted in `withheld`, which ingestTick
+ *  turns into one count of the tick. The parent is known by construction: a taken main file belongs to a registered uuid, which is
+ *  knownUuids' registry half. */
+function activeAgentFiles(db, ctx, seen, budget, parents, room, armed) {
+  const files = [];
+  let withheld = 0;
+  let complete = true;
+  if (parents.size === 0 || room <= 0) return { files, withheld, complete };
+  const stat = ctx.activeStat ?? statActive;
+  const sinceMs = installRecordOf(db);
+  const historyOff = ctx.historyOff();
+  const fileIds = new Set();
+  let statted = 0;
+  for (const row of tickStmts(db).activeAgentRows.all(JSON.stringify([...parents]))) {
+    if (fileIds.has(row.fileId)) continue;
+    const home = ctx.homes.find((h) => row.path.startsWith(`${h}/projects/`));
+    if (home === undefined) continue;
+    if (seen.has(row.path)) { fileIds.add(row.fileId); continue; }
+    if (statted >= room) break;
+    if (budget !== null && !budgetLeft(budget)) { complete = false; break; }
+    statted += 1;
+    const st = stat(row.path);
+    const verdict = decideActiveRead({
+      row: { dev: row.dev, ino: row.ino, offset: Number(row.offset), size: row.size === null ? null : Number(row.size), mtimeNs: row.mtimeNs },
+      stat: st,
+      nowMs: ctx.nowMs,
+      tornStaleMs: TORN_STALE_MS,
+    });
+    if (verdict !== 'skip') fileIds.add(row.fileId);
+    if (verdict !== 'read') continue;
+    const gate = agentGate(ctx, {
+      form: 'tick', armed, historyOff, admitted: true, preInstall: isPreInstall(Number(st.mtimeNs / 1_000_000n), sinceMs), parentKnown: parents.has(row.uuid),
+    });
+    if (gate === 'paused') withheld += 1;
+    if (gate === 'read') files.push({ path: row.path, uuid: row.uuid, home, agentKey: row.agentKey, runId: row.runId });
+  }
+  return { files, withheld, complete };
+}
+
+/** One admitted subagent file's gate (W4 P3, P5, P6, P15 (b)), the one place both arms ask decideAgentIngest: 'read' when it is
+ *  read, 'paused' when the 90% pause alone withholds it (the same inputs with no pause would read it), else 'skip'. */
+function agentGate(ctx, i) {
+  if (decideAgentIngest({ ...i, pause: ctx.agentsPause ?? null })) return 'read';
+  return (ctx.agentsPause ?? null) !== null && decideAgentIngest({ ...i, pause: null }) ? 'paused' : 'skip';
 }
 
 /** The install record (P6): meta `agents_since_ms` as a number, or null when none stands. A record that is not a finite number
@@ -5405,6 +5473,7 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null, ar
   const files = [];
   const seen = new Set();
   let complete = true;
+  let agentsWithheld = 0;
   const take = (list, addUuids) => {
     for (const f of list) {
       if (addUuids) uuids.add(f.uuid);
@@ -5424,6 +5493,13 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null, ar
     const a = activeFiles(db, ctx, seen, budget);
     take(a.files, false);
     if (!a.complete) complete = false;
+    else {
+      // W4 P3: after the main files, in what the per-tick stat cap leaves them, for the parents whose main file was just taken.
+      const g = activeAgentFiles(db, ctx, seen, budget, new Set(a.files.map((f) => f.uuid)), (ctx.activeStatMax ?? ACTIVE_STAT_MAX) - a.statted, armed);
+      take(g.files, false);
+      agentsWithheld += g.withheld;
+      if (!g.complete) complete = false;
+    }
   }
   const known = scan || sideScan ? knownUuids(db, ctx.home) : new Set();
   if (scan && complete) {
@@ -5435,17 +5511,18 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null, ar
     const sinceMs = installRecordOf(db);
     const historyOff = ctx.historyOff();
     for (const e of agentFiles) {
-      const ingest = decideAgentIngest({
-        form: 'tick', armed, historyOff, pause: ctx.agentsPause ?? null, admitted: e.verdict === 'admit',
+      const gate = agentGate(ctx, {
+        form: 'tick', armed, historyOff, admitted: e.verdict === 'admit',
         preInstall: isPreInstall(e.mtimeMs, sinceMs), parentKnown: known.has(e.uuid),
       });
-      if (ingest && !seen.has(e.path)) {
+      if (gate === 'paused') agentsWithheld += 1;
+      if (gate === 'read' && !seen.has(e.path)) {
         seen.add(e.path);
         files.push({ path: e.path, uuid: e.uuid, home: e.home, agentKey: agentKey(e.id, e.runId), runId: e.runId });
       }
     }
   }
-  return { files, uuids, known, complete };
+  return { files, uuids, known, complete, agentsWithheld };
 }
 
 /** Every examined file's measured size and mtime, `eof_ms` for those left at end-of-file, and the
@@ -5491,6 +5568,9 @@ export async function ingestTick(db, ctx, budget) {
   let marker = null;
   try { const st = lstatSync(historyPaths(ctx.home).agentsOn); marker = { isFile: st.isFile(), isSymbolicLink: st.isSymbolicLink() }; } catch { /* absent or unreadable: not armed */ }
   const armed = agentsArmedOf(marker);
+  // W4 P5 (D-8155): the pause order's one site. Subagent capture pauses at 90% of the cap, main capture goes on to the cap; the size and
+  // cap are the pass's own, handed on by tick(), and a context built without them (capBytes 0) pauses nothing by this rule.
+  ctx.agentsPause = decideAgentsPause({ armed, pause: ctx.pause ?? null, sizeBytes: ctx.sizeBytes ?? 0, capBytes: ctx.capBytes ?? 0 });
   const found = candidateFiles(db, ctx, scan, sideScan, budget, armed);
   const { files, uuids, known } = found;
   const examined = [];
@@ -5510,6 +5590,9 @@ export async function ingestTick(db, ctx, budget) {
   // standing line.
   const skipped = new Set();
   try {
+    // D-8155: the counter of the pause, once per tick that withheld an admitted subagent file (its cursor does not move). It does not join
+    // W1's capture_paused_* kill rule by its name; the 90% WARN (agents-paused-at-cap) is its watch.
+    if (found.agentsWithheld > 0) withTx(db, 'NORMAL', () => { bump(db, 'capture_paused_agents_at_cap'); });
     for (const f of files) {
       if (!budgetLeft(budget) || ctx.historyOff()) { complete = false; break; }
       let r;

@@ -415,7 +415,7 @@ const healthEntries = [
   ...healthRows('pass', ['first-tick-pending', 'ok']),
   ...healthRows('warn', [
     'off', 'recovering', 'op-running', 'catching-up', 'lag-unmeasured', 'fts-unavailable', 'cap-malformed',
-    'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
+    'redact-source-unreadable', 'cap-near', 'agents-paused-at-cap', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
     'export-segment-missing', 'export-segment-damaged', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
     'drain-rejected', 'spool-planted', 'export-marks-unchecked',
@@ -556,6 +556,19 @@ export function decideAgentIngest(i) {
   if (i.form === 'tick') return i.armed && !i.preInstall;
   if (i.form === 'import') return i.preInstall;
   return false;
+}
+
+/** The share of the store cap at which subagent capture pauses while main capture goes on to the cap (W4 P5, ruled by the operator,
+ *  item 92, 2026-11-08). */
+export const AGENTS_PAUSE_SHARE = 0.9;
+/** The pause order, the one rule (W4 P5, D-8155): subagent capture pauses at 90% of the store cap. Answers `'at-90'` when the marker
+ *  arms the ingest, no other pause stands (`pause` null: neither at the cap nor below the floor, which pause every capture already),
+ *  the cap is measured (`capBytes` over 0: an unmeasured cap pauses nothing by this rule, review 1737 F2) and the store has reached
+ *  its share; else null. The sweep asks it in ingestTick, right after its one read of the marker, and deriveHealth asks it for the
+ *  `agents-paused-at-cap` WARN, so the WARN is decided where the pause applies. */
+export function decideAgentsPause({ armed, pause, sizeBytes, capBytes }) {
+  if (!armed || pause !== null || !(capBytes > 0)) return null;
+  return sizeBytes >= AGENTS_PAUSE_SHARE * capBytes ? 'at-90' : null;
 }
 
 // ── the one role reader (§5.2, O53) ───────────────────────────────────────
@@ -4280,6 +4293,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'cap-malformed': `write a positive integer (GB) into the cap file, or remove it for the default of ${CAP_DEFAULT_GB}`,
   'redact-source-unreadable': 'make the named secret files readable by this user; a value never yet seen in them goes unredacted meanwhile',
   'cap-near': 'raise the cap before capture pauses at it, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
+  'agents-paused-at-cap': 'subagent capture is paused at 90% of the store cap and main capture continues: raise the cap, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
   'breaker-open': `none needed: the breaker closes by itself; read the sweep for why it opened: ${SWEEP_LOG}`,
   'roster-unreadable': 'make ~/.ccrc/accounts.sh readable (ccrc install regenerates it)',
   'root-is-symlink': 'make ~/.ccrc/history a real 0700 directory: only its db/ may be a link',
@@ -4589,6 +4603,12 @@ export function deriveHealth(h) {
   if (h.redactUnreadable.length > 0) warn.push(item('redact-source-unreadable', `secret source(s) could not be read: ${h.redactUnreadable.join(', ')}`));
   if (h.sizeBytes !== null && h.capturePause !== 'at-cap' && h.sizeBytes * 100 >= capBytes(h.capGb) * CAP_WARN_PCT) {
     warn.push(item('cap-near', `the store is ${h.sizeBytes} bytes, ${Math.floor((h.sizeBytes * 100) / capBytes(h.capGb))}% of its ${h.capGb} GB cap`));
+  }
+  // W4 P5 (D-8155): decided where the pause applies, by decideAgentsPause, from the marker the status envelope carries (`agentsArmed`,
+  // absent reads as false), the standing pause and the size and cap that decide at-cap. From 90% to the cap both WARNs stand; at the
+  // cap at-cap FAILs and both stop (every capture is paused then).
+  if (h.sizeBytes !== null && decideAgentsPause({ armed: h.agentsArmed === true, pause: h.capturePause === '' ? null : h.capturePause, sizeBytes: h.sizeBytes, capBytes: capBytes(h.capGb) }) !== null) {
+    warn.push(item('agents-paused-at-cap', `the store is ${h.sizeBytes} bytes, ${Math.floor((h.sizeBytes * 100) / capBytes(h.capGb))}% of its ${h.capGb} GB cap: subagent capture is paused and main capture continues`));
   }
   if (h.breakerOpen) warn.push(item('breaker-open', 'a breaker is open'));
   if (h.rosterUnreadable) warn.push(item('roster-unreadable', '~/.ccrc/accounts.sh cannot be read, so no account home is discovered'));

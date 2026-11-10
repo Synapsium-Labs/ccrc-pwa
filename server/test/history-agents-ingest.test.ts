@@ -14,9 +14,9 @@ import {
 } from './historyAgentFixtures.js';
 import { makeHistoryBox, openStoreRO, plantSession, plantTranscript, recordOpenFlags, runDriver, skipOnDarwin } from './historyHelpers.js';
 import { mkTmp, removeTmpFixturesSince, tmpMark } from './tmpHelpers.js';
-import { agentIdOk, capBytes, historyPaths, META_MAX_BYTES } from '../../ccd/history/lib.mjs';
+import { agentIdOk, capBytes, historyPaths, META_MAX_BYTES, SCAN_INTERVAL_MS } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
-import { behindStats, discoverTranscripts, readAgentMeta } from '../../ccd/history/sweep.mjs';
+import { behindStats, candidateFiles, discoverTranscripts, ingestTick, makeIngestCtx, newBudget, readAgentMeta } from '../../ccd/history/sweep.mjs';
 
 skipOnDarwin();
 
@@ -164,6 +164,10 @@ describe('what reads a stored short subagent row, and what it holds back (review
     expect(behindStats(db, box.homes).files).toBe(0);    // and the lag does not count it
     await tick(armed, { scan: false });                  // armed, but its parent is not active: it waits for the scan tick
     expect(offsetOf(db, aPath)).toBe(at);
+    // the paused row (W4 P5): armed, a scan tick, the store at 90% of the cap: the agent arm withholds it, cursor unmoved, counted once
+    await tick(armed, { scan: true, storeAt: 0.9 });
+    expect(offsetOf(db, aPath), 'paused at 90%: the short row stays short').toBe(at);
+    expect(counterOf(db, 'capture_paused_agents_at_cap')).toBe(1);
     await tick(armed, { scan: true });                   // the scan tick's agent arm reads it, under its own key
     expect(offsetOf(db, aPath)).toBe(fs.statSync(aPath).size);
     expect(agentKeys(db)).toEqual(['a']);
@@ -194,6 +198,26 @@ describe('what reads a stored short subagent row, and what it holds back (review
     // sidecars: 0.
     expect(sidecarsOf(db, PARENT)).toBe(1);
     expect(offsetOf(db, aPath)).toBe(at);                // and the subagent row is still short, unread while disarmed
+  });
+});
+
+describe('a stored short subagent row under the 90% pause holds none of its parent\'s sidecars back (review 1735, F2; W4 P5)', () => {
+  it('the paused twin: armed, a sidecar scan, the store at 90%: the sidecar is stored and the agent offset stays at `at`', async () => {
+    const rig = await rigOf('ccrc-hist-f2p-');
+    const { db, box, tick } = rig;
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0x820)] }, SINCE);
+    const aPath = paths['a']!;
+    await tick(armed, { scan: true });                   // the same set-up tick: parent and agent a whole, no sidecar yet
+    expect(sidecarsOf(db, PARENT)).toBe(0);
+    fs.appendFileSync(aPath, fixtureRows(0x821, 3).map((r) => `${JSON.stringify(r)}\n`).join(''));
+    db.prepare('UPDATE ingest_files SET size = ? WHERE file_id = (SELECT file_id FROM file_paths WHERE path = ?)').run(fs.statSync(aPath).size, aPath);
+    const at = offsetOf(db, aPath);                      // captured AFTER agent a grows (review 1735 F2's correction)
+    const results = path.join(box.homes[0]!, 'projects', SLUG, PARENT, 'tool-results');
+    fs.mkdirSync(results, { recursive: true });
+    fs.writeFileSync(path.join(results, 'note.txt'), 'a sidecar of the parent\n');
+    await tick(armed, { scan: true, sideScan: true, storeAt: 0.9 });
+    expect(sidecarsOf(db, PARENT), 'main capture, sidecars included, does not wait on a paused subagent row').toBe(1);
+    expect(offsetOf(db, aPath)).toBe(at);
   });
 });
 
@@ -296,6 +320,225 @@ describe('what the agent arm does not enter, and which parents it serves', () =>
     expect(agentKeys(rig.db), 'CONTROL: the agent file was read').toEqual(['a']);
     expect(rig.db.prepare('SELECT started_ms AS s, cwd, git_branch AS b FROM epochs WHERE cc_session_uuid = ?').get(PARENT)).toEqual({ s: null, cwd: null, b: null });
   });
+});
+
+/** The result of one `candidateFiles` call over the rig's store, as a non-scan tick makes it: the paths it would read, in order, and
+ *  every path its between-scans pass stated. `max` is ctx.activeStatMax (the per-tick stat cap). */
+function probeActive(rig: AgentRig, o: { max?: number; armedMarker?: boolean } = {}): { read: string[]; stats: string[] } {
+  const ctx = makeIngestCtx(rig.box.home, rig.box.homes, T0 + 3_600_000, null) as Record<string, unknown>;
+  const real = ctx['activeStat'] as (p: string) => unknown;
+  const stats: string[] = [];
+  ctx['activeStat'] = (p: string): unknown => { stats.push(p); return real(p); };
+  if (o.max !== undefined) ctx['activeStatMax'] = o.max;
+  const r = candidateFiles(rig.db, ctx, false, false, null, o.armedMarker ?? true) as { files: Array<{ path: string }> };
+  return { read: r.files.map((f) => f.path), stats };
+}
+/** Appends `n` rows (message uuids under `tag`) to a stored file and stamps its mtime at `atMs`, so the next stat reads as changed. */
+function grow(p: string, tag: number, atMs: number, n = 1): void {
+  fs.appendFileSync(p, fixtureRows(tag, n).map((r) => `${JSON.stringify(r)}\n`).join(''));
+  fs.utimesSync(p, new Date(atMs), new Date(atMs));
+}
+const mainPathOf = (rig: AgentRig, uuid: string): string => path.join(rig.box.homes[0]!, 'projects', SLUG, `${uuid}.jsonl`);
+
+describe('the read cadence (W4 addendum P3, SA10)', () => {
+  it('SA10 read cadence (P3): an inactive parent\'s subagents are not stated; an active parent\'s are, inside the per-tick cap, after the main files', async () => {
+    const rig = await rigOf('ccrc-hist-sa10-');
+    const { db, tick } = rig;
+    const p1 = plantAgentTree(rig, { slug: SLUG, uuid: uuidOf(1), agents: [agent('a1', 0x900)] }, SINCE);
+    const p2 = plantAgentTree(rig, { slug: SLUG, uuid: uuidOf(2), agents: [agent('a2', 0x910)] }, SINCE);
+    await tick(armed, { scan: true });
+    expect(agentRows(db), 'CONTROL: set-up stored both subagents').toBe(2);
+    const [a1, a2, m1, m2] = [p1.paths['a1']!, p2.paths['a2']!, mainPathOf(rig, uuidOf(1)), mainPathOf(rig, uuidOf(2))];
+    const statsOf = (r: { stats: string[] }, ...paths: string[]): number => r.stats.filter((x) => paths.includes(x)).length;
+    // 1. a non-scan tick, no parent active: the main files are stated (CONTROL), no subagent file is
+    let r = probeActive(rig);
+    expect(statsOf(r, m1, m2), 'CONTROL: the main files were stated').toBe(2);
+    expect(statsOf(r, a1, a2)).toBe(0);
+    // 2. the subagent files themselves changed, their parents' did not: still not stated, not read
+    grow(a1, 0x901, T0 + 300_000); grow(a2, 0x911, T0 + 300_000);
+    r = probeActive(rig);
+    expect(statsOf(r, a1, a2), 'an inactive parent: no subagent stat').toBe(0);
+    expect(r.read).toEqual([]);
+    // 3. parent 1 active: its stored subagent file is stated once, inside ACTIVE_STAT_MAX, and read after the main file; parent 2's is not
+    grow(m1, 0x9a1, T0 + 300_000);
+    r = probeActive(rig);
+    expect(statsOf(r, a1), 'an active parent: its subagent file is stated').toBe(1);
+    expect(statsOf(r, a2)).toBe(0);
+    expect(r.read).toEqual([m1, a1]);
+    // 4. the cap filled by main files: both parents active, a cap of two stats: the main files take it, the subagent files wait
+    grow(m2, 0x9a2, T0 + 300_000);
+    r = probeActive(rig, { max: 2 });
+    expect([...r.read].sort(), 'the cap is filled by the main files').toEqual([m1, m2].sort());
+    expect(statsOf(r, a1, a2), 'the subagent files wait for a later tick').toBe(0);
+    // 5. CONTROL: with room, the same state reads all four, the main files first (main files take precedence)
+    r = probeActive(rig, { max: 4 });
+    expect(r.read.slice(0, 2).sort()).toEqual([m1, m2].sort());
+    expect(r.read.slice(2).sort()).toEqual([a1, a2].sort());
+    // 6. and one stat of room beyond the main files reads exactly one of them
+    r = probeActive(rig, { max: 3 });
+    expect(r.read).toHaveLength(3);
+    expect(statsOf(r, a1, a2)).toBe(1);
+    // 7. the marker reaches this arm: unarmed, the subagent files are stated (their parent is active) but none is read
+    r = probeActive(rig, { max: 4, armedMarker: false });
+    expect([...r.read].sort()).toEqual([m1, m2].sort());
+  });
+
+  it('SA10 end to end: a non-scan tick reads an active parent\'s grown subagent file, not an inactive parent\'s, not a disarmed one, and not one with no row', async () => {
+    const rig = await rigOf('ccrc-hist-sa10e-');
+    const { db, tick } = rig;
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0xa00)] }, SINCE);
+    const [aPath, mPath] = [paths['a']!, mainPathOf(rig, PARENT)];
+    await tick(armed, { scan: true });
+    const sizeOf = (p: string): number => fs.statSync(p).size;
+    expect(offsetOf(db, aPath), 'CONTROL: set-up stored a whole').toBe(sizeOf(aPath));
+    const stored = offsetOf(db, aPath);
+    // the subagent file grows alone: its parent is inactive, so a non-scan tick leaves it
+    grow(aPath, 0xa01, T0 + 400_000);
+    await tick(armed, { scan: false });
+    expect(offsetOf(db, aPath)).toBe(stored);
+    // the parent grows too: the parent is active, and the subagent file is read in the same tick
+    grow(mPath, 0xa02, T0 + 400_000);
+    await tick(armed, { scan: false });
+    expect(offsetOf(db, aPath), 'read by the active parent\'s pass').toBe(sizeOf(aPath));
+    expect(offsetOf(db, mPath)).toBe(sizeOf(mPath));
+    // a subagent file with no row waits for a scan tick, even under an active parent
+    const b = path.join(path.dirname(aPath), 'agent-b.jsonl');
+    fs.writeFileSync(b, fixtureRows(0xa10, 2).map((x) => `${JSON.stringify(x)}\n`).join(''));
+    fs.utimesSync(b, new Date(T0 + 400_000), new Date(T0 + 400_000));
+    grow(mPath, 0xa03, T0 + 500_000);
+    await tick(armed, { scan: false });
+    expect(agentKeys(db), 'no row, no active read').toEqual(['a']);
+    await tick(armed, { scan: true });
+    expect(agentKeys(db)).toEqual(['a', 'b']);
+    // disarmed: the parent is read, the subagent file is not, though its parent is active
+    grow(aPath, 0xa04, T0 + 600_000); grow(mPath, 0xa05, T0 + 600_000);
+    const before = offsetOf(db, aPath);
+    await tick(noMarker, { scan: false });
+    expect(offsetOf(db, mPath)).toBe(sizeOf(mPath));
+    expect(offsetOf(db, aPath), 'the marker reaches the active pass').toBe(before);
+  });
+});
+
+describe('main files take precedence under a spent budget (W4 addendum P3, SA10\'s CONTROL)', () => {
+  it('a budget that reads one file reads the main file, and the active subagent file waits: a mutant that reads subagent files first leaves the main file unread', async () => {
+    const rig = await rigOf('ccrc-hist-sa10c-');
+    const { db } = rig;
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0xa50)] }, SINCE);
+    const [aPath, mPath] = [paths['a']!, mainPathOf(rig, PARENT)];
+    await rig.tick(armed, { scan: true });
+    const [aStored, mStored] = [offsetOf(db, aPath), offsetOf(db, mPath)];
+    grow(aPath, 0xa51, T0 + 400_000, 2); grow(mPath, 0xa52, T0 + 400_000, 2);
+    // ingestTick as the pass runs it, on a context with no ids (the tick's journal half is not under test), not a scan, and a budget that
+    // is spent after one file: maxBytes 1
+    const ctx = makeIngestCtx(rig.box.home, rig.box.homes, T0 + 120_000, null) as Record<string, unknown>;
+    await ingestTick(db, ctx, newBudget(undefined, { maxBytes: 1 }));
+    expect(offsetOf(db, mPath), 'the main file was read').toBeGreaterThan(mStored);
+    expect(offsetOf(db, aPath), 'the subagent file waits for a later tick').toBe(aStored);
+  });
+});
+
+describe('the pause order (W4 addendum P5, SA11)', () => {
+  /** A rig with a known parent and `ids` subagent files, post-install unless `atMs` says otherwise. */
+  const paused = async (prefix: string, ids: string[], o: { atMs?: number } = {}): Promise<AgentRig> => {
+    const rig = await rigOf(prefix);
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: ids.map((id, i) => agent(id, 0xb00 + i * 16, o.atMs === undefined ? {} : { atMs: o.atMs })) }, SINCE);
+    return rig;
+  };
+
+  it('a scan tick at 90% of the cap ingests the main transcript and no subagent file, and counts the tick once', async () => {
+    const rig = await paused('ccrc-hist-p90-', ['a', 'b']);
+    await rig.tick(armed, { scan: true, storeAt: 0.9 });
+    expect(mainRows(rig.db), 'main capture continues').toEqual([{ uuid: PARENT, entries: 2 }]);
+    expect(agentRows(rig.db), 'no subagent file is bound').toBe(0);
+    expect(counterOf(rig.db, 'capture_paused_agents_at_cap'), 'two files withheld, one count').toBe(1);
+    await rig.tick(null, { scan: true, storeAt: 0.9 });
+    expect(counterOf(rig.db, 'capture_paused_agents_at_cap'), 'once per tick').toBe(2);
+    await rig.tick(null, { scan: true, storeAt: 0.89 });
+    expect(agentRows(rig.db), 'CONTROL: under 90% both are read').toBe(2);
+    expect(counterOf(rig.db, 'capture_paused_agents_at_cap')).toBe(2);
+  });
+
+  it('an unarmed node, or a file the pause is not the reason for, counts nothing', async () => {
+    const rig = await paused('ccrc-hist-p90-un-', ['a']);
+    await rig.tick(noMarker, { scan: true, storeAt: 0.9 });
+    expect(counterNames(rig.db)).not.toContain('capture_paused_agents_at_cap');   // unarmed: nothing is paused
+    const old = await paused('ccrc-hist-p90-old-', ['a'], { atMs: -60_000 });
+    await old.tick(armed, { scan: true, storeAt: 0.9 });
+    expect(counterNames(old.db), 'a pre-install file would not be read anyway').not.toContain('capture_paused_agents_at_cap');
+  });
+
+  it('the active pass is paused too: an active parent\'s grown subagent file is withheld at 90%, its parent is read', async () => {
+    const rig = await rigOf('ccrc-hist-p90-act-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('a', 0xc00)] }, SINCE);
+    const [aPath, mPath] = [paths['a']!, mainPathOf(rig, PARENT)];
+    await rig.tick(armed, { scan: true });
+    const before = offsetOf(rig.db, aPath);
+    grow(aPath, 0xc01, T0 + 400_000); grow(mPath, 0xc02, T0 + 400_000);
+    await rig.tick(armed, { scan: false, storeAt: 0.9 });
+    expect(offsetOf(rig.db, mPath), 'main capture continues').toBe(fs.statSync(mPath).size);
+    expect(offsetOf(rig.db, aPath)).toBe(before);
+    expect(counterOf(rig.db, 'capture_paused_agents_at_cap')).toBe(1);
+    await rig.tick(armed, { scan: true });
+    expect(offsetOf(rig.db, aPath), 'CONTROL: below 90% the scan reads it').toBe(fs.statSync(aPath).size);
+  });
+
+  /** The pass itself (review 1735 F3), through runDriver on a fixture HOME with a 1 GB cap: a first pass at the cap writes the install
+   *  record and ingests nothing; a second, below 90%, stores the parent and one subagent file; both grow; the third runs at `size`. */
+  const sa11 = (prefix: string, o: { scan: boolean; size: number }): { mainEntries: number; agentBefore: number; agentAfter: number; counter: number } => {
+    const box = makeHistoryBox(prefix, { roster: LANE_ROSTER });
+    createStore(box.home);
+    fs.writeFileSync(historyPaths(box.home).cap, '1\n');
+    const pass = (deps: Parameters<typeof runDriver>[1]): void => { const r = runDriver(box, deps); expect(r.code, r.stderr).toBe(0); };
+    pass({ sizeBytes: capBytes(1) });
+    const ro0 = openStoreRO(box);
+    const since = Number(getMeta(ro0, 'agents_since_ms'));
+    ro0.close();
+    const parent = uuidOf(11);
+    plantSession(box, 'lane-a-s1', { uuid: parent });
+    const main = plantTranscript(box, 'lane-a', SLUG, parent, fixtureRows(0xd00, 2, parent));
+    const dir = path.join(box.accountHome['lane-a']!, 'projects', SLUG, parent, 'subagents');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'agent-a.jsonl');
+    const put = (p: string, rows: object[], atMs: number, append = false): void => {
+      const text = rows.map((r) => `${JSON.stringify(r)}\n`).join('');
+      if (append) fs.appendFileSync(p, text); else fs.writeFileSync(p, text);
+      fs.utimesSync(p, new Date(atMs), new Date(atMs));
+    };
+    put(file, fixtureRows(0xd01, 2), since + 60_000);
+    fs.mkdirSync(path.dirname(historyPaths(box.home).agentsOn), { recursive: true });
+    fs.writeFileSync(historyPaths(box.home).agentsOn, '');
+    pass({ sizeBytes: 1024, offsetMs: 120_000 });
+    const agentOffset = (db: ReturnType<typeof openStoreRO>): number =>
+      (db.prepare("SELECT f.offset AS n FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.agent_id = 'a'").get() as { n: number }).n;
+    const ro1 = openStoreRO(box);
+    const agentBefore = agentOffset(ro1);
+    expect(agentBefore, 'CONTROL: the second pass stored the subagent file whole').toBe(fs.statSync(file).size);
+    ro1.close();
+    put(main, fixtureRows(0xd02, 2, parent), since + 180_000, true);
+    put(file, fixtureRows(0xd03, 2), since + 180_000, true);
+    pass({ sizeBytes: o.size, offsetMs: o.scan ? 120_000 + SCAN_INTERVAL_MS + 60_000 : 240_000 });
+    const db = openStoreRO(box);
+    try {
+      const mainEntries = (mainRows(db) as Array<{ entries: number }>)[0]!.entries;
+      return { mainEntries, agentBefore, agentAfter: agentOffset(db), counter: counterOf(db, 'capture_paused_agents_at_cap') };
+    } finally { db.close(); }
+  };
+
+  it.each([[true], [false]] as const)('SA11 pause order (P5), through the pass (scan tick: %s): at 90 percent of a 1 GB cap main rows are ingested, subagent cursors unmoved, counted', (scan) => {
+    // DriverDeps.sizeBytes at ceil(0.9 * capBytes(1)): planRun answers no pause (under the cap), so only ingestTick's decideAgentsPause can hold the
+    // subagent file back, from the size and cap the pass handed tick() (mutants (f) and (g))
+    const r = sa11(`ccrc-hist-sa11-${scan}-`, { scan, size: Math.ceil(0.9 * capBytes(1)) });
+    expect(r.mainEntries, 'main capture continues').toBe(4);
+    expect(r.agentAfter, 'the subagent cursor did not move').toBe(r.agentBefore);
+    expect(r.counter).toBe(1);
+  }, 180_000);
+
+  it('SA11 CONTROL: one byte under 90% the same pass reads the grown subagent file and counts nothing', () => {
+    const r = sa11('ccrc-hist-sa11-ctl-', { scan: true, size: Math.ceil(0.9 * capBytes(1)) - 1 });
+    expect(r.mainEntries).toBe(4);
+    expect(r.agentAfter, 'the subagent cursor moved').toBeGreaterThan(r.agentBefore);
+    expect(r.counter).toBe(0);
+  }, 180_000);
 });
 
 describe('the install record under the pass itself (review 1731, F3)', () => {
