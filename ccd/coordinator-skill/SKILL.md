@@ -321,7 +321,9 @@ not after.
    (`ccrc-api runs items-list <run>`) is the only thing that publishes them:
    `GET /api/runs` carries the TALLY (`{done,total}`) and no ids, and the
    dispatch response never carried them either. A coordinator that guessed `1`
-   was refused `unknown-item` and was right to stop rather than guess twice.
+   was refused `unknown-item`: re-read the ids once (`runs items-list`); if
+   one is still unknown, record the call (`ccrc-api calls record`) and go on,
+   because the tally is display only. `item-terminal` is a no-op to record.
    That ordering IS the authorisation: the server's own re-measurement is what
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
@@ -332,19 +334,19 @@ not after.
    — `project`, `wave` and `waveOf` are the reviewed run's and are derived
    server-side; do not send them. `review-in-flight` means a review run is
    already open for that wave: close it first (`{"state":"failed"}` if the
-   reviewer died), then retry. When a review round's report lands and the
-   work run has had its three review rounds, decide BEFORE opening the next:
-   by the rules in `references/wave-lifecycle.md` (Extending a reached review
-   cap), extend with `"$API" runs review-rounds <work run id> --json -` and a
-   one-line reason, or rule on the findings you hold, or wait. Extending first
-   means the open is never refused, so the operator is never asked or pushed. `coord-lift-off` on the extension means this box
-   leaves the lift to the operator (the default): do not retry; rule on the findings you hold, or wait for the operator's lift.
-   `cap-review-rounds` on an open means you opened without deciding: do not retry
-   the open. The server has told the operator (one ask, with the last review's
-   open findings); a late extension still closes that ask, but the operator has
-   already been pushed once, so decide at the cap, not at the refusal. A bare `400 bad-request` with no `detail` on
+   reviewer died), then retry. `cap-review-rounds` means the work run has had
+   its three review rounds: do not retry the open. Decide it as
+   `references/decision-procedure.md` step 7 does: lift the cap with
+   `ccrc-api runs review-rounds` when the last review's open findings are
+   regressions or gaps in what the PR claims to cover, otherwise apply the
+   cutoff and land with known limits. `coord-lift-off` means the operator
+   switched lifts off: keep the cap, park the thread behind the server's ask,
+   and work the others. `cap-not-reached` means there is nothing to lift: open
+   the review. A 404 is a block of class P4 (an older server without the
+   door), so record the block with `wakeOn: update`. A bare `400 bad-request` with no `detail` on
    this open means the SERVER lane has not landed yet (this branch deploys
-   server first; the plan's Task 14 says why) — wait for the next wake and
+   server first; the plan's Task 14 says why) — record the block with
+   `wakeOn: update`, wait for the next wake and
    do NOT add `project`/`wave` to satisfy it: an older server would open a
    second WORK run for the wave. Then `"$API" runs dispatch <review run id> --json -` with a
    brief cut from `references/review-brief.md` — the work run id, its branch
@@ -399,16 +401,19 @@ not after.
      landing line by the advance that sends the run back: first read the line,
      `GET /api/landing?project=<project>` (`ccrc-api landing show --project
      <project>`), and send an ejection only where this PR's entry for this run
-     reads `pinned`; with no such entry the round is no ejection, and it stays
-     a stop for the operator. **A red the PR owns** is sent when the queue
+     reads `pinned`; with no such entry the round is no ejection, and a measured
+     conflict goes as a plain `fix-round` mail with the conflicted paths and no
+     `ejection` field (clause 15 allows one). **A red the PR owns** is sent when the queue
      dequeued the PR for a required check and no conflict was measured, or when
      the verdict's `RED` line names a required check red on the head that is the
      PR's own. Its body holds two entries, one to a line, and nothing else:
      `red: #<pr>`, then `checks: <required names that are red>`. It has no
      `base:` entry and licenses no absorb: the worker absorbs only on its own
-     clause 16's first two triggers. A dequeue with any other cause, a
-     requested change or a cause you could not read among them, is no
-     report-less round: it stays a stop for the operator. For either form, on
+     clause 16's first two triggers. A dequeue with any other cause is no
+     report-less round: a cause you could not read is read again with backoff,
+     then the PR is enqueued once more (§5), and a requested change is
+     addressed by default, and only ignoring it is the operator's (O6). For
+     either form, on
      route Q disarm first (§5), then make the same advance to `working`, on the
      `merging → working` edge, and send the same `fix-round` mail with no
      `artifacts`. Every `ejected:` round's advance carries `ejection`, an
@@ -418,13 +423,14 @@ not after.
      `ejected:` mail once the advance's answer reads `landing.kind` `ejected`
      and `landing.entry.baseSha` equals the base you sent. If it reads
      anything else, the line recorded no
-     base: send no mail, and report it to the operator with the run's state
+     base: send no `ejected:` mail, and read the run's state
      as the advance answered it: `working` after `ok`; after a refusal, the
      state the answer names (its `from`), which is still `merging` only when
      the refusal came before any move; and when the answer names no state or
      was uncertain (the 503 `run-unreadable`, an `unknown-run` after the
      commit, a transport failure), read `runs list` for the run's state
-     before reporting. The second ejection of one entry is not refused: where
+     before going on. Then send a plain `fix-round` mail with no `ejection`
+     and record the call. The second ejection of one entry is not refused: where
      the entry you read counts one ejection already, the advance still answers
      `ok` and the server raises one notice to the operator, so name the second
      ejection in your turn's text and send the round as usual. The worker's
@@ -473,8 +479,9 @@ not after.
      on an interface from that producer, independently prove the producer
      interface PR merged at the exact `producerSha` carried in the conditional
      producer contract (it reads MERGED there, or CLOSED there with
-     `landedInTrain: true` on its row of `ccd pr-state --session <id>`). A missing or non-`done` row, failed release, or required
-     exact-SHA merge proof that is absent means report and do not dispatch. The
+     `landedInTrain: true` on its row of `ccd pr-state --session <id>`). A missing or non-`done` row is read again with backoff (class P3), a
+     failed release is retried, and an absent exact-SHA merge proof means land
+     the producer first (step 7); dispatch only when each holds. The
      closed row proves the fingerprint and terminal run state; it does not prove
      a required interface merged. Only then dispatch wave N+1 (step 2).
 7. **Final merge:** on a native-queue project the last wave's producer LANDS
@@ -612,8 +619,12 @@ is never read by this session.
 
 ## When something is wrong
 
-- **A dispatch is refused `paused`.** Stop. Report to the operator. Do not
-  touch the file.
+- **A dispatch is refused `paused`.** Read the cause: check whether
+  `$REG/coordinator-paused` exists (a read you may make). Present: the
+  operator's pause, so no dispatch, no in-place bind and no self-work on new
+  waves, while non-dispatch work continues: landing already-reviewed PRs,
+  reviews and docs. Absent: the registry was unlistable, a fault retried with
+  backoff and a time wake, then dispatch again. Do not touch the file.
 - **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
   woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
@@ -621,8 +632,15 @@ is never read by this session.
 - **Your own run row disagrees with the ledger.** The run row is the machine's
   record and the ledger is the human's; if they disagree, the ledger is what a
   reviewer will read, so fix the ledger in a commit and say so in the report.
-- **You cannot reach the server.** Nothing is invented and nothing is done by
-  hand: stop and report. A program that stalls honestly is recoverable.
+- **A 403 `stale-uuid` on an ack or a mail.** Your identity file changed under
+  you: derive the identity again (`ccrc-api whoami`) and resend once. A second
+  `stale-uuid` is a block of class P4 (`references/decision-procedure.md`).
+- **You cannot reach the server.** This is class P3 (`references/decision-procedure.md`):
+  nothing is invented and nothing is done by hand. Retry with backoff, each
+  retry a call recorded with `ccrc-api calls record` and `wakeOn: time:<epoch>`
+  so the time wake brings you back, and work every thread that does not need
+  the server. When the ccrc server itself is down nothing can be recorded, so
+  say so in the turn's text and end the turn.
 
 ## Linear
 

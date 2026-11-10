@@ -3945,11 +3945,11 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     expect(s).toContain('**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.');
     expect(s).toContain('**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.');
     expect(s).toContain('Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.');
-    expect(s).toContain('Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.');
+    expect(s).toContain('Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and a measured conflict goes as a plain `fix-round` mail with the conflicted paths and no `ejection` field (clause 15 allows one).');
     expect(s).toContain('**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.');
     expect(s).toContain('Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.');
     expect(s).toContain('It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.');
-    expect(s).toContain('A dequeue with any other cause, a requested change or a cause you could not read among them, is no report-less round: it stays a stop for the operator.');
+    expect(s).toContain('A dequeue with any other cause is no report-less round: a cause you could not read is read again with backoff, then the PR is enqueued once more (§5), and a requested change is addressed by default, and only ignoring it is the operator\'s (O6).');
     expect(s).toContain('For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.');
     expect(s).toContain('The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.');
     expect(s, 'every report-less round is again read as clause 15\'s ejection (review 1302 F2)').not.toContain('this round is clause 15\'s ejection');
@@ -3982,15 +3982,15 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     '**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.',
     '**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.',
     'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.',
-    'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
+    'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and a measured conflict goes as a plain `fix-round` mail with the conflicted paths and no `ejection` field (clause 15 allows one).',
     '**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.',
     'Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.',
     'It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.',
-    'A dequeue with any other cause, a requested change or a cause you could not read among them, is no report-less round: it stays a stop for the operator.',
+    'A dequeue with any other cause is no report-less round: a cause you could not read is read again with backoff, then the PR is enqueued once more (§5), and a requested change is addressed by default, and only ignoring it is the operator\'s (O6).',
     'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
     'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
     'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
-    'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.',
+    'If it reads anything else, the line recorded no base: send no `ejected:` mail, and read the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before going on. Then send a plain `fix-round` mail with no `ejection` and record the call.',
     'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
     'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
   ].join(' ');
@@ -4352,20 +4352,20 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
       '**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.',
       '**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.',
       'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.',
-      'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
+      'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and a measured conflict goes as a plain `fix-round` mail with the conflicted paths and no `ejection` field (clause 15 allows one).',
       '**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.',
       'Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.',
       'It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.',
-      'A dequeue with any other cause, a requested change or a cause you could not read among them, is no report-less round: it stays a stop for the operator.',
+      'A dequeue with any other cause is no report-less round: a cause you could not read is read again with backoff, then the PR is enqueued once more (§5), and a requested change is addressed by default, and only ignoring it is the operator\'s (O6).',
       'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
       'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
       'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
-      'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.',
+      'If it reads anything else, the line recorded no base: send no `ejected:` mail, and read the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before going on. Then send a plain `fix-round` mail with no `ejection` and record the call.',
       'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
       'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
     ].join(' '));
     // The fail-closed sentence directly follows the new equality sentence, so deleting it reds here on its own.
-    expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.');
+    expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no `ejected:` mail, and read the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before going on. Then send a plain `fix-round` mail with no `ejection` and record the call.');
   });
 });
 
@@ -4569,5 +4569,95 @@ describe('references/decision-procedure.md (D-8126, wave A5 task 3)', () => {
     for (const s of order) { const i = t.indexOf(s); expect(i, s).toBeGreaterThan(at); at = i; }
     expect(t).toContain('coord-lift-off');
     expect(t).toContain('cap-not-reached');
+  });
+});
+
+describe('the coordinator skill: every stop gets its recovery or its class (D-8126, wave A5 task 4)', () => {
+  const wrong = (): string => flat(skill.slice(skill.indexOf('## When something is wrong'), skill.indexOf('\n## Linear')));
+  const step = (n: number): string => flat(skill.slice(skill.indexOf(`\n${n}. **`), skill.indexOf(`\n${n + 1}. **`)));
+
+  it('no longer tells a coordinator that a stalled program is recoverable', () => {
+    expect(flat(allSkillText)).not.toContain('A program that stalls honestly is recoverable');
+    expect(wrong()).not.toContain('Nothing is invented and nothing is done by hand: stop and report.');
+  });
+
+  it('the paused entry is read by its cause: the operator\'s pause keeps non-dispatch work, an unlistable registry is a fault', () => {
+    const w = wrong();
+    const at = w.indexOf('**A dispatch is refused `paused`.**');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const e = w.slice(at, w.indexOf('- **', at + 5));
+    expect(e).toContain('`$REG/coordinator-paused`');
+    expect(e).toContain('no dispatch, no in-place bind and no self-work on new waves');
+    expect(e).toContain('landing already-reviewed PRs, reviews and docs');
+    expect(e).toContain('the registry was unlistable');
+    expect(e).toContain('backoff and a time wake');
+    expect(e).toContain('Do not touch the file');
+    expect(e).not.toContain('Stop. Report to the operator.');
+  });
+
+  it('an unreachable server is a class P3 wait with a backoff, a recorded call with a time wake, and a turn that says so', () => {
+    const w = wrong();
+    const at = w.indexOf('**You cannot reach the server.**');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const e = w.slice(at);
+    expect(e).toContain('P3');
+    expect(e).toContain('backoff');
+    expect(e).toContain('`ccrc-api calls record`');
+    expect(e).toContain('`wakeOn: time:<epoch>`');
+    expect(e).toContain('say so in the turn');
+    expect(e).toContain('nothing is invented and nothing is done by hand');
+    expect(e).toContain('references/decision-procedure.md');
+  });
+
+  it('keeps the cap-concurrency entry as it stands until the fleet-capacity plan rewrites it (W1-5, P11)', () => {
+    expect(wrong()).toContain('- **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be woken.');
+    expect(flat(skill)).toContain('`cap-concurrency` remains authoritative — stop, say so, and wait to be woken, exactly as you would for any other run.');
+    expect(flat(skill.slice(0, skill.indexOf('# Coordinating')))).toContain('Never use it to do a wave\'s own work');
+  });
+
+  it('step 4 re-reads the ids once on unknown-item, records and goes on, and treats item-terminal as a no-op', () => {
+    const s = step(4);
+    expect(s).toContain('A coordinator that guessed `1` was refused `unknown-item`: re-read the ids once');
+    expect(s).toContain('`runs items-list`');
+    expect(s).toContain('the tally is display only');
+    expect(s).toContain('`item-terminal` is a no-op to record');
+    expect(s).not.toContain('was right to stop rather than guess twice');
+  });
+
+  it('step 5 takes a cap-review-rounds through the lift door and lands with known limits otherwise, and parks a bare 400', () => {
+    const s = step(5);
+    expect(s).toContain('`cap-review-rounds` means the work run has had its three review rounds');
+    expect(s).toContain('`ccrc-api runs review-rounds`');
+    expect(s).toContain('references/decision-procedure.md');
+    expect(s).toContain('`coord-lift-off`');
+    expect(s).toContain('`cap-not-reached`');
+    expect(s).toContain('A 404 is a block of class P4');
+    expect(s).toContain('land with known limits');
+    expect(s).not.toContain('the cap is theirs to lift; rule on the findings you hold, or wait');
+    expect(s).toContain('record the block with `wakeOn: update`');
+  });
+
+  it('step 6 sends a plain fix round for a conflict with no pinned entry, a requested change is addressed, an unreadable cause is retried', () => {
+    const s = step(6);
+    expect(s).toContain('a measured conflict goes as a plain `fix-round` mail with the conflicted paths and no `ejection` field');
+    expect(s).toContain('a requested change is addressed by default, and only ignoring it is the operator\'s (O6)');
+    expect(s).toContain('a cause you could not read is read again with backoff, then the PR is enqueued once more');
+    expect(s).toContain('send a plain `fix-round` mail with no `ejection` and record the call');
+    expect(s).not.toContain('it stays a stop for the operator');
+    expect(s).not.toContain('report it to the operator with the run\'s state');
+  });
+
+  it('step 6 re-reads a missing closed row with backoff and lands an unproven producer first, instead of reporting', () => {
+    const s = flat(skill.slice(skill.indexOf('**Different project:**'), skill.indexOf('\n7. **Final merge:**')));
+    expect(s).toContain('read again with backoff');
+    expect(s).toContain('land the producer first (step 7)');
+    expect(s).not.toContain('means report and do not dispatch');
+  });
+
+  it('a stale-uuid answer derives the identity again and resends once; a second one is a block of class P4', () => {
+    const t = flat(skill);
+    expect(t).toContain('403 `stale-uuid` on an ack or a mail');
+    expect(t).toContain('derive the identity again (`ccrc-api whoami`) and resend once');
+    expect(t).toContain('A second `stale-uuid` is a block of class P4');
   });
 });
