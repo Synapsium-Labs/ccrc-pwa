@@ -2,6 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> [!NOTE]
+> **Accepted on 2026-11-10** by the coordinator (CP-71), after reviews 1726, 1728, 1731, 1735, 1737 and 1739 and fix rounds 1 to 5. The caution box below was written before the acceptance: its "a draft for review", "is not accepted" and "the merge of this document" no longer hold. Every other gate it lists still stands, and the plan still authorises no marker, store read, host probe, release or rollout.
+>
+> Review 1739 read fix round 5's delta and found six statements that do not hold against main. Each is corrected at build time under the anchor rule, by the task that owns it:
+> - **Task 1H, the census route's CLI half.** `operatorMain` in `cli.mjs` strips `--json` before `runOpVerb`, and under `--json` `emit` writes the sweep's lines to stderr. So `ccrc history census --json` must print the report on stdout, and SA23 asserts it there.
+> - **Task 2, SA8.** `epochCopySlots` keys level-0 slots by the boundary's holding file, so a subagent leaf fans in only with the leaves of its own agent file, and no parent mixes subagent and main leaves. SA8's fixture holds 8 final subagent leaves in one agent file, and its stated outcome drops the mix.
+> - **Task 1E, `decideAgentIngest`'s table.** An import row with `admitted: false` answers false, so an import arm that ignores `admitted` fails.
+> - **The sidecar case (review 1735's F2) and its paused twin.** `at` is captured after agent a grows, before the asserted tick.
+> - **Every `it.each` truth table** types its rows (`as const`), so `typecheck-tests` stays green.
+> - **The census's canonical share** (the coordinator's read) comes from that stdout report.
+
 > [!CAUTION]
 > **A draft for review. It authorises nothing.** It was drafted under programme item CP-71 and is not accepted. Its independent review is the gate, and no W4 implementation starts before the plan is accepted (the addendum's approval note).
 > This plan does **not** authorise any of the following:
