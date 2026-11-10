@@ -972,12 +972,13 @@ function parentReroller(db, ictx, onlyIfChanged = false, runBudget = null) {
       // have left a prefix in: a value learned after the cut that straddles it would not match the redaction, and its prefix
       // would stay in the gist and in nodes_fts. A stored gist of GIST_MAX or more takes the fresh rollup, with the stored status
       // standing. An invalid or absent parent holds the rollup by construction, and a tombstoned summary makes "unreadable"
-      // routine, so it takes the fresh rollup too (a kept rollup goes stale); that narrowing was the reviewer's at review 1742
-      // and the coordinator adopted it. For a kept gist `capped` is the stored flag with the rollup's topics and refs cuts (the
+      // routine, so it takes the fresh rollup too (a kept rollup goes stale); that narrowing was the worker's own refinement in
+      // fix round 1, and the coordinator adopted it at review 1742. For a kept gist `capped` is the stored flag with the rollup's topics and refs cuts (the
       // stored flag cannot tell its own gist cut from them, so it stays set once set); a fresh rollup carries its own.
       // Residual 1, disclosed and not built: a parent created while its last child's summary was already unreadable is stored ok
-      // with the rollup gist, and status ok cannot tell that parent from a steered gist. A later unreadable re-roll therefore keeps
-      // that rollup when it is uncut, and the rollup can go stale.
+      // with the rollup gist, and status ok cannot tell that parent from a steered gist; nor can it tell one whose capped steered
+      // gist an earlier unreadable re-roll replaced with the fresh rollup (the status ok or degraded stands over a rollup gist).
+      // A later unreadable re-roll therefore keeps such a rollup while it is under GIST_MAX, and the rollup can go stale.
       // Residual 2, disclosed and not built: a gist that blockFields did cut can still store fewer than GIST_MAX units, because
       // capText's cutBefore stops one short of a surrogate pair at the cut and blockFields' trimEnd drops whitespace at the cut.
       // A value that straddles such a cut would have to contain that pair or that whitespace.

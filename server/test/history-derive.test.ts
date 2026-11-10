@@ -2132,6 +2132,8 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
         expect({ status: parentRow(parents[0]!).status, gist: parentRow(parents[0]!).gist }, 'derive: the steered gist stands, not the rollup').toEqual({ status: 'ok', gist: NODE_OK });
       } finally {
         wdb.prepare('UPDATE nodes SET status = ? WHERE node_id = ?').run(planted, lastId);
+        // a red above may have left group 0's parent (and the depth-2 parent over it) rewritten: re-roll them from the restored leaf
+        D.rerollParents(wdb, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) }, ids.slice(0, 8), false);
         closeWriter(wdb);
       }
       expect(sum(report(lts, lts + 1), 'addOn'), 'CONTROL: restored').toBe(1);
@@ -2462,7 +2464,7 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_ALL_W });
   });
 
-  it('the belt\'s node step charges the summary decode of a steered parent\'s last child to the budget it was handed', async () => {
+  it('the belt\'s node step charges the summary decode of every asked last child to the budget it was handed', async () => {
     const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): { bytes: number } };
     const D = (await import('../../ccd/history/derive.mjs')) as unknown as { beltNodesStep(db: unknown, ictx: object, slice: object): boolean };
     const lasts = Array.from({ length: GROUPS }, (_, g) => g * 8 + 7).filter(exactReceipt).map((k) => ids[k]!);
@@ -2476,14 +2478,20 @@ describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W
     const before = everyone.map((id) => parentRow(id));
     const db = openWriter(historyPaths(box.home).dbFile);
     const step = getStep(db, 'nodes-belt', 1);
+    let after: typeof before = before;
     try {
       withTx(db, 'NORMAL', () => { setStep(db, 'nodes-belt', 1, '0', null); });
       expect(D.beltNodesStep(db, ictx, slice), 'the step completed').toBe(true);
+      after = everyone.map((id) => parentRow(id));
     } finally {
       withTx(db, 'NORMAL', () => { if (step !== null) setStep(db, 'nodes-belt', 1, step.cursor, step.completedMs); else db.prepare("DELETE FROM derivation_state WHERE step = 'nodes-belt' AND version = 1").run(); });
+      // a step that rewrote a parent (a red below) is undone by a re-roll from the stored children, as every parent was derived
+      if (JSON.stringify(after) !== JSON.stringify(before) || after === before) {
+        (await rerollMod()).rerollParents(db, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) }, [...ids], false);
+      }
       closeWriter(db);
     }
-    expect(everyone.map((id) => parentRow(id)), 'CONTROL: the step rewrote no parent').toEqual(before);
+    expect(after, 'CONTROL: the step rewrote no parent').toEqual(before);
     expect(slice.bytes, 'the decode of each asked last child\'s summary was charged to the handed budget').toBe(zBytes);
   });
 
