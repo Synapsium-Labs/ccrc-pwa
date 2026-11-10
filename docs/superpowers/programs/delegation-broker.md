@@ -8,7 +8,7 @@ The first visibility release is designed in `docs/superpowers/specs/2026-11-02-d
 
 Separately, the operator authorized obtaining the exact previously refused test-launcher inspection request from retained evidence and preparing a precise safety-disposition request. That instruction does not authorize retrying the refused inspection, reading forbidden account/secret paths or weakening guards. The original nonzero test execution remains unresolved until causally explained and legitimately verified.
 
-Wave 4 has since landed in full: PR4 #1619 and PR3 #2191 merged on 2026-11-03, and the wave 4 ledger fold is #2233. The Wave 5 adoption/promotion plan, #2167, was approved by the operator on 2026-11-04 with every O5 recommendation; its implementation, and the ordinary lifecycle, review, CI and native-queue obligations, remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed.
+Wave 4 has since landed in full: PR4 #1619 and PR3 #2191 merged on 2026-11-03, and the wave 4 ledger fold is #2233. The Wave 5 adoption/promotion plan, #2167, was approved by the operator on 2026-11-04 with every O5 recommendation; its implementation, and the ordinary lifecycle, review, CI and native-queue obligations, remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed. Wave 5 landed in full by 2026-11-09. On 2026-11-10 the operator chose not to keep worktrees and dropped promotion (wave 5b), so the programme closes with wave 5.
 
 ## Current operator amendment — 2026-10-28
 
@@ -49,7 +49,7 @@ never links work by a name, a path, a time or a working directory.
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | #1614, #1627, #1619, #2191 | **merged**: PR1 #1614 on 2026-10-31 as `3ce530dad` and PR2 #1627 on 2026-10-31 as `c555df234` (both landed by another session at the operator's go; runs 584 and 1021 still open); PR4 #1619 on 2026-11-03 as `27cd78962` from `c9eaf82fc`, after reviews 1365 and 1367, run 1020 closed `done`; PR3 #2191 on 2026-11-03 as `30b270d19` from `ef3b85d46`, after reviews 1384, 1390 and 1397, run 1007 closed `done`; the two-day gate was waived by the operator on 2026-10-28, not passed |
 | 5v | visibility (scope decision 2026-11-02) | honest helper and workspace visibility in the PWA; no automatic end or reopening | pwa, through the server box | 4 | #2254 | **merged** 2026-11-04 as `1d5b09e01` at exact head `e0792867f` (run 1421, four review rounds; the fourth by the operator's lift of the cap); run 1421 closed `done` |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357, #2397, #2396, #2419, #2422, #2420, #2426, #2452, #2481, #2502 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). The plan's Task 0, the corpus, #2397 on 2026-11-07 as `e53d64928` at `a4ee0565d` (run 1577, reviews 1591, 1605 and 1607; split out of PR7 by D-8053). PR7 #2396 on 2026-11-07 as `67121c031` at `7c4c3190c` (run 1569, reviews 1587, 1604 and 1609), first in v0.0.1020, shadow. PR10 #2419 on 2026-11-07 as `0ba6431c6` at `bd01a4171` (run 1613, reviews 1615, 1623 and 1624), the PWA's keep, attach and "not delegated" controls. PR10b #2422 on 2026-11-07 as `a80986312` at `b12b0c4fd` (run 1625, reviews 1626, 1628 and 1629), PR10's review leftovers. PR7b #2420 on 2026-11-07 as `b018bd2b1` at `ad726423c` (run 1612, reviews 1622, 1627 and 1630), review 1609's findings on PR7. PR7c #2426 on 2026-11-07 as `9873acc49` at `e06d4ebda` (run 1631, reviews 1634, 1640 and 1644), review 1630's liveness finding, first in v0.0.1025. PR8b #2452 on 2026-11-08 as `3750e99ba` at `e278bc4b5` (run 1645, reviews 1659, 1665, 1669 and 1683), the adoption switch and its door, first in v0.0.1043. PR8c #2481 on 2026-11-09 as `fe4c74c8e` at `ccc0c48c6` (run 1688, reviews 1693, 1699, 1703, 1709 and 1717), the switch's Settings card, first in v0.0.1050. PR8d #2502 on 2026-11-09 as `3a8af3af6` at `355efb605` (run 1721, reviews 1727 and 1729), the counts line in mode unmeasured (item 131), first in v0.0.1055. Every PR of wave 5 but promotion (5b) has landed |
-| 5b | 4 Adopt (promotion) | promotion through `ws-add --base` (the plan's PR9a and PR9b) | server | 5 | — | split out of wave 5 by the operator on 2026-11-04 (D-7940); dispatched once the rest of wave 5 has landed and been used, when the operator says so |
+| 5b | 4 Adopt (promotion) | promotion through `ws-add --base` (the plan's PR9a and PR9b) | server | 5 | — | split out of wave 5 by the operator on 2026-11-04 (D-7940); **dropped** by the operator on 2026-11-10: keeping stays off, so no worktree is kept to promote |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | dropped by the operator on 2026-10-26 (D-7002) |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | dropped by the operator on 2026-10-26 (D-7002) |
 
@@ -2297,6 +2297,23 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     above zero, the card's list still names each worktree that figure counts, headed "Worktrees the last pass listed",
     with "and N more" past 50 (review 1727 F1). The sentence above it stays true. Any change to the list is the
     operator's choice.
+- **2026-11-10 — The operator chose not to keep worktrees; item 132 withdrawn, wave 5b dropped, and the programme
+  closes.** On item 132's return the operator answered: “I don't want to "keep them" I've set cleanup”, and then: “I
+  don't see value in keeping old used and no longer needed worktrees beyond life of their session”.
+  - Their tick of item 132 meant they had chosen Do not keep. The coordinator had read the absent marker as a tap of
+    Keep them that never reached the server, and returned the item. Item 132 was withdrawn.
+  - Measured on the fleet box: the switch's marker is absent, so the lane stays in shadow and only records what it
+    would keep. Worktrees left behind go to the orphan-tree lane, whose live and rescue markers both stand. That lane
+    removes a clean tree once nothing in it has changed for 7 days (a HEAD that is on no remote is pinned under a ref
+    first), and never removes a tree with uncommitted changes. A kept tree would have been held back from it for 7
+    days from its last keep.
+  - Wave 5b (promotion, the plan's PR9a and PR9b) is dropped, as the coordinator told the operator in the same
+    exchange: promotion turns a kept worktree into a run, and with keeping off no worktree is kept. It can return only
+    as a new run, if keeping is ever turned on.
+  - Run 1730 held wave 5b and was never dispatched, so the ordinary close refuses it: the coordinator asked the
+    operator to end it (an end request), and the programme closes with it. The two items carried from PR8d (above)
+    stay with the Rider. Adoption stays in the product and only records while the switch is off; Retain and resolve
+    and the switch's card are unchanged.
 
 ## Carried constraints
 
@@ -2441,6 +2458,9 @@ These are plan refinements and proposed implementation decisions under the appro
 change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
+
+**None (2026-11-10).** The programme closes with wave 5; wave 5b was dropped (decisions above). What follows is
+kept as history.
 
 **Wave 3's remaining follow-ups (2026-10-24).** Both runs of the operator's "Split: attempt fix first" have landed: run
 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762 (follow-up
