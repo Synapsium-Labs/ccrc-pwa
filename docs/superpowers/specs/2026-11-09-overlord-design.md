@@ -92,7 +92,7 @@ accounts off for it.
 - **The numbers could be shaped by the thing they measure.** Evaluation now rests on blind answers, sealed predictions
   and replay (H30), and the operator's own oversight is measured too (H36).
 - **Nothing verified that the machines compose.** A model, property tests, a deterministic simulator and one invariant
-  monitor now carry ten stated invariants (H33).
+  monitor now carry twelve stated invariants (H33).
 - **Five things were added because the best systems have them, or none does yet:** a rule for when asking is cheaper
   than acting (H34), an attention budget (H35), a fleet playbook that learns from measured outcomes (H37), a portfolio
   with the operator's rank and sealed forecasts (H38), and engagement the operator can set for each programme (H39).
@@ -295,8 +295,9 @@ one beside it.
   restore door (§7.6) each raise. A recreated session with the same name gets nothing. A call that carries an older
   term is refused `stale-designation`. Every write door also checks the generation and its act key (the fence,
   §3.3.11). A raise of the term at designate or rebind binds the body that the same transaction makes `live`, so
-  that body's current generation carries the new term. Confirm the restore keeps the same body, so it makes a renewal
-  due at once (hard, Table 3.3.11b), and the next generation carries the raised term.
+  that body's current generation carries the new term. Confirm the restore keeps the same body unless the
+  journal names another (§7.6). Where it keeps it, it makes a renewal due at once (hard, Table 3.3.11b), and the
+  next generation carries the raised term.
 - **No second start.** "Start the Overlord" is offered only while no session is bound to the row. While a session is
   bound or pending, the door refuses `overlord-exists` and names it, and the console shows **Open the Overlord**
   instead.
@@ -369,7 +370,8 @@ is one call, by number, so the operator can approve or overturn it.
     session ids, the actor the gate recorded, and the binding's state: `pending` or `live`. A retired row binds no
     session.
   - **Its writers are the designate, rebind and retire doors, the Settings model row, and Confirm the restore**, which
-    raises the term and takes the stricter of the row and the authority journal (§7.6). Each of the three doors is
+    raises the term and takes the stricter of the row and the authority journal (§7.6). The renewal lane writes it in
+    one case only: it fails a `pending` binding whose deadline passed (§3.2). Each of the three doors is
     a session-gated operator door with a step-up. The Settings model row writes the model class. Selecting `fable`
     there keeps the step-up, and selecting `opus` needs none (§3.4).
   - **The three doors.** `POST /api/overlord/designate` is "Start the Overlord": it creates a session and binds it,
@@ -387,9 +389,10 @@ is one call, by number, so the operator can approve or overturn it.
     `live` only when the check passes. If it fails, the new session is stopped, the row goes back to binding no session
     (designate) or the
     old binding stands (rebind), and the door answers `overlord-sandbox-unmet`.
-  - **A start that never reports fails the check.** If no start report arrives within the `carded` deadline and its
-    one re-nudge (Table 3.3.11a), the door treats the sandbox check as failed, as above. A pending row never stands
-    without a deadline, so `overlord-exists` cannot wedge the next "Start the Overlord".
+  - **A start that never reports fails the check.** The door writes the `carded` deadline and its one re-nudge
+    (Table 3.3.11a) on the `pending` row. If no start report arrives by then, the renewal lane treats the sandbox
+    check as failed, as above, after a server restart too. A pending row never stands without a deadline, so
+    `overlord-exists` cannot wedge the next "Start the Overlord".
   - **A session that failed its first check stays stopped.** The board shows it with the properties that failed
     (§5.2). The next "Start the Overlord" creates a fresh session, and so does the next rebind. Neither restarts the
     stopped one.
@@ -898,6 +901,10 @@ Table 3.3.9b applies to it.
     undecided between `worker` and `reviewer`. A claim or an intent that could not be measured, with no measured yes
     beside it, reads as undecided between `coordinator` and `plain`. The members of each undecided answer share one
     `SessionRole` view, so the roll lane and the hook still get one answer.
+  - **The view, role by role.** `worker`, `reviewer`, `auditor` and `replay` read as `child`, so the roll lane never
+    takes them and the hook never tells them to coordinate. `overlord`, `coordinator` and `plain` read as
+    `coordinator`. The roll lane's `overlord` hold (§3.2) lands in the pull request that first reads the designation,
+    so the Overlord is never rolled as a coordinator in between.
   - **`plain` is what the server measures, not what a session was told.** Since D-8142 the hook tells every session
     the operator creates that it may coordinate from its first turn. `roleOf` still reads such a session as `plain`
     until it claims a run or declares intent. Its view is `coordinator`, so it is rolled as today.
@@ -1944,7 +1951,8 @@ holds private data and can change state, so it must never take untrusted text ra
     are capped apart, at 600 characters (Table 11.5b).
   - **Its states.** `open`, `commanded`, `consumed`, `expired`, `stale` or `replaced`. `open` moves to `commanded` on
     the operator's tap, to `replaced` when a newer proposal names it, to `stale` when a target row moves, and to
-    `expired` after 24 hours. `commanded` moves to `consumed` in the transaction that writes its act row, and back to
+    `expired` after 24 hours. `commanded` moves to `consumed` in the transaction that writes its act row, to
+    `stale` when a target row moves (its command ends with it, and the operator is told), and back to
     `open` when the command's 15 minutes pass unused. All but `open` and `commanded` are terminal.
   - **Few at once.** One open proposal per target, and three open `propose-command` proposals in all. A newer proposal
     says which one it replaces. A proposal that would pass either limit is refused `proposal-limit`. A proposal whose
@@ -1960,7 +1968,8 @@ holds private data and can change state, so it must never take untrusted text ra
     the message row that a disagreement about a class-none act is settled. That authorises nothing operator-only.
   - **A command is spent once.** When it is spent is stated once, in §10.1. A retry with the same operation key
     reuses it. Each consumed command is a record in the authority journal (§7.6).
-  - **Live commands are band 1 of the inbox (§6.8).** A command that expires unused is told to the operator.
+  - **Live commands are band 1 of the inbox (§6.8).** A command that expires unused is told to the operator. So is
+    a commanded act that settles `refused` or `unknown`: the command is spent and the act did not happen.
   - **A coordinator checks, never reads.** Where a commanded act is carried out down the chain, the act row names
     the one session that may perform it. That session marks it performed through a door, once. A coordinator checks
     through the act read (kind, target, authority, state and term only), never from mail text.
@@ -2204,13 +2213,15 @@ operator sets.
   - quiet hours;
   - "away until".
 - **Each push has a cost.** A push at a briefing time costs 0. An interrupting push costs 1. A repeat costs 2.
-- **Each urgency has a deferral limit.** The escalate door takes one of three urgencies, in Table 4.2a.
+- **Each urgency has a deferral limit.** The escalate door takes one of three urgencies, in Table 4.2a. Nothing
+  defers a push past its limit. Quiet hours and "away until" hold a push only up to it, and an open console
+  settles a pending batch and nothing else.
 
 | Urgency | Deferral limit | Accepted when |
 |---|---|---|
 | `blocking-now` | None: it pushes at once | The server measures a run or a hold waiting behind the item |
 | `blocking-by` a time | That time, less a lead time (Table 11.5b) | Always |
-| `batchable` | The next briefing time | Always |
+| `batchable` | The next briefing time. With no briefing time set, it is not deferred | Always |
 
 *Table 4.2a. How long each urgency may wait.*
 
@@ -2218,8 +2229,11 @@ operator sets.
   and the Overlord's urgency (§6.7).
 - **A batch waits for the operator.** A pending batch is delivered when the operator opens the console, with no push.
   Otherwise it goes out at the next briefing time, as one push.
-- **An unseen blocking item pushes once more after two hours** (a Setting). That repeat costs 2.
-- **A spent budget lets only a verified `blocking-now` through.** That push is logged as an overdraft, with its cause.
+- **An unseen blocking item that the tier held or escalated pushes once more after two hours** (a Setting). That
+  repeat costs 2. It sends the row's one outbox row again, under the row's tag, and adds no row (I2). A blocking
+  item the tier never held pushes once, as today's build does (I9).
+- **A spent budget lets through a verified `blocking-now`, and a `blocking-by` at its deferral limit.** Each such
+  push is logged as an overdraft, with its cause.
 - **Deferred is never hidden.** A deferred notice is recorded at once. Its row is on Waiting on you as it would be
   anyway: deferral delays the push, never the row.
 - **The escalate door stamps the earliest time the operator can answer.** It reads the briefing times, the quiet hours
@@ -2305,14 +2319,16 @@ Requests list. The home groups that list by what the operator must do next (Tabl
   `takenFrom`. The reason `operator-took-it` is carried on the move's news row. While a request is the operator's,
   the follow-up arm sends no nudge and the Overlord relays nothing on it. The operator's hand back returns it to
   `takenFrom`, and clears it. The operator's answer keeps its meaning for a request that reached `needs-you` any other
-  way.
+  way: it moves the request to `in-progress` only when its owner has acknowledged it. Otherwise the answer is
+  recorded, the request stays `needs-you`, and the Overlord routes it ("routed after the operator's answer",
+  Figure 3).
 
 | Actor | Its moves |
 |---|---|
-| the Overlord | open (to `received`); route (`received` to `routed`); re-relay (stays `routed`), to answer a counter with the revised done test; route elsewhere (`declined` to `routed`, and `needs-you` to `routed` after the operator's answer); drop (`received`, `declined` or `needs-you` to `dropped`, with a reason) |
+| the Overlord | open (to `received`); route (`received` to `routed`); re-relay (stays `routed`), to answer a counter with the revised done test; route elsewhere (`declined` to `routed`, and `needs-you` to `routed` after the operator's answer); drop (`received` or `declined` to `dropped`, with a reason; `needs-you` to `dropped` only after the operator's answer, and refused `operator-has-it` before it) |
 | the owning coordinator | acknowledge (`routed` to `in-progress`); counter (stays `routed`, counted); decline (`routed` to `declined`); blocked (`in-progress` to `blocked`); failed (`in-progress` to `failed`); report (news only, no move: mail that carries `requestId`, with no door of its own) |
 | the server | stamp news; close (`in-progress` to `done`, `done-unverified` to `done`, and `received` to `done` at the Overlord's close door); close unverified (`in-progress` to `done-unverified`); start a parent (`received` to `in-progress`, when the parent's first child is routed); unblock (`blocked` to `in-progress`); move to `needs-you` (from `received`, `routed`, `in-progress`, `blocked` or `declined`) |
-| the operator | answer (`needs-you` to `in-progress`, for a request that reached `needs-you` any other way than a take); take (`routed`, `in-progress` or `blocked` to `needs-you`, recording that state in `takenFrom`, with the reason `operator-took-it` on the move's news row); hand back (`needs-you` to the state in `takenFrom`, which it clears); confirm (`done-unverified` to `done`); withdraw (to `dropped` from `received`, `routed`, `in-progress`, `needs-you` or `done-unverified`) |
+| the operator | answer (`needs-you` to `in-progress`, for a request its owner has acknowledged that reached `needs-you` any other way than a take; for any other such request the answer is recorded and it stays `needs-you` for the Overlord to route); take (`routed`, `in-progress` or `blocked` to `needs-you`, recording that state in `takenFrom`, with the reason `operator-took-it` on the move's news row); hand back (`needs-you` to the state in `takenFrom`, which it clears); confirm (`done-unverified` to `done`); withdraw (to `dropped` from `received`, `routed`, `in-progress`, `needs-you` or `done-unverified`) |
 
 *Table 5.1b. Who may move a request, and where.*
 
@@ -2499,8 +2515,11 @@ Overlord acts on what they say.
     card.
   - **The coordinator skill's clause 22 states all of this** (§11.4).
 - **C15. The server keeps the clocks, and the Overlord acts** (C15, H22, H39).
-  - **`followUpAt` is stamped by the server.** It is first set from the read-back's "first news due", within a
-    ceiling from an L0 table (Table 11.5b). Each later nudge re-times it.
+  - **`followUpAt` is stamped by the server.** It is set when the request is opened, and again at each move that
+    leaves the next step to a session (a relay, a counter, a decline), to a ceiling from an L0 table (Table
+    11.5b). The read-back then sets it from its "first news due", within that table's ceiling. Each later nudge
+    re-times it. So every open request outside `needs-you`, `done-unverified` and `blocked` has a clock. A parent
+    takes none of its own: its children carry theirs.
   - **One L1 decider, `followUpDue`, decides a nudge.** Its inputs: no acknowledgement, no news, no linked work, a quiet
     run, a dead coordinator, a stall rung repeated, and the nudges so far. The nudge names its reason.
   - **News resets the clock at most twice** without measured movement on the request's linked work. Prose alone
@@ -2517,16 +2536,18 @@ Overlord acts on what they say.
   - **The arm has its own arming.** The stall watch sends notices to anyone but a worker only at a level the operator
     chose in Settings, or under markers that have no writer in the tree. Riding that arming would tie the arm to a
     switch about workers. So the follow-up arm runs on the Overlord's
-    effective rung instead, at `advise` and `full` (§7.5). It is keyed on its subject, as run-less notices are, so a
-    restart never sends a nudge twice.
+    effective rung instead, at `advise` and `full` (§7.5). At `chat` it sends no nudge: a follow-up that comes due
+    there moves its request to `needs-you`, so a rung the server lowered leaves no request unfollowed. It is keyed
+    on its subject, as run-less notices are, so a restart never sends a nudge twice.
   - **Engagement narrows it, from W3.** Until engagement ships (W3's first step), every programme reads `full`. Then a
     `hands-off` programme gets no follow-up nudges. From W3, when the operator speaks to a programme's coordinator from
     the console, a tap on a next-step control included, follow-ups for that programme pause for 30 minutes. The
     `operator-at-programme` mark that starts the pause is written from W1a (§7.5).
   - **The `off` rung stops every nudge,** and moves each open request whose owner has not acknowledged to `needs-you`,
     in one transaction (§7.5).
-  - **After a server gap** the follow-up clocks are dropped and timed again from the boot. A gap never fires a burst
-    of nudges.
+  - **After a server gap** only a follow-up that came due while the server was down is timed again, spread after
+    the boot. One that is not yet due keeps its time. A gap never fires a burst of nudges, and never pushes one
+    out.
 - **C16. The operator hears about endings and about what needs them** (C16, H35, H36).
   - **Endings and needs reach the operator.** When a request is `done`, `done-unverified`, `failed`, `dropped` or
     `needs-you`, the Overlord says so in its chat, and the Requests list shows it.
@@ -2575,7 +2596,8 @@ the Overlord's value lies in the brief and the done test, not in the extra hop.
     impossible, or a duplicate. `blocked`, on a named request or programme. `failed`. Declining with a reason is a
     correct answer, and clause 22 says so.
   - **Dependencies cannot loop.** The `blocked` door refuses a cycle (`dependency-cycle`). The server unblocks a
-    request when what it waits on is done. If that ends any other way, the request moves to `needs-you`.
+    request whenever it measures that what it waits on is done: at that event, and when a request enters
+    `blocked`, a hand back included. If that ends any other way, the request moves to `needs-you`.
   - **After a decline** the Overlord routes the request elsewhere or tells the operator. The follow-up arm holds it to
     that (§5.4).
   - **A parent waits on its children.** The parent is done when the server measures every child done. A parent has no
@@ -3214,14 +3236,15 @@ taken only where the Overlord may settle the row alone, and it delays the push, 
     it. A hold's outcome, the reach stamp and one outbox row are written in one transaction too. A row is stamped at
     most once.
   - One sender drains the outbox. It marks a row sent when the push service accepts it. It retries an unsent row,
-    with backoff, while it runs, and sends every unsent row again at boot.
+    with backoff, while it runs, and sends every unsent row again at boot. A row the attention budget deferred
+    to a stated time is not unsent before that time (§4.2).
   - A row whose level makes no push today still gets its outbox row, marked silent. The sender marks it sent at once
     and shows nothing, so the pushes stay those of today's build (I9).
   - Each push carries the row's own tag, so a repeat replaces the first on the device.
   - The promise: exactly one reach, at least one push attempt, at most one notification shown (invariant I2).
-  - One L1 decider, `pushDue(row)`, is asked on every event: a reach, a change of level or urgency, a batch flush. The
-    level is the higher of the coordinator's `neededBy` and the Overlord's urgency. The Overlord never lowers a
-    coordinator's `blocking`. The blocking toggle pushes through the same stamp.
+  - One L1 decider, `pushDue(row)`, is asked on every event: a reach, a change of level or urgency, a batch flush, a
+    voided staged act (§7.2). The level is the higher of the coordinator's `neededBy` and the Overlord's urgency. The
+    Overlord never lowers a coordinator's `blocking`. The blocking toggle pushes through the same stamp.
 - **Deadlines are columns, set once.** Nothing extends one. At boot the holds are re-seeded from their rows. Those
   whose deadline passed meanwhile are released in one grouped push, with the reason `server-gap`. A clean shutdown
   seals state locally and pushes nothing. After each boot the rung is capped at `advise` until one witness off the
@@ -3482,7 +3505,8 @@ a grant holds, how it lives, and how it tightens by itself.
 - **H26. Shadow, then live, and every grant expires.** A new grant starts in `shadow`. Nothing is held under it (§6.7),
   so the server records what it would have allowed from the sealed predictions filed on questions in its scope.
   It leaves shadow only on the operator's tap on its shadow report (`POST /api/overlord/grants/:id/live`).
-  Every grant expires after 30 days.
+  Every grant expires after 30 days. `overlordMayAct` reads `expiresAt` against `now` at each call: the lane's
+  write of `expired` is the record, not the gate.
 - **Renewal is not one tap.** Its door is `POST /api/overlord/grants/:id/renew`. The renewal sheet shows three acts
   from the grant's last period as blind spot-checks. Renew is enabled after the operator answers them. With no answer
   by the expiry, the grant becomes `expired`. Renewing it later starts it again in `shadow`.
@@ -3502,8 +3526,10 @@ a grant holds, how it lives, and how it tightens by itself.
 *Table 7.2a. What suspends a grant. Widening stays the operator's alone, and narrowing is the safe direction, so the
 server suspends without being asked.*
 
-- **The states.** `shadow`, then `live`, then `suspended`, `revoked` or `expired`. A latched suspension returns to
-  `live` only by the operator's tap.
+- **The states.** `shadow`, then `live`, then `suspended`, `revoked` or `expired`. `suspended` is the latch alone,
+  stored with its cause, and it returns to `live` only by the operator's tap. A condition is never stored: it is
+  read at each call, as the ladder's conditions are, so a condition that ends lifts no latch. A latch leaves a
+  grant in `shadow` where it is: it leaves shadow only by its shadow report.
 
 **Staging, the blind check and evidence.**
 
@@ -3514,19 +3540,28 @@ server suspends without being asked.*
     it, the clock waits. The window is ten minutes of that time.
   - **"Answer now" is the operator's own answer.** The staged act exits `preempted`. When the operator picks the same
     option, its outcome is `concurred`.
-  - **After eight hours unseen**, the answer falls back to an ordinary item for the operator.
-  - **The commit re-checks.** The transaction that makes it `effective` runs `overlordMayAct`, the fence, the rung and
-    the row's state again.
+  - **After eight hours with the window not run out**, seen or not, the answer falls back to an ordinary item for
+    the operator. The eight hours are wall time, counted from the staging.
+  - **The commit re-checks.** The transaction that makes it `effective` runs `overlordMayAct`, the rung and the
+    row's state again. The fence is read from the act row's own stamps: its term and its generation must still
+    be the current ones. So the mint of a later generation voids a staged act, as a rebind and a restore do, and
+    its item is the operator's. Why: the generation that staged it has ended, and no later one has read it. The
+    cost is small, because a staged act commits only after the operator has watched its window.
   - **Staging settles the hold.** It writes the row's reach stamp, and the staging push is its outbox row.
   - **No ask answer is ever staged.** A child waits on a live dialog. An O3 ask goes to the operator with the
     recommendation.
   - **A window that ran out unseen adds no evidence.** It is never agreement.
+  - **A voided act goes back to the operator, and says so.** A latch, a revocation, an expiry, a lower rung, a raised
+    term or the mint of a later generation voids a staged act in the transaction that makes the change. A condition does
+    not: the commit decides. A voided act is an event for `pushDue` (§6.7): the row's one outbox row is sent again under
+    the row's tag, as a repeat is, and says the Overlord did not answer.
 - **The blind check.** When it is armed, the decision model's `grant.inside` row runs after the code checks pass. It
   sees the question, the options, the grant's scope and the answer's option, and never the Overlord's reasons.
   Anything short of a clear yes answers `defer`, and the matter goes to the operator. Unarmed, the check is skipped:
-  the code checks and the veto window stand, and the act row records that it did not run. Why blind: a monitor that
-  cannot read the agent's reasoning cannot be talked round by it, and Anthropic built its own action classifier that
-  way (2026-03-25).
+  the code checks and the veto window stand, and the act row records that it did not run. The commit of a staged act
+  reads that record and asks nothing again: if the check is armed at the commit and the row holds no clear yes, the
+  act is `voided`. Why blind: a monitor that cannot read the agent's reasoning cannot be talked round by it, and
+  Anthropic built its own action classifier that way (2026-03-25).
 - **Evidence is an interval, for one effect and one scope.** The server computes it from blind answers only: the count,
   the one-sided 95% lower bound, and the window. It needs spread: at least five days and distinct subjects. The floor is
   the gates table's (§9.5): 19 blind cases and a lower bound of 0.85. Why: 12 agreeing cases out of 12 prove no more
@@ -3661,7 +3696,9 @@ capability (arXiv 2506.12469), and set so that it moves down by itself.
   - `full`: holds are live, and each armed kind of answer is delivered.
 - **Computed, never stepped.** The server stores three things:
   - `operatorRung`: `off`, `chat`, `advise` or `full`, set by the operator;
-  - `latchedCap`, with its cause: set by evidence of bad judgement or doubtful authority, cleared only by the operator;
+  - `latchedCap`: the lowest cap of the standing latches. Each latch is a row with its cause and its cap, set by
+    evidence of bad judgement or doubtful authority and cleared only by the operator, one cause at a time. A new
+    latch never raises the cap;
   - live conditions, which lift when they measurably end.
 
   `effectiveRung` is the lowest of the operator's rung and every cap a standing latch or condition sets. Every door,
@@ -3772,8 +3809,10 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
   - changes of the ladder, engagement, ceilings and arming;
   - a decision-model refit that eases a gate;
   - commands consumed, practice retirements, and each confirmed restore.
-- **Boot coherence.** At boot the server compares the journal with the Overlord's rows, following the collector
-  switch's table.
+- **Boot coherence.** At boot the server compares the authority journal with the Overlord's rows, following the
+  collector switch's table. It also compares the act journal with the act rows: a settle record whose act has no
+  row means the database went back, and the server refuses `authority-rolled-back`. An authority record is rare
+  and an act is not, so most restores lose acts and no authority record.
 
 | Journal against the rows | Verdict |
 |---|---|
@@ -3782,26 +3821,33 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
 | behind | refuse `authority-rolled-back` |
 | ahead | refuse `authority-rolled-back` |
 | malformed | refuse `authority-rolled-back` |
-| one trailing record with no row | a crash, not a restore: rolled forward if it narrows, dropped if it widens |
+| one trailing record with no row | refuse `authority-rolled-back`: a crash between a record and its row and a restore one record behind look the same. Confirm the restore applies the record if it narrows, and leaves it unapplied if it widens |
 
 *Table 7.6a. Boot coherence. Only narrowing records are ever replayed.*
 
 - **A witness outside the volume.** A volume snapshot restores the database and the journal together, so the journal
-  alone cannot see it. The server sends its authority epoch to every agent and every signed-in console. Each keeps the
-  highest it has seen. A server whose epoch is lower than a witness's refuses `authority-rolled-back`.
+  alone cannot see it. The server's authority epoch rises with every authority record and every settle record of
+  the act journal. The server sends it, with the head hashes of those two journals, to every agent and every
+  signed-in console. Each keeps the highest it has seen. A server whose epoch is lower than a witness's, or whose
+  journals do not hold the witness's heads, refuses `authority-rolled-back`. So records written after a restore
+  cannot catch the epoch up.
   - **An agent on the server's own host is no witness:** the same snapshot restores its copy.
   - **A narrowing is done only once a witness holds it.** A change that narrows authority (a revoke, a suspension, a
     lower rung) is reported to the operator as done only once at least one witness off the volume holds its epoch.
     Until then the console shows it as taking effect.
   - **After each boot, grants read as suspended and the rung is capped at `advise`** until one witness off the
-    server's volume has answered (Table 7.2a, Table 7.5a). On one box that is the first signed-in console.
+    server's volume has answered (Table 7.2a, Table 7.5a). On one box that is the first signed-in console. What
+    is left: after a restore of the whole volume, acts of the `advise` rung run, and may repeat, until that
+    answer.
 - **A detected restore latches the ladder at `chat`** (Table 7.5a), and latches every grant suspended (Table 7.2a).
   Every Overlord door but card, probe and note refuses `authority-rolled-back` until the operator confirms the
   restore.
 - **Confirm the restore.** One operator door ends `authority-rolled-back`. It is session-gated, behind the step-up,
   journalled, and ships in W1 (§11.1, §11.2). In one transaction it does what follows a restore:
-  - the term rises (§3.1);
-  - each authority field takes the stricter of the database and the journal;
+  - the term rises above the higher of the row's and the journal's (§3.1);
+  - each authority field takes the stricter of the database and the journal. For the designation: when the
+    journal's last designate, rebind or retire names another session than the row binds, or none, the row binds
+    no session, both ids join the past session ids, and the operator starts the Overlord again;
   - every grant stays latched suspended (§7.2);
   - the reconciliation pass runs (below);
   - classes are computed again (§6.7);
@@ -3809,10 +3855,14 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
 
   It then lifts `authority-rolled-back`. The `chat` cap stays as an ordinary latch, which the operator clears as any
   other (§7.5).
-- **The reconciliation pass.** It sets `divergedAt` on each act the act journal holds after the snapshot, and reaches
-  the asks and items those acts touched through their act rows' targets. Those rows go to the operator and are never
-  held. `diverged` is never an act state: the act states stay closed (Table 10.1b), and nothing an older build reads
-  changes.
+- **No id is used twice across a restore.** After Confirm the restore, the ids of grants, acts, proposals and
+  commands start above the highest their journals hold, as message ids do (§5.1).
+- **The reconciliation pass.** For each act the act journal holds and the table lacks, it writes the act's row with
+  `divergedAt` set, so the act's natural key stays taken. It reaches the asks, items and requests those acts touched
+  through their targets. Those asks and items go to the operator and are never held, and those requests move to
+  `needs-you`. Where the act journal is no further on than the database (the whole volume came back), no record says
+  which rows were acted on, so every open ask, item and request goes to the operator. `diverged` is never an act
+  state: the act states stay closed (Table 10.1b), and nothing an older build reads changes.
 - **The act journal** holds an intent record before each effect and a settle record after the commit. Its head is
   signed each day with the server's existing signing key, over a domain-separated preimage, and printed in the
   digest. The console keeps each head on the device, and checks that the next one extends it. Doctor verifies the
@@ -4438,12 +4488,12 @@ recurring failures that seed it, are defined in §10.5.
 
 | Move | Who makes it, and when |
 |---|---|
-| proposed to shadow | automatic, after a clean replay of the last 60 days; otherwise refused `practice-contradicts` |
+| proposed to shadow | automatic, after a clean replay of the last 60 days; otherwise the entry is `retired`, with the reason `practice-contradicts` |
 | shadow to canary | a `narrow` entry: automatic. A `widen` or `role:overlord` entry: the operator's tick |
 | canary to live | a `narrow` entry: automatic, once the holdout shows a non-negative effect over at least 20 exposures. Otherwise: the operator's tick |
-| live to live, renewed | the practice lane, at 45 days, on a non-negative measured effect |
+| live to live, renewed | the practice lane, at 45 days, on a non-negative effect measured against the holdout. A live entry keeps the canary's holdout. With nothing measured it is not renewed |
 | live to graduated | the practice lane, when it measures the guard or skill pull request merged |
-| any state to retired | automatic on a guard breach, on expiry, or at 90 days without graduation; or the operator |
+| any state but `graduated` to retired | automatic on a guard breach, on expiry, or 90 days after its first serving without graduation; or the operator. An `operator` entry is retired only by the operator: a guard breach on one raises an item |
 | an `operator` entry from the message record | live at the operator's tap |
 
 *Table 9.7b. How an entry moves, one move per row. When the live budget is full, a canary waits, and its item says
@@ -4507,10 +4557,11 @@ server's evidence, so the server fills every field it can measure, and the Overl
   operator and keeps its natural key. `diverged` is not an act state: the restore pass sets the `divergedAt` column
   (Table 10.1a, §7.6). `off` does not abandon a `pending` row: it is settled by measuring. A started session whose act
   is not `done` is listed "in flight" and counts against the start cap (§8.2).
-- **Two keys.** An act's natural key is its target row and that row's revision. A start, which has no target row
-  yet, is keyed by its request and its name (§8.2). An operation key from the door process is the transport's
-  dedupe: a repeated key returns the first call's row and outcome, and never acts again. A refusal at
-  the gate writes no row and stores no key, so a retry can act once its cause clears. Refusals are counted by word.
+- **Two keys.** An act's natural key is its target row and that row's revision. A start, which has no target row yet,
+  is keyed by its request and its name (§8.2). An operation key from the door process is the transport's dedupe: a
+  repeated key returns the first call's row and outcome, and never acts again. A refusal at the gate writes no row and
+  stores no key, so a retry can act once its cause clears. A row settled `refused` frees its natural key too: no
+  effect happened, so a later call may act under a new row. Refusals are counted by word.
 - **An authority is spent once.** A command is consumed in the transaction that writes its act row, as `pending` for
   an effect outside the database or as `done` for one inside it. Its proposal moves from `commanded` to `consumed` in
   the same transaction. A retry with the same operation key returns that row, and spends nothing again. This is the
@@ -4561,7 +4612,7 @@ server's evidence, so the server fills every field it can measure, and the Overl
 | decision-model answers | Per question: its id, the answer, the band, the model and the time taken, or that a check did not run (§3.7) |
 | staging | For a staged answer: when it took effect, or that it was vetoed, voided or preempted (§7.2) |
 | performer | For a commanded act carried out down the chain: the one session that may perform it, and when it marked it performed |
-| `divergedAt` | Set only by the restore pass, on an act the act journal holds after the snapshot. The pass reaches the asks and items that act touched through its targets, and those go to the operator (§7.6) |
+| `divergedAt` | Set only by the restore pass, on the row it writes for an act the act journal holds and the table lacks. The pass reaches the asks, items and requests that act touched through its targets: the asks and items go to the operator, and the requests move to `needs-you` (§7.6) |
 
 *Table 10.1a. The columns of an act row. The server fills every column but `summary`, `why` and the Overlord's part of
 the answer fields: its chosen option, cited ids and stated probability.*
@@ -4571,7 +4622,7 @@ the answer fields: its chosen option, cited ids and stated probability.*
 | `pending` | Written before an effect outside the database | `done`, `refused` or `unknown` |
 | `unknown` | The settle could not measure the effect. Its question goes to the operator | `done` or `refused`, only by a measurement |
 | `refused`, for an answer | The effect did not happen: the boot pass measured no key press, or the door refused it | Terminal. Its question goes to the operator, unless the row has already closed, so a row never stays open with nobody holding it |
-| `staged` | A grant-backed O3 answer waits out its veto window (§7.2) | `effective` (the veto clock), `vetoed` (the operator's Veto), `voided` (a change of authority, or eight hours unseen and fallen back to the operator) or `preempted` (the operator answering first, Answer now included; its outcome is `concurred` when the operator picks the same option) |
+| `staged` | A grant-backed O3 answer waits out its veto window (§7.2) | `effective` (the veto clock), `vetoed` (the operator's Veto), `voided` (a change of authority, the mint of a later generation, a blind check armed since the staging with no clear yes on the row, or eight hours with the window not run out; each returns the row to the operator with a push that says so) or `preempted` (the operator answering first, Answer now included; its outcome is `concurred` when the operator picks the same option) |
 | `done`, `refused`, `effective`, `vetoed`, `voided`, `preempted`, `shadow` | Settled. `shadow` is kept so the log's words never change. In version 1 nothing writes it: a shadow answer is a sealed prediction (§9.5), and a shadow grant is scored from those predictions (§7.2) | none |
 
 *Table 10.1b. The act states. `done`, `refused`, `effective`, `vetoed`, `voided`, `preempted` and `shadow` are
@@ -4650,9 +4701,9 @@ builds no stream of its own (H3, H27, H33).
   (#277, #464) can carry the same sequence later, so an outside collector rebuilds the Overlord's history with no new
   mechanism.
 - **One invariant monitor** (L1) reads that sequence: in the tests, in the simulator and on the live server. It checks
-  I1 to I8 and I10 everywhere. I9 compares against a build without the Overlord, so only the simulator checks it, by
-  running each seed both ways. A violation is a latch on the ladder: cap `advise`, and one operator item (§7.5).
-  It ships in W1, and M24 counts its findings.
+  I1 to I8 and I10 to I12 everywhere. I9 compares against a build without the Overlord, so only the simulator checks it,
+  by running each seed both ways. A violation is a latch on the ladder: cap `advise`, and one operator item (§7.5). It
+  ships in W1, and M24 counts its findings.
 
 ### 10.5 Cases
 
@@ -4699,7 +4750,7 @@ name that owner.
 
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
-| `overlord_designation` (singleton; session id, registry generation, `term`, model class, past ids, actor, and the binding's state, `pending` or `live`; a retired row binds no session and keeps the rest) | C5, L3 | `coord.db` | The designate, rebind and retire doors, the Settings model row, and Confirm the restore, which raises the term and takes the stricter of the row and the authority journal (§7.6). Designate and rebind each create the session they bind, in the same door, and write `pending`, and `live` once that start's sandbox check passes; retire keeps the row | none | W1 | yes; the authority journal rules after a restore | Ignores it: no Overlord, today's routing |
+| `overlord_designation` (singleton; session id, registry generation, `term`, model class, past ids, actor, and the binding's state, `pending` or `live`; a retired row binds no session and keeps the rest) | C5, L3 | `coord.db` | The designate, rebind and retire doors, the Settings model row, and Confirm the restore, which raises the term, takes the stricter of the row and the authority journal, and binds no session where the journal names another (§7.6). Designate and rebind each create the session they bind, in the same door, and write `pending`, and `live` once that start's sandbox check passes; retire keeps the row. The renewal lane writes it in one case: it fails a `pending` binding whose deadline passed (§3.2) | The `pending` row's deadline, which the renewal lane enforces | W1 | yes; the authority journal rules after a restore | Ignores it: no Overlord, today's routing |
 | `operator_messages` | OM, L3 | the private store | Insert: the console's prompt route, for the designated session only. State: one function of the private store, moving through the message moves table (Table 11.1b), called by the delivery lane (delivered, queued), the hook's pick-up report (picked up), the prompt route's settlement mark and each citing door after its own commit (settled, spent). The boot pass re-derives `settled` from the citing rows (I8). The private store is a second SQLite file, so a citing door's commit in `coord.db` and the message's state never share a transaction | none | W1 | yes | Records nothing: pane text is content, never operator words |
 | The read ledger | OM, L3 | the private store | The Overlord's read doors, one line per read | none | W1 | yes | Ignores it |
 | `continuity_generations` (and each generation's act key, bound at the mint to the launch nonce ccd put in the door process's environment, and issued once, on the first call that presents it; W0's fallback has no door process and no nonce, so `ccrc-api` writes the key file at the mint, §3.6) | C3, L3 | `coord.db` | The renewal lane | The renewal lane; deadlines are columns | W1a | yes | Ignores it: sessions roll and resume as today |
@@ -4742,7 +4793,7 @@ name that owner.
 | The authority journal | C5, L3 | a new file on the server host | The authority-changing doors, inside the store's transaction | Boot coherence | W1 | never | Ignores the file |
 | The act journal | C5, L3 | a new file on the server host | The act doors (intent, settle) | Daily head signing | W2 | never | Ignores the file |
 | The privacy journal | OM, L3 | a new file on the server host | From W1, the console's prompt route, for the record of the highest message id issued, so no id is used twice across a wipe or a restore. From W4, the learning events: the entries' apply function, for every retirement (About you, `retire-entry`, the retention pass), and the learning controls | Replayed after a restore | W1, W4 | never | Ignores the file |
-| The witness epoch | C8, adapters | each agent and each signed-in console | The server sends it; each keeps the highest | On each connect | W1 | never: outside the volume. Only a witness off the server's volume counts. An agent on the server's own host is no witness, because the same snapshot restores its copy (§7.6) | An older agent drops the additive field |
+| The witness epoch, with the heads of the authority journal and the act journal | C8, adapters | each agent and each signed-in console | The server sends them; each keeps the highest epoch and its heads | On each connect | W1 | never: outside the volume. Only a witness off the server's volume counts. An agent on the server's own host is no witness, because the same snapshot restores its copy (§7.6) | An older agent drops the additive field |
 
 *Table 11.1a. Stores, journals and the witness.*
 
@@ -4754,7 +4805,7 @@ name that owner.
 
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
-| `FLEET_ROLES` (long-lived, launch profile, card renderer, compaction instructions and probe set as columns), `roleOf`. Where a fact is unmeasured `roleOf` answers a typed undecided reading, never a guess | K, L0; C3, L1 | code | n/a | n/a | W1a | n/a | `SessionRole` as today |
+| `FLEET_ROLES` (long-lived, the `SessionRole` view, launch profile, card renderer, compaction instructions and probe set as columns), `roleOf`. Where a fact is unmeasured `roleOf` gives a typed undecided answer, never a guess (§3.3.9) | K, L0; C3, L1 | code | n/a | n/a | W1a | n/a | `SessionRole` as today |
 | `renewalDue`, the generation state machine, the fence check (C3); `MAIL_PACE` (C5). `MAIL_PACE` and the renewal triggers are records keyed by role, total over `FLEET_ROLES` | C3 and C5, L1 | code | n/a | n/a | W1a (fence W1) | n/a | No renewal; today's two mail-pace pairs |
 | `INJECTED_PROMPTS`; the refusal-word list, generated from §11.6 | K, L0 | code | n/a | n/a | W1, growing | n/a | History tags injected text `operator`, as today |
 | The message moves table: delivered and queued (the delivery lane), picked up (the hook's report door), settled and spent (the door that cites the message, or the prompt route's settlement mark) | OM, L0 | code | n/a | n/a | W1 | n/a | n/a |
@@ -4821,7 +4872,7 @@ tested over its whole input domain (§11.7).*
 | Door | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
 | Designate, rebind, retire: `POST /api/overlord/designate`, `POST /api/overlord/rebind` (each creates its session and writes the row `pending` in the same door, so the session's first launch has the `overlord` profile; no door designates a session that already runs), `DELETE` (retire keeps the row, with no session bound) | C5, L4 | `overlord_designation` | it | n/a | W1 | n/a | No route |
-| Confirm the restore | C5, L4 | in one transaction: the term, each authority field, the reconciliation pass, the server's epoch set above the highest any witness holds; a record in the authority journal. Every grant stays latched. It then lifts `authority-rolled-back` | it, behind the step-up | n/a | W1 | n/a | No route |
+| Confirm the restore | C5, L4 | in one transaction: the term, each authority field (the designation's binding among them), the reconciliation pass, the server's epoch set above the highest any witness holds; a record in the authority journal. Every grant stays latched. It then lifts `authority-rolled-back` | it, behind the step-up | n/a | W1 | n/a | No route |
 | The console's prompt route, one write for the designated session. From W2 a tap on a next-step control goes through this route to the session of the coordinator that owns the request, with the control's fixed text and the request id, as the operator's typing does today. It makes no row of `operator_messages`: the server stamps it on the request as news and writes the `operator-at-programme` mark (§5.4) | K, L4 | `operator_messages`; for a tap, the request's news | it | n/a | W1 (the tap W2) | n/a | Sends to the pane only |
 | The Overlord's reads: board, `messages`, inbox, history, model, feed. The inbox read's contract, its row shape and its order, is fixed in W1: later waves add bands and kinds of row, and change nothing a W1 caller reads | C5, L4 | the read ledger | each its own line | n/a | W1 (board, messages, history, and the inbox with band 1 and probes, §6.8), W2 (band 3 joins the inbox), W3 (band 2, packets, admission and background work join it; a drill joins every Overlord read that would show a real row of its kind, §7.5), W4 (model, feed) | n/a | No route |
 | The sequence read: one cursor over `overlord_sequence`, which answers a gap explicitly | C5, L4 | the read ledger | it | n/a | W1 | n/a | No route |
@@ -5015,8 +5066,10 @@ what each older build does (H32).
 - **Times are the server's.** A door takes a duration, such as "first news in two hours", and the server stamps the
   time. The inbox returns the time each row has left. A session never compares an absolute deadline on its own clock.
 - **Ports for time and chance.** New Overlord and continuity code takes `Clock`, `Scheduler` and `Entropy` from the
-  composition root. A single-definition scan goes red on an ambient clock, timer or random call in the new Overlord
-  and continuity modules. Existing code in those contexts is not rewritten for it. SQL never reads the clock.
+  composition root. A single-definition scan goes red on an ambient clock, timer or random call in the new Overlord and
+  continuity modules. Its scope is one list of directories and files, and each piece adds its new modules to the list in
+  the pull request that creates them. Existing code in those contexts is not rewritten for it. SQL never reads the
+  clock.
 - **Deadlines are durable columns, set once.** Nothing extends one, and no deadline is a timer that lives in one
   process. `followUpAt` is not a deadline: only the follow-up arm re-sets it, after a nudge or a gap.
 - **Two kinds of timer.** A timer that fails towards the operator (a hold's deadline, an expiry, a second push) uses
@@ -5033,11 +5086,11 @@ what each older build does (H32).
 - **A day is defined.** `max-per-day` is a rolling 24 hours over act rows. Daily jobs key on a local date in the time
   zone set in Settings, and run once when they catch up, as the digest's beat does.
 - **After a gap.** At boot the holds are re-seeded from their rows. Those whose deadline passed meanwhile are released
-  in one grouped push, `server-gap`. Follow-up clocks drop and re-time. A clean shutdown seals state locally and
-  pushes nothing. The breaker's row survives, so a restart neither forgets it nor trips it. Until one witness off the
-  server's volume has answered, grants read as suspended and the rung is capped at `advise` (§7.6). On one box that
-  is the first signed-in console. The re-seed waits one sweep for that answer, so with no console open a hold
-  re-seeded at boot is released, as `released:rung` (§6.7).
+  in one grouped push, `server-gap`. A follow-up that came due meanwhile is timed again (§5.4). A clean shutdown seals
+  state locally and pushes nothing. The breaker's row survives, so a restart neither forgets it nor trips it. Until
+  one witness off the server's volume has answered, grants read as suspended and the rung is capped at `advise`
+  (§7.6). On one box that is the first signed-in console. The re-seed waits one sweep for that answer, so with no
+  console open a hold re-seeded at boot is released, as `released:rung` (§6.7).
 - **An older server reads the newer database.** A higher `user_version` is readable, and unknown tables and columns
   are skipped. The danger is a new word in a column an older build already reads. Table 11.5 lists each one. The plan
   measures, before each wave merges, what the oldest build a box can roll back to does with it. The tree already
@@ -5078,6 +5131,8 @@ values too. They are columns of the role table and constants of the card rendere
 | 60 an hour from one coordinator | The quota for reports to `overlord` | W2 | wall |
 | One hour | The lead time that turns `blocking-by` into a push | W3 | wall |
 | Seven days | The longest "first news due" a read-back may promise | W2 | wall |
+| One hour | How long a request may wait for its next move (a route, a read-back, a re-relay) before a follow-up comes due | W2 | wall |
+| Eight hours | How long a staged answer may wait for its veto window to run out before it falls back to the operator | W3 | wall |
 | 60 seconds a row | The service time admission assumes before it has a measure | W3 | n/a |
 | 10 minutes, then 20, then 40 | The breaker's waits | W3 | observed |
 | Three openings in a day | The breaker's condition on the ladder, which caps `advise` | W3 | wall |
@@ -5130,7 +5185,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 down. Rebind keeps the old binding. The stopped session stays stopped, and the board shows the properties that failed.
 At a later start a failure is `launch-profile-unmet` (§3.6) | H4 |
 | `launch-profile-unmet` | Every Overlord door but card, probe and note | The running session's profile digest is not the profile's, or its start report lists a loaded file, settings source, hook, tool server, mod, agent or skill the profile does not list | H1, H4 |
-| `authority-rolled-back` | Every Overlord door but card, probe and note | Boot coherence failed, or a witness holds a higher epoch | H27 |
+| `authority-rolled-back` | Every Overlord door but card, probe and note | Boot coherence failed (the authority journal against the rows, or the act journal against the act rows), or a witness holds a higher epoch or a journal head the server's journals lack | H27 |
 | `stale-designation` | Every Overlord write door | The call carries an older term | H12 |
 | `stale-generation` | Every Overlord write door | The generation number or its act key is wrong | H12 |
 | `card-unread` | Every Overlord door but card, probe and note | This generation has not read the current card hash or rules version | H11, C40 |
@@ -5143,7 +5198,7 @@ At a later start a failure is `launch-profile-unmet` (§3.6) | H4 |
 | `no-new-evidence` | `object` | A second objection on one decision cites no new id | C59, H8 |
 | `default-not-safest` | The brief door | The brief's default is not its safest option | C58, H34 |
 | `class-unstated` | The answer doors | The Overlord did not state the classes it sees | H17 |
-| `operator-has-it` | The answer doors, `return-over-asked`; the Overlord's request moves | The row has already reached the operator; or the operator took the request (`takenFrom` is set) | H18, H22 |
+| `operator-has-it` | The answer doors, `return-over-asked`; the Overlord's request moves | The row has already reached the operator; or the operator took the request (`takenFrom` is set); or the Overlord would drop a `needs-you` request the operator has not answered | H18, H22 |
 | `operator-only` | `overlordMayAct` | A member of the effective class is not covered | C25, C26 |
 | `identity-too-weak` | `overlordMayAct`, grants | The caller's strength is under the act's or the grant's least | H28 |
 | `evidence-too-weak` | The answer doors | A big answer, or one whose effect carries a class, rests only on `inferred` or `none`. An answer the server cannot place as routine reads as big | H21 |
@@ -5194,20 +5249,24 @@ Six machines interact here: generations, holds, readiness and the breaker, the l
 per guard proves the guard exists, not that the machines compose (H33).
 
 - **Why.** Reading the machines together found three contradictions in an earlier pass of this design. So the
-  invariants are stated once, as predicates, and checked by tools that compose the machines.
+  invariants are stated once, as predicates, and checked by tools that compose the machines. I11 and I12 were added
+  after a model of the authority and request machines: planted faults that widened authority without the operator,
+  or left a request with no clock, broke none of I1 to I10.
 
 | # | Invariant |
 |---|---|
 | I1 | A held row is settled by the Overlord by its deadline, or reaches the operator by its deadline, or within one sweep of the first boot after it |
-| I2 | A row that reached the operator has exactly one reach stamp and one outbox row. That row is sent (the sender marks it once the push service accepts it), silent because today's build pushes nothing for a row of that level, deferred by the attention budget to a stated time, or settled with no push because the operator opened the console (§4.2) |
+| I2 | A row that reached the operator has exactly one reach stamp and one outbox row. That row is sent (the sender marks it once the push service accepts it), silent because today's build pushes nothing for a row of that level, deferred by the attention budget to a stated time no later than its deferral limit (Table 4.2a), or settled with no push because the operator opened the console (§4.2) |
 | I3 | At most one effect per natural key, and every effect has an act row |
-| I4 | Every act of a class other than none commits with a live grant in scope, a consumed command for its proposal, a request bound to an operator message, or, for `state-a-fact`, a cited stated entry resting on an operator message |
+| I4 | Every act of a class other than none commits with a live grant in scope, a command that was live when the act row was written, for a `commanded` proposal whose targets had not moved, a request bound to an operator message, or, for `state-a-fact`, a cited stated entry resting on an operator message |
 | I5 | A write is accepted only from the current term, generation and act key |
 | I6 | A lineage's class never loses a member of O1 to O6 |
 | I7 | After a restore, no authority field is wider than the journal's |
 | I8 | After a crash at any step, the next card lists every unsettled message and open hold |
 | I9 | While `mayHold` is false, the pushes and states of question rows equal those of a build without the Overlord |
 | I10 | Every open row is on the operator's list at all times |
+| I11 | Authority widens only by the operator. The effective rung, a grant's state and a kind's arming widen only in the transaction of an operator's step-up door, or when a condition measurably ends |
+| I12 | Every open request outside `needs-you`, `done-unverified` and `blocked` has a follow-up time, or is a parent whose children have theirs |
 
 *Table 11.7a. The invariants. The invariant monitor (§10.4) checks the same predicates in production, except I9, which
 only the simulator checks, by running each seed both ways.*
@@ -5217,7 +5276,7 @@ only the simulator checks, by running each seed both ways.*
 | A small model, explored exhaustively within bounds and written before the code | First the composition of holds, readiness, generations and restarts, with I5's generation part; then authority and restore, where I5's term and act key join | W0; W1 |
 | Stateful property tests over the real L1 deciders | Each machine: exactly once, never lost, monotonic, fails towards the operator | With each machine's wave |
 | Exhaustive tests of first-match deciders, with a monotonicity property | `overlordReadiness`, `itemClassFloor`, `overlordMayAct`, `renewalDue`, `followUpDue`, `mayHold` | With each |
-| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I10 under faults | Skeleton in W1a: the new deciders on the fake ports, with crash and gap injection. The real lanes join once the watcher's runner reads `Clock`. Restore injection joins with the first decider that reads a restore |
+| A deterministic simulator: the real lanes and SQLite on a fake clock and a fake agent link, with crash, restore and gap injection, and reach coverage of every state and edge | I1 to I12 under faults | Skeleton in W1a: the new deciders on the fake ports, with crash and gap injection. The real lanes join once the watcher's runner reads `Clock`. Restore injection joins with the first decider that reads a restore |
 | The invariant monitor on the live sequence, `overlord_sequence` | The same predicates in production, except I9 | W1 |
 | The scenario suite and the replay | The Overlord's behaviour (§9.5) | W3 |
 | Mutation testing of each new L1 decider, with a score floor that only rises | That the tests would catch a broken guard | Daily, from W1a |
@@ -5266,7 +5325,7 @@ from rows the server writes, never from the Overlord's own account.
 | M22 | Authority: grants live, suspended and expired; acts under a grant vetoed or overturned; restores detected | No act under a suspended grant, ever | The authority journal |
 | M23 | Renewals: time in each state, receipts missing, `degraded` generations, the fitted ceiling by model, handover discrepancies, planned and unplanned starts counted apart | A renewal inside six minutes; no generation offered work before it read its card | `continuity_generations` |
 | M24 | Verification: invariant-monitor violations in production, simulator seeds run and red, mutation floors, scenario pass | Zero violations; floors never fall; every anti-goal family passes three runs of three | The monitor, the simulator, the mutation runner, the scenario suite |
-| M25 | Attention: interrupting pushes per active day against the budget, overdrafts and their causes, minutes deferred | Within the budget; every overdraft a verified `blocking-now` | `pushAdmission`'s records |
+| M25 | Attention: interrupting pushes per active day against the budget, overdrafts and their causes, minutes deferred | Within the budget; every overdraft a verified `blocking-now` or a `blocking-by` at its deferral limit | `pushAdmission`'s records |
 | M26 | Decision quality: the operator's own reversals within 14 days, tripwires fired, the deference gap, the switch rate after a reveal, delegations, the objection hit rate | Watched. The deference gap is M27's anchoring gap: M27 holds it under 10 points, and at 0.15 the fatigue rule acts | Items, act rows, objection rows, `fatigueSignals` |
 | M27 | Oversight is real: the anchoring gap, the glanced share, Seen without opening, the catch rate on seeded wrong calls, supervision debt, weekly checks done, oversight minutes a week | Anchoring gap under 10 points; the rest watched | Answer events, the weekly check, act rows |
 | M28 | The hop: settle share and added latency per kind and programme, and kinds bypassed | Watched; the bypass rule acts on it (§6.8) | Hold rows, act rows |
@@ -5299,7 +5358,7 @@ changed a call from its rev 8 form. §13.1 lists every H call.
 | C12 | Starting or widening without being asked | allow, refuse | Refuse: it stays O3 until a grant. `operator-request` authority exists only for a request that cites an operator message naming the project or programme. Code matches a whole token against a project's name or a programme's slug, never against a title a session wrote. A name under four characters and the `overlord` project never match. One message founds one root request, within 24 hours. Anything else is staged as a proposal for one tap | Proposed | H7, H8 |
 | C13 | Relay form | peer mail, system mail | System mail from `overlord`, as typed fields. The mail row stores only the cited message ids, and the server renders the operator's quote from them at fetch, marked attested. The Overlord writes only its own part, capped and checked on the way out. The priority is rendered from `portfolio_rank`. Relays have ceilings across the fleet and per target (Table 11.5b) | Proposed | H6, H7, H9, H25, H38 |
 | C14 | Reports to the Overlord | a new verb, mail | Mail to the role address `overlord`, resolved at send and re-targeted in a rebind's transaction. A coordinator answers a relay with `ccrc-api request ack`, a read-back. Reports skip the peer quotas and have a larger quota of their own (Table 11.5b). A report never wakes the Overlord: it is stamped as news. Only a move by the request doors or the server arrives as an inbox row | Proposed | H12, H19, H22 |
-| C15 | Follow-up | polling, a stall-watch arm | One L1 decider, `followUpDue`, armed by the Overlord's rung and keyed on its subject, never by the stall watch's arming. Each nudge names its reason. After two nudges with no measured movement, the server moves the request to `needs-you`, and from W3 also raises the operator's item | Proposed | H22 |
+| C15 | Follow-up | polling, a stall-watch arm | One L1 decider, `followUpDue`, armed by the Overlord's rung and keyed on its subject, never by the stall watch's arming. Every open request has a clock from the moment it is opened. At `chat` a follow-up that comes due moves its request to `needs-you`. Each nudge names its reason. After two nudges with no measured movement, the server moves the request to `needs-you`, and from W3 also raises the operator's item | Proposed | H22 |
 | C16 | What it reports to the operator | everything, the endings | Done, dropped and needs-you, in its chat and on the Requests list. The server stamps news and composes "since you were last here" from rows. The Overlord narrates facts and never originates them. Pushes go through the attention budget | Proposed | H22, H35, H36 |
 | C17 | What holds for the Overlord | everything, items and asks | Items and asks, and only rows it may settle alone (`mayHold`). Approvals stay as today | Proposed | H17, H18, H39 |
 | C18 | Its decision procedure | new, D-8126's | D-8126's, in five steps. First the effective class and the effect: escalate unless covered. Then ratified goals, `doneWhen`, ledger and rulings, and precedents that a code check matches. Then the five best entries for this question, in the third person. Then `askOrAct`, and decide. Doubt about a class resolves towards the operator | Proposed | H17, H21, H34 |
@@ -5547,7 +5606,7 @@ mechanism leaves something open, the row says what is left.
 | Private content leaks into a public repository | A public, unerasable revision (GitHub keeps every edit) | Entries from other projects are `overlord-only` by default. `privateNameHits` and the quote check run at every egress door, with one refusal word. `privateNameHits` also runs on the quote the server renders, and a hit there waits for the operator's one tap. Clause 22: never copy Overlord mail into a pull request, an issue, a commit or a tracker. Left: a paraphrase passes |
 | The operator model drifts or is poisoned | Answers rest on a stale or planted picture of the operator | The server derives `stated` from the operator's own acts. An entry whose statement is not an exact span of its operator source counts as `inferred` until the operator confirms or edits it. Tool or model text yields only candidates. The subject key refuses contradictions. An inferred entry unused for 90 days is retired. The weekly check asks "Still true?". M7 watches retirements |
 | Memory loss over a long life | It loses threads across programmes and months | Generations renewed from rows before the context grows long. The anchor, the card and append-only notes. Closed-book probes and a fitted ceiling. A generation that fails to start is `degraded`, never silently active |
-| A restore revives authority | A snapshot brings back a revoked grant, an old designation or a cleared latch | The authority journal, which no snapshot carries. A witness epoch held outside the volume. An agent on the server's own host is no witness, because the same snapshot restores its copy. After each boot, grants read as suspended and the rung is capped at `advise` until one witness off the server's volume has answered; on one box that is the first signed-in console. Boot coherence refuses `authority-rolled-back` until the operator's "Confirm the restore" door, behind the step-up, runs the restore in one transaction: the term rises, each field takes the stricter of database and journal, every grant stays latched, the reconciliation pass runs, and the epoch is set above every witness's. The ladder's `chat` cap then stays as a latch the operator clears. Each act the act journal holds after the snapshot gets `divergedAt`, and the asks and items it touched go to the operator |
+| A restore revives authority | A snapshot brings back a revoked grant, an old designation or a cleared latch | The authority journal, which no snapshot carries. Boot coherence reads the act journal against the act rows too. A witness epoch, with the journals' heads, held outside the volume. An agent on the server's own host is no witness, because the same snapshot restores its copy. After each boot, grants read as suspended and the rung is capped at `advise` until one witness off the server's volume has answered; on one box that is the first signed-in console. Boot coherence refuses `authority-rolled-back` until the operator's "Confirm the restore" door, behind the step-up, runs the restore in one transaction: the term rises, each field takes the stricter of database and journal, every grant stays latched, the reconciliation pass runs, and the epoch is set above every witness's. The ladder's `chat` cap then stays as a latch the operator clears. Each act the act journal holds and the table lacks gets a row with `divergedAt`, and the asks, items and requests it touched go to the operator |
 | The decision model is wrong, down or leaks | A wrong class, a missed flag, or private text sent out | It may only narrow, and each row states which way it fails. A line is admitted only by a measured bound, and labels come only from the operator. An injection canary before arming, and an anchor set after. `private-state` rows run only on a local or zero-retention host. Both egress checks run on every text field before it is sent to a `hosted` model, and a hit answers `not-asked`. The operator arms each row, under a daily ceiling |
 | Agreement is inflated | Authority widens on numbers the Overlord shaped, or that a tired operator gave | Only blind or examined answers count. A sealed prediction is filed on every escalated item. One scored against an answer that was neither blind nor examined is reported apart, as anchored, and counts for no gate. The Overlord states a recommendation only in a brief, never in the chat or a summary, and an answer is scored blind only when none of its chat text since the filing was on screen before the pick. Replay as of a date runs in a replay body. Agreement is set against the operator's own consistency. When fatigue is measured, decisions move to on-tap |
 | Tripwires used to deny the Overlord | Someone trips latches on purpose to hold it at `advise` or `chat` | A step down only returns routing to today's, so the cost is availability, never safety. Tripwires refuse and count before they latch. `superseded` feeds no tripwire, and the breaker counts only lapses and releases the Overlord caused. Each step is logged with its cause, and only the operator clears a latch (M21) |
