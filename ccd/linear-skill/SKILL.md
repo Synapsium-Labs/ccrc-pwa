@@ -152,9 +152,17 @@ printf '%s\n' '{"body":"Ready for review: the fix is on the branch named in the 
   | ~/.local/bin/ccrc-api linear comment AAA-12 --json - | jq -r '.ok'
 ```
 
-Link a pull request you opened to its ticket, so Linear's GitHub integration tracks it. In the PR body cite the ticket's
-GitHub mirror issue (`Closes #<n>` when the merge meets the ticket's acceptance, `Refs #<n>` when a live check is owed),
-never the ticket id:
+Link a pull request you opened to its ticket by the repository's visibility. Read it first: `linking show` answers
+this project's `mode` (`private`, `public` or `unknown`) and `teamKey`.
+
+```bash
+~/.local/bin/ccrc-api linking show | jq -r '.mode, .teamKey'
+```
+
+On a `private` project the ticket id goes in the branch, the commits (`Related: KEY-123`) and the PR body (`Closes
+KEY-123` when the merge meets the ticket's acceptance, `Refs KEY-123` when a live check is owed), and Linear's GitHub
+integration links the PR. On a `public` or `unknown` project never write a tracker id in the repository: cite the
+ticket's GitHub mirror issue (`Closes #<n>` or `Refs #<n>`) and link from the Linear side:
 
 ```bash
 printf '%s\n' '{"url":"https://github.com/example-org/example-repo/pull/1"}' \

@@ -804,12 +804,15 @@ an operator/DB act, not a client one — or address the mail with an explicit
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
 
-**Link the PR to its ticket, once, before it lands.** When the wave's work is tied to a Linear ticket, the PR is
-linked from the Linear side with `ccrc-api linear link <REF> --json -` (body `{"url":"<the PR's github.com URL>"}`),
-so Linear's GitHub integration tracks it and the team's Git automations act on merge. The PR body cites the ticket's
-GitHub mirror issue and never the tracker id: `Closes #<n>` when the merge meets the ticket's acceptance, `Refs #<n>`
-when a live check is owed. A link refused `not-found`, `bad-field` or `not-configured` is reported in your turn, not
-retried in a loop; it never blocks the landing.
+**Link the PR to its ticket, once, before it lands, by the repository's visibility.** When the wave's work is tied to
+a Linear ticket, read `ccrc-api linking show` (`mode`, `teamKey`). `private`: the ticket is in the workspace (a
+dispatch's `slug` starts `key-123-`) and the PR body says `Closes KEY-123` when the merge meets the ticket's
+acceptance, `Refs KEY-123` when a live check is owed; Linear's GitHub integration links and closes. `public` or
+`unknown`: the PR is linked from the Linear side with `ccrc-api linear link <REF> --json -` (body
+`{"url":"<the PR's github.com URL>"}`), so the team's Git automations act on merge, and its body cites the ticket's
+GitHub mirror issue and never the tracker id: `Closes #<n>` or `Refs #<n>` by the same test. A link refused
+`not-found`, `bad-field` or `not-configured` is reported in your turn, not retried in a loop; it never blocks the
+landing.
 
 **The recorded head.** In §5 and §5b, `<handoffCommit>` is the recorded head: the advance answer's `verifiedHead` when
 present, otherwise the head the server's dequeue or merged brief prints. An advance answer with no `verifiedHead` means
