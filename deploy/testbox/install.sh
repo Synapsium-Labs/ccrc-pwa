@@ -53,9 +53,11 @@
 # Two more modes run from the installed tree (<tools>/release/installed) and from nowhere else (D-8166):
 #   --reapply  applies a changed box file, or new repository rows (--repos), at the installed tag: phase 1's value
 #              refusals, then phases 5 and 6 (phases 2 to 4 are the first install's and are skipped). The tag is the
-#              tree's build.json version, which the installed marker must name; the repository rows are the installed
-#              ones unless --repos names others; the push user's key is the one installed. With the box file and the
-#              rows unchanged it changes nothing.
+#              tree's build.json version; the installed marker may name an older tag (tool sync switches the installed
+#              tree and never rewrites the marker: apply-release), and the marker then records the tree's tag. The
+#              repository rows are the installed ones unless --repos names others; the push user's key is the one
+#              installed. With the tag, the box file and the rows unchanged it changes nothing, unless --force: that
+#              runs phases 5 and 6 anyway (repair rewrites units, drop-ins, rule, firewall file and key, and restarts).
 #   --unpair   stops and disables the test service and the egress timer, empties the push user's authorized_keys and
 #              removes the service token file. It leaves CCRC_TESTBOX_ROOT, the mirrors and the installed tree (the box
 #              is rebuilt, never reused: no wipe) and the installed marker.
@@ -84,16 +86,18 @@ put() { _sys install -m "$1" -o root -g root "$2" "$3" || fail "cannot write $3"
 # ── the arguments ────────────────────────────────────────────────────────
 usage() {
   printf 'usage: install.sh --release <tag> --node <version> --repos <row file>... --distro <ID>-<VERSION_ID> --push-key <file>\n' >&2
-  printf '       <tools>/release/installed/deploy/testbox/install.sh --reapply [--repos <row file>]...\n' >&2
+  printf '       <tools>/release/installed/deploy/testbox/install.sh --reapply [--force] [--repos <row file>]...\n' >&2
   printf '       <tools>/release/installed/deploy/testbox/install.sh --unpair\n' >&2
   exit 2
 }
 MODE=install
+FORCE=0
 A_REL='' A_NODE='' A_DISTRO='' A_KEY=''
 A_REPOS=()
 while (($#)); do
   case $1 in
     --reapply) [ "$MODE" = install ] || usage; MODE=reapply; shift ;;
+    --force) FORCE=1; shift ;;
     --unpair) [ "$MODE" = install ] || usage; MODE=unpair; shift ;;
     --release) (($# >= 2)) || usage; A_REL=$2; shift 2 ;;
     --node) (($# >= 2)) || usage; A_NODE=$2; shift 2 ;;
@@ -108,6 +112,7 @@ case $MODE in
   reapply) [ -z "$A_REL$A_NODE$A_DISTRO$A_KEY" ] || usage ;;
   unpair) [ -z "$A_REL$A_NODE$A_DISTRO$A_KEY" ] && [ "${#A_REPOS[@]}" -eq 0 ] || usage ;;
 esac
+[ "$FORCE" = 0 ] || [ "$MODE" = reapply ] || usage
 
 TBI_HERE=${BASH_SOURCE[0]}
 [[ $TBI_HERE == */* ]] || TBI_HERE=./$TBI_HERE
@@ -284,12 +289,15 @@ if [ -f "$ETC/installed" ]; then
 fi
 same_rows=1
 if [ "$MODE" = reapply ]; then
-  [ -n "$MARK_TAG" ] && [ "$MARK_TAG" = "$A_REL" ] || refuse "the installed marker names ${MARK_TAG:-no release}, not this tree's $A_REL"
+  # Tool sync switches the installed link to a new tag and never rewrites the marker, so after a sync the marker may
+  # name an older tag than the tree: that is the apply-release case, and phases 5 and 6 below record the tree's tag
+  # (D-8166). Only a box with no marker (never installed) is refused.
+  [ -n "$MARK_TAG" ] || refuse "the box has no installed marker (run the first install, not --reapply)"
   for i in "${!ROW_NAMES[@]}"; do
     [ "${ROW_FILES[$i]}" -ef "$REPOS/${ROW_NAMES[$i]}.json" ] || cmp -s -- "${ROW_FILES[$i]}" "$REPOS/${ROW_NAMES[$i]}.json" || same_rows=0
   done
 fi
-if [ -n "$MARK_TAG" ] && [ "$MARK_TAG" = "$A_REL" ] && [ "$MARK_SHA" = "$BOX_SHA" ] && [ "$same_rows" = 1 ]; then
+if [ "$FORCE" = 0 ] && [ -n "$MARK_TAG" ] && [ "$MARK_TAG" = "$A_REL" ] && [ "$MARK_SHA" = "$BOX_SHA" ] && [ "$same_rows" = 1 ]; then
   say "$A_REL is installed and the box file is unchanged; nothing to do"
   exit 0
 fi

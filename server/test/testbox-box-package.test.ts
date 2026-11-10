@@ -20,7 +20,7 @@
 // .curlrc.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { units, UNIT_NAME } from '../../agent/src/testbox/systemd.js';
 import { encodeSpec, type RunSpec } from '../../agent/src/testbox/spec.js';
@@ -965,19 +965,48 @@ describe('the installer: --reapply from the installed tree applies a changed box
     expect(sysLog(b).length).toBe(n);
   });
 
-  it('--reapply refuses when the marker\'s tag is not the tree\'s', async () => {
+  it('--reapply applies at the tree\'s tag when the marker names an older one (apply-release), and records the tree\'s tag', async () => {
     const marker = readFileSync(markerOf(b), 'utf8');
     writeFileSync(markerOf(b), marker.replace(BOOT_TAG, 'v0.0.2'));
     try {
-      const before = treeOf(b.root);
       const n = sysLog(b).length;
       const r = await reapply(b);
-      expect([r.code, r.stderr.trim()]).toEqual([1, `ccrc-testbox-install: refused: the installed marker names v0.0.2, not this tree's ${BOOT_TAG}; nothing was written`]);
-      expect(treeOf(b.root)).toEqual(before);
-      expect(lines(b).slice(n)).toEqual(QUERIES(b, true));
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr.split('\n').filter((l) => / phase \d:/.test(l)).map((l) => /phase (\d)/.exec(l)![1])).toEqual(['5', '6']);
+      expect(readFileSync(markerOf(b), 'utf8')).toBe(marker);
+      expect(lines(b).slice(n)).toContain('systemctl restart ccrc-testbox.service');
     } finally {
       writeFileSync(markerOf(b), marker);
     }
+  });
+
+  it('--reapply refuses a box with no installed marker', async () => {
+    const marker = readFileSync(markerOf(b), 'utf8');
+    rmSync(markerOf(b));
+    try {
+      const before = treeOf(b.root);
+      const r = await reapply(b);
+      expect([r.code, r.stderr.trim()]).toEqual([1, 'ccrc-testbox-install: refused: the box has no installed marker (run the first install, not --reapply); nothing was written']);
+      expect(treeOf(b.root)).toEqual(before);
+    } finally {
+      writeFileSync(markerOf(b), marker);
+    }
+  });
+
+  it('--reapply --force with nothing changed rewrites a damaged unit and the firewall file, and restarts (repair)', async () => {
+    const unit = path.join(b.root, 'etc', 'systemd', 'system', 'ccrc-testbox-run@.service.d', '50-ccrc-testbox.conf');
+    const good = readFileSync(unit, 'utf8');
+    writeFileSync(unit, '# damaged\n');
+    const n = sysLog(b).length;
+    const plain = await reapply(b);
+    expect([plain.code, plain.stderr]).toEqual([0, expect.stringContaining('nothing to do')]);
+    expect(readFileSync(unit, 'utf8')).toBe('# damaged\n');
+    const r = await reapply(b, ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('nothing to do');
+    expect(readFileSync(unit, 'utf8')).toBe(good);
+    expect(lines(b).slice(n)).toContain('systemctl restart ccrc-testbox.service');
+    expect(readFileSync(markerOf(b), 'utf8')).toBe(`release\t${BOOT_TAG}\nbox-sha256\t${sha256Of(b.boxFile)}\n`);
   });
 
   it('--reapply refuses a box value off its shape before any write', async () => {
