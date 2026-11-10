@@ -2838,6 +2838,7 @@ export class CoordStore {
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, now, from, to, causedBy, detail ?? null);
     this.settleEndRequests(runId, from, to, causedBy, detail, now);
+    this.clearAdmissionWait(runId);   // D-6095: any move ends the wait for the cap
     return { ok: true as const, from, to };
   }
 
@@ -5568,6 +5569,53 @@ export class CoordStore {
     return this.db.prepare(
       `SELECT id AS runId, sessionId, dispatchedAt FROM runs WHERE ${COUNTED_RUNS_WHERE} ORDER BY id`,
     ).all() as { runId: number; sessionId: string | null; dispatchedAt: number }[];
+  }
+
+  // ── the admission wait (D-6095) ───────────────────────────────────────────
+
+  /** A refusal by the concurrency cap, stamped on the run (inside the coordination serialiser): `admissionWaitSince` keeps
+   *  the OLDEST refusal (set only while null), `lastRefusedAt` always moves to `at`. Only a run still waiting (`planned`,
+   *  or parked in another idle state) takes a stamp. */
+  stampAdmissionWait(runId: number, at: number): void {
+    this.db.prepare(
+      `UPDATE runs SET admissionWaitSince = COALESCE(admissionWaitSince, ?), lastRefusedAt = ? WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL}`,
+    ).run(at, at, runId);
+  }
+
+  /** The `admissionWake` lane's mail for the run's newest refusal went out (or was already out): the only writer of
+   *  `admissionWokenAt`. A run with no stamp is left alone. */
+  markAdmissionWoken(runId: number, at: number): boolean {
+    const r = this.db.prepare('UPDATE runs SET admissionWokenAt = ? WHERE id = ? AND admissionWaitSince IS NOT NULL').run(at, runId);
+    return Number(r.changes) === 1;
+  }
+
+  /** All three columns to NULL. Called by `advanceInner` for every state move, so a dispatch, a send-back that proceeds, a
+   *  close and an abandon each end the wait. */
+  clearAdmissionWait(runId: number): void {
+    this.db.prepare(
+      'UPDATE runs SET admissionWaitSince = NULL, lastRefusedAt = NULL, admissionWokenAt = NULL WHERE id = ? AND admissionWaitSince IS NOT NULL',
+    ).run(runId);
+  }
+
+  /** One run's stamp, with who claims it, for a refusal's feed row and the tests; null for an unknown run. */
+  admissionStampOf(runId: number): { since: number | null; lastRefusedAt: number | null; wokenAt: number | null; claimedBy: string | null; program: string } | null {
+    const r = this.db.prepare(
+      'SELECT admissionWaitSince AS since, lastRefusedAt, admissionWokenAt AS wokenAt, claimedBy, program FROM runs WHERE id = ?',
+    ).get(runId) as { since: number | null; lastRefusedAt: number | null; wokenAt: number | null; claimedBy: string | null; program: string } | undefined;
+    return r === undefined ? null : { since: r.since, lastRefusedAt: r.lastRefusedAt, wokenAt: r.wokenAt, claimedBy: r.claimedBy, program: r.program };
+  }
+
+  /** The runs waiting on the cap, oldest refusal first: stamped, still `planned` or parked in an idle state (`sendBack`: a
+   *  refused send-back, not a refused dispatch), with a claimant, and ELIGIBLE: never woken, or refused again since the
+   *  wake (`lastRefusedAt` newer than `admissionWokenAt`). */
+  admissionWaiters(): { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; sendBack: boolean }[] {
+    const rows = this.db.prepare(
+      `SELECT id AS runId, program, claimedBy, admissionWaitSince AS since, lastRefusedAt, state FROM runs
+       WHERE admissionWaitSince IS NOT NULL AND lastRefusedAt IS NOT NULL AND state IN ${IDLE_RUN_STATES_SQL}
+         AND claimedBy <> '' AND (admissionWokenAt IS NULL OR admissionWokenAt < lastRefusedAt)
+       ORDER BY admissionWaitSince, id`,
+    ).all() as { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; state: string }[];
+    return rows.map((r) => ({ runId: r.runId, program: r.program, claimedBy: r.claimedBy, since: r.since, lastRefusedAt: r.lastRefusedAt, sendBack: r.state !== 'planned' }));
   }
 
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────
