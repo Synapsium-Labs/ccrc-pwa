@@ -237,9 +237,13 @@ H1 to H6, H14 and H16 turn them into design.
 
 *Table 2b. The operator's three directions to the hardening review.*
 
-**What the review still needs the operator to rule.** Sixteen of the review's choices are the operator's to make.
-This edition is written as if each proposed answer holds, and each stays open until the operator rules. Eight of
-them change what this edition builds, and are listed here. "Waiting on you" lists all sixteen, most important first:
+**Ruled since, 2026-11-10.** The review asked how far the skill-size ratchet should reach. The operator ruled: cap
+each `SKILL.md`, hold each contract inside what a compaction keeps, and optimise the skills (§11.3). Reference files
+are not capped.
+
+**What the review still needs the operator to rule.** Fifteen of the review's choices are the operator's to make.
+This edition is written as if each proposed answer holds, and each stays open until the operator rules. Seven of
+them change what this edition builds, and are listed here. "Waiting on you" lists all fifteen, most important first:
 - A box where the server shares a user with fleet sessions caps the ladder at `advise`, and refuses grants, commands
   and learning, unless the operator opts in from Settings with the risk stated (§7.4).
 - Another provider's lane for the Overlord is a privacy decision, made lane by lane (§3.4).
@@ -249,8 +253,6 @@ them change what this edition builds, and are listed here. "Waiting on you" list
 - Replay runs in a disposable replay body that is never designated, so R7's one Overlord stands (§9.5).
 - Where work waits, the portfolio rank is the first sort key: automatic wakes and the release after a reset. When a
   pool will run out, `background` work on it waits (§5.6).
-- The skill-size ratchet caps every skill file, references included. It binds every programme from the day it
-  merges (§11.3).
 
 ## 3. What the Overlord is
 
@@ -700,9 +702,9 @@ on hook context.
   not.
 - **The skill stays small.** Skills are restored within 5k tokens each and 25k in all, the oldest dropped first, and
   the oldest is `ccrc-overlord` itself. So its `SKILL.md` stays under 5,000 tokens, with the procedures in its
-  references. A size ratchet test caps skill files. It ships in W1a, with caps measured at that merge. A cap only goes
-  down, except in a pull request that adds a pinned clause, which may raise that file's cap by the clause's bytes and
-  no more.
+  references. A size ratchet test caps each `SKILL.md`, and holds its contract inside what a compaction keeps (§11.3).
+  It ships in W1a, with caps measured at that merge. A cap only goes down, except in a pull request that adds a
+  pinned clause, which may raise that file's cap by the clause's bytes and no more.
 - **A delta on every prompt.** A `UserPromptSubmit` hook adds the canaries and the counts of open requests and holds,
   a cheap re-anchor at the end of the context. It reads a cache the door process keeps (one writer, a lease, "unknown"
   when stale), and makes no network call, because a hook that times out loses its output.
@@ -4693,9 +4695,9 @@ why.*
   measured effect. At 90 days from its first serving it graduates into a server guard or a skill change, through a
   coordinator's pull request, or it retires. An `operator` entry lasts until it is retired.
 - **A budget, and a ratchet.** At most 40 live entries in all, and 8 per role. When the budget is full, a canary
-  waits (Table 9.7b). A size ratchet test caps skill files. It ships in W1a, with caps measured at that merge. A cap
-  only goes down, except in a pull request that adds a pinned clause, which may raise that file's cap by the clause's
-  bytes and no more.
+  waits (Table 9.7b). A size ratchet test caps each `SKILL.md` (§11.3). It ships in W1a, with caps measured at that
+  merge. A cap only goes down, except in a pull request that adds a pinned clause, which may raise that file's cap
+  by the clause's bytes and no more.
 - **Across projects, only the abstract crosses.** An entry may apply across projects only when it is abstract and
   rests on two programmes. It must also pass the private-name check (§9.4), and name no path, repository, branch, slug
   or person. Raw traces, precedents and operator-model text never cross.
@@ -5196,17 +5198,23 @@ The skill is the Overlord's contract: numbered clauses, pinned verbatim by a tes
 19. Never change what judges, bounds or authorises you.
 
 - **Small enough to survive a compaction.** `SKILL.md` stays under 5,000 tokens, because Claude Code restores each skill
-  within 5k tokens and 25k in all. A size ratchet test caps skill files, from W1a, with caps measured at its merge. A
-  cap only goes down, except in a pull request that adds a pinned clause, which may raise that file's cap by the
-  clause's bytes and no more. The skill files are every `.md` file under a `ccd/*-skill/` directory. A clause's bytes
-  are the UTF-8 bytes of its whole numbered line under the `## The contract` heading, newline included, for clauses
-  numbered past the merge base's highest. A reworded clause earns nothing, and a reference file earns nothing. A
-  `SKILL.md` earns the raise only once its contract has a pinned clause at the merge base. So this skill puts its
-  clauses under that heading, and pins them `1..N` from its first pull request. A skill file that is new in a pull
-  request is capped at its size at that merge. That is how a `SKILL.md` sheds procedures into references, which are
-  read on demand: only the restored `SKILL.md` bears the restore budget. Growth is measured against the merge base
-  with `main`, so slack under a cap cannot be refilled. The ratchet stops growth. It does not by itself bring the
-  coordinator skill, which is far over the restore budget today, under it.
+  within 5k tokens and 25k in all, and keeps the start of each. A size ratchet test caps each `SKILL.md`, from W1a,
+  with caps measured at its merge (the operator's ruling of 2026-11-10). A cap only goes down, except in a pull
+  request that adds a pinned clause, which may raise that file's cap by the clause's bytes and no more. The capped
+  files are every `SKILL.md` under a `ccd/*-skill/` directory. Reference files are not capped: they are read on
+  demand and never re-attached. A clause's bytes are the UTF-8 bytes of its whole numbered line under the
+  `## The contract` heading, newline included, for clauses numbered past the merge base's highest. A reworded clause
+  earns nothing. A `SKILL.md` earns the raise only once its contract has a pinned clause at the merge base. So this
+  skill puts its clauses under that heading, and pins them `1..N` from its first pull request. Growth is measured
+  against the merge base with `main`, so slack under a cap cannot be refilled.
+- **The contract comes first, and inside what is kept.** After a compaction a cut skill still looks loaded, so a
+  session keeps whatever came first and loses the rest without a sign. The same test therefore holds three things
+  for every `SKILL.md` that has a contract. The contract is the file's first section. A short notice stands before
+  it, which names a later section and tells the session to load the skill again if it cannot see that section. And
+  the contract ends within 16,000 bytes of the file's start: 5,000 tokens at a cautious 3.2 bytes a token (Table
+  11.5b). This rule has no raise. A clause that pushes a contract past it needs shorter clauses. The tree's three
+  role skills were reordered so in W1a. The ratchet stops growth. It does not by itself bring the coordinator's
+  `SKILL.md`, which is about three times the restore budget, under it.
 - **The constitution rides elsewhere.** The stable text (what it is, each ruling in one line, the anti-goals) is the
   workspace memory file the launch profile ships (§3.3.3).
 - **Enabled by one profile.** The `overlord` launch profile enables `ccrc-overlord` and no other skill. Its reader
@@ -5240,8 +5248,12 @@ The coordinator skill gains three clauses, each pinned verbatim by `coordinator-
   refuses `capability-missing`, naming `overlord-route-v1`. `operatorClass`, the effect and an ask's release reason
   reach the raise and release doors in W3's first step. Until then those doors ignore the fields, as Table 11.1e
   says an older build does, and every row reaches the operator as today.
-- **Its size grows only by its clauses.** The size ratchet test covers the coordinator skill's files too (§11.3). Each
-  pull request that adds one of these clauses may raise the file's cap by that clause's bytes and no more. A new clause
+- **Its size grows only by its clauses.** The size ratchet test covers the coordinator's `SKILL.md` too (§11.3). Each
+  pull request that adds one of these clauses may raise the file's cap by that clause's bytes and no more. The
+  contract must also end inside what a compaction keeps, and that rule has no raise. With its contract moved first
+  and its notes moved out of the section, the coordinator's ends about 2,300 bytes short of the bound. That is room
+  for three or four clauses of ordinary length. Past that, existing clauses are shortened first, in a pull request
+  of its own that changes the pin suite with them, and the operator approves that wording. A new clause
   also changes the count word in the skill's prose. Those bytes lie outside the clause's line, so the same pull
   request offsets them inside the same file. M31 tracks the files' bytes, not their caps.
 
@@ -5312,6 +5324,7 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | One sweep of the readiness lane, whose cadence is a `LANE_SCHEDULE` row added in W1 | How long after boot the word reads `unmeasured` | W1 | wall |
 | 90 days | How long `overlord_sequence` is kept | W1 | wall |
 | 200 notes of 500 characters | The caps on `continuity_notes` for one identity | W1a | n/a |
+| 16,000 bytes | How far into a `SKILL.md` its contract may end: 5,000 tokens at 3.2 bytes a token | W1a | n/a |
 | 1,500 characters | The Overlord's part of a relay | W2 | n/a |
 | 1,000 characters, and 600 for its reasons, capped apart | The Overlord's text that travels with a proposal and is shown on its card | W3 | n/a |
 | 200 and 600 characters | An act's `summary` and its `why` | W2 | n/a |
@@ -5476,7 +5489,7 @@ only the simulator checks, by running each seed both ways.*
 | The invariant monitor on the live sequence, `overlord_sequence` | The same predicates in production, except I9 | W1 |
 | The scenario suite and the replay | The Overlord's behaviour (§9.5) | W3 |
 | Mutation testing of each new L1 decider, with a score floor that only rises | That the tests would catch a broken guard | Daily, from W1a |
-| The skill-size ratchet, with caps measured at its merge | That no skill file grows, except by a pinned clause's bytes in the pull request that adds the clause (§11.3) | W1a |
+| The skill-size ratchet, with caps measured at its merge | That no `SKILL.md` grows, except by a pinned clause's bytes in the pull request that adds the clause, and that each contract comes first and ends inside what a compaction keeps (§11.3) | W1a |
 
 *Table 11.7b. The tools, and when each arrives.*
 
@@ -5686,7 +5699,7 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 | Wave | What it ships |
 |---|---|
 | W0, a spike | It changes nothing that runs: its test-only files ship in the tarball and do nothing. It measures what the design depends on: the hook's cap and the anchor slot; a fresh start as the renewal act, and its time; what a clear or a fresh start does to running readers, queued input and scheduled tasks; whether a compaction rotates the uuid; auto memory, forks, the subagent model, the model-switch hooks and a refused proactive compaction; the door process under a restricted launch (hooks, skills, the permission mode); reader types with no shell; nudge-and-read for the operator's messages; the statusline's token fields; whether the inbox socket can be used with the peer channel closed; a continuity record for each lane; whether its accounts bill Fable to usage credits; how closely the seven-day figure times the Fable share reading tracks the Fable allowance; how ccd picks an account today (no listed order exists yet: that is W1's build); the restart numbers and the first sweep after boot (§6.4); what an account's shared config directory loads into a session; how reliable the typed `/clear` is. It writes the first model of holds, readiness and generations (§11.7). Where the real thing does not exist yet (the renewal verb, probes), it measures the parts with stand-ins, and W1a measures again with the real ones |
-| W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port; the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1` |
+| W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port; the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge, and each role skill's contract moved to the front of its file; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1` |
 | W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the reservation rule, `account_reservations` and ccd's capability word `account-reserve`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the capability word `overlord-v1` |
 | W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups and read-back flags); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; the capability word `overlord-route-v1` |
 | W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow; engagement per programme; the replay body and the scenario suite; the weekly check and the Week page; the handover brief; the capability word `overlord-brief-v1` |
@@ -5857,7 +5870,7 @@ mechanism leaves something open, the row says what is left.
   C56). This spec names none.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions. D-8125 has merged. The Overlord's W1 starts
   when D-8126 has merged. W0 and W1a do not wait for it.
-- **Sixteen rulings the hardening review needs from you.** Each narrows something you ruled, spends your attention, or
+- **Fifteen rulings the hardening review needs from you.** Each narrows something you ruled, spends your attention, or
   sends data to a second party. They are listed most important first.
   1. **A box where the server and the sessions share a user (H28, §7.4).** The default install is one box. There,
      nothing the server holds is beyond a session's reach. The review's call: on such a box the ladder stops at
@@ -5905,12 +5918,6 @@ mechanism leaves something open, the row says what is left.
       overturned, and a big one after about 180. At 3 those are about twenty and about sixty. About one
       escalation in eight is blind, so at 1 the Overlord mostly briefs and recommends for its first months. A cell
       for a routine answer is the fleet's, not one programme's: rule whether it should be narrower (Table 9.5b).
-  16. **The scope of the skill-size ratchet (H37, §11.3).** The test is built and waits for you. It binds every
-      programme: once it merges, a pull request that grows a skill file fails in the merge queue, unless it adds a
-      pinned clause or puts the new text in a new reference file. Measured on `main` over 14 days, the coordinator
-      skill's `SKILL.md` grew in 17 of its 18 commits, and its largest reference in all 17 of its own. The choice:
-      every skill file, as written here, or `SKILL.md` only, which alone bears the restore budget. Proposed: every
-      skill file, with coordinators told before it merges.
 
 ### Later
 
