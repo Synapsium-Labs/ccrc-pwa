@@ -8,6 +8,8 @@
 > The caution box below was written before these two acts, as was the precompute row under "Measured on the base", which records the base. The box's "held draft", "is not accepted" and "has not been performed", and every line that waits for this plan's acceptance or for act 1, describe the plan before them. The acceptance authorises this document's merge and the build of the PRs it orders, each with its own review. Every other gate in the box stands as written, O4 and the operator's arming among them.
 >
 > **Amended on 2026-11-10** by the coordinator, after review 1736 of W3-1: the lane-word lines (Global Constraints, the `history-steer-hook-copies` slug, Task 1C and D-8130) say that W3-1 spells no lane word, Task 3 carries the lane-words parity case and its mutant, and the PR table says that a W3 PR adding a history test claims `ci.yml`.
+>
+> **Amended again on 2026-11-10** by the coordinator, after W3-4's reviews (1741 to 1744, #2540): Task 1D's "Produces" gives `spikeReport` its `addOn` field; Task 4 spells an unreadable child's range, says which receipt asks for a node block (an exact one, the coordinator's ruling on review 1741) and which spans `addOn` counts, and names the report's two disclosed residuals. These record what W3-4 built; no D-number was taken.
 
 > [!CAUTION]
 > **A held draft. It authorises nothing.** It was drafted under programme item CP-60 and is not accepted. On 2026-11-08 the operator (items 90, 91 and 96) and the coordinator (the programme ledger) ruled every row its decision table then held but O4. The operator ruled O23 and O24, added afterwards from reviews 1686 and 1690, on 2026-11-09 (items 117 and 118), so O4 alone is open. The rulings select options. They accept neither this plan nor any build.
@@ -752,7 +754,7 @@ The card's per-session step already measures, decides and acts for the next comp
 
 **Interfaces:**
 - Consumes (existing): in `history-counters.mjs`, `openCounterStore(dbPath)`, `boundaryLeafOf(rs, boundaryUuid)`, `foldCompliance(values)`, the `measured` and `unmeasured` answers with their `COUNTER_UNMEASURED` words, and the flag parser it already imports from the driver; `store.mjs`'s `blobPlainTextMeasured`; `derive.mjs`'s `holdingCopyOf`; `recall.mjs`'s `expandEntryBody`; lib's `summaryParts`, `redactField`, `parseBlocks`, `selectBlock`, `summaryRowFor` and `producerOfCopy`. Every one is read-only, and none changes.
-- Produces (new): `spikeReport({ db, sessions: string[], sinceMs, untilMs }): { perBackend: Record<'anthropic'|'other'|'unknown', SpikeFigures>, baseline: Record<'anthropic'|'other'|'unknown', SpikeFigures> }` and its CLI arm:
+- Produces (new): `spikeReport({ db, sessions: string[], sinceMs, untilMs }): { perBackend: Record<'anthropic'|'other'|'unknown', SpikeFigures>, baseline: Record<'anthropic'|'other'|'unknown', SpikeFigures>, addOn: Record<'anthropic'|'other'|'unknown', SpikeFigures> }` (`addOn` added by W3-4, Task 4 Step 6) and its CLI arm:
 
 ```
 history-counters.mjs spike --db <history.db> --session <id> [--session <id>] --since <ms> --until <ms> --out <file>
@@ -1113,7 +1115,7 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
     - both bounds, non-ASCII: `seven 300-char gists of a three-byte character, and a previous gist of the same` keep the same two bounds;
     - astral: `a gist of four-byte characters is cut between surrogate pairs, never inside one`;
     - PX24, several quotes: `a parent add-on with three steered children carries the sentence four times, once after every closing tag`;
-    - PX14 and §7.7's child row: `a native child gives its id and range only` (the native child is hand-built with status `ok` and unflagged, so only its kind refuses it); `a flagged child's gist is omitted; a child carrying a fixture token is redacted; a child whose row cannot be read, or whose status is unreadable, gives its id and range only`;
+    - PX14 and §7.7's child row: `a native child gives its id and range only` (the native child is hand-built with status `ok` and unflagged, so only its kind refuses it); `a flagged child's gist is omitted; a child carrying a fixture token is redacted; a child whose row cannot be read, or whose status is unreadable, gives its id and range only` (a row that cannot be read at all spells its range `unknown..unknown`, as `nodeRangeText(null, null)` does);
     - `the generic variant never carries the add-on` (the open-breaker print of Task 2 is the generic variant);
     - `a steered node block replaces only the parent's gist (§6.3), and a wrong id is degraded`.
   - The O14 cases:
@@ -1146,7 +1148,7 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
   - (k) the flag mapped open, every value but 1 read as unflagged (the stored-flag group case: the children stored with 2 and -1 are quoted).
 - [ ] **Step 5: Commit** `feat(history): the parent add-on and steered node gists (spec §7.1)`.
 - [ ] **Step 6: The add-on spans in the spike report (O15).** The cohort measures leaf and add-on spans together, so W3-4, released before the cohort, carries the report's add-on figure:
-  - `spikeReport` gains `addOn: SpikeFigures`, over the receipted spans whose leaf is the last child of its depth-1 parent, read-only from `node_children`. It is printed beside the cohort's figures, which count these spans too, and the fixed gates read the cohort's figures together (O15);
+  - `spikeReport` gains `addOn`, one `SpikeFigures` per backend, over the receipted spans whose leaf has an EXACT receipt and is the last child of its depth-1 parent, read-only from `node_children`. It is printed beside the cohort's figures, which count these spans too, and the fixed gates read the cohort's figures together (O15). An exact receipt is what asks for a node block: derive and the report read that fact through one `EXACT_RECEIPT_SQL` in `lib.mjs`, and the report adds its own measurability rule (the span is receipted). `addOn`'s compliance is the leaf block's; the node block's is counted as `node_status:<status>:<backend>` and `node_reason:<reason>:<backend>`. Two residuals are disclosed, not built: an exact receipt does not prove the printed file carried the add-on (a slot not yet final when the file was minted), so a span can be counted that was never asked; and a last child whose depth-1 parent is not yet derived when the report runs is left out with no word;
   - its test, `spike reports add-on spans apart`: the add-on spans are counted in `addOn` and in the cohort's figures alike. Mutant: the add-on spans dropped from the cohort's figures (the cohort's count falls by the add-on spans);
   - run `history-counters.test.ts`: it passes. Commit `feat(history-counters): the add-on spans in the spike report (O15)`.
 
