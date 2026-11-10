@@ -217,18 +217,33 @@ export interface AdmitFacts {
   step: 'admit';
   /** The registry directory's listing, or `null` when it could not be listed. */
   names: readonly string[] | null;
-  /** Called only when neither marker refused. */
+  /** D-6093: this dispatch starts no process, because it resumes a session that READS LIVE (`sessionReadsLive`, read by
+   *  the caller only after `admitMarkerRefusal` answered null, so a pause costs zero liveness reads). Only a measured
+   *  `true` frees the concurrency check; every fresh spawn, hibernated, stopped, archived or dead session and every
+   *  liveness that could not be measured is `false` and is charged as before. */
+  liveResume: boolean;
+  /** Called only when neither marker refused, and not at all for a live resume. */
   caps: () => CapsReading;
 }
 
-function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
-  // 1: PAUSE / KILL-SWITCH FIRST. A directory that cannot be listed is a pause that cannot be ruled out: fail-shut.
-  if (f.names === null || f.names.includes(COORDINATOR_PAUSE_MARKER)) {
-    return refused({ ok: false, kind: 'refused', code: 'paused' });
-  }
+/** Step 1 of the admit step, alone: the operator's pause and the mail-disabled marker, in that order (null: neither).
+ *  Exported so the caller can ask it BEFORE a liveness read (D-6093): `decideAdmit` below answers through it, so the two
+ *  cannot drift. A directory that cannot be listed is a pause that cannot be ruled out: fail-shut. */
+export function admitMarkerRefusal(names: readonly string[] | null): DispatchHalt | null {
+  if (names === null || names.includes(COORDINATOR_PAUSE_MARKER)) return { ok: false, kind: 'refused', code: 'paused' };
   // Refusing outright (rather than skipping the `/clear`) leaves the run `planned`, so the retry after the operator
   // lifts the marker is a genuinely fresh dispatch.
-  if (f.names.includes(MAIL_DISABLED_MARKER)) return refused({ ok: false, kind: 'refused', code: 'mail-disabled' });
+  if (names.includes(MAIL_DISABLED_MARKER)) return { ok: false, kind: 'refused', code: 'mail-disabled' };
+  return null;
+}
+
+function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
+  // 1: PAUSE / KILL-SWITCH FIRST.
+  const marker = admitMarkerRefusal(f.names);
+  if (marker !== null) return refused(marker);
+  // D-6093: a resume of a live session starts nothing, so it is not charged a slot. The pause and the marker above
+  // still refuse it first.
+  if (f.liveResume) return go(null);
   // 2: the concurrency cap. The refusal carries the numbers: a cap that refuses without saying what it is reads as a
   // bug. It is the ONLY cap: the daily dispatch brake that followed it is retired (D-7068, operator
   // ruling 2026-10-26). It counted reviews and warm resumes as if they were fresh workspaces, refused a coordinator

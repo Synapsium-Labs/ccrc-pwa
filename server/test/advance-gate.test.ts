@@ -29,6 +29,7 @@ function facts(over: Partial<AdvanceGateFacts> & { to: AdvanceGateFacts['to'] },
     read: () => { calls.read++; return { ok: true, run: r }; },
     reviewInFlight: () => { calls.review++; return null; },
     overConcurrency: () => { calls.caps++; return null; },
+    liveWorker: false,
     ...over,
   };
   return { f, calls };
@@ -138,6 +139,19 @@ describe('advanceGate — lookups are lazy (ARCH-33)', () => {
       advanceGate(f);
       expect(calls.caps, state).toBe(n);
     }
+  });
+
+  it('D-6093: a live worker sent back to working is not charged the cap, and the caps are not read', () => {
+    for (const state of ['awaiting-review', 'merging'] as const) {
+      const { f, calls } = facts({ to: 'working', liveWorker: true, overConcurrency: () => FULL }, run({ state }));
+      expect(advanceGate(f), state).toEqual({ ok: true, run: run({ state }) });
+      expect(calls.caps).toBe(0);
+    }
+  });
+
+  it('D-6093: kept, a worker that does not read live is charged (liveWorker false refuses on a full fleet)', () => {
+    const { f } = facts({ to: 'working', liveWorker: false, overConcurrency: () => FULL }, run({ state: 'merging' }));
+    expect(advanceGate(f)).toStrictEqual(refused({ reject: { code: 'cap-concurrency', limit: 1, running: 1 } }));
   });
 
   it('reads nothing past the first refusal and the run once', () => {

@@ -5,7 +5,7 @@ import type { RunCcd, WatcherCoordPort } from './ports.js';
 import { cutShort } from '../lifecycle.js';
 import type { SessionRecord } from '../registry.js';
 import type { TurnVerdict } from './archiveDoor.js';
-import { fieldMeasured, readRegistryMeasured } from '../registry.js';
+import { fieldMeasured, measuredIdentity, readRegistryMeasured, readSessionRecord } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import {
   BROWSER_ROUTE_CAP, CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
@@ -27,7 +27,7 @@ import {
 import { readSkillState, skillDirFor } from '../skillstate.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
-  decideDispatch, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
+  admitMarkerRefusal, decideDispatch, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
 } from './dispatchDecide.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
@@ -119,6 +119,13 @@ export interface DispatchRunDeps {
   /** The fleet-wide wake budget's one list (D-5242, `FleetWatcher.admitWake`): a resume onto a hibernated worker records
    *  an ASKED wake there beside its `ensure`, and is never refused for it. Absent (no watcher): nothing is recorded. */
   admitWake?: (kind: 'asked', id: string) => boolean;
+  /**
+   * D-6093: whether the session's pane is ALIVE and its live file readable (`liveWordFor` over the same tmux and live-file
+   * reads the turn verdict makes, which cannot say it: a gone pane reads `idle` there). A PORT, for `turnVerdict`'s
+   * reason. OPTIONAL, unlike it, on purpose and in the safe direction: absent, or throwing, the session does not read
+   * live and the concurrency check is made as before.
+   */
+  paneLive?: (rec: SessionRecord) => Promise<boolean>;
 }
 
 /** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
@@ -285,6 +292,30 @@ export function capsMeasured(coord: CoordStore): CapsReading {
     ? { limit: caps.maxConcurrentWorkers, running: usage.running }
     : null;
   return { caps, usage, overConcurrency };
+}
+
+/**
+ * D-6093, THE ONE DEFINITION OF "LIVE" the concurrency check is skipped for: a resume or a send-back of a session that
+ * starts no process. The registry row is listed with a measured identity and no unmeasured lifecycle field, is not
+ * stopped, not archived and not hibernated (a hibernated worker's resume wakes a process), and its pane is alive
+ * (`paneLive`). Anything that cannot be read, an absent port included, answers `false`: an unmeasured read never frees a
+ * slot (Review focus 3). Reads one registry row, not the fleet. Called by `dispatchRun` and the advance route only
+ * AFTER the pause and `mail-disabled` markers were ruled out, so a paused dispatch takes zero liveness reads.
+ */
+export async function sessionReadsLive(
+  deps: Pick<DispatchRunDeps, 'io' | 'cfg' | 'paneLive'>, sessionId: string,
+): Promise<boolean> {
+  if (deps.paneLive === undefined) return false;
+  try {
+    const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+    if (read.kind !== 'found') return false;
+    const rec = read.record;
+    if (measuredIdentity(rec) === null || rec.lifecycleUnmeasured.length > 0) return false;
+    if (rec.stopped !== null || rec.archivedAt !== null || rec.hibernatedAt !== null) return false;
+    return (await deps.paneLive(rec)) === true;
+  } catch {
+    return false;
+  }
 }
 
 /** The `DispatchOutcome` member `refuseSpentChild` answers, and its inputs —
@@ -552,9 +583,13 @@ export async function dispatchRun(
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
   const { run, body, itemTitles, routeFields: plannedRoute, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
-  // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
-  const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
-    caps: () => capsMeasured(coord) });
+  // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned. D-6093: a resume of a session that
+  // reads live starts no process and is not charged a slot; its liveness is read only once the markers are ruled out.
+  // The liveness is read only when it could matter: past the markers, and only if the cap would refuse.
+  const names = await deps.io.readdir(deps.cfg.registryDir);
+  const liveResume = run.sessionId !== null && admitMarkerRefusal(names) === null
+    && capsMeasured(coord).overConcurrency !== null && await sessionReadsLive(deps, run.sessionId);
+  const admit = decideDispatch({ step: 'admit', names, liveResume, caps: () => capsMeasured(coord) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
   // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
   // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.

@@ -12,7 +12,7 @@ import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { clearSender } from '../inject/send.js';
 import { assembleFleet, fleetNow } from '../fleet.js';
-import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import { liveWordFor, turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -52,9 +52,9 @@ import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } f
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
-import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
+import { advanceGate, advanceRequest, reEntersWorking, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured, sessionReadsLive } from './dispatch.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
@@ -645,6 +645,10 @@ export function registerCoordRoutes(
   const coordMutex = new CoordMutex();
   // The turn reads' deps (D-5238), built once from the watcher this function receives.
   const turnReads = turnReadDeps(deps, watcher);
+  // D-6093: the pane-alive read a live resume or send-back is judged by (`sessionReadsLive`): a pane tmux proves alive
+  // whose live file this box could read. `liveWordFor` is the turn verdict's own pane sequence, which cannot answer it
+  // (a gone pane reads `idle` there); anything it could not read is `false`, so the cap is charged.
+  const paneLive = async (rec: SessionRecord): Promise<boolean> => (await liveWordFor(turnReads, rec)).ok;
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
    *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
@@ -1659,6 +1663,8 @@ export function registerCoordRoutes(
       // D-5238: the live `/clear` gate's reads — `turnverdict.ts`, their one home, over the watcher this function
       // already receives (thunks: each call reads the watcher's newest pane-scraped pieces).
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
+      // D-6093: whether a resumed session's pane is alive, for the concurrency check a live resume skips.
+      paneLive,
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
     const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents));
@@ -1956,8 +1962,15 @@ export function registerCoordRoutes(
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
+      // D-6093: a send-back of a worker that reads LIVE starts no process, so the cap is not charged. Read only for the one
+      // edge the cap gate checks (an idle run back to `working`) and only when the cap would refuse, before the gate and inside
+      // the serialiser.
+      const pre = to === 'working' ? coord.run(id) : null;
+      const liveWorker = pre !== null && pre.ok && pre.run !== null && pre.run.sessionId !== null
+        && reEntersWorking(to, pre.run.state) && capsMeasured(coord).overConcurrency !== null
+        && await sessionReadsLive({ io: deps.io, cfg: deps.cfg, paneLive }, pre.run.sessionId);
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
-        overConcurrency: () => capsMeasured(coord).overConcurrency });
+        liveWorker, overConcurrency: () => capsMeasured(coord).overConcurrency });
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });

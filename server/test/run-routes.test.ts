@@ -3301,8 +3301,8 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'bad-transition' } });
   });
 
-  it('re-entering `working` from awaiting-review takes the cap check — a send-back on a full fleet is refused honestly (spec §7.2)', async () => {
-    const home = mkTmp('ccrc-runs-');
+  /** A work run parked at `awaiting-review` whose worker is `demo-reentry`, with another programme holding the one slot. */
+  const parkedAtFullCap = async (home: string) => {
     const { run } = makeRunner(home, { wsAddCreates: ['demo-reentry'] });
     const w = await openApp(home, run); app = w.app;
     w.coord.setCaps({ maxConcurrentWorkers: 1 });
@@ -3317,13 +3317,45 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
     expect(w.coord.advance(blocker.id, 'dispatched', 'test').ok).toBe(true);
     expect(w.coord.capsUsage().running).toBe(1);
+    return { w, id: opened.id };
+  };
+  const SEND_BACK = { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } };
 
-    const res = await postAdvance(app, opened.id,
-      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+  it('re-entering `working` from awaiting-review takes the cap check — a send-back of a worker that is NOT live on a full fleet is refused honestly (spec §7.2; D-6093 keeps it for a hibernated worker)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');   // asleep: a send-back would wake it
+    const res = await postAdvance(app, id, SEND_BACK);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
     // The run did not move.
-    expect(okRun(w.coord.run(opened.id))!.state).toBe('awaiting-review');
+    expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
+  });
+
+  it('a send-back of a worker that reads live advances on a full fleet (D-6093: nothing starts, so nothing is charged)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    const res = await postAdvance(app, id, SEND_BACK);
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(id))!.state).toBe('working');
+  });
+
+  it('an unmeasurable liveness is charged: a send-back whose pane cannot be read is refused on a full fleet (D-6093)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    rmSync(path.join(home, '.cc-sessions', 'demo-reentry.uuid'), { force: true });   // the row no longer lists
+    const res = await postAdvance(app, id, SEND_BACK);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+    expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
+  });
+
+  it('a send-back with a free slot reads no liveness (D-6093)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    w.coord.setCaps({ maxConcurrentWorkers: 5 });
+    rmSync(path.join(home, '.cc-sessions', 'demo-reentry.uuid'), { force: true });   // would be unmeasurable if it were read
+    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(200);
   });
 
   it('does NOT cap-check dispatched -> working: a run already counted may always start working', async () => {

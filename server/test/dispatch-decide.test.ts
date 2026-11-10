@@ -234,7 +234,7 @@ describe('decideDispatch, the admit step', () => {
     overConcurrency: null, ...over,
   });
   const admit = (names: readonly string[] | null, reading: CapsReading, reads: { n: number }): AdmitFacts =>
-    ({ step: 'admit', names, caps: () => { reads.n++; return reading; } });
+    ({ step: 'admit', names, liveResume: false, caps: () => { reads.n++; return reading; } });
 
   it('an unlistable directory is paused (fail-shut), and the caps are not read', () => {
     const reads = { n: 0 };
@@ -253,6 +253,22 @@ describe('decideDispatch, the admit step', () => {
   });
   // The daily cap that once followed concurrency is retired (D-7068): concurrency is the last
   // admission gate, and past it a clean listing goes.
+  // D-6093: a resume of a session that reads live starts no process, so the cap is skipped and never read; the markers
+  // above it still refuse first.
+  it('a live resume is admitted at a full cap, and the caps are not read', () => {
+    const reads = { n: 0 };
+    const full = caps({ overConcurrency: { limit: 3, running: 3 }, usage: { running: 3 } });
+    expect(decideDispatch({ ...admit([], full, reads), liveResume: true }).kind).toBe('go');
+    expect(reads.n).toBe(0);
+  });
+  it('a live resume is still refused first by the pause and by mail-disabled', () => {
+    expect(outcomeOf(decideDispatch({ ...admit([COORDINATOR_PAUSE_MARKER], caps(), { n: 0 }), liveResume: true })))
+      .toEqual({ ok: false, kind: 'refused', code: 'paused' });
+    expect(outcomeOf(decideDispatch({ ...admit([MAIL_DISABLED_MARKER], caps(), { n: 0 }), liveResume: true })))
+      .toEqual({ ok: false, kind: 'refused', code: 'mail-disabled' });
+    expect(outcomeOf(decideDispatch({ ...admit(null, caps(), { n: 0 }), liveResume: true })))
+      .toEqual({ ok: false, kind: 'refused', code: 'paused' });
+  });
   it('gate order: concurrency is the last admission gate', () => {
     const full = caps({ overConcurrency: { limit: 3, running: 3 }, usage: { running: 3 } });
     expect(outcomeOf(decideDispatch(admit([], full, { n: 0 }))))

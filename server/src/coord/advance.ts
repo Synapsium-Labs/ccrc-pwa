@@ -40,6 +40,10 @@ export interface AdvanceGateFacts<R extends AdvanceRunFacts = AdvanceRunFacts> {
   readonly reviewInFlight: () => number | null;
   /** `capsMeasured(coord).overConcurrency`: the numbers a refusal says, or null when a slot is free. */
   readonly overConcurrency: () => { limit: number; running: number } | null;
+  /** D-6093: the run's worker reads LIVE (`sessionReadsLive`), so a send-back starts no process and is not charged a
+   *  slot. The route reads it, once, only for an idle run sent back to `working`; `false` (the default of any read it
+   *  could not make) charges the cap as before. */
+  readonly liveWorker: boolean;
 }
 
 /** The body of a `reject` object: its `code` and exactly the fields the inline sends wrote. */
@@ -123,6 +127,12 @@ type GateResult = AdvanceRefusal | undefined;
  * THE GATES, IN ORDER. One entry per refusal condition, each on its own line so a reorder is a one-line swap.
  * Comments name the inline handler's reasons for each position.
  */
+/** The one edge the cap gate checks: an idle run sent back to `working`. The route asks it before it reads a worker's
+ *  liveness (D-6093), so it reads that only for this edge, and names none of the gate's inputs itself. */
+export function reEntersWorking(to: RunState, from: RunState): boolean {
+  return to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(from);
+}
+
 const GATES = [
   // D-2545: an unreadable store is 503, a fact about this box, not the request; it answers ahead of `unknown-run`
   // because 404 would tell the coordinator a row sitting in the table does not exist. Before any re-measurement.
@@ -146,7 +156,8 @@ const GATES = [
   // Spec 2026-09-14 §7.2 pin 2: the one legal edge back INTO an active state takes the cap check dispatch takes.
   // `dispatched -> working` is not checked: that run is already counted.
   ['cap', (c) => {
-    if (c.f.to !== 'working' || !(IDLE_RUN_STATES as readonly RunState[]).includes(c.run!.state)) return undefined;
+    if (!reEntersWorking(c.f.to, c.run!.state)) return undefined;
+    if (c.f.liveWorker) return undefined;
     const over = c.f.overConcurrency();
     return over === null ? undefined : { reject: { code: 'cap-concurrency', limit: over.limit, running: over.running } };
   }],
