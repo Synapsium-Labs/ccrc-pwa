@@ -1236,6 +1236,26 @@ credentials and the `doneWhen` field. The `bigCalls` half of the read waits for 
   reviewer's classing against §3 and §5. A task owner with server-box access takes them; A1-4 is not complete
   until they are written here. (Re-checked: the fleet box holds only test-run copies of the database, no live one.)
 
+**Wave A10 (readings not yet due, 2026-11-10).** The 30-day point runs from the rollout mail, and nothing of A1 to A9 is
+deployed: the branch is unpushed and its PR is a draft, so no rollout mail has been sent and no 30-day reading exists.
+No figure below is a reading; the baseline (A1) is the only measured column.
+
+| # | Target at 30 days | Reading | What a reading decides |
+|---|---|---|---|
+| M1 | down 70% from the A1 baseline | not taken | none by itself |
+| M2 | 0 | not taken | above 0 two weeks after the rollout mail: raise R7's hook deny as a later, security-sensitive plan task (a `PreToolUse` deny in `ccd/session-hook.sh` on AskUserQuestion for a session that claims a run of a pinned programme); it is not built in A10 |
+| M3 | down by half | not taken | none by itself |
+| M4 | under 10% | not taken | none by itself |
+| M5 | under 15% | not taken | above 15%: find the kind of call that clusters and propose the change to the line of the decision procedure or its tie-breakers as a skill-text PR (security-sensitive, the pinned text); under 15%: record that the line stands |
+| M6 | halved from about 38 coordinator-hours a week | not taken | none by itself |
+| M7 | under 10 minutes | not taken | none by itself |
+| M8 | 0 | not taken | any listed act is audited by a human beside the hook's deny log |
+
+To take them, read-only, weekly and at 30 days: re-run the A1-4 procedure (`transcripts`, and `items`, `sample`, `score`
+on the server box), then `calls --db PATH` and `transcripts --pinned-from-server` from `deploy/measure-autonomy.py`, and
+replace each "not taken" with the figure, its window and the command's date. M3, M4 and M6 still wait on a task owner
+with server-box access (A1-4). Row 49 is not part of any decision here (see "Waiting on you").
+
 ### Waiting on you
 
 - §15 Q4: does D-8126 supersede the 2026-09-22 debugging ceiling (row 49)? Until it is answered, row 49 keeps the
