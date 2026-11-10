@@ -1581,9 +1581,10 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   const perBackend = {};
   const baseline = {};
   const addOn = {};
-  /** O15: a RECEIPTED cohort span (newSpan's `receipted`) whose leaf holds an EXACT receipt (s.exactAsked, lib's
-   *  EXACT_RECEIPT_SQL: the same predicate derive's node read asks) and is the last child of a depth-1 parent (read-only, from
-   *  node_children). An unreceipted span, or one with only the generic receipt, was never printed an add-on. Residual, the
+  /** O15: a cohort span whose leaf holds an EXACT receipt (s.exactAsked, lib's EXACT_RECEIPT_SQL: "asked" is that shared SQL,
+   *  the same one derive's node read asks) and is the last child of a depth-1 parent (read-only, from node_children). The report
+   *  adds its own measurability rule on top, `x.receipted` (newSpan's: spikeFigures needs a measured leaf), which derive does not
+   *  apply: an asked last child whose leaf did not parse gets a node verdict from derive and is left out here. An unreceipted span, or one with only the generic receipt, was never printed an add-on. Residual, the
    *  over-count direction: an exact receipt does not prove the printed file carried the add-on (EXACT_RECEIPT_SQL's comment
    *  says why), so a span can be counted here though nothing was asked. */
   const isAddOn = (x) => x.receipted && s.exactAsked.get(x.leaf.id) !== undefined && s.addOnLeaf.get(x.leaf.id) !== undefined;

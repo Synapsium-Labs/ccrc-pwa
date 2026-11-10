@@ -966,15 +966,26 @@ function parentReroller(db, ictx, onlyIfChanged = false, runBudget = null) {
       r = read;
     } else if (read.read === 'unreadable') {
       // Asked, but the summary cannot be read now. The stored status always stands. The stored gist stands (re-redacted under the
-      // current pairs) ONLY when that status is ok or degraded, which is a steered gist (the coordinator's ruling of 2026-11-10:
-      // a re-roll keeps the steered gist). An invalid or absent parent holds the rollup by construction, and a tombstoned summary
-      // makes "unreadable" routine, so it takes the fresh rollup as the verdict arm does: a kept rollup would go stale, and a value
-      // cut at GIST_MAX would keep its prefix. For a kept gist `capped` is the stored flag with the rollup's topics and refs cuts
-      // (the stored flag cannot tell its own gist cut from them, so it stays set once set).
-      const steered = self.row.status === 'ok' || self.row.status === 'degraded';
+      // current pairs) ONLY when that status is ok or degraded (a steered gist, the coordinator's ruling of 2026-11-10: a re-roll
+      // keeps the steered gist) AND the gist is provably uncut: its length, counted as capText counts (String(gist).length, in
+      // UTF-16 units), is under GIST_MAX. Spec 8.3 puts redaction before every cut, so a re-roll never keeps a gist that a cut could
+      // have left a prefix in: a value learned after the cut that straddles it would not match the redaction, and its prefix
+      // would stay in the gist and in nodes_fts. A stored gist of GIST_MAX or more takes the fresh rollup, with the stored status
+      // standing. An invalid or absent parent holds the rollup by construction, and a tombstoned summary makes "unreadable"
+      // routine, so it takes the fresh rollup too (a kept rollup goes stale); that narrowing was the reviewer's at review 1742
+      // and the coordinator adopted it. For a kept gist `capped` is the stored flag with the rollup's topics and refs cuts (the
+      // stored flag cannot tell its own gist cut from them, so it stays set once set); a fresh rollup carries its own.
+      // Residual 1, disclosed and not built: a parent created while its last child's summary was already unreadable is stored ok
+      // with the rollup gist, and status ok cannot tell that parent from a steered gist. A later unreadable re-roll therefore keeps
+      // that rollup when it is uncut, and the rollup can go stale.
+      // Residual 2, disclosed and not built: a gist that blockFields did cut can still store fewer than GIST_MAX units, because
+      // capText's cutBefore stops one short of a surrogate pair at the cut and blockFields' trimEnd drops whitespace at the cut.
+      // A value that straddles such a cut would have to contain that pair or that whitespace.
+      const steered = (self.row.status === 'ok' || self.row.status === 'degraded')
+        && typeof self.row.gist === 'string' && self.row.gist.length < GIST_MAX;
       r = steered
         ? {
-          ...read, status: self.row.status, gist: typeof self.row.gist === 'string' ? redactField(self.row.gist, ictx.pairIdx) : null,
+          ...read, status: self.row.status, gist: redactField(self.row.gist, ictx.pairIdx),
           capped: Number(self.row.capped) === 1 || read.restCapped,
         }
         : { ...read, status: self.row.status };

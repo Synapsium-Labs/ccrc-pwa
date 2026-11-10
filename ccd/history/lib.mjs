@@ -6699,7 +6699,10 @@ export function blockStatus({ receipt, block, idMismatch, priorGistShas }) {
 /** The ONE predicate for "a node block was asked" (spec §7.4 item 2 and §7.1; W3 steering plan Task 4, with the coordinator's
  *  ruling of 2026-11-10): a parent's last child holds an EXACT receipt, a steer_receipts row whose leaf_id is that child's id
  *  (the generic variant never carries the add-on). Bind the child's id; a row answers `{ hit: 1 }`, no row answers undefined.
- *  Derive (the node read) and the spike report (the add-on spans) both read this text, and neither has a second spelling.
+ *  "Asked" is this SQL alone, read by derive (the node read) and by the spike report (the add-on spans): the two readers have no
+ *  second spelling of THAT fact. They do not share the rest of their predicates: the report adds its own measurability rule
+ *  (`x.receipted` in history-counters.mjs, because spikeFigures needs a measured leaf), so a last child that is asked but whose leaf
+ *  did not parse gets a node verdict from derive, and addOn leaves its span out.
  *  Residual, disclosed and not built: an exact receipt does not prove that the printed file carried the add-on, because a
  *  slot may not have been final when the file was minted. The parent can then be stored absent, and the span counted in
  *  addOn, though nothing was asked. That is the over-count direction. */
