@@ -2584,9 +2584,9 @@ already running).
             the lane between modes; "runtime remove" takes the LiteLLM
             runtime off a box whose lanes all run direct, and refuses while
             one does not; "login <id>" signs a codex lane in
-            through the lane's own runtime (a device code, shown in the
+            through ccrc's auth library (a device code, shown in the
             terminal or the account pane) and writes nothing but what that
-            runtime writes into the lane's exec.authDir. Needs jq and node.
+            library writes into the lane's exec.authDir. Needs jq and node.
             Refused on a server-role box
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
