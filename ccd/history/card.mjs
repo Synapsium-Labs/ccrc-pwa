@@ -387,8 +387,9 @@ function steerPredictionOf(db, ictx, p, mayWrite) {
  *    steer_unrecorded_removed the card's generation record was due and not acted on, and this file went with the prediction;
  *    steer_cleanup_failed     the id's other files could not all be removed after a write that landed;
  *    steer_compose_failed     the composer threw (the parent add-on missed a bound at its floor, a defect): the steer
- *                             prediction is a skip, any standing file goes, once per end-of-file evaluation; never a
- *                             `card_skipped:*`, and the card is untouched.
+ *                             prediction is a skip, any standing file goes, and the count is once per evaluation that may
+ *                             write (end-of-file with the run's budget left: `mayWrite`; none elsewhere, where nothing is
+ *                             composed); never a `card_skipped:*`, and the card is untouched.
  *  A CONSUMED file whose replacement cannot be written is unlinked too, so the hook never serves the last compaction's id as
  *  this one's (D-5059's arm). */
 function steerArtifact(db, ictx, id, uuid, p, atEof, mayWrite, recorded) {

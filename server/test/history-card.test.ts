@@ -2677,7 +2677,9 @@ describe("childrenOf reads the group's stored rows; the card step passes them to
     }
   });
 
-  it('a composer that throws makes the steer prediction a skip: the standing steer file goes, steer_compose_failed is counted once, the card is written as usual, and no card_skipped is counted (D4)', async () => {
+  // The composer is forced to throw for a parent add-on in the TEST only (no seam in shipped code); the mock is scoped to the case that
+  // asks for it, and lifted after it.
+  const forcingComposeThrow = async (body: () => Promise<void>): Promise<void> => {
     vi.resetModules();
     vi.doMock('../../ccd/history/lib.mjs', async (importOriginal) => {
       const real = await importOriginal<typeof libCard>();
@@ -2690,6 +2692,32 @@ describe("childrenOf reads the group's stored rows; the card step passes them to
       };
     });
     try {
+      await body();
+    } finally {
+      vi.doUnmock('../../ccd/history/lib.mjs');
+      vi.resetModules();
+    }
+  };
+
+  it("a compose failure over ANOTHER leaf's steer file still counts its consumption: the file is removed, steer_consumed 1, steer_compose_failed 1", () => forcingComposeThrow(async () => {
+    const fx = await store7(null, FLAGS.map(() => ({ flag: 0 })));
+    try {
+      const steer = path.join(libCard.historyPaths(fx.home).root, 'steer', ID7, `${E7}.txt`);
+      fs.mkdirSync(path.dirname(steer), { recursive: true });
+      fs.writeFileSync(steer, expectedSteer(fx.prevId));   // the file the boundary before this one left: it names the previous leaf
+      const { text } = await fx.run();
+      expect(text, 'the file of the other leaf is removed').toBeNull();
+      expect(fs.existsSync(steer)).toBe(false);
+      expect(fx.counter('steer_consumed'), 'its boundary was ingested: consumed once').toBe(1);
+      expect(fx.counter('steer_compose_failed'), 'counted once').toBe(1);
+      expect(fx.counter('steer_written')).toBe(0);
+    } finally {
+      fx.db.close();
+    }
+  }));
+
+  it('a composer that throws makes the steer prediction a skip: the standing steer file goes, steer_compose_failed is counted once, the card is written as usual, and no card_skipped is counted (D4)', () => forcingComposeThrow(async () => {
+    {
       const fx = await store7(null, FLAGS.map(() => ({ flag: 0 })));
       try {
         const P = libCard.historyPaths(fx.home);
@@ -2708,12 +2736,10 @@ describe("childrenOf reads the group's stored rows; the card step passes them to
         const skipped = (fx.db.prepare("SELECT name FROM counters WHERE name LIKE 'card_skipped:%'").all() as Array<{ name: string }>).map((r) => r.name);
         expect(skipped, 'no card_skipped counter').toEqual([]);
         expect(fx.counter('card_written'), 'the card prediction is untouched').toBe(1);
+        expect(fx.counter('steer_consumed'), 'the file named this leaf: not consumed').toBe(0);
       } finally {
         fx.db.close();
       }
-    } finally {
-      vi.doUnmock('../../ccd/history/lib.mjs');
-      vi.resetModules();
     }
-  });
+  }));
 });
