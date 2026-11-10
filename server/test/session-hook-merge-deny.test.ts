@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { waveLifecycleText } from './waveLifecycle.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -741,12 +742,11 @@ const waveReason = (h: string): string => `ccrc: this workspace's hold reads \`$
 const MUTATIONS = ['mergePullRequest', 'enqueuePullRequest', 'enablePullRequestAutoMerge', 'mergeBranch'];
 const gqlMutation = (word: string): string => `gh api graphql -f query='mutation { ${word}(input: {pullRequestId: "x"}) { clientMutationId } }'`;
 
-const LIFECYCLE = path.resolve(__dirname, '../../ccd/coordinator-skill/references/wave-lifecycle.md');
 /** Review Focus 1's first source: every backticked `gh …` span of the lifecycle reference's paragraph
  *  "Landing on a native-queue project", extracted by its anchors, never retyped. A span may wrap across
  *  a line break in the Markdown, so the paragraph's lines are trimmed and joined with a space first. */
 const landingSpans = (): string[] => {
-  const lines = fs.readFileSync(LIFECYCLE, 'utf8').split('\n');
+  const lines = waveLifecycleText().split('\n');
   const from = lines.findIndex((l) => l.includes('**Landing on a native-queue project**'));
   const to = lines.findIndex((l, i) => i > from && l.includes('**Same project:**'));
   if (from < 0 || to < 0) throw new Error('the lifecycle reference no longer has the paragraph "Landing on a native-queue project" before "Same project:"');
@@ -758,7 +758,7 @@ const landingSpans = (): string[] => {
 /** Review Focus 1's second source: the landing verdict block, the fenced bash block that follows the
  *  `### 5b` heading, from the line that begins `( # The landing verdict` to before its closing fence. */
 const verdictBlock = (): string => {
-  const lines = fs.readFileSync(LIFECYCLE, 'utf8').split('\n');
+  const lines = waveLifecycleText().split('\n');
   const heading = lines.findIndex((l) => l.startsWith('### 5b'));
   const start = lines.findIndex((l, i) => i > heading && l.startsWith('( # The landing verdict'));
   const end = lines.findIndex((l, i) => i > start && l.startsWith('```'));

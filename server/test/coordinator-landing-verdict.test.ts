@@ -17,9 +17,10 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { waveLifecycleText } from './waveLifecycle.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const wl = readFileSync(path.join(root, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+const wl = waveLifecycleText();
 const MARK = '# The landing verdict';
 const blocks = [...wl.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]!).filter((b) => b.includes(MARK));
 
