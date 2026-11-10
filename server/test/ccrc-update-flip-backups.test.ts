@@ -3025,10 +3025,18 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     const exampleWith = (os: keyof typeof ODD, ...lines: string[]): Buffer => Buffer.concat([EXAMPLE(), ...[...lines, ODD[os]].map((l) => Buffer.from(l, 'utf8'))]);
     const refused = (k: string): string => `rc 1 val  from  why ${k} cannot be measured: ~/.ccrc/ccrc.env `;
 
+    // D-8150 (C18 item 1): every setting is asked in ONE sourced shell. A shell per setting re-parsed all of ccd/ccrc each
+    // time (about 100 spawns a platform), which took 19 to 21 s on a loaded CI shard against the 20 s limit. `_ccrc_knob`
+    // carries nothing from one call to the next (it clears KNOB, KNOB_FROM and KNOB_WHY first and keeps its work in
+    // locals), so one shell decides what a shell each did. Each answer follows its own marker line, and the markers must
+    // name every setting once, in order, so a loop that stops early is red.
     it.each(['linux', 'darwin'] as const)('W24-R12: a copy of ccrc.env.example plus one line the %s model cannot decide reads the default for every setting it only mentions in a comment (ruling 16, D-6604)', (os) => {
       const home = boxWith('ccrc-fx-w24-r12-', exampleWith(os));
-      for (const k of SETTINGS) {
-        const got = knob(home, `CCD_OS=${os}; _ccrc_knob ${k} 7; ${ECHO}`);
+      const MARK = '@@w24-r12 ';
+      const out = knob(home, `CCD_OS=${os}; for k in ${SETTINGS.join(' ')}; do echo "${MARK}$k"; _ccrc_knob "$k" 7; ${ECHO}; done`);
+      const blocks = out.split(MARK).slice(1).map((b) => [b.slice(0, b.indexOf('\n')), b.slice(b.indexOf('\n') + 1)] as const);
+      expect(blocks.map(([k]) => k), 'one answer per setting, in CCRC_SETTINGS order').toEqual(SETTINGS);
+      for (const [k, got] of blocks) {
         // Wave 23's departure (ruling 10): on macOS the data keep asks the model whatever the scan says, so the odd line refuses it.
         if (os === 'darwin' && k === 'CCRC_BACKUP_DATA_KEEP') expect(got.startsWith(refused(k)), got).toBe(true);
         else expect(got, k).toBe('rc 0 val 7 from default why \n');

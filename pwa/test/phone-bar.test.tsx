@@ -114,7 +114,8 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
           // The badge is the one count every door reads: one open item waits on the operator, one session asks nothing.
           expect(within(bar!).getByRole('button', { name: 'Waiting, 1 waiting on you' })).toHaveAttribute('data-command', 'go-waiting');
           expect(within(bar!).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
-          // Each door is named by its place's title, and the word it shows begins that name.
+          // Each door is named by the word it shows: its place's title, or the place's `short` word where it has one
+          // ("Waiting", review 1722), and that word begins its name (review 1723 N1).
           for (const door of bar!.querySelectorAll<HTMLElement>('[data-command]')) {
             const word = door.querySelector('.phone-bar-word')?.textContent ?? '';
             expect(word, door.getAttribute('data-command')!).not.toBe('');
@@ -192,7 +193,8 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
         const doorish = 'button, a, [role="link"], [data-command]';
         const chrome = heads.flatMap((h) => [...(h.matches(doorish) ? [h] : []), ...h.querySelectorAll<HTMLElement>(doorish)])
           .filter((el) => el.closest('.account-gauge') === null);
-        const titles = PLACES.map((p) => ROUTES.find((r) => r.id === p.id)!.title);
+        // A place is named by its `short` word where it has one, as the bar names it (review 1723 N2): "Waiting", not "Waiting on you".
+        const titles = PLACES.map((p) => p.short ?? ROUTES.find((r) => r.id === p.id)!.title);
         const places = new Set(PLACES.map((p) => p.id));
         for (const el of chrome) {
           const name = el.getAttribute('aria-label') ?? el.textContent ?? '';

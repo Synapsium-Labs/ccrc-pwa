@@ -192,9 +192,13 @@ describe('a zero count joined or spaced carries no label (review 1601 F1, F2; de
     ['tests passed: 0 out of 12'],
     ['tests passed: 0%'],
     ['tests passed: 0 of twelve'],
-    // A plural number word is a count too (Task C16 fix round 1, review 1722 F5): A4's word end must not cut it.
+    // The plurals `tens`, `hundreds` and `thousands` are counts too (Task C16 fix round 1, review 1722 F5; Task C18,
+    // review 1723 F2): A4's word end must not cut them. Other plurals ("0 of dozens", "0 of millions") are not number
+    // words here, and keep a label as they did on main.
     ['tests failed: 0 of hundreds of cases'],
     ['CI passed: 0 of thousands'],
+    ['tests failed: 0 of tens of thousands'],
+    ['CI failed: 0 of tens of cases'],
     ['tests passed: 0 (of 12)'],
     ['tests passed: 0 (out of 12)'],
     ['tests failed: 0 — all good'],
@@ -217,6 +221,10 @@ describe('a zero count joined or spaced carries no label (review 1601 F1, F2; de
     // A number word ends at a word end (Task C16, review 1689 A4): "ten" is not the start of "tenants".
     ['tests passed: 0 of tenants', { text: 'passed', tone: 'ok' }],
     ['tests failed: none of tenants', { text: 'failed', tone: 'fail' }],
+    ['tests failed: 0 of tensions', { text: 'failed', tone: 'fail' }],
+    // A combining mark continues a word, as in NEGATION_TOKEN (Task C18, review 1723 N6): "hundreds" and U+0301 is not
+    // the number word.
+    ['tests failed: 0 of hundreds\u0301', { text: 'failed', tone: 'fail' }],
   ])('%s keeps its label', (text, status) => {
     expect(statusesOf(text)).toEqual([status]);
   });
