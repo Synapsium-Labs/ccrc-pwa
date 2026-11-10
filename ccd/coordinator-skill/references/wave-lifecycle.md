@@ -21,14 +21,14 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 
 | refused | what it means | what you do |
 |---|---|---|
-| `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
-| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project. Or it names an EXISTING session of the run's project and you sit outside that project; `by` names YOUR project and a `detail` says a crossing spawns fresh. Or your own registry row records no project; a `detail` says so and there is no `by`. Where you sit never refuses an open by itself; it only stops you rebinding an existing session: a coordinator may sit in ANY project and run a programme whose home and runs are elsewhere (the operator's ruling of 2026-10-18) | do not retry with the same id. A wave that changes project, or any wave into a project you do not sit in, opens WITHOUT `sessionId` and spawns fresh in the target repo. The no-project case: stop and report. Nothing was opened and nothing was held |
-| `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
-| `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
+| `claimed-by-another` | another coordinator holds this program; `by` names it | park the thread (clause 8, class O4) and do not retry: the refusal does not lapse. Try the id-preserving revive of `references/resume.md` §3 first, which is the operator's act, so the item you raise names it; if the id is lost, the handover is the operator's, through the console's Resume door (`references/resume.md` §6). Work every thread that does not need this programme's next run |
+| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project. Or it names an EXISTING session of the run's project and you sit outside that project; `by` names YOUR project and a `detail` says a crossing spawns fresh. Or your own registry row records no project; a `detail` says so and there is no `by`. Where you sit never refuses an open by itself; it only stops you rebinding an existing session: a coordinator may sit in ANY project and run a programme whose home and runs are elsewhere (the operator's ruling of 2026-10-18) | do not retry with the same id. A wave that changes project, or any wave into a project you do not sit in, opens WITHOUT `sessionId` and spawns fresh in the target repo. The no-project case is the same: the missing project only stops you rebinding an existing session, so open the wave without `sessionId` and record the registry fault as a routine call with `ccrc-api calls record`. Nothing was opened and nothing was held |
+| `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | read the stored programme's goals (`ccrc-api goals show <slug>`) and compare its pinned spec path with this coordinator's own. A match: resend with the stored home (`by`), because a programme has one home — the repo holding its ledger, spec and plan — and it does not move. No match, or no pin: the slug names another programme, so open under a new slug. Nothing was opened |
+| `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | a guard, not a stall: this session is not acting as a coordinator. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. Do not retry and open no run from here; this session is a worker until its own run is closed. Nothing was opened and nothing was held |
 | `workspace-spent` | the `sessionId` you passed is a CHILD workspace — one carrying the `$REG/<id>.child` marker, ordinarily minted for a run — whose branch has already had a PR (open, draft, merged or closed); `pr` names it. A child carries at most one PR | open the wave again WITHOUT `sessionId`; its dispatch mints a fresh child (§5, "One PR per child"). Nothing was opened and nothing was held |
-| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, stop and report. When the repeated `detail` shows the child's branch or tip does not resolve (a hand rename), the next run opens on a fresh child rather than retrying this one. Nothing was opened and nothing was held |
+| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, back off as class P3 does (`references/decision-procedure.md`: 1, 2, 4, 8, 15 and 30 minutes, each retry a `block` call with a time wake), still keeping `sessionId`. When the repeated `detail` shows the child's branch or tip does not resolve (a hand rename), the next run opens on a fresh child rather than retrying this one. Nothing was opened and nothing was held |
 | `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
-| `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
+| `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | a defect in your own input, so correct the input and resend: a wave, denominator and run id must each be a positive safe integer. Nothing was opened. A fresh refusal rolls both inserts back; no `ws-hold` runs |
 | `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
 
 **Why `project-mismatch` exists.** A session's workspace is a git worktree in
@@ -103,18 +103,18 @@ with the run now `dispatched`, or a refusal:
 
 | refused | what it means | what you do |
 |---|---|---|
-| `paused` | `$REG/coordinator-paused` exists | stop, report, touch nothing |
-| `mail-disabled` | `$REG/mail-disabled` exists | stop, report, touch nothing |
+| `paused` | the dispatch's pause check refused, for one of two causes: `$REG/coordinator-paused` exists (the operator's pause), or the registry could not be listed (a fault) | read the cause: whether `$REG/coordinator-paused` exists is a read you may make. **Present:** the operator's pause, kept for dispatch (class O1): no dispatch, no in-place bind and no self-work on new waves, while non-dispatch work continues — landing already-reviewed PRs, reviews and docs. **Absent:** the registry was unlistable, a fault (class P3): back off with a time wake, then dispatch again. Never touch the file |
+| `mail-disabled` | `$REG/mail-disabled` exists | the operator's kill switch (class O1): touch nothing, park the threads that need mail and work the rest |
 | `cap-concurrency` | `maxConcurrentWorkers` is full | stop, name the cap, wait |
-| `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
+| `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | park the thread, and never retry blindly: a retry can bind a second workspace. The dead-dispatch pass binds the returned child when exactly one `.child` marker names the run, or abandons the dead dispatch, and mails you either way. On that mail re-read `runs list`: a bound run goes on; an abandoned one is opened again and dispatched with an explicit `slug`, since a named spawn binds only `<project>-<slug>` |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn — at the gate, or at the act: the server reads the live file again just before the `/clear`, and a refusal there can leave this run's own hold and route arming in place, which the next dispatch rewrites (D-5238) | wait and retry; do not force it |
-| `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
-| `status-unmeasurable` | wave ≥ 2's session's LIVE file (or its pane) could not be read before the `/clear`, so whether it is mid-turn was never measured — the hookstate can say `done` while the pane works, so the server also reads the live file (D-5238) | the same rule as `hookstate-unmeasurable`: retry once (the run is untouched, still `planned`, the workspace only resumed — read again just before the `/clear`, it can also refuse at the act, after this run's own hold and route arming were placed, both of which the next dispatch rewrites); if it repeats, stop and report |
+| `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, back off three times over about 15 minutes (class P3), then close the run as failed and open the wave fresh without `sessionId`; if that repeats too it is a block of class P4 (record it with `wakeOn: update`), because a file on the fleet host needs a human and this refusal will stand until it is readable |
+| `status-unmeasurable` | wave ≥ 2's session's LIVE file (or its pane) could not be read before the `/clear`, so whether it is mid-turn was never measured — the hookstate can say `done` while the pane works, so the server also reads the live file (D-5238) | the same rule as `hookstate-unmeasurable`: retry once (the run is untouched, still `planned`, the workspace only resumed — read again just before the `/clear`, it can also refuse at the act, after this run's own hold and route arming were placed, both of which the next dispatch rewrites); if it repeats, back off three times over about 15 minutes, then close the run as failed and open fresh without `sessionId`, then P4, exactly as that row says |
 | `worker-starting` | the pane THIS dispatch's `ensure` started had not come up within the server's bounded wait | send the dispatch again: nothing was held, cleared or sent and the run is untouched. This is the only way a spawn slower than the wait completes |
-| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
-| `workspace-spent` | wave ≥ 2's session is a CHILD whose branch has had a PR since this run was opened — usually the previous wave's worker opened it after you opened this wave on its workspace; `pr` names it. The body also carries `unbound`, and `detail` whenever `unbound` is `false` | `unbound:true`: the server has already released the workspace (or handed its claim to the other run still open on it), cleared this run's `sessionId` and left the run `planned` — dispatch it again, unchanged, and a fresh child is minted, branching from the project's default branch and carrying none of the spent producer's unmerged commits; if this wave depends on that producer's code, wait until its PR is proven merged, exactly as §5's "One PR per child" requires, before dispatching again. `unbound:false`: that release (or hand-over) did not happen, or it happened but the run was no longer `planned` and bound by the time it completed — `detail` says which; a `detail` naming a PERMANENT cause — this box's ccd "does not support" the verb, the surviving run's claim "cannot be written", or the other runs naming the workspace "could not be read" — means stop and report, and any other `detail` (including "`<verb> failed`") means retry the same dispatch once, and if it repeats, stop and report. Either way nothing was resumed and no `/clear` was sent |
-| `spent-unmeasured` | wave ≥ 2's session may be a spent child and the evidence could not be read; `detail` says which read failed. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY session, marked or not — where a resume used to answer `error: 'registry-unmeasurable'` — because without the listing the server cannot tell a child from any other workspace; but dispatch lists the registry for its own pause check FIRST, so a registry that is ALREADY unlistable there answers `paused` instead (the table's first row) and never reaches here — this code's unlistable case is a listing that fails only at the resume arm's own re-read, after that pause check's listing already succeeded. `unbound` is always `false` | retry the same dispatch: the binding is kept, nothing was resumed and no `/clear` was sent. It is not `workspace-spent`. If it repeats, stop and report |
-| `intent-held` | another programme's run in this project holds a landing intent this dispatch names, and is not `done` or `failed`; `key` names the intent and `holder` the run and its programme | stop. Nothing was spawned by this attempt and the run is still `planned`, except that on the `worker-starting` re-run the first pass may already have started or woken the bound worker's pane; no hold or row is written. Mail that run's coordinator, naming the key, through its `runId`, and report it in your turn. Dispatch again without the key only once that coordinator or the operator says the two waves are not the same change. Never retry it unchanged |
+| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (park the thread; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The abandon door is closed to sessions, so raise an end request for the wedged run (the runs rebuild's end-request door, D-8115; a non-blocking `do` item until that door ships), park the thread and work the rest. When the run reads abandoned, open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
+| `workspace-spent` | wave ≥ 2's session is a CHILD whose branch has had a PR since this run was opened — usually the previous wave's worker opened it after you opened this wave on its workspace; `pr` names it. The body also carries `unbound`, and `detail` whenever `unbound` is `false` | `unbound:true`: the server has already released the workspace (or handed its claim to the other run still open on it), cleared this run's `sessionId` and left the run `planned` — dispatch it again, unchanged, and a fresh child is minted, branching from the project's default branch and carrying none of the spent producer's unmerged commits; if this wave depends on that producer's code, wait until its PR is proven merged, exactly as §5's "One PR per child" requires, before dispatching again. `unbound:false`: that release (or hand-over) did not happen, or it happened but the run was no longer `planned` and bound by the time it completed — `detail` says which; a `detail` naming a PERMANENT cause — this box's ccd "does not support" the verb, the surviving run's claim "cannot be written", or the other runs naming the workspace "could not be read" — is a block of class P4 (record it with `wakeOn: update`), and any other `detail` (including "`<verb> failed`") means retry the same dispatch with backoff (class P3), then P4 if it repeats. Either way nothing was resumed and no `/clear` was sent |
+| `spent-unmeasured` | wave ≥ 2's session may be a spent child and the evidence could not be read; `detail` says which read failed. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY session, marked or not — where a resume used to answer `error: 'registry-unmeasurable'` — because without the listing the server cannot tell a child from any other workspace; but dispatch lists the registry for its own pause check FIRST, so a registry that is ALREADY unlistable there answers `paused` instead (the table's first row) and never reaches here — this code's unlistable case is a listing that fails only at the resume arm's own re-read, after that pause check's listing already succeeded. `unbound` is always `false` | retry the same dispatch: the binding is kept, nothing was resumed and no `/clear` was sent. It is not `workspace-spent`. If it repeats, back off as class P3 does, keeping the binding |
+| `intent-held` | settle it with the holder: mail that run's coordinator, naming the key, through its `runId`. The holder's word decides, and silence parks the thread while the rest continues. Dispatch again without the key only once that coordinator says the two waves are not the same change; only a disagreement between the two of you about cross-programme scope is the operator's (O3). Nothing was spawned by this attempt and the run is still `planned`, except that on the `worker-starting` re-run the first pass may already have started or woken the bound worker's pane; no hold or row is written. Never retry it unchanged |
 
 A dispatch may carry `intents`, an array of at most 8 keys, each the issue or
 PR number its wave answers (`#<n>`) or a deviation number (`D-<n>`). Name one
@@ -166,23 +166,30 @@ arrives within the wave's ordinary window, read the session's own screen before 
 
 - `spawnState: 'expired'` — the settle ran out. Large resumes legitimately settle unconfirmed; the
   session is very often fine. Give it the ordinary window before acting.
-- `spawnState: 'login'` or `'blocked'` — the account behind that lane needs a human. Waiting longer
-  cannot fix it. Say so to the operator; do not re-dispatch onto the same lane.
+- `spawnState: 'login'` or `'blocked'` — the account behind that lane needs a human (O4), and waiting
+  longer cannot fix it. Raise an item for the account. The wave itself goes on: close the dispatched run
+  as failed (allowed for a dispatched run), then open the wave fresh without `sessionId`. Placement skips
+  the lane, because ccd's placement filter skips a lane whose newest `spawnState` is `login` or
+  `blocked`.
 - `spawnState: 'vanished'` — the tmux session went away mid-poll. The row will classify itself on
   the next sweep.
 - `spawnState: 'narrow'` — the pane was under 120 columns (`READER_MIN_COLS`) when it spawned, or
   ccd could not read its width, so ccd answered none of its startup prompts, skipped its `/effort`
   and its re-drive of an interrupted turn, and keeps its pane readers stood down while it stays
   narrow. The server's mail lane is not width-aware: it still types into this pane, and cannot see
-  an armed auto-continue whose line has wrapped. Waiting does not fix it. Ask the operator to widen
-  it (opening and closing its terminal drawer re-pins it) and to check its screen for an unanswered
-  startup prompt before you re-dispatch. A current ccd pins every spawn 220x50, so the usual cause is
+  an armed auto-continue whose line has wrapped. Waiting does not fix it. Give it the ordinary window first, then close the run as failed and open
+  fresh, as for `login` above. A `do` item asking the operator to widen it (opening and closing its terminal
+  drawer re-pins it) and to check its screen for an unanswered startup prompt is raised only if it
+  repeats, and never as blocking. A current ccd pins every spawn 220x50, so the usual cause is
   a terminal attached to that session itself (a marker from an older ccd may mean one on any session).
-- `skillState: 'absent'` — the worker will read your brief without its standing protocol, because
-  the skill installer has not run on that account's home. The dispatch still happened and the brief
-  still works, degraded: it carries the branch-discipline sentence in its own text for exactly this
-  case. **Report it to the operator before you treat the wave as briefed** — running the installer
-  is a human act, and every later wave on that home has the same gap until it happens.
+- `skillState: 'absent'` — the worker reads your brief without its standing protocol, because the
+  skill installer had not run on that account's home. The dispatch still happened and the brief still
+  works: it carries the branch-discipline sentence in its own text for exactly this case, so the wave is
+  briefed and you go on. The agent runs the skill installer on that home itself (the operator's ruling of
+  2026-11-09, D-8126), and the dispatch answer reports what it did as `skillInstall`: `installed`,
+  `converged` (the home already matched) or `failed`; it is `null` where nothing was absent, nothing was
+  run, or this box's ccd lacks the verb. On `failed`, raise one non-blocking `do` item naming the home.
+  Either way the coordinator goes on, and the next wave on that home measures `skillState` afresh.
 - `skillState: 'unmeasurable'` — say so as an unknown, not as a problem. Nothing was measured, so
   do not go hunting for a missing install and do not re-dispatch: the wave is briefed either way.
 
@@ -206,7 +213,7 @@ already in use — or one whose id outruns ccd's length cap with a long project
 name — fails the spawn with a 502 whose `stderr` carries ccd's own words: choose
 another name, never retry the same one. **Check the answer's `sessionId` equals
 `<project>-<slug>`**; an older server ignores the field and mints a random name, and
-that mismatch is a stop-and-report, not a retry.
+that mismatch is a block of class P4 (record it with `wakeOn: update`), not a retry.
 
 **`items` — the wave's declared ledger.** `"items"` is the machine-readable
 half of the wave plan whose other half is the brief: one title per unit of
@@ -311,11 +318,11 @@ of them is how a workspace gets orphaned:
 | shape | meaning | what you do |
 |---|---|---|
 | `error:'oversize'` (413) | the mail this dispatch would queue — the worker kickoff prefix **plus** your brief, composed — exceeds the mail body byte cap (`MAIL_BODY_MAX_BYTES`). Checked EARLY, before the pause/kill-switch check, before caps, before anything is spawned or held (`dispatch.ts`'s own `MAIL_BODY_MAX_BYTES` check). Not a mail-routes-only code: this is the SAME field/status `POST /api/mail`'s own oversize body/subject/artifacts refusals use (SKILL.md), but this occurrence is dispatch's own | trim the brief and resend — the run is untouched, still `planned`, and nothing on the fleet was spawned |
-| `error:'hold-oversize'` (413) | the persisted run's complete session-card hold exceeds the hook's 127-character display window. Rechecked here for reconstructed or newer-database rows that bypassed current open-time validation | shorten the programme slug through an operator correction before retrying. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
-| `error:'hold-invalid'` (400) | the persisted run's programme or numeric fields cannot satisfy the hook's positive-decimal hold grammar | stop and report the stored defect. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
-| `error:'registry-unmeasurable'` (502) | the fleet's registry directory could not be listed — and this can land AFTER `ccd ws-add` already ran, before the run row records the new workspace | **stop and report; the operator resolves it** — exactly like `ambiguous-dispatch`, never a blind retry. A retry's `before` snapshot now includes the orphaned workspace, so the retry binds a SECOND one and strands the first, unheld and unrecorded, on the fleet |
-| `error:'unsupported'` (501) | this ccd build does not support a verb this route needs | stop and report — an operator/fleet-host issue, not a retryable one |
-| a bare `{"ok":false,"stderr":"<text>"}`, no `refused`/`error`/`reject.code` field at all (502) | the underlying `ccd` call itself failed for one of its ordinary reasons — `ws-add` (wave 1's fresh spawn), `ensure` (wave ≥2's resume), or `ws-hold` (either wave, the claim itself) | stop and report — the SAME as the rows above, even though none of the three fields SKILL.md's own check reads is populated. `state` always stays `planned` (this shape never advances it) — but that is NOT "nothing happened yet": `sessionId` may already be WRITTEN onto the row (a wave-1 `ws-add` success writes it before `ws-hold` can go on to fail; wave ≥2 always starts with it already there, from an earlier open or dispatch), and a workspace may already exist on the fleet, freshly spawned and unheld. Confirm no partially-spawned or partially-held workspace was left behind by an earlier attempt before ANY retry — the fleet is where that evidence lives, not the run row's own `state` |
+| `error:'hold-oversize'` (413) | the persisted run's complete session-card hold exceeds the hook's 127-character display window. Rechecked here for reconstructed or newer-database rows that bypassed current open-time validation | the row never passed the open door and you cannot correct it, and an open of the same wave would return the same run. Raise an end request for the run (the runs rebuild's end-request door, D-8115; a non-blocking `do` item until that door ships), park the thread and work the rest. When the run reads abandoned, open the wave again: the open door's slug cap keeps the new row within limits. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
+| `error:'hold-invalid'` (400) | the persisted run's programme or numeric fields cannot satisfy the hook's positive-decimal hold grammar | the same as `hold-oversize` above: the stored row cannot be corrected from here, so raise an end request for the run, park the thread and work the rest, and open the wave again when the run reads abandoned. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
+| `error:'registry-unmeasurable'` (502) | the fleet's registry directory could not be listed — and this can land AFTER `ccd ws-add` already ran, before the run row records the new workspace | park the thread, and never retry blindly. A retry's `before` snapshot now includes the orphaned workspace, so the retry binds a SECOND one and strands the first, unheld and unrecorded, on the fleet. The dead-dispatch pass binds the returned child when exactly one `.child` marker names the run, or abandons the dead dispatch, and mails you either way; on that mail re-read `runs list`: a bound run goes on, an abandoned one is opened again |
+| `error:'unsupported'` (501) | this ccd build does not support a verb this route needs | a tool or box fact, a block of class P4: record it with `wakeOn: update` and work every thread that does not need the verb |
+| a bare `{"ok":false,"stderr":"<text>"}`, no `refused`/`error`/`reject.code` field at all (502) | the underlying `ccd` call itself failed for one of its ordinary reasons — `ws-add` (wave 1's fresh spawn), `ensure` (wave ≥2's resume), or `ws-hold` (either wave, the claim itself) | read the `stderr`. A slug already in use: choose another name. An `ensure` or `ws-hold` failure: retry with backoff, three times, then it is a block of class P4. `state` always stays `planned` (this shape never advances it) — but that is NOT "nothing happened yet": `sessionId` may already be WRITTEN onto the row (a wave-1 `ws-add` success writes it before `ws-hold` can go on to fail; wave ≥2 always starts with it already there, from an earlier open or dispatch), and a workspace may already exist on the fleet, freshly spawned and unheld. Confirm no partially-spawned or partially-held workspace was left behind by an earlier attempt before ANY retry — the fleet is where that evidence lives, not the run row's own `state` |
 
 **A brief can be refused `oversize` without itself exceeding the cap.** What
 dispatch measures is the COMPOSED mail — the worker kickoff prefix (the
@@ -640,7 +647,7 @@ same, and shows as `absent`.
 |---|---|
 | `stale-tip` | the branch moved after the claim was written |
 | `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way). On a REVIEW run's close it can also mean the reviewed run itself cannot be measured (it names no run, is gone, or has no session); the answer there is `{"state":"failed"}` on the review run, not a re-submit. |
-| `branch-unmeasurable` | the workspace's branch could not be resolved: the live registry has a row for this session and the row's own branch field is null — either listed with bytes that did not come back (transient) or absent (not). Not evidence either way; the run is unchanged. Re-submit once the registry reads clean. If it keeps answering this, the session's registry row needs a human — the run row's frozen branch column is deliberately not used as a guess |
+| `branch-unmeasurable` | the workspace's branch could not be resolved: the live registry has a row for this session and the row's own branch field is null — either listed with bytes that did not come back (transient) or absent (not). Not evidence either way; the run is unchanged. Re-submit once the registry reads clean, backing off as class P3 does. If it keeps answering this it is a block of class P4: the session's registry row needs a human, so record the block with `wakeOn: update` — the run row's frozen branch column is deliberately not used as a guess |
 | `pr-regressed` | the PR is not in the phase the claim asserted |
 | `pr-unmeasurable` | the PR state could not be re-read (not evidence either way) — but see below: this is ALSO what a malformed submission of your own gets, before any I/O runs |
 | `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays the review run's job, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
@@ -648,8 +655,8 @@ same, and shows as `absent`.
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
 | `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
-| `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review. Decide first whether another round is truly needed (Extending a reached review cap, below): if so, extend the cap with `"$API" runs review-rounds`, and a further open then succeeds; if not, rule on the findings you already hold, or wait. |
-| `ejection-not-merging` | on an ADVANCE to `working` whose body carries `ejection`, from a run not at `merging`: an ejection rides only the `merging → working` edge, so a run at `dispatched` or `awaiting-review` answers this code, while the edge gate's `bad-transition` (a run at `working`, among others), a review in flight and, from `awaiting-review`, the dispatch cap answer first, each with its own code. The server recorded nothing: the run and its landing entry are unchanged. Do not retry with the body and send no `fix-round` mail; re-read the run, and a run no longer at `merging` gets no ejection: report it to the operator (SKILL.md step 6). |
+| `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review. Decide it as `references/decision-procedure.md` step 7 does: lift the cap with `ccrc-api runs review-rounds` when the open findings are regressions or gaps in what the PR claims to cover, otherwise apply the cutoff and land with known limits. `coord-lift-off` means the operator switched lifts off: keep the cap and park the thread behind the server's ask. `cap-not-reached` means there is nothing to lift: open the review. A 404 is a block of class P4. |
+| `ejection-not-merging` | on an ADVANCE to `working` whose body carries `ejection`, from a run not at `merging`: an ejection rides only the `merging → working` edge, so a run at `dispatched` or `awaiting-review` answers this code, while the edge gate's `bad-transition` (a run at `working`, among others), a review in flight and, from `awaiting-review`, the dispatch cap answer first, each with its own code. The server recorded nothing: the run and its landing entry are unchanged. Do not retry with the body and send no `fix-round` mail; re-read the run and act on the state it is in. A run no longer at `merging` gets no ejection (SKILL.md step 6). |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 | `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick, at most twice. Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
@@ -772,8 +779,8 @@ Partial success on a ledger write is how tallies drift.
 
 | shape | meaning | what you do |
 |---|---|---|
-| `refused:'unknown-item'` (404), with `itemId` | that id is not THIS run's item (another run's, or none) | **stop and report** — do not retry with a guessed id. Re-read the run's ledger first |
-| `refused:'item-terminal'` (409), with `itemId` and `state` | the item already settled (`done`/`failed`/`abandoned` are terminal) and the write was refused, not silently applied | **stop and report** — a tally that moved backwards is a lie on the console. If the item genuinely needs a different outcome, that is an operator decision, not a retry |
+| `refused:'unknown-item'` (404), with `itemId` | that id is not THIS run's item (another run's, or none) | re-read the run's ledger once with `runs items-list`, never a guessed id. If the id is still unknown, record the call with `ccrc-api calls record` and go on: the tally is display only |
+| `refused:'item-terminal'` (409), with `itemId` and `state` | the item already settled (`done`/`failed`/`abandoned` are terminal) and the write was refused, not silently applied | a no-op to record: the tally cannot move backwards, and a different outcome for a settled item is not a retry |
 | `error:'unknown-run'` (404) | the run id is wrong or the DB was rebuilt | re-read `GET /api/runs` |
 | `error:'bad-request'` (400) | shape: no `items` array, an empty one, a non-integer id, a `state` outside the vocabulary, or past 32 entries | fix the body; nothing was written |
 
@@ -895,8 +902,9 @@ the worker's fingerprint exactly as the worker reports it.
    either way. The `--required` exit decides, and a `ROUTE Q` answer does not waive it.
    On `0`, go on under this gate and the read-back below. On `8` (pending), if
    this landing attempt's bounded wait is already spent (§5b, **After a bounded
-   wait**), do not start the wait: report the exit to the operator and leave the
-   landing stopped; otherwise wait for them in the foreground —
+   wait**), do not start the wait: record a `block` call with a time wake on the
+   backoff schedule (class P3), park this run at `merging` and work the rest,
+   and on the wake run the verdict again as a new landing attempt; otherwise wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
    never by ending your turn: no mail comes when checks finish; then run the
    verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer
@@ -905,8 +913,9 @@ the worker's fingerprint exactly as the worker reports it.
    rule of §5b, which limits a rerun to the kind it names and never reruns
    unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any
    other line goes by its bullet in §5b. On any other exit the stop is
-   `checks-gate-unread` too. Stop `checks-gate-unread` means: report the exit
-   and the whole output, and never enqueue, arm, retry or choose another route
+   `checks-gate-unread` too. Stop `checks-gate-unread` is transient (class P3): say
+   the exit and the whole output in your turn's text, back off with a `block`
+   call and a time wake, and never enqueue, arm, retry or choose another route
    by hand. gh's "no required checks reported" and "no checks reported" are an
    exit `1`: with a `ROUTE Q` answer they are this stop, which is deliberately
    conservative on a queue repository, not support promised by an empty
@@ -958,18 +967,19 @@ the worker's fingerprint exactly as the worker reports it.
    then the checks, then the read-back — or send the owning worker a fix round
    on the `merging → working` edge in one of the two report-less forms of
    SKILL.md step 6's send-back (its fresh wave-done gets a fresh review run,
-   and a fresh `merging`). A dequeue that neither a re-enqueue nor one of
-   those two forms answers, a requested change or a cause you could not read
-   among them, is a stop for the operator and no report-less round (SKILL.md
-   step 6). Closing before the landing would hand a PR still
+   and a fresh `merging`). A dequeue that neither a re-enqueue nor one of those two forms answers is no report-less round
+   (SKILL.md step 6): a cause you could not read is read again with backoff (class P3) and the PR is then
+   enqueued once more, and a requested change is addressed by default as a fix round, only ignoring it
+   being the operator's (O6). Closing before the landing would hand a PR still
    in the queue to a reclaim: nothing could then tell you of its dequeue, and
    no worker would be left to fix it. A coordinator whose own workspace
    carries a programme-wave hold or the child marker — a self-claimed run's,
    or a reclaim heir that was the programme's own worker — is refused its
    enqueue by the session hook, like any worker. Do not close to shed the
-   hold (a final close of a child reclaims your own pane): ask the operator
-   to enqueue, or disarm, with the same spellings from their own shell, and
-   wait at `merging` as above.
+   hold (a final close of a child reclaims your own pane): never
+   work round the deny (class P4): raise one non-blocking `do` item naming the PR and the exact command to
+   enqueue, or disarm, with the same spellings from the operator's own shell, park that run at `merging` as
+   above, and work every other thread.
 
    **Same project:** open wave N+1 first with this producer's `sessionId`, then
    close the producer with `final:false`; the hold transfers to the already-open
@@ -1341,14 +1351,16 @@ decides what this session does, and nothing else does:
   does not, the stop stands: `trainUnproven`, no row or another head is reported
   as that stop at once, while `trainUnread` means ccd could not read the train
   record (no time left in its budget, a timeout, GitHub unreachable), so read
-  the row once more and report the stop if it still reads `trainUnread`.
+  the row once more and, if it still reads `trainUnread`, back off (class P3) and read it again on the wake.
 - `WAIT pending: <names>` — a reported required check is still running. Wait
   in the foreground, `gh pr checks <pr> --required --watch`, again if the call
   times out while a reported required check is still pending, then run the
   verdict again — never by ending your turn: no mail comes when checks finish.
   Once this landing attempt's bounded wait is spent, which a `BOUND_S=300` run
   that ends on this very line spends too (**After a bounded wait**, below), do
-  not wait: report the line to the operator and leave the landing stopped.
+  not wait: record a `block` call with a time wake on the backoff schedule (class P3), park the run at
+  `merging`, and on the wake run the verdict again as a new landing attempt. After 4 hours, raise the
+  non-blocking `do` item of class P3.
 - `WAIT not-reported: <names>` — a required name nothing has reported on the
   head yet, whatever `gh pr checks <pr> --required` exits: it judges only the
   checks that have reported, and its `--watch` returns at once when every
@@ -1368,7 +1380,7 @@ decides what this session does, and nothing else does:
   A name it still reads as not reported is the stop `not-reported`. A `ROUTE`
   it prints is not yet landing permission: see **After a bounded wait**, below.
   Once this landing attempt's bounded wait is spent, none of this is started
-  again: report the line to the operator and leave the landing stopped.
+  again: park the run as the `WAIT pending` bullet says, with a `block` call and a time wake.
 - `RED <names>` — a required check is red on the head, each name with its
   kind. If it is the PR's own, that is the existing fix-round rule (step 3:
   on route Q disarm first, then a fix round to the owning worker on the
@@ -1380,7 +1392,7 @@ decides what this session does, and nothing else does:
   rerun, is the stop `red-unreachable`. Once this landing attempt's bounded wait
   is spent (**After a bounded wait**, below), that one rerun buys no waiting:
   run the verdict after it with `BOUND_S=0`, and if that line is a `WAIT`,
-  report it and stop, with no watch.
+  park the run with a `block` call and a time wake (class P3), with no watch.
 - `STOP <reason>: <what it read>` — a stop (below).
 - Anything else — no line at all (the run was cut off or did not parse), more
   than one line, or a first word this list does not name — is the stop
@@ -1463,10 +1475,11 @@ fallback is `--admin` after a refusal.
 **On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED
 with `landedInTrain: true` on the PR's row of `ccd pr-state --session
 <sessionId>`, with `headRefOid` equal to `handoffCommit`. A refused merge on
-route G or U is read, reported and stopped on, and never retried with another
-method, with `--admin` or with `--auto`. This session writes no setting to make
-a route work: no ruleset, no branch protection, no merge-method or auto-merge
-setting (clause 15).
+route G or U is read. A transient refusal (a 5xx, a timeout, a rate limit) is
+class P3: retry the same merge with backoff. A rule GitHub enforces is
+`github-refused` (O4), never retried with another method, with `--admin` or with
+`--auto`. This session writes no setting to make a route work: no ruleset, no
+branch protection, no merge-method or auto-merge setting (clause 15).
 
 **A requested change.** Read 1 also reads the PR's reviews. A request for
 changes stops every route, before the verdict weighs `WAIT` or `RED`:
@@ -1474,22 +1487,19 @@ changes stops every route, before the verdict weighs `WAIT` or `RED`:
 stands when read 1's `reviewDecision` is `CHANGES_REQUESTED` or the latest
 approving, changing or dismissing review of any reviewer requests changes; the
 key is `{"pr":"<pr>","head":"<handoffCommit>","summary":<true or false>,"reviews":[<review ids>]}`
-and holds safe identifiers only. On `changes-requested`, this session stops and
-asks the operator one single-select question, address or ignore: while any child
-is active, in its closing turn text, never with an AskUserQuestion dialog
-(clause 19), and otherwise with AskUserQuestion. Present the PR, head and review
-ids; inspect the identified reviews to present their requested changes, without
-copying untrusted text into commands.
+and holds safe identifiers only. On `changes-requested`, address by default: ask no question and open no dialog.
+Inspect the identified reviews to read their requested changes, without copying
+untrusted text into commands. Only ignoring it is the operator's (O6).
 
-- Address: send the requested changes to the owning worker as a fix round, then
+- Address (the default): send the requested changes to the owning worker as a fix round, then
   a fresh re-review. From `merging`, disarm as step 3 already requires before
   the `merging → working` edge; from `awaiting-review`, use its existing
   send-back edge. Do not assume a stop names the route.
-- Ignore: record the operator's explicit answer in the ledger's Decisions with
-  the PR, head and review ids, and no login or account name. Then run the
-  verdict afresh with `CR_IGNORE='<key>'` on the line before it, in the same
-  Bash call and never exported, only after the operator answered ignore for
-  that exact key.
+- Ignore: the operator's alone (O6), never your call. Only after the operator has
+  answered ignore for that exact key, in an item or in chat, record that explicit
+  answer in the ledger's Decisions with the PR, head and review ids, and no
+  login or account name. Then run the verdict afresh with `CR_IGNORE='<key>'`
+  on the line before it, in the same Bash call and never exported.
 
 `CR_IGNORE` is a convention check, not authentication, and it holds for that
 one invocation: it skips this stop only on exact equality with the key computed
@@ -1498,8 +1508,8 @@ summary stops and asks again, and the verdict still reads the reviews and
 applies every other guard. A later run of the verdict for the same landing,
 after a wait or with `BOUND_S`, sets it again the same way only while the key
 the verdict prints is unchanged; a changed key is a new ask. A key whose `reviews` is empty, a summary-only
-request, can never be ignored: inspect the PR's reviews, read the verdict again
-and report to the operator. Only a fresh `ROUTE` result permits the normal
+request, can never be ignored, so it is addressed from what the PR's reviews say, and the verdict is read
+again. Only a fresh `ROUTE` result permits the normal
 landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested`
 line. Ignore cannot evade a missing required approval: on a direct route the
 verdict stops `approval-missing` (**No `--admin`**, above), and a refusal it
@@ -1512,8 +1522,8 @@ after each wait, as a complete verdict (**After a bounded wait**, above). It
 cannot atomically prevent a request submitted after that last read or while an
 already-enqueued PR merges, and nothing here claims review enforcement at queue
 time. If it observes a request on a queued PR, it stops that landing attempt,
-disarms it as step 3 does if it is only armed, asks the operator to dequeue it
-if it is in the queue, asks address or ignore, and never enqueues again
+disarms it as step 3 does if it is only armed, raises one non-blocking `do` item to dequeue it
+if it is in the queue, addresses the request by default, and never enqueues again
 silently. Watching a queued PR continuously is a server follow-up, not this
 skill's.
 
@@ -1527,9 +1537,10 @@ once the verdict, and on route Q the checks gate, have answered, read the line:
 this run reads `pinned` with a `pinnedSha` equal to the head you bind. A paused
 line, an entry in another state, a `pinnedSha` that differs from that head or a
 read that fails in any other way than a 404 (a timeout, a 401, a 5xx, a
-transport error or an answer you cannot parse) lands nothing: report what it
-read to the operator and leave the landing stopped, and never bind another head
-to match it. A PR with no entry, which a run that entered `merging` before the
+transport error or an answer you cannot parse) lands nothing, and each has its own disposition. A paused line is the operator's: park the run at `merging`
+and work the rest. A read that fails is class P3: back off with a `block` call and a time wake. An entry in
+another state, or a `pinnedSha` that differs, is re-measured: read the head and the line again, and where the
+server's own pin is stale re-pin it through the normal advance (§5). Never bind another head to match it. A PR with no entry, which a run that entered `merging` before the
 line existed leaves, lands as the verdict says, and your turn's text names the
 missing entry. A read answered 404 comes from a server older than the line: read
 it as no entry, and land the same way. The order it answers is read and not yet
@@ -1561,32 +1572,50 @@ place of route Q: a repository with a merge queue lands through it.
 **A stop.** A stop enqueues nothing and merges nothing. It leaves the run where
 it is (at `merging` or `awaiting-review`) and changes nothing, with one
 exception, the new-head route below. Say in your turn's text which stop fired
-and what it read, for the operator: every stop goes to the operator, and only
-that exception goes on to the new-head route as well. The verdict stops with one
-of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
-`unknown-rule-type`, `method-set-empty`, `rebase-only`,
-`queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
-`unverifiable`, `not-reported`, `changes-requested`, `approval-missing`. A
-`changes-requested` stop is read before `WAIT` and `RED` on every route and is
-the operator's to decide, as **A requested change** above says. An
-`approval-missing` stop goes to the admin-merge door first, once (**The
-admin-merge door (D-8124)**, above): a `MERGED` line leaves no stop, and a
-`REFUSED` one is reported to the operator with the door's line. Four stops no
-read decides are yours to name: `red-unreachable` (above), `verdict-unread`
-(above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub
-refused for a rule it enforces at merge and this session does not verify —
-reviews, signatures, deployments, code scanning, required workflows — which this
-session never works around. Not a stop: a required check red on the head that is
-the PR's own; that goes to the fix-round rule, on route G exactly as on route Q.
-A `red-unreachable` whose red is `main`'s own and already fixed on `main` needs
-a new head, and this session takes the new-head route itself (D-7588). It
-disarms first on route Q, then sends a fix round to the owning worker on the
-`merging → working` edge, in SKILL.md step 6's `ejected: new-head:#<pr>` form,
-which records the base on the advance, for one clean merge of `main` and nothing
-else, then dispatches a review run whose brief names that merge commit as the
-change under review; the reviewer still reads the whole diff (reviewer clause
-5). Show both facts with reads you can type, after one `git fetch origin`:
-read that one required name on a `main` sha with `gh api --paginate
+and what it read, and then give it its disposition, below; only that exception
+goes on to the new-head route as well. The verdict stops with one of these
+reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`, `unknown-rule-type`,
+`method-set-empty`, `rebase-only`, `queue-method-not-allowed`,
+`two-queue-methods`, `auto-merge-off`, `unverifiable`, `not-reported`,
+`changes-requested`, `approval-missing`. A `changes-requested` stop is read
+before `WAIT` and `RED` on every route and is addressed by default, as **A
+requested change** above says. Four stops no read decides are yours to name:
+`red-unreachable` (above), `verdict-unread` (above), `checks-gate-unread` (step
+3) and `github-refused`, a merge GitHub refused for a rule it enforces at merge
+and this session does not verify — reviews, signatures, deployments, code
+scanning, required workflows — which this session never works around.
+
+The dispositions, by reason:
+
+- **Rule shape** (`unknown-rule-type`, `method-set-empty`, `rebase-only`,
+  `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
+  `read-3b-unknowable`, `unverifiable`): repository settings are the operator's
+  (O4). Raise one non-blocking item, park the run at its stop and work the rest.
+- **Transient** (`unreadable`, `verdict-unread`, `checks-gate-unread`,
+  `not-reported`): class P3, so back off with a `block` call and a time wake and
+  run the verdict again as a new landing attempt.
+- `not-at-head`: re-measure the head and re-bind through the existing paths.
+- `changes-requested`: address by default; only ignoring it is the
+  operator's (O6).
+- `approval-missing`: the admin-merge door first, once (**The admin-merge door
+  (D-8124)**, above): a `MERGED` line leaves no stop, and a `REFUSED` one is
+  reported to the operator with the door's line.
+- `red-unreachable`: the new-head route below where `main` is already fixed
+  (D-7588); otherwise mail the red's owner and park the run.
+- `github-refused`: O4, unless the refused rule is code scanning on the PR's own
+  findings, which is a fix round.
+
+Not a stop: a required check red on the head that is the PR's own; that goes to
+the fix-round rule, on route G exactly as on route Q. A `red-unreachable` whose
+red is `main`'s own and already fixed on `main` needs a new head, and this
+session takes the new-head route itself (D-7588). It disarms first on route Q,
+then sends a fix round to the owning worker on the `merging → working` edge, in
+SKILL.md step 6's `ejected: new-head:#<pr>` form, which records the base on the
+advance, for one clean merge of `main` and nothing else, then dispatches a
+review run whose brief names that merge commit as the change under review; the
+reviewer still reads the whole diff (reviewer clause 5). Show both facts with
+reads you can type, after one `git fetch origin`: read that one required name on
+a `main` sha with `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/check-runs'` and `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/status'`, judged as read 5 judges it: red
 when a completed run of it concluded other than success, neutral or skipped, or
@@ -1609,15 +1638,16 @@ summaries green. Where none of those commits shows that name red, or that name
 does not read passing on `main`'s current tip from a merge-queue run (red,
 pending, not reported, unread, reported only by a status, passing only from
 another run, or a tip with no merge-queue run, as a merge that bypassed the
-queue leaves), the stop stands and goes to the operator as every other stop
-does. Send the new-head round only when, after the same fetch, `git merge-tree
---write-tree --name-only --no-messages origin/main <handoffCommit>` exits 0:
-exit 1 (a conflict) or any other answer leaves the stop standing for the
-operator. The one rerun the RED bullet allows does not clear a red that is
-`main`'s own, and no close and reopen does either: a rerun replays its run's
-original merge commit, which still carries `main`'s red, and a close and reopen
-of the PR can race GitHub's recompute of the merge ref. Where you take the
-route, say so in your turn's text with the reads that showed it.
+queue leaves), the stop stands and takes `red-unreachable`'s other disposition:
+mail the red's owner and park the run. Send the new-head round only when, after
+the same fetch, `git merge-tree --write-tree --name-only --no-messages
+origin/main <handoffCommit>` exits 0: exit 1 (a conflict) or any other answer
+leaves the stop standing, with the same disposition. The one rerun the RED
+bullet allows does not clear a red that is `main`'s own, and no close and reopen
+does either: a rerun replays its run's original merge commit, which still
+carries `main`'s red, and a close and reopen of the PR can race GitHub's
+recompute of the merge ref. Where you take the route, say so in your turn's text
+with the reads that showed it.
 
 **The latest attempt decides** (D-7546, which amends the strict reading of
 D-7495). The verdict judges the latest attempt of each required name, which is
@@ -1861,7 +1891,7 @@ The client sends `asks answer` and `asks release` to the question door family's 
 `POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), with the
 row's kind added for you; the commands below do not change. A box whose server is older than the
 family is refused by the client before anything is sent (`no-questions-door`): nothing was
-answered, so say so to the operator rather than retrying.
+answered, and the refusal is a block of class P4 — record it with `wakeOn: update` rather than retrying.
 
 **A cross-project coordinator receives its children's questions** (the operator's ruling of
 2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
@@ -1944,8 +1974,8 @@ window lapses on its own. A release is FINAL: the row moves to `declined`, a ter
 and an answer you send for it afterwards is refused `declined` (D-5289) — releasing hands the
 question over, it does not defer it. Only a `held` row can be released; a release of a row
 that has already lapsed, or that a principal has taken or answered, is refused `not-held`.
-Decline anything that would be a NEW decision (clause 11's own words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
-guessing at it.
+Release only what clause 21 makes the operator's: an operator-only decision or act (O1 to O6), never a
+design call the goals settle; working an answer out from the goals is reading, not guessing.
 ```bash
 "$API" asks list
 ```
@@ -1964,7 +1994,8 @@ What the ask row does NOT carry is the reason to answer it. `question` and `opti
 entire evidentiary surface — no rationale, no chat history, no transcript of the child's
 reasoning is readable through any route in this tree. Rule only from what you can already read
 elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
-program. If answering would require guessing rather than reading, decline it.
+program. Working an answer out from the goals is reading, not guessing. If answering would
+require guessing rather than reading, decline it.
 
 ## The approval lane — a child's permission prompt (plan Task 16)
 
@@ -1984,7 +2015,8 @@ UTC and the ready-to-run commands. Three routes are yours, each through the clie
 
 The first two are the question door family's claimant pair, the same doors as the ask lane's;
 the client adds the row's kind, and the mailed commands do not change. A box whose server is
-older than the family is refused by the client before anything is sent (`no-questions-door`).
+older than the family is refused by the client before anything is sent (`no-questions-door`), a block of
+class P4: record it with `wakeOn: update`.
 
 A ruling after the window is refused `hook-gone`: the child's hook has returned and the
 operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other

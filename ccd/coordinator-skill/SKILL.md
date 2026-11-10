@@ -232,8 +232,9 @@ NOT typed refusal codes (`shared/api.ts`'s own `RunRefuseCode` docstring says
 so explicitly — "a caller that assumes every non-2xx response here carries a
 `RunRefuseCode` is wrong"). Your documented field-check
 (`$body.refused ?? $body.error ?? $body.reject?.code`) reads `undefined` for
-the bare-502 shape; treat `undefined` the same as any refusal you do not have
-a specific rule for — **stop and report**, never retry blindly. A retry after
+the bare-502 shape; read the `stderr`, and take the bare 502's row in
+`references/wave-lifecycle.md` §2: a slug already in use is a new name, an `ensure` or `ws-hold` failure is
+retried with backoff three times, and then it is a block of class P4. Never retry blindly. A retry after
 `registry-unmeasurable` specifically can ORPHAN a workspace `ccd ws-add`
 already spawned before the refusal landed — see the table in
 `references/wave-lifecycle.md` §2.
@@ -242,7 +243,8 @@ One more untyped shape, and it is not run-route-specific: `error:'not-configured
 (501) is what EVERY coordination route — the mail pair and all four run
 routes alike — answers when this box's server has no coordination database
 wired in at all. It is not a per-call failure to retry; it is a fact about
-the box, the same as `unsupported`: stop and report it to the operator.
+the box, the same as `unsupported`: a block of class P4 (`references/decision-procedure.md`). Record it with
+`wakeOn: update` and work every thread that does not need the coordination routes.
 
 **Landing writes.** `fixesMain` is the coordinator's or the operator's to set
 or clear, never a worker's. For a PR with no run, use
@@ -553,7 +555,8 @@ is refused `project-mismatch` with `by:` your project and a `detail` that says
 so, so wave 3 into the same target as wave 2 opens without `sessionId` too.
 Where you sit never refuses an open; who you are still does (`claimedByUuid`,
 below), and so does a registry row of yours that records no project
-(`project-mismatch` with a `detail` and no `by` — stop and report).
+(`project-mismatch` with a `detail` and no `by`: open the wave without `sessionId`, so it spawns fresh, and
+record the registry fault as a routine call).
 
 **Your children's questions come to you wherever you sit** (the operator's
 ruling of 2026-10-18, D-5530). A child's question — and, once approvals ship,

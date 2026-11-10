@@ -80,8 +80,10 @@ EVERY conflicting path (never just the first), and carries the holder's
 identity (`heldBy`, `heldByUuid`), the holder's stated `intent`, its `runId`, the
 standing `expiresAt`, the holder's `deliverable`, and a pre-addressed
 `mailHint` — the envelope to send, already filled in. When `deliverable` is
-`no:<reason>`, `mailHint` is `null` — escalate to the operator instead:
-never a silent send at a peer measured unreachable.
+`no:<reason>`, `mailHint` is `null` — do not send at a peer measured
+unreachable, and do not escalate to the operator: work the uncontested paths and wait for the claim's
+`expiresAt`, when the lease lapses by itself. Only a claim that never expires is a block of class P4 (record it
+with `wakeOn: update`).
 
 ## Losing a race gracefully
 

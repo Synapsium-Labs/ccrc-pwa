@@ -39,8 +39,9 @@ does not lapse when the named session dies, and no call named in this corpus eve
 a fresh coordinator under a new id cannot take the program over by any move of its own. Handing the
 program to a different session is an operator act, performed from the console, and it sits outside this
 session's reach for the reason clause 4's pause marker does — a wedge's release valve behind the wedged
-session's own key is not a release valve. So the refusal is still a STOP for you: report it, and say
-which run is wedged and which id it names.
+session's own key is not a release valve. So the refusal is class O4: park the thread, and try the id-preserving
+revive of §3 first, which is also the operator's act, so the item you raise names it, and say which run is wedged
+and which id it names. Then work the rest: every thread that does not need this programme's next run goes on.
 
 Everything else keeps working, which is what makes this easy to misread. Mail still routes to the dead
 id, the board still renders the program, and only this one call refuses. The wedge surfaces at the wave
@@ -127,9 +128,10 @@ and leaves a wave nobody advanced. This runbook is about the COORDINATOR's own d
 
 If the original id can no longer be revived, this session is not the one that fixes it: every
 `POST /api/runs` for that program answers `claimed-by-another`, naming a session that may no longer
-exist, and retrying spends turns on a refusal that is working exactly as designed. Stop and report,
-naming the run and the id it claims. That report IS the act — the operator has a console door that
-hands the program to a living session, and the report is how it gets reached.
+exist, and retrying spends turns on a refusal that is working exactly as designed. Park the thread
+(class O4) and work the rest. Raise an item naming the run and the id it claims: the handover is the
+operator's, through the runs rebuild's Resume door and its picker, which reach a programme with no open run
+and hand it to a living session, and the item is how that door gets reached. Nothing new is built for it here.
 
 If the program was ALSO re-opened under a different id, that half is a recovery on the box rather than
 a call: a second run row is a second ledger, and no reassignment merges them.
