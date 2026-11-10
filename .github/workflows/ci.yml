@@ -1365,12 +1365,26 @@ jobs:
     # those times, each shard holds about 1,550 s, about 520 s over three
     # workers (ask-inline alone is 491 s), so a shard expects about nine
     # minutes with its setup, and 20 is twice that.
+    # THREE SHARDS (D-8167). At two, green queue shards took 14 to 19 minutes
+    # (2026-11-09 to 11-10), and a loaded runner was cancelled at the 20-minute
+    # limit while its tests still passed, ejecting its group. The limit stays
+    # 20: the fix is the third shard, never a longer deadline.
+    # The suite had grown to 82 files. Green queue run
+    # 42805910829 (jobs 129794853574 and 129794853772) reported 5,788 s of file
+    # time; its two Test steps took 1,082 s and 982 s (jobs of 18.6 and 16.9
+    # minutes). The largest files: ask-inline 573 s, wheel-chain 355 s,
+    # wheel-chain-chip 248 s, runs-widths 246 s, frame-cost 243 s. Split in
+    # three by those times (`FILE_MS`, refreshed from the same run), each
+    # shard holds about 1,930 s, about 645 s over three workers (a simulation
+    # of the sequencer that put the two-shard run at 1,039 s and 931 s), so a
+    # shard expects about 12 minutes with its setup: 8 minutes under 20, and
+    # no file alone is larger than a shard.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
-        total: [2]
+        shard: [1, 2, 3]
+        total: [3]
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
