@@ -17,7 +17,7 @@ import {
 import { endRequestEndedMail } from '../src/coord/ledgersMail.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
-import { watcherTeardown } from './watcherTeardown.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import type { StuckReason } from '../../shared/api.js';
 
@@ -64,7 +64,6 @@ describe('endRequestDecide', () => {
 });
 
 let app: FastifyInstance | null = null;
-const teardown = watcherTeardown();
 afterEach(async () => {
   vi.restoreAllMocks();
   await app?.close();
@@ -84,7 +83,7 @@ async function rig(): Promise<Rig> {
   const sent: PushPayload[] = [];
   const deps = { ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, coord, push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
   const bus = new Bus();
-  const watcher = teardown.track(new FleetWatcher(deps, bus, 10_000));
+  const watcher = quietAtTestEnd(new FleetWatcher(deps, bus, 10_000));
   app = await buildServer(deps, bus, watcher);
   const open = (wave: number, extra: Record<string, unknown> = {}): number =>
     (coord.openRun({ program: 'prog-a', title: 'Prog A', project: 'project-a', wave, waveOf: 3, claimedBy: 'lane-a', ...extra }) as { id: number }).id;
