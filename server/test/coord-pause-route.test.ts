@@ -293,6 +293,9 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/review-cap',
     // D-7319: the dead-dispatch switch (see the docstring above).
     '/api/coord/dispatch-abandon',
+    // D-8077: the three-state control over the run-close lanes (Advanced). The operator arms a lane that closes runs on its own, so
+    // no machine lane and no session may call it: session-gated, no box token (the dispatch-abandon argument).
+    '/api/coord/run-close',
     // D-7453: Settings › Automation › Roll idle sessions, an operator dial, session-gated like the stall-watch door.
     '/api/coord/roll-idle',
     // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).

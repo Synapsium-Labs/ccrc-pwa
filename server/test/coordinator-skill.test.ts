@@ -846,6 +846,10 @@ describe('the coordinator skill: linkage', () => {
       // D-8112: the adoption switch and its read, the operator's gate (O5-7 (a)) and session-gated: no coordinator's door.
       'GET /api/coord/delegation-adopt',
       'POST /api/coord/delegation-adopt',
+      // D-8077: the operator arms the run-close lanes from Advanced (session-gated): no coordinator's door, and no coordinator is told
+      // how to arm the lane that closes its own runs.
+      'GET /api/coord/run-close',
+      'POST /api/coord/run-close',
       // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
       // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
       // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the

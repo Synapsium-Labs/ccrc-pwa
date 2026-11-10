@@ -54,7 +54,7 @@ import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
@@ -70,6 +70,8 @@ import {
 } from './stallsettings.js';
 import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
+import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
+import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
 import {
   openRunPreconditions, type AttributionRead, type HomeProjectVerdict, type OpenRunRefusal, type SessionMarkRead,
@@ -519,7 +521,8 @@ export interface CoordRoutesHandle {
    *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
    *  reclaim door — which runs inside this serialiser — can never interleave with it. */
   withSweepAbandon<T>(coord: WatcherCoordPort, fn: (
-    abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
+    abandon: (runId: number, crashedId: string, stillStuck: SweepCloseGuard['stillStuck'],
+      extra?: Pick<SweepCloseGuard, 'fleetAct' | 'detail'>) => Promise<CloseOutcome>,
   ) => Promise<T>): Promise<T>;
   /** The SAME hold with nothing handed in — for the stop-done lane (D-5370, `sleepLane.ts`), whose act is a
    *  `ccd stop` and never a run transition: it re-reads the store and stops inside this hold, so a dispatch opening a
@@ -655,10 +658,10 @@ export function registerCoordRoutes(
 
   /** The dead-coordinator lane's abandon (workspace lifecycle spec §5.4) — `withAbandon`'s deps, `'sweep'` and the
    *  crashed id, inside the same `coordMutex`. Handed to the watcher by `buildServer`. */
-  const withSweepAbandon: CoordRoutesHandle['withSweepAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId, crashedId, stillCrashed) => closeRun(
+  const withSweepAbandon: CoordRoutesHandle['withSweepAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId, crashedId, stillStuck, extra) => closeRun(
     { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
       childReclaim: childReclaimPort(deps, coord) },
-    runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillCrashed })));
+    runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillStuck, ...extra })));
 
   // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
   // allocator's MAX(file, db) recovery, held here and handed into
@@ -1657,7 +1660,7 @@ export function registerCoordRoutes(
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
-    const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents));
+    const run = () => coordMutex.run(() => stampDispatchAttempt(dispatchDeps.coord, id, () => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents)));
     const outcome = await run();
     // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
     // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured
@@ -2814,6 +2817,67 @@ export function registerCoordRoutes(
       'record-only', { degraded: 'dispatch abandon switch written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/run-close` (D-8077; spec 2026-11-04 §12.3, A15; the runs rebuild, Task 26): the operator's three-state
+   *  control (off, shadow, on) over each run-close lane group, the Advanced rows' one source. The GET answers each group's state
+   *  word, its would-close list from the lane's last reading, and its closes and refusals of the last 7 days (`runCloseViewOf`,
+   *  L1). The POST takes `{group, choice}` and nothing else. One path for both verbs, the dispatch-abandon door's shape:
+   *  session-gated when `CCRC_AUTH` is armed, open dark, no box token, so no coordinator and no session can arm a lane. While
+   *  coordination or reclamation is paused, or the registry will not list, `on` is refused (o12); `off` and `shadow` never are.
+   *  A change is a record-only feed row naming the actor. */
+  const runCloseNow = async (coord: NonNullable<typeof deps.coord>): Promise<{ view: RunCloseView; names: readonly string[] | null; unreadable: string | null }> => {
+    const read = await deps.io.readdirMeasured(deps.cfg.registryDir);
+    const names = read.ok ? read.entries : null;
+    const setting = coord.runCloseSetting();
+    const now = Date.now();
+    const since = now - RUN_CLOSE_TALLY_MS;
+    const view = runCloseViewOf({
+      names,
+      choices: setting.kind === 'row'
+        ? { 'never-started': setting.neverStarted, 'claimant-crashed': setting.claimantCrashed }
+        : { 'never-started': 'shadow', 'claimant-crashed': 'shadow' },
+      updatedAt: setting.kind === 'row' ? setting.updatedAt : null,
+      reading: watcher?.runVerdicts.reading() ?? null,
+      closed7d: closedByGroup(coord.sweepClosesBetween(since, now + 1)),
+      refused7d: coord.runCloseRefusalCounts(since),
+      nowMs: now,
+    });
+    return { view, names, unreadable: setting.kind === 'unreadable' ? setting.detail : null };
+  };
+  app.get('/api/coord/run-close', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const { view, unreadable } = await runCloseNow(deps.coord);
+    if (unreadable !== null) return refuseRoute(reply, 'state-unreadable', { detail: unreadable });
+    return reply.code(200).send({ ok: true, ...view });
+  });
+
+  app.post('/api/coord/run-close', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const body = req.body as { group?: unknown; choice?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Array.isArray(body) || Object.keys(body).sort().join() !== 'choice,group'
+      || !isRunCloseGroup(body.group) || !isRunCloseChoice(body.choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: "the body is {group:'never-started'|'claimant-crashed', choice:'off'|'shadow'|'on'} and nothing else" });
+    }
+    const { group, choice } = body;
+    const before = await runCloseNow(coord);
+    if (before.unreadable !== null) return refuseRoute(reply, 'state-unreadable', { detail: before.unreadable });
+    // o12: nothing is armed while the lanes are held. `off` and `shadow` are the safe directions and always go through.
+    if (choice === 'on') {
+      const held = runCloseHeldOf(before.names);
+      if (held !== null) return refuseRoute(reply, before.names === null ? 'registry-unread' : 'coordination-paused', { detail: held });
+    }
+    const was = before.view.groups.find((g) => g.group === group)!.choice;
+    coord.setRunCloseChoice(group, choice, Date.now());
+    const after = await runCloseNow(coord);
+    if (was !== choice && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'run close changed', runId: null,
+        body: `the ${group} run-close group: ${was} -> ${choice}; by ${actor}` },
+      'record-only', { degraded: 'run-close switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after.view });
   });
 
   /** `GET`/`POST /api/coord/scope-sweep` (D-7994): the door of the Settings card over the sweep's two switches. The GET
