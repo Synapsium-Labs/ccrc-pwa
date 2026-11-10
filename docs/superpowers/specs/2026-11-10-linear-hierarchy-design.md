@@ -4,7 +4,9 @@
 creating and moving the Linear objects itself, and ccrc's plan as the source of truth are the operator's rulings of
 2026-11-10. The drift rule, the one inbound path, the initiatives-off handling, the console acts, the per-project
 settings and the migration strategy were proposed to the operator and confirmed the same day ("all looks correct").
-Everything else marked **Design call** is the author's, for the operator to check (§16). Docs only: no code ships with
+A builder check then raised eight questions. The operator ruled the first the same day: each project has a **Linear
+owner** (§7.5). The other seven are answered where they land and marked **Design call**. Everything else marked
+**Design call** is the author's, for the operator to check (§16). Docs only: no code ships with
 it. Facts about today's tree were read on `origin/main` `945834579` · Related:
 `docs/superpowers/specs/2026-10-31-linear-central-key-design.md` (the proxy, the journal, the write-policy port; this
 design **reverses its non-goal "initiatives"**, and keeps every anti-goal it lists),
@@ -77,8 +79,8 @@ inside each stage, and the tickets under them, always current, with nobody maint
    and issues itself, through its own Linear proxy.
 3. ccrc is the source of truth. A Linear-side edit to anything ccrc manages is put back, with a comment, and repeated
    drift on one object reaches the operator as a Waiting on you item.
-4. The one inbound path: an issue someone files straight into a managed team is taken into the owning coordinator's
-   plan and placed.
+4. The one inbound path: an issue someone files straight into a managed team (§7.1) is routed by the project's
+   **Linear owner** (§7.5) into a programme's plan or the team's Upkeep epic.
 5. A workspace with initiatives turned off still gets epics and checkpoints. The programme layer waits, and the
    operator is asked to turn the feature on.
 6. Every existing team is reshaped into the hierarchy by a migration the operator approves per team, which loses no
@@ -108,15 +110,22 @@ GitHub integration.
 | ccrc | What it is | Linear object | Created | Closed |
 |---|---|---|---|---|
 | **Product** | A ccrc project (a repository), or several projects that share one team key | **Team** | Never: the team exists; the project's team key names it | Never |
-| **Programme** | A goal-sized body of work with a spec, a pinned "In short" and a done-when list | **Initiative** | When the programme's plan is first declared (§5.3) | When the programme is done or abandoned |
+| **Programme** | A goal-sized body of work with a spec, a pinned "In short" and a done-when list | **Initiative** (one per workspace its epics sit in, see below) | When the programme's plan is first declared (§5.2) | When the programme is done or abandoned |
 | **Epic** | One plan-sized stage of a programme. Examples: the history programme's W1 capture, W2 evaluation, W3 steering, W4 subagents; test-box connect; the runs rebuild | **Project** | With the programme, or when the coordinator adds it | When all its checkpoints are met and its tickets are closed, or when it is dropped |
 | **Checkpoint** | A gate inside an epic: an acceptance row, an operator act, or a point measured and recorded. Example, history W3: cohort started, report, bars set, armed | **Project milestone** | With its epic | It has no closed state in Linear; ccrc marks it met (§6.2) |
-| **Ticket** | A wave's work run, a task, a bug or a follow-up: something that becomes a pull request or is closed with a reason | **Issue**, in the epic's project and, when it serves one, the checkpoint's milestone | When the plan names it, or when its run opens | When its run lands, or when the plan drops it |
+| **Ticket** | A wave's work run, a task, a bug or a follow-up: something that becomes a pull request or is closed with a reason | **Issue**, in the team of the project its work lands in, in the epic's project and, when it serves one, the checkpoint's milestone | When the plan names it, or when its run opens | When its run lands, or when the plan drops it |
 
-**Products of several repositories.** A product is not a new record. Projects that carry the same team key are one
-product, because they file into one team. A programme's initiative lives in the workspace of its home project's team.
-An epic whose runs touch projects of several teams in one workspace lists every one of those teams on its Linear
-project. **Design call.**
+**Products of several repositories, and which team a ticket files into.** A product is not a new record. Projects
+that carry the same team key are one product, because they file into one team. **Design call:**
+- Each ticket names the project its work lands in: a `project` field in the plan, default the programme's home
+  project. Its issue goes into that project's team.
+- Each epic names a project the same way (default the home project). Its Linear project lives in that project's team,
+  and also lists every other team its tickets file into.
+- An epic belongs to one workspace. Every ticket of an epic files into a team of the epic's workspace; `plan put`
+  refuses one that does not (`ticket-workspace-mismatch`), and the coordinator places that work in an epic of the
+  other workspace instead. Issues never move between workspaces.
+- A programme whose epics sit in two workspaces gets one initiative in each, with the same name and description, each
+  linking the epics of its own workspace.
 
 ## 4. ccrc's new model
 
@@ -125,20 +134,23 @@ project. **Design call.**
 - **Programme** is unchanged: `programs` keeps its slug, state, home project, spec pin and `doneWhen` list (1 to 12
   strings, `shared/ledgers.ts`, `DONE_WHEN_MAX_ITEMS`).
 - **Epic** is new. A programme has an ordered list of epics. Each has a key (stable, slug grammar), a title, a one-line
-  summary and a state: `planned`, `active`, `done` or `dropped`.
+  summary, a project (§3), the waves it holds, and a state: `planned`, `active`, `done` or `dropped`.
 - **Checkpoint** is new. An epic has an ordered list of checkpoints. Each has a key, a title, a kind (`acceptance`,
   `operator-act`, `measured`), an optional list of the programme's done-when entries it proves (by index), and a state:
   `open`, `met` or `dropped`. A met checkpoint carries its evidence: a pull request number, an operator item id, or a
   repository path where the measurement is recorded.
 - **Ticket** is new as a record. Today a ticket exists only in Linear. Each has a key, a kind (`work`, `task`, `bug`,
-  `follow-up`), a title, a body, an epic, an optional checkpoint, a source (`plan`, `worker`, `inbound`) and a state:
-  `open`, `started`, `done` or `dropped`.
-- **Wave** stays a programme-wide number. Every run of one wave belongs to one epic, so an epic is a contiguous run of
-  waves. A run opened into a wave whose earlier runs sit in another epic is refused (`wave-epic-mismatch`).
-  **Design call:** waves keep their programme-wide numbering, so ledgers, branch names and the runs screen are
+  `follow-up`), a title, a body, a project (where its work lands, §3), an epic, an optional checkpoint, a source
+  (`plan`, `worker`, `inbound`) and a state: `open`, `started`, `done` or `dropped`.
+- **Wave** stays a programme-wide number. **Design call:** the plan declares each epic's waves. `plan put` lists them
+  on each epic, as a contiguous range, and no wave sits in two epics. So the first run of a new wave lands in the
+  right epic before any run of that wave exists, and nothing is inferred from earlier runs. A run opened into a wave
+  that no epic lists, or with a ticket of another epic than the one that lists its wave, is refused
+  (`wave-epic-mismatch`). Waves keep their programme-wide numbering, so ledgers, branch names and the runs screen are
   unchanged.
-- **Run.** A work run attaches to exactly one ticket. A review run is never filed: it attaches to the run it reviews,
-  as today. A wave of three parallel work runs is three tickets. **Design call.**
+- **Run.** A work run attaches to exactly one ticket of a programme, never to a ticket in a team's Upkeep epic (§7.6).
+  A review run is never filed: it attaches to the run it reviews, as today. A wave of three parallel work runs is three
+  tickets. **Design call.**
 - **The done-when list** stays the programme's definition of done. It becomes the initiative's description (§6.1).
   A checkpoint that proves a done-when entry says so, and the programme page shows which entries are proved and which
   are not. The programme's own state still moves only as it does today. Nothing closes a programme automatically.
@@ -162,14 +174,14 @@ each record, so that one reconciler walks one table.
 
 | Table | Columns (sketch; the builder settles names) |
 |---|---|
-| `plan_epics` | `id`, `program`, `key`, `ordinal`, `title`, `summary`, `state`, `droppedWhy`, `openedAt`, `doneAt`; unique (`program`, `key`) |
+| `plan_epics` | `id`, `program` (null for a team's Upkeep epic, §7.6), `project`, `waves` (JSON list of wave numbers), `key`, `ordinal`, `title`, `summary`, `state`, `droppedWhy`, `openedAt`, `doneAt`; unique (`program`, `key`) |
 | `plan_checkpoints` | `id`, `epicId`, `key`, `ordinal`, `title`, `kind`, `proves` (JSON array of done-when indexes), `state`, `metAt`, `evidence` (JSON), `itemId`; unique (`epicId`, `key`) |
-| `plan_tickets` | `id`, `program` (null for the upkeep epic, §7.6), `epicId`, `checkpointId`, `key`, `kind`, `title`, `body`, `source`, `state`, `runId`; unique (`program`, `key`) |
+| `plan_tickets` | `id`, `program` (null while in the Upkeep epic, §7.6), `project`, `epicId`, `checkpointId`, `key`, `kind`, `title`, `body`, `source`, `state`, `runId`; unique (`program`, `key`) |
 | `runs` | gains `ticketId` (nullable) |
-| `linear_bindings` | `localKind` (`programme`, `epic`, `checkpoint`, `ticket`), `localId`, `workspaceId` (slot UUID), `teamKey`, `linearId` (Linear's UUID), `identifier` (issues only), `fingerprint` (of the managed fields as last written), `syncedAt`, `state` (`pending`, `bound`, `failed`), `driftCount`, `driftSince`, `heldItemId` |
-| `linear_migrations` | one row per team migration: `workspaceId`, `teamKey`, `state` (`proposing`, `proposed`, `approved`, `applying`, `applied`, `put-back`, `failed`), `map` (JSON), `itemId`, timestamps |
+| `linear_bindings` | `localKind` (`programme`, `epic`, `checkpoint`, `ticket`), `localId`, `workspaceId` (slot UUID), `teamKey`, `linearId` (Linear's UUID), `identifier` (issues only), `fingerprint` (of the managed fields as last written), `syncedAt`, `state` (`pending`, `bound`, `failed`), `driftCount`, `driftSince`, `heldItemId`; unique (`localKind`, `localId`, `workspaceId`), so a programme has one initiative row per workspace (§3) |
+| `linear_migrations` | one row per team migration: `workspaceId`, `teamKey`, `state` (`proposing`, `proposed`, `approved`, `applying`, `applied`, `put-back`, `failed`), `map` (JSON, with each listed issue's snapshot, §10.3), `itemId`, timestamps |
 | `linear_migration_moves` | one row per Linear object the migration changed: `migrationId`, `linearId`, `identifier`, `before` (JSON), `after` (JSON), `appliedAt`, `revertedAt` |
-| `project_linking` | gains `initiatives` (`on` or `off`, default `on`) |
+| `project_linking` | gains `initiatives` (`on` or `off`, default `on`); `linearOwner` (a coordinator's session id, or null for the default rule, §7.5); `ownsTeam` (marks the one project that owns a shared team key, §7.5) |
 
 A programme, epic or checkpoint that is not yet in Linear simply has no bound row. Bindings are never deleted: a
 dropped epic keeps its row, and its Linear project is closed, not removed.
@@ -181,21 +193,30 @@ under `/api/programmes/:slug/plan`:
 
 | Verb | What it does |
 |---|---|
-| `plan put <slug> --json <f>` | Declares or revises the programme's epics and checkpoints, and any tickets already known, as one body keyed by `key`. The server diffs it against the store. A key that disappears is **dropped**, never deleted, and needs a `droppedWhy` |
+| `plan put <slug> --json <f>` | Declares or revises the programme's epics (with their waves) and checkpoints, and any tickets already known, as one body keyed by `key`. The server diffs it against the store. A key that disappears is **dropped**, never deleted, and needs a `droppedWhy` |
 | `plan show <slug>` | The plan with each record's state and Linear URL |
 | `plan met <slug> <checkpoint> --json <f>` | Marks a checkpoint met, with its evidence |
-| `plan ticket add <slug> --json <f>` | Adds a ticket to an epic (and a checkpoint) |
-| `plan ticket move <slug> <ticket> --json <f>` | Moves a ticket to another epic or checkpoint, or drops it with a reason |
-| `plan take <slug> <REF> --json <f>` | Takes an inbound Linear issue into the plan (§7.5) |
+| `plan ticket add <slug> --json <f>` | Adds a ticket to an epic (and a checkpoint, and a project) |
+| `plan ticket move <slug> <ticket> --json <f>` | Moves a ticket to another epic, checkpoint or project, or drops it with a reason |
+| `plan take <slug> <REF> --json <f>` | Takes an issue into this programme's plan: an inbound issue the Linear owner handed to it, or a ticket in the team's Upkeep epic (§7.5, §7.6). Or closes a handed issue with a reason, or returns it to the owner with a note |
 | `plan epic drop <slug> <epic> --json <f>` | Drops an epic with a reason |
+| `plan triage <team> <REF> --json <f>` | Routes an inbound issue: hand it to a programme, place it in Upkeep, close it, or raise it to the operator (§7.5) |
 | `plan map propose <team> --json <f>` | Proposes a team's migration map (§10.3) |
+
+**Who may call them (ruled).** The programme verbs (`put`, `met`, `ticket add`, `ticket move`, `take`, `epic drop`)
+check that the caller is the programme's coordinator: the one claimant `runs.claimedBy` already holds per programme,
+or, for a programme with no run yet, the session that first declared its plan. The one other caller is a worker
+filing a follow-up into its own run's epic with `plan ticket add` (§12). The team verbs (`triage`, `map propose`) check
+that the caller is the team's Linear owner (§7.5). Anyone else is refused `not-plan-owner` or `not-linear-owner`.
+`plan show` is open to every session on the box token. The operator's console acts are not session calls and pass
+neither check.
 
 A `plan put` body, in short:
 
 ```json
 {
   "epics": [
-    { "key": "w3-steering", "title": "W3 steering", "summary": "…",
+    { "key": "w3-steering", "title": "W3 steering", "summary": "…", "waves": [3],
       "checkpoints": [
         { "key": "cohort-started", "title": "Cohort started", "kind": "measured" },
         { "key": "bars-set", "title": "Bars set", "kind": "operator-act", "proves": [2] }
@@ -205,15 +226,20 @@ A `plan put` body, in short:
 }
 ```
 
+`project` on an epic or a ticket is optional and defaults to the programme's home project (§3).
+
 Bounds, **Design call:** at most 24 epics in a programme, 16 checkpoints in an epic, and 200 tickets in one body.
 Titles follow the Linear title bound in `ops.ts` (255 characters). Every text field passes the `linear-egress`
-redactor profile before it is stored, so what is stored is what Linear will get.
+redactor profile and the public-text check (§6.1) before it is stored, so what is stored is what Linear will get.
 
 **Runs attach.** `runs open` (`POST /api/runs`) gains an optional `ticket` key. A run opened with no ticket, in a
-programme that has a plan, gets a new ticket in the epic of its wave, titled from the run's title. A run opened into a
-programme with no epic is refused `plan-missing` when the programme was created after this build lands, and allowed
-as today for an older programme until its team migrates (§10). **Design call:** that refusal is what makes new
-programmes "born in the new shape" rather than a convention.
+programme that has a plan, gets a new ticket in the epic that lists its wave, with the run's project, titled from the
+run's title. A run opened with a ticket whose project is not the run's sets the ticket's project to the run's, since
+that is where the work lands; its issue moves with it (§5.3). A run opened into a programme with no epic is refused
+`plan-missing` when the programme was created after this build lands, and allowed as today for an older programme
+until its team migrates (§10). **Design call:** that refusal is what makes new programmes "born in the new shape"
+rather than a convention. A run is never opened under the reserved `linear-sync` slug (§7.6): `runs open` refuses it
+`reserved-programme`.
 
 ## 5. The Linear object lifecycle
 
@@ -237,11 +263,13 @@ writes through `callLinear`, the write-policy port and the `linear_events` journ
 
 In this order, each step binding its id before the next starts, so that a crash resumes and never duplicates:
 
-1. **Initiative** in the home team's workspace, named after the programme, its description built from the pinned
-   "In short" and the done-when list (§6.1). Skipped while initiatives are off (§9).
-2. **One project per epic**, in the product's team (or teams, §3), linked to the initiative.
+1. **Initiative** in each workspace the programme's epics sit in (§3), named after the programme, its description
+   built from the pinned "In short" and the done-when list (§6.1). Skipped while initiatives are off (§9).
+2. **One project per epic**, in its project's team (and every other team its tickets file into, §3), linked to the
+   initiative of its workspace.
 3. **One milestone per checkpoint**, in the epic's project, in plan order.
-4. **One issue per known ticket**, in the epic's project and the checkpoint's milestone when it has one.
+4. **One issue per known ticket**, in its project's team, in the epic's project and the checkpoint's milestone when it
+   has one.
 
 Every create carries a `requestId` (the central-key spec §6.6) built from the binding row, so a retry cannot create a
 second object. Where Linear's create has no idempotency key, the sync first reads by its own marker before it creates
@@ -252,7 +280,8 @@ again. **Builder:** measure which of the four creates accept an idempotency key.
 | ccrc event | Linear change |
 |---|---|
 | Plan revised (`plan put`) | New epics, checkpoints and tickets created; renamed ones updated; dropped ones closed (§5.4) |
-| Run dispatched | Its issue moves to a started state |
+| Run dispatched | Its issue moves to a started state (dispatch first waits for the issue to exist, §5.6) |
+| A ticket's project changes (`plan put`, `plan ticket move`, or a run opened in another project) | Its issue moves to that project's team, inside the epic's workspace. Linear gives it a new identifier and keeps the old one redirecting; ccrc refreshes the stored identifier (§5.5). **Design call** |
 | Run closes merged | Its issue moves to a completed state (often Linear's GitHub integration has already done this, §7.3) |
 | Checkpoint met | The milestone's description gains a "Met on <date>: <evidence>" line, and its target date is set to that day |
 | Epic `active` | Project status to a started status |
@@ -279,7 +308,7 @@ Completed, with no canceled initiative.
 
 | Record | Ids in `linear_bindings` |
 |---|---|
-| Programme | workspace slot id, initiative UUID |
+| Programme | workspace slot id, initiative UUID (one row per workspace, §3) |
 | Epic | workspace slot id, team key, project UUID |
 | Checkpoint | workspace slot id, milestone UUID |
 | Ticket | workspace slot id, team key, issue UUID and identifier |
@@ -288,6 +317,20 @@ The issue identifier is stored for display and links only. Every write goes by U
 central-key spec §4.5). An identifier that changes when an issue moves team is refreshed from the next read. ccrc never
 writes an identifier into a repository file of a public repository; the linking rules stand
 (`server/src/linking/policy.ts`).
+
+### 5.6 Dispatch waits for the ticket's issue
+
+**Design call.** A work run is dispatched once its ticket's issue exists in Linear, so that its workspace and branch
+can carry the issue's identifier from the start. When a run is ready to dispatch and its ticket's binding is not yet
+`bound`, dispatch asks the plan sync to run at once and waits for it, for at most one sync pass. Then:
+- **Bound in time.** In a project whose linking mode is `private`, the workspace and its branch are named with the
+  identifier (`ws/key-123-…`, the convention `ticketRefOfBranch` reads), so Linear's own GitHub integration links the
+  pull request and completes the issue when it merges. In a `public` or `unknown` project the branch never carries
+  it, as today, and the sync adds the link to the pull request itself (`attachmentLinkURL`).
+- **Not bound in time** (Linear slow or down, the rate budget spent): the run is dispatched as today, with no
+  identifier in its branch, and the sync adds the link to its pull request when the issue appears.
+
+The wait never runs past its bound, so trouble in Linear never stalls the fleet.
 
 ## 6. What ccrc writes in Linear
 
@@ -300,9 +343,21 @@ writes an identifier into a repository file of a public repository; the linking 
 - **Issue:** the ticket's title and body.
 
 Every text passes the `linear-egress` redactor profile and ends with the server's fixed footer line, as session writes
-do today. No text names a console URL, a host, a session or an account. **Design call:** text that lands on an issue
-of a team whose project's linking mode is `public` or `unknown` follows the public-repository rules, because Linear's
-GitHub sync can mirror the issue to a public repository.
+do today. No text names a console URL, a host, a session or an account.
+
+**Public text. Design call.** Text that lands on an issue of a team whose project's linking mode is `public` or
+`unknown` follows the public-repository rules, because Linear's GitHub sync can mirror the issue to a public
+repository. A server check enforces this, the same way the PR route refuses a tracker id in a public repository today
+(`tracker-id-public`). It refuses text that:
+- carries one of the team's tracker ids where the linking mode forbids it (`trackerIdsIn`,
+  `server/src/linking/policy.ts`), or
+- matches the topology deny list the repository already keeps (the pattern and hashed classes of
+  `server/test/topology-clean.test.ts`, moved into a shared module that the server and that suite both read).
+
+Its refusal code is its own, `linear-text-public`, and it names the class that matched (and, for tracker ids, the
+ids, as `tracker-id-public` does). The check runs on every plan verb and map that carries text, so the session that
+wrote the text is refused at once. The sync runs it again before each write as a guard; a write it stops leaves the
+binding `failed` and mails the programme's coordinator.
 
 ### 6.2 What ccrc owns
 
@@ -319,10 +374,17 @@ never watched, so ccrc does not fight people over assignees or priorities.
 
 ## 7. The sync rule
 
-### 7.1 ccrc is the source of truth
+### 7.1 ccrc is the source of truth, in managed teams
 
 ccrc writes its plan to Linear. It never reads a Linear edit back into the plan. The plan changes only through
-`ccrc-api plan` (a coordinator), the operator's console acts, and ccrc's own events (runs, items).
+`ccrc-api plan` (a programme's coordinator, or a team's Linear owner, §4.3), the operator's console acts, and ccrc's
+own events (runs, items).
+
+**Managed teams. Design call.** A team becomes **managed** when its migration is applied (§10.3), and stays managed
+unless that migration is put back. Only a managed team gets the drift pass (§7.2), inbound detection (§7.5) and the
+`plan-owned` refusal (§7.7). Before that, new programmes are still born in the new shape: their objects are created,
+bound and moved by the plan sync as usual. But no drift pass, inbound mail or refusal applies to the team, and the
+issues listed on a proposed, or approved but not yet applied, map are left untouched until the apply.
 
 ### 7.2 Drift detection
 
@@ -366,39 +428,66 @@ When one object is restored three times within seven days (**Design call**), ccr
 
 A restore that Linear refuses (for example a key without write access to the team) raises the same item at once.
 
-### 7.5 The one inbound path
+### 7.5 The Linear owner, and the one inbound path (ruled)
 
-An issue in a managed team that ccrc has no binding for, created by anyone but ccrc's own key (a person, a colleague,
-an integration, or a public GitHub issue synced in), is **inbound**. The drift pass finds it and mails the **owning
-coordinator**: the coordinator of the project whose team key names that team. **Design call:** when several projects
-share the team key, the owner is the project marked as the team's owning project in the console (default: the first
-project that set the key). With no coordinator live, the issue waits and the project's row in the console counts it;
-the next coordinator on that project gets it in its card.
+Each ccrc project has a **Linear owner**: a coordinator, named per project in the console beside the team key
+(§11.1). By default it is the coordinator of that project's most recently active programme (the programme homed on
+the project whose runs moved last). Where an installer runs a coordinator above all the other coordinators, the
+operator may name that one the Linear owner of every project. **Design call:** for a team key several projects share,
+the team's Linear owner is the Linear owner of the project marked in the console as owning the team (default: the
+first project that set the key).
 
-The coordinator reads the issue as untrusted data and decides, by its own goals as the autonomy default says:
-- **A bug or small task:** `plan take` places it in an epic and checkpoint of a live programme, or in the team's upkeep
-  epic (§7.6). The sync re-parents it, and from then on ccrc owns its fields (§6.2). Its reporter's title and text are
-  kept as the ticket's starting text.
-- **A duplicate or not a fault:** the coordinator closes it with a comment, through `plan take` with a close reason.
-- **A request that would change a programme's scope:** a `decide` item for the operator, because scope is operator-only.
+The Linear owner does two things for its team:
+- it drafts the team's migration map (§10.3);
+- it routes inbound issues.
+
+It never rewrites another programme's plan. Each programme's coordinator still declares and owns its own epics,
+checkpoints and tickets (§4.3).
+
+An issue in a managed team (§7.1) that ccrc has no binding for, created by anyone but ccrc's own key (a person, a
+colleague, an integration, or a public GitHub issue synced in), is **inbound**. The drift pass finds it and mails the
+team's Linear owner. The owner reads the issue as untrusted data and decides with `plan triage`, by its own goals as
+the autonomy default says:
+- **Work a live programme should do:** *hand* it to that programme's coordinator, who is mailed and takes it with
+  `plan take` into an epic and checkpoint of its plan. When that programme is the owner's own, it takes it at once.
+  A coordinator may also close a handed issue with a reason, or return it to the owner with a note.
+- **A bug or small task no live programme takes now:** *upkeep* places it in the team's Upkeep epic (§7.6).
+- **A duplicate or not a fault:** *close* it with a comment and a reason.
+- **A request that would change a programme's scope:** *raise* a `decide` item for the operator, because scope is
+  operator-only.
+
+Once an issue is taken or placed, the sync re-parents it, and from then on ccrc owns its fields (§6.2). Its reporter's
+title and text are kept as the ticket's starting text.
+
+**No live owner.** When an inbound issue or a map that is due needs the owner and none is live (the named coordinator
+is not running, or the default rule finds no live coordinator), the issue waits, the project's row in the console
+counts it, and ccrc raises one Waiting on you item per project, *Name a Linear owner* (§11.3). The item closes itself
+when an owner is named and live, and the waiting issues are mailed to it.
 
 This is the only way anything made in Linear enters ccrc's plan. An edit to a managed object never does.
 
-### 7.6 The upkeep epic
+### 7.6 The Upkeep epic
 
 **Design call.** Each managed team has one standing epic that belongs to no programme: **Upkeep**. Its Linear project
-is in the team, outside any initiative, with no milestones. Bugs and follow-ups that no live programme owns go there.
-It never closes. Its items, and any other item that belongs to no programme (map approvals §10.3, the initiatives-off
-item §9), are raised under one reserved programme slug, `linear-sync`, that ccrc creates and the runs screen does not
-list. **Builder:** `operator_items.program` is `NOT NULL`; the reserved slug is how such items get a programme without a
-schema change to items.
+is in the team, outside any initiative, with no milestones. It holds only issues that no one has taken yet: those the
+Linear owner placed there (§7.5), and the leaves the migration found with no owner (§10.3). It never closes.
+
+Upkeep is never a run's programme. No run opens on an Upkeep ticket. A coordinator that wants one takes it with
+`plan take`, which moves the ticket into its own programme and an epic of its plan, and its issue into that epic's
+Linear project. The work then runs as a normal run of that programme.
+
+Operator items that belong to no programme (map approvals §10.3, the initiatives-off item §9, *Name a Linear owner*
+§7.5) are raised under one reserved programme slug, `linear-sync`, that ccrc creates and the runs screen does not
+list. The slug holds items only: there is no run path under it, and `runs open` refuses it (§4.3). **Builder:**
+`operator_items.program` is `NOT NULL`; the reserved slug is how such items get a programme without a schema change to
+items.
 
 ### 7.7 Session writes in managed teams
 
-`linear create`, and `linear update` on an issue ccrc has a binding for, are refused `plan-owned` with the remedy
-"file it through `ccrc-api plan ticket add`" (**Design call**). Without this, a session's own `create` would be
-treated as inbound, and its `update` as drift. `linear comment` and `linear link` stay as they are. Reads are
-unchanged.
+In a managed team (§7.1), `linear create`, and `linear update` on an issue ccrc has a binding for, are refused
+`plan-owned` with the remedy "file it through `ccrc-api plan ticket add`" (**Design call**). Without this, a session's
+own `create` would be treated as inbound, and its `update` as drift. In a team not yet managed they work as today.
+`linear comment` and `linear link` stay as they are. Reads are unchanged.
 
 ## 8. The proxy additions
 
@@ -420,7 +509,8 @@ There is no delete or archive document. Nothing in this design removes a Linear 
 **Design call.** The new writes are server-internal operations of the plan sync and the migration, not session verbs.
 They live in `LINEAR_OPS`-style rows, so the census and the shaping rules cover them, but no proxy route exposes them,
 and the client table in `ccd/ccrc-api` gains no `linear` row. Sessions see the hierarchy through `ccrc-api plan show`,
-which carries the Linear URLs. The session `create` body gains no milestone field.
+which carries the Linear URLs. The session `create` body gains no milestone field. The sync also calls the existing
+issue and `attachmentLinkURL` documents, as the ccrc actor, for tickets and for §5.6's pull request link.
 
 ### 8.3 Write policy and journal vocabulary
 
@@ -464,9 +554,13 @@ Two halves, done together for each programme:
 - **Reshape Linear:** existing issues into initiatives, projects and milestones, and stale ones closed.
 - **Reshape ccrc:** each live programme gets its epics and checkpoints, with the Linear ids attached.
 
-The ccrc half comes first within a programme: the map declares the epics and checkpoints, the plan sync creates their
-Linear objects from the plan, and then the migration moves the existing issues into them. So the migration never
-builds Linear structure that ccrc does not hold.
+The ccrc half comes first within a programme, and the programme's own coordinator does it. The Linear owner mails each
+live programme's coordinator to declare its epics (with their waves) and checkpoints through `plan put`, and the plan
+sync creates their Linear objects. The map then places the existing issues onto those keys. The map declares epics
+and checkpoints itself only for a programme that has no plan and no live coordinator: a done programme that still owns
+open issues, or a backlog programme the map proposes. A map that would change a plan a coordinator declared is
+refused (`map-rewrites-plan`). So the migration never builds Linear structure that ccrc does not hold, and the owner
+never rewrites another programme's plan.
 
 ### 10.2 Order
 
@@ -480,8 +574,9 @@ Only teams that some ccrc project names by its team key are migrated. A team no 
 
 ### 10.3 Per team: map, approve, apply, report
 
-1. **Map.** ccrc asks the team's owning coordinator (§7.5) to propose the map, through `ccrc-api plan map propose`. The
-   map accounts for every open issue in the team, and nothing else. For each issue it says one of:
+1. **Map.** ccrc asks the team's Linear owner (§7.5) to propose the map, through `ccrc-api plan map propose`. The
+   map accounts for every open issue in the team, and nothing else. It keeps each issue's snapshot as read when the
+   map was drafted: its state, team, project, parent, milestone, title and description. For each issue it says one of:
 
    | Class | Becomes |
    |---|---|
@@ -489,7 +584,7 @@ Only teams that some ccrc project names by its team key are migrated. A team no 
    | An epic-level issue (`[EPIC]`, a stage) | An epic and its project (replaced) |
    | A checkpoint-level issue (a "CP-nn" row, an operator act, a measured gate) | A checkpoint and its milestone (replaced) |
    | A leaf of a live or past programme | A ticket, moved into its epic's project and milestone |
-   | A leaf no programme owns | A ticket in the upkeep epic |
+   | A leaf no programme owns | A ticket in the Upkeep epic |
    | Finished but never closed | Closed as done, with its evidence (the merged pull request) |
    | Superseded | Closed as canceled, related to its successor |
    | Stale, no owner, no recent activity | Proposed for closing; closed only if the map approves it |
@@ -500,12 +595,18 @@ Only teams that some ccrc project names by its team key are migrated. A team no 
    The server checks the map before it raises anything: every open issue is listed once, every target exists in the
    map or the store, and every count adds up.
 2. **Approve.** ccrc raises a `decide` item under `linear-sync` with the map on it (§11.3). The operator approves with
-   one tap and a confirm, or returns it with a note, which goes back to the coordinator.
+   one tap and a confirm, or returns it with a note, which goes back to the Linear owner.
 3. **Apply.** The server applies the map, deterministically and idempotently, recording each change in
    `linear_migration_moves` before it makes it. Parts that belong to a live programme wait for its wave boundary
-   (§10.5).
-4. **Report.** When done, the item becomes a report: what was created, what moved, what closed, what was left, with
-   counts first and the full list below, and a *Put back* act.
+   (§10.5). **Design call:** a map can go stale between draft and apply, so the apply first re-reads every issue on
+   it and compares it with the map's snapshot. An issue that changed (any snapshot field differs, or it was closed) is
+   skipped, never forced, and listed in the report. When the apply finishes, the team is managed (§7.1).
+4. **Report.** When done, the item becomes a report: what was created, what moved, what closed, what was skipped as
+   changed, what was left, with counts first and the full list below, and a *Put back* act.
+5. **Skipped issues.** They sit in a managed team with no binding, so they reach the Linear owner as inbound (§7.5).
+   The owner routes them one by one, or re-proposes them together in a follow-up map. A follow-up map covers only
+   those issues, goes through the same approve and apply, and belongs to the same migration: its moves land under the
+   same row, and the same *Put back* covers them.
 
 ### 10.4 Nothing is deleted
 
@@ -515,7 +616,8 @@ Only teams that some ccrc project names by its team key are migrated. A team no 
   for a team whose repository is public, the comment names the new home by title only, with no Linear URL or
   identifier, so the mirrored text follows the public-repository rules.
 - Closed issues are never moved or rewritten. Only open issues are reshaped.
-- **Put back.** Every move has its `before`. *Put back* replays them in reverse: closed issues reopen to their old
+- **Put back.** It relies on the move record alone, never on the map: every move has its `before`, and *Put back*
+  replays them in reverse: closed issues reopen to their old
   state, moved issues return to their old project, parent and milestone, and the projects and initiatives the migration
   created are canceled, not removed. The ccrc half is put back too: the programmes' epics and checkpoints are dropped
   with the reason "put back". Put back is offered until the team's next migration, and refuses an issue that has moved
@@ -526,8 +628,10 @@ Only teams that some ccrc project names by its team key are migrated. A team no 
 - **Live programmes migrate at a wave boundary, never mid-run.** ccrc applies a live programme's part of the map only
   when the programme has no run dispatched or working. **Design call:** the boundary is read from run states, so no
   coordinator act is needed and none can be forgotten.
-- **New programmes are born in the new shape** from the day the build lands (§4.3, `plan-missing`). They need no
-  migration.
+- **New programmes are born in the new shape** from the day the build lands (§4.3, `plan-missing`), whether their
+  team is managed yet or not (§7.1). They need no migration.
+- **Before the apply,** the team's existing issues stay as they are, including every issue on a proposed or approved
+  map, and no drift pass, inbound mail or `plan-owned` refusal reaches the team (§7.1).
 - **Programmes already done** are given a completed initiative only when they still own open issues to place.
   Otherwise their closed issues are left as they are. **Design call.**
 
@@ -542,12 +646,16 @@ issues, so a few hundred writes).
 ### 11.1 Per-project setting
 
 Settings > Security > Project linking (`pwa/src/screens/settings/ProjectLinkingCard.tsx`) gains, per project:
+- **Linear owner** (ruled), beside the team key: a picker of coordinators. Empty means the default rule (§7.5), and
+  the card says which coordinator that is now, or that none is live. One act names one coordinator the Linear owner of
+  every project.
 - **File into initiatives:** on (default) or off.
-- **Owning project:** for a team key shared by several projects, which one owns inbound issues (§7.5).
+- **Owning project:** for a team key shared by several projects, which one's Linear owner is the team's (§7.5).
 - The team's **hierarchy state:** "Not migrated", "Map waiting for you", "Migrating", "Migrated on <date>" or "Put back
-  on <date>", with a link to the item.
+  on <date>", with a link to the item; and the count of inbound issues waiting for an owner, when there are any.
 
-The add-project sheet gains the initiatives toggle beside the team key. Nothing else is configured anywhere else.
+The add-project sheet gains the Linear owner picker (left empty, the default rule) and the initiatives toggle beside
+the team key. Nothing else is configured anywhere else.
 
 ### 11.2 Programme and epic pages
 
@@ -558,16 +666,17 @@ The add-project sheet gains the initiatives toggle beside the team key. Nothing 
 - **Epic page** (`/programmes/<slug>/epics/<key>`), new: the epic's checkpoints in order, each with its state, met date
   and evidence (a pull request link, an item link, or a repository path that opens in the Docs reader); its tickets with
   their runs; and *Open in Linear* for the project.
-- The upkeep epic has a page under the project, reached from the project linking card.
+- The Upkeep epic has a page under the project, reached from the project linking card.
 
 ### 11.3 Items
 
 | Item | Kind | On the item | Acts |
 |---|---|---|---|
-| Approve a team's migration map | `decide` | The map: counts first (created, moved, closed, left), then each programme's epics and checkpoints, then every issue grouped by class | *Approve* (one tap, confirm), *Return* with a note |
-| Migration report | `do` | What changed, counts first, then the full list | *Put back* (confirm), *Done* |
+| Approve a team's migration map | `decide` | The map: counts first (created, moved, closed, left), then each programme's epics and checkpoints, then every issue grouped by class | *Approve* (one tap, confirm), *Return* with a note to the Linear owner |
+| Migration report | `do` | What changed, counts first (skipped as changed among them), then the full list | *Put back* (confirm), *Done* |
 | Persistent drift | `decide` | Object, field, values, who, when | *Hand to the coordinator*, *Keep the plan* |
 | Initiatives off | `do` | Which workspace, the steps | *Check again* |
+| Name a Linear owner | `do` | The project, why an owner is needed now (inbound issues waiting, a map due), the coordinators live now | *Name* (pick one, confirm) |
 
 Each item carries its control on the item, as ruled. New typed actions join `ItemAction` in `shared/ledgers.ts` beside
 `end-run` and `close-refused`, written by the server alone.
@@ -586,22 +695,27 @@ Both skins use the same components; nothing in this design is skin-specific.
 ## 12. The skills
 
 - **Coordinator** (`ccd/coordinator-skill/SKILL.md` §Linear and its wave-lifecycle references): a new programme's plan
-  is declared with `plan put` before its first run opens, epics plan-sized and checkpoints as the gates inside them;
-  every run opens with its ticket; a checkpoint is recorded with `plan met` and its evidence when it is met; inbound
-  mail is handled as §7.5; `linear create` is not used in a managed team. The ledger template's waves table gains an
+  is declared with `plan put` before its first run opens, epics plan-sized with their waves listed and checkpoints as
+  the gates inside them; every run opens with its ticket, and a ticket names its project when the work lands outside
+  the home project; a checkpoint is recorded with `plan met` and its evidence when it is met; a handed issue or an
+  Upkeep ticket it wants is taken with `plan take`; `linear create` is not used in a managed team. As a project's
+  Linear owner, it routes inbound mail with `plan triage` and drafts the team's map with `plan map propose`, and it
+  never changes another programme's plan (§7.5). The ledger template's waves table gains an
   epic column. The epics themselves are read with `plan show`, so the ledger holds no second copy of the plan.
 - **Worker** (`ccd/worker-skill/SKILL.md` §Linear): a follow-up is filed with `plan ticket add`, kind `follow-up`, into
   its own run's epic. The coordinator is told by mail and may move or drop it. **Design call:** a worker files into its
   own epic only, so it cannot change any other part of the plan.
-- **Linear skill** (`ccd/linear-skill/SKILL.md`): the `plan-owned` refusal and its remedy; the rule that the hierarchy
-  is ccrc's, and that its restore comments are ccrc's own.
+- **Linear skill** (`ccd/linear-skill/SKILL.md`): the `plan-owned` and `linear-text-public` refusals and their
+  remedies; the rule that the hierarchy is ccrc's, and that its restore comments are ccrc's own.
 - **Reviewer:** unchanged.
 
 ## 13. Reusability for other installers
 
-- Everything is set per project in the console: the team key (exists), "File into initiatives", and the owning
-  project. No team key, workspace, team name or status name is written in code. Statuses are found by type.
-- The reserved programme slug and the upkeep epic's name are constants of ccrc, not of any installer.
+- Everything is set per project in the console: the team key (exists), the Linear owner, "File into initiatives", and
+  the owning project. No team key, workspace, team name or status name is written in code. Statuses are found by type.
+- The Linear owner's default needs no setting: it follows whichever coordinator ran the project's latest programme.
+  An installer with a coordinator above the others may name it for every project; one without loses nothing.
+- The reserved programme slug and the Upkeep epic's name are constants of ccrc, not of any installer.
 - A project with no team key is untouched, as today.
 - An installer with one workspace and one team gets the same behaviour. The migration's order (§10.2) is a rule over
   whatever teams the installer's projects name.
@@ -612,7 +726,7 @@ Both skins use the same components; nothing in this design is skin-specific.
 1. **Model and proxy:** the migration, the plan verbs, the new documents and ops, the journal and policy vocabulary,
    the directory additions. Inert until a plan exists.
 2. **Plan sync and drift pass**, with the `plan-missing` refusal for programmes created from that day.
-3. **Console:** the settings, the programme and epic pages, the items.
+3. **Console:** the settings (the Linear owner among them), the programme and epic pages, the items.
 4. **Skills.**
 5. **Migration:** the pilot team, its report read by the operator; then the remaining teams in its workspace; then
    the remaining teams in each other workspace.
@@ -629,35 +743,53 @@ Each is a detail this design does not settle, named so it is not missed:
 6. Whether Linear's GitHub sync mirrors issue relations and attachments, which decides how much of §10.4's link
    reaches the mirror.
 7. Table and column names, the debounce delay, and the migration's rate share (§4.2, §5.1, §10.6).
-8. A pointer in the central-key spec's §2 to this design's reversal of its initiatives non-goal.
-9. The D-numbers, defined in the plan, not here.
+8. The dispatch wait's exact figure, within one sync pass (§5.6).
+9. The shared module that holds the topology deny list's classes, read by both the server's public-text check and
+   the topology suite (§6.1).
+10. How "live" is read for a Linear owner, from the session standing the console already shows (§7.5).
+11. A pointer in the central-key spec's §2 to this design's reversal of its initiatives non-goal.
+12. The D-numbers, defined in the plan, not here.
 
 ## 16. Design calls
 
+**Ruled since the first draft,** and so not in this list: each project's **Linear owner** (§7.5), with its default,
+its two duties (the team's migration map, routing inbound issues), its authority over the team verbs (§4.3), and the
+item that asks the operator to name one when none is live.
+
 Every call the author made without a ruling, for the operator to check:
-1. Products of several repositories are projects sharing a team key; an epic lists every team its runs touch (§3).
-2. Waves keep programme-wide numbering; all runs of one wave belong to one epic (§4.1).
-3. One ticket per work run; review runs are never filed (§4.1).
+1. A ticket files into the team of the project its work lands in (a per-ticket `project`, default the home project);
+   an epic belongs to one workspace; a programme spanning two workspaces gets one initiative in each, same name (§3).
+2. The plan declares each epic's waves; a run in a wave no epic lists is refused `wave-epic-mismatch`; waves keep
+   programme-wide numbering (§4.1).
+3. One ticket per work run, never an Upkeep ticket; review runs are never filed (§4.1).
 4. An operator-act checkpoint tied to an item is marked met when the item is done (§4.1).
 5. One binding table for every Linear id (§4.2).
 6. Plan size bounds: 24 epics, 16 checkpoints per epic, 200 tickets per body (§4.3).
 7. `plan-missing`: a programme created after the build cannot open a run without a plan (§4.3).
 8. One server-side plan sync writes all hierarchy objects; no session does (§5.1).
 9. A checkpoint has no gate issue; "met" is written on the milestone (§5.3).
-10. Text on issues of public-mirrored teams follows public-repository rules (§6.1).
-11. ccrc owns a state's category, not its name, and never watches fields it does not set (§6.2).
-12. The drift pass runs every 30 minutes per workspace (§7.2).
-13. An integration's completed state is not drift once ccrc records the merge, with one pass of grace (§7.3).
-14. Persistent drift is three restores in seven days; while open, one restore per pass and one comment per day (§7.4).
-15. The owning coordinator of a shared team key is the console's owning project (§7.5).
-16. One standing upkeep epic per team, outside any initiative; programme-less items go under a reserved `linear-sync`
-    slug (§7.6).
-17. Session `create` and managed `update` are refused `plan-owned` in managed teams (§7.7).
-18. No delete or archive document in the proxy (§8.1).
-19. The hierarchy writes are server-internal, not session verbs (§8.2).
-20. Only teams some project names are migrated (§10.2).
-21. A migration map may propose paused backlog programmes, approved with the map (§10.3).
-22. On public teams, the replacement comment names the new home by title only (§10.4).
-23. A live programme's wave boundary is read from run states (§10.5).
-24. Done programmes get an initiative only when they still own open issues (§10.5).
-25. A worker files follow-ups into its own run's epic only (§12).
+10. Moving a ticket to another team's project moves its issue within the workspace; Linear keeps the old identifier
+    redirecting (§5.3).
+11. Dispatch waits up to one sync pass for the ticket's issue, so the branch carries its identifier; after that the run
+    is dispatched and the link added when the issue appears (§5.6).
+12. Public-repository text rules on Linear text are enforced by a server check, refused `linear-text-public` (§6.1).
+13. ccrc owns a state's category, not its name, and never watches fields it does not set (§6.2).
+14. A team is managed (drift pass, inbound, `plan-owned`) only once its migration is applied; before that new
+    programmes are still born in the new shape and mapped issues are untouched (§7.1).
+15. The drift pass runs every 30 minutes per workspace (§7.2).
+16. An integration's completed state is not drift once ccrc records the merge, with one pass of grace (§7.3).
+17. Persistent drift is three restores in seven days; while open, one restore per pass and one comment per day (§7.4).
+18. For a shared team key, the team's Linear owner is the owning project's (§7.5).
+19. The Upkeep epic holds only untaken issues and is never a run's programme; a taken issue moves into the taker's
+    programme and epic; the reserved `linear-sync` slug holds items only (§7.6).
+20. Session `create` and managed `update` are refused `plan-owned` in managed teams (§7.7).
+21. No delete or archive document in the proxy (§8.1).
+22. The hierarchy writes are server-internal, not session verbs (§8.2).
+23. Only teams some project names are migrated (§10.2).
+24. A migration map may propose paused backlog programmes, approved with the map (§10.3).
+25. A stale map: the apply re-checks each issue against the map's snapshot, skips and lists changed ones, and the
+    owner may re-propose them; put back relies on the move record (§10.3, §10.4).
+26. On public teams, the replacement comment names the new home by title only (§10.4).
+27. A live programme's wave boundary is read from run states (§10.5).
+28. Done programmes get an initiative only when they still own open issues (§10.5).
+29. A worker files follow-ups into its own run's epic only (§12).
