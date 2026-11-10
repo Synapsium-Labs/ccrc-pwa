@@ -2272,6 +2272,8 @@ function runUninstCodex(c: {
     lockStub(c.lockRefuse ?? [], c.lockNoFlock ?? []),
     recordingStub('_codex_tier_ours', c.ours, 1, {}, c.oursWhy ?? {}),
     recordingStub('_codex_stop_tier', c.stopRc, 0, c.stopWords ?? {}),
+    // The removal itself, real: the one function that removes the runtime's directory, which this step calls.
+    ccrcFunction('_codex_runtime_rm'),
     ccrcFunction('_uninst_codex'),
     '_uninst_codex; rc=$?',
     'printf \'%s\\n\' "${CX_LOCK_FD:-}" "${CX_LOCK_ID:-}" > "$HOME/lock-after"',
@@ -2391,9 +2393,15 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     // with `${var:?}` or an explicit non-empty-plus-literal-suffix check,
     // belt-and-braces against a future edit that builds `rt` some other way
     // (review fix round 1, spec-5/mut-4). Read the real source, not the
-    // isolation stub.
+    // isolation stub. The removal is `_codex_runtime_rm`'s, one function a
+    // second caller will share (codex-bridge Stage 4, Task 9), so the guard is
+    // pinned there, the uninstall is pinned to call it, and the directory is
+    // removed in no second place in the file.
+    expect(ccrcFunction('_codex_runtime_rm')).toMatch(/rm -rf -- "\$\{rt:\?[^}]*\}"/);
     const src = ccrcFunction('_uninst_codex');
-    expect(src).toMatch(/rm -rf -- "\$\{rt:\?[^}]*\}"/);
+    expect(src).toMatch(/\b_codex_runtime_rm \|\| _ccrc_die\b/);
+    expect(src, 'the uninstall removes the runtime a second way').not.toMatch(/rm -rf/);
+    expect(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8').match(/rm -rf -- "\$\{rt:\?/g) ?? []).toHaveLength(1);
   });
 
   it('the front-first tier order is _codex_stop_order\'s, whose mode-blind order is CODEX_TIERS reversed, so a tier cannot be silently missed', () => {
