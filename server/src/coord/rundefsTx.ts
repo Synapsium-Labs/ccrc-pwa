@@ -95,7 +95,7 @@ export function queueSystemMail(
  */
 export function insertSystemMailTx(
   coord: WatcherCoordPort,
-  run: Pick<RunRow, 'program' | 'wave' | 'waveOf'> | null,
+  run: (Pick<RunRow, 'program'> & Partial<Pick<RunRow, 'wave' | 'waveOf'>>) | null,
   m: { fromId: SystemMailSender; toId: string; runId: number | null;
        kind: MailKind; subject: string; body: string;
        /** `never`: the mail sweep's hibernated gate holds this delivery and asks no wake (D-8073). */

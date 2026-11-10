@@ -2394,6 +2394,65 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE operator_items ADD COLUMN action TEXT;
   ALTER TABLE operator_items ADD COLUMN heldUntil INTEGER;
   `,
+  // ── 50: user_version 49 -> 50 ─────────────────────────────────────────────
+  // The run-close lane's three durable facts (D-8077; spec 2026-11-04 §7, §12; the ruled plan's W1, R4, R5):
+  //  - `runs.lastDispatchAttemptAt`: the moment `dispatchRun` last answered for the run, whatever it answered, so a refused
+  //    dispatch counts as the programme's activity (R4). Written by one store method, outside any `gh` or fleet call.
+  //  - `run_close_anchors (laneRow, key, firstAt, lastAt)`: the first and the latest pass of an unbroken series on which a
+  //    lane row's condition held for a key (a programme, or a run), `deadAnchorNext`'s rule (R5).
+  //  - `run_close_warnings (programme, claimant, warnedAt, deliveryId)`: the one E1 warning a programme has been sent. Any
+  //    activity after `warnedAt` deletes the row, so the next close needs a fresh warning delivered 24 h earlier.
+  //
+  // ONE NULLABLE COLUMN AND TWO NEW TABLES, nothing on an existing table that an older build would trip on: it opens a file
+  // at `user_version 50` by rule 3 (it warns, reads as-is and migrates nothing). Every earlier entry is frozen. RE-MEASURE
+  // the slot before the PR and before merge (it must print 49 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN lastDispatchAttemptAt INTEGER;
+  CREATE TABLE run_close_anchors (
+    laneRow TEXT NOT NULL,
+    key     TEXT NOT NULL,
+    firstAt INTEGER NOT NULL,
+    lastAt  INTEGER NOT NULL,
+    PRIMARY KEY (laneRow, key)
+  );
+  CREATE TABLE run_close_warnings (
+    programme  TEXT NOT NULL PRIMARY KEY,
+    claimant   TEXT NOT NULL,
+    warnedAt   INTEGER NOT NULL,
+    deliveryId INTEGER NOT NULL
+  );
+  `,
+  // ── 51: user_version 50 -> 51 ─────────────────────────────────────────────
+  // Arming the run-close lanes from the UI (D-8077; spec 2026-11-04 §12.3, A15; the runs rebuild, Task 26):
+  //  - `run_close_settings`: ONE ROW, `CHECK (id = 1)`, the `dispatch_abandon_settings` idiom, one column per lane group. Only an
+  //    exact `on` arms and only an exact `off` stops; any other token reads as shadow (`runCloseChoiceOf`). THE SEED IS THE RULING:
+  //    shadow for both, updatedAt 0. Its one writer is `CoordStore.setRunCloseChoice`, called only by `POST /api/coord/run-close`.
+  //  - `run_close_refusals (groupName, runId, why, at)`: a close a group's arm refused, one row per (group, run, reason) with the
+  //    latest time, so the Advanced row can say how many it met in 7 days.
+  //
+  // TWO NEW TABLES AND NOTHING ELSE: an older build opening a file at `user_version 51` takes rule 3 (it warns, reads as-is and
+  // migrates nothing) and never names them. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge
+  // (it must print 50 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE run_close_settings (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    neverStarted    TEXT NOT NULL,
+    claimantCrashed TEXT NOT NULL,
+    updatedAt       INTEGER NOT NULL
+  );
+  INSERT INTO run_close_settings (id, neverStarted, claimantCrashed, updatedAt) VALUES (1, 'shadow', 'shadow', 0);
+  CREATE TABLE run_close_refusals (
+    groupName TEXT NOT NULL,
+    runId     INTEGER NOT NULL,
+    why       TEXT NOT NULL,
+    at        INTEGER NOT NULL,
+    PRIMARY KEY (groupName, runId, why)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
