@@ -1511,8 +1511,8 @@ function compareUnclosed(coh, base) {
 
 /** The spike report (spec §7.5; plan Task 1D). `db` is a read handle (openCounterStore's); `sessions` are `ccrc_id`s;
  *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text. Returns `{ perBackend,
- *  baseline, addOn }`: `addOn` is the cohort's figures over the spans whose leaf is the last child of a depth-1 parent (O15,
- *  W3-4's add-on spans), computed by spikeFigures with the cohort's run words so it reads like the cohort's. Those spans
+ *  baseline, addOn }`: `addOn` is the cohort's figures over the RECEIPTED spans whose leaf is the last child of a depth-1 parent
+ *  (O15, W3-4's add-on spans; an unreceipted one was never printed, so it carried no add-on and stays out), computed by spikeFigures with the cohort's run words so it reads like the cohort's. Those spans
  *  stay in `perBackend` too, and the fixed gates read `perBackend`.
  *  @param {{ db: object, sessions: string[], sinceMs: number, untilMs: number }} a */
 export function spikeReport({ db, sessions, sinceMs, untilMs }) {
@@ -1573,8 +1573,9 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   const perBackend = {};
   const baseline = {};
   const addOn = {};
-  /** O15: a cohort span whose leaf is the last child of a depth-1 parent (read-only, from node_children). */
-  const isAddOn = (x) => x.leaf !== null && s.addOnLeaf.get(x.leaf.id) !== undefined;
+  /** O15: a RECEIPTED cohort span (newSpan's `receipted`, the one receipt rule) whose leaf is the last child of a depth-1 parent
+   *  (read-only, from node_children). An unreceipted one was never printed, so it carried no add-on. */
+  const isAddOn = (x) => x.receipted && s.addOnLeaf.get(x.leaf.id) !== undefined;
   for (const be of BACKENDS) {
     const pick = (side) => ({ placed: sides[side].placed.filter((x) => x.backend === be), untimed: sides[side].untimed.filter((x) => x.backend === be) });
     const c = pick('cohort');

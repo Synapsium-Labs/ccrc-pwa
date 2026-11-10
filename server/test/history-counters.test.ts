@@ -442,6 +442,7 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
         ...k.map((x) => S(x, { status: x === 'k8' ? 'degraded' : 'ok' })),
         S('m1', { status: 'ok' }), S('m2', { status: 'ok' }), S('z1'),
         S('d1', { status: 'ok' }), S('d2', { status: 'ok' }),
+        S('u1', { status: 'ok' }), S('u2'),
         S('o1', { status: 'ok', model: MODEL_O }), S('o2', { status: 'ok', model: MODEL_O }),
       ] },
       { id: 'base-1', spans: [S('b1', { status: 'ok' }), S('b2', { status: 'ok' })] },
@@ -451,14 +452,18 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
     // a node of depth 2 whose last child is a leaf (hand-built) is no depth-1 parent
     addParent(p, 'P3', ['d1', 'd2'], 2);
     addParent(p, 'P4', ['o1', 'o2']);
+    // an unreceipted last child was never printed, so it carried no add-on: counted in perBackend, kept out of addOn
+    addParent(p, 'P6', ['u1', 'u2']);
     // a baseline span that is the last child of a depth-1 parent is not an add-on span of the cohort
     addParent(p, 'P5', ['b1', 'b2']);
     const r = spike(p);
     // the add-on spans: k8 (the eighth leaf), m2, and the other backend's o2; each is counted in the cohort's figures too
     expect(Object.keys(r).sort()).toEqual(['addOn', 'baseline', 'perBackend']);
-    expect(A(r).population.spans).toBe(8 + 3 + 2);
-    expect(A(r).compliance.receipted).toBe(8 + 2 + 2);
+    expect(A(r).population.spans).toBe(8 + 3 + 2 + 2);
+    expect(A(r).compliance.receipted).toBe(8 + 2 + 2 + 1);
     expect(r.addOn.anthropic.population.spans).toBe(2);
+    expect(r.addOn.anthropic.population.notRequested).toBe(0);
+    expect(A(r).population.notRequested).toBe(2);
     expect(r.addOn.anthropic.compliance.receipted).toBe(2);
     expect(r.addOn.anthropic.compliance.all.status).toMatchObject({ ok: 1, degraded: 1 });
     expect(r.addOn.anthropic.compliance.all.ok_degraded).toEqual({ num: 2, den: 2 });
