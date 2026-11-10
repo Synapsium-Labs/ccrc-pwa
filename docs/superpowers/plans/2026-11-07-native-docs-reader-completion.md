@@ -6,7 +6,7 @@
 
 **Architecture:** Reuse the approved take-up and W5b leaf plans. W6 adds a bounded mockup/asset pipeline separate from the sealed reader; W8b uses the existing history/version transport through the one library adapter and a pure bounded diff. W7 reconciles carries, documents the shipped source, runs independent review and records release/deployed evidence.
 
-**Tech Stack:** TypeScript, React 19, Fastify, the existing ccd Python helper, package-local vitest, existing browser harness, `@synapsium-labs/docserver` exactly 1.1.0, existing parse/render and highlight workers. No new runtime dependency.
+**Tech Stack:** TypeScript, React 19, Fastify, the existing ccd Python helper, package-local vitest, existing browser harness, `@synapsium-labs/docserver` exactly 1.1.0 for A–D (later extension pins require their own review), existing parse/render and highlight workers. No new runtime dependency is authorised for A–D by this plan; required extensions need their own reviewed dependency and security decisions.
 
 **Spec:** `docs/superpowers/specs/2026-11-07-native-docs-reader-completion-design.md`; base spec `2026-10-01-native-docs-reader-design.md` §5.6–5.8; rich-docs spec `2026-10-12-rich-docs-reader-and-shared-renderer-design.md` G1/G4/G5/G6/G7 and retirement gate. Read the spec with this plan.
 
@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Exact release is `v1.1.0` at `50cef012aa671974473d19c2acd77f900e9d03af`; npm integrity is recorded in the take-up plan. Recheck provenance at execution; do not repeat signing/publication approval.
+- A–D use exactly the released library `v1.1.0` at `50cef012aa671974473d19c2acd77f900e9d03af`; npm integrity is recorded in the take-up plan. Recheck provenance at execution; do not repeat signing/publication approval. This is not the final extension-release pin: any later library change needs its scoped extension design, compatibility checks and reviewed exact-version adoption; F measures the final approved release set.
 - Preserve both 2026-11-06 phone blocks byte-for-byte. `E17-READING does-not-hold`, `E17-BLOCKS 2`: production on-request. An old `auto` block is not proof of after-ready or the 1.1.0 build.
 - Reader sandbox exactly `allow-scripts`; shell CSP meta exactly `frame-src 'none'`; no same-origin, popup/top-navigation widening, second reader renderer, protocol parser or parent window-message listener.
 - Mockups: static sandbox empty, scripted sandbox exactly `allow-scripts`; no MessageChannel/message listener. CSP meta first, click guard second; attribute equals meta. Second load tears down, never loops.
@@ -29,6 +29,13 @@
 - Whole changed-file and outward-text privacy scan: actual rc 0, zero hits, including dotted-number shapes. Scan mail/dispatch/PR text before sending, list mail before push and wave-done. No private identities, absolute deployment paths or private security reports in public docs.
 - The first rollout containing W5b-1 is **server-first**, whichever tag contains it. Only after both boxes run it does ordinary ordering resume.
 - Existing approvals are not re-opened. Coordinator calls below are labelled as such. Reserved operator actions stay reserved; no impersonated ticks or device measurements.
+- Required appearance continuity is a final E/F acceptance gate: separately specify, implement and review shared-renderer/consumer support for ccrc's canonical skin/theme catalogue and host-selected visual language. A remains exact 1.1.0; API, catalogue-sharing and compatibility are not approved by this scope record.
+- Recorded operator ruling #1418 keeps outside non-repo folders, variants, large files, PDFs and configured tracker links; #1420 requires private draft-review snapshots with a lifecycle. Full parity plus drafts and side-by-side installed evidence gate final E/F acceptance and retirement. Outside folders need not become Git repositories. These are required follow-ons with scoped designs/leaf plans, not Later/Dropped or work silently assigned to A.
+- Existing per-read/render safety limits remain until a reviewed parity-extension design replaces them. No unsafe blanket cap increase, unauthenticated working-tree read or sandbox/CSP widening is authorised here.
+
+**Parity inventory reconciliation:** #1418's no-feature-loss promise is not limited to its five named examples. The required follow-on spec must inventory the standalone reader's capabilities against the native reader, including print and figure-overlay Back-to-close, and amend the rich-docs parity table before E closes. Those rows are not automatically waived by their older Later/Dropped labels. Old-origin state currently starts fresh under the rich-docs state contract; reconcile that recorded choice with the later no-feature-loss promise explicitly, without authorising migration here. Any genuine conflict requiring a product waiver goes to the operator before E/F acceptance. Keep the current sandbox/CSP and state boundaries until a reviewed design or explicit ruling resolves the seam; do not add allow-modals or claim a missing capability delivered.
+
+**Recorded draft decision:** #1420's 2026-10-25 operator comment fixes a frozen snapshot at share time, with 'newer draft available' and re-share after later edits; no live reads through the link. Do not re-ask that choice. Capability-link versus signed-in access, reviewer comments, revocation storage/retention and hidden referenced assets still need the scoped threat model/design; the no-session acceptance criterion must be reconciled with the access model, not silently discarded. Raise only genuinely unresolved product choices when their design needs them. Comments, if adopted, never count as merge approval.
 
 ## Review Focus
 
@@ -54,6 +61,7 @@ Paths below are relative to the repository. Existing-file anchors are symbols/co
 | C1 | 5–7 | Prescan, typed plan, bounded loader and CSP | New `pwa/src/docs/mockup/**`, existing image decisions |
 | C2 | 8–10 | Viewer, reader asset integration, static mockup Export | DocsLeaf, ReaderFrame, DocImage, Export and UI/scan tests |
 | D | 11–14 | Diff/history adapters and reader/lab residue | Reader bridge/policy/frame, lab tests, narrow source scans |
+| Required follow-ons | Separate scoped leaf plans, after A and before final E/F acceptance | Native appearance continuity; #1418 parity and #1420 draft lifecycle | New ownership/claims and reviewed interfaces required; not in A's scope |
 | E | 15–16 | Source-backed carry closure, docs, final review | README, project CLAUDE, current guard/test owners |
 | F | 17 | Release/rollout/evidence/handover receipt | Coordinator ledger only unless a measured defect returns to a worker |
 | Cutover | 18 | Operator receipt | No feature-worker infrastructure edits |
@@ -315,6 +323,8 @@ Add optional callbacks/seed to `ReaderMountInput`: `version?: ReaderVersionSeed`
 
 **Owner:** coordinator plus separately dispatched reviewer. Worker internal reviews are not this gate.
 
+- [ ] Complete the standalone/native capability inventory, explicitly reconcile the rich-docs print, figure-overlay Back-to-close and old-origin state rows with #1418, and amend the rich-docs spec through its claimed, reviewed follow-on task. Older Later/Dropped text is not a waiver. An unresolved product conflict blocks E/F; this step authorises no state migration or sandbox relaxation.
+- [ ] Refuse final E/F acceptance until required appearance continuity and #1418/#1420 parity/draft work have scoped specifications/leaf plans, merged reviewed implementations and actual evidence. The existing A–D tasks do not implement those extensions. Record every feature and side-by-side comparison; a Backlog ticket or a requirement paragraph is not closure.
 - [ ] Freeze candidate tip/base and review all remaining-programme PRs plus interaction paths on that exact tree. Use three Opus/high held-out lenses: correctness; spec/security boundaries; reproduction/evidence. Critical/important each receive three Sonnet/high refuters and majority ruling, minor one/advisory. Record actual model/effort; missing/dead lens is unverified. No workflow unless separately authorised.
 - [ ] Verify fingerprint through the server before review, close review with its accepted report, preserve cited report before review-child reclamation. Tip movement means remeasure/review, never accept a stale report. The coordinator does not replace this with its own diff reading.
 - [ ] Resolve every blocking finding with red/green and measured guard row, one fix commit; rerun affected/full gates and fresh exact-tip review as required. Complete changed-file/outward-text scan; no unissued deviation definitions.
@@ -330,16 +340,32 @@ Add optional callbacks/seed to `ReaderMountInput`: `version?: ReaderVersionSeed`
 - [ ] Measure the actual existing release, attestation and trusted full-suite. Pin one tag/commit for the acceptance set. Prepare the exact operator rollout item; first tag containing B1 uses server-first. This coordinator monitors the existing update mechanism read-only and does not manually roll out or promote without operator go.
 - [ ] After operator action, remeasure both installed stamps/provenance/health and capabilities. Fleet doctor docs PASS and server docs-sw PASS must be actual output, not a peer's unverified claim. Exit3 means installed but doctor unhealthy; exit4 means restored/stop. Record both truthfully.
 - [ ] Verify actual PWA/service-worker build equals the release. Desktop deployed acceptance: six sections, ref/draft/auth failures, history/version links/at/ref/only/Back latest, changes/unavailable/draft, prefs/marks/last visit, source/download, Share/Export, mockup static/scripted/external reset and second-load refusal. A content title/pin check proves native docs, HTTP200 alone does not.
+- [ ] Execute every extension acceptance row below against the same final installed release set and the reviewed leaf specifications; record each capability separately with the evidence interface above. Compare the standalone/native capabilities side by side by action and observed result, not just screenshots or a list of tickets. A missing row, failure, unresolved parity disposition or unmeasured mandatory check blocks F and retirement.
 - [ ] Prepare one concise device item for real-only rows: one-bar and reachable tools at412×915, on-request figures, released-build lab E17/E18, synthetic mockup/script risk, iOS browser+installed Save, Android Share/Copy/Export usable file, desktop Firefox static export. Reuse existing phone blocks only as historical evidence, never as this build's result. No request to repeat old evidence merely for paperwork.
 - [ ] Apply already specified scripts-confirm/export-flat/share-file contingency if its trigger is measured; return a code defect to a scoped worker/review cycle, then repeat affected acceptance on the new release. Do not discard a failing phone block or widen CSP to get a pass.
 - [ ] Commit final handover: actual shipped features, exact evidence, limitations, CarryReceipt with zero blocking/unclassified rows, operator-only retirement pending if applicable, rollback route. Report “native delivery verified” only when every mandatory row passes or has an existing explicit accepted outcome. Keep programme open for a mandatory retirement gate; no false whole-programme closure.
+
+
+**Required extension acceptance matrix (execute in F, not satisfied by earlier worker evidence):**
+
+| Capability | Installed action and required observation |
+|---|---|
+| Appearance | Exercise both canonical skins, all twelve canonical palettes and Follow the system; verify host-selected appearance on ordinary/lazy open, changes while open under the reviewed extension contract, native chrome/typography/surfaces/focus/accessibility and retained phone/desktop geometry budgets. No independent theme catalogue or mode-only substitution. |
+| Outside folders | Settings add/remove for a non-repo root; read the same admitted sections/rendering with the not-in-a-repo label and last-modified truth; no fabricated history/ref. Verify readonly containment/redaction and escaping-symlink refusal under the reviewed extension design. No Git conversion. |
+| Layout variants | Open every kept variant, including classic/A/B/C and the existing AB default; choice persists as the reviewed contract specifies and remains usable on phone, laptop and wide views. |
+| Large files | Open measured real-file fixtures above 2 MiB using the reviewed bounded stream/page design; prove below/at/above the approved ceiling and truthful over-ceiling output, including the reviewed overlay-cap decision. No blanket cap lift. |
+| PDFs | List, open in the isolated inline viewer and download the same admitted PDF; verify self-hosted assets, no CDN, phone and desktop operation and unchanged isolation boundaries. |
+| Tracker links | Configure generic regex/URL templates in Settings; matching IDs resolve correctly, nonmatches remain text, and no private tracker is hardcoded. |
+| Draft review | Share a frozen read-only snapshot, verify the draft banner and unchanged shared bytes after edits, newer-draft notice/re-share, last-view TTL, early removal on same-file branch commit, UI Pin/Revoke, retention, immediate revoked 404 and unreadability after expiry. Exercise the reviewed access model against the recorded no-session criterion; never a live working-tree read. |
+| Complete parity inventory | Run every feature row from the amended side-by-side inventory, not only the examples above. Explicitly evidence print and figure-overlay Back-to-close outcomes and the explicitly resolved old-origin-state disposition without an implicit waiver, state migration or sandbox widening. |
 
 ### Task 18: Separate operator retirement and final programme closure
 
 **Owner:** operator for each infrastructure act; coordinator prepares and verifies receipt. This is not permission to touch live docserver units/config, proxy mappings or project roots.
 
-- [ ] Recheck retirement prerequisites: F verified, six sections including vision/promise, all roots safely under projects root, no active session working in a root being moved, required docs/doctor/docs-sw and phone evidence. If any fails, native preview and standalone remain separate and programme says pending.
-- [ ] Operator sequence: denylist condition; safe Git-root moves; remove old `/docs` proxy mapping on every PWA origin **before** any stop; prove native content/ref/draft/auth; update operator preview convention (durable GitHub links unchanged); stop forwarder; stop old docserver, retain history/directory; prove listener closed.
+- [ ] Recheck retirement prerequisites: F verified including required appearance work, all #1418 parity and #1420 draft-lifecycle acceptance rows with merged child evidence, and a side-by-side check finding nothing missing. Cover all six sections and the complete amended capability/state inventory, including outside non-repo folders, variants, large files, PDFs, configured tracker links, print, figure-overlay Back-to-close and the explicitly resolved old-origin-state disposition. Current Share is not draft-store acceptance. Missing evidence or an unfinished child blocks retirement.
+- [ ] Verify every configured root is served natively under its approved containment/redaction policy, including non-repo folders without mandatory Git conversion. No active session may be working in a root that an independently justified move would affect. Required docs/doctor/docs-sw and phone evidence remain. If any prerequisite fails, keep both previews and report pending.
+- [ ] Operator sequence: denylist condition; only justified safe root moves, preserving existing Git history and without forcing non-repo folders into Git; remove old `/docs` proxy mapping on every PWA origin **before** any stop; prove native content/ref/draft/auth; update operator preview convention (durable GitHub links unchanged); stop forwarder; stop old docserver, retain history/directory; prove listener closed.
 - [ ] Verify outcome without printing private config/secrets. Rollback never serves raw standalone HTML on authenticated app origin. If cutover fails, record exact boundary and keep a safe separately authenticated preview; no hidden infrastructure workaround.
 - [ ] With final receipts committed and all required run/item states measured, mail MERGED/closure before closing the last run. Clear coordinator intent only when the role ends. Final response distinguishes native delivery from standalone retirement, with no “complete” claim ahead of evidence.
 
@@ -356,6 +382,10 @@ Each dispatch includes only wave specifics: programme/spec/plan paths; exact tas
 No new deviation number is defined by this documentation-only plan. At each implementation run opening the coordinator allocates and defines its known departures in the ledger in the same act. The historical class-cap asset reservations (including the base spec's listed-size amendment), conditional Docs mount focus in Task 13 (including its three rich-docs focus sentences), conservative diff limits and serial C/D decomposition are labelled coordinator calls, not historical operator rulings. A departure from an existing normative sentence gets an issued entry before dispatch, not a guessed number.
 
 ## Results
+
+**R10 review corrections, 2026-11-10:** complete parity/state reconciliation, recorded frozen-snapshot/re-share decision, summary dependencies, coordinator claim ownership and explicit F extension acceptance rows. No product implementation, state migration or safety relaxation; exact-head review/CI remain gates.
+
+**Entry correction, 2026-11-10:** durable appearance and recorded #1418/#1420 no-feature-loss/draft-lifecycle gates restored. Detailed extension designs and implementation leaf plans remain pending. This amendment does not implement those features, relax safety caps, authorise infrastructure actions or expand adoption run 1532.
 
 Entry work started 2026-11-09 under the eight-hour autonomy mandate; no product implementation or acceptance is claimed. Run 1532 remains planned pending the amended-plan/review/landing entry gate and shared-file ordering. The ledger records the verified #2480 merge and live C16 overlap. The receipt below freezes the finite carry inventory without asserting a fresh audit. Red/green, mutation, independent handoff review, exact-tip CI/queue/full-suite, release/inventory/device and cutover receipts are still execution work; plan publication fills none of those boxes.
 
@@ -384,7 +414,10 @@ Each source is the corresponding completion-design §7 row. `measuredRef` is not
 | Library C114 | not remeasured at entry | open | Existing library programme | Missing mutation coverage and evidence corrections belong to first 1.1.x maintenance work; 1.1.0 CSS measured correct, no proved consumer defect or invented release dependency | Owning task must record exact current evidence and disposition |
 | Highlighting requests/colour divergences | not remeasured at entry | open | Existing library owner; E receipt | Retain accepted divergence or cite actual fix; do not promise a new library implementation | Owning task must record exact current evidence and disposition |
 | Per-job highlight latency | not remeasured at entry | open | Operator-deferred | Retain owner/next-touch trigger, not a new release blocker | Owning task must record exact current evidence and disposition |
-| Hosted expiring links, bundle Export, fullscreen Share, XML colouring restoration, print, large files/PDFs, prototype variants, old-origin state | not remeasured at entry | open | Existing explicit Later/Dropped decisions | Not delivered and not silently added to scope | Owning task must record exact current evidence and disposition |
+| Required appearance continuity | operator request 2026-11-10; no implementation claimed | open | Required follow-on leaf plan; E/F verify | Canonical catalogue, both skins/all palettes/system, lazy/live changes, accessibility and existing geometry budgets | Must ship before final E/F acceptance |
+| #1418 parity and #1420 draft lifecycle | recorded operator ruling 2026-10-25; child tickets still Backlog at 2026-11-10 check | open | Required follow-on spec/leaf plans; E/F and Task 18 verify | Outside non-repo folders, variants, large files, PDFs, configured tracker links, private draft snapshots/lifecycle, side-by-side installed check | Required; old Later/Dropped classification is not a waiver |
+| Print, figure-overlay Back-to-close and old-origin state | rich-docs parity/state rows conflict or need reconciliation with later #1418 promise; no full implementation audit claimed | open | Required parity follow-on spec/leaf plan; E reconciliation, F installed comparison | Complete capability/state inventory; preserve current sandbox/state rules until reviewed resolution | Older Later/Dropped text is not a waiver; genuine product conflict needs operator ruling before E/F |
+| Other hosted publishing, bundle Export, fullscreen Share and XML colouring restoration | not remeasured at entry | open | Existing explicit Later/Dropped decisions, excluding #1418/#1420 | Not delivered; do not confuse general hosting deferral with required private draft-review sharing | Owning task must record exact current evidence and disposition |
 | Desktop mails 17022/17033: reader-mount-steals-focus | C16 worker reported reproduction at `43dfc2a51311f7e587636677998258491668429e`: a 3-second held reader chunk failed all eight first-Tab-stop cases; not independently reproduced by this coordinator | open | D Task 13 explicit focus regression/repair; E Task 15 verifies closure | Held-chunk host-control/next-Tab and preserved no-owner M8.1 cases, two focus mutations, issued D departure and three rich-docs focus amendments in Task 13 | Routed from the previously unimplemented A/next-touch note by entry review 17041; adoption does not claim this fix. Must be resolved with measured evidence before E/F acceptance; no silent acceptance |
 | Desktop mail 17022: unfolded-refusal-name-cut | reported at C16 `43dfc2a51311f7e587636677998258491668429e`; not independently reproduced | open | E / header carry closure | Refused GitHub + unfolded crumbs across the reported narrow-width band; measure name truncation | Preserve peer's report, reproduce and disposition; not a new permission to rewrite desktop A |
 
@@ -398,7 +431,7 @@ Each source is the corresponding completion-design §7 row. `measuredRef` is not
 
 ### Waiting on you
 
-- No repeated approval/signing/phone-evidence request. Reserved rollout, device and retirement actions become precise console items when ready; all unblocked work proceeds autonomously.
+- Do not repeat approval/signing/phone evidence or the recorded frozen-snapshot choice. Required follow-on designs still owe access-model/comment/security decisions and any genuine parity/state conflict; raise only operator-owned choices as precise console items when needed. Reserved rollout, device and retirement actions also wait for exact entry evidence; all unblocked work proceeds autonomously.
 
 ### Later
 
