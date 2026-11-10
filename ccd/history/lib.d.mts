@@ -128,6 +128,26 @@ export const HEALTH_WORDS: Readonly<Record<string, HealthClass>>;
 
 export function idOk(id: unknown): boolean;
 export function spoolFileIdOf(name: unknown): string | null;
+
+// --- W4 addendum P1, P10, P20: the subagent file grammars and identity
+export const RUN_ID_RE: RegExp;
+export const AGENT_ID_MAX: number;
+export function agentIdOk(id: unknown): boolean;
+export type AgentLevel = 'root' | 'project' | 'session' | 'subagents' | 'workflows' | 'run';
+export const AGENT_LEVELS: readonly AgentLevel[];
+export type AgentDirReason = 'link' | 'not-dir' | 'unlistable';
+export const AGENT_DIR_REASONS: readonly AgentDirReason[];
+export type AgentFileReason = 'run-id' | 'name' | 'link' | 'not-regular';
+export const AGENT_FILE_REASONS: readonly AgentFileReason[];
+export type AgentName =
+  | { role: 'candidate'; id: string | null }
+  | { role: 'meta'; id: string }
+  | { role: 'journal' }
+  | { role: 'descend' };
+export function classifyAgentName(name: string, where: 'subagents' | 'run'): AgentName;
+export function decideAgentDir(i: { kind: 'dir' | 'link' | 'file' | 'other'; listable: boolean }): { enter: true } | { enter: false; reason: AgentDirReason };
+export function decideAgentFile(i: { kind: 'file' | 'link' | 'dir' | 'other'; id: string | null; runOk: boolean }): { verdict: 'admit' } | { verdict: 'refuse'; reason: AgentFileReason };
+export function agentKey(id: string, runId: string | null): string;
 export function readBoxEnvValue(text: string, key: string): { found: boolean; value: string };
 export interface HistoryPaths {
   readonly root: string; readonly spool: string; readonly draining: string; readonly journalDir: string;

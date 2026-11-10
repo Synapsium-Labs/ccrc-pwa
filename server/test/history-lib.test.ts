@@ -19,6 +19,8 @@ import {
   SPOOL_EVENTS, SPOOL_SOURCES, SPOOL_NODE_KINDS, EPOCH_CAUSES, DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES,
   BACKENDS, JOURNAL_KINDS, JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS,
   UUID_RE, WRITER_RE, idOk, readBoxEnvValue, historyPaths,
+  AGENT_ID_MAX, RUN_ID_RE, AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
+  agentIdOk, classifyAgentName, decideAgentDir, decideAgentFile, agentKey,
 } from '../../ccd/history/lib.mjs';
 import {
   canonicalJson, JSON_DEPTH_MAX, JSON_NODES_MAX, jsonWithinStructureBound, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
@@ -62,14 +64,42 @@ import * as libFork from '../../ccd/history/lib.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
 
-describe('lib.mjs is L1: its import block is node:crypto and nothing else (spec §6.4, §13)', () => {
+// lib stays free of I/O: its one import besides node:crypto is an L0 file that imports nothing (W4 addendum P10, the shared arm;
+// the coordinator's ruling in fix round 4, review 1735 F1).
+const LIB_IMPORTS = ['node:crypto', '../../shared/workflow-ids.mjs'];
+const SHARED_IDS = join(REPO, 'shared', 'workflow-ids.mjs');
+// Module level (not the ring describe's own), so the import case above it reads the same row (review 1737 A7).
+/** L3 never imports an outer ring and only L4 may reach `../compact-card.mjs`; store.mjs is the sole node:sqlite importer. */
+const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {
+  'lib.mjs': { ring: 'L1', forbids: (s) => !LIB_IMPORTS.includes(s) },
+  'store.mjs': { ring: 'L3', forbids: (s) => s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') },
+  'sweep.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
+  'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
+  // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
+  'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  // W3 Task 1B: the steer file's IO, L3, which card.mjs (L4) calls. It imports lib and store and nothing outward, and reaches SQLite through the handle it is given.
+  'steer.mjs': { ring: 'L3', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './card.mjs' || s === './derive.mjs' || s.startsWith('../') },
+  'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+  'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
+};
+
+describe('lib.mjs is L1: its import block is node:crypto and the shared run-id grammar, nothing else (spec §6.4, §13; W4 addendum P10)', () => {
   const src = readFileSync(LIB, 'utf8');
 
-  it('imports exactly node:crypto — no fs, no sqlite, no child_process, nothing that imports them', () => {
+  it('imports exactly node:crypto and the shared run-id grammar — no fs, no sqlite, no child_process, nothing that imports them', () => {
     const specs = specsOf(src);
     // Non-vacuity: a reader that matched nothing would pass every ring.
     expect(specs.length, 'the import scan matched nothing').toBeGreaterThan(0);
-    expect(specs).toEqual(['node:crypto']);
+    expect([...specs].sort()).toEqual([...LIB_IMPORTS].sort());
+    expect(specsOf(readFileSync(SHARED_IDS, 'utf8'))).toEqual([]);   // the L0 file imports nothing
+    expect(otherDoors(readFileSync(SHARED_IDS, 'utf8'))).toEqual([]);
+  });
+
+  it('CONTROL (review 1735 F1): a second shared import reds both pins', () => {
+    const more = `${src}\nimport { SPAWN_X } from '../../shared/spawn.mjs';`;
+    expect([...specsOf(more)].sort()).not.toEqual([...LIB_IMPORTS].sort());
+    expect(specsOf(more).filter(RINGS['lib.mjs']!.forbids)).toEqual(['../../shared/spawn.mjs']);
   });
 
   it('reaches no module by any other door, and reads no environment', () => {
@@ -103,20 +133,6 @@ const otherDoors = (src: string): string[] => DOORS.filter((r) => r.test(codeOf(
 describe('every ccd/history module and history test fixture keeps its ring (spec §6.4, §13; plan Global Constraints "Rings"; review 316 F26)', () => {
   const HIST = join(REPO, 'ccd', 'history');
   const FIX = join(REPO, 'server', 'test', 'fixtures', 'history');
-  /** L3 never imports an outer ring and only L4 may reach `../compact-card.mjs`; store.mjs is the sole node:sqlite importer. */
-  const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {
-    'lib.mjs': { ring: 'L1', forbids: (s) => s !== 'node:crypto' },
-    'store.mjs': { ring: 'L3', forbids: (s) => s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') },
-    'sweep.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
-    'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
-    // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
-    'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
-    'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
-    // W3 Task 1B: the steer file's IO, L3, which card.mjs (L4) calls. It imports lib and store and nothing outward, and reaches SQLite through the handle it is given.
-    'steer.mjs': { ring: 'L3', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './card.mjs' || s === './derive.mjs' || s.startsWith('../') },
-    'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
-    'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
-  };
   /**
    * - A preload is a seam from outside (D-4247). It imports only node builtins, never the module graph it patches, with ONE allowance
    *   (FU6, B3M21/B3M22): a lazy `import()` that LAZY_IMPORTS names for that file, exactly. preload-faults.mjs reads store.mjs's
@@ -6096,7 +6112,12 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
     const dir = mkTmp('ccrc-history-f2r5-');
     const copy = join(dir, 'lib-instrumented.mjs');
     const EXPORTS = 'export { isUnicode61Token, unicode61Fold, isDroppedMark };';
-    writeFileSync(copy, `${readFileSync(LIB, 'utf8')}\n${EXPORTS}\n`);
+    // The copy lives in a temp dir where lib's relative `../../shared/workflow-ids.mjs` does not resolve, so that ONE specifier is
+    // rewritten to the shared file's absolute URL (W4 addendum P10); CONTROL: the rewrite replaced exactly one specifier.
+    const SHARED_SPEC = "'../../shared/workflow-ids.mjs'";
+    const libBytes = readFileSync(LIB, 'utf8');
+    expect(libBytes.split(SHARED_SPEC).length - 1, 'CONTROL: lib names the shared run-id file in exactly one specifier').toBe(1);
+    writeFileSync(copy, `${libBytes.replace(SHARED_SPEC, JSON.stringify(pathToFileURL(SHARED_IDS).href))}\n${EXPORTS}\n`);
     const h = await import(/* @vite-ignore */ `${pathToFileURL(copy).href}?f2r5=${process.pid}-${Date.now()}`) as {
       isUnicode61Token: (cp: number) => boolean; unicode61Fold: (cp: number) => number; isDroppedMark: (cp: number) => boolean;
     };
@@ -12131,5 +12152,68 @@ describe('CP-39d: decideActiveRead (D-7096)', () => {
     // the boundary: exactly tornStaleMs old is stale (the examinedSize rule is `>=`)
     const edge = BigInt(NOW - lib.SCAN_INTERVAL_MS) * 1_000_000n;
     expect(decide(row({ mtimeNs: edge }), stat({ mtimeNs: edge, size: 150 })), 'exactly tornStaleMs old').toBe('same');
+  });
+});
+
+// W4 addendum P1, P10, P20: the subagent file grammars, the identity and the run-id holder.
+describe('the subagent grammars and identity (W4 addendum P1, P10, P20)', () => {
+  it('the grammar constants and vocabularies are as the addendum states them', () => {
+    expect(AGENT_ID_MAX).toBe(128);
+    expect(AGENT_LEVELS).toEqual(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
+    expect(AGENT_DIR_REASONS).toEqual(['link', 'not-dir', 'unlistable']);
+    expect(AGENT_FILE_REASONS).toEqual(['run-id', 'name', 'link', 'not-regular']);
+    expect(RUN_ID_RE.source).toBe('^wf_[0-9a-f]{8}-[0-9a-f]{3}$');
+    expect([RUN_ID_RE.test('wf_0123abcd-0a1'), RUN_ID_RE.test('wf_0123abcd-0a'), RUN_ID_RE.test('wf_0123ABCD-0a1'), RUN_ID_RE.test('x/wf_0123abcd-0a1')]).toEqual([true, false, false, false]);
+  });
+
+  it.each([
+    ['', false], ['a', true], ['a'.repeat(128), true], ['a'.repeat(129), false], ['a.b', false],
+    ['-a', true], ['a_b', true], ['a b', false], ['é', false],
+  ] as const)('agentIdOk(%j) is %s', (id, ok) => expect(agentIdOk(id)).toBe(ok));
+
+  it('agentIdOk answers false for a non-string', () => {
+    expect([agentIdOk(undefined as unknown as string), agentIdOk(null as unknown as string), agentIdOk(7 as unknown as string)]).toEqual([false, false, false]);
+  });
+
+  it('classifyAgentName tells transcript candidates from companions', () => {
+    expect(classifyAgentName('agent-x.jsonl', 'subagents')).toEqual({ role: 'candidate', id: 'x' });
+    expect(classifyAgentName('agent-x.meta.json', 'run')).toEqual({ role: 'meta', id: 'x' });
+    expect(classifyAgentName('journal.jsonl', 'run')).toEqual({ role: 'journal' });
+    expect(classifyAgentName('journal.jsonl', 'subagents')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName('workflows', 'subagents')).toEqual({ role: 'descend' });
+    expect(classifyAgentName('agent-a.b.jsonl', 'subagents')).toEqual({ role: 'candidate', id: null });
+  });
+
+  it('classifyAgentName: the other names, each where it is not special', () => {
+    expect(classifyAgentName('workflows', 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName('agent-x.meta.json', 'subagents')).toEqual({ role: 'meta', id: 'x' });
+    expect(classifyAgentName('agent-a.b.meta.json', 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName('agent-.jsonl', 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName(`agent-${'a'.repeat(129)}.jsonl`, 'run')).toEqual({ role: 'candidate', id: null });
+    expect(classifyAgentName(`agent-${'a'.repeat(128)}.jsonl`, 'run')).toEqual({ role: 'candidate', id: 'a'.repeat(128) });
+    expect(classifyAgentName('notes.txt', 'subagents')).toEqual({ role: 'candidate', id: null });
+  });
+
+  it('decideAgentDir enters a listable directory and refuses a link, a non-directory and an unlistable one', () => {
+    expect(decideAgentDir({ kind: 'dir', listable: true })).toEqual({ enter: true });
+    expect(decideAgentDir({ kind: 'dir', listable: false })).toEqual({ enter: false, reason: 'unlistable' });
+    expect(decideAgentDir({ kind: 'link', listable: true })).toEqual({ enter: false, reason: 'link' });
+    expect(decideAgentDir({ kind: 'file', listable: true })).toEqual({ enter: false, reason: 'not-dir' });
+    expect(decideAgentDir({ kind: 'other', listable: true })).toEqual({ enter: false, reason: 'not-dir' });
+  });
+
+  it('decideAgentFile admits a regular file with a good name in a good run, and refuses in order: run-id, name, link, not-regular', () => {
+    expect(decideAgentFile({ kind: 'file', id: 'x', runOk: true })).toEqual({ verdict: 'admit' });
+    expect(decideAgentFile({ kind: 'file', id: 'x', runOk: false })).toEqual({ verdict: 'refuse', reason: 'run-id' });
+    expect(decideAgentFile({ kind: 'link', id: null, runOk: false })).toEqual({ verdict: 'refuse', reason: 'run-id' });
+    expect(decideAgentFile({ kind: 'link', id: null, runOk: true })).toEqual({ verdict: 'refuse', reason: 'name' });
+    expect(decideAgentFile({ kind: 'link', id: 'x', runOk: true })).toEqual({ verdict: 'refuse', reason: 'link' });
+    expect(decideAgentFile({ kind: 'other', id: 'x', runOk: true })).toEqual({ verdict: 'refuse', reason: 'not-regular' });
+    expect(decideAgentFile({ kind: 'dir', id: 'x', runOk: true })).toEqual({ verdict: 'refuse', reason: 'not-regular' });
+  });
+
+  it('agentKey is <ID> or <RUN>/<ID> (P1)', () => {
+    expect(agentKey('x', null)).toBe('x');
+    expect(agentKey('x', 'wf_0123abcd-0a1')).toBe('wf_0123abcd-0a1/x');
   });
 });

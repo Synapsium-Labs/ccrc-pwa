@@ -4,7 +4,8 @@
 // Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md
 // (§6.4 rings by imports, §13 cross-cutting invariants). L1 is a property of
 // this file's IMPORTS, not its path, and history-lib.test.ts reads it off the
-// import block: `node:crypto` is the only import. No `fs`, no `sqlite`, no
+// import block: `node:crypto` and the L0 run-id file `shared/workflow-ids.mjs`
+// (which imports nothing) are the only imports. No `fs`, no `sqlite`, no
 // `child_process`, no environment read, and nothing that imports them —
 // `compact-card.mjs` imports `node:fs`, so a function of its reaches a
 // decision here as an injected parameter, never by import. A decision that
@@ -21,6 +22,9 @@
 // file, so every export added here is declared there in the same commit.
 // `node:crypto` arrives with the ids and digests (canonical JSON, eventKey).
 import { createHash } from 'node:crypto';
+// The workflow run id's one definition (W4 addendum P10, the shared arm): an L0 file that imports nothing, shared with the
+// server's workflow reader, so no loader of this file can reach I/O through it. Re-exported below beside the subagent grammars.
+import { RUN_ID_RE } from '../../shared/workflow-ids.mjs';
 
 // ── exit codes and the reason words (§8.3) ────────────────────────────────
 // D-4169: 4 (writer busy) and 9 (no store on this box)
@@ -442,6 +446,61 @@ export function spoolFileIdOf(name) {
   if (typeof name !== 'string' || name.startsWith('.') || !name.endsWith('.jsonl')) return null;
   const id = name.slice(0, -'.jsonl'.length);
   return idOk(id) ? id : null;
+}
+
+// ── the subagent file grammars (W4 addendum P1, P10, P20) ─────────────────
+// A session's subagent transcripts live under `<session>/subagents/agent-<ID>.jsonl`, and a workflow's under
+// `<session>/subagents/workflows/<RUN>/agent-<ID>.jsonl`, each with an `agent-<ID>.meta.json` companion; a run directory
+// also holds `journal.jsonl`. These are the pure halves of the walk: the names it tells apart, the directories it enters
+// and the files it admits. The walk itself (lstat, listing, the cursors) is the sweep's.
+export { RUN_ID_RE };
+/** The agent id grammar: the hook's `_hook_compact_scope` gate and `CCRC_ID_MAX`, `[A-Za-z0-9_-]`, 1 to 128 chars. */
+export const AGENT_ID_MAX = 128;
+const AGENT_ID_RE = /^[A-Za-z0-9_-]+$/;
+export function agentIdOk(id) {
+  return typeof id === 'string' && id.length >= 1 && id.length <= AGENT_ID_MAX && AGENT_ID_RE.test(id);
+}
+/** The levels of the walk, outermost first: the home's projects root, a project, a session, its `subagents/`, a
+ *  `workflows/` directory and one run's directory. Plan-chosen words (the census names where a refusal happened). */
+export const AGENT_LEVELS = Object.freeze(['root', 'project', 'session', 'subagents', 'workflows', 'run']);
+/** Why a directory is not entered: a symbolic link, something that is not a directory, a directory that cannot be listed. */
+export const AGENT_DIR_REASONS = Object.freeze(['link', 'not-dir', 'unlistable']);
+/** Why a candidate file is refused, in the order they are tested (decideAgentFile). */
+export const AGENT_FILE_REASONS = Object.freeze(['run-id', 'name', 'link', 'not-regular']);
+
+const AGENT_TRANSCRIPT_RE = /^agent-(.+)\.jsonl$/;
+const AGENT_META_RE = /^agent-(.+)\.meta\.json$/;
+/** What a name in `subagents/` (`where` 'subagents') or in a run directory (`where` 'run') is. `workflows` is entered from
+ *  `subagents/` only; `journal.jsonl` is the run's journal in a run directory only (in `subagents/` it is just an
+ *  unnamed candidate); `agent-<ID>.meta.json` with a good ID is a companion. Every other name is a candidate, whose `id` is
+ *  `<ID>` for `agent-<ID>.jsonl` with a good ID, else null (the census counts it refused by name). */
+export function classifyAgentName(name, where) {
+  if (where === 'subagents' && name === 'workflows') return { role: 'descend' };
+  if (where === 'run' && name === 'journal.jsonl') return { role: 'journal' };
+  const meta = AGENT_META_RE.exec(name);
+  if (meta && agentIdOk(meta[1])) return { role: 'meta', id: meta[1] };
+  const t = AGENT_TRANSCRIPT_RE.exec(name);
+  return { role: 'candidate', id: t && agentIdOk(t[1]) ? t[1] : null };
+}
+/** Whether the walk enters a directory entry, from its lstat kind and whether it could be listed. A link is never followed. */
+export function decideAgentDir(i) {
+  if (i.kind === 'link') return { enter: false, reason: 'link' };
+  if (i.kind !== 'dir') return { enter: false, reason: 'not-dir' };
+  if (!i.listable) return { enter: false, reason: 'unlistable' };
+  return { enter: true };
+}
+/** Whether a candidate transcript is admitted, tested in AGENT_FILE_REASONS' order, so every candidate in a misnamed run
+ *  directory is `run-id` whatever else is wrong with it. */
+export function decideAgentFile(i) {
+  if (!i.runOk) return { verdict: 'refuse', reason: 'run-id' };
+  if (i.id === null) return { verdict: 'refuse', reason: 'name' };
+  if (i.kind === 'link') return { verdict: 'refuse', reason: 'link' };
+  if (i.kind !== 'file') return { verdict: 'refuse', reason: 'not-regular' };
+  return { verdict: 'admit' };
+}
+/** The identity of a subagent within its parent session (P1): the Agent tool's `<ID>`, or a workflow agent's `<RUN>/<ID>`. */
+export function agentKey(id, runId) {
+  return runId === null ? id : `${runId}/${id}`;
 }
 
 // ── the one role reader (§5.2, O53) ───────────────────────────────────────

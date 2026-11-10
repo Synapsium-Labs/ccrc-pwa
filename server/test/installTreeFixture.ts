@@ -149,6 +149,9 @@ export const TREE_FILES = [
   // without them, so every install fixture built on this list needs them.
   'shared/redact.mjs',
   'shared/redact-cli.mjs',
+  // ccrc history's policy ring (`ccd/history/lib.mjs`, copied whole with `ccd/history`) imports the run-id grammar from here
+  // (W4 addendum P10, the shared arm); a placed tree without it fails `status --json` at load, and doctor's history check with it.
+  'shared/workflow-ids.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would

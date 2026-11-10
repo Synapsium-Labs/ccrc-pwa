@@ -28,8 +28,9 @@ import {
 } from '../../../shared/workflows.js';
 
 /** Claude Code's run id, as measured: `wf_` + 8 hex + `-` + 3 hex. Anything
- *  else in the runs directory is not a run. */
-export const RUN_ID_RE = /^wf_[0-9a-f]{8}-[0-9a-f]{3}$/;
+ *  else in the runs directory is not a run. Defined once in `shared/workflow-ids.mjs`
+ *  (W4 addendum P10), so ccrc history's lib reads the same grammar. */
+export { RUN_ID_RE } from '../../../shared/workflow-ids.mjs';
 
 /** The agent-call key every journal line names (`v<n>:<sha256 hex>`). */
 const KEY_RE = /^v\d+:[0-9a-f]{64}$/;
