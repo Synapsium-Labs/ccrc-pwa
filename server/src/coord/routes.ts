@@ -54,7 +54,7 @@ import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { operatorRetainLease, resolveLease, retainLease, runStampsOfSeries, type LeaseDoorDeps } from './delegationLeaseDoor.js';
 import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } from './delegation-lease-acts.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
-import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { BASE_ONLY_MERGE, doneRunOf, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
@@ -2011,7 +2011,7 @@ export function registerCoordRoutes(
     if (to === 'awaiting-review' || to === 'merging') {
       const measured = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+        doneRunOf(run),
         claim,
       );
       if (!measured.ok) {
