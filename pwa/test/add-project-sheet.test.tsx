@@ -2,6 +2,7 @@
 // drives it: `open` true is open, false is closed, and a close is a `rerender` (vaul unmounts the panel at
 // `open={false}`, so a reset that lived inside it would never run). `fireEvent`, not `userEvent`: vaul's drag handler
 // raises unhandled errors under `userEvent`'s pointer sequence (`add-workspace-sheet.test.tsx` says the same).
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ToastHost } from '@ccrc/ui';
@@ -9,6 +10,10 @@ import { AddProjectSheet, type AddProjectSheetProps } from '../src/fleet/AddProj
 import { PROJECT_ADD_HINT, PROJECT_ADD_REFUSAL_TEXT, PROJECT_ADD_TEXT, projectAddedText } from '../src/fleet/projectAddWords';
 import type { ProjectAddOutcome } from '../src/fleet/useProjectRows';
 import { ApiError } from '../src/lib/apiError';
+import { api } from '../src/lib/api';
+import { useProjectAddForm } from '../src/fleet/AddProjectForm';
+import { LINKING_REFUSAL_TEXT } from '../src/lib/refusalWords';
+import { LINKING_ADD_TEXT } from '../src/fleet/projectAddWords';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -320,5 +325,97 @@ describe('closing', () => {
     await act(async () => { answer(added('repo')); });
     expect(await screen.findByText('Added project repo')).toBeInTheDocument();
     expect(p.onClose).not.toHaveBeenCalled();
+  });
+});
+
+// The linking standard's two optional fields (D-8147, plan Task 8): the add-project sheet only, never the new-session
+// sheet's inline add.
+describe('Linear team key and the template PR (D-8147)', () => {
+  const keyField = (): HTMLInputElement => screen.getByLabelText(LINKING_ADD_TEXT.teamKey) as HTMLInputElement;
+  const templateBox = (): HTMLElement => screen.getByRole('checkbox', { name: new RegExp(LINKING_ADD_TEXT.template) });
+  const fillClone = (): void => { typeIn(repoField(), 'example/repo'); };
+
+  it('a clone with a team key saves it after the add', async () => {
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+    });
+    const p = props();
+    mount(p);
+    fillClone();
+    typeIn(keyField(), 'key');
+    expect(keyField().value).toBe('KEY');
+    fireEvent.click(confirm());
+    await waitFor(() => expect(save).toHaveBeenCalledWith('repo', { teamKey: 'KEY', override: null }));
+    expect(await screen.findByText(`${projectAddedText('repo', 'github')} ${LINKING_ADD_TEXT.keySaved('KEY')}`)).toBeInTheDocument();
+    expect(p.onClose).toHaveBeenCalled();
+  });
+
+  it('a team key the box refuses is said in its fixed sentence, and the project is still added', async () => {
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(400, { ok: false, error: 'bad-team-key', detail: 'box text' }));
+    mount(props());
+    fillClone();
+    typeIn(keyField(), 'k');
+    fireEvent.click(confirm());
+    const toastText = await screen.findByText(new RegExp(`^${projectAddedText('repo', 'github')} `));
+    expect(toastText.textContent).toContain(LINKING_REFUSAL_TEXT['bad-team-key']);
+    expect(toastText.textContent).not.toContain('box text');
+  });
+
+  it('the template box runs the template act after the add and reports it in the toast', async () => {
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+    });
+    const open = vi.spyOn(api, 'openTemplatePr').mockResolvedValue({ ok: true, url: 'https://github.com/example/repo/pull/3' });
+    mount(props());
+    fillClone();
+    typeIn(keyField(), 'KEY');
+    expect(templateBox()).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(templateBox());
+    expect(templateBox()).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(confirm());
+    await waitFor(() => expect(open).toHaveBeenCalledWith('repo'));
+    expect(await screen.findByText(new RegExp('https://github.com/example/repo/pull/3'))).toBeInTheDocument();
+  });
+
+  it('a repository not read yet says when to open the template from Settings', async () => {
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+    });
+    vi.spyOn(api, 'openTemplatePr').mockRejectedValue(new ApiError(409, { ok: false, error: 'repo-unmeasured' }));
+    mount(props());
+    fillClone();
+    typeIn(keyField(), 'KEY');
+    fireEvent.click(templateBox());
+    fireEvent.click(confirm());
+    expect(await screen.findByText(new RegExp(LINKING_ADD_TEXT.unmeasured))).toBeInTheDocument();
+  });
+
+  it('the empty arm shows no template box, and still offers the key', () => {
+    mount(props());
+    pickEmpty();
+    expect(screen.queryByRole('checkbox', { name: new RegExp(LINKING_ADD_TEXT.template) })).not.toBeInTheDocument();
+    expect(keyField()).toBeInTheDocument();
+  });
+
+  it('an add with neither field makes no linking call', async () => {
+    const save = vi.spyOn(api, 'saveLinking');
+    const open = vi.spyOn(api, 'openTemplatePr');
+    mount(props());
+    fillClone();
+    fireEvent.click(confirm());
+    expect(await screen.findByText('Added project repo')).toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('the new-session inline add shows neither field', () => {
+    function Inline(): ReactNode {
+      const form = useProjectAddForm({ active: true, add: vi.fn(), adding: false, onAdded: vi.fn() });
+      return form.fields;
+    }
+    render(<Inline />);
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.teamKey)).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(repoField()).toBeInTheDocument();
   });
 });

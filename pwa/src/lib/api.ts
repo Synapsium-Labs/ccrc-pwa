@@ -30,6 +30,7 @@ import {
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
+import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
@@ -532,6 +533,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setProjectPool: (project: string, pool: string | null) =>
       postJson<{ ok: true; pool: ProjectPoolWire; warning?: 'unknown-pool' }>(
         `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
+    /** `POST /api/projects/:project/linking` (D-8147): set a project's Linear team key and visibility override (`null`
+     *  clears each). The answer is the stored row, read back after the write, and is what the card shows. */
+    saveLinking: (project: string, body: LinkingWriteBody) =>
+      postJson<{ ok: true; linking: ProjectLinkingWire }>(`/api/projects/${encodeURIComponent(project)}/linking`, body),
+    /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
+     *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
+    openTemplatePr: (project: string) =>
+      postJson<{ ok: true; url: string }>(`/api/projects/${encodeURIComponent(project)}/pr-template`),
     /** `POST /api/pools/accounts/:id` (Task 7) — tag an account into a pool,
      *  or clear it with `pools: []`. Wave 1 is one pool per account, but the
      *  wire already carries an array (the server's own `one-pool-per-account`

@@ -6,6 +6,7 @@ import type {
 } from '../../../shared/api';
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
+import type { LinkingRefusal } from '../../../shared/linking';
 import type { RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
@@ -335,10 +336,45 @@ export function apiErrorText(err: unknown): string {
     if (typeof code === 'string') {
       const text = API_ERROR_TEXT[code];
       if (text !== undefined) return text;
+      // The linking standard's words (D-8147): the ones that name a fact the answer carries, then the fixed table.
+      const named = Object.hasOwn(LINKING_NAMED_TEXT, code) ? LINKING_NAMED_TEXT[code]!(err.body as Record<string, unknown>) : null;
+      if (named !== null) return named;
+      const linking = refusalText(err, LINKING_REFUSAL_TEXT);
+      if (linking !== null) return linking;
     }
   }
   return err instanceof Error ? err.message : String(err);
 }
+
+/**
+ * The linking standard's refusals (D-8147; `LINKING_REFUSALS`, `shared/linking.ts`) in the operator's words, one fixed
+ * sentence per word; the box's own text never reaches the screen. A `Record`, so a word the list gains without a sentence
+ * is a compile error. `apiErrorText` falls back to it, so the PR sheet, the workspace sheet and the Settings card say the
+ * same sentence for the same word.
+ */
+export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
+  'bad-team-key': 'That is not a Linear team key. A team key starts with a capital letter and has up to 16 capital letters, digits or underscores, like KEY.',
+  'bad-override': 'The server did not accept that visibility. Choose Automatic, Private or Public.',
+  'no-project': 'The server does not know that project. Reload the list and try again.',
+  'repo-public': 'This repository is public, so it takes no ticket id and no template pull request. Nothing was opened.',
+  'repo-unmeasured': "ccrc has not read this repository's visibility yet. Try again in a few minutes.",
+  'template-exists': 'This repository already has a pull request template. Nothing was opened.',
+  'no-team-key': "Set this project's Linear team key first, then open the template pull request.",
+  'tracker-id-public': 'This repository is public: remove the ticket id from the title and body. Link the ticket from Linear instead.',
+  'ticket-slug-public': 'This repository is public, so a workspace name cannot be just a ticket id. Name the workspace in words.',
+  'template-failed': 'The template pull request could not be opened. Nothing was changed. Try again.',
+};
+
+/** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
+ *  code). `null`: the answer did not carry it, so the fixed sentence above is what is said. */
+const LINKING_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {
+  /** The PR sheet: "This repository is public: remove KEY-123 from the title and body. Link the ticket from Linear instead." */
+  'tracker-id-public': (body) => {
+    const ids = Array.isArray(body['ids']) ? body['ids'].filter((i): i is string => typeof i === 'string' && /^[A-Z][A-Z0-9_]{0,15}-\d{1,9}$/.test(i)) : [];
+    return ids.length === 0 ? null
+      : `This repository is public: remove ${ids.join(', ')} from the title and body. Link the ticket from Linear instead.`;
+  },
+};
 
 /**
  * `POST /api/sessions/:id/kickoff`'s own refusals (wave-4 review, MINOR 3,

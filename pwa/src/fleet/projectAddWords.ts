@@ -9,7 +9,7 @@
 // STATUS: a 502, which is git's failure and is said from its stderr whatever word rides beside it, and a 404, a server
 // older than the route.
 import { ApiError } from '../lib/apiError';
-import { refusalText } from '../lib/refusalWords';
+import { apiErrorText, refusalText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
 import {
   deriveProjectName, isNewProjectName, parseGithubRepo, PROJECT_NAME_MAX, type GithubRepo, type ProjectAddBody,
@@ -222,4 +222,54 @@ export function projectOfferText(offer: Exclude<ProjectSearchOffer, null | { kin
   return offer.name === null
     ? { title, detail: 'From GitHub, under a name you give it' }
     : { title, detail: `From GitHub, as project ${offer.name}` };
+}
+
+/** The add-project sheet's two optional linking fields and the lines their follow-up acts add to the success toast
+ *  (the linking standard, D-8147). The sheet only: the new-session sheet's inline add has neither field. */
+export const LINKING_ADD_TEXT = {
+  teamKey: 'Linear team key (optional)',
+  template: 'Open a PR adding the linking template',
+  /** `repo-unmeasured` on the template act: a project just cloned has not been read yet. */
+  unmeasured: "ccrc has not read this repository's visibility yet; open the template from Settings › Project linking in a few minutes.",
+  keySaved: (key: string): string => `Linear team key ${key} saved.`,
+  keyFailed: (why: string): string => `The team key was not saved. ${why}`,
+  templateOpened: (url: string): string => `Template pull request opened: ${url}`,
+  templateFailed: (why: string): string => `The template pull request was not opened. ${why}`,
+} as const;
+
+/** The linking choices the form held when it sent: a trimmed upper-cased key (`null`: none) and whether the template box
+ *  was ticked. */
+export interface LinkingChoice { teamKey: string | null; template: boolean }
+
+/** Whether the form sends a linking follow-up at all. */
+export const hasLinkingChoice = (c: LinkingChoice | undefined): c is LinkingChoice => c !== undefined && (c.teamKey !== null || c.template);
+
+/** The toast's added lines, in order, for a project just added. Each act runs after the add, and one failing is a line,
+ *  never a rollback: the project exists either way. `save` and `open` are `api.saveLinking` and `api.openTemplatePr`. */
+export async function linkingFollowUps(
+  project: string,
+  choice: LinkingChoice,
+  acts: {
+    save: (project: string, body: { teamKey: string | null; override: null }) => Promise<unknown>;
+    open: (project: string) => Promise<{ url: string }>;
+  },
+): Promise<string[]> {
+  const lines: string[] = [];
+  if (choice.teamKey !== null) {
+    try {
+      await acts.save(project, { teamKey: choice.teamKey, override: null });
+      lines.push(LINKING_ADD_TEXT.keySaved(choice.teamKey));
+    } catch (err) {
+      lines.push(LINKING_ADD_TEXT.keyFailed(apiErrorText(err)));
+    }
+  }
+  if (choice.template) {
+    try {
+      lines.push(LINKING_ADD_TEXT.templateOpened((await acts.open(project)).url));
+    } catch (err) {
+      const unmeasured = refusalText(err, { 'repo-unmeasured': LINKING_ADD_TEXT.unmeasured });
+      lines.push(unmeasured ?? LINKING_ADD_TEXT.templateFailed(apiErrorText(err)));
+    }
+  }
+  return lines;
 }

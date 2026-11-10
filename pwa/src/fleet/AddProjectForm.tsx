@@ -12,16 +12,23 @@
 // while the operator types.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { RadioFieldset, toast } from '@ccrc/ui';
+import { OptionRow, RadioFieldset, toast } from '@ccrc/ui';
 import type { ProjectAddBody, ProjectAddSource } from '../../../shared/projectAdd';
 import type { ProjectAddOutcome } from './useProjectRows';
 import { NAME_FIELD_CLASS, PlainTextField } from './WorkspaceNameField';
-import { PROJECT_ADD_TEXT, formVerdict, prefillName, projectAddRefusalText, type ProjectAddForm } from './projectAddWords';
+import {
+  LINKING_ADD_TEXT, PROJECT_ADD_TEXT, formVerdict, prefillName, projectAddRefusalText, type LinkingChoice, type ProjectAddForm,
+} from './projectAddWords';
 import './fleet.css';
 
 /** The project an add made, as said to the operator: the server's echo, or what the form sent when the echo was
  *  unreadable (the project WAS added). */
-export interface ProjectAdded { name: string; source: ProjectAddSource }
+export interface ProjectAdded {
+  name: string;
+  source: ProjectAddSource;
+  /** What the linking fields held when the form sent (D-8147); only a host that shows them (`linking`) gets it. */
+  linking?: LinkingChoice;
+}
 
 export interface ProjectAddFormHost {
   /** Whether the host is showing the form. Going false forgets the form and orphans an answer still in flight. */
@@ -33,6 +40,9 @@ export interface ProjectAddFormHost {
   /** A success. `dismissed`: the form went away while it ran, so the host says it without acting on a form that is
    *  gone. */
   onAdded: (added: ProjectAdded, dismissed: boolean) => void;
+  /** Show the two optional linking fields (D-8147): a Linear team key, and for a clone the template pull request. The
+   *  add-project sheet only; the new-session sheet's inline add leaves it off and shows neither. */
+  linking?: boolean;
 }
 
 export interface ProjectAddFormState {
@@ -59,13 +69,16 @@ const SOURCES: { value: ProjectAddSource; label: string }[] = [
  *  sheet body scrolls, so it clips, and a focused field that is the form's last child would lose its ring's bottom edge. */
 const FORM_CLASS = `${NAME_FIELD_CLASS.sheetBody} pb-1`;
 
-export function useProjectAddForm({ active, add, adding, onAdded }: ProjectAddFormHost): ProjectAddFormState {
+export function useProjectAddForm({ active, add, adding, onAdded, linking = false }: ProjectAddFormHost): ProjectAddFormState {
   const [form, setForm] = useState<ProjectAddForm>(EMPTY_FORM);
   /** The operator typed the name: the repository stops prefilling it. */
   const [named, setNamed] = useState(false);
   /** Which fields have earned their hint (a blur, or a submit for both). */
   const [shown, setShown] = useState(NO_HINTS);
   const [refusal, setRefusal] = useState<string | null>(null);
+  /** The linking fields (D-8147), held beside the form: the key as typed (upper-cased) and the template box. */
+  const [teamKey, setTeamKey] = useState('');
+  const [template, setTemplate] = useState(false);
   // Bumped whenever the form stops showing: an answer issued under an older generation belongs to a form that is gone.
   const generation = useRef(0);
 
@@ -76,6 +89,8 @@ export function useProjectAddForm({ active, add, adding, onAdded }: ProjectAddFo
     setNamed(false);
     setShown(NO_HINTS);
     setRefusal(null);
+    setTeamKey('');
+    setTemplate(false);
   }, [active]);
 
   const plan = formVerdict(form);
@@ -91,12 +106,16 @@ export function useProjectAddForm({ active, add, adding, onAdded }: ProjectAddFo
     }
     const mine = generation.current;
     setRefusal(null);
+    // What the linking fields hold NOW goes with the add: the form may be reset before the answer lands.
+    const key = teamKey.trim().toUpperCase();
+    const choice: LinkingChoice = { teamKey: key === '' ? null : key, template: verdict.body.source === 'github' && template };
     const outcome = await add(verdict.body);
     if (outcome.kind === 'busy') return;
     const dismissed = mine !== generation.current;
     if (outcome.kind === 'added') {
       // True with or without the form, so a success that lands after a dismissal is said too.
-      onAdded(outcome.answer === 'unreadable' ? { name: verdict.name, source: verdict.body.source } : outcome.answer, dismissed);
+      const added = outcome.answer === 'unreadable' ? { name: verdict.name, source: verdict.body.source } : outcome.answer;
+      onAdded(linking ? { ...added, linking: choice } : added, dismissed);
       return;
     }
     const text = projectAddRefusalText(outcome.error, verdict.body.source);
@@ -156,6 +175,22 @@ export function useProjectAddForm({ active, add, adding, onAdded }: ProjectAddFo
         onBlur={() => setShown((s) => ({ ...s, name: true }))}
         onEnter={submit}
       />
+      {linking && (
+        <>
+          <ProjectAddField
+            label={LINKING_ADD_TEXT.teamKey}
+            value={teamKey}
+            hint={null}
+            locked={adding}
+            onChange={(next) => setTeamKey(next.toUpperCase())}
+            onBlur={() => undefined}
+            onEnter={submit}
+          />
+          {form.source === 'github' && (
+            <OptionRow label={LINKING_ADD_TEXT.template} checked={template} disabled={adding} onClick={() => setTemplate((t) => !t)} />
+          )}
+        </>
+      )}
       {adding && form.source === 'github' && <p role="status" className={NAME_FIELD_CLASS.hint}>{PROJECT_ADD_TEXT.cloningNote}</p>}
       {refusal !== null && <p role="alert" className={NAME_FIELD_CLASS.refusal}>{refusal}</p>}
     </div>

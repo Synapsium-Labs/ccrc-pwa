@@ -232,3 +232,33 @@
    project, a name and a session id, long tokens, so it wraps anywhere rather than push the card sideways at 360. */
 .left-behind-keeps { display: grid; gap: calc(var(--pad-card) / 4); margin: 0; padding: 0; list-style: none; min-width: 0; }
 .left-behind-keeps > li { overflow-wrap: anywhere; }
+
+/* Security › Project linking (the linking standard, D-8147; plan Task 8's width table). Layout only: every word wears
+   `.settings-note` or inherits the card's ink, and the failure line is the page's amber note, so no colour is set here.
+   The card's body is a container, so the pane's width decides, not the window's. Under 480: a row stacks (name, key field
+   and Save on one line, visibility line then the full-width select, template line then the full-width button). From 480:
+   name, key and visibility on one line, the template cell under them. From 760: one grid line, name / key + Save /
+   visibility + select / template + button. The card keeps 960 px at most and is centred. A long name wraps. */
+.linking-section { width: 100%; max-width: 960px; margin-inline: auto; min-width: 0; }
+.linking-card { container-type: inline-size; min-width: 0; }
+.linking-list { display: grid; gap: var(--pad-card); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.linking-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.linking-row + .linking-row { padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); }
+.linking-name { margin: 0; overflow-wrap: anywhere; font-weight: var(--weight-semibold); }
+.linking-cell { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; align-content: start; }
+.linking-cell > * { min-width: 0; }
+.linking-cell p { margin: 0; overflow-wrap: anywhere; }
+.linking-key-line { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.linking-key-line input { width: calc(8ch + 1.5rem + 2px); max-width: 100%; margin: 0; }
+.linking-key-line button { width: auto; flex: 0 0 auto; }
+.linking-cell select { width: 100%; max-width: 100%; }
+.linking-result { min-width: 0; }
+.linking-result p { margin: 0; overflow-wrap: anywhere; }
+@container (min-width: 480px) {
+  .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
+  .linking-template, .linking-result { grid-column: 1 / -1; }
+}
+@container (min-width: 760px) {
+  .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); }
+  .linking-template { grid-column: auto; }
+}

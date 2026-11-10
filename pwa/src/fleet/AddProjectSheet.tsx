@@ -8,7 +8,8 @@ import { Button, QC_ACTIONS, Sheet, toast } from '@ccrc/ui';
 import type { ProjectAddBody } from '../../../shared/projectAdd';
 import type { ProjectAddOutcome } from './useProjectRows';
 import { useProjectAddForm } from './AddProjectForm';
-import { PROJECT_ADD_TEXT, projectAddedText } from './projectAddWords';
+import { api } from '../lib/api';
+import { PROJECT_ADD_TEXT, hasLinkingChoice, linkingFollowUps, projectAddedText } from './projectAddWords';
 import './fleet.css';
 
 export interface AddProjectSheetProps {
@@ -27,11 +28,20 @@ export function AddProjectSheet({ open, onClose, add, adding, onStartSession }: 
     active: open,
     add,
     adding,
+    linking: true,
     onAdded: (added, dismissed) => {
       // True with or without the sheet, so a success that lands after a dismissal is said too, with its action.
       const text = projectAddedText(added.name, added.source);
-      if (onStartSession === undefined) toast(text);
-      else toast(text, 'info', { label: PROJECT_ADD_TEXT.startSession, onClick: () => onStartSession(added.name) });
+      const say = (said: string): void => {
+        if (onStartSession === undefined) toast(said);
+        else toast(said, 'info', { label: PROJECT_ADD_TEXT.startSession, onClick: () => onStartSession(added.name) });
+      };
+      // The linking follow-ups (D-8147) run after the add and each outcome is a line of the one toast. With neither field
+      // set the toast is said at once, as before.
+      if (hasLinkingChoice(added.linking)) {
+        void linkingFollowUps(added.name, added.linking, { save: api.saveLinking, open: api.openTemplatePr })
+          .then((lines) => say([text, ...lines].join(' ')));
+      } else say(text);
       if (!dismissed) onClose();
     },
   });
