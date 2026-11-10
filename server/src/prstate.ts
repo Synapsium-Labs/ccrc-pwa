@@ -3,6 +3,8 @@ import { isPrReason, UNCHECKED_PR } from '../../shared/api.js';
 import type { CcdResult } from './coord/ports.js';
 import { ccdEnding } from './lifecycle.js';
 import { isHead40 } from '../../shared/landing.js';
+import type { LinkingMode } from '../../shared/linking.js';
+import { ticketRefOfBranch, trackerIdsIn } from './linking/policy.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -364,6 +366,7 @@ export function prView(
   line: CcdPrLine | CcdPrFailure | CcdPrSessionFailure | null,
   tasks: TaskItem[] | null,
   prev: PrState | null,
+  linking?: DraftLinking,
 ): PrView {
   if (line === null) return { pr: prev ?? UNCHECKED_PR, draft: null, facts: null };
   // Both failure shapes land here and are treated identically — whose fault it
@@ -379,13 +382,16 @@ export function prView(
     branch: line.branch, baseShort: line.baseShort, repo: line.repo,
     commits: line.ahead, dirty: line.dirty,
   };
-  return { pr, draft: pr.phase === 'none' ? draftPr(line, tasks) : null, facts };
+  return { pr, draft: pr.phase === 'none' ? draftPr(line, tasks, linking) : null, facts };
 }
 
 const FIXUP_RE = /^(fixup|squash|amend|wip)!?\b/i;
 
 /** `ws/quiet-basin` → `quiet-basin`. */
 const deslug = (branch: string): string => branch.slice(branch.lastIndexOf('/') + 1);
+
+/** What `draftPr` needs of a project's linking (D-8147): the rule that applies and the team's key. */
+export interface DraftLinking { mode: LinkingMode; teamKey: string | null }
 
 /**
  * Title and body for a new PR — deterministic, no model call, testable
@@ -396,7 +402,7 @@ const deslug = (branch: string): string => branch.slice(branch.lastIndexOf('/') 
  * the one that names the intent. Reading it the other way titles every
  * multi-commit PR "fix typo".
  */
-export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null): { title: string; body: string } {
+export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null, linking?: DraftLinking): { title: string; body: string } {
   const commits = [...line.commits].reverse();
   const real = commits.filter((c) => !FIXUP_RE.test(c.subject));
   const title =
@@ -409,6 +415,12 @@ export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null): { title: str
   if (line.template !== null && line.template.trim() !== '') parts.push(line.template.trim());
   else if (real[0] !== undefined && real[0].body.trim() !== '') {
     parts.push(real[0].body.trim().split('\n\n')[0]!.trim());
+  }
+  // D-8147: a PRIVATE project's PR carries its ticket (`Refs`, never `Closes`: whether the merge meets the acceptance is
+  // the operator's call in the sheet). It ends the first part, unless that part already names the ticket.
+  const ref = linking?.mode === 'private' ? ticketRefOfBranch(line.branch, linking.teamKey) : null;
+  if (ref !== null && !trackerIdsIn(parts[0] ?? '', linking!.teamKey).includes(ref)) {
+    parts[0] = parts[0] === undefined ? `Refs ${ref}` : `${parts[0]}\n\nRefs ${ref}`;
   }
   if (tasks !== null && tasks.length > 0) {
     parts.push(['## Plan', ...tasks.map((t) => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.subject}`)].join('\n'));

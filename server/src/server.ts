@@ -80,13 +80,15 @@ import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
+import { linkingMode, trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
 import { AuthAttempts } from './accounts/attempts.js';
 import { sessionIdHash } from './auth/sessions.js';
 import { resolveTitle } from './linear/resolve.js';
-import { classifyAddFailure, planCreate } from './workspaceCreate.js';
+import { classifyAddFailure, planCreate, publicTicketSlug } from './workspaceCreate.js';
+import type { LinkingMode } from '../../shared/linking.js';
 import { classifyProjectAddFailure, planProjectAdd } from './projectAdd.js';
 import type { ProjectAddAnswer } from '../../shared/projectAdd.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
@@ -3130,7 +3132,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { title } = await resolveTitle(plan.name, plan.ask.ticket, {
       ccrcDir: deps.cfg.ccrcDir, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     });
-    const slug = plan.ask.slug;
+    // D-8147: in a PUBLIC project the slug (the branch) is the title's words, never the ticket id.
+    let slug = plan.ask.slug;
+    if (plan.ask.ticket !== null && deps.coord !== undefined) {
+      let row: ReturnType<CoordStore['linkingOf']> | undefined;
+      try { row = deps.coord.linkingOf(project); } catch { row = undefined; }
+      if (row !== undefined && linkingMode(row.override, row.measured) === 'public') {
+        const words = publicTicketSlug(title, plan.ask.ticket, project);
+        if (!words.ok) return refuseRoute(reply, words.error);
+        slug = words.slug;
+      }
+    }
     const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
     if (res.ok) return { ok: true, id: workspaceId(project, slug), slug, title };
     const failure = classifyAddFailure(res);
@@ -3838,6 +3850,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
   };
 
+  // D-8147: the session's project's linking, for the PR paths: the rule that applies and the team's key. Undefined when
+  // there is no store, the registry could not name the project, or the store could not be read: no linking is applied.
+  const sessionLinking = async (id: string): Promise<{ mode: LinkingMode; teamKey: string | null } | undefined> => {
+    const coord = deps.coord;
+    if (coord === undefined) return undefined;
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    if (read.kind !== 'found' || read.record.projectEvidence !== 'measured' || read.record.project === '') return undefined;
+    try {
+      const row = coord.linkingOf(read.record.project);
+      return { mode: linkingMode(row.override, row.measured), teamKey: row.teamKey };
+    } catch { return undefined; }
+  };
+
   app.get('/api/sessions/:id/pr', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
@@ -3852,11 +3877,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The task read starts beside pr-state, not after it, and is caught at once (below): a failed pr-state answers
     // `unknownView` and ignores it, and a rejection while pr-state is pending is not unhandled. Never `Promise.all`.
     const tasks = prTasks(id);
+    const linking = sessionLinking(id);
     tasks.catch(() => {}); // caught from the start: a read that rejects while pr-state is pending is not unhandled
     const res = await deps.runCcd(argv);
     if (!res.ok) return unknownView(sweepFailureReason(res));
     const [first] = parsePrLines(res.stdout);
-    return prView(first ?? null, await tasks, null);
+    return prView(first ?? null, await tasks, null, await linking);
   });
 
   app.post('/api/sessions/:id/pr', async (req, reply) => {
@@ -3867,6 +3893,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.title !== 'string' || body.title.trim() === ''
       || typeof body.body !== 'string' || body.body.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // D-8147: a PUBLIC project's pull request never names its team's tracker id (Linear links it from its side).
+    const linking = await sessionLinking(id);
+    if (linking?.mode === 'public') {
+      const ids = trackerIdsIn(`${body.title}\n${body.body}`, linking.teamKey);
+      if (ids.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids });
     }
     const b64 = Buffer.from(body.body, 'utf8').toString('base64');
     const argv = CCD_ARGV.prOpen(id, body.title, b64, body.draft === true);

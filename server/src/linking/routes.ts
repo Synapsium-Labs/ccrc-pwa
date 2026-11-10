@@ -123,6 +123,8 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     let argv: CcdArgv;
     try { argv = CCD_ARGV.prTemplate(project, row.teamKey); } catch { return refuseRoute(reply, 'bad-team-key'); }
     const res = await opts.runCcd(argv);
+    // A call that never ran has no ccd refusal to read, only the runner's own words (D-6840).
+    if (res.ran === false) return refuseRoute(reply, 'template-failed', { stderr: withoutCcdRefusal(res.stderr) });
     if (!res.ok) {
       const reason = ccdReason(res.stdout);
       if (reason === 'repo-public' || reason === 'template-exists') return refuseRoute(reply, reason);

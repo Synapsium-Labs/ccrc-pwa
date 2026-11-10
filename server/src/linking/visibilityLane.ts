@@ -41,6 +41,10 @@ export class VisibilityLane {
       const due = visibilityDue(rows, now);
       if (due === null) return;
       const res = await runCcd(CCD_ARGV.repoVisibility(due));
+      if (res.ran === false) {   // the call never ran: a failed reading, not an answer to parse (D-6840)
+        coord.recordLinkingReading(due, { state: 'failed', reason: 'not-ran', at: now });
+        return;
+      }
       const a = parseAnswer(res.stdout);
       if (res.ok && a.kind === 'measured') {
         coord.recordLinkingReading(due, { state: 'measured', visibility: a.visibility, slug: a.slug, template: a.template, at: now });
