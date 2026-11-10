@@ -13,11 +13,14 @@ import type { RunVerdict } from '../src/coord/runVerdicts.js';
 import type { ProgrammesAnswer, ProgrammeRow } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietWatcher } from './laneQuiet.js';
 
 let app: FastifyInstance | null = null;
 let coord: CoordStore;
 let watcher: FleetWatcher;
 afterEach(async () => { await app?.close(); app = null; vi.useRealTimers(); });
+// D-8140 (C17 item 1): the watcher this file builds is quiet before its test ends (`watcher-quiet-census.test.ts`).
+afterEach(() => quietWatcher(watcher));
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
-import { DELEGATION_PASS_SLOW_PREFIX, FleetWatcher } from '../src/watch.js';
+import { FleetWatcher } from '../src/watch.js';
 import { questionsTestView } from '../src/coord/questions.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -37,6 +37,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { askKey } from '../src/askkey.js';
 import { okAsk, okAsks } from './coordReadHelpers.js';
 import { doorInsOf } from './questionDoorIns.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -151,7 +152,10 @@ function fixture(opts: {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const io: FleetIO = opts.overIo ? opts.overIo(localIO) : localIO;
   const deps = { ...testDeps(home, runner), push: opts.push as never, coord, io };
-  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
+  // D-8140 (C17 item 3): every case's watcher is quiet before its case ends. Its ticks start a delegation pass nothing else awaits,
+  // and one left running reads the next case's `Date.now` jump inside a phase and logs its slow line into that case's spy (CI run
+  // 42673038502, F9: `cut=0`, so not the pass F9's own `closeDelegation()` had closed).
+  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 10_000));
   return {
     coord, home, reg, w,
     tick: () => w.tick(),
@@ -334,6 +338,10 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
     expect(f.coord.releaseAsk(askId, T0 + 1)).toBe(true);        // held -> released, by "someone else"
+    // D-8140 (C17 item 3): mintHold's ticks start a delegation pass that is not this sweep's, and the clock jump below
+    // used to land inside it, so the pass logged (its slow line, or its compaction line) into the spy. It is awaited
+    // to its end here, before the spy, so nothing but this sweep can write to it.
+    await f.w.closeDelegation();
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(T0 + ASK_GRACE_MS + 1);
@@ -343,9 +351,8 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     expect(heldMap(f.w).has('cc-a')).toBe(false);
     expect(okAsk(f.coord.askById(askId))!.state).toBe('released');      // untouched, not rewritten
     // Silent: distinguishes this branch from the exhaustiveness fallback
-    // ('held'/'unknown'), which warns. The clock jump above can land inside a
-    // delegation pass, which then logs itself slow; that line is not this sweep's.
-    expect(warn.mock.calls.filter(([m]) => !String(m).startsWith(DELEGATION_PASS_SLOW_PREFIX))).toEqual([]);
+    // ('held'/'unknown'), which warns.
+    expect(warn.mock.calls).toEqual([]);
   });
 
   // RULING F9, branch 3: the row itself is gone — a lost coord.db. Its loss

@@ -33,6 +33,11 @@ const cache = new Map<string, ParsedFile>();
  *  between two calls is seen; the parse is cached per path and text. */
 export function parsedFile(file: string): ParsedFile {
   const abs = path.isAbsolute(file) ? file : path.join(REPO_ROOT, file);
+  // D-8140 (C17 item 4): a `__`-prefixed basename is a TRANSIENT mutant a parallel suite writes and removes
+  // (`boot.test.ts` writes `server/src/__boot_control_mutant__.ts` and removes it), never a source: an empty parse,
+  // read from nothing. A census that listed it before it vanished met ENOENT on whichever shard ran beside it. The same
+  // rule as `rings/walkSrc.ts`'s `walkSrc` and `single-definition/helpers.ts`'s `sources`, which skip it while walking.
+  if (path.basename(abs).startsWith('__')) return parseSource('', abs);
   const text = readFileSync(abs, 'utf8');
   const hit = cache.get(abs);
   if (hit && hit.text === text) return hit;

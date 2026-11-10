@@ -22,7 +22,7 @@ import { SENTENCES, refusalSentence } from '../src/wsaudit.js';
 const ALL_TOKENS: Record<LcRefusalToken, true> = {
   'scratch-unwritable': true, 'tip-unreadable': true, 'bad-session-id': true,
   'flock-unavailable': true, 'lock-unopenable': true, 'is-a-workspace': true,
-  'session-live': true, 'session-verdict-unknown': true, 'spawn-failed': true,
+  'session-live': true, 'session-verdict-unknown': true, 'workspace-unreadable': true, 'spawn-failed': true,
   'purge-refused': true, 'purge-incomplete': true, 'purge-mechanism-absent': true,
   'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true, 'probe-unmeasured': true,
   'token-malformed': true, 'run-id-malformed': true, 'containment-refuted': true,
@@ -36,7 +36,7 @@ describe('the journal-only refusal vocabulary', () => {
   it.each(TOKENS)('isLcRefusalToken(%s)', (t) => { expect(isLcRefusalToken(t)).toBe(true); });
 
   it('covers the whole union and derives its list from the map', () => {
-    expect(TOKENS.length).toBe(25);
+    expect(TOKENS.length).toBe(26);
     expect([...LC_REFUSAL_TOKENS].sort()).toEqual([...TOKENS].sort());
   });
 

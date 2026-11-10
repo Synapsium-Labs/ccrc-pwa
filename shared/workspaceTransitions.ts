@@ -4,7 +4,7 @@
  *
  * `WORKSPACE_TRANSITIONS` is `RUN_TRANSITIONS`'s sibling for a session's workspace: each row is one edge a client reads
  * as a refusal today, taken from the verb's own refusal and pinned by `server/test/workspace-refusal-census.test.ts`
- * (104 edges, well past the spec's ~10-edge test). A row is (verb, the states the verb is refused in, the refusal code,
+ * (107 edges, well past the spec's ~10-edge test). A row is (verb, the states the verb is refused in, the refusal code,
  * who enforces it, the precondition). The codes are the three vocabularies clients already read, unrenamed:
  * `ARCHIVE_REFUSALS` (the archive door's wire words), `SENTENCES` (`server/src/wsaudit.ts`) and `LC_REFUSAL_WORD`
  * (`./api.ts`); this table adds the missing half of each word, WHICH state refuses WHICH verb and WHY.
@@ -14,7 +14,7 @@
  * lanes (`server/src/archivedExpiry.ts`, `server/src/coord/childReclaim.ts`, `server/src/collectLane.ts`) type their words
  * as `WorkspaceRefusal<verb>` (plus `WorkspacePostActWord` where the act prints one) and narrow them through
  * `isWorkspaceRefusal`, so a word this table lacks does not compile there. The PWA and `wsaudit.ts` only render words
- * (`SENTENCES`, `LC_REFUSAL_WORD`), held to the census by its completeness test. THE BASH SIDE: the 97 `ccd` edges are
+ * (`SENTENCES`, `LC_REFUSAL_WORD`), held to the census by its completeness test. THE BASH SIDE: the 100 `ccd` edges are
  * still ENFORCED in bash, which cannot read a TS table; the census holds each verb's codes to ccd's own text (the lane
  * sets, pinned to ccd both ways, for expire, reclaim and collect; words harvested from ccd's refusal sites for restore,
  * forget and reap), so ccd and this table cannot drift apart unseen, but ccd does not answer from it.
@@ -81,6 +81,7 @@ const ROWS = [
   { verb: 'forget', from: ['held'], refusal: 'held', by: 'ccd', precondition: 'a program holds the row' },
   { verb: 'forget', from: ['asleep'], refusal: 'hibernated', by: 'ccd', precondition: 'the row is asleep, not gone' },
   { verb: 'forget', from: ['live'], refusal: 'session-live', by: 'ccd', precondition: 'the session is still running' },
+  { verb: 'forget', from: ['workspace'], refusal: 'workspace-unreadable', by: 'ccd', precondition: 'the row\'s workspace field could not be read, so whether it is a workspace is unproven' },
   { verb: 'forget', from: ['live'], refusal: 'session-verdict-unknown', by: 'ccd', precondition: 'tmux did not answer, so liveness is unproven' },
   { verb: 'forget', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },
   { verb: 'reap', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },

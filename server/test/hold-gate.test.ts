@@ -16,6 +16,7 @@ import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import { readRegistry, HOLD_NO_REASON, HOLD_UNREADABLE } from '../src/registry.js';
 import type { SessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -129,7 +130,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     for (let i = 0; i < 3; i++) {
       forceDue(w);
       await w.tick();
@@ -155,7 +156,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await sweepSettled(w);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
@@ -179,7 +180,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
 
@@ -209,7 +210,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
       ...testDeps(home, runnerFor(() => mergedLine('demo-quiet-basin', prNumber), calls)),
       push: { notify } as never,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body).toContain('PR #591');
@@ -244,7 +245,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const home = seed(['demo-quiet-basin']);
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     const degraded: SessionRecord = {
       hibernatedAt: null,
       namedByOperator: false, title: null,
@@ -298,7 +299,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
       io: holdUnreadableIO,
       push: { notify } as never,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await sweepSettled(w);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
@@ -335,7 +336,7 @@ describe("sweepMerged — the reason comes from the sweep's own snapshot", () =>
       return res;
     };
     const deps = { ...testDeps(home, run), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await sweepSettled(w);
 
@@ -447,7 +448,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
       push: { notify } as never,
       coord,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     for (let i = 0; i < 3; i++) { forceDue(w); await w.tick(); await sweepSettled(w); }
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     // The whole clause, verbatim — id, program, wave and waveOf. A silent skip
@@ -479,7 +480,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
       push: { notify } as never,
       coord,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     for (let i = 0; i < 3; i++) { forceDue(w); await w.tick(); await sweepSettled(w); }
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     expect(notify).toHaveBeenCalledTimes(1);
@@ -509,7 +510,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
       push: { notify } as never,
       coord,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick(); await sweepSettled(w);
     const runId = okRuns(coord.runs())[0]!.id;
     await vi.waitFor(() => expect(mergedPushes(notify)).toHaveLength(1));
@@ -547,7 +548,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body).toBe('PR #42 merged; nothing archived.');

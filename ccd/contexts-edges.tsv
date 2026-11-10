@@ -384,6 +384,7 @@ cmd_forget -> _lc_intent
 cmd_forget -> _lc_refuse
 cmd_forget -> _lc_tx
 cmd_forget -> _reg_get
+cmd_forget -> _reg_read_to
 cmd_forget -> _reg_retire
 cmd_forget -> _session_verdict
 cmd_forget -> _tmux_t

@@ -199,13 +199,15 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         // Provider.
         await page.click('.acct-door, .acct-door-action');
         await page.waitForSelector('[data-frame="provider"]');
-        // Once the panel has stopped moving (the spring up, or the dialog's fade).
-        await page.waitForFunction(() => new Promise<boolean>((done) => {
+        // Once the panel is at rest: open, and every animation on it (the spring up, or the dialog's fade) finished.
+        // Never two reads 150 ms apart (D-8140): the spring (`--curve-spring`) overshoots its rest from about 200 ms to
+        // its end, so two equal reads either side of the peak, or a frame the loaded renderer never drew, read the
+        // panel a few px above the bottom edge.
+        await page.waitForFunction(() => {
           const el = document.querySelector<HTMLElement>('.sheet-panel');
-          if (el === null) { done(false); return; }
-          const a = el.getBoundingClientRect().top;
-          setTimeout(() => done(el.getBoundingClientRect().top === a), 150);
-        }), undefined, { timeout: 10_000 });
+          return el !== null && el.getAttribute('data-state') === 'open'
+            && el.getAnimations().every((a) => a.playState === 'finished');
+        }, undefined, { timeout: 10_000 });
         const arm = await page.evaluate(() => {
           const p = document.querySelector<HTMLElement>('.sheet-panel')!.getBoundingClientRect();
           return {
