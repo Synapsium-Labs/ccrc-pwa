@@ -20,9 +20,15 @@ Three of the operator's 2026-11-10 rulings (session host research, section 6.1) 
 - `_fleet_spawn_compose` merges the pins last, after the account composer, so no lane or account value beats them. It fails open like the account composer.
 - The four screen-read holds (D-2229, D-2369, the rescue near-wait, the stale-Enter check) stay. Each carries a comment naming the follow-up: delete them once the pin is watched working live. The cache-expiry reader for idle compaction is a later change.
 
+## Consequences the ruling carries (review finding, verified)
+
+- **A session with no account room parks until the operator acts.** Before the pin, Claude Code's own wait-then-continue re-sent the turn at the reset. With it off, nothing in ccd re-sends that turn: `_rescue_check` types nothing, the no-room `_rescuewait` closes `clear` once the home account resets (no swap fires, the target is the home wrapper), and `_watchdog_resume_here` restarts in place only when the operator recorded `choice=wait` through `ccd limit-wait`. A fleet that hits the five-hour ceiling unattended therefore sits idle after the reset until someone taps "Wait until reset" on each session. This is what the ruling says ("the operator's options come only when no account has room"); an automatic in-place restart at the reset (for example `_watchdog_resume_here` without `choice=wait`) is NOT part of this change and is left as an open question for the operator.
+- **The five-hour near-reset wait can no longer open.** Rule b of `_rescue_check` (`_rescue_armed`) keys on Claude Code's own auto-continue footer, which the pin removes, so every near-reset block now swaps instead of waiting a few minutes. Expect more rescue swaps and more herd/spread pressure until the holds are deleted and the spread is re-measured.
+
 ## Tasks
 
 - [x] T1. Test first, red: every launch kind (top-level, routed, child, codex-lane wrapper) carries the three keys with the ruled values in its one `--settings`, on both spawn lines.
 - [x] T2. Build: `FLEET_SPAWN_PINS` and `_fleet_spawn_compose` in ccd, called once in `_spawn_start` after the account composer.
 - [x] T3. The older byte-exact argv suites clear the pins in their harness, as they pin the browser default.
 - [x] T4. Leave the follow-up comment at each of the four holds.
+- [x] T5. Review: state both consequences above plainly in the plan and the README (no new restart mechanism; that needs an operator ruling).
