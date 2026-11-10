@@ -504,6 +504,7 @@ const USAGE = [
   '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
   '  operator verbs: import | prune | reparse | recall-off <id> [--generation <uuid>] [--clear] | recall-off --clear-all',
+  '    | census [--json] (read-only: subagent parent-link coverage)',
   '    | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
@@ -1539,7 +1540,7 @@ export function formatHealth(health) {
 
 /** A CLI operator verb, or a doctor flag, → the --op verb the sweep runs. */
 export const OP_OF_VERB = Object.freeze({
-  import: 'import', prune: 'prune', reparse: 'reparse', 'recall-off': 'recall-off',
+  import: 'import', prune: 'prune', reparse: 'reparse', 'recall-off': 'recall-off', census: 'census',
   '--repair': 'repair', '--backup': 'backup', '--migrate': 'migrate', '--adopt': 'adopt', '--restore': 'restore', '--rebuild': 'rebuild',
 });
 
@@ -1809,9 +1810,13 @@ export async function operatorMain(home, argv) {
     return env.exit;
   }
   const P = healthLib.historyPaths(home);
+  // W4 P16 (a): the census's report IS its answer, so under --json it is the one JSON document on stdout, where every other
+  // operator verb's --json stdout is the envelope alone. The sweep prints it as one JSON line when it is handed `--json`
+  // (parseOpVerbArgs' census arm), which this puts back after the strip above; a refusal still prints the envelope.
+  const reportOnStdout = json && verb === 'census';
   const emit = (line, toStderr = false) => {
     const text = `${line}\n`;
-    if (json || toStderr) process.stderr.write(text);
+    if ((json && !reportOnStdout) || toStderr) process.stderr.write(text);
     else process.stdout.write(text);
   };
   // A throw out of the door that is neither a StoreError nor a SQLite error (relayIndexOf's rethrow) is a defect: exit 1.
@@ -1823,13 +1828,13 @@ export async function operatorMain(home, argv) {
   // the catch below) is redacted with the index of the read its text belongs to, as D-5023 rules; before the index exists, NO_PAIRS.
   const seam = { idx: NO_PAIRS };
   try {
-    r = await runOpVerb(home, verb, rest.slice(1), emit, seam);
+    r = await runOpVerb(home, verb, reportOnStdout ? [...rest.slice(1), '--json'] : rest.slice(1), emit, seam);
   } catch (e) {
     thrown = true;
     r = { exit: EXIT.INTERNAL };
     errLine(`ccrc history ${verb}: internal error: ${thrownText(e)}; ${OP_OPERATOR_NOTE_ANY}`, seam.idx);
   }
-  if (json) {
+  if (json && !(reportOnStdout && r.exit === EXIT.OK)) {
     const id = readTrimmed(P.storeId);
     const env = healthLib.readEnvelope({
       exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }),

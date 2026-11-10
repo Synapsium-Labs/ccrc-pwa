@@ -1169,11 +1169,13 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
     expect(libPlan.formOf('recall-off', ['demo-quiet-basin'])).toBe('recall-off');
     expect(libPlan.formOf('recall-off', ['--clear-all'])).toBe('recall-off-clear-all');
     for (const op of ['repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) expect(libPlan.formOf(op, [])).toBe(op);
+    // W4 P16 (a): the census is read-only, never a writing form, whatever it is handed (a dry run, so it runs inside a session)
+    for (const a of [[], ['--json'], ['--apply'], ['--agents', '--apply']]) expect(libPlan.formOf('census', a), a.join(' ')).toBe(null);
     expect(libPlan.formOf('frobnicate', ['--apply'])).toBe(libPlan.UNKNOWN_OP_FORM);
   });
   it('every non-null form formOf answers for a known verb is a WRITING_FORMS key', () => {
     const argvs = [[], ['--apply'], ['--session', 'x', '--file', 'y', '--apply'], ['--clear-all'], ['--agents', '--apply']];
-    for (const op of ['import', 'prune', 'reparse', 'recall-off', 'repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) {
+    for (const op of ['import', 'prune', 'reparse', 'recall-off', 'census', 'repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) {
       for (const a of argvs) {
         const f = libPlan.formOf(op, a);
         if (f !== null) expect(NAMES, `${op} ${a.join(' ')}`).toContain(f);
@@ -6525,6 +6527,15 @@ describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8
     expect(why('import', ['--agents', '--file', FILE, '--apply'])).toBe('bad-args');
     // the combination is bad-args before the id grammar can say bad-id
     expect(why('import', ['--agents', '--session', '../x', '--file', FILE])).toBe('bad-args');
+  });
+
+  it('census (W4 P16 (a)) takes --json alone, a bool', () => {
+    expect(ok('census', [])).toEqual({ op: 'census', json: false });
+    expect(ok('census', ['--json'])).toEqual({ op: 'census', json: true });
+    expect(why('census', ['--json', '--json'])).toBe('bad-args');
+    expect(why('census', ['--apply'])).toBe('bad-args');
+    expect(why('census', ['stray'])).toBe('bad-args');
+    expect(why('census', ['--json', 'stray'])).toBe('bad-args');
   });
 
   it('migrate, repair, backup and adopt take no arguments', () => {

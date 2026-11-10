@@ -10,13 +10,13 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  agentKeys, agentRig, agentRows, AGENT_T0, armed, callRows, censusOf, counterNames, fixtureRows, holdAgainIn, iso, linkOf, plantAgentTree,
-  resultRows, T0, untimedRows, whileClosed, type AgentRig, type CensusReport, type TreeSpec,
+  agentKeys, agentRig, agentRows, AGENT_T0, armed, callRows, censusOf, counterNames, counterOf, fixtureRows, holdAgainIn, linkOf, membershipsPerEntry,
+  plantAgentTree, resultRows, T0, transcriptRows, untimedRows, variantsOf, whileClosed, type AgentRig, type CensusReport, type TreeSpec,
 } from './historyAgentFixtures.js';
-import { holdLock, makeHistoryBox, openStoreRO, runCli, runShim, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
+import { holdLock, makeHistoryBox, openStoreRO, recordOpenFlags, runCli, runShim, skipOnDarwin, type HistoryBox } from './historyHelpers.js';
 import { historyPaths, WRITING_FORMS } from '../../ccd/history/lib.mjs';
-import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
-import { LANE_ROSTER } from './historyAgentFixtures.js';
+import { closeWriter, getMeta } from '../../ccd/history/store.mjs';
+import { discoverTranscripts } from '../../ccd/history/sweep.mjs';
 
 skipOnDarwin();
 
@@ -253,5 +253,586 @@ describe('the rest of the verdict table', () => {
     expect(r.beside.qParentUnknown).toBe(1);
     expect(r.shares!['D-T']!.den, 'both are in D minus T: P11\'s denominator is unchanged').toBe(2);
     expect(r.sums.ok).toBe(true);
+  });
+});
+
+// ── workflows (P12) ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The text a workflow's launching call returns (act M1, D-8161). */
+const launched = (run: string): string => `Workflow launched in background. Task ID: t-1\nRun ID: ${run}`;
+
+describe('SA14 workflow predicate (P12): (a), (b) and (c) side by side', () => {
+  /** A run RUN with agents `ids` under a known parent whose main rows are `parentRows`; an armed tick; the census. `summary` plants the run's summary file. */
+  async function wf(prefix: string, parentRows: object[] | undefined, o: { ids?: string[]; summary?: boolean; over?: Record<string, unknown> } = {}): Promise<{ rig: AgentRig; report: CensusReport }> {
+    const rig = await rigOf(prefix);
+    const ids = o.ids ?? ['x'];
+    const { paths } = plantAgentTree(rig, {
+      slug: SLUG, uuid: PARENT, agents: [], runs: [{ id: RUN, agents: ids.map((id, i) => agent(id, 0x4100 + i)) }],
+      ...(parentRows === undefined ? {} : { mainRows: parentRows }),
+    }, SINCE);
+    if (o.summary === true) {
+      const dir = path.join(path.dirname(path.dirname(path.dirname(path.dirname(paths[`${RUN}/${ids[0]}`]!)))), 'workflows');   // <session>/workflows/<run>.json
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${RUN}.json`), '{}');
+    }
+    await rig.tick(armed, { scan: true });
+    return { rig, report: censusOf(rig, o.over ?? {}) };
+  }
+  const workflowUnits = (r: CensusReport, which: 'a' | 'b' | 'c') => r.byKind.workflow[which] as Exclude<CensusReport['byKind']['workflow']['a'], 'unavailable'>;
+
+  it('under the shipped predicate (b) is computed and the canonical share is the D-T range when nothing is withheld', async () => {
+    const { report } = await wf('ccrc-hist-sa14-b-', resultRows(0x4001, [{ ms: AGENT_T0 - 30_000, text: launched(RUN) }]));
+    expect(workflowUnits(report, 'b')).toMatchObject({ D: 1, Ad: 1, L: 1, U: 0, M: 0 });
+    expect(report.units).toMatchObject({ Ad: 1, L: 1 });
+    expect(report.withheld).toEqual([]);
+    expect(report.canonical).toEqual({ lo: 1, hi: 1 });
+  });
+
+  it('SA14 (a), (b), (c) each over a fixture where only that predicate holds: only that row counts it', async () => {
+    // only (b) holds: the launch result names the run, there is no summary file
+    const onlyB = await wf('ccrc-hist-sa14-onlyb-', resultRows(0x4002, [{ ms: AGENT_T0 - 30_000, text: launched(RUN) }]));
+    expect([workflowUnits(onlyB.report, 'a').L, workflowUnits(onlyB.report, 'b').L, workflowUnits(onlyB.report, 'c').L]).toEqual([1, 1, 0]);
+    expect(workflowUnits(onlyB.report, 'c').U).toBe(1);
+    // only (c) holds: the run summary exists, no result names the run
+    const onlyC = await wf('ccrc-hist-sa14-onlyc-', resultRows(0x4003, [{ ms: AGENT_T0 - 30_000, text: 'nothing about it' }]), { summary: true });
+    expect([workflowUnits(onlyC.report, 'a').L, workflowUnits(onlyC.report, 'b').L, workflowUnits(onlyC.report, 'c').L]).toEqual([1, 0, 1]);
+    expect(workflowUnits(onlyC.report, 'b').U).toBe(1);
+    // only (a) holds: placement alone, which is true of every admitted file and measures nothing
+    const onlyA = await wf('ccrc-hist-sa14-onlya-', resultRows(0x4004, [{ ms: AGENT_T0 - 30_000, text: 'nothing about it' }]));
+    expect([workflowUnits(onlyA.report, 'a').L, workflowUnits(onlyA.report, 'b').L, workflowUnits(onlyA.report, 'c').L]).toEqual([1, 0, 0]);
+    // CONTROL: the canonical verdict under (b) is the result's, not placement's
+    expect([onlyB.report.units.L, onlyC.report.units.L, onlyA.report.units.L]).toEqual([1, 0, 0]);
+  });
+
+  it('SA14 (b): a tool_result naming the run inside the window is linked; the same row outside it is unresolved', async () => {
+    const outside = await wf('ccrc-hist-sa14-outside-', resultRows(0x4005, [{ ms: AGENT_T0 + 20 * MIN, text: launched(RUN) }]));
+    expect(outside.report.units).toMatchObject({ L: 0, U: 1, M: 0 });
+    const edge = await wf('ccrc-hist-sa14-edge-', resultRows(0x4006, [{ ms: AGENT_T0 + 14 * MIN, text: launched(RUN) }]));
+    expect(edge.report.units, 'CONTROL: 14 minutes after the run\'s first row is inside').toMatchObject({ L: 1, U: 0 });
+  });
+
+  it('SA14 (b): 65 candidates with the match last is unmeasured (decode-bound); the 64th is within the bound', async () => {
+    // nearest the anchor first: the rows at +1 s, +2 s, ...; the match is the farthest
+    const rows = (matchAt: number, tag: number): object[] => resultRows(tag, Array.from({ length: 65 }, (_, k) => ({ ms: AGENT_T0 + 1000 * (k + 1), text: k === matchAt ? launched(RUN) : `other ${k}` })));
+    const late = await wf('ccrc-hist-sa14-65-', rows(64, 0x4007));
+    expect(late.report.units).toMatchObject({ L: 0, U: 0, M: 1 });
+    expect(late.report.reasons).toEqual({ 'decode-bound': 1 });
+    expect(late.report.beside.lookups).toMatchObject({ workflow: 1, decodes: 64 });
+    const edge = await wf('ccrc-hist-sa14-64-', rows(63, 0x4008));
+    expect(edge.report.units, 'CONTROL').toMatchObject({ L: 1, M: 0 });
+  });
+
+  it('SA14 (b): a user row over the decode cap is unmeasured (over-cap)', async () => {
+    const { rig } = await wf('ccrc-hist-sa14-overcap-', resultRows(0x4009, [{ ms: AGENT_T0 - 30_000, text: launched(RUN) }]));
+    rig.db.prepare("UPDATE blobs SET raw_len = 20000000 WHERE blob_id IN (SELECT e.blob_id FROM entries e JOIN transcripts t ON t.transcript_pk = e.transcript_pk WHERE t.agent_id = '')").run();
+    const report = censusOf(rig);
+    expect(report.units).toMatchObject({ L: 0, U: 0, M: 1 });
+    expect(report.reasons).toEqual({ 'over-cap': 1 });
+  });
+
+  it('SA14 (b): two agents of one run share one lookup', async () => {
+    const { report } = await wf('ccrc-hist-sa14-two-', resultRows(0x400a, [{ ms: AGENT_T0 - 30_000, text: launched(RUN) }]), { ids: ['x', 'y'] });
+    expect(report.units).toMatchObject({ D: 2, Ad: 2, L: 2 });
+    expect(report.beside.lookups).toMatchObject({ workflow: 1, agentTool: 0 });
+  });
+
+  it('the run id is a whole token: a longer id that begins with it, and a word that ends with it, do not name the run; a text item does', async () => {
+    const longer = await wf('ccrc-hist-sa14-longer-', resultRows(0x400b, [{ ms: AGENT_T0 - 30_000, text: launched(`${RUN}f`) }, { ms: AGENT_T0 - 20_000, text: `x${RUN}` }, { ms: AGENT_T0 - 10_000, text: `${RUN}-` }]));
+    expect(longer.report.units).toMatchObject({ L: 0, U: 1 });
+    const items = await wf('ccrc-hist-sa14-items-', resultRows(0x400c, [{ ms: AGENT_T0 - 30_000, text: `${launched(RUN)}\n`, items: true }]));
+    expect(items.report.units, 'CONTROL: a tool_result whose content is text items, the run id ended by a line break').toMatchObject({ L: 1 });
+  });
+
+  it('with no predicate settled (a direct call), (b) is unavailable, no canonical share exists, and the workflow unit is M for the range', async () => {
+    const { report } = await wf('ccrc-hist-sa14-null-', resultRows(0x400d, [{ ms: AGENT_T0 - 30_000, text: launched(RUN) }]), { over: { predicate: null, runWindow: null } });
+    expect(report.byKind.workflow.b).toBe('unavailable');
+    expect(workflowUnits(report, 'a')).toMatchObject({ L: 1 });
+    expect(report.canonical).toBeNull();
+    expect(report.units).toMatchObject({ Ad: 1, L: 0, M: 1 });
+    expect(report.reasons).toEqual({ 'predicate-unsettled': 1 });
+    expect(report.sums.ok).toBe(true);
+  });
+});
+
+// ── the pre-install, unentered and held-twice populations ───────────────────────────────────────────────────────────────
+
+describe('SA18 pre-install (P6): P, then Q and admitted, then imported', () => {
+  it('SA18 a pre-install file is P and outside D-T; touched after the record it is Q, then admitted; imported it is Ad and I, still outside D-T', async () => {
+    const rig = await rigOf('ccrc-hist-sa18-');
+    const { paths } = plantAgentTree(rig, {
+      slug: SLUG, uuid: PARENT, mainRows: calls(0x3301, { before: 60_000, ids: ['toolu_ctrl'] }, { before: 50_000, ids: ['toolu_pre'] }, { before: 40_000, ids: ['toolu_imp'] }),
+      agents: [agent('ctrl', 0x4201, { meta: { toolUseId: 'toolu_ctrl' } }), agent('pre', 0x4202, { atMs: -60_000, meta: { toolUseId: 'toolu_pre' } }), agent('imp', 0x4203, { atMs: -60_000, meta: { toolUseId: 'toolu_imp' } })],
+    }, SINCE);
+    await rig.tick(armed, { scan: true });
+    expect(agentKeys(rig.db), 'never ingested by a tick').toEqual(['ctrl']);
+    let c = censusOf(rig);
+    expect(c.units).toMatchObject({ D: 3, P: 2, Q: 0, R: 0, Ad: 1, I: 0 });
+    expect(c.beside.agentFileRefused, 'never refused').toEqual({});
+    expect(c.shares!['D-T']!.den, 'outside D - T').toBe(1);
+    expect(c.shares!['D']!.den).toBe(3);
+    // touched at the record: post-install (an mtime equal to it is), so Q, and in D - T
+    fs.utimesSync(paths['pre']!, new Date(T0), new Date(T0));
+    c = censusOf(rig);
+    expect(c.units).toMatchObject({ D: 3, P: 1, Q: 1, Ad: 1 });
+    expect(c.shares!['D-T']!.den).toBe(2);
+    await rig.tick(armed, { scan: true });
+    c = censusOf(rig);
+    expect(c.units).toMatchObject({ D: 3, P: 1, Q: 0, Ad: 2, I: 0 });
+    // the operator's import takes the other pre-install file: Ad and I, out of P, still outside D - T
+    const r = await whileClosed(rig, () => runShim(rig.box, ['--op', 'import', '--agents', '--apply']));
+    expect(r.code, r.stderr).toBe(0);
+    c = censusOf(rig);
+    expect(c.units).toMatchObject({ D: 3, P: 0, Q: 0, Ad: 3, I: 1, L: 3 });
+    expect(c.shares!['D-T']!.den, 'the imported unit is outside D - T').toBe(2);
+    expect(c.shares!['D']!.den).toBe(3);
+    expect(c.shares!['E']!.den).toBe(3);
+    expect(c.sums.ok).toBe(true);
+  });
+});
+
+describe('SA19 unentered directories, every level (K)', () => {
+  const isRoot = process.getuid?.() === 0;
+  /** A control unit that an unentered directory must not let a share print over, then `arrange` in the second home / second session. */
+  async function withK(prefix: string, arrange: (rig: AgentRig, ctx: { sess: string; proj: string; lane: string }) => void): Promise<{ rig: AgentRig; report: CensusReport }> {
+    const rig = await rigOf(prefix);
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, agents: [agent('c', 0x4301, { meta: {} })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    expect(censusOf(rig).shares, 'CONTROL: a share prints while nothing is unentered').not.toBeNull();
+    const lane = rig.box.homes[1]!;
+    const proj = path.join(rig.box.homes[0]!, 'projects', SLUG);
+    arrange(rig, { sess: path.join(proj, uuidOf(2)), proj, lane });
+    return { rig, report: censusOf(rig) };
+  }
+  const expectK = (r: CensusReport, level: string, reason: string): void => {
+    expect(r.K).toEqual([{ level, reason, n: 1 }]);
+    expect(r.shares, 'no share is drawn from a tree that holds one').toBeNull();
+    expect(r.canonical).toBeNull();
+    expect(r.withheld).toEqual(['K']);
+    expect(r.units, 'their files are unknown, never counted as 0 or as units').toMatchObject({ D: 1, Ad: 1 });
+  };
+
+  it('SA19 subagents a link', async () => {
+    const { report } = await withK('ccrc-hist-sa19-sublink-', (rig, { sess }) => {
+      fs.mkdirSync(path.join(rig.box.home, 'elsewhere', 'sub'), { recursive: true });
+      fs.mkdirSync(sess, { recursive: true });
+      fs.symlinkSync(path.join(rig.box.home, 'elsewhere', 'sub'), path.join(sess, 'subagents'));
+    });
+    expectK(report, 'subagents', 'link');
+  });
+
+  it('SA19 a workflows/<run> that is a regular file', async () => {
+    const { report } = await withK('ccrc-hist-sa19-runfile-', (_rig, { sess }) => {
+      fs.mkdirSync(path.join(sess, 'subagents', 'workflows'), { recursive: true });
+      fs.writeFileSync(path.join(sess, 'subagents', 'workflows', RUN), 'x');
+    });
+    expectK(report, 'run', 'not-dir');
+  });
+
+  it.skipIf(isRoot)('SA19 a subagents/ that cannot be listed (mode 000, skipped as root)', async () => {
+    let dir = '';
+    try {
+      const { report } = await withK('ccrc-hist-sa19-sub000-', (_rig, { sess }) => {
+        dir = path.join(sess, 'subagents');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.chmodSync(dir, 0);
+      });
+      expectK(report, 'subagents', 'unlistable');
+    } finally { if (dir !== '') fs.chmodSync(dir, 0o755); }
+  });
+
+  it('SA19 a projects root that is a link', async () => {
+    const { report } = await withK('ccrc-hist-sa19-rootlink-', (rig, { lane }) => {
+      fs.rmSync(path.join(lane, 'projects'), { recursive: true });
+      fs.mkdirSync(path.join(rig.box.home, 'elsewhere', 'projects'), { recursive: true });
+      fs.symlinkSync(path.join(rig.box.home, 'elsewhere', 'projects'), path.join(lane, 'projects'));
+    });
+    expectK(report, 'root', 'link');
+  });
+
+  it.skipIf(isRoot)('SA19 a project directory that cannot be listed (mode 000, skipped as root)', async () => {
+    let dir = '';
+    try {
+      const { report } = await withK('ccrc-hist-sa19-proj000-', (_rig, { lane }) => {
+        dir = path.join(lane, 'projects', '-home-u-closed');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.chmodSync(dir, 0);
+      });
+      expectK(report, 'project', 'unlistable');
+    } finally { if (dir !== '') fs.chmodSync(dir, 0o755); }
+  });
+
+  it('SA19 a session directory that is a link', async () => {
+    const { report } = await withK('ccrc-hist-sa19-sesslink-', (rig, { sess }) => {
+      fs.mkdirSync(path.join(rig.box.home, 'elsewhere', 'sess'), { recursive: true });
+      fs.symlinkSync(path.join(rig.box.home, 'elsewhere', 'sess'), sess);
+    });
+    expectK(report, 'session', 'link');
+  });
+
+  it('SA19 a session-id entry that is a regular file', async () => {
+    const { report } = await withK('ccrc-hist-sa19-sessfile-', (_rig, { sess }) => { fs.writeFileSync(sess, 'x'); });
+    expectK(report, 'session', 'not-dir');
+  });
+
+  it('SA19 a linked project directory whose session holds subagents/agent-x.jsonl: K gains project/link, agent-x is no unit and is never read, the main transcript is still listed (review 1728 F4)', async () => {
+    const x = uuidOf(3);
+    let target = '';
+    const { rig, report } = await withK('ccrc-hist-sa19-projlink-', (rig2, { proj }) => {
+      target = path.join(rig2.box.home, 'elsewhere', 'real-proj');
+      fs.mkdirSync(path.join(target, x, 'subagents'), { recursive: true });
+      fs.writeFileSync(path.join(target, `${x}.jsonl`), fixtureRows(0x4302, 1).map((r) => `${JSON.stringify(r)}\n`).join(''));
+      fs.writeFileSync(path.join(target, x, 'subagents', 'agent-x.jsonl'), fixtureRows(0x4303, 1).map((r) => `${JSON.stringify(r)}\n`).join(''));
+      fs.symlinkSync(target, path.join(path.dirname(proj), '-home-u-linked'));
+    });
+    expectK(report, 'project', 'link');
+    const { opens } = recordOpenFlags(() => censusOf(rig));
+    expect(opens.map((o) => o.path).filter((p) => p.includes('agent-x'))).toEqual([]);
+    expect(discoverTranscripts(rig.box.homes, [x]).map((t: { uuid: string }) => t.uuid), 'main lists through the link, as it always did').toEqual([x]);
+  });
+});
+
+describe('SA21 the census\'s unit (P18 (a)): one unit per key, however many holdings', () => {
+  async function held(prefix: string, how: Array<'link' | 'copy'>): Promise<CensusReport> {
+    const rig = await rigOf(prefix);
+    const [a, b] = rig.box.homes as [string, string];
+    const ids = how.map((_, i) => `h${i}`);
+    const { paths } = plantAgentTree(rig, {
+      slug: SLUG, uuid: PARENT, mainRows: calls(0x3401, ...ids.map((id, i) => ({ before: 60_000 + i * 1000, ids: [`toolu_${id}`] }))),
+      agents: ids.map((id, i) => agent(id, 0x4400 + i, { meta: { toolUseId: `toolu_${id}` } })),
+    }, SINCE);
+    await rig.tick(armed, { scan: true });
+    how.forEach((h, i) => holdAgainIn(paths[ids[i]!]!, a, b, h));
+    await rig.tick(armed, { scan: true });
+    return censusOf(rig);
+  }
+
+  it('SA21 a hardlink held by two homes and a copy held by two homes: one unit each, holdings 2 and physical files 1 and 2', async () => {
+    const link = await held('ccrc-hist-sa21-link-', ['link']);
+    expect(link.units).toMatchObject({ D: 1, Ad: 1, L: 1 });
+    expect([link.beside.holdings, link.beside.physical]).toEqual([2, 1]);
+    const copy = await held('ccrc-hist-sa21-copy-', ['copy']);
+    expect(copy.units).toMatchObject({ D: 1, Ad: 1, L: 1 });
+    expect([copy.beside.holdings, copy.beside.physical]).toEqual([2, 2]);
+    const both = await held('ccrc-hist-sa21-both-', ['link', 'copy']);
+    expect(both.units, 'CONTROL: counting each listed path as a unit would make four').toMatchObject({ D: 2, Ad: 2, L: 2 });
+    expect([both.beside.holdings, both.beside.physical]).toEqual([4, 3]);
+    expect(both.beside.holdingUnbound).toEqual({ unread: 0, unreadable: 0, replaced: 0, shrunk: 0 });
+    expect(both.sums.ok).toBe(true);
+  });
+});
+
+describe('what the store keeps of a key held more than once', () => {
+  /** Agent `a` in the first home with `n` rows, ingested; then `then` runs. */
+  async function twice(prefix: string, o: { n?: number; meta?: AgentSpec['meta']; links?: string[] } = {}): Promise<{ rig: AgentRig; first: string; a: string; b: string }> {
+    const rig = await rigOf(prefix);
+    const [a, b] = rig.box.homes as [string, string];
+    const { paths } = plantAgentTree(rig, {
+      slug: SLUG, uuid: PARENT, mainRows: calls(0x3501, ...(o.links ?? ['toolu_1', 'toolu_2']).map((id, i) => ({ before: 60_000 + i * 1000, ids: [id] }))),
+      agents: [agent('a', 0x4501, { n: o.n ?? 3, ...(o.meta === undefined ? { meta: { toolUseId: 'toolu_1' } } : { meta: o.meta }) })],
+    }, SINCE);
+    await rig.tick(armed, { scan: true });
+    return { rig, first: paths['a']!, a, b };
+  }
+
+  it('SA26 growing copies: a copy, then three rows appended in place to the source: the three stored once, the union of both holdings, no variant, shape prefix', async () => {
+    const { rig, first, a, b } = await twice('ccrc-hist-sa26-');
+    holdAgainIn(first, a, b, 'copy');
+    await rig.tick(armed, { scan: true });
+    fs.appendFileSync(first, fixtureRows(0x4502, 3).map((r) => `${JSON.stringify(r)}\n`).join(''));
+    await rig.tick(armed, { scan: true });
+    expect(transcriptRows(rig.db, 'a')).toBe(1);
+    expect(membershipsPerEntry(rig.db, 'a'), 'six entries, the first three held by both').toEqual([2, 2, 2, 1, 1, 1]);
+    expect(variantsOf(rig.db, 'a')).toBe(0);
+    const c = censusOf(rig);
+    expect(c.beside.shapes).toMatchObject({ prefix: 1, identical: 0, fork: 0, disjoint: 0 });
+    expect(c.beside.identityCollision).toBe(0);
+    expect(c.shares, 'growth withholds nothing').not.toBeNull();
+    expect(c.units).toMatchObject({ D: 1, Ad: 1 });
+  });
+
+  it('SA29 disjoint holdings: two holdings of one key with rows and none in common are identity_collision, and no share prints', async () => {
+    const { rig, a, b } = await twice('ccrc-hist-sa29-');
+    // another file of the same key in the second home: other rows under the same session and agent id
+    const dir = path.join(b, 'projects', SLUG, PARENT, 'subagents');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'agent-a.jsonl'), fixtureRows(0x4503, 3).map((r) => `${JSON.stringify(r)}\n`).join(''));
+    fs.writeFileSync(path.join(dir, 'agent-a.meta.json'), JSON.stringify({ toolUseId: 'toolu_1' }));
+    fs.utimesSync(path.join(dir, 'agent-a.jsonl'), new Date(T0 + 60_000), new Date(T0 + 60_000));
+    await rig.tick(armed, { scan: true });
+    expect(transcriptRows(rig.db, 'a'), 'CONTROL: both files are the one key\'s').toBe(1);
+    expect(a).not.toBe(b);
+    const c = censusOf(rig);
+    expect(c.beside.shapes).toMatchObject({ disjoint: 1 });
+    expect(c.beside.identityCollision).toBe(1);
+    expect(c.shares).toBeNull();
+    expect(c.withheld).toEqual(['identity_collision']);
+    expect(c.canonical).toBeNull();
+    expect(c.units, 'one unit, not a collision of units').toMatchObject({ D: 1, Ad: 1 });
+  });
+
+  it('SA29 CONTROL: identical copies are not a collision and the share prints', async () => {
+    const { rig, first, a, b } = await twice('ccrc-hist-sa29-copy-');
+    holdAgainIn(first, a, b, 'copy');
+    await rig.tick(armed, { scan: true });
+    const c = censusOf(rig);
+    expect(c.beside.shapes).toMatchObject({ identical: 1, disjoint: 0 });
+    expect(c.shares).not.toBeNull();
+    expect(c.withheld).toEqual([]);
+  });
+
+  describe('SA28 a key\'s meta evidence (P17 (c))', () => {
+    const verdictOf = (c: CensusReport): string => (['L', 'U', 'M', 'X'] as const).filter((k) => c.units[k] === 1).join('');
+    const isRoot = process.getuid?.() === 0;
+
+    it('SA28 metas naming different links: the row keeps the first, the census says M (meta-conflict), never L', async () => {
+      const { rig, first, a, b } = await twice('ccrc-hist-sa28-conflict-');
+      holdAgainIn(first, a, b, 'copy', { toolUseId: 'toolu_2' });
+      await rig.tick(armed, { scan: true });
+      expect(linkOf(rig.db, 'a')).toBe('toolu_1');
+      expect(counterOf(rig.db, 'agent_meta_conflict')).toBe(1);
+      const c = censusOf(rig);
+      expect(verdictOf(c)).toBe('M');
+      expect(c.reasons).toEqual({ 'meta-conflict': 1 });
+    });
+
+    it('SA28 from X: one holding whose meta names no link is X; a second holding whose meta is absent moves it to M (meta-unread:absent)', async () => {
+      const { rig, first, a, b } = await twice('ccrc-hist-sa28-x-', { meta: {} });
+      expect(verdictOf(censusOf(rig))).toBe('X');
+      holdAgainIn(first, a, b, 'copy', 'absent');
+      await rig.tick(armed, { scan: true });
+      const c = censusOf(rig);
+      expect(verdictOf(c), 'a copy whose meta is missing widens the range: (c)\'s disclosed consequence').toBe('M');
+      expect(c.reasons).toEqual({ 'meta-unread:absent': 1 });
+    });
+
+    it.each([['oversized'], ['malformed']] as const)('SA28 one holding whose meta is %s is M (meta-unread:%s); a second holding that names a link leaves it M', async (cause) => {
+      const { rig, first, a, b } = await twice(`ccrc-hist-sa28-${cause}-`, { meta: cause });
+      let c = censusOf(rig);
+      expect(verdictOf(c)).toBe('M');
+      expect(c.reasons).toEqual({ [`meta-unread:${cause}`]: 1 });
+      holdAgainIn(first, a, b, 'copy', { toolUseId: 'toolu_1' });
+      await rig.tick(armed, { scan: true });
+      c = censusOf(rig);
+      expect(linkOf(rig.db, 'a'), 'the second holding\'s link was written').toBe('toolu_1');
+      expect(verdictOf(c)).toBe('M');
+      expect(c.reasons).toEqual({ [`meta-unread:${cause}`]: 1 });
+    });
+
+    it('SA28 a meta that is a directory is M (meta-unread:not-regular)', async () => {
+      const rig = await rigOf('ccrc-hist-sa28-notreg-');
+      const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3502, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4504, { meta: 'absent' })] }, SINCE);
+      fs.mkdirSync(paths['a']!.replace(/\.jsonl$/, '.meta.json'));
+      await rig.tick(armed, { scan: true });
+      const c = censusOf(rig);
+      expect(c.reasons).toEqual({ 'meta-unread:not-regular': 1 });
+    });
+
+    it.skipIf(isRoot)('SA28 a meta that cannot be opened is M (meta-unread:unreadable), skipped as root', async () => {
+      const rig = await rigOf('ccrc-hist-sa28-unreadable-');
+      const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3503, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4505, { meta: { toolUseId: 'toolu_1' } })] }, SINCE);
+      fs.chmodSync(paths['a']!.replace(/\.jsonl$/, '.meta.json'), 0);
+      await rig.tick(armed, { scan: true });
+      expect(censusOf(rig).reasons).toEqual({ 'meta-unread:unreadable': 1 });
+    });
+
+    it('SA28 a meta changed after its link was stored is M (meta-conflict)', async () => {
+      const { rig, first } = await twice('ccrc-hist-sa28-changed-');
+      expect(verdictOf(censusOf(rig)), 'CONTROL: unchanged, it is linked').toBe('L');
+      fs.writeFileSync(first.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ toolUseId: 'toolu_2' }));
+      const c = censusOf(rig);
+      expect(verdictOf(c)).toBe('M');
+      expect(c.reasons).toEqual({ 'meta-conflict': 1 });
+    });
+  });
+});
+
+describe('SA30 unbound holdings (P18 (a)): the lower end widens and the upper end does not', () => {
+  const isRoot = process.getuid?.() === 0;
+  it.skipIf(isRoot)('SA30 four keys with a bound holding each: three have a second that is unread, unreadable or replaced, one only grew', async () => {
+    const rig = await rigOf('ccrc-hist-sa30-');
+    const [a, b] = rig.box.homes as [string, string];
+    const ids = ['k1', 'k2', 'k3', 'k4'];
+    const { paths } = plantAgentTree(rig, {
+      slug: SLUG, uuid: PARENT, mainRows: calls(0x3601, ...ids.map((id, i) => ({ before: 60_000 + i * 1000, ids: [`toolu_${id}`] }))),
+      agents: ids.map((id, i) => agent(id, 0x4600 + i, { meta: { toolUseId: `toolu_${id}` } })),
+    }, SINCE);
+    await rig.tick(armed, { scan: true });
+    // k3's second holding is read, then replaced by another inode at the same path
+    const replaced = holdAgainIn(paths['k3']!, a, b, 'copy');
+    await rig.tick(armed, { scan: true });
+    // the new file exists before the old one goes, and the old inode is kept by a link outside the tree, so no later file takes its
+    // number (a recycled number reads as replaced too, which is not the case this one pins)
+    fs.linkSync(replaced, path.join(rig.box.home, 'keep-k3'));
+    fs.copyFileSync(paths['k3']!, `${replaced}.new`);
+    fs.renameSync(`${replaced}.new`, replaced);
+    // k1's is not yet read; k2's cannot be opened; k4 only grew since its read
+    holdAgainIn(paths['k1']!, a, b, 'copy');
+    fs.chmodSync(holdAgainIn(paths['k2']!, a, b, 'copy'), 0);
+    fs.appendFileSync(paths['k4']!, fixtureRows(0x4610, 2).map((r) => `${JSON.stringify(r)}\n`).join(''));
+    const c = censusOf(rig);
+    expect(c.beside.holdingUnbound).toEqual({ unread: 1, unreadable: 1, replaced: 1, shrunk: 0 });
+    expect(c.units).toMatchObject({ D: 4, Ad: 4, L: 4 });
+    // three extra units at the lower end, none at the upper: 4 / (4 + 3) to 4 / 4
+    expect(c.shares!['D-T']!.lo).toBeCloseTo(4 / 7, 12);
+    expect(c.shares!['D-T']!.hi).toBe(1);
+    expect(c.shares!['D-T']!.den).toBe(4);
+  });
+
+  it('SA30 a holding that shrank below its cursor is unbound (shrunk)', async () => {
+    const rig = await rigOf('ccrc-hist-sa30-shrunk-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3602, { before: 60_000, ids: ['toolu_k1'] }), agents: [agent('k1', 0x4620, { n: 3, meta: { toolUseId: 'toolu_k1' } })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    expect(censusOf(rig).beside.holdingUnbound.shrunk, 'CONTROL').toBe(0);
+    fs.truncateSync(paths['k1']!, 10);
+    const c = censusOf(rig);
+    expect(c.beside.holdingUnbound).toEqual({ unread: 0, unreadable: 0, replaced: 0, shrunk: 1 });
+  });
+});
+
+describe('SA31 precedence: nothing counted twice (P18)', () => {
+  it('SA31 a stored row whose only holding is replaced by a link is Ad once, refused_since_stored 1, and both sums hold', async () => {
+    const rig = await rigOf('ccrc-hist-sa31-');
+    const { paths } = plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3701, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4701, { meta: { toolUseId: 'toolu_1' } })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    const moved = path.join(path.dirname(path.dirname(paths['a']!)), 'moved-a');   // outside subagents/, which the walk lists
+    fs.renameSync(paths['a']!, moved);
+    fs.symlinkSync(moved, paths['a']!);
+    const c = censusOf(rig);
+    expect(c.units, 'counted exactly once, as admitted').toMatchObject({ D: 1, R: 0, P: 0, Q: 0, Ad: 1, L: 1, G: { notFound: 0, unknown: 0 } });
+    expect(c.beside.refusedSinceStored).toBe(1);
+    expect(c.beside.agentFileRefused).toEqual({ link: 1 });
+    expect(c.sums).toEqual({ ok: true, failed: [] });
+    expect(c.shares).not.toBeNull();
+  });
+});
+
+describe('SA33 a parent\'s window (P19 (b)): M by cause, never U; read past the window, U', () => {
+  type Kind = 'agent' | 'workflow';
+  /** The decoy rows of a kind: rows that name nothing the unit links to, timed `at` ms from the unit's first row. */
+  const decoy = (kind: Kind, tag: number, at: number[]): object[] => (kind === 'agent'
+    ? callRows(tag, at.map((ms, i) => ({ ms: AGENT_T0 + ms, ids: [`toolu_decoy${tag}_${i}`] })))
+    : resultRows(tag, at.map((ms, i) => ({ ms: AGENT_T0 + ms, text: `other ${tag}.${i}` }))));
+  /** Row times: inside the window, and just past its end (the agent's window ends at t0, a workflow's 15 minutes after it). */
+  const IN = (kind: Kind): number => (kind === 'agent' ? -5 * MIN : -2 * MIN);
+  const IN2 = (kind: Kind): number => (kind === 'agent' ? -2 * MIN : 2 * MIN);
+  const PAST = (kind: Kind): number => (kind === 'agent' ? 5 * MIN : 20 * MIN);
+  async function parentOf(prefix: string, kind: Kind, rows: object[]): Promise<{ rig: AgentRig; main: string }> {
+    const rig = await rigOf(prefix);
+    const a = agent(kind === 'agent' ? 'a' : 'x', 0x4800 + (kind === 'agent' ? 0 : 1), kind === 'agent' ? { meta: { toolUseId: 'toolu_Z' } } : {});
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: rows, ...(kind === 'agent' ? { agents: [a] } : { agents: [], runs: [{ id: RUN, agents: [a] }] }) }, SINCE);
+    await rig.tick(armed, { scan: true });
+    return { rig, main: path.join(rig.box.homes[0]!, 'projects', SLUG, `${PARENT}.jsonl`) };
+  }
+  const lines = (rows: object[]): string => rows.map((r) => `${JSON.stringify(r)}\n`).join('');
+
+  it.each([['agent'], ['workflow']] as const)('SA33 %s: a parent read only to before the window\'s end is M (parent-behind); read past it, U', async (kind) => {
+    const { rig, main } = await parentOf(`ccrc-hist-sa33-behind-${kind}-`, kind, decoy(kind, 0x5001, [IN(kind)]));
+    expect(censusOf(rig).units, 'CONTROL: the parent read to its end, no match').toMatchObject({ U: 1, M: 0 });
+    // two rows appended: one inside the window, one past its end; a tick that reads one line stores the first only
+    fs.appendFileSync(main, lines([...decoy(kind, 0x5002, [IN2(kind)]), ...decoy(kind, 0x5003, [PAST(kind)])]));
+    await rig.tick(armed, { scan: true, budget: { chunkBytes: 1, maxBytes: 1 } });
+    let c = censusOf(rig);
+    expect(c.units).toMatchObject({ U: 0, M: 1 });
+    expect(c.reasons).toEqual({ 'parent-behind': 1 });
+    await rig.tick(armed, { scan: true });
+    c = censusOf(rig);
+    expect(c.units, 'the same parent read past the window\'s end').toMatchObject({ U: 1, M: 0 });
+  });
+
+  it.each([['agent'], ['workflow']] as const)('SA33 %s: a parent with a second holding not yet bound is M (parent-copy-unbound); bound, U', async (kind) => {
+    const { rig, main } = await parentOf(`ccrc-hist-sa33-unbound-${kind}-`, kind, decoy(kind, 0x5004, [IN(kind)]));
+    expect(censusOf(rig).units.U, 'CONTROL').toBe(1);
+    holdAgainIn(main, rig.box.homes[0]!, rig.box.homes[1]!, 'copy');
+    let c = censusOf(rig);
+    expect(c.units).toMatchObject({ U: 0, M: 1 });
+    expect(c.reasons).toEqual({ 'parent-copy-unbound': 1 });
+    await rig.tick(armed, { scan: true });
+    c = censusOf(rig);
+    expect(c.units).toMatchObject({ U: 1, M: 0 });
+  });
+
+  it.each([['agent'], ['workflow']] as const)('SA33 %s: a parent whose only candidate row has a NULL ts_ms and no match is M (parent-untimed)', async (kind) => {
+    const rows = kind === 'agent' ? callRows(0x5005, [{ ms: null, ids: ['toolu_other'] }]) : resultRows(0x5005, [{ ms: null, text: 'other' }]);
+    const { rig } = await parentOf(`ccrc-hist-sa33-untimed-${kind}-`, kind, rows);
+    const c = censusOf(rig);
+    expect(c.units).toMatchObject({ U: 0, M: 1 });
+    expect(c.reasons).toEqual({ 'parent-untimed': 1 });
+  });
+
+  it.each([['agent'], ['workflow']] as const)('SA33 %s: an untimed row is decoded within the bound, so one that names the unit still links it', async (kind) => {
+    const rows = kind === 'agent' ? callRows(0x5006, [{ ms: null, ids: ['toolu_Z'] }]) : resultRows(0x5006, [{ ms: null, text: launched(RUN) }]);
+    const { rig } = await parentOf(`ccrc-hist-sa33-untimed-hit-${kind}-`, kind, rows);
+    expect(censusOf(rig).units).toMatchObject({ L: 1, M: 0 });
+  });
+});
+
+// ── the verb (P16 (a)) ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('SA23 the census verb writes nothing and answers lib\'s exits', () => {
+  /** The store's bytes, mtime and user_version, and every entry under ~/.ccrc (names, sizes and mtimes; the lock and SQLite's WAL
+   *  sidecars, which a read-only open may create, are excluded), as "writes nothing" is measured. */
+  function fingerprint(box: HistoryBox): { db: string; dbMtime: number; userVersion: number; tree: string[] } {
+    const dbFile = historyPaths(box.home).dbFile;
+    const ro = openStoreRO(box);
+    let userVersion: number;
+    try { userVersion = (ro.prepare('PRAGMA user_version').get() as { user_version: number }).user_version; } finally { ro.close(); }
+    const root = path.join(box.home, '.ccrc');
+    const tree: string[] = [];
+    const visit = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.name === 'history-sweep.lock' || /-(wal|shm)$/.test(e.name)) continue;
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { tree.push(`${path.relative(root, p)}/`); visit(p); continue; }
+        const st = fs.lstatSync(p);
+        tree.push(`${path.relative(root, p)} ${st.size} ${Math.trunc(st.mtimeMs)}`);
+      }
+    };
+    visit(root);
+    return { db: createHash('sha256').update(fs.readFileSync(dbFile)).digest('hex'), dbMtime: fs.statSync(dbFile).mtimeMs, userVersion, tree: tree.sort() };
+  }
+
+  it('SA23 --json prints the report as one JSON document on stdout, exit 0, and the store is untouched; no install record is written', async () => {
+    const rig = await rigOf('ccrc-hist-sa23-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3801, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4801, { meta: { toolUseId: 'toolu_1' } })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    // the fixture deletes the install record after its seeding ticks, so a census that ran decideInstallRecord would write one (review 1728, F6)
+    rig.db.prepare("DELETE FROM meta WHERE k = 'agents_since_ms'").run();
+    closeWriter(rig.db);
+    const before = fingerprint(rig.box);
+    const r = runCli(rig.box, ['census', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    const doc = JSON.parse(r.stdout) as CensusReport;
+    expect(doc.units).toMatchObject({ D: 1, Ad: 1 });
+    expect(r.stderr, 'nothing on stderr: the report is the answer').toBe('');
+    expect(fingerprint(rig.box)).toEqual(before);
+    const ro = openStoreRO(rig.box);
+    try { expect(getMeta(ro, 'agents_since_ms')).toBeNull(); } finally { ro.close(); }
+    expect(WRITING_FORMS).not.toHaveProperty('census');
+  });
+
+  it('the text form prints one group per line, counts and ranges only, never a path; it runs inside a session too', async () => {
+    const rig = await rigOf('ccrc-hist-sa23-text-');
+    plantAgentTree(rig, { slug: SLUG, uuid: PARENT, mainRows: calls(0x3802, { before: 60_000, ids: ['toolu_1'] }), agents: [agent('a', 0x4802, { meta: { toolUseId: 'toolu_1' } })] }, SINCE);
+    await rig.tick(armed, { scan: true });
+    closeWriter(rig.db);
+    const r = runCli(rig.box, ['census'], { env: { CLAUDECODE: '1' } });
+    expect(r.code, r.stderr).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines.every((l) => l.startsWith('census '))).toBe(true);
+    expect(lines[0]).toBe('census units: D 1 = R 0 + P 0 + Q 0 + Ad 1; Ad = L 1 + U 0 + M 0 + X 0; I 0; G 0 (not found 0, unknown 0)');
+    expect(r.stdout).toContain('census share D-T: 100.0% to 100.0% (den 1)');
+    expect(r.stdout, 'no path').not.toContain(rig.box.home);
+    expect(r.stdout).not.toContain('agent-a');
+  });
+
+  it('no store on this box is exit 9; a held lock is exit 4; any argument but --json is exit 2', async () => {
+    const empty = makeHistoryBox('ccrc-hist-sa23-nostore-');
+    expect(runCli(empty, ['census']).code).toBe(9);
+    const rig = await rigOf('ccrc-hist-sa23-lock-');
+    closeWriter(rig.db);
+    expect(runCli(rig.box, ['census', '--bogus']).code).toBe(2);
+    expect(runCli(rig.box, ['census', 'x']).code).toBe(2);
+    const release = holdLock(rig.box);
+    try { expect(runCli(rig.box, ['census']).code).toBe(4); } finally { release(); }
   });
 });
