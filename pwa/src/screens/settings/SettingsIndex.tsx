@@ -1,5 +1,6 @@
-// Settings' index (settings spec §3.2, D-5503): five rows, one per section, then two diagnostic doors (Reader lab, Measure highlighting), each with its icon, its name, its purpose
-// line (the phone index) and its measured status line (`sectionStatus.ts`), a link to `/settings/<id>`.
+// Settings' index (settings spec §3.2, D-5503): five rows, one per section, then two diagnostic doors (Reader lab,
+// Measure highlighting). Every row has its icon, its name and its purpose line (the phone index) and is a link to
+// `/settings/<id>`; only a section has a measured status line (`sectionStatus.ts`), and a diagnostic has none.
 //
 // THE ONE INDEX. Refined's phone page and narrow pane render it now (R2b1); Refined's desktop nav (R2c) and
 // Instrument's list column (R3a) render this same component, so a section's name, status and order are said once.
