@@ -84,11 +84,11 @@ describe('the store: three states per group, default shadow', () => {
     expect(r.coord.runCloseChoice('never-started')).toBe('shadow');
   });
 
-  it('migration 52 adds the claimant-gone group to a database at version 51 as shadow and keeps the other two choices (D-8078)', () => {
+  it('migration 54 adds the claimant-gone group to a database at version 53 as shadow and keeps the other two choices (D-8078)', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    fresh.exec('ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 51;');
+    fresh.exec('ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
     fresh.close();
     const coord = new CoordStore(openCoordDb(file));
     expect(coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'on', claimantCrashed: 'off', claimantGone: 'shadow', updatedAt: 9 });
