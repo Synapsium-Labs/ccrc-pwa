@@ -175,6 +175,7 @@ import {
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
+import { MAIL_PACE, mailPaceRoleOf } from './coord/mailPace.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -497,48 +498,10 @@ const CHECKS_SLOW_MS = 120_000;
 /** The facts of an episode the lane keeps (spec §3.1): its id, its transition row's time, its head and its PR. */
 interface LaneEpisode { e: number; at: number; head: string; pr: number }
 
-/** The mail lane (the seventh; cadence `MAIL_SWEEP_MS`, `laneSchedule.ts`; the rest of this block is the gate's arithmetic).
- *
- * How long a session must have been idle before it is interruptible. ccd's
- *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
- *  the same judgement about the same panes, and two numbers for one policy is
- *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
- *  Claude Code rewrites only when the live word changes: under `idle` or
- *  `shell` the main loop has been idle at least that long (the worker stall
- *  watch design's §3.1), which is all this quiet needs. `mailTurnIdle`
- *  (`turnidle.ts`) applies it. */
-const MAIL_QUIET_MS = 60_000;
-
-/** No session gets two injections inside this window, however much mail is
- *  queued for it. A fan-out of six findings arriving as six prompts in ninety
- *  seconds is a denial of service dressed as coordination. */
-const MAIL_COOLDOWN_MS = 120_000;
+/** The mail lane (the seventh; cadence `MAIL_SWEEP_MS`, `laneSchedule.ts`); the gate's two pace pairs are `coord/mailPace.ts`'s `MAIL_PACE`, one row per role. */
 /** D-5242: the mail lane wakes a hibernated recipient at most this often (`ccd ensure` is a cold `--resume`); its
  *  mail waits under the `hibernated` gate meanwhile. The fleet-wide bound is the wake budget (`coord/wakeBudget.ts`). */
 const MAIL_WAKE_FLOOR_MS = 10 * 60_000;
-
-/** The same two questions the pair above asks, asked of a COORDINATOR — a
- *  session whose id is the `claimedBy` of a non-terminal run.
- *
- *  The pair above is sized for a worker mid-thought: a minute of measured idle
- *  before the lane may interrupt, and no second injection inside two. A
- *  coordinator at a wave boundary is not mid-anything. Its own contract
- *  (clause 7, `ccd/coordinator-skill/SKILL.md`) MANDATES that it end its turn
- *  and wait, so the state the worker floor exists to protect is the state the
- *  coordinator is required to be in, and the floor becomes a delay with nothing
- *  behind it — on the one session every other session in a program is waiting
- *  for.
- *
- *  Fifteen seconds is still an idle floor and not the absence of one: it is read
- *  off the same `statusUpdatedAt` and answers the same question, so a
- *  coordinator genuinely mid-turn is still not interrupted. Thirty seconds keeps
- *  `MAIL_COOLDOWN_MS`'s own promise — no fan-out arriving as a burst of prompts
- *  — at a boundary where two messages are a handoff rather than a denial of
- *  service.
- *
- *  Workers and every other session read the pair above, untouched. */
-const COORD_QUIET_MS = 15_000;
-const COORD_COOLDOWN_MS = 30_000;
 
 /** WHAT `MAIL_REPLAY_MS` MEANS: how long
  *  an UNACKED delivery waits before it is replayed. Dated from the
@@ -7476,7 +7439,7 @@ export class FleetWatcher {
    *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
    *      turn — `idle`, or `shell` (an idle main loop over a background shell)
    *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
-   *      least `MAIL_QUIET_MS` old (`COORD_QUIET_MS` for a coordinator): the
+   *      least `MAIL_PACE.worker.quietMs` old (`MAIL_PACE.coordinator.quietMs` for a coordinator): the
    *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
    *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
    *      tripwire only. It never reads a folded word,
@@ -7933,11 +7896,14 @@ export class FleetWatcher {
       try {
         // THE ONE FACT THIS RUNG ADDS, read once per row from the per-sweep set
         // above and consumed by exactly two gates: this one and `not-quiet`
-        // below. Neither condition changes — only the threshold each is measured
+        // below. It is the row of `MAIL_PACE` (`coord/mailPace.ts`) this session
+        // reads, chosen through `mailPaceRoleOf`: the claimant of an open run
+        // reads the coordinator row, every other session the worker row.
+        // Neither condition changes — only the threshold each is measured
         // against.
-        const isCoordinator = coordinators.has(d.toId);
+        const pace = MAIL_PACE[mailPaceRoleOf(d.toId, coordinators)];
         const last = this.mailCooldown.get(d.toId) ?? 0;
-        if (now - last < (isCoordinator ? COORD_COOLDOWN_MS : MAIL_COOLDOWN_MS)) { gated(d, 'cooldown'); continue; }
+        if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
         const rec = records.find((r) => r.id === d.toId);
         // registry ladder: `records` came from `readRegistryMeasured` above,
         // with `!listed` already refused (fix — blocking review findings
@@ -8206,7 +8172,7 @@ export class FleetWatcher {
         const mark = mailTurnReadsMark(mode) && live !== null
           ? await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, d.toId, identity.uuid, live)
           : null;
-        const turn = mailTurnIdle(live, mark, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
+        const turn = mailTurnIdle(live, mark, now, pace.quietMs, mode);
         // THE QUIET THRESHOLD DOES NOT FORK `not-quiet`, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on

@@ -46,7 +46,7 @@ import { PR_BACKOFF_MAX_MS } from '../laneSchedule.js';
  *  it existed, a delivery no one ever acked replayed "forever, bounded by
  *  ack rather than by a count" — true, and that is exactly what left
  *  spec:170-172's own terminal state structurally unreachable for any
- *  delivery that succeeded even once, since `MAIL_COOLDOWN_MS` only SPACES
+ *  delivery that succeeded even once, since `MAIL_PACE`'s cooldown only SPACES
  *  the injections and a send that keeps succeeding can never fail its way
  *  into this counter).
  *
@@ -85,7 +85,7 @@ export const MAIL_TURN_HOLD_MS = 60_000;
  *  a little over three hours of a recipient provably receiving the same
  *  envelope and never acking it — long enough that an ordinary slow ack
  *  (a session busy on something else for a while) never comes close, short
- *  enough that `MAIL_COOLDOWN_MS`'s own docstring's "denial of service
+ *  enough that `MAIL_PACE.worker`'s own docstring's "denial of service
  *  dressed as coordination" eventually parks rather than running for the
  *  life of the box. */
 export const MAIL_REPLAY_MAX_ATTEMPTS = 20;
