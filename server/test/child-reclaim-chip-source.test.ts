@@ -193,13 +193,17 @@ it('counts a property and a bracketed read of FleetSession.child, and no look-al
   expect(fleetChildReads("// session['child'] and session.child\nconst c = 1;")).toBe(0);
 });
 
-it('has ONE reader of FleetSession.child in pwa/src — childMarkOf, in runWords.ts', () => {
+it('has ONE reader of FleetSession.child — childMarkOf, in shared/runBelongs.ts, which pwa/src/fleet/runWords.ts re-exports', () => {
   const reads = Object.fromEntries(pwaSources()
     .map((f) => [path.relative(root, f), fleetChildReads(readFileSync(f, 'utf8'))] as const)
     .filter(([, n]) => n > 0));
   // archiveReleased.ts reads `releasedFrom.child`, a DIFFERENT field; its own
   // docstring: "never `FleetSession.child`: one decision, one field".
-  expect(reads).toEqual({ 'pwa/src/fleet/archiveReleased.ts': 1, 'pwa/src/fleet/runWords.ts': 1 });
+  // D-8077: the reader moved to `shared/runBelongs.ts` so the run-close lane (server) and the abandon sheet read ONE definition;
+  // `runWords.ts` re-exports it and holds no read of its own.
+  expect(reads).toEqual({ 'pwa/src/fleet/archiveReleased.ts': 1 });
+  expect(fleetChildReads(readFileSync(path.join(root, 'shared/runBelongs.ts'), 'utf8'))).toBe(1);
+  expect(readFileSync(path.join(root, 'pwa/src/fleet/runWords.ts'), 'utf8')).toContain("export { childMarkOf, type ChildMarkRead } from '../../../shared/runBelongs'");
 });
 
 it('no pwa/src file reads the close response’s why-word — the PWA renders no close word', () => {

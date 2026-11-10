@@ -166,7 +166,7 @@ import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
 import { readBranchFacts } from './coord/runCloseFacts.js';
 import { abandonRefusal } from './coord/close.js';
-import type { ChildMarkRead } from '../../shared/runBelongs.js';
+import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
@@ -5915,12 +5915,11 @@ export class FleetWatcher {
     }
   }
 
-  /** R1 (D-8077): a session's `.child` marker, read fresh from the registry (whose `ChildMark` is already validated, so it is a
-   *  `ChildMarkRead` as it stands); null when the registry cannot say. A session with no registry row names no marker, so no
-   *  workspace is released for it. */
+  /** R1 (D-8077): a session's `.child` marker through its one reader, read fresh; null when the registry cannot say. A session
+   *  with no registry row names no marker, so no workspace is released for it. */
   childMarkFor(sessionId: string): Promise<ChildMarkRead | null> {
     return readSessionRecord(this.deps.io, this.deps.cfg, sessionId).then((r) =>
-      r.kind === 'found' ? r.record.child : r.kind === 'absent' || r.kind === 'bad-id' ? { kind: 'none' as const } : null);
+      r.kind === 'found' ? childMarkOf({ child: r.record.child }) : r.kind === 'absent' || r.kind === 'bad-id' ? { kind: 'none' as const } : null);
   }
 
   /** R4 (D-8077): the claimant's last busy turn, `null` when it has not been seen busy since the server started, and `'unread'`

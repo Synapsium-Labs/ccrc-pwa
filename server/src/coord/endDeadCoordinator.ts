@@ -63,7 +63,7 @@ export interface EndDeadCoordinatorDeps {
   journalReread: (early: DeadCoordinatorJournalTrust) => { readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust };
   abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillStuck'],
     extra?: Pick<SweepCloseGuard, 'fleetAct' | 'detail'>) => Promise<CloseOutcome>;
-  /** R1 (D-8077, the ruled plan's W1): the child marker of a run's session, read fresh from the registry, or null when it
+  /** R1 (D-8077, the ruled plan's W1): the child marker of a run's session, read fresh through `childMarkOf`, or null when it
    *  cannot be measured. Absent, the act is today's (every run's workspace is released). Present, the act asks `fleetActFor`:
    *  `none` closes the run with no `ccd` call, `list` lists it as stuck and never closes it. */
   childMark?: (sessionId: string) => Promise<ChildMarkRead | null>;

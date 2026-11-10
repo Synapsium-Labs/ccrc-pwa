@@ -981,11 +981,13 @@ describe('the run-close lane’s never-started switch has no writer in the tree 
   });
 });
 
-// D-8077: the child marker's one QUESTION, `runBelongsTo`, is defined once, in `shared/runBelongs.ts`, and the run-close lane asks it.
-// (The marker's READER, `childMarkOf`, moves into the same file with the PWA half of D-8077, and its one-definer test with it.)
-describe('the child marker’s question is defined once (D-8077)', () => {
-  it('one definer of runBelongsTo', () => {
+// D-8077: the child marker has ONE reader and ONE question, `shared/runBelongs.ts`; the PWA re-exports the reader and the
+// run-close lane asks the question.
+describe('the child marker’s reader and question are defined once (D-8077)', () => {
+  it('one definer of childMarkOf (client side) and one of runBelongsTo', () => {
     const files = [...ALL, ...bashRoots.flatMap(() => [] as string[])];
+    const definesChildMarkOf = [...files, ...pwaSources()].filter((f) => /\bexport const childMarkOf\b/.test(stallCode(f))).map(rel);
+    expect(definesChildMarkOf).toEqual(['shared/runBelongs.ts']);
     const definesBelongs = [...files, ...pwaSources()].filter((f) => /\bexport (?:const|function) runBelongsTo\b/.test(stallCode(f))).map(rel);
     expect(definesBelongs).toEqual(['shared/runBelongs.ts']);
   });
