@@ -1,13 +1,15 @@
 // D-8126 (autonomy plan Task A9-3, spec §9.3): the rollout mail's start-up pass. L4: it READS the open claimants and each
 // one's binding, QUEUES the system mail and RECORDS the feed row; which mails are due and their words are
-// `coord/skillRollout.ts`'s (L1). Once per claimant per skill revision, durably: the feed row's once-only key
-// (`CoordStore.hasNotice`) is what a restart reads, so a server that starts again sends nothing.
+// `coord/skillRollout.ts`'s (L1). Once per claimant per skill revision, durably: the mail row itself is what a restart
+// reads (`CoordStore.hasMailWithSubject`), because the `mail` table is never pruned. The feed row's once-only key is
+// NOT durable over a coordinator's lifetime (the archive keeps only the newest `FEED_RETENTION` rows, and a pruned row
+// reads as never recorded), so it is a second reader here and never the only one.
 //
 // FAIL TOWARD NOT SENDING TWICE: a claimant whose binding cannot be read is skipped (it is not told on a guess, and
 // nothing is recorded, so the next start asks again); a mail that throws records nothing and the pass goes on.
 import type { WatcherCoordPort } from './coord/ports.js';
 import { queueSystemMail } from './coord/rundefsTx.js';
-import { rolloutMailsDue } from './coord/skillRollout.js';
+import { rolloutKey, rolloutMailsDue, rolloutMailSubject } from './coord/skillRollout.js';
 
 export interface SkillRolloutDeps {
   readonly coord: WatcherCoordPort;
@@ -32,7 +34,8 @@ export function runSkillRollout(deps: SkillRolloutDeps, revision: string): { sen
     console.warn(`ccrc-server: skill rollout: the claimants could not be read (${err instanceof Error ? err.message : String(err)})`);
     return { sent };
   }
-  for (const m of rolloutMailsDue(claimants, (id) => coord.hasNotice('coord', id, `skill-rollout:${revision}:${id}`), revision)) {
+  for (const m of rolloutMailsDue(claimants, (id) => coord.hasMailWithSubject('operator', null, id, rolloutMailSubject(revision))
+      || coord.hasNotice('coord', id, rolloutKey(revision, id)), revision)) {
     try {
       queueSystemMail(coord, null, { fromId: 'operator', toId: m.toId, runId: null, kind: 'status', subject: m.subject, body: m.body });
       record({ sessionId: m.toId, title: 'Coordinator skill changed', body: m.body }, m.key);

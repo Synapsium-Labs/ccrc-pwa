@@ -69,6 +69,17 @@ describe('runSkillRollout — the start-up pass', () => {
     expect(t.mails('coord-a')).toHaveLength(1);
   });
 
+  it('a restart after the feed archive pruned the rollout row still sends none (F14)', () => {
+    const t = build();
+    t.open('prog-a', 'coord-a');
+    expect(t.rollout().sent).toEqual(['coord-a']);
+    // the mail is delivered, and the feed archive rolls past its retention: the row is gone
+    t.coord.db.prepare('DELETE FROM feed_events').run();
+    expect(t.coord.hasNotice('coord', 'coord-a', 'skill-rollout:clause-21:coord-a')).toBe(false);
+    expect(t.rollout().sent).toEqual([]);
+    expect(t.mails('coord-a')).toHaveLength(1);
+  });
+
   it('a worker (a child that claims its own sub-run) gets none', () => {
     const t = build();
     t.open('prog-a', 'coord-a', 'worker-w');
