@@ -403,14 +403,14 @@ the cut list (D-8107):
 **Why, as measured.**
 - **The lent plan has no five-hour window.** Before Task 4, `scratch-a`'s limits file (written 23:07:05Z) read:
   weekly 42%, weekly reset 2026-11-16 07:00Z, and no five-hour figure, with no five-hour window since 2026-10-28.
-  Since #2473 (D-8120), ccrc has read such a lane as having no five-hour limit. The arm assumed a five-hour limit and
+  Since #2473, ccrc has read such a lane as having no five-hour limit. The arm assumed a five-hour limit and
   its reset.
 - **A weekly limit cannot show the case.** The parent's first limit would be the weekly one, 58 points away. Claude
   Code declines to pause its workflow agents for a reset that far off, as `too far out to wait for` (spec §1.1, 7
   runs). The 30-minute bound after the reset would have fallen on about 2026-11-16 07:30Z.
 - **The behaviour is about to change.** The operator's session-host ruling Q4 (research doc #2526, its section 6.1)
-  turns Claude Code's own auto-continue at the usage limit off in the settings ccd passes to every spawn, as D-8173.
-  D-8173 is allocated only, not built, so a reading made now would describe behaviour that is about to change.
+  turns Claude Code's own auto-continue at the usage limit off in the settings ccd passes to every spawn. That
+  change has a deviation number allocated but is not built yet, so a reading made now would describe behaviour that is about to change.
 - **The ruling:** item 145.
 
 **Still open.** Spec §5.4 rule 2 and §11 item 3 leave "a longer bound for delegated work in flight" waiting on
