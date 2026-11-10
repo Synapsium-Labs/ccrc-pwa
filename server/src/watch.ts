@@ -54,6 +54,7 @@ import type {
   SessionLanding, SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 import { APPROVAL_HOOK_WAIT_S } from '../../shared/api.js';
+import { RUN_CLOSE_WHY } from '../../shared/run-close.js';
 import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth, DelegationProjectionWire } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -162,6 +163,10 @@ import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } fro
 import { createRunVerdicts, type RunVerdicts } from './coord/runVerdicts.js';
 import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
+import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
+import { readBranchFacts } from './coord/runCloseFacts.js';
+import { abandonRefusal } from './coord/close.js';
+import type { ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
@@ -213,7 +218,7 @@ import {
 import { childEverCoordinated, expireArchived, expireLaneLive, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import { retireExecutor } from './retireExecutor.js';
 import {
-  deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
+  DEAD_COORDINATOR_AFTER_MS, deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
   deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
   type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
@@ -221,7 +226,7 @@ import {
   type DeadCoordinatorSealResult, type DeadCoordinatorSeedCause,
 } from './deadCoordinator.js';
 import {
-  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker, recordDeadCoordinatorBreakerSeed,
+  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, deadCoordinatorLaneOff, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker, recordDeadCoordinatorBreakerSeed,
   recordDeadCoordinatorFeed, recordDeadCoordinatorThrew, rereadDeadCoordinatorJournalTrust,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
@@ -745,6 +750,12 @@ export class FleetWatcher {
    *  `statusUpdatedAt` (the live file writes on change, so that stamp is the stretch's start), else the tick's clock;
    *  cleared when a measured row is anything but `busy`. The Finished push asks for a main Stop at or after it. */
   private episodeBusySince = new Map<string, number>();
+  /** The run-close lane's memory (D-8077): the last outcome it recorded per (row, programme), and the branch facts it read. */
+  private readonly runCloseMemory = createRunCloseMemory();
+  /** R4: the last tick each session was seen busy. In memory only, so it is `'unread'` until a tick has run since the server
+   *  started (`claimantBusyAt`). */
+  private readonly lastSeenBusy = new Map<string, number>();
+  private busyPrimed = false;
   /** Last swept task progress per session id, and when the sweep ran. */
   private taskProgress = new Map<string, TaskProgress>();
   /** Last-swept PR state per SESSION id. */
@@ -2709,6 +2720,8 @@ export class FleetWatcher {
       void this.sweepRunStuck().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the runs-closed notice's drain (D-8073), on its own minute.
       void this.sweepUntold().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
+      void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -2881,7 +2894,9 @@ export class FleetWatcher {
         // neither opens nor closes a stretch.
         if (s.status !== 'busy') this.episodeBusySince.delete(s.id);
         else if (!this.episodeBusySince.has(s.id)) this.episodeBusySince.set(s.id, s.statusUpdatedAt ?? Date.now());
+        if (s.status === 'busy') this.lastSeenBusy.set(s.id, Date.now());
       }
+      this.busyPrimed = true;
       for (const id of this.episodeBusySince.keys()) { if (!sessionProjects.has(id)) this.episodeBusySince.delete(id); }
       this.activeProjects = projects;
       // Build 9 wave 7: the claim lease rides THIS tick, on its own slower
@@ -3202,7 +3217,7 @@ export class FleetWatcher {
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -3251,7 +3266,9 @@ export class FleetWatcher {
           runId: r.runId,
           tag: `run-${r.runId}-${r.toState}`,
           recordAlways: true,
-          recordOnly: r.toState === 'closing',
+          // A lane's own close (`causedBy 'sweep'`, `expired:*`) is a record, never a push (D-8077): the coordinator is told by
+          // the notice and the screen shows the close.
+          recordOnly: r.toState === 'closing' || (r.causedBy === 'sweep' && r.detail !== null && r.detail.startsWith('expired:')),
         }, projects);
       }
       this.lastRunNotifyId = r.eventId;
@@ -5898,6 +5915,45 @@ export class FleetWatcher {
     }
   }
 
+  /** R1 (D-8077): a session's `.child` marker, read fresh from the registry (whose `ChildMark` is already validated, so it is a
+   *  `ChildMarkRead` as it stands); null when the registry cannot say. A session with no registry row names no marker, so no
+   *  workspace is released for it. */
+  childMarkFor(sessionId: string): Promise<ChildMarkRead | null> {
+    return readSessionRecord(this.deps.io, this.deps.cfg, sessionId).then((r) =>
+      r.kind === 'found' ? r.record.child : r.kind === 'absent' || r.kind === 'bad-id' ? { kind: 'none' as const } : null);
+  }
+
+  /** R4 (D-8077): the claimant's last busy turn, `null` when it has not been seen busy since the server started, and `'unread'`
+   *  before the first tick (then the lane and the verdict give nothing this pass). */
+  claimantBusyAt = (claimant: string): number | null | 'unread' => (this.busyPrimed ? this.lastSeenBusy.get(claimant) ?? null : 'unread');
+
+  /** The run-close lane (D-8077; spec 2026-11-04 §12): rows E1 and E1r, one pass a minute, shadow until the group is armed. */
+  async sweepRunClose(fleet?: FleetReadModel): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const { io, cfg } = this.deps;
+    // The selection listing is the tick's model (`fleetFor`, ARCH-51); only the act-time guard lists again (`runCloseActNames`).
+    const read = await this.fleetFor(fleet);
+    const selected = read.listed ? read.names : null;
+    await this.runLane('runClose', () => runClosePass({
+      coord, verdicts: this.runVerdicts, now: () => Date.now(), memory: this.runCloseMemory, notifyLog: this.deps.notifyLog,
+      registryNames: async () => selected,
+      freshRegistryNames: () => this.runCloseActNames(),
+      measure: (id) => measureClaimant({ coord, io, cfg, tmux: this.deps.tmux }, id, Date.now()),
+      claimantBusyAt: this.claimantBusyAt,
+      branchFacts: (sid) => readBranchFacts({ runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => Date.now() }, sid),
+      childMark: (sid) => this.childMarkFor(sid),
+      abandonRefusal: (runId) => abandonRefusal(coord, runId),
+      serial: this.deadCoordinatorSerial,
+    }));
+  }
+
+  /** The run-close lane's act-time listing (D-8077): the guard asked inside the serialiser lists afresh, never from the tick's
+   *  model, so a pause raised during the act stops it. Named in the census's act-time listing methods. */
+  private async runCloseActNames(): Promise<readonly string[] | null> {
+    try { const l = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return l.ok ? l.entries : null; } catch { return null; }
+  }
+
   /** The stuck verdict's lane (D-8071; spec 2026-11-04 §7): one read-only pass a minute, one at a time, filling `runVerdicts`. */
   async sweepRunStuck(): Promise<void> {
     const coord = this.deps.coord;
@@ -5905,7 +5961,7 @@ export class FleetWatcher {
     await this.runLane('runStuck', () => runStuckPass({
       coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, verdicts: this.runVerdicts,
       journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()),
-      now: () => Date.now(),
+      now: () => Date.now(), claimantBusyAt: this.claimantBusyAt,
     }));
   }
 
@@ -5926,6 +5982,7 @@ export class FleetWatcher {
       for (const [id, e] of this.deadCoordinatorState) {
         if (e.crashedPasses !== 0) this.deadCoordinatorState.set(id, { ...e, crashedPasses: 0 });
       }
+      this.runVerdicts.setCrashReading(null, 0);
     };
     // ONE — the switch. `reclaim-paused` stops the lane entirely, shadow included: nothing is measured, recorded or
     // written. The run of crashed passes is forgotten, so a lowered switch needs two FRESH passes; the durable anchors
@@ -5935,6 +5992,11 @@ export class FleetWatcher {
     // Here, after the switch and before every gate that is the crash's own (the journal's trust, the anchors, the
     // breaker, shadow): none of those measures a dispatch, so none of them may hold one. Its failure is its own.
     await this.deadDispatchStep(coord);
+    // The crash row's own control (Task 26) turned OFF stops the crash-specific steps below the same way; the group's marker
+    // is the override. It sits AFTER the dispatch reason, which has its own switch (`dispatchAbandonSetting`): the crash row's
+    // Off must never hold a dispatch.
+    const crashChoice = coord.runCloseChoice('claimant-crashed');
+    if (deadCoordinatorLaneOff(names, crashChoice)) { forget(); return; }
     // TWO — the journal's own trust (`readDeadCoordinatorJournalTrust`): a mirror not swept yet, or gone stale,
     // decides NOTHING this pass — no anchor is written or deleted, and the run of crashed passes starts again.
     const journal = await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth());
@@ -6081,6 +6143,19 @@ export class FleetWatcher {
         deletes.push(id);
       }
     }
+    // The crash row's would-close list (Task 26, spec §12.3): every open run of a claimant measured crashed this pass, with the
+    // moment its hour runs out. A claimant whose runs cannot be read is left out of it, never guessed.
+    {
+      const would: { runId: number; program: string; why: typeof RUN_CLOSE_WHY.claimantCrashed; at: number }[] = [];
+      for (const c of crashed) {
+        try {
+          const read = coord.bindingsOf(c.id).claimant();
+          if (!read.ok) continue;
+          for (const r of read.siblings) would.push({ runId: r.id, program: r.program, why: RUN_CLOSE_WHY.claimantCrashed, at: c.since + DEAD_COORDINATOR_AFTER_MS });
+        } catch { /* a store that will not read names nothing */ }
+      }
+      this.runVerdicts.setCrashReading({ would, named: [] }, now);
+    }
     // A claimant that left the population (its runs closed, or reclaimed by an heir) is forgotten, anchor and all.
     for (const id of [...this.deadCoordinatorState.keys()]) if (!ids.includes(id)) this.deadCoordinatorState.delete(id);
     for (const id of anchors.keys()) if (!ids.includes(id)) deletes.push(id);
@@ -6138,7 +6213,7 @@ export class FleetWatcher {
         const e = this.deadCoordinatorState.get(c.id)!;
         return deadCoordinatorDue(c.since, e.crashedPasses, now) && now >= e.nextAskAt;
       }).sort((a, b) => a.since - b.since || (a.id < b.id ? -1 : 1));
-      const armed = deadCoordinatorLaneArmed(names);
+      const armed = deadCoordinatorLaneArmed(names, crashChoice);
       for (const pick of due) {
         const out = await this.deadCoordinatorAct(coord, pick, now);
         if (armed || out?.kind !== 'would-end') break;
@@ -6274,7 +6349,9 @@ export class FleetWatcher {
       // WHOLE — the hold with the trust — so a mirror gone stale since the pass is a `hold` stop (review 339, F4).
       journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()),
       // ...and its synchronous half again AFTER the claimant's measure, from the mirror as it is THEN (wave 6; review 355, F7).
-      journalReread: (early: DeadCoordinatorJournalTrust) => rereadDeadCoordinatorJournalTrust(coord, this.lifecycleHealth(), early) };
+      journalReread: (early: DeadCoordinatorJournalTrust) => rereadDeadCoordinatorJournalTrust(coord, this.lifecycleHealth(), early),
+      // R1 (D-8077): the run's marker, read fresh at the act, so no workspace a marker does not order is released.
+      childMark: (sessionId: string) => this.childMarkFor(sessionId) };
     try {
       const out = await serial(coord, (abandon) => endDeadCoordinator({ ...deps, abandon }, pick.id, now));
       const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
@@ -9438,7 +9515,7 @@ export class FleetWatcher {
       const claimed = coord.claimDigestDay(day, now, n);
       this.lastDigestDay = day;
       if (!claimed || n === 0) return;
-      const copy = digestPushCopy(day, built.digest.totals, built.digest.drift?.lines.length);
+      const copy = digestPushCopy(day, built.digest.totals, built.digest.drift?.lines.length, built.digest.closes?.line ?? null);
       this.pushOne({ kind: 'coord', sessionId: '', project: '', title: copy.title, body: copy.body, tag: copy.tag,
         url: copy.url, recordAlways: true }, this.activeProjects);
     } catch (err) {

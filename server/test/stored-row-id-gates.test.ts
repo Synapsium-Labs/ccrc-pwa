@@ -256,7 +256,7 @@ describe('the abandon arm closes a bad stored id failed with no fleet act (spec 
     const id = storedRun(d.coord, { state: 'working', sessionId: BAD, claimedBy: CLAIMED_BY });
     let asked = 0;
     const out = await closeRun(d.closeDeps, id, { intent: 'abandon' }, 'sweep',
-      { claimedBy: CLAIMED_BY, stillCrashed: async () => { asked += 1; return null; } });
+      { claimedBy: CLAIMED_BY, stillStuck: async () => { asked += 1; return null; } });
     expect(out).toEqual({ ...OMITTED, id });
     expect(asked, 'the claimant is re-measured once, before the close').toBe(1);
     expect(calls).toEqual([]);
@@ -272,7 +272,7 @@ describe('the abandon arm closes a bad stored id failed with no fleet act (spec 
     const id = storedRun(d.coord, { state: 'working', sessionId: BAD, claimedBy: CLAIMED_BY });
     const stop = { kind: 'remeasured', why: 're-measured alive' } as const;
     const out = await closeRun(d.closeDeps, id, { intent: 'abandon' }, 'sweep',
-      { claimedBy: CLAIMED_BY, stillCrashed: async () => stop });
+      { claimedBy: CLAIMED_BY, stillStuck: async () => stop });
     expect(out).toEqual({ ok: false, kind: 'sweep-stopped', stop, fleetAct: null });
     expect(calls).toEqual([]);
     expect(okRun(d.coord.run(id))!.state).toBe('working');

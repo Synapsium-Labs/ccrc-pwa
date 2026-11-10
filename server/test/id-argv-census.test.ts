@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 47 id-taking calls across 14 files.
+// THE CLAIM: 48 id-taking calls across 15 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -341,6 +341,8 @@ const GATES = {
     file: 'coord/fingerprint.ts', scope: 'resolveDoneBranch',
     re: /if \(!isRegistryId\(run\.sessionId\)\) \{\s*return \{ ok: false, code: 'tip-unmeasurable'/,
   },
+  /** The run-close lane's branch facts refuse a non-registry id as unmeasured (D-8077), before the capability read and the argv. */
+  'branch-facts-gate': { file: 'coord/runCloseFacts.ts', scope: 'readBranchFacts', re: /if \(!isRegistryId\(sessionId\)\) return unmeasured\(\);/ },
   /** The child-reclaim executor defers a bad id before either of its builders. */
   'child-reclaim-outcome': {
     file: 'coord/childReclaim.ts', scope: 'childSpentRecordJudge',
@@ -447,6 +449,8 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/staleArchive.ts', scope: 'act', builder: 'wsArchive', id: 'id', origin: ['registry'], gate: ['stale-archive-act'] },
   // coord/fingerprint.ts: reached from close (below close's gate) and advance (below advance's gate).
   { file: 'coord/fingerprint.ts', scope: 'verifyDone', builder: 'prStateSession', id: 'run.sessionId', origin: ['stored'], gate: ['close-gate', 'advance-gate', 'fingerprint-check'], entry: /\bresolveDoneBranch\(deps, run\)/ },
+  // coord/runCloseFacts.ts: the run-close lane's branch facts, below their own id gate.
+  { file: 'coord/runCloseFacts.ts', scope: 'readBranchFacts', builder: 'prStateSession', id: 'sessionId', origin: ['stored'], gate: ['branch-facts-gate'] },
   // coord/routes.ts: the open's hold, in the helper `POST /api/runs` calls once its decider admitted the open (the
   // callers case pins that order).
   { file: 'coord/routes.ts', scope: 'holdAndBindSession', builder: 'wsHold', id: 'sessionId', origin: ['request'], gate: ['run-open-checks'] },
@@ -499,7 +503,7 @@ const GATE_FILES = [
   // its purge test vets each missing id with the predicate before reading the registry listing.
   'fleetstate.ts',
   'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/closeDecide.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
-  'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
+  'coord/expireArchived.ts', 'coord/childReclaimStale.ts', 'coord/runCloseFacts.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.
   'orphanTreeLane.ts',
   // ccdargv.ts (delegation broker wave 5): `CCD_ARGV.leaseMark` vets the parent and a promoted session with the predicate

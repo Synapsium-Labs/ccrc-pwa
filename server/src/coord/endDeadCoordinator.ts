@@ -17,6 +17,9 @@ import {
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
 } from '../deadCoordinator.js';
 import { notifyEach } from '../notice.js';
+import type { ChildMarkRead } from '../../../shared/runBelongs.js';
+import { fleetActFor } from './runClose.js';
+import { runCloseGroupArmed, type RunCloseChoice } from '../../../shared/run-close.js';
 
 /**
  * THE DEAD-COORDINATOR LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.4, "No successor" and "The act").
@@ -58,7 +61,12 @@ export interface EndDeadCoordinatorDeps {
    *  between the claimant's measure and the commit. Handed the early read's trust, it never trusts more
    *  (`rereadDeadCoordinatorJournalTrust`). */
   journalReread: (early: DeadCoordinatorJournalTrust) => { readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust };
-  abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>;
+  abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillStuck'],
+    extra?: Pick<SweepCloseGuard, 'fleetAct' | 'detail'>) => Promise<CloseOutcome>;
+  /** R1 (D-8077, the ruled plan's W1): the child marker of a run's session, read fresh from the registry, or null when it
+   *  cannot be measured. Absent, the act is today's (every run's workspace is released). Present, the act asks `fleetActFor`:
+   *  `none` closes the run with no `ccd` call, `list` lists it as stuck and never closes it. */
+  childMark?: (sessionId: string) => Promise<ChildMarkRead | null>;
   /** The lane's clock, read at the moment each re-measure measures. A re-measure NEVER takes the pass's instant: a
    *  supervisor heartbeat stamped after that instant would read "from the future", not fresh, and a RESTARTING
    *  coordinator (heartbeat written before its pane is up) would read `orphan` — crashed. */
@@ -136,7 +144,13 @@ export function rereadDeadCoordinatorJournalTrust(
 
 /** Is the lane ARMED in this registry listing? The one reader of the live switch outside its definer — so the watcher,
  *  which holds writes of its own, never names it (`single-definition.test.ts`'s no-writer pin). */
-export const deadCoordinatorLaneArmed = (names: readonly string[]): boolean => names.includes(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+export const deadCoordinatorLaneArmed = (names: readonly string[], choice: RunCloseChoice): boolean =>
+  runCloseGroupArmed(names.includes(DEAD_COORDINATOR_LANE_LIVE_MARKER), choice);
+
+/** Is the lane turned OFF (Task 26, the crash row's own control)? Its choice is `off` and no marker stands: the marker is the
+ *  emergency override, and wins. An off lane reads and records nothing, as a raised `reclaim-paused` leaves it. */
+export const deadCoordinatorLaneOff = (names: readonly string[], choice: RunCloseChoice): boolean =>
+  choice === 'off' && !names.includes(DEAD_COORDINATOR_LANE_LIVE_MARKER);
 
 /** The runs, grouped by programme in the order the store listed them (id order). */
 const byProgramme = (runs: readonly { id: number; program: string }[]): DeadCoordinatorProgramme[] => {
@@ -167,7 +181,7 @@ export async function stillCrashed(deps: Omit<EndDeadCoordinatorDeps, 'coord'> &
   }
   const names = listed.entries;
   if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
-  if (!deadCoordinatorLaneArmed(names)) return { kind: 'switch', why: 'the lane was disarmed during the act' };
+  if (!deadCoordinatorLaneArmed(names, deps.coord.runCloseChoice('claimant-crashed'))) return { kind: 'switch', why: 'the lane was disarmed during the act' };
   // The journal's own trust FIRST, and whole: a mirror gone `unknown` or `stale` since the pass stops the act as the
   // pass's own hold does — nothing learned, the anchor standing (review 339, F4).
   const journal = await deps.journalTrust();
@@ -215,7 +229,7 @@ export async function endDeadCoordinator(
     return { kind: 'store-unreadable', detail: err instanceof Error ? err.message : String(err) };
   }
   // 3 — shadow stops here: recorded, and `abandon` is never called.
-  if (!deadCoordinatorLaneArmed(names)) return { kind: 'would-end', programmes: byProgramme(runs) };
+  if (!deadCoordinatorLaneArmed(names, deps.coord.runCloseChoice('claimant-crashed'))) return { kind: 'would-end', programmes: byProgramme(runs) };
   // 4 — each run: the abandon, with the compare-and-set and the re-measure inside the arm.
   const ended: { id: number; program: string }[] = [];
   const released: { id: number; program: string }[] = [];
@@ -235,7 +249,18 @@ export async function endDeadCoordinator(
   try {
     for (const run of runs) {
       current = run.id;
-      const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId));
+      // R1, the crash row included: a run whose workspace no marker of its own orders is closed with no fleet act, and one
+      // whose marker cannot be read is listed and never closed.
+      let extra: Pick<SweepCloseGuard, 'fleetAct'> | undefined;
+      if (deps.childMark !== undefined) {
+        const read = deps.coord.run(run.id);
+        const sessionId = read.ok && read.run !== null ? read.run.sessionId : null;
+        const mark = sessionId === null ? { kind: 'none' as const } : await deps.childMark(sessionId);
+        const act = mark === null ? 'list' : fleetActFor({ id: run.id, sessionId }, mark);
+        if (act === 'list') { stuck.push({ runId: run.id, why: 'its .child marker could not be read, so no workspace may be released' }); continue; }
+        extra = { fleetAct: act === 'none' ? 'none' : 'release' };
+      }
+      const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId), extra);
       if (out.ok) { ended.push(run); continue; }
       if (out.kind === 'sweep-stopped') {
         // The stop came after the fleet act: the worker is released, or re-held under a surviving run, and its run stays
@@ -253,6 +278,7 @@ export async function endDeadCoordinator(
       }
       const why = closeRefusalOf(run.id, out);
       stuck.push({ runId: run.id, why: why.detail === undefined ? why.kind : `${why.kind}: ${why.detail}` });
+      deps.coord.recordRunCloseRefusal('claimant-crashed', run.id, why.kind, Date.now());
     }
     current = null;
   } catch (err) {

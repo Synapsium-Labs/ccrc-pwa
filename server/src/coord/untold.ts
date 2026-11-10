@@ -17,10 +17,23 @@ export const isUntoldNotice = (subject: string): boolean => subject.startsWith(U
 
 const who = (cause: string): string => (cause === 'sweep' ? 'the sweep' : 'the operator');
 
+/** What a refused close says it was refused for (spec §12.2): the notice asks nothing, it tells the coordinator the lane met
+ *  something it will not close over. An `unknown` run is a state a newer server can move. */
+const REFUSED_WORDS: Readonly<Record<string, string>> = {
+  'open-pr': 'it has an open pull request',
+  'unpushed-commits': 'its branch has commits that are not pushed',
+  'busy-worker': 'its worker is still busy',
+  'child-marker-unreadable': 'ccrc cannot tell whether a child is still working in its workspace',
+  'warning-undelivered': 'the warning that it would close could not be delivered',
+  'unknown-run': 'it is in a state this server cannot read, which a newer server can move',
+};
+
 function noticeOf(rows: readonly UntoldRow[]): { subject: string; body: string } {
-  const subject = `${UNTOLD_SUBJECT_PREFIX} ${rows.length} ${rows.length === 1 ? 'run' : 'runs'}`;
-  const lines = rows.map((r) =>
-    `run ${r.runId} (${r.program} wave ${r.wave}/${r.waveOf ?? '?'}) was closed by ${who(r.cause)}${r.detail === null ? '' : ` (${r.detail})`}`);
+  const closed = rows.filter((r) => r.cause !== 'refused');
+  const subject = `${UNTOLD_SUBJECT_PREFIX} ${closed.length === 0 ? 'none' : `${closed.length} ${closed.length === 1 ? 'run' : 'runs'}`}`;
+  const lines = rows.map((r) => r.cause === 'refused'
+    ? `run ${r.runId} (${r.program} wave ${r.wave}/${r.waveOf ?? '?'}) was not closed: ${REFUSED_WORDS[r.detail ?? ''] ?? 'ccrc refused to close it'}`
+    : `run ${r.runId} (${r.program} wave ${r.wave}/${r.waveOf ?? '?'}) was closed by ${who(r.cause)}${r.detail === null ? '' : ` (${r.detail})`}`);
   return { subject, body: [...lines, 'This is a record. It asks nothing of you.'].join('\n') };
 }
 

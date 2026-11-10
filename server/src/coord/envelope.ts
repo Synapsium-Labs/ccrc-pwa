@@ -67,6 +67,9 @@ export function renderEnvelope(m: EnvelopeInput): string {
   if (m.runId !== null) {
     const wave = m.wave === null ? '' : ` wave ${m.wave}${m.waveOf === null ? '' : `/${m.waveOf}`}`;
     lines.push(`run: ${m.runId}${m.program === null ? '' : ` (program:${m.program}${wave})`}`);
+  } else if (m.program !== null) {
+    // D-8077: a run-less system mail that names a programme (the run-close lane's warning) carries the slug in its envelope.
+    lines.push(`program: ${m.program}`);
   }
   lines.push(`kind: ${m.kind}`, `subject: ${m.subject}`);
   if (m.artifacts.length > 0) {
@@ -115,6 +118,8 @@ export function renderInboxEntry(deliveryId: number, storedEnvelope: string): st
   if (e.runId !== null) {
     const wave = e.wave === null ? '' : ` wave ${e.wave}${e.waveOf === null ? '' : `/${e.waveOf}`}`;
     lines.push(`run: ${e.runId}${e.program === null ? '' : ` (program:${e.program}${wave})`}`);
+  } else if (e.program !== null) {
+    lines.push(`program: ${e.program}`);
   }
   if (e.artifacts.length > 0) {
     lines.push('artifacts:');

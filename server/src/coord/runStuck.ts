@@ -150,6 +150,10 @@ export interface RunStuckFacts {
   /** For a review run: the work run it reviews has closed, or a later review reached `working` or `done`. */
   readonly target: { readonly closed: boolean } | null;
   readonly laterReviewMoved: boolean;
+  /** E1's quiet arm (D-8077; spec §7 row 5): every open run of the programme is planned and the programme has been quiet (R4)
+   *  for 48 hours, the warning's own moment. The lane reads the same predicate (`runClose.ts`), so a stuck reason and a close
+   *  can never disagree. */
+  readonly e1Quiet: boolean;
   /** A later wave of the programme has left planned. */
   readonly overtaken: boolean;
   /** Nothing else is open in the programme. */
@@ -194,8 +198,8 @@ function ownerGone(f: RunStuckFacts, nowMs: number): RunStuck | null | 'unknown'
   return null;
 }
 
-/** THE VERDICT (§7). `null` is no verdict: nothing holds, or a reading was uncertain. `closes` is null on every verdict
- *  until the run-close lane writes its own map (Task 25). */
+/** THE VERDICT (§7). `null` is no verdict: nothing holds, or a reading was uncertain. `closes` is null on every verdict:
+ *  the run-close lane writes its own map (`RunVerdicts.setCloses`, Task 25) and the reader joins it on. */
 export function runStuck(f: RunStuckFacts, nowMs: number): RunStuck | null {
   if (f.state === 'done' || f.state === 'failed' || f.state === 'unknown') return null;
   // Rule R2: any uncertain reading (the coordinator's, or for a started run the worker's) gives no verdict this pass.
@@ -219,7 +223,7 @@ export function runStuck(f: RunStuckFacts, nowMs: number): RunStuck | null {
     const since = stuckSince(null, 'overtaken', f.times);
     if (since !== null && nowMs - since > OVERTAKEN_AFTER_MS) return verdictOf('overtaken', null, since);
   }
-  if (f.aloneInProgramme && nowMs - f.times.openedAt > NEVER_STARTED_AFTER_MS) {
+  if ((f.aloneInProgramme && nowMs - f.times.openedAt > NEVER_STARTED_AFTER_MS) || f.e1Quiet) {
     return verdictOf('never-started', null, f.times.openedAt);
   }
   return null;

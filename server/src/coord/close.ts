@@ -134,7 +134,15 @@ export type CloseOutcome =
  *  revive of the SAME id (`ccd ensure` takes no mutex and rewrites nothing in `coord.db`); only a re-measure can. */
 export interface SweepCloseGuard {
   readonly claimedBy: string;
-  readonly stillCrashed: () => Promise<DeadCoordinatorStop | null>;
+  /** The lane's re-measure (D-8077: `stillCrashed` became `stillStuck` when the run-close lane's rows joined the crash row).
+   *  It also re-reads the row's own switch, the pauses and the store facts that made the run a candidate. */
+  readonly stillStuck: () => Promise<DeadCoordinatorStop | null>;
+  /** R1 (D-8077): `none` closes the run with NO `ccd` call and no child hand-off (a run with no session, a marker naming
+   *  another run, a `none` marker); absent or `release` is the abandon arm as it always was. */
+  readonly fleetAct?: 'release' | 'none';
+  /** The lane row, and the close's detail (`expired:<row>` plus the measured fact), stored on the run event and the run.
+   *  Absent, the close records no detail, which is the crash row's today. */
+  readonly detail?: string;
 }
 
 /**
@@ -179,7 +187,7 @@ export { abandonMove };
  * A run whose stored `sessionId` is not a registry id is not refused here, and the arm does not refuse it either: the
  * arm closes it `failed` with no fleet act (spec §2.3), so the door ends such a programme whole.
  */
-export function abandonRefusal(coord: CoordStore, id: number): Extract<CloseOutcome, { ok: false }> | null {
+export function abandonRefusal(coord: Pick<CoordStore, 'run'>, id: number): Extract<CloseOutcome, { ok: false }> | null {
   const read = coord.run(id);
   // `closeRun`'s own two answers for a row it cannot use (D-2545; an absent run).
   if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
@@ -221,7 +229,7 @@ export async function closeRun(
 ): Promise<CloseOutcome> {
   // The fifth argument is the sweep's guard, or, on the other two words, the detail the final advance stores (D-8071).
   const sweep = typeof sweepOrDetail === 'object' && sweepOrDetail !== null ? sweepOrDetail : undefined;
-  const detail = typeof sweepOrDetail === 'string' ? sweepOrDetail : null;
+  const detail = typeof sweepOrDetail === 'string' ? sweepOrDetail : sweep?.detail ?? null;
   // Everything the request says, ahead of any fleet act: `decideClose` names the arm and refuses what that arm cannot
   // take. The three arms are separate executors by construction (D-290): what an arm skips is ABSENT from it, not
   // skipped by a flag threaded through a shared path.
@@ -292,7 +300,7 @@ async function sweepGateOf(
   deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sweep: SweepCloseGuard | undefined,
 ): Promise<CloseHalt | null> {
   if (sweep === undefined) return null;
-  const d = decideClose({ step: 'sweep', stop: await sweep.stillCrashed(), fresh: () => deps.coord.run(id), claimedBy: sweep.claimedBy });
+  const d = decideClose({ step: 'sweep', stop: await sweep.stillStuck(), fresh: () => deps.coord.run(id), claimedBy: sweep.claimedBy });
   return d.kind === 'go' ? null : stopped(deps, d);
 }
 
@@ -348,6 +356,12 @@ async function abandonRun(
     const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false, detail);
     return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
   }
+  // R1 (D-8077): the lane found no workspace this run may release (a marker naming another run, or none): the run closes with
+  // no sibling read, no `ccd` call and no child hand-off. The sweep's gate still runs, once, before the commit.
+  if (sweep?.fleetAct === 'none') {
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false, detail);
+    return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
+  }
   const sibRead = deps.coord.bindingsOf(sessionId).worker({ excludeRunId: id });
   // An abandon never runs `verifyDone`, so there is no measured line to reuse: `null` is what "it did not run" IS.
   const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
@@ -356,7 +370,7 @@ async function abandonRun(
   const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
   if (halt !== null) return halt;
   if (sweep !== undefined) {
-    const after = decideClose({ step: 'recheck', stop: await sweep.stillCrashed(), release: act.plan.released });
+    const after = decideClose({ step: 'recheck', stop: await sweep.stillStuck(), release: act.plan.released });
     if (after.kind !== 'go') return stopped(deps, after);
   }
   const late = commitAbandon(deps, id, plan, causedBy, sweep, true, detail);

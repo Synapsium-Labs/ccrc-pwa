@@ -22,6 +22,7 @@ import type { SessionVerdict } from '../src/exec.js';
 import type { ReadFailure } from '../src/io.js';
 import type { Runner } from '../src/exec.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../shared/api.js';
+import type { ChildMarkRead } from '../../shared/runBelongs.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
@@ -52,6 +53,8 @@ interface Opts {
   clockAt?: number;
   /** The journal's trust as it is READ AGAIN after the claimant's measure (default: the early read's, unchanged). */
   reread?: (early: DeadCoordinatorJournalTrust) => { hold: string | null; trust: DeadCoordinatorJournalTrust };
+  /** R1: the run's `.child` marker as the executor reads it (default: not wired, which is today's act). */
+  childMark?: (sessionId: string) => Promise<ChildMarkRead | null>;
 }
 
 const rig = async (o: Opts = {}) => {
@@ -82,11 +85,12 @@ const rig = async (o: Opts = {}) => {
     now: () => o.clockAt ?? NOW,
     // The sweep's abandon exactly as the serialiser's handle runs it (`routes.ts`'s `withSweepAbandon`): the REAL
     // `closeRun`, `'sweep'`, the crashed id and the executor's re-measure.
-    abandon: (runId, crashedId, stillCrashed): Promise<CloseOutcome> => {
+    abandon: (runId, crashedId, stillCrashed, extra): Promise<CloseOutcome> => {
       abandoned.push(runId);
       return closeRun({ coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd }, runId, { intent: 'abandon' }, 'sweep',
-        { claimedBy: crashedId, stillCrashed });
+        { claimedBy: crashedId, stillStuck: stillCrashed, ...extra });
     },
+    ...(o.childMark === undefined ? {} : { childMark: o.childMark }),
   };
   /** A working run of `program`, claimed by the crashed coordinator, dispatched into `worker`. */
   const working = (program: string, worker: string): number => {
@@ -396,7 +400,7 @@ describe('the journal’s trust is READ AGAIN after the claimant’s measure (wa
     expect(after.indexOf('deps.journalReread(journal.trust)'), 'the re-read, after the measure').toBeGreaterThan(-1);
     // ARCH-35: the abandon arm is `abandonRun`, and its commit is `commitAbandon`; both are read by symbol.
     const arm = sourceOfSymbol('server/src/coord/close.ts', 'abandonRun');
-    const mark = 'stop: await sweep.stillCrashed(), release:';
+    const mark = 'stop: await sweep.stillStuck(), release:';
     const last = arm.indexOf(mark);
     expect(last, 'close’s re-measure after the fleet act').toBeGreaterThan(-1);
     const commit = arm.indexOf('commitAbandon(deps, id, plan, causedBy, sweep, true, detail)', last);
@@ -493,5 +497,50 @@ describe('the journal-trust adapter — the errors file ccd writes only when it 
     const r = await rig();
     const io = { ...r.deps.io, statMeasured: async () => ({ ok: false as const, reason: 'unreadable' as const }) };
     expect((await readDeadCoordinatorJournalTrust({ ...r.deps, io }, OK)).trust).toMatchObject({ untrusted: null, lastWriteErrorAt: 'unknown' });
+  });
+});
+
+// ── R1 (D-8077): the crash row's fleet act obeys the marker, like every row ─────────────────────────────────────────
+describe('the crash row\'s fleet act (R1)', () => {
+  const settle = async (mark: ChildMarkRead | null) => {
+    const r = await rig({ childMark: async () => mark });
+    const id = r.working('alpha', 'demo-w1');
+    const out = await endDeadCoordinator(r.deps, CRASHED, NOW);
+    return { r, id, out };
+  };
+
+  it('a crash close of a reused name makes no ccd call', async () => {
+    const { r, id, out } = await settle({ kind: 'child', runId: 9999 });
+    expect(out).toMatchObject({ kind: 'ended', stuck: [] });
+    expect(r.stateOf(id)).toBe('failed');
+    expect(r.calls, 'a marker naming a later run releases nothing').toEqual([]);
+  });
+
+  it('a none marker closes with no ccd call', async () => {
+    const { r, id } = await settle({ kind: 'none' });
+    expect(r.stateOf(id)).toBe('failed');
+    expect(r.calls).toEqual([]);
+  });
+
+  it('an unreadable or unrecognised marker lists the run and never closes it', async () => {
+    for (const mark of [{ kind: 'unreadable' } as const, { kind: 'unrecognised' } as const, null]) {
+      const { r, id, out } = await settle(mark);
+      expect(out).toMatchObject({ kind: 'ended', programmes: [] });
+      expect((out as unknown as { stuck: { runId: number }[] }).stuck.map((x) => x.runId)).toEqual([id]);
+      expect(r.stateOf(id)).toBe('working');
+      expect(r.calls).toEqual([]);
+    }
+  });
+
+  it('a readable marker of this run still releases the workspace, as today', async () => {
+    const r = await rig({});
+    const id = r.working('alpha', 'demo-w1');
+    const withMark = await rig({ childMark: async () => ({ kind: 'child', runId: id }) });
+    const id2 = withMark.working('alpha', 'demo-w1');
+    await endDeadCoordinator(r.deps, CRASHED, NOW);
+    await endDeadCoordinator(withMark.deps, CRASHED, NOW);
+    expect(id2).toBe(id);
+    expect(withMark.calls).toEqual(r.calls);
+    expect(withMark.calls.length).toBeGreaterThan(0);
   });
 });

@@ -58,6 +58,7 @@ import {
 import {
   deadDispatchVerdict, dispatchAbandonViewOf, type DeadDispatchRegistry, type DeadDispatchVerdict, type ReturnedChildFacts,
 } from './deadDispatch.js';
+import { DISPATCH_ABANDON_CLOSE_DETAIL } from './runCloseSwitch.js';
 import { bindReturnedChild } from './dispatch.js';
 import { childBindGate } from './childBind.js';
 import { unboundSessionOf } from './runSpend.js';
@@ -83,7 +84,8 @@ export interface AbandonDeadDispatchDeps {
   runCcd: RunCcd;
   fleetState?: FleetState | undefined;
   serial: <T>(coord: WatcherCoordPort, fn: (
-    abandon: (runId: number, claimedBy: string, guard: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
+    abandon: (runId: number, claimedBy: string, guard: SweepCloseGuard['stillStuck'],
+      extra?: Pick<SweepCloseGuard, 'fleetAct' | 'detail'>) => Promise<CloseOutcome>,
   ) => Promise<T>) => Promise<T>;
   now: () => number;
 }
@@ -179,7 +181,7 @@ export async function abandonDeadDispatches(deps: AbandonDeadDispatchDeps): Prom
         const again = await deadDispatchOf(deps, id);
         return again.verdict.kind === 'dead' ? null : { kind: 'remeasured', why: `re-measured: ${whyOf(again.verdict)}` };
       };
-      const out = await abandon(id, claimedBy, guard);
+      const out = await abandon(id, claimedBy, guard, { detail: DISPATCH_ABANDON_CLOSE_DETAIL });
       if (!out.ok) {
         const why = out.kind === 'sweep-stopped' ? out.stop.why
           : out.kind === 'claimant-changed' ? `claimant-changed: ${out.claimedBy ?? 'none'}`

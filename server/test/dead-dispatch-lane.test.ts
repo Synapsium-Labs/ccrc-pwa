@@ -26,6 +26,7 @@ import { loadConfig } from '../src/config.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { closeRun } from '../src/coord/close.js';
+import { DISPATCH_ABANDON_CLOSE_DETAIL } from '../src/coord/runCloseSwitch.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { DISPATCH_ABANDON_DEFAULT_MS, DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT, DISPATCH_BIND_EVENT } from '../../shared/dispatch-abandon.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -82,10 +83,10 @@ const fixture = async (opts: { beforeAbandon?: () => void; livePane?: (id: strin
   // the claimant and the caller's re-measure.
   watcher.useCoordSerialiser({ withSweepAbandon: (c, fn) => {
     acts += 1;
-    return fn((runId, claimedBy, stillCrashed) => {
+    return fn((runId, claimedBy, stillCrashed, extra) => {
       // Between the pass's verdict and the arm: whatever lands here, the arm's re-measure must see.
       opts.beforeAbandon?.();
-      return closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy, stillCrashed });
+      return closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy, stillStuck: stillCrashed, ...extra });
     });
   } });
   const plant = (id: string, fields: Record<string, string>): void => {
@@ -124,6 +125,8 @@ describe('the dead-dispatch reason of the dead-coordinator lane (D-7319)', () =>
     expect(f.stateOf(id)).toBe('failed');
     const close = f.coord.runEvents(id).find((e) => e.toState === 'failed' && e.fromState === 'planned');
     expect(close?.causedBy).toBe('sweep');
+    // Its close carries its own detail, so the run-close tally never counts it under the crash row.
+    expect(f.coord.db.prepare('SELECT closeDetail FROM runs WHERE id = ?').get(id)).toEqual({ closeDetail: DISPATCH_ABANDON_CLOSE_DETAIL });
     expect(f.reasons(id)).toHaveLength(1);
     expect(f.reasons(id)[0]!.detail).toMatch(new RegExp(`^${DISPATCH_ABANDON_EVENT} started=\\d+ bound=${BOUND}$`));
     expect(f.mail()).toEqual([expect.objectContaining({ fromId: 'operator', toId: COORD, runId: id, subject: DISPATCH_ABANDON_SUBJECT })]);
@@ -189,6 +192,15 @@ describe('the dead-dispatch reason of the dead-coordinator lane (D-7319)', () =>
     f.coord.setDispatchAbandon('on', f.now());
     await f.pass();
     expect(f.stateOf(id)).toBe('failed');
+  });
+
+  it('the crash row turned Off does not hold a stalled dispatch: its own switch is on (D-7319)', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND);
+    f.coord.setRunCloseChoice('claimant-crashed', 'off', f.now());
+    await f.pass();
+    expect(f.stateOf(id)).toBe('failed');
+    expect(f.reasons(id)).toHaveLength(1);
   });
 
   it('the switch turned off between the verdict and the arm stops the arm', async () => {

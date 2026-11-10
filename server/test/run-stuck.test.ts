@@ -41,7 +41,7 @@ const zero: StoredTimes = {
 const times = (over: Partial<StoredTimes> = {}): StoredTimes => ({ ...zero, ...over });
 const facts = (over: Partial<RunStuckFacts> = {}): RunStuckFacts => ({
   id: 1, state: 'planned', kind: 'work', dispatchStartedAt: null, dispatchedAt: null, lastMoveAt: null,
-  claimant: alive, claimantJournal: quiet, worker: null, workerJournal: null, target: null, laterReviewMoved: false,
+  claimant: alive, claimantJournal: quiet, worker: null, workerJournal: null, target: null, laterReviewMoved: false, e1Quiet: false,
   overtaken: false, aloneInProgramme: false, reviewOpen: null, behind: null, times: times(), ...over,
 });
 

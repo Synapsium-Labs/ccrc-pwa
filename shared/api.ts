@@ -5892,6 +5892,11 @@ export function parseMailEnvelope(text: string): MailEnvelopeParse {
       waveOf = inner[3] === undefined ? null : Number(inner[3]);
     }
     i += 1;
+  } else if ((cur() ?? '').startsWith('program: ')) {
+    // D-8077: a run-less mail that names a programme (`renderEnvelope`'s `program:` line, the run-close warning's).
+    program = (cur() as string).slice('program: '.length);
+    if (program === '') return malformed(i);
+    i += 1;
   }
 
   const kindLine = /^kind: (.+)$/.exec(cur() ?? '');
@@ -13196,6 +13201,10 @@ export interface DigestAnswer {
   /** The drift reconciler's findings open at `toMs` (D-5923). Additive: an answer without it is a build before the
    *  reconciler, and a reader treats it as no drift. It is never counted into `totals.decisions`. */
   readonly drift?: { readonly totals: Readonly<Record<DriftKind, number>>; readonly lines: readonly DriftLine[] };
+  /** The run-close lane's closes in the window, one line naming each row (D-8077): "ccrc closed 7 stuck runs (5 never started,
+   *  2 review of finished work)". Additive: absent when the lane closed nothing, and a reader that does not know it shows none.
+   *  It is never counted into `totals.decisions`. */
+  readonly closes?: { readonly total: number; readonly line: string };
   readonly sentAt: number | null;
   readonly pushed: boolean;
 }

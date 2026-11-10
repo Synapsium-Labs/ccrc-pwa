@@ -529,6 +529,20 @@ async function resumeBound(
   return { sessionId, ...d.plan, resumed: true, adopted: false, adoptedSpawn: null, defaultOmitted: false };
 }
 
+/** The stamp around a dispatch (D-8077; the run-close lane's R4): `runs.lastDispatchAttemptAt` is written here, by EVERY answer,
+ *  a refusal and a throw included, once the answer is known, in one small statement outside any `gh` or fleet call. It
+ *  changes no answer and no order. It takes the attempt as a thunk, not `dispatchRun` itself, so the one bare `dispatchRun(...)`
+ *  call stays at the route's `coordMutex.run(...)` where `dispatch-mutex-gate.test.ts` reads it. */
+export async function stampDispatchAttempt(
+  coord: Pick<DispatchRunDeps['coord'], 'noteDispatchAttempt'>, id: number, attempt: () => Promise<DispatchOutcome>,
+): Promise<DispatchOutcome> {
+  try {
+    return await attempt();
+  } finally {
+    try { coord.noteDispatchAttempt(id, Date.now()); } catch { /* the stamp is a record: it never changes the answer */ }
+  }
+}
+
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
   slug: unknown = undefined, intents: unknown = undefined,

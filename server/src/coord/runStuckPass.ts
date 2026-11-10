@@ -27,6 +27,7 @@ import {
   type PersonFacts, type PersonReading, type RunStuckFacts, type StoredTimes,
 } from './runStuck.js';
 import type { RunVerdict, RunVerdicts } from './runVerdicts.js';
+import { RUN_CLOSE_QUIET_ARM_MS, programmeLastActivity, rowAnchor } from './runClose.js';
 
 /** A closed run's header keeps its programme's `coordinatorGone` for this long after the programme's last close (A55). */
 export const PROGRAMME_GONE_KEEP_MS = 168 * 60 * 60_000;
@@ -40,6 +41,9 @@ export interface RunStuckPassDeps {
   /** The journal's trust, read by the watcher beside the dead-coordinator lane (`readDeadCoordinatorJournalTrust`). */
   readonly journalTrust: () => Promise<{ readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust }>;
   readonly now: () => number;
+  /** The claimant's last busy turn (R4), `'unread'` before the watcher has seen the session since it started. Absent, every
+   *  reading is unread, and E1's quiet arm gives no verdict (R2). */
+  readonly claimantBusyAt?: (claimant: string) => number | null | 'unread';
 }
 
 interface Measured {
@@ -155,6 +159,32 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
     if (!holding.has(id)) { coord.deleteGoneSince(id); goneRows.delete(id); }
   }
 
+  // E1's QUIET ARM (D-8077): a programme whose every open run is planned and that has been quiet (R4) for 48 hours. The lane
+  // reads the same activity (`programmeLastActivity`), so the verdict and the lane's close clock never disagree. An unread
+  // busy turn (a restart) gives no verdict this pass (R2).
+  const quietNow = deps.now();
+  const e1QuietProgrammes = new Set<string>();
+  // The lane's durable first-pass anchor is the one place a row's activity enters (`rowAnchor`): the verdict reads the same anchor
+  // the close clock does. A programme the lane has not anchored yet (a first pass after a deploy, a pause or a gap, R5) gives no verdict.
+  const e1Anchors = coord.runCloseAnchors('never-started');
+  for (const program of new Set(open.map((r) => r.program))) {
+    const ofProgram = open.filter((r) => r.program === program);
+    if (!ofProgram.every((r) => r.state === 'planned')) continue;
+    const claimants = idsOf(ofProgram.flatMap((r) => (r.claimedBy === null ? [] : [r.claimedBy])));
+    if (claimants.length !== 1 || ofProgram.some((r) => r.claimedBy === null)) continue;
+    const firstPass = e1Anchors.get(program);
+    if (firstPass === undefined) continue;
+    // A warning sent to a claimant who has since been replaced is no warning for the new one.
+    const warning = coord.runCloseWarning(program);
+    const act = programmeLastActivity({
+      ...coord.programmeActivity(program), claimantBusyAt: deps.claimantBusyAt === undefined ? 'unread' : deps.claimantBusyAt(claimants[0]!),
+      warningDeliveredAt: warning !== null && warning.claimant === claimants[0] ? warning.deliveredAt : null,
+    });
+    if (act === 'unread') continue;
+    const anchor = rowAnchor('never-started', { firstPassAt: firstPass.firstAt, programmeLastActivityAt: act });
+    if (anchor !== null && quietNow - anchor >= RUN_CLOSE_QUIET_ARM_MS) e1QuietProgrammes.add(program);
+  }
+
   // THE FACTS of each open run, and the verdict.
   const reviewedOpen = new Set(open.flatMap((r) => (r.kind === 'review' && r.reviews !== null ? [r.reviews] : [])));
   const factsOf = new Map<number, RunStuckFacts>();
@@ -170,6 +200,8 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
       if (t.ok && t.run !== null) { target = { closed: t.run.closedAt !== null }; targetClosedAt = t.run.closedAt; }
     }
     const overtakenAt = r.state === 'planned' && r.kind === 'work' ? coord.programmeLeftPlannedAt(r.program, r.wave) : null;
+    // E1r's `later-review` arm: a later review of the same work run reached `working` or `done` (D-8077).
+    const laterReviewAt = r.state === 'planned' && r.kind === 'review' && r.reviews !== null ? coord.laterReviewMovedAt(r.reviews, r.id) : null;
     const j = cj ?? { kind: 'no-history' as const };
     const times: StoredTimes = {
       ...emptyTimes,
@@ -181,13 +213,14 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
       supervisedAt: c?.supervisedAt ?? null,
       goneSinceCoordinator: r.claimedBy === null ? null : goneRows.get(r.claimedBy)?.firstGoneAt ?? null,
       goneSinceWorker: r.sessionId === null ? null : goneRows.get(r.sessionId)?.firstGoneAt ?? null,
-      openedAt: r.openedAt, dispatchStartedAt: r.dispatchStartedAt, targetClosedAt, overtakenAt,
+      openedAt: r.openedAt, dispatchStartedAt: r.dispatchStartedAt, targetClosedAt, overtakenAt, laterReviewAt,
     };
     factsOf.set(r.id, {
       id: r.id, state: r.state as RunState, kind: r.kind as RunKind, dispatchStartedAt: r.dispatchStartedAt,
       dispatchedAt: r.dispatchedAt, lastMoveAt: lastMoveOf(r.id),
       claimant: c?.person ?? null, claimantJournal: cj, worker: w?.person ?? null, workerJournal: wj,
-      target, laterReviewMoved: false, overtaken: overtakenAt !== null,
+      target, laterReviewMoved: laterReviewAt !== null, overtaken: overtakenAt !== null,
+      e1Quiet: r.state === 'planned' && r.kind === 'work' && e1QuietProgrammes.has(r.program),
       aloneInProgramme: false,
       reviewOpen: r.state === 'awaiting-review' ? reviewedOpen.has(r.id) : null,
       behind: null, times,

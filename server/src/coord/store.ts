@@ -8,6 +8,7 @@ import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
@@ -45,6 +46,7 @@ import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, Sta
 // implement them. `parseStallDetail` is the one reader of a stall observation's detail, so `driftOpenRuns` never
 // counts one as an act.
 import type { DriftAskRow, DriftDeliveryRow, DriftFindingRow, DriftReviewRow, DriftRunRow } from './drift.js';
+import type { GraceAnchor, LaneRun, WarningRow } from './runClose.js';
 import { parseStallDetail } from './stall.js';
 // Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
@@ -52,6 +54,7 @@ import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
 import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
 import type { DispatchAbandonRead } from './deadDispatch.js';
 import type { DispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
+import { runCloseChoiceOf, type RunCloseChoice, type RunCloseGroup } from '../../../shared/run-close.js';
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
@@ -2834,7 +2837,7 @@ export class CoordStore {
   private settleEndRequests(runId: number, from: string, to: RunState, causedBy: string, detail: string | undefined, now: number): void {
     const ended = (TERMINAL_RUN_STATES as readonly string[]).includes(to);
     if (!ended && !(from === 'planned' && to !== 'planned')) return;
-    if (detail?.startsWith('abandon:requested:') === true) return;
+    if (detail?.startsWith(ABANDON_REQUESTED_PREFIX) === true || detail?.startsWith(ABANDON_REFUSED_PREFIX) === true) return;
     const note = ended
       ? (causedBy === 'operator' ? 'The run was closed by you.' : causedBy === 'coordinator' ? 'Handled by its coordinator.' : 'The run closed.')
       : 'Handled by its coordinator.';
@@ -3160,6 +3163,10 @@ export class CoordStore {
     this.db.prepare('INSERT OR REPLACE INTO run_close_untold (runId, program, wave, waveOf, claimant, cause, detail, at) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(runId, r.program, r.wave, r.waveOf, r.claimedBy, cause, detail, Date.now());
   }
+
+  /** A refused close owes the run's claimant one word too (spec §12.2, "Told"): the same `untold` row, with cause `refused` and the
+   *  reason as its detail. Opens no transaction. A run with no claimant has nobody to tell. */
+  tellRefusal(runId: number, reason: string): void { this.writeUntold(runId, 'refused', reason); }
 
   /** Every closed run whose claimant has not been told, oldest close first (D-8073, spec §11.7). */
   untoldRows(): UntoldRow[] {
@@ -3836,6 +3843,13 @@ export class CoordStore {
     this.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(at, runId);
   }
 
+  /** The moment `dispatchRun` last ANSWERED for this run, whatever it answered (migration 48, D-8077; the run-close lane's
+   *  R4): a proceed, a pause, a cap, a refusal. It counts as the programme's activity, so a coordinator that keeps trying to
+   *  dispatch a wave is not quiet. ONE CALL SITE, `dispatchRun`'s wrapper; one `UPDATE`, touching nothing else. */
+  noteDispatchAttempt(runId: number, at: number): void {
+    this.db.prepare('UPDATE runs SET lastDispatchAttemptAt = ? WHERE id = ?').run(at, runId);
+  }
+
   /** This run's dispatch is asking ccd for a child (migration 41, D-8068). Written BEFORE `ws-add --child`, beside
    *  `markDispatchStarted`, for that method's reason: a `ws-add` that comes back after the dispatch stopped reading is
    *  still this run's child, and the dead-dispatch pass binds it with no further word from this arm. Sticky: a retry on
@@ -4342,6 +4356,181 @@ export class CoordStore {
       "WHERE r.program = ? AND r.wave > ? AND r.kind = 'work' AND e.fromState = 'planned' AND e.toState <> 'planned'",
     ).get(program, afterWave) as { at: number | bigint | null } | undefined;
     return row === undefined || row.at === null ? null : Number(row.at);
+  }
+
+  // ── the run-close lane's reads and writes (D-8077; spec 2026-11-04 §7, §12; the ruled plan's W1, R4 and R5) ──────────────
+  // They read what R4 and R5 name and write the lane's two tables. They decide nothing (`runClose.ts` does) and close nothing
+  // (`closeRun` does). A statement that throws is the caller's failure arm: the lane answers "not this pass" (R2).
+
+  /** Every open run, as the lane reads it, in id order. */
+  runCloseRuns(): LaneRun[] {
+    const rows = this.db.prepare(
+      'SELECT id, program, wave, kind, state, reviews, claimedBy, sessionId, openedAt, dispatchStartedAt, lastDispatchAttemptAt ' +
+      `FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+    ).all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: driftInt(r.id, 'runs id'), program: String(r.program), wave: driftInt(r.wave, 'runs wave'),
+      kind: r.kind === 'review' ? 'review' as const : 'work' as const, state: String(r.state),
+      reviews: driftIntOrNull(r.reviews ?? null, 'runs reviews'), claimedBy: (r.claimedBy as string | null) ?? null,
+      sessionId: (r.sessionId as string | null) ?? null, openedAt: driftInt(r.openedAt, 'runs openedAt'),
+      dispatchStartedAt: driftIntOrNull(r.dispatchStartedAt ?? null, 'runs dispatchStartedAt'),
+      lastDispatchAttemptAt: driftIntOrNull(r.lastDispatchAttemptAt ?? null, 'runs lastDispatchAttemptAt'),
+    }));
+  }
+
+  /** R4's store half for ONE programme: the newest act row on its runs (drift's definition, which leaves out the lanes' own
+   *  `operator` rows and stall observations, MINUS `causedBy 'sweep'` rows, so the lane's own closes never reset its clock),
+   *  the newest `openedAt`, the newest dispatch attempt and the newest mail from each run's claimant naming one of its runs.
+   *  The claimant's busy turn and the warning's delivery are the lane's, not the store's. */
+  programmeActivity(program: string): {
+    lastActAt: number | null; lastOpenedAt: number | null; lastDispatchAttemptAt: number | null; lastClaimantMailAt: number | null;
+  } {
+    const sums = this.db.prepare('SELECT MAX(openedAt) AS opened, MAX(lastDispatchAttemptAt) AS attempt FROM runs WHERE program = ?')
+      .get(program) as { opened: unknown; attempt: unknown };
+    const mail = this.db.prepare(
+      'SELECT MAX(m.at) AS at FROM mail m JOIN runs r ON r.id = m.runId WHERE r.program = ? AND m.fromId = r.claimedBy',
+    ).get(program) as { at: unknown };
+    let lastActAt: number | null = null;
+    const events = this.db.prepare(
+      'SELECT e.at AS at, CAST(e.detail AS TEXT) AS detail FROM run_events e JOIN runs r ON r.id = e.runId ' +
+      "WHERE r.program = ? AND e.causedBy <> 'operator' AND e.causedBy <> 'sweep' ORDER BY e.at DESC, e.id DESC",
+    );
+    for (const e of events.iterate(program) as Iterable<{ at: unknown; detail: string | null }>) {
+      if (parseStallDetail(e.detail) !== null) continue;
+      lastActAt = driftInt(e.at, 'run_events at');
+      break;
+    }
+    return {
+      lastActAt, lastOpenedAt: driftIntOrNull(sums.opened ?? null, 'runs openedAt'),
+      lastDispatchAttemptAt: driftIntOrNull(sums.attempt ?? null, 'runs lastDispatchAttemptAt'),
+      lastClaimantMailAt: driftIntOrNull(mail.at ?? null, 'mail at'),
+    };
+  }
+
+  /** The first moment a later review of `reviewed` (a work run), opened after run `afterRunId`, reached `working` or `done`
+   *  (E1r's `later-review` arm and its `since`), or null. */
+  laterReviewMovedAt(reviewed: number, afterRunId: number): number | null {
+    const row = this.db.prepare(
+      'SELECT MIN(e.at) AS at FROM run_events e JOIN runs r ON r.id = e.runId ' +
+      "WHERE r.kind = 'review' AND r.reviews = ? AND r.id > ? AND e.toState IN ('working', 'done')",
+    ).get(reviewed, afterRunId) as { at: unknown } | undefined;
+    return row === undefined ? null : driftIntOrNull(row.at ?? null, 'run_events at');
+  }
+
+  /** The runs the sweep closed in `[fromMs, toMs)`, grouped by the close's detail (D-8077; the daily digest's line). The
+   *  detail's first word names the lane row (`expired:never-started`); a sweep close with no detail is the crash row's or the
+   *  dead-dispatch lane's. */
+  sweepClosesBetween(fromMs: number, toMs: number): { detail: string | null; n: number }[] {
+    const rows = this.db.prepare(
+      "SELECT closeDetail AS detail, COUNT(*) AS n FROM runs WHERE closedBy = 'sweep' AND closedAt >= ? AND closedAt < ? GROUP BY closeDetail",
+    ).all(fromMs, toMs) as { detail: string | null; n: unknown }[];
+    return rows.map((r) => ({ detail: r.detail, n: driftInt(r.n, 'closes n') }));
+  }
+
+  // ── the run-close lanes' arming (D-8077; spec 2026-11-04 §12.3; Task 26) ────────────────────────────────────
+  /** `run_close_settings` (migration 49), read: both groups' choices (a lost row, or a token this build does not know, reads
+   *  shadow, which arms nothing) and the write time; `unreadable` with the driver's detail when the read failed. Never throws. */
+  runCloseSetting(): { kind: 'row'; neverStarted: RunCloseChoice; claimantCrashed: RunCloseChoice; updatedAt: number | null }
+    | { kind: 'unreadable'; detail: string } {
+    try {
+      const r = this.db.prepare('SELECT neverStarted, claimantCrashed, CAST(updatedAt AS TEXT) AS updatedText FROM run_close_settings WHERE id = 1')
+        .get() as { neverStarted: unknown; claimantCrashed: unknown; updatedText: unknown } | undefined;
+      const at = r !== undefined && typeof r.updatedText === 'string' ? Number(r.updatedText) : NaN;
+      return { kind: 'row', neverStarted: runCloseChoiceOf(r?.neverStarted), claimantCrashed: runCloseChoiceOf(r?.claimantCrashed),
+        updatedAt: Number.isSafeInteger(at) ? at : null };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** One group's choice. An unreadable row reads shadow: a doubt arms nothing (the lane's callers also keep their markers). */
+  runCloseChoice(group: RunCloseGroup): RunCloseChoice {
+    const s = this.runCloseSetting();
+    return s.kind === 'row' ? (group === 'never-started' ? s.neverStarted : s.claimantCrashed) : runCloseChoiceOf(null);
+  }
+
+  /** The switch's one writer, called only by `POST /api/coord/run-close`: an upsert of the one row's group column. */
+  setRunCloseChoice(group: RunCloseGroup, choice: RunCloseChoice, at: number): void {
+    const col = group === 'never-started' ? 'neverStarted' : 'claimantCrashed';
+    this.db.prepare(
+      `INSERT INTO run_close_settings (id, neverStarted, claimantCrashed, updatedAt) VALUES (1, 'shadow', 'shadow', ?) ` +
+      `ON CONFLICT(id) DO UPDATE SET ${col} = ?, updatedAt = ?`,
+    ).run(at, choice, at);
+  }
+
+  /** A close a group's arm refused: one row per (group, run, reason), its time moved to the latest. A failed write is dropped. */
+  recordRunCloseRefusal(group: RunCloseGroup, runId: number, why: string, at: number): void {
+    try {
+      this.db.prepare(
+        'INSERT INTO run_close_refusals (groupName, runId, why, at) VALUES (?, ?, ?, ?) ' +
+        'ON CONFLICT(groupName, runId, why) DO UPDATE SET at = excluded.at',
+      ).run(group, runId, why, at);
+    } catch { /* a refusal that cannot be recorded is not worth stopping the pass for */ }
+  }
+
+  /** How many (run, reason) refusals each group met at or after `sinceMs`. */
+  runCloseRefusalCounts(sinceMs: number): Record<RunCloseGroup, number> {
+    const out: Record<RunCloseGroup, number> = { 'never-started': 0, 'claimant-crashed': 0 };
+    try {
+      const rows = this.db.prepare('SELECT groupName, COUNT(*) AS n FROM run_close_refusals WHERE at >= ? GROUP BY groupName')
+        .all(sinceMs) as { groupName: string; n: unknown }[];
+      for (const r of rows) if (r.groupName === 'never-started' || r.groupName === 'claimant-crashed') out[r.groupName] = driftInt(r.n, 'refusals n');
+    } catch { /* an unreadable tally reads zero */ }
+    return out;
+  }
+
+  /** R5's anchors of one lane row, by key (a programme slug or a run id). */
+  runCloseAnchors(laneRow: string): Map<string, GraceAnchor> {
+    const rows = this.db.prepare('SELECT key, firstAt, lastAt FROM run_close_anchors WHERE laneRow = ?').all(laneRow) as Record<string, unknown>[];
+    return new Map(rows.map((r) => [String(r.key), { firstAt: driftInt(r.firstAt, 'anchor firstAt'), lastAt: driftInt(r.lastAt, 'anchor lastAt') }]));
+  }
+
+  setRunCloseAnchor(laneRow: string, key: string, a: GraceAnchor): void {
+    this.db.prepare(
+      'INSERT INTO run_close_anchors (laneRow, key, firstAt, lastAt) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(laneRow, key) DO UPDATE SET firstAt = excluded.firstAt, lastAt = excluded.lastAt',
+    ).run(laneRow, key, a.firstAt, a.lastAt);
+  }
+
+  deleteRunCloseAnchor(laneRow: string, key: string): void {
+    this.db.prepare('DELETE FROM run_close_anchors WHERE laneRow = ? AND key = ?').run(laneRow, key);
+  }
+
+  /** A programme's E1 warning with its delivery's own stamp (`deliveredAt` only for a `delivered` or `acked` delivery). */
+  runCloseWarning(programme: string): WarningRow | null {
+    const r = this.db.prepare(
+      'SELECT w.programme AS programme, w.claimant AS claimant, w.warnedAt AS warnedAt, w.deliveryId AS deliveryId, ' +
+      "CASE WHEN d.state IN ('delivered', 'acked') THEN d.deliveredAt END AS deliveredAt " +
+      'FROM run_close_warnings w LEFT JOIN mail_deliveries d ON d.id = w.deliveryId WHERE w.programme = ?',
+    ).get(programme) as Record<string, unknown> | undefined;
+    if (r === undefined) return null;
+    return {
+      programme: String(r.programme), claimant: String(r.claimant), warnedAt: driftInt(r.warnedAt, 'warning warnedAt'),
+      deliveryId: driftInt(r.deliveryId, 'warning deliveryId'), deliveredAt: driftIntOrNull(r.deliveredAt ?? null, 'delivery deliveredAt'),
+    };
+  }
+
+  /** Queue the warning and record it in ONE transaction: `send` queues the mail and answers its delivery id (the
+   *  `drainUntold` pattern), and the row follows it, so a crash between the two leaves neither. */
+  queueRunCloseWarning(programme: string, claimant: string, at: number, send: () => number): number {
+    return tx(this.db, () => {
+      const deliveryId = send();
+      this.db.prepare(
+        'INSERT INTO run_close_warnings (programme, claimant, warnedAt, deliveryId) VALUES (?, ?, ?, ?) ' +
+        'ON CONFLICT(programme) DO UPDATE SET claimant = excluded.claimant, warnedAt = excluded.warnedAt, deliveryId = excluded.deliveryId',
+      ).run(programme, claimant, at, deliveryId);
+      return deliveryId;
+    });
+  }
+
+  /** Delete a programme's warning: any activity after `warnedAt` invalidates it (the next close needs a fresh one). */
+  deleteRunCloseWarning(programme: string): void {
+    this.db.prepare('DELETE FROM run_close_warnings WHERE programme = ?').run(programme);
+  }
+
+  /** The programmes that hold a warning row, so one that left the candidates loses its row. */
+  runCloseWarningProgrammes(): string[] {
+    return (this.db.prepare('SELECT programme FROM run_close_warnings').all() as { programme: string }[]).map((r) => r.programme);
   }
 
   /** The RECORD of the dead-coordinator breaker's held set (review 381, F1; since D-4857 the typed state,
@@ -7308,16 +7497,19 @@ export class CoordStore {
   runEventsSince(sinceId: number): { eventId: number; runId: number; fromState: string; toState: string;
                                       sessionId: string | null;
                                       project: string; workspace: string | null; program: string;
-                                      wave: number; waveOf: number | null }[] {
+                                      wave: number; waveOf: number | null;
+                                      /** D-8077: who caused the move and its detail, so the push lane can tell a lane's
+                                       *  `expired:*` close (record-only) from a person's. */
+                                      causedBy: string; detail: string | null }[] {
     return this.db.prepare(
       'SELECT re.id AS eventId, re.runId, re.fromState, re.toState, r.sessionId, r.project, r.workspace, ' +
-      'r.program, r.wave, r.waveOf ' +
+      'r.program, r.wave, r.waveOf, re.causedBy, re.detail ' +
       'FROM run_events re JOIN runs r ON r.id = re.runId ' +
       'WHERE re.id > ? ORDER BY re.id',
     ).all(sinceId) as { eventId: number; runId: number; fromState: string; toState: string;
                          sessionId: string | null;
                          project: string; workspace: string | null; program: string;
-                         wave: number; waveOf: number | null }[];
+                         wave: number; waveOf: number | null; causedBy: string; detail: string | null }[];
   }
 
   // ── disaster recovery (spec:82-85) ─────────────────────────────────────────
@@ -10458,6 +10650,8 @@ export class CoordStore {
   openEndRequestOf(runId: number): ItemRow | null { return ledgers.openEndRequestsOf(this.db, runId)[0] ?? null; }
   /** The run's newest end request that ended in a decline or a withdraw (A24), or null. */
   lastEndedEndRequest(runId: number, askerId: string) { return ledgers.lastEndedEndRequest(this.db, runId, askerId); }
+  /** The refused-close items that still wait (held or not): the lane re-measures them each pass. */
+  openCloseRefusedItems(): ItemRow[] { return ledgers.openCloseRefusedItems(this.db); }
   /** The sessions of the review runs of a run: the workers who may ask to end the run they review. */
   reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
   setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
