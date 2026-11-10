@@ -169,17 +169,21 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     await openReady('/docs/demo/specs/a.md');
     const title = titleButton();
     fireEvent.click(title);
+    expect(panelOf()).not.toHaveAttribute('hidden');
     const inside = panelOf().querySelector<HTMLElement>('a, button');
     expect(inside).not.toBeNull();
     inside!.focus();
     fireEvent.keyDown(inside!, { key: 'Escape' });
     expect(title).toHaveAttribute('aria-expanded', 'false');
+    expect(panelOf()).toHaveAttribute('hidden');
     expect(document.activeElement).toBe(title);
     fireEvent.click(title);
     expect(title).toHaveAttribute('aria-expanded', 'true');
+    expect(panelOf()).not.toHaveAttribute('hidden');
     (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.keyDown(title, { key: 'Escape' });
     expect(title).toHaveAttribute('aria-expanded', 'false');
+    expect(panelOf()).toHaveAttribute('hidden');
     expect(document.activeElement).toBe(title);
   });
 
