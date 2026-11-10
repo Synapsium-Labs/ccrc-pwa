@@ -351,8 +351,8 @@ the operator's open ask on that run. When to use it (author's call, read from th
 - **A known limit that leaves a definition-of-done item unmet is O3.** Raise the item; the PR may still land when the
   limit is reversible and the rest of the programme needs it.
 
-The door's refusals (author's calls):
-- **`coord-lift-off`**: the operator has switched coordinator lifts off (`CCRC_REVIEW_CAP_COORD_LIFT`). That is the
+The door's refusals (author's calls). Note (D-8165): the lift is now always on and `CCRC_REVIEW_CAP_COORD_LIFT` is retired, so `coord-lift-off` below is history; the code and the skill no longer have it.
+- **`coord-lift-off`** (retired, D-8165): the operator has switched coordinator lifts off (`CCRC_REVIEW_CAP_COORD_LIFT`). That is the
   operator's choice, so lifting stays the operator's for that run. The run's thread parks behind the server's existing
   ask; other threads continue.
 - **`cap-not-reached`**: nothing to lift. Open the review.
@@ -417,7 +417,7 @@ added in rev 2.
 | 9 | Clause 19, AskUserQuestion when no child is active | Allowed | Removed once the Goals pin exists | R7. |
 | 10 | Clause 20, raising items | Every operator need | Narrowed | Items only for O1 to O6 and P-blocks that need a human act. Big calls are records (§6), not decide items. |
 | 11 | Step 4, `unknown-item`, `item-terminal` | Stop and report | Self-recover | Re-read the ids once (`runs items-list`). If still unknown, record and go on: the tally is display only. `item-terminal` is a no-op to record. |
-| 12 | Step 5 and `wave-lifecycle.md` §4, `cap-review-rounds` | The server asks the operator; the coordinator waits | Self-recover (D-8125) | §5.7: lift through `runs review-rounds` when the open findings are regressions or gaps in the PR's own claim; otherwise apply the cutoff and land with known limits. The door's refusals: `coord-lift-off` parks the thread behind the operator's ask; `cap-not-reached` opens the review; a 404 is P4. |
+| 12 | Step 5 and `wave-lifecycle.md` §4, `cap-review-rounds` | The server asks the operator; the coordinator waits | Self-recover (D-8125) | §5.7: lift through `runs review-rounds` when the open findings are regressions or gaps in the PR's own claim; otherwise apply the cutoff and land with known limits. The door's refusals (`coord-lift-off` is retired, D-8165: the lift is always on): `coord-lift-off` parked the thread behind the operator's ask (was); `cap-not-reached` opens the review; a 404 is P4. |
 | 13 | Step 5, a bare `400` on a review open (an older server) | Wait for the next wake | Physical (P4) | Unchanged in substance; it is recorded with `wakeOn: update`. |
 | 14 | Step 6, an ejection with no `pinned` entry on the landing line ("it stays a stop for the operator") | Stop | Self-recover | Send a conflict-sync request on the measured conflict (clause 15 allows one) as a plain `fix-round` mail with the conflicted paths and no `ejection` field. |
 | 15 | Step 6, a dequeue with any other cause, a requested change among them | Stop for the operator | Self-recover, except "ignore" | Re-read the cause. An unreadable cause is P3 (retry), then re-enqueue once. A requested change is addressed by default; only "ignore" is the operator's (O6). |
@@ -467,7 +467,7 @@ added in rev 2.
 | 59 | Server, the stall watch's `coord-ball` arm (one operator push at 30 h, `COORD_BALL_CAP_MS`) and the `quiet` ladder's operator rung (rung 3) | Reports to the operator only | Acts first | §8.3, item 1: `coord-ball` gains a rung that mails the coordinator. The 30 h push and the `quiet` ladder stay as they are. |
 | 60 | `references/delegated-worktrees.md`, "The operator's acts": attaching a lease, saying a worktree is not delegated, acting on a worktree in conflict | Never done by a session | Keep (O4) | The thread that needs it parks; the rest continues. |
 | 61 | 403 `stale-uuid` on an ack or a mail | Stop and report | Self-recover | Derive the identity again (`ccrc-api whoami`) and resend once. A second `stale-uuid` is P4. |
-| 62 | D-8125's lift door: `coord-lift-off`, `cap-not-reached`, 404 | Not covered | As §5.7 | `coord-lift-off`: keep (the operator switched lifts off), park the thread. `cap-not-reached`: open the review. 404: P4. |
+| 62 | D-8125's lift door: `coord-lift-off`, `cap-not-reached`, 404 | Not covered | As §5.7 | `coord-lift-off` (retired, D-8165: the lift is always on, so this refusal no longer exists): was keep, park the thread. `cap-not-reached`: open the review. 404: P4. |
 
 ## 8. What the server must add
 

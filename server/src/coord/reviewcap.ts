@@ -112,12 +112,11 @@ export function coordLiftReason(raw: unknown): { ok: true; reason: string } | { 
 }
 
 /** Why a coordinator lift is refused. Ownership is the route's to decide (it needs the registry). */
-export type CoordLiftRefusal = 'coord-lift-off' | 'run-closed' | 'not-found' | 'cap-not-reached';
+export type CoordLiftRefusal = 'run-closed' | 'not-found' | 'cap-not-reached';
 
-/** Whether a coordinator may lift now, and the cap before and after. Order: setting, kind, closed, lifted or under the cap. */
-export function coordLiftVerdict(i: { kind: RunKind | 'unknown'; closed: boolean; rounds: number; granted: number; liftedAt: number | null; setting: 'on' | 'off' }):
+/** Whether a coordinator may lift now, and the cap before and after. Order: kind, closed, lifted or under the cap. There is no setting: the lift is always on (D-8165). */
+export function coordLiftVerdict(i: { kind: RunKind | 'unknown'; closed: boolean; rounds: number; granted: number; liftedAt: number | null }):
   { ok: true; capBefore: number; capAfter: number } | { ok: false; refused: CoordLiftRefusal; detail: string } {
-  if (i.setting === 'off') return { ok: false, refused: 'coord-lift-off', detail: 'coordinator review-cap lifts are turned off on this box; the operator lifts the cap' };
   if (i.kind !== 'work') return { ok: false, refused: 'not-found', detail: 'only a work run has a review cap' };
   if (i.closed) return { ok: false, refused: 'run-closed', detail: 'the run is closed' };
   const capBefore = effectiveReviewCap(i.granted);

@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  configDirFor, deriveRole, reviewCapCoordLiftOf, derivedRoleNote, loadConfig, parseReleaseSource, readReleaseSource,
+  configDirFor, deriveRole, derivedRoleNote, loadConfig, parseReleaseSource, readReleaseSource,
   DEFAULT_RELEASE_API_URL, DEFAULT_UPDATE_DEADLINE_MS,
 } from '../src/config.js';
 import { mungePath } from '../src/munge.js';
@@ -639,39 +639,20 @@ describe('the deps-shed thresholds (D-7278)', () => {
   });
 });
 
-describe('reviewCapCoordLiftOf (D-8125)', () => {
-  const warnOf = (env: NodeJS.ProcessEnv): { value: string; said: string } => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try { return { value: reviewCapCoordLiftOf(env), said: warn.mock.calls.flat().join(' ') }; } finally { warn.mockRestore(); }
-  };
-
-  it('an absent or empty value is off and silent: the door is attribution, not proof, so it is opt-in', () => {
-    expect(warnOf({})).toEqual({ value: 'off', said: '' });
-    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: '' })).toEqual({ value: 'off', said: '' });
-  });
-
-  it('on and off read as given, silently', () => {
-    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: 'off' })).toEqual({ value: 'off', said: '' });
-    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: 'on' })).toEqual({ value: 'on', said: '' });
-  });
-
-  it('case and surrounding space do not change on or off', () => {
-    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: ' OFF ' })).toEqual({ value: 'off', said: '' });
-    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: 'On' })).toEqual({ value: 'on', said: '' });
-  });
-
-  it('any other value warns once and reads off: the switch restricts authority, so it fails closed', () => {
-    for (const raw of ['false', '0', 'no', 'disabled', 'nope']) {
-      const r = warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: raw });
-      expect(r.value, raw).toBe('off');
-      expect(r.said, raw).toContain(`CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw)} is not one of on|off; it reads as off`);
-    }
-  });
-
-  it('loadConfig carries it as cfg.reviewCapCoordLift', () => {
+describe('the coordinator review-cap lift is always on (D-8165)', () => {
+  it('the config has no switch for it, and a box whose ccrc.env still sets the retired key loads quietly and unchanged', () => {
     const home = mkTmp('ccrc-cfg-rclift-');
     seedRoster(home);
-    expect(loadConfig({ CCRC_HOME: home }).reviewCapCoordLift).toBe('off');
-    expect(loadConfig({ CCRC_HOME: home, CCRC_REVIEW_CAP_COORD_LIFT: 'on' }).reviewCapCoordLift).toBe('on');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const plain = loadConfig({ CCRC_HOME: home });
+      expect(Object.keys(plain)).not.toContain('reviewCapCoordLift');
+      for (const raw of ['on', 'off', 'nope', '']) {
+        expect(loadConfig({ CCRC_HOME: home, CCRC_REVIEW_CAP_COORD_LIFT: raw }), raw).toEqual(plain);
+      }
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('REVIEW_CAP_COORD_LIFT');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

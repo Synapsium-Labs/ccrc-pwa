@@ -177,7 +177,7 @@ export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LED
  * object of literals the route and the census read. `run-closed`, `not-found`, `bad-request`, `not-your-programme`,
  * `run-unreadable` and `not-configured` are reused words, declared with their own tables.
  */
-export const REVIEW_ROUNDS_REFUSALS = { coordLiftOff: 'coord-lift-off', capNotReached: 'cap-not-reached' } as const;
+export const REVIEW_ROUNDS_REFUSALS = { capNotReached: 'cap-not-reached' } as const;
 export type ReviewRoundsRefusal = (typeof REVIEW_ROUNDS_REFUSALS)[keyof typeof REVIEW_ROUNDS_REFUSALS];
 const REVIEW_ROUNDS_WORDS: ReadonlySet<string> = new Set(Object.values(REVIEW_ROUNDS_REFUSALS));
 /** Whether `word` is one of the review-rounds door's own words (the mail-routes code census admits them through this). */
@@ -412,9 +412,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'policy-unavailable': 503, 'journal-unavailable': 503,
   'linear-unauthorised': 502,
   'linear-invalid': 422,
-  // The coordinator's review-rounds door (D-8125): CHOSEN, not measured. 409 for both: the box has coordinator lifts turned
-  // off, or the run is not at its cap; neither is a fault in what the coordinator sent.
-  [REVIEW_ROUNDS_REFUSALS.coordLiftOff]: 409, [REVIEW_ROUNDS_REFUSALS.capNotReached]: 409,
+  // The coordinator's review-rounds door (D-8125): CHOSEN, not measured. 409: the run is not at its cap, which is not a fault in
+  // what the coordinator sent. (The lift is always on, D-8165: there is no refusal for a box that turned it off.)
+  [REVIEW_ROUNDS_REFUSALS.capNotReached]: 409,
   ...LANDING_REFUSAL_STATUS,
 };
 

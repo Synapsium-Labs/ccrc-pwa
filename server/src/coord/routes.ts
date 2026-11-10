@@ -4727,7 +4727,7 @@ export function registerCoordRoutes(
 
   // D-8125: the coordinator's review-cap door; its handler lives in `reviewRoundsRoute.ts`.
   registerReviewRoundsRoute(app, {
-    coord: deps.coord, requireMailToken, requireAttribution, coordMutex, notice, setting: deps.cfg.reviewCapCoordLift,
+    coord: deps.coord, requireMailToken, requireAttribution, coordMutex, notice,
   });
 
   return { withAbandon, withSweepAbandon, serial: (fn) => coordMutex.run(fn) };

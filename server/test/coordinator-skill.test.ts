@@ -2012,9 +2012,15 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
   });
 
   it('names the coordinator review-rounds door, its refusals and the review-round cutoff (D-8125)', () => {
-    for (const w of ['runs review-rounds', 'POST /api/runs/:id/review-rounds', 'coord-lift-off', 'cap-not-reached',
+    for (const w of ['runs review-rounds', 'POST /api/runs/:id/review-rounds', 'cap-not-reached',
       'no-review-rounds-door', 'not-your-programme', '2 rounds', '3 for security']) {
       expect(allSkillText, `the skill must name ${w}`).toContain(w);
+    }
+  });
+
+  it('never says the extension may be off or switched by the operator: it is always on (D-8165)', () => {
+    for (const w of ['coord-lift-off', 'CCRC_REVIEW_CAP_COORD_LIFT', 'turned coordinator extensions off', 'leaves the lift to the operator']) {
+      expect(allSkillText, w).not.toContain(w);
     }
   });
 

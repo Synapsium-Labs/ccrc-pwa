@@ -17,6 +17,10 @@ grant and the latest coordinator lift, so the run board's band and the run page 
 **Tech stack:** TypeScript, Fastify, `node:sqlite` (server); bash (`ccd/ccrc-api`, `ccd/ccrc`); React, `@ccrc/ui`,
 vitest + jsdom, vitest browser mode (PWA).
 
+**Note (D-8165):** the `CCRC_REVIEW_CAP_COORD_LIFT` switch this plan adds was retired the next day: the coordinator's lift is always on and
+not configurable. This plan keeps its history; read every mention of the switch, of `coord-lift-off` and of the `coordination` settings family below as
+retired. See `docs/superpowers/plans/2026-11-10-review-cap-always-on.md`.
+
 **Ruling:** D-8125 (below). It builds on D-6795 (the cap), D-6909 (the cap on the run row), D-6910 (the read of the
 ask) and D-6911 (where the operator's control lives). Anchors are symbol names on `origin/main` at `47007038c`,
 2026-11-09. Re-ground each one by its symbol before editing.

@@ -5,11 +5,11 @@
 // The box token authenticates the box; `{byId, byUuid}` is attribution re-measured against the registry
 // (`requireAttribution`), which is freshness, not forgery-proofness, like every coordinator lane. The ccrc-api client closes
 // the cheap forgery: it fills the pair from the calling pane and refuses a body that names either, so another pane cannot
-// type its coordinator's pair through the client. D-8125 open item for the operator: a caller that bypasses the client
-// (raw HTTP with the box token and a read of the registry) is still attribution, not proof; a credential only the session
-// holds would close it. Until then the door is OFF by default (`CCRC_REVIEW_CAP_COORD_LIFT`, `reviewCapCoordLiftOf`): the
-// per-lift bound (REVIEW_ROUND_CAP rounds, journaled, noticed) does not stop repeated lifts, so a box turns the door on
-// knowingly. Ownership is decided from
+// type its coordinator's pair through the client. Known limit: a caller that bypasses the client (raw HTTP with the box
+// token and a read of the registry) is still attribution, not proof; a credential only the session holds would close it.
+// The operator ruled the door ALWAYS ON and not configurable (D-8165, over D-8125's off-by-default switch): there is no
+// setting, no refusal for one, and the per-lift bound (REVIEW_ROUND_CAP rounds, journaled, noticed) is what limits a lift.
+// Ownership is decided from
 // the server's own rows: the run's `claimedBy`, or an open claim on its programme. A worker is neither.
 //
 // THE ORDER (a cheaper refusal is never reached after an expensive one): not configured; the box token; the body's shape
@@ -32,13 +32,10 @@ export interface ReviewRoundsRouteDeps {
   requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid') => Promise<boolean>;
   coordMutex: { run<T>(fn: () => Promise<T>): Promise<T> };
   notice: NoticeSink;
-  /** `CCRC_REVIEW_CAP_COORD_LIFT` as the server read it at start. */
-  setting: 'on' | 'off';
   now?: () => number;
 }
 
 const ROUTE = 'POST /api/runs/:id/review-rounds';
-const SETTING_OFF = 'coordinator lifts are off on this box (CCRC_REVIEW_CAP_COORD_LIFT=off); the operator lifts the cap';
 
 export function registerReviewRoundsRoute(app: FastifyInstance, deps: ReviewRoundsRouteDeps): void {
   const now = deps.now ?? Date.now;
@@ -73,9 +70,9 @@ export function registerReviewRoundsRoute(app: FastifyInstance, deps: ReviewRoun
 
     const at = now();
     const lifted = await deps.coordMutex.run(async () =>
-      coord.liftReviewCapByCoordinator({ workRunId: id, byId, reason: why.reason, setting: deps.setting, now: at }));
+      coord.liftReviewCapByCoordinator({ workRunId: id, byId, reason: why.reason, now: at }));
     if (!lifted.ok) {
-      return refuseRoute(reply, lifted.refused, { detail: lifted.refused === 'coord-lift-off' ? SETTING_OFF : lifted.detail });
+      return refuseRoute(reply, lifted.refused, { detail: lifted.detail });
     }
     const n = coordLiftNotice(id, byId, why.reason, lifted.capBefore, lifted.capAfter);
     deps.notice({ kind: 'coord', sessionId: '', runId: id, title: n.title, body: n.body }, 'record-only',

@@ -673,7 +673,6 @@ To extend, run `"$API" runs review-rounds <work run id> --json -` (`POST /api/ru
 
 Refusals:
 
-- `coord-lift-off`: the operator has turned coordinator extensions off on this box.
 - `no-review-rounds-door`, or a 404: an older server. In both cases the cap is the operator's: rule on the findings you hold, or wait.
 - `cap-not-reached`: the cap is not reached, or the operator already lifted it; open the review.
 - `not-your-programme`: you do not claim this run's programme; do not retry.

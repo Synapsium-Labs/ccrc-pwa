@@ -1094,7 +1094,7 @@ describe('the rejection table is total, in both directions', () => {
         // lane journals its skips, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
         // `WAKE_MEMORY_REFUSALS` and `WAKE_MEMORY_NOTES`, never NOT_CODES.
         // THE COORDINATOR'S REVIEW-ROUNDS DOOR (D-8125): `coord/reviewcap.ts` names the lift's refusals as literals
-        // (`'coord-lift-off'`, `'cap-not-reached'`). Admitted through the exported guard, derived from `REVIEW_ROUNDS_REFUSALS`,
+        // (`'cap-not-reached'`). Admitted through the exported guard, derived from `REVIEW_ROUNDS_REFUSALS`,
         // never NOT_CODES.
         || isReviewRoundsRefusal(tok)
         || isWakeGateKebab(tok)
