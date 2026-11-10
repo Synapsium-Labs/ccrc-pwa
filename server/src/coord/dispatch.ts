@@ -482,6 +482,17 @@ function stopped(coord: CoordStore, id: number, d: DispatchStop): DispatchHalt {
   }
 }
 
+/**
+ * D-6095: a refusal by the concurrency cap is a wait, not a dead end. The run is stamped (`stampAdmissionWait`: the oldest
+ * refusal kept, the newest moved) so the `admissionWake` lane can mail its claimant when the cap has room, and one journal
+ * line says what was refused and the arithmetic. Called inside the coordination serialiser by both doors that charge the
+ * cap, the dispatch and the advance route's send-back. The run keeps its state.
+ */
+export function noteCapRefusal(coord: CoordStore, runId: number, limit: number, running: number, at: number = Date.now()): void {
+  coord.stampAdmissionWait(runId, at);
+  coord.recordRunEvent(runId, 'coordinator', `admission-refused:cap-concurrency limit=${limit} running=${running}`, at);
+}
+
 /** What a dispatch bound: the session it will hold, brief and (resumed) `/clear`. */
 interface Bound {
   sessionId: string; workspace: string | null; branch: string | null; wrapper: string | null; resumed: boolean;
@@ -655,7 +666,13 @@ export async function dispatchRun(
   }
   const admit = decideDispatch({ step: 'admit', names, liveResume, caps: () => caps,
     ...(deps.admitFreedSlot === undefined ? {} : { admitFreedSlot: deps.admitFreedSlot }) });
-  if (admit.kind !== 'go') return stopped(coord, id, admit);
+  if (admit.kind !== 'go') {
+    const halt = stopped(coord, id, admit);
+    if (!halt.ok && halt.kind === 'refused' && halt.code === 'cap-concurrency') {
+      noteCapRefusal(coord, id, halt.limit ?? 0, halt.running ?? 0);
+    }
+    return halt;
+  }
   // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
   // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.
   const browserCap = routeForBrowserCap(plannedRoute, capSupported(deps.fleetState, BROWSER_ROUTE_CAP));

@@ -54,7 +54,7 @@ import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, reEntersWorking, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, type WorkerReading } from './dispatch.js';
+import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, noteCapRefusal, type WorkerReading } from './dispatch.js';
 import { capRefusalOf } from './dispatchDecide.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -657,6 +657,18 @@ export function registerCoordRoutes(
     if (read.kind === 'absent') return 'gone';
     if (read.kind !== 'found' || measuredIdentity(read.record) === null || read.record.lifecycleUnmeasured.length > 0) return 'unmeasured';
     return workerReadingFor(turnReads, read.record);
+  };
+  /** D-6095: the feed row of a refusal by the cap, one per refusal (`lastRefusedAt` is in its once-only key, so a refusal
+   *  that is retried is a new row and a replay of the same one is not). Record-only: the operator is not pushed for a wait
+   *  the lane will end. The stamp and the journal line were written inside the serialiser (`noteCapRefusal`). */
+  const announceAdmissionRefusal = (coord: CoordStore, runId: number, limit: number | undefined, running: number | undefined): void => {
+    const st = coord.admissionStampOf(runId);
+    if (st === null || st.lastRefusedAt === null || st.claimedBy === null) return;
+    const key = `admission-refused:${runId}:${st.lastRefusedAt}`;
+    if (coord.hasNotice('coord', st.claimedBy, key)) return;
+    notice({ kind: 'coord', sessionId: st.claimedBy, title: 'admission refused',
+      body: `run ${runId} (${st.program}) waits for the concurrency cap: limit ${limit ?? '?'}, running ${running ?? '?'}`, runId },
+    'record-only', { dedupeKey: key });
   };
   // D-6094: the freed-slot window is the watcher's own list, never the shared wake list (`FleetWatcher.admitFreedSlot`).
   const admitFreedSlot = watcher?.admitFreedSlot === undefined ? undefined : (): boolean => watcher.admitFreedSlot();
@@ -1683,6 +1695,11 @@ export function registerCoordRoutes(
     const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents));
     // D-8126 (row 38): the self-install of an absent worker skill runs AFTER the serialiser releases, so it never holds
     // a close, reclaim or another dispatch behind two installers.
+    // D-6095: a refusal by the cap was stamped inside the serialiser; its feed row is written here, after it released.
+    const answer = (o: DispatchOutcome) => {
+      if (!o.ok && o.kind === 'refused' && o.code === 'cap-concurrency') announceAdmissionRefusal(coord, id, o.limit, o.running);
+      return sendDispatchOutcome(reply, o);
+    };
     const outcome = await installAbsentSkill(dispatchDeps, await run());
     // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
     // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured
@@ -1693,11 +1710,11 @@ export function registerCoordRoutes(
     if (!outcome.ok && outcome.kind === 'worker-starting') {
       const { record, uuid } = outcome.poll;
       if (!(await waitForMeasuredVerdict(() => dispatchDeps.turnVerdict(record, uuid)))) {
-        return sendDispatchOutcome(reply, outcome);
+        return answer(outcome);
       }
-      return sendDispatchOutcome(reply, await installAbsentSkill(dispatchDeps, await run()));
+      return answer(await installAbsentSkill(dispatchDeps, await run()));
     }
-    return sendDispatchOutcome(reply, outcome);
+    return answer(outcome);
   });
 
   /**
@@ -1988,7 +2005,16 @@ export function registerCoordRoutes(
       const caps = charged && !liveWorker ? await capsMeasuredCounted(coord, workerReading) : capsMeasured(coord);
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
         liveWorker, overConcurrency: () => capRefusalOf(caps, admitFreedSlot) });
-      if (!gate.ok) return refuseAdvance(reply, gate.refusal);
+      if (!gate.ok) {
+        // D-6095: a send-back the cap refused waits like a refused dispatch: stamped and journalled inside the serialiser,
+        // its feed row written beside the refusal. The run keeps its state.
+        const r = gate.refusal;
+        if ('reject' in r && r.reject.code === 'cap-concurrency') {
+          noteCapRefusal(coord, id, r.reject.limit, r.reject.running);
+          announceAdmissionRefusal(coord, id, r.reject.limit, r.reject.running);
+        }
+        return refuseAdvance(reply, r);
+      }
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });
   });

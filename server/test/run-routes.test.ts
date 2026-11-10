@@ -1107,6 +1107,27 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls).toEqual([]);
   });
 
+  it('a cap-refused dispatch stamps the run (it stays planned), journals the refusal and puts it in the feed (D-6095)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { notifyLog }); app = w.app;
+    const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
+    w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
+    expect(w.coord.advance(blocker.id, 'dispatched', 'coordinator').ok).toBe(true);
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const opened = (await postOpen(app)).json() as { id: number };
+    expect((await postDispatch(app, opened.id)).statusCode).toBe(409);
+    expect(okRun(w.coord.run(opened.id))!.state).toBe('planned');
+    const stamp = w.coord.admissionStampOf(opened.id)!;
+    expect(stamp.since).not.toBeNull();
+    expect(w.coord.runEvents(opened.id).map((e) => e.detail)).toContain('admission-refused:cap-concurrency limit=1 running=1');
+    expect(w.coord.hasNotice('coord', stamp.claimedBy!, `admission-refused:${opened.id}:${stamp.lastRefusedAt}`)).toBe(true);
+    expect(w.coord.admissionWaiters()).toMatchObject([{ runId: opened.id, sendBack: false }]);
+  });
+
   // The daily brake's rolling-24h case lived here; the brake is retired (D-7068) and
   // `retire-daily-brake.test.ts` pins that a dispatch past the old count is admitted.
 
@@ -3307,7 +3328,9 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
   /** A work run parked at `awaiting-review` whose worker is `demo-reentry`, with another programme holding the one slot. */
   const parkedAtFullCap = async (home: string, watcher?: FleetWatcher) => {
     const { run } = makeRunner(home, { wsAddCreates: ['demo-reentry'] });
-    const w = await openApp(home, run, {}, watcher); app = w.app;
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { notifyLog }, watcher); app = w.app;
     w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);                       // running = 1 (dispatched)
@@ -3335,15 +3358,37 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
   });
 
-  it('characterization (D-6095): a cap-refused send-back writes no journal row and sends no mail; the run keeps its state', async () => {
+  it('a cap-refused send-back is stamped, journalled and put in the feed, sends no mail and keeps its state (D-6095)', async () => {
     const home = mkTmp('ccrc-runs-');
     const { w, id } = await parkedAtFullCap(home);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
-    const before = w.coord.runEvents(id).length;
     const mailBefore = (w.coord.db.prepare('SELECT count(*) AS c FROM mail').get() as { c: number }).c;
     expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(409);
-    expect(w.coord.runEvents(id)).toHaveLength(before);
+    expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
+    const stamp = w.coord.admissionStampOf(id)!;
+    expect(stamp.since).not.toBeNull();
+    expect(stamp.lastRefusedAt).toBe(stamp.since);
+    expect(w.coord.admissionWaiters()).toMatchObject([{ runId: id, sendBack: true }]);
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('admission-refused:cap-concurrency limit=1 running=1');
+    expect(w.coord.hasNotice('coord', CLAIMED_BY, `admission-refused:${id}:${stamp.lastRefusedAt}`)).toBe(true);
     expect((w.coord.db.prepare('SELECT count(*) AS c FROM mail').get() as { c: number }).c).toBe(mailBefore);
+    // The refusal that is retried keeps the oldest stamp and moves the newest.
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(409);
+    const again = w.coord.admissionStampOf(id)!;
+    expect(again.since).toBe(stamp.since);
+    expect(again.lastRefusedAt!).toBeGreaterThan(stamp.lastRefusedAt!);
+  });
+
+  it('a send-back that proceeds clears the stamp (D-6095)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
+    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(409);
+    expect(w.coord.admissionStampOf(id)!.since).not.toBeNull();
+    w.coord.setCaps({ maxConcurrentWorkers: 5 });
+    expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(200);
+    expect(w.coord.admissionStampOf(id)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
   });
 
   it('a send-back of a worker that reads live advances on a full fleet (D-6093: nothing starts, so nothing is charged)', async () => {
