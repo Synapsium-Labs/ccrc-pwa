@@ -2824,7 +2824,7 @@ This section says which question rows the Overlord's tier sees, and which owner 
 | A coordinator's question-ending turn | Waits for the operator to type | Clause 20 already says to raise it as an item, so it takes the item row above |
 | A child's permission prompt (approvals) | Coordinator first, then the operator | **Unchanged in this programme.** A 60 s main-thread window leaves no room for a second hop, and widening an allow beyond `ordinary` would change the signer and the hook's verifier. Later (see "Where things stand") |
 | A `forbidden`-class prompt | Straight to the operator | Unchanged: forbidden acts are O1 by definition |
-| A review-cap ask | The operator's ask, pushed | Gone for coordinators once D-8125 lands. Where D-8125 refused `coord-lift-off`, the operator had switched coordinator lifts off, so it stayed the operator's (D-8165 retired that switch: the lift is always on) |
+| A review-cap ask | The operator's ask, pushed | Gone for coordinators once D-8125 lands. Where D-8125 refuses `coord-lift-off`, the operator switched coordinator lifts off, so it stays the operator's |
 
 *Table 6.1a. Each channel, and what the Overlord's tier does with it.*
 
