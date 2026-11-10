@@ -71,7 +71,7 @@ fi
 # program-leverage wave 1 only because that row went red first. The row
 # covers every file there, not only the .md ones, so the mutation-run.py
 # helper is guarded like the prose.
-REQUIRED_REFS=(delegated-worktrees.md ledger-template.md mail-envelope.md mutation-run.py peer-protocol.md resume.md review-brief.md review-panel.md routing-matrix.md wave-lifecycle.md)
+REQUIRED_REFS=(api.md cross-project.md delegated-worktrees.md ledger-template.md mail-envelope.md mutation-run.py peer-protocol.md resume.md review-brief.md review-panel.md routing-matrix.md wave-lifecycle.md wave-steps.md)
 [[ -f "$SRC/SKILL.md" ]] || { echo "install-coordinator-skill: no SKILL.md under $SRC — refusing" >&2; exit 1; }
 for ref in "${REQUIRED_REFS[@]}"; do
   [[ -f "$SRC/references/$ref" ]] \
