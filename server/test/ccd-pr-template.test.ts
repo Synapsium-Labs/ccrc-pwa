@@ -57,6 +57,11 @@ describe('ccd pr-template (D-8147)', () => {
     const rows = JSON.parse(r.stdout.split('\n')[0]!) as Array<{ number: number }>;
     expect(rows[0]!.number).toBe(9);
     expect(h.git(origin(), 'show', `${BRANCH}:.github/pull_request_template.md`)).toBe(TEMPLATE);
+    // Built from objects: one commit on the default branch's tip, no ref or checkout of the main repository moved.
+    expect(h.git(origin(), 'rev-parse', `${BRANCH}^`)).toBe(h.git(origin(), 'rev-parse', 'refs/heads/main'));
+    expect(h.git(origin(), 'log', '-1', '--format=%an <%ae>', BRANCH)).toBe('ccrc <ccrc@ccrc.invalid>');
+    expect(h.git(path.join(h.home, 'projects', 'demo'), 'status', '--porcelain')).toBe('');
+    expect(h.git(path.join(h.home, 'projects', 'demo'), 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('refs/heads/main');
     const create = h.ghCalls().find((c) => c.startsWith('pr create'))!;
     expect(create).toContain('--repo owner/repo');
     expect(create).toContain(`--head ${BRANCH}`);
@@ -109,7 +114,7 @@ describe('ccd pr-template (D-8147)', () => {
     noTemp();
   });
 
-  it('removes its temp worktree on every path', () => {
+  it('leaves no worktree behind on any path', () => {
     setup();
     put('gh-create-fail', '');
     const r = run('--project demo --team KEY');

@@ -1264,6 +1264,10 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/linear/proxy/projects': "a workspace's project names and ids",
     '/api/linear/proxy/labels': "a workspace's label names and ids",
     '/api/linear/proxy/users': "a workspace's user names and ids, never an email address",
+    // The linking standard's session read (D-8147): the caller's own project's row, a box-token machine lane. The project name
+    // is the registry's, the team key is the operator's (its shape is closed), the override and mode are two-word sets, and the
+    // reading is a repository slug from gh, a visibility and template word, a time and a failure word held to `^[a-z-]{1,24}$`.
+    '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };
 
   it('every GET route and websocket is masked by the hook, masked inline, or exempt with a reason', () => {

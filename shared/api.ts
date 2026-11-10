@@ -16,7 +16,6 @@ import type { ReadFailure } from './agent-protocol.js';
 import type { PerfHealth } from './perf.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
-import type { ProjectLinkingWire } from './linking.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { LandingWrite } from './landingLine.js';
 
@@ -2328,6 +2327,41 @@ export type ProjectRepoWire =
   | { state: 'named'; slug: string }
   | { state: 'absent' }
   | { state: 'unmeasured' };
+
+/** What GitHub says a repository is (the linking standard, D-8147). */
+export type RepoVisibility = 'public' | 'private' | 'internal';
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const REPO_VISIBILITY_MAP: Record<RepoVisibility, true> = { public: true, private: true, internal: true };
+export const REPO_VISIBILITIES: readonly RepoVisibility[] = Object.keys(REPO_VISIBILITY_MAP) as RepoVisibility[];
+
+/** The operator's word on a project's linking, which wins over any reading. */
+export type LinkingOverride = 'private' | 'public';
+/** D-6048 (ARCH-12): the runtime list, derived from the type. */
+const LINKING_OVERRIDE_MAP: Record<LinkingOverride, true> = { private: true, public: true };
+export const LINKING_OVERRIDES: readonly LinkingOverride[] = Object.keys(LINKING_OVERRIDE_MAP) as LinkingOverride[];
+
+/** Which rule applies: `private` carries the ticket id, `public` never does, `unknown` is nothing measured or set. */
+export type LinkingMode = 'private' | 'public' | 'unknown';
+/** D-6048 (ARCH-12): the runtime list, derived from the type. */
+const LINKING_MODE_MAP: Record<LinkingMode, true> = { private: true, public: true, unknown: true };
+export const LINKING_MODES: readonly LinkingMode[] = Object.keys(LINKING_MODE_MAP) as LinkingMode[];
+
+/** Whether the repository has the pull request template file. */
+export type TemplateState = 'present' | 'absent';
+/** D-6048 (ARCH-12): the runtime list, derived from the type. */
+const TEMPLATE_STATE_MAP: Record<TemplateState, true> = { present: true, absent: true };
+export const TEMPLATE_STATES: readonly TemplateState[] = Object.keys(TEMPLATE_STATE_MAP) as TemplateState[];
+
+/** One project's linking facts as the wire carries them (D-8147). */
+export interface ProjectLinkingWire {
+  teamKey: string | null;
+  override: LinkingOverride | null;
+  measured:
+    | { state: 'measured'; visibility: RepoVisibility; slug: string; template: TemplateState; at: number }
+    | { state: 'unmeasured' }
+    | { state: 'failed'; reason: string; at: number };
+  mode: LinkingMode;
+}
 
 /**
  * What a project's pool tag (`~/.cc-sessions/pools/<project>` on the fleet box)

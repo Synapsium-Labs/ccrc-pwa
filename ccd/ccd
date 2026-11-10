@@ -11708,8 +11708,8 @@ cmd_repo_visibility() {   # ccd repo-visibility --project <p>  (D-8147)
 cmd_pr_template() {   # ccd pr-template --project <p> --team <KEY>  (D-8147)
   # A branch and a pull request that add the pull request template to a PRIVATE repository, on the operator's tap. Fixed
   # arity. Never a push to the default branch (one refspec, `refs/heads/ccrc/linking-template`, never forced), refused on a
-  # public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a refusal. The temp worktree is
-  # a dot name under $PROJECTS_ROOT (the project walk skips it) and is removed on every path.
+  # public repository. rc 0 and the gh PR rows on an answer; rc 1 and {"reason":...} on a refusal. No worktree, no
+  # checkout and no ref moves: the commit is built from objects (see `_pr_template_open`).
   [[ $# -eq 4 && $1 == --project && $3 == --team ]] || die "usage: ccd pr-template --project <p> --team <KEY>"
   _ws_project_valid "$2" || die "bad project"
   [[ "$4" =~ ^[A-Z][A-Z0-9_]{0,15}$ ]] || die "bad team key"
@@ -11731,41 +11731,46 @@ sys.exit(0 if any(r.get("state") == "OPEN" for r in json.load(sys.stdin)) else 1
   if git -C "$main" cat-file -e "$tip:$(_pr_template_rel)" 2>/dev/null; then
     printf '{"reason":"template-exists"}\n'; return 1
   fi
-  local wt="$PROJECTS_ROOT/.pr-template.$2.$$"
-  git -C "$main" worktree add --detach --quiet "$wt" "$tip" || die "git worktree add failed for $wt"
-  rc=0; _pr_template_open "$wt" "$slug" "$def" "$team" || rc=$?
-  git -C "$main" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
-  git -C "$main" worktree prune >/dev/null 2>&1 || :
-  return "$rc"
+  _pr_template_open "$main" "$tip" "$slug" "$def" "$team"
 }
 
-_pr_template_open() {   # worktree slug default-branch team -> the PR rows on stdout; returns (never dies) so the caller removes the worktree
-  local wt=$1 slug=$2 def=$3 team=$4 rows rc reason
+_pr_template_open() {   # main-checkout default-tip slug default-branch team -> the PR rows on stdout; returns (never dies)
+  # ONE COMMIT, BUILT FROM OBJECTS. ccd writes no `git commit` (the reclaim region's `_ws_reclaim_commit_tree` is the only
+  # commit-tree line in this file, and its callers are pinned), and needs no worktree: the template is a blob, a temporary
+  # index (never the checkout's own) holds the default branch's tree plus that blob, and the commit object is written by
+  # `hash-object -t commit`, which checks its form. The one thing that leaves the machine is a push of that sha to
+  # `refs/heads/ccrc/linking-template`; no local ref and no working tree move.
+  local main=$1 tip=$2 slug=$3 def=$4 team=$5 rows rc reason
   local rel; rel=$(_pr_template_rel)
   # A branch left on origin by an earlier try (the PR was closed unmerged, or `gh pr create` failed after the push) is
   # reused, never pushed over: a fresh commit would be a sibling of it and the unforced push would be refused every time.
   local have=0 lsout
-  if lsout=$(_plat_timeout "$PR_GH_TIMEOUT" git -C "$wt" ls-remote origin "refs/heads/ccrc/linking-template" 2>/dev/null) && [[ -n "$lsout" ]]; then
-    _plat_timeout "$PR_GH_TIMEOUT" git -C "$wt" fetch --quiet origin "refs/heads/ccrc/linking-template" 2>/dev/null \
-      && git -C "$wt" cat-file -e "FETCH_HEAD:$rel" 2>/dev/null && have=1
+  if lsout=$(_plat_timeout "$PR_GH_TIMEOUT" git -C "$main" ls-remote origin "refs/heads/ccrc/linking-template" 2>/dev/null) && [[ -n "$lsout" ]]; then
+    _plat_timeout "$PR_GH_TIMEOUT" git -C "$main" fetch --quiet origin "refs/heads/ccrc/linking-template" 2>/dev/null \
+      && git -C "$main" cat-file -e "FETCH_HEAD:$rel" 2>/dev/null && have=1
   fi
   if (( have == 0 )); then
-  mkdir -p "$(dirname "$wt/$rel")"
-  cat > "$wt/$rel" <<EOF
-<!-- Linking: name this PR's Linear ticket so Linear links it and acts on merge. -->
-<!-- Closes $team-<n> when merging this PR meets the ticket's acceptance; Refs $team-<n> when a live check is still owed. -->
-Closes $team-
-
-## Summary
-
-## Test plan
-EOF
-  git -C "$wt" add "$rel" || { echo "pr-template: git add failed" >&2; return 1; }
-  git -C "$wt" -c user.name='ccrc' -c user.email='ccrc@ccrc.invalid' -c commit.gpgsign=false \
-    commit --quiet -m "Add a pull request template that names the Linear ticket" \
-    || { echo "pr-template: git commit failed" >&2; return 1; }
-  git -C "$wt" push origin "HEAD:refs/heads/ccrc/linking-template" >/dev/null \
-    || { echo "pr-template: push failed for ccrc/linking-template — nothing was opened" >&2; return 1; }
+    local body blob tree sha idx stamp
+    body=$(printf '%s\n' \
+      "<!-- Linking: name this PR's Linear ticket so Linear links it and acts on merge. -->" \
+      "<!-- Closes $team-<n> when merging this PR meets the ticket's acceptance; Refs $team-<n> when a live check is still owed. -->" \
+      "Closes $team-" "" "## Summary" "" "## Test plan")
+    idx=$(_plat_mktemp_d) || { echo "pr-template: could not make a scratch index" >&2; return 1; }
+    idx="$idx/index"
+    blob=$(printf '%s\n' "$body" | git -C "$main" hash-object -w --stdin) && [[ "$blob" =~ ^[0-9a-f]{40,64}$ ]] \
+      || { rm -rf "${idx%/index}"; echo "pr-template: could not write the template" >&2; return 1; }
+    tree=$(GIT_INDEX_FILE="$idx" git -C "$main" read-tree "$tip" \
+      && GIT_INDEX_FILE="$idx" git -C "$main" update-index --add --cacheinfo "100644,$blob,$rel" \
+      && GIT_INDEX_FILE="$idx" git -C "$main" write-tree) && [[ "$tree" =~ ^[0-9a-f]{40,64}$ ]] \
+      || { rm -rf "${idx%/index}"; echo "pr-template: could not build the tree" >&2; return 1; }
+    rm -rf "${idx%/index}"
+    stamp="$(date +%s) +0000"
+    sha=$(printf 'tree %s\nparent %s\nauthor ccrc <ccrc@ccrc.invalid> %s\ncommitter ccrc <ccrc@ccrc.invalid> %s\n\n%s\n' \
+      "$tree" "$tip" "$stamp" "$stamp" "Add a pull request template that names the Linear ticket" \
+      | git -C "$main" hash-object -t commit -w --stdin) && [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]] \
+      || { echo "pr-template: could not write the commit" >&2; return 1; }
+    _plat_timeout "$PR_GH_TIMEOUT" git -C "$main" push origin "$sha:refs/heads/ccrc/linking-template" >/dev/null 2>&1 \
+      || { echo "pr-template: push failed for ccrc/linking-template — nothing was opened" >&2; return 1; }
   fi
   _plat_timeout "$PR_GH_TIMEOUT" gh pr create --repo "$slug" --head ccrc/linking-template --base "$def" \
     --title "Add a pull request template that names the Linear ticket" \

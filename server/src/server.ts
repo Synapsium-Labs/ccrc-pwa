@@ -3929,6 +3929,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // that cannot be read in full prove nothing, so they refuse too.
       if (!ccdCan(deps.fleetState, 'prStateSession')) return refuseRoute(reply, 'unavailable', { detail: 'commits-unread' });
       const state = await deps.runCcd(CCD_ARGV.prStateSession(id));
+      // A runner that never ran proves nothing about the commits (D-6840): the same refusal as an unread answer.
+      if (state.ran === false) return refuseRoute(reply, 'unavailable', { detail: 'commits-unread' });
       const [line] = state.ok ? parsePrLines(state.stdout) : [];
       if (line === undefined || !isFullLine(line) || typeof line.ahead !== 'number' || line.commits.length < line.ahead) {
         return refuseRoute(reply, 'unavailable', { detail: 'commits-unread' });
