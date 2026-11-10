@@ -38,6 +38,7 @@ import { okRun, okRuns, parentOfSession } from './coordReadHelpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { landingStoreOver } from './landingFixture.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -3423,7 +3424,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
 
   it('a send-back to a sleeping worker advances when the one slot is held by a 6-day run whose worker is gone (D-6094: the advance route and dispatch agree on one reading)', async () => {
     const home = mkTmp('ccrc-runs-');
-    const watcher = new FleetWatcher(testDeps(home, makeRunner(home, {}).run), new Bus(), 10_000);
+    const watcher = quietAtTestEnd(new FleetWatcher(testDeps(home, makeRunner(home, {}).run), new Bus(), 10_000));
     const { w, id } = await parkedAtFullCap(home, watcher);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');   // asleep: charged unless the slot is free
     w.coord.db.prepare("UPDATE runs SET dispatchedAt = ? WHERE program = 'other'").run(Date.now() - 6 * 24 * 60 * 60 * 1000);

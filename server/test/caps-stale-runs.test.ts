@@ -21,6 +21,7 @@ import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 const PROJECT = 'demo';
 const WORKER = 'demo-quiet-basin';
@@ -227,7 +228,7 @@ describe('the freed-slot window (FleetWatcher.admitFreedSlot, D-6094)', () => {
     const home = mkTmp('ccrc-freed-slot-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    return new FleetWatcher(testDeps(home, runner), new Bus(), 10_000);
+    return quietAtTestEnd(new FleetWatcher(testDeps(home, runner), new Bus(), 10_000));
   };
 
   it('slots freed by the predicate are handed out no faster than WAKE_BURST a window', () => {

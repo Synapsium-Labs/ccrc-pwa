@@ -303,6 +303,22 @@ describe('bindRunInPlace: the coordinator takes its own refused wave, with no fl
     expect(okRun(b.coord.run(bound))).toMatchObject({ state: 'planned', sessionId: 'demo-worker' });
   });
 
+  it('an in-place bind holds the landing intents it names, and refuses another programme\'s held key (D-8085, D-8086)', async () => {
+    const b = build();
+    const a = b.open();
+    const other = b.coord.openRun({ program: 'q', title: 't', project: PROJECT, wave: 1, waveOf: 1, claimedBy: BOSS });
+    if (!('id' in other)) throw new Error('fixture');
+    expect(await bindRunInPlace(inPlaceDeps(b), a, BOSS, BOSS_UUID, 'feat/a', ['#900'])).toMatchObject({ ok: true });
+    expect(b.coord.heldLandingIntents(PROJECT, ['#900'])).toMatchObject([{ key: '#900', runId: a, program: 'p' }]);
+    // the other programme's bind is refused for the same key
+    expect(await bindRunInPlace(inPlaceDeps(b), other.id, BOSS, BOSS_UUID, 'feat/b', ['#900']))
+      .toEqual({ ok: false, kind: 'refused', code: 'intent-held', key: '#900', holder: { runId: a, program: 'p' } });
+    expect(okRun(b.coord.run(other.id))).toMatchObject({ state: 'planned', sessionId: null });
+    // a malformed list is refused before any write; an unlisted key is free
+    expect(await bindRunInPlace(inPlaceDeps(b), other.id, BOSS, BOSS_UUID, 'feat/b', 'no')).toMatchObject({ ok: false, kind: 'bad-request' });
+    expect(await bindRunInPlace(inPlaceDeps(b), other.id, BOSS, BOSS_UUID, 'feat/b', ['#901'])).toMatchObject({ ok: true });
+  });
+
   it('paused refuses an in-place bind, and so does the mail kill switch, and a registry that cannot be listed', async () => {
     const b = build();
     const id = b.open();

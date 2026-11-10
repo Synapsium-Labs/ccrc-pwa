@@ -274,6 +274,13 @@ describe('decideDispatch, the admit step', () => {
     expect(outcomeOf(decideDispatch(admit([], full, { n: 0 }))))
       .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 3, running: 3, detail: capConcurrencyDetail(3, 3) });
   });
+  it('D-8126: a run bound to another session is refused without the in-place bind in the words, since that bind refuses it', () => {
+    const full = caps({ overConcurrency: { limit: 3, running: 3 }, usage: { running: 3 } });
+    const out = outcomeOf(decideDispatch({ ...admit([], full, { n: 0 }), boundElsewhere: true }));
+    expect(out).toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 3, running: 3, detail: capConcurrencyDetail(3, 3, false) });
+    expect(capConcurrencyDetail(3, 3, false)).not.toContain('inPlace');
+    expect(capConcurrencyDetail(3, 3, false)).toContain('the server will mail you when there is room');
+  });
   it('D-6097: the cap frame\'s detail carries its own numbers, the in-place bind and the wake mail, and only it and self-dispatch carry one', () => {
     const d = capConcurrencyDetail(3, 2);
     expect(d).toContain('3');

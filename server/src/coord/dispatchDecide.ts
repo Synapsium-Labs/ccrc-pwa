@@ -105,7 +105,12 @@ export const SELF_DISPATCH_DETAIL =
  *  numbers. Built once from the frame's own numbers, for the dispatch frame and the advance frame alike: the ruling is
  *  that a coordinator whose wave is refused does it itself, in place, unless a reason in the coordinator skill applies,
  *  and then the server mails it when there is room (the `admissionWake` lane, D-6095). */
-export function capConcurrencyDetail(limit: number, running: number): string {
+export function capConcurrencyDetail(limit: number, running: number, inPlaceOffered = true): string {
+  // A planned run already bound to another session is refused by the in-place bind, so the words do not offer it.
+  if (!inPlaceOffered) {
+    return `No room under the concurrency cap (${running} running, limit ${limit}). This run is bound to another session ` +
+      'and cannot be taken in place; end your turn and the server will mail you when there is room.';
+  }
   return `No room under the concurrency cap (${running} running, limit ${limit}). Do this wave in your own workspace now ` +
     '(an in-place bind with inPlace: true, and a sibling worktree), unless one of the reasons in the coordinator skill ' +
     'applies; if one does, end your turn and the server will mail you when there is room.';
@@ -262,6 +267,9 @@ export interface AdmitFacts {
    *  `true` frees the concurrency check; every fresh spawn, hibernated, stopped, archived or dead session and every
    *  liveness that could not be measured is `false` and is charged as before. */
   liveResume: boolean;
+  /** The run is bound to a session other than its claimant: the in-place bind refuses it (`bindRunInPlace`), so a cap
+   *  refusal's detail must not offer that bind. Absent: not bound elsewhere. */
+  boundElsewhere?: boolean;
   /** Called only when neither marker refused, and not at all for a live resume. */
   caps: () => CapsReading;
   /** D-6094: admits one slot the stale-run predicate freed (`capRefusalOf`); asked only for a freed slot. Absent: refused. */
@@ -295,7 +303,7 @@ function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
     // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return refused({ ok: false, kind: 'refused', code: 'cap-concurrency',
       limit: overConcurrency.limit, running: overConcurrency.running,
-      detail: capConcurrencyDetail(overConcurrency.limit, overConcurrency.running) });
+      detail: capConcurrencyDetail(overConcurrency.limit, overConcurrency.running, f.boundElsewhere !== true) });
   }
   return go(null);
 }

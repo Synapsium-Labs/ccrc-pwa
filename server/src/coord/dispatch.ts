@@ -26,6 +26,7 @@ import {
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
 import { isDocsBareRef } from '../../../shared/docs.js';
+import { parseLandingIntents } from '../../../shared/landingIntents.js';
 import type { AttributionRead, AttributionRefusal } from './openRun.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
@@ -670,6 +671,7 @@ export async function dispatchRun(
     if (!liveResume) caps = await capsMeasuredCounted(coord, deps.workerReading);
   }
   const admit = decideDispatch({ step: 'admit', names, liveResume, caps: () => caps,
+    boundElsewhere: run.sessionId !== null && run.sessionId !== run.claimedBy,
     ...(deps.admitFreedSlot === undefined ? {} : { admitFreedSlot: deps.admitFreedSlot }) });
   if (admit.kind !== 'go') {
     const halt = stopped(coord, id, admit);
@@ -923,7 +925,7 @@ export type InPlaceOutcome =
  * starts nothing and is charged to neither cap (`CoordStore.bindInPlace` leaves `dispatchedAt` null).
  */
 export async function bindRunInPlace(
-  deps: InPlaceDeps, id: number, by: string, byUuid: string, branch: unknown,
+  deps: InPlaceDeps, id: number, by: string, byUuid: string, branch: unknown, intents: unknown = undefined,
 ): Promise<InPlaceOutcome> {
   const { coord } = deps;
   const markers = admitMarkerRefusal(await deps.io.readdir(deps.cfg.registryDir));
@@ -955,7 +957,19 @@ export async function bindRunInPlace(
   if (typeof branch !== 'string' || !isDocsBareRef(branch)) {
     return { ok: false, kind: 'bad-request', detail: 'branch: must be the sibling worktree\'s bare git branch name' };
   }
-  const adv = coord.bindInPlace(id, by, branch);
+  // D-8085, D-8086: the landing intents a plain dispatch holds are held by the in-place bind too, under the same holder
+  // check (the caller runs inside `coordMutex`, which serialises this check and the write in `bindInPlace`).
+  const parsedIntents = parseLandingIntents(intents);
+  if (!parsedIntents.ok) return { ok: false, kind: 'bad-request', detail: parsedIntents.detail };
+  const intentKeys = parsedIntents.keys;
+  if (intentKeys.length > 0) {
+    const other = coord.heldLandingIntents(run.project, intentKeys).find((h) => h.program !== run.program);
+    if (other !== undefined) {
+      return { ok: false, kind: 'refused', code: 'intent-held', key: other.key,
+        holder: { runId: other.runId, program: other.program } };
+    }
+  }
+  const adv = coord.bindInPlace(id, by, branch, intentKeys);
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
   return { ok: true, id, sessionId: by, branch };
 }

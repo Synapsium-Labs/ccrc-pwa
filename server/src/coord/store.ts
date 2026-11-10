@@ -3897,12 +3897,20 @@ export class CoordStore {
    * The first hop is taken BEFORE any column is written, so a run not `planned` (or not a work run) refuses
    * `bad-transition` with nothing changed. The caller (`bindRunInPlace`, `dispatch.ts`) has already decided WHO may bind.
    */
-  bindInPlace(runId: number, sessionId: string, branch: string): AdvanceResult {
+  bindInPlace(runId: number, sessionId: string, branch: string, intents: readonly string[] = []): AdvanceResult {
     return tx(this.db, () => {
       const first = this.advanceInner(runId, 'dispatched', 'coordinator', 'inPlace');
       if (!first.ok) return first;
       this.bindSession(runId, sessionId);
       this.db.prepare('UPDATE runs SET branch = ?, resumed = 0, inPlace = 1 WHERE id = ?').run(branch, runId);
+      // Landing intents (D-8086), as `dispatchRun` writes them; `dispatchedAt` is null for an in-place run, so the hold is
+      // stamped with the bind's own time.
+      for (const key of intents) {
+        this.db.prepare(
+          'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
+          'SELECT id, project, ?, claimedBy, ? FROM runs WHERE id = ?',
+        ).run(key, Date.now(), runId);
+      }
       return this.advanceInner(runId, 'working', 'coordinator', 'inPlace');
     });
   }

@@ -1695,7 +1695,7 @@ export function registerCoordRoutes(
       const byUuid = body.byUuid;
       const inPlaceDeps = { coord, io: deps.io, cfg: deps.cfg,
         attribute: (who: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, who, uuid, 'claimedByUuid') };
-      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, body.branch)));
+      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, body.branch, body.intents)));
     }
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
