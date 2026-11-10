@@ -126,6 +126,12 @@ export interface DispatchRunDeps {
    * live and the concurrency check is made as before.
    */
   paneLive?: (rec: SessionRecord) => Promise<boolean>;
+  /** D-6094 (temporary): a run's worker reading, for the stale-run predicate (`countedRuns`). OPTIONAL in the safe
+   *  direction: absent, every dispatched run counts as before. */
+  workerReading?: (sessionId: string) => Promise<WorkerReading>;
+  /** D-6094 (temporary): admits one slot the predicate freed, in a window of its own (`FleetWatcher.admitFreedSlot`).
+   *  Absent: a freed slot is refused. */
+  admitFreedSlot?: () => boolean;
 }
 
 /** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
@@ -285,13 +291,66 @@ export type DispatchOutcome =
  * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
  * a cap that refuses without saying what it is is indistinguishable from a bug).
  */
-export function capsMeasured(coord: CoordStore): CapsReading {
+export function capsMeasured(coord: CoordStore, counted?: number): CapsReading {
   const caps = coord.caps();
   const usage = coord.capsUsage();
-  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
-    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
-    : null;
-  return { caps, usage, overConcurrency };
+  const limit = caps.maxConcurrentWorkers;
+  if (counted === undefined || usage.running < limit) {
+    const overConcurrency = usage.running >= limit ? { limit, running: usage.running } : null;
+    return { caps, usage, overConcurrency, freedSlot: null };
+  }
+  // D-6094: the raw count is at the limit; `counted` (a subset of it, `countedRuns`) decides whether a slot is really
+  // taken. A refusal says the count that holds the slots; a freed slot says the raw one, as the frame has always meant.
+  const c = Math.min(counted, usage.running);
+  return {
+    caps, usage,
+    overConcurrency: c >= limit ? { limit, running: c } : null,
+    freedSlot: c >= limit ? null : { limit, running: usage.running },
+  };
+}
+
+/**
+ * D-6094 (TEMPORARY; fleet-capacity W3-4 deletes the predicate, its port and its constant): a run stops holding a slot of
+ * the concurrency cap when its worker is dead, asleep or has sat idle for longer than `STALE_RUN_COUNTED_MS` since the
+ * dispatch. A 6-day-old run whose worker is gone is not a process, and counting it blocked every coordinator behind
+ * a number no memory backed. The reasons the count stays CLOSED: a run whose worker reads `busy` (background work,
+ * subagents and crons included, because tool children hold the memory) or cannot be read is counted, a row with no
+ * session is counted, a run dispatched inside the window is counted, and a missing port counts everything.
+ */
+export const STALE_RUN_COUNTED_MS = 2 * 60 * 60 * 1000;
+
+/** One worker's liveness: `busy` working or holding tool children; `idle` awake and quiet; `gone` dead, stopped, asleep or
+ *  archived; `unmeasured` it could not be read. */
+export type WorkerReading = 'busy' | 'idle' | 'gone' | 'unmeasured';
+
+/** `capsMeasured`'s count of the runs that still hold a slot (D-6094): a subset of `capsUsage().running`'s rows, taken
+ *  over `activeRunWorkers`. A worker is read once, and only for a run older than `STALE_RUN_COUNTED_MS`. A reading that
+ *  throws is `unmeasured`. Absent port: every run counts. Reads, consumes nothing. */
+export async function countedRuns(
+  coord: CoordStore, workerReading: DispatchRunDeps['workerReading'], now: number = Date.now(),
+): Promise<number> {
+  const rows = coord.activeRunWorkers();
+  if (workerReading === undefined) return rows.length;
+  const readings = new Map<string, WorkerReading>();
+  let counted = 0;
+  for (const r of rows) {
+    if (r.sessionId === null || now - r.dispatchedAt < STALE_RUN_COUNTED_MS) { counted++; continue; }
+    let w = readings.get(r.sessionId);
+    if (w === undefined) {
+      try { w = await workerReading(r.sessionId); } catch { w = 'unmeasured'; }
+      readings.set(r.sessionId, w);
+    }
+    if (w !== 'gone' && w !== 'idle') counted++;
+  }
+  return counted;
+}
+
+/** `capsMeasured` over the stale-run predicate: the raw numbers, and the count of runs that still hold a slot. Called by
+ *  both doors only after the markers were ruled out and only when the raw count is at the limit. */
+export async function capsMeasuredCounted(
+  coord: CoordStore, workerReading: DispatchRunDeps['workerReading'],
+): Promise<CapsReading> {
+  return capsMeasured(coord, await countedRuns(coord, workerReading));
 }
 
 /**
@@ -587,9 +646,15 @@ export async function dispatchRun(
   // reads live starts no process and is not charged a slot; its liveness is read only once the markers are ruled out.
   // The liveness is read only when it could matter: past the markers, and only if the cap would refuse.
   const names = await deps.io.readdir(deps.cfg.registryDir);
-  const liveResume = run.sessionId !== null && admitMarkerRefusal(names) === null
-    && capsMeasured(coord).overConcurrency !== null && await sessionReadsLive(deps, run.sessionId);
-  const admit = decideDispatch({ step: 'admit', names, liveResume, caps: () => capsMeasured(coord) });
+  let caps = capsMeasured(coord);
+  let liveResume = false;
+  if (admitMarkerRefusal(names) === null && caps.overConcurrency !== null) {
+    liveResume = run.sessionId !== null && await sessionReadsLive(deps, run.sessionId);
+    // D-6094: a full cap that charges this dispatch is re-counted over the runs whose worker still holds a slot.
+    if (!liveResume) caps = await capsMeasuredCounted(coord, deps.workerReading);
+  }
+  const admit = decideDispatch({ step: 'admit', names, liveResume, caps: () => caps,
+    ...(deps.admitFreedSlot === undefined ? {} : { admitFreedSlot: deps.admitFreedSlot }) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
   // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
   // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.

@@ -38,7 +38,8 @@ export interface AdvanceGateFacts<R extends AdvanceRunFacts = AdvanceRunFacts> {
   readonly read: () => { ok: true; run: R | null } | { ok: false; detail: string };
   /** `CoordStore.reviewInFlightFor(id)`: the live review run of this work run, or null. */
   readonly reviewInFlight: () => number | null;
-  /** `capsMeasured(coord).overConcurrency`: the numbers a refusal says, or null when a slot is free. */
+  /** `capRefusalOf` over `capsMeasured` (D-6094: counted over the runs whose worker still holds a slot): the numbers a refusal
+   *  says, or null when a slot is free. */
   readonly overConcurrency: () => { limit: number; running: number } | null;
   /** D-6093: the run's worker reads LIVE (`sessionReadsLive`), so a send-back starts no process and is not charged a
    *  slot. The route reads it, once, only for an idle run sent back to `working`; `false` (the default of any read it

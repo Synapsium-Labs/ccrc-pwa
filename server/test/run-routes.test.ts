@@ -15,6 +15,8 @@ import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
+import { FleetWatcher } from '../src/watch.js';
+import { Bus } from '../src/bus.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
@@ -170,6 +172,7 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
  *  literals the price of one field's override at every call site. */
 const openApp = async (
   home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'>> & { cfg?: Partial<Deps['cfg']> } = {},
+  watcher?: FleetWatcher,
 ) => {
   // The registry directory always exists on a real fleet host once ccd has
   // ever run — the pause check's own fail-shut-on-unlistable rule is about a
@@ -187,7 +190,7 @@ const openApp = async (
   const dbPath = path.join(home, '.ccrc', 'coord.db');
   const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const base = testDeps(home, run);
-  const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
+  const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } }, undefined, watcher);
   return { app, coord };
 };
 
@@ -3302,9 +3305,9 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
   });
 
   /** A work run parked at `awaiting-review` whose worker is `demo-reentry`, with another programme holding the one slot. */
-  const parkedAtFullCap = async (home: string) => {
+  const parkedAtFullCap = async (home: string, watcher?: FleetWatcher) => {
     const { run } = makeRunner(home, { wsAddCreates: ['demo-reentry'] });
-    const w = await openApp(home, run); app = w.app;
+    const w = await openApp(home, run, {}, watcher); app = w.app;
     w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);                       // running = 1 (dispatched)
@@ -3356,6 +3359,37 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     w.coord.setCaps({ maxConcurrentWorkers: 5 });
     rmSync(path.join(home, '.cc-sessions', 'demo-reentry.uuid'), { force: true });   // would be unmeasurable if it were read
     expect((await postAdvance(app, id, SEND_BACK)).statusCode).toBe(200);
+  });
+
+  it('a send-back to a sleeping worker advances when the one slot is held by a 6-day run whose worker is gone (D-6094: the advance route and dispatch agree on one reading)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const watcher = new FleetWatcher(testDeps(home, makeRunner(home, {}).run), new Bus(), 10_000);
+    const { w, id } = await parkedAtFullCap(home, watcher);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');   // asleep: charged unless the slot is free
+    w.coord.db.prepare("UPDATE runs SET dispatchedAt = ? WHERE program = 'other'").run(Date.now() - 6 * 24 * 60 * 60 * 1000);
+    const res = await postAdvance(app, id, SEND_BACK);   // 'demo-blocker' has no registry row: its worker is gone
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(id))!.state).toBe('working');
+  });
+
+  it('a freed slot is refused where the server has no freed-slot window, with running = the raw count (D-6094: fail closed)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
+    w.coord.db.prepare("UPDATE runs SET dispatchedAt = ? WHERE program = 'other'").run(Date.now() - 6 * 24 * 60 * 60 * 1000);
+    const res = await postAdvance(app, id, SEND_BACK);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+  });
+
+  it('the same send-back is refused while the slot-holding run was dispatched within 2 h, however its worker reads (D-6094)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, id } = await parkedAtFullCap(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-reentry.hibernated'), '1700000000');
+    const res = await postAdvance(app, id, SEND_BACK);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+    expect(okRun(w.coord.run(id))!.state).toBe('awaiting-review');
   });
 
   it('does NOT cap-check dispatched -> working: a run already counted may always start working', async () => {

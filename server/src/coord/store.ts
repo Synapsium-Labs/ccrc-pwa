@@ -1213,6 +1213,9 @@ const AUTO_CONTINUE_ARMED_LAST_ERROR: Extract<Extract<SendResult, { ok: false }>
  *  `stallCandidates` reads it too (stall watch wave 1), for the same safe
  *  direction: an unnamed state is a candidate, and the lane's verdict holds it. */
 const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
+/** The runs `capsUsage().running` counts (D-13): dispatched, and in an active state. `activeRunWorkers` reads the same
+ *  rows through this one fragment. */
+const COUNTED_RUNS_WHERE = `dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`;
 /** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
  *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
  *  names this fragment and never the literal pair (D-2800), except the
@@ -5550,9 +5553,21 @@ export class CoordStore {
     // awaiting-review). D-13's principle is kept and sharpened: this names
     // the runs whose session is WORKING.
     const running = (this.db.prepare(
-      `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
+      `SELECT count(*) AS c FROM runs WHERE ${COUNTED_RUNS_WHERE}`,
     ).get() as { c: number }).c;
     return { running };
+  }
+
+  /**
+   * D-6094 (TEMPORARY; fleet-capacity W3-4 deletes it): the rows `capsUsage().running` counts, one per row, with the
+   * worker each names. The predicate is `COUNTED_RUNS_WHERE`, the one fragment both statements use, so any filtered
+   * count taken over these rows is a SUBSET of the raw count by construction. A `planned` row and a row with
+   * `dispatchedAt` null (an in-place run, W1-4b) are in neither. `capsUsage` stays a plain SQL count for the caps view.
+   */
+  activeRunWorkers(): { runId: number; sessionId: string | null; dispatchedAt: number }[] {
+    return this.db.prepare(
+      `SELECT id AS runId, sessionId, dispatchedAt FROM runs WHERE ${COUNTED_RUNS_WHERE} ORDER BY id`,
+    ).all() as { runId: number; sessionId: string | null; dispatchedAt: number }[];
   }
 
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────

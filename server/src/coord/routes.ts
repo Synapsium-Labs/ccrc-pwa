@@ -12,7 +12,7 @@ import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { clearSender } from '../inject/send.js';
 import { assembleFleet, fleetNow } from '../fleet.js';
-import { liveWordFor, turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import { liveWordFor, turnReadDeps, turnVerdictFor, workerReadingFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -54,7 +54,8 @@ import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, reEntersWorking, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured, sessionReadsLive } from './dispatch.js';
+import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured, capsMeasuredCounted, sessionReadsLive, type WorkerReading } from './dispatch.js';
+import { capRefusalOf } from './dispatchDecide.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
@@ -649,6 +650,16 @@ export function registerCoordRoutes(
   // whose live file this box could read. `liveWordFor` is the turn verdict's own pane sequence, which cannot answer it
   // (a gone pane reads `idle` there); anything it could not read is `false`, so the cap is charged.
   const paneLive = async (rec: SessionRecord): Promise<boolean> => (await liveWordFor(turnReads, rec)).ok;
+  // D-6094 (temporary, deleted at W3-4): a run's worker reading for the stale-run predicate, over the same registry row
+  // read `sessionReadsLive` makes; a row the registry lists as absent is gone, anything unreadable is `unmeasured`.
+  const workerReading = async (sessionId: string): Promise<WorkerReading> => {
+    const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+    if (read.kind === 'absent') return 'gone';
+    if (read.kind !== 'found' || measuredIdentity(read.record) === null || read.record.lifecycleUnmeasured.length > 0) return 'unmeasured';
+    return workerReadingFor(turnReads, read.record);
+  };
+  // D-6094: the freed-slot window is the watcher's own list, never the shared wake list (`FleetWatcher.admitFreedSlot`).
+  const admitFreedSlot = watcher?.admitFreedSlot === undefined ? undefined : (): boolean => watcher.admitFreedSlot();
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
    *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
@@ -1665,6 +1676,8 @@ export function registerCoordRoutes(
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
       // D-6093: whether a resumed session's pane is alive, for the concurrency check a live resume skips.
       paneLive,
+      // D-6094: the stale-run predicate's two ports, the same pair the advance route passes.
+      workerReading, ...(admitFreedSlot === undefined ? {} : { admitFreedSlot }),
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
     const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents));
@@ -1966,11 +1979,15 @@ export function registerCoordRoutes(
       // edge the cap gate checks (an idle run back to `working`) and only when the cap would refuse, before the gate and inside
       // the serialiser.
       const pre = to === 'working' ? coord.run(id) : null;
-      const liveWorker = pre !== null && pre.ok && pre.run !== null && pre.run.sessionId !== null
-        && reEntersWorking(to, pre.run.state) && capsMeasured(coord).overConcurrency !== null
-        && await sessionReadsLive({ io: deps.io, cfg: deps.cfg, paneLive }, pre.run.sessionId);
+      const charged = pre !== null && pre.ok && pre.run !== null && reEntersWorking(to, pre.run.state)
+        && capsMeasured(coord).overConcurrency !== null;
+      const liveWorker = charged && pre.run!.sessionId !== null
+        && await sessionReadsLive({ io: deps.io, cfg: deps.cfg, paneLive }, pre.run!.sessionId);
+      // D-6094: a send-back the cap would charge is re-counted over the runs whose worker still holds a slot, gathered
+      // here, inside the serialiser, as the dispatch route gathers it; the gate stays a synchronous step.
+      const caps = charged && !liveWorker ? await capsMeasuredCounted(coord, workerReading) : capsMeasured(coord);
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
-        liveWorker, overConcurrency: () => capsMeasured(coord).overConcurrency });
+        liveWorker, overConcurrency: () => capRefusalOf(caps, admitFreedSlot) });
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });

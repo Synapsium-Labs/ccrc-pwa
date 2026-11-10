@@ -153,3 +153,26 @@ export async function turnMarkFor(d: TurnReadDeps, rec: SessionRecord): Promise<
   if (!live.ok) return { ok: false, reason: 'unmeasured' };
   return readTurnMarkMeasured(d.io, d.cfg.registryDir, rec.id, rec.uuid, { startedAt: live.state.startedAt });
 }
+
+/**
+ * D-6094 (TEMPORARY; the stale-run predicate's read, deleted at fleet-capacity W3-4): one worker's liveness for the
+ * concurrency count. `gone`: the registry row is stopped, archived or hibernated, or tmux proved the pane gone. `busy`:
+ * the turn verdict says busy, or the frame's row lists background work or subagents, or the turn marker's `bg` or `crons`
+ * is not exactly 0 (tool children hold memory; the reads stop-done makes). `idle`: all of those read quiet. Anything
+ * that could not be read is `unmeasured` (the count treats it as busy). The words are `coord/dispatch.ts`'s
+ * `WorkerReading`, spelled here so this L3 file imports no policy module.
+ */
+export async function workerReadingFor(d: TurnReadDeps, rec: SessionRecord): Promise<'busy' | 'idle' | 'gone' | 'unmeasured'> {
+  if (rec.stopped !== null || rec.archivedAt !== null || rec.hibernatedAt !== null) return 'gone';
+  const word = await liveWordFor(d, rec);
+  if (!word.ok) return word.reason === 'no-pane' ? 'gone' : 'unmeasured';
+  const turn = await turnVerdictFor(d, rec, rec.uuid);
+  if (turn === 'busy') return 'busy';
+  if (turn !== 'idle') return 'unmeasured';
+  const row = await liveRowFor(d, rec, rec.uuid);
+  if (row === null) return 'unmeasured';
+  if ((row.background?.count ?? 0) > 0 || (row.subagents?.length ?? 0) > 0) return 'busy';
+  const mark = await turnMarkFor(d, rec);
+  if (!mark.ok) return 'unmeasured';
+  return mark.bg === 0 && mark.crons === 0 ? 'idle' : 'busy';
+}

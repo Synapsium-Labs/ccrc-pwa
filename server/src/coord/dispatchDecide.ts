@@ -75,6 +75,25 @@ const orphaned = (kind: 'registry-unmeasurable' | 'ambiguous-dispatch'): string 
 export interface CapsReading {
   caps: CoordCaps; usage: CoordCapsUsage;
   overConcurrency: { limit: number; running: number } | null;
+  /** D-6094 (temporary; deleted with the stale-run predicate at W3-4): the raw count is at or above the limit but the
+   *  count of runs whose worker is still working or recent is below it, so a slot the predicate freed is there. Carries
+   *  the RAW numbers a refusal says. Absent or null: no slot was freed. */
+  freedSlot?: { limit: number; running: number } | null;
+}
+
+/**
+ * The refusal numbers of a cap reading, or null when the dispatch (or the send-back) may go on. ONE spelling for both
+ * doors (D-6094): an ordinary refusal is `overConcurrency`; a slot the stale-run predicate freed is handed out only
+ * when `admitFreedSlot` admits it (the freed-slot window, `WAKE_BURST` per `WAKE_WINDOW_MS`), and a missing port refuses
+ * it. Called only by an admit that has passed the markers, and the port is asked only for a freed slot.
+ */
+export function capRefusalOf(
+  c: CapsReading, admitFreedSlot: (() => boolean) | undefined,
+): { limit: number; running: number } | null {
+  if (c.overConcurrency !== null) return c.overConcurrency;
+  const freed = c.freedSlot ?? null;
+  if (freed === null) return null;
+  return admitFreedSlot !== undefined && admitFreedSlot() === true ? null : freed;
 }
 
 /** The run row a dispatch decides on, once it is known to exist. */
@@ -224,6 +243,8 @@ export interface AdmitFacts {
   liveResume: boolean;
   /** Called only when neither marker refused, and not at all for a live resume. */
   caps: () => CapsReading;
+  /** D-6094: admits one slot the stale-run predicate freed (`capRefusalOf`); asked only for a freed slot. Absent: refused. */
+  admitFreedSlot?: () => boolean;
 }
 
 /** Step 1 of the admit step, alone: the operator's pause and the mail-disabled marker, in that order (null: neither).
@@ -248,7 +269,7 @@ function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
   // bug. It is the ONLY cap: the daily dispatch brake that followed it is retired (D-7068, operator
   // ruling 2026-10-26). It counted reviews and warm resumes as if they were fresh workspaces, refused a coordinator
   // with nothing that would wake it, and measured neither memory nor processes.
-  const { overConcurrency } = f.caps();
+  const overConcurrency = capRefusalOf(f.caps(), f.admitFreedSlot);
   if (overConcurrency !== null) {
     // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return refused({ ok: false, kind: 'refused', code: 'cap-concurrency',
