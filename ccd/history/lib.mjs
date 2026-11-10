@@ -5295,7 +5295,9 @@ const presenceText = (p) => (p !== null && p.state === 'value' && p.value.trim()
  *    unreadable, absent or empty is `workspace-unreadable`, never a wider or
  *    narrower scope (D-4676 (history-workspace-scope));
  *  - otherwise the family (id, generation), the generation null when the
- *    caller must take the id's newest family. */
+ *    caller must take the id's newest family;
+ *  - every verdict carries `agents`, the `--agents` flag (W4 addendum P7): it widens what a scope READS and decides nothing
+ *    else, so it takes no part in the refusals above. */
 export function decideScope(i) {
   if (!SCOPE_SOURCES.includes(i.source)) return refuseScope('no-identity');
   if (!idOk(i.id)) return refuseScope('bad-id');
@@ -5303,7 +5305,8 @@ export function decideScope(i) {
   if ((project ? 1 : 0) + (workspace ? 1 : 0) + (session !== null ? 1 : 0) > 1) return refuseScope('bad-args');
   const ownProject = presenceText(i.reg.project);
   const verdict = (kind, o) => ({
-    ok: true, kind, source: i.source, id: i.id, generation: i.generation.value, project: ownProject, workdir: null, ...o,
+    ok: true, kind, source: i.source, id: i.id, generation: i.generation.value, project: ownProject, workdir: null,
+    agents: i.flags.agents === true, ...o,
   });
   if (session !== null) {
     if (!idOk(session)) return refuseScope('bad-id');
@@ -8828,12 +8831,16 @@ export const AROUND_DEFAULT = 5;
 export const AROUND_MAX = 50;
 
 const readOpt = (kind, key, extra = {}) => Object.freeze({ kind, key, ...extra });
-/** Options every read verb takes (§8.2). `--project` and `--workspace` both given is decideScope's bad-args. */
+/** Options every read verb takes (§8.2). `--project` and `--workspace` both given is decideScope's bad-args. `--agents` widens
+ *  what the scope reads to the family's subagent transcripts and their nodes (W4 addendum P7); it names no other scope. */
 const COMMON_READ_OPTIONS = Object.freeze({
   '--json': readOpt('flag', 'json'),
   '--session': readOpt('value', 'session'),
   '--project': readOpt('flag', 'project'),
   '--workspace': readOpt('flag', 'workspace'),
+  // W4 addendum P7 (Task 3): subagent rows and leaves are read only under this flag. It is a read option of every verb, so a verb
+  // that joins READ_OPTIONS later derives it here and spells no second copy.
+  '--agents': readOpt('flag', 'agents'),
 });
 /** The most families a `--json` scope object names (§8.3's cap; chosen). A `--project` or `--workspace` scope can
  *  hold hundreds of families, and the envelope is part of every call's 20,000 chars: three objects keep the whole
@@ -8901,7 +8908,7 @@ const BAD_READ_ARGS = Object.freeze({ ok: false, reason: 'bad-args' });
 export function parseReadArgs(verb, argv) {
   if (typeof verb !== 'string' || !Object.hasOwn(READ_OPTIONS, verb) || !Array.isArray(argv)) return BAD_READ_ARGS;
   const spec = READ_OPTIONS[verb];
-  const opts = { json: false, session: null, project: false, workspace: false, ...spec.defaults };
+  const opts = { json: false, session: null, project: false, workspace: false, agents: false, ...spec.defaults };
   const positional = [];
   const seen = new Set();
   let rest = false;
@@ -9055,7 +9062,7 @@ export function parseGrepArgs(argv, nowMs) {
     seen.add(t);
     if (t === '--json') { a.json = true; continue; }
     if (t === '--include-recall') { a.includeRecall = true; continue; }
-    if (t === '--project' || t === '--workspace') continue;
+    if (t === '--project' || t === '--workspace' || t === '--agents') continue;
     if (i + 1 >= argv.length) return bad;
     i += 1;
     const v = argv[i];
@@ -9675,7 +9682,7 @@ export function parseDescribeArgs(argv) {
     seen.add(t);
     if (t === '--json') { a.json = true; continue; }
     if (t === '--full') { a.full = true; continue; }
-    if (t === '--project' || t === '--workspace') continue;
+    if (t === '--project' || t === '--workspace' || t === '--agents') continue;
     if (i + 1 >= argv.length) return bad;
     i += 1;
     const v = argv[i];

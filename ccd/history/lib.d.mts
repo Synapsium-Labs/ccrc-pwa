@@ -746,12 +746,12 @@ export interface ScopeInputs {
   source: string;
   id: string;
   generation: GenerationChoice;
-  flags: { project: boolean; workspace: boolean; session: string | null };
+  flags: { project: boolean; workspace: boolean; session: string | null; agents?: boolean };
   reg: { project: Presence<string>; workdir: Presence<string>; sessionProject: Presence<string> | null };
 }
 export type ScopeVerdict =
   | ScopeRefusal<'no-identity' | 'bad-args' | 'bad-id' | 'cross-project' | 'project-unreadable' | 'workspace-unreadable'>
-  | { ok: true; kind: ScopeKind; source: string; id: string; generation: string | null; project: string | null; workdir: string | null };
+  | { ok: true; kind: ScopeKind; source: string; id: string; generation: string | null; project: string | null; workdir: string | null; agents: boolean };
 export function decideScope(i: ScopeInputs): ScopeVerdict;
 // --- W2-2b Task 3: the headless path's own two decisions (W2-D41, W2-D46)
 export function decideEnvProject(i: { verdict: Extract<ScopeVerdict, { ok: true }>; storedProject: string }): { ok: true } | ScopeRefusal<'cross-project'>;
