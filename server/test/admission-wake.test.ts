@@ -13,6 +13,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
+import { admissionWakeChoice, type AdmissionWaiter } from '../src/coord/admissionWake.js';
+import { WAKE_BURST, WAKE_WINDOW_MS } from '../src/coord/wakeBudget.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -162,5 +164,54 @@ describe('the stamp (store)', () => {
     expect(f.coord.admissionWaiters()).toMatchObject([{ runId: id, sendBack: true }]);
     expect(f.coord.advance(id, 'working', 'test').ok).toBe(true);
     expect(f.coord.admissionWaiters()).toEqual([]);
+  });
+});
+
+describe('the decider: admissionWakeChoice', () => {
+  const w = (runId: number, program: string, since: number, over: Partial<AdmissionWaiter> = {}): AdmissionWaiter =>
+    ({ runId, program, claimedBy: `coord-${program}`, since, lastRefusedAt: since, sendBack: false, ...over });
+  const ids = (c: { chosen: readonly AdmissionWaiter[] }): number[] => c.chosen.map((x) => x.runId);
+  const NOW = 10 * WAKE_WINDOW_MS;
+
+  it('no room wakes nobody, and the list it hands back is the window pruned', () => {
+    const c = admissionWakeChoice([w(1, 'a', 1)], 0, [NOW - 1, NOW - WAKE_WINDOW_MS - 1], NOW);
+    expect(c.chosen).toEqual([]);
+    expect(c.recent).toEqual([NOW - 1]);
+  });
+
+  it('the oldest refusal in a programme goes first', () => {
+    const c = admissionWakeChoice([w(2, 'a', 20), w(1, 'a', 10), w(3, 'a', 30)], 1, [], NOW);
+    expect(ids(c)).toEqual([1]);
+  });
+
+  it('two programmes waiting are served alternately, not one programme twice', () => {
+    const c = admissionWakeChoice([w(1, 'a', 10), w(2, 'a', 11), w(3, 'b', 12)], 2, [], NOW);
+    expect(ids(c).sort()).toEqual([1, 3]);
+  });
+
+  it('the programme served longest ago goes first', () => {
+    const served = new Map([['a', NOW - 5], ['b', NOW - 50]]);
+    const c = admissionWakeChoice([w(1, 'a', 10), w(2, 'b', 99)], 1, [], NOW, served);
+    expect(ids(c)).toEqual([2]);
+    expect(c.served.get('b')).toBe(NOW);
+    expect(c.served.get('a')).toBe(NOW - 5);
+  });
+
+  it('a third wake inside one window waits for the next', () => {
+    const c = admissionWakeChoice([w(1, 'a', 1), w(2, 'b', 2), w(3, 'c', 3)], 3, [], NOW);
+    expect(ids(c)).toHaveLength(WAKE_BURST);
+    expect(c.recent).toHaveLength(WAKE_BURST);
+    const later = admissionWakeChoice([w(3, 'c', 3)], 3, c.recent, NOW + 1);
+    expect(later.chosen).toEqual([]);
+    expect(admissionWakeChoice([w(3, 'c', 3)], 3, c.recent, NOW + WAKE_WINDOW_MS).chosen).toHaveLength(1);
+  });
+
+  it('it never wakes more than the room', () => {
+    expect(ids(admissionWakeChoice([w(1, 'a', 1), w(2, 'b', 2)], 1, [], NOW))).toHaveLength(1);
+  });
+
+  it('a woken waiter does not block the next in its programme (the store lists eligible waiters only)', () => {
+    const c = admissionWakeChoice([w(2, 'a', 20)], 1, [], NOW);
+    expect(ids(c)).toEqual([2]);
   });
 });
