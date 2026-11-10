@@ -22,7 +22,7 @@ import {
   AGENT_ID_MAX, RUN_ID_RE, AGENT_LEVELS, AGENT_DIR_REASONS, AGENT_FILE_REASONS,
   agentIdOk, classifyAgentName, decideAgentDir, decideAgentFile, agentKey,
   INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
-  META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink,
+  META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, decideMetaType,
 } from '../../ccd/history/lib.mjs';
 import {
   canonicalJson, JSON_DEPTH_MAX, JSON_NODES_MAX, jsonWithinStructureBound, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
@@ -12306,5 +12306,16 @@ describe('the subagent meta\'s store side (W4 addendum P17 (c))', () => {
     [null, { ok: false, cause: 'unreadable' }, { write: null, count: 'agent_meta_unreadable:unreadable' }],
   ] as const)('decideMetaLink(%j, %j) is %j (P17 (c), the store side)', (stored, read, want) => {
     expect(decideMetaLink({ stored, read: read as libPlan.MetaRead })).toEqual(want);
+  });
+  it.each([
+    [null, okRead('t1', 'general-purpose'), 'general-purpose'],    // the first meta read whole that carries a type
+    [null, okRead(null, 'Explore'), 'Explore'],                    // independent of the link
+    ['general-purpose', okRead('t1', 'Explore'), null],            // a row that stands is never rewritten
+    ['general-purpose', okRead('t1', 'general-purpose'), null],
+    [null, okRead('t1', null), null],                              // no type in a meta read whole
+    [null, { ok: false, cause: 'malformed' }, null],               // an incomplete read writes nothing
+    ['general-purpose', { ok: false, cause: 'absent' }, null],
+  ] as const)('decideMetaType(%j, %j) is %j (write once, from the first whole meta)', (stored, read, want) => {
+    expect(decideMetaType({ stored, read: read as libPlan.MetaRead })).toBe(want);
   });
 });

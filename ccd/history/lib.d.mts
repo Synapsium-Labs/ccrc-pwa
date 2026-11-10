@@ -155,6 +155,7 @@ export type MetaFailure = 'absent' | 'oversized' | 'not-regular' | 'unreadable' 
 export type MetaRead = { ok: true; toolUseId: string | null; agentType: string | null } | { ok: false; cause: MetaFailure };
 export type MetaCount = 'agent_meta_conflict' | `agent_meta_unreadable:${MetaFailure}`;
 export function decideMetaLink(i: { stored: string | null; read: MetaRead }): { write: string | null; count: MetaCount | null };
+export function decideMetaType(i: { stored: string | null; read: MetaRead }): string | null;
 export const INSTALL_META: 'agents_since_ms';
 export function decideInstallRecord(i: { existing: number | null; nowMs: number }): number | null;
 export function isPreInstall(mtimeMs: number, sinceMs: number | null): boolean;

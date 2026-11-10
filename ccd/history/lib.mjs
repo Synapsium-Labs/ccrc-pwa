@@ -522,6 +522,12 @@ export function decideMetaLink({ stored, read }) {
   if (stored === null) return { write: read.toolUseId, count: null };
   return { write: null, count: stored === read.toolUseId ? null : 'agent_meta_conflict' };
 }
+/** The agent type a key's row keeps (P17, D-8161): written once, from the first meta read whole that carries a string under
+ *  AGENT_TYPE_KEY (`read.agentType`); a row that stands is never rewritten and an incomplete read writes nothing. null is
+ *  "write nothing". It is independent of the link: a meta that names no link still gives the type. */
+export function decideMetaType({ stored, read }) {
+  return stored === null && read.ok && read.agentType !== null ? read.agentType : null;
+}
 
 // ── the subagent ingest gates (W4 addendum P6, P15 (b)) ───────────────────
 /** The `meta` key holding when the first W4 tick ran (P6): a subagent file is post-install when its mtime is at or after it. */

@@ -71,7 +71,7 @@ import {
   decideReplayMark, replayWriterLayout, planReplayLayout, formatReplayLayout, widestReplayRanges,
   carryHoldAdvice,
   // W4 P1, P6, P15 (b), P20: the subagent walk's grammar, its identity and the ingest gates.
-  RUN_ID_RE, classifyAgentName, decideAgentDir, decideAgentFile, agentKey, META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
+  RUN_ID_RE, classifyAgentName, decideAgentDir, decideAgentFile, agentKey, META_MAX_BYTES, AGENT_TYPE_KEY, decideMetaLink, decideMetaType, INSTALL_META, decideInstallRecord, isPreInstall, agentsArmedOf, decideAgentIngest,
   // W2-1 Task 4 (W2-D30): the presence record's lib decisions.
   RECALL_OFF_KEYS, RECALL_OFF_SCAN_MAX, recallOffStateOf, planRecallOffObservation, recallOffReplayRows,
 } from './lib.mjs';
@@ -2020,8 +2020,11 @@ export function readAgentMeta(path) {
       n += got;
       if (n > META_MAX_BYTES) return { ok: false, cause: 'oversized' };
     }
-    text = buf.subarray(0, n).toString('utf8');
+    // ignoreBOM keeps a leading BOM in the text, so JSON.parse refuses it (malformed) as it always did; fatal refuses invalid UTF-8
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf.subarray(0, n));
   } catch (e) {
+    // a TextDecoder failure is a TypeError with code ERR_ENCODING_INVALID_ENCODED_DATA: the bytes are not a JSON text
+    if (e?.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') return { ok: false, cause: 'malformed' };
     return { ok: false, cause: e?.code === 'ENOENT' ? 'absent' : e?.code === 'ELOOP' ? 'not-regular' : 'unreadable' };
   } finally {
     if (fd !== null) { try { closeSync(fd); } catch { /* read already answered */ } }
@@ -2040,10 +2043,12 @@ export function readAgentMeta(path) {
  *  written once too, from the field AGENT_TYPE_KEY names. Runs inside bindFile's transaction. */
 function bindAgentMeta(db, transcriptPk, key, filePath) {
   const read = readAgentMeta(join(dirname(filePath), `agent-${key.slice(key.lastIndexOf('/') + 1)}.meta.json`));
-  const stored = db.prepare('SELECT parent_tool_use_id AS link FROM transcripts WHERE transcript_pk = ?').get(transcriptPk).link;
-  const d = decideMetaLink({ stored, read });
+  const row = db.prepare('SELECT parent_tool_use_id AS link, agent_type AS type FROM transcripts WHERE transcript_pk = ?').get(transcriptPk);
+  const d = decideMetaLink({ stored: row.link, read });
+  const type = decideMetaType({ stored: row.type, read });
+  // the SQL guards (IS NULL) are the second line behind the deciders: a row that stands is never rewritten
   if (d.write !== null) db.prepare('UPDATE transcripts SET parent_tool_use_id = ? WHERE transcript_pk = ? AND parent_tool_use_id IS NULL').run(d.write, transcriptPk);
-  if (read.ok && read.agentType !== null) db.prepare('UPDATE transcripts SET agent_type = ? WHERE transcript_pk = ? AND agent_type IS NULL').run(read.agentType, transcriptPk);
+  if (type !== null) db.prepare('UPDATE transcripts SET agent_type = ? WHERE transcript_pk = ? AND agent_type IS NULL').run(type, transcriptPk);
   if (d.count !== null) bump(db, d.count);
 }
 

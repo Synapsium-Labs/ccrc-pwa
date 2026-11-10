@@ -2,16 +2,18 @@
 // P20; plan 2026-11-09 Task 1C). In-process, against fixture HOMEs and stores made by historyAgentFixtures.ts' rig: the scan
 // tick's agent arm runs `ingestTick` exactly as the pass does, and the pass-level cases run `runDriver` on a fixture HOME.
 // Linux-only, as the sweep's cases are (the arm lists real directories and plants FIFOs).
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
+import fs, { constants } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import {
   agentRig, agentRows, agentKeys, agentTypeOf, aliasesOf, armed, CENSUS_WALK_FIGURES, counterNames, counterOf, fileRowsOf, fixtureRows,
   holdAgainIn, LANE_ROSTER, linkOf, mainRows, membershipsPerEntry, noMarker, offsetOf, plantAgentTree, plantMarker, recordOpenFlagsAsync,
   runIdsOf, sidecarsOf, T0, transcriptRows, variantsOf, type AgentRig, type TreeSpec,
 } from './historyAgentFixtures.js';
-import { makeHistoryBox, openStoreRO, plantSession, plantTranscript, runDriver, skipOnDarwin } from './historyHelpers.js';
+import { makeHistoryBox, openStoreRO, plantSession, plantTranscript, recordOpenFlags, runDriver, skipOnDarwin } from './historyHelpers.js';
+import { mkTmp, removeTmpFixturesSince, tmpMark } from './tmpHelpers.js';
 import { agentIdOk, capBytes, historyPaths, META_MAX_BYTES } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta } from '../../ccd/history/store.mjs';
 import { behindStats, discoverTranscripts, readAgentMeta } from '../../ccd/history/sweep.mjs';
@@ -479,7 +481,11 @@ describe('the subagent meta, its lifecycle and agent_type (W4 addendum P17, SA6,
 });
 
 describe('readAgentMeta (W4 addendum P17)', () => {
-  const dirOf = (): string => fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'ccrc-hist-meta-'));
+  // a directory per case, removed after it (tmpHelpers' mark-and-remove, scoped to this describe)
+  let mark = -1;
+  beforeEach(() => { mark = tmpMark(); });
+  afterEach(() => { if (mark >= 0) removeTmpFixturesSince(mark); mark = -1; });
+  const dirOf = (): string => mkTmp('ccrc-hist-meta-');
   it('answers the link and the type of a whole object, and the cause of anything else', () => {
     const dir = dirOf();
     const put = (name: string, text: string): string => { const p = path.join(dir, name); fs.writeFileSync(p, text); return p; };
@@ -505,6 +511,53 @@ describe('readAgentMeta (W4 addendum P17)', () => {
     expect(fs.statSync(at).size).toBe(META_MAX_BYTES);
     expect(readAgentMeta(at)).toEqual({ ok: true, toolUseId: 't', agentType: null });
     expect(readAgentMeta(over)).toEqual({ ok: false, cause: 'oversized' });
+  });
+  it('invalid UTF-8 is malformed, never decoded with replacement characters; valid multibyte text and a BOM-led file are read as before', () => {
+    const dir = dirOf();
+    const put = (name: string, bytes: Buffer): string => { const p = path.join(dir, name); fs.writeFileSync(p, bytes); return p; };
+    const json = (pre: Buffer | string, post: Buffer | string = ''): Buffer => Buffer.concat([Buffer.from('{"toolUseId":"t","agentType":"'), Buffer.from(pre), Buffer.from(post), Buffer.from('"}')]);
+    expect(readAgentMeta(put('bad.json', json(Buffer.from([0xff, 0xfe]))))).toEqual({ ok: false, cause: 'malformed' });
+    expect(readAgentMeta(put('cut.json', json(Buffer.from([0xe2, 0x82]))))).toEqual({ ok: false, cause: 'malformed' });
+    expect(readAgentMeta(put('ok.json', json('é€')))).toEqual({ ok: true, toolUseId: 't', agentType: 'é€' });
+    expect(readAgentMeta(put('bom.json', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), json('x')])))).toEqual({ ok: false, cause: 'malformed' });
+  });
+  it('the open carries O_NOFOLLOW and O_NONBLOCK (the race belts behind the lstat)', () => {
+    const dir = dirOf();
+    const p = path.join(dir, 'm.json');
+    fs.writeFileSync(p, '{"toolUseId":"t"}');
+    const { out, opens } = recordOpenFlags(() => readAgentMeta(p));
+    expect(out, 'CONTROL: the meta was read').toEqual({ ok: true, toolUseId: 't', agentType: null });
+    const mine = opens.filter((o) => o.path === p);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.flags & constants.O_NOFOLLOW, 'O_NOFOLLOW').toBe(constants.O_NOFOLLOW);
+    expect(mine[0]!.flags & constants.O_NONBLOCK, 'O_NONBLOCK').toBe(constants.O_NONBLOCK);
+  });
+  /** fs.lstatSync answers `as` for `target` and the real answer for any other path, for the run of `fn`; restored in finally. */
+  const lstatLying = <T,>(target: string, as: string, fn: () => T): T => {
+    const real = fs.lstatSync;
+    const patch = fs as { lstatSync: typeof fs.lstatSync };   // lstatSync is typed read-only; the open recorder patches openSync the same way
+    patch.lstatSync = ((p: fs.PathLike, ...rest: unknown[]) => (String(p) === target ? (real as (...a: unknown[]) => fs.Stats)(as) : (real as (...a: unknown[]) => fs.Stats)(p, ...rest))) as typeof fs.lstatSync;
+    syncBuiltinESMExports();
+    try { return fn(); } finally { patch.lstatSync = real; syncBuiltinESMExports(); }
+  };
+  it('a swap after the lstat: a FIFO where a regular file was seen is not regular, and the read does not block', { timeout: 5000 }, () => {
+    const dir = dirOf();
+    const regular = path.join(dir, 'regular.json'); fs.writeFileSync(regular, '{"toolUseId":"t"}');
+    const fifo = path.join(dir, 'fifo.json');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    // A reader and a writer end are held by the case, so even an open without O_NONBLOCK returns and a read without the fstat
+    // re-check ends in EAGAIN (O_NONBLOCK) rather than hanging this process for good: the mutants fail, they do not wedge.
+    const reader = fs.openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+    const writer = fs.openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK);
+    try {
+      expect(lstatLying(fifo, regular, () => readAgentMeta(fifo))).toEqual({ ok: false, cause: 'not-regular' });
+    } finally { fs.closeSync(writer); fs.closeSync(reader); }
+  });
+  it('a swap after the lstat: a link where a regular file was seen is refused by the open, never followed', () => {
+    const dir = dirOf();
+    const regular = path.join(dir, 'regular.json'); fs.writeFileSync(regular, '{"toolUseId":"t"}');
+    const link = path.join(dir, 'link.json'); fs.symlinkSync(regular, link);
+    expect(lstatLying(link, regular, () => readAgentMeta(link))).toEqual({ ok: false, cause: 'not-regular' });
   });
   it('a FIFO is not regular and is never blocked on', () => {
     const dir = dirOf();
