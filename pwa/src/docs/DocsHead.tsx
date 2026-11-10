@@ -1132,6 +1132,9 @@ function OneBar(p: Omit<CompactProps, 'plainView'> & { readonly tree: DocsTreeOk
   const dot = freshDot(freshnessChip(tree, p.receivedAt, visit.freshness, p.now).state);
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape' || !open) return;
+    // A sheet the panel's Share or Export opens is portalled out of the panel but still bubbles here through React's
+    // tree: its Escape is the sheet's own, so only a key pressed in the panel's (or the title's) own DOM closes the panel.
+    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
     e.stopPropagation();
     setOpen(false);
     title.current?.focus();

@@ -21,7 +21,7 @@ import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
-import { COMMIT_B, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, treeResponse, type FakeLoaders } from './docsFixtures';
+import { COMMIT_A, COMMIT_B, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, treeResponse, type FakeLoaders } from './docsFixtures';
 
 /** matchMedia at `width`: a min-width or max-width query answered as an engine at that width answers it. */
 function atWidth(width: number): void {
@@ -187,10 +187,35 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     expect(document.activeElement).toBe(title);
   });
 
+  it('Escape inside Share\'s sheet closes the sheet only: the details panel it was opened from stays open', async () => {
+    await openReady('/docs/demo/specs/a.md');
+    fireEvent.click(titleButton());
+    fireEvent.click(within(panelOf()).getByRole('button', { name: DOCS_HEAD_TEXT.share }));
+    const sheet = await screen.findByRole('dialog');
+    expect(panelOf().contains(sheet), 'the sheet is portalled out of the panel').toBe(false);
+    fireEvent.keyDown(sheet, { key: 'Escape' });
+    expect(titleButton()).toHaveAttribute('aria-expanded', 'true');
+    expect(panelOf()).not.toHaveAttribute('hidden');
+  });
+
   it('the title\'s name carries the freshness words', async () => {
     await openReady('/docs/demo/specs/a.md');
     expect(nameOf(titleButton()).endsWith(DOCS_HEAD_TEXT.moreNever)).toBe(true);
     expect(titleButton().querySelector('.docs-title-dot')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('the title names a failed fetch: its name ends with the freshness problem words, and the dot is the failed one', async () => {
+    const base = treeOk();
+    const tree = {
+      ...base,
+      freshness: {
+        ...base.freshness,
+        stamp: { okAgeMs: 179 * 60_000, attemptAgeMs: 5 * 60_000, lastOutcome: 'fetch-transport', okCommit: COMMIT_A },
+      },
+    } as const;
+    await openReady('/docs/demo/specs/a.md', 412, fakeLoaders({ tree: okTree(tree) }));
+    expect(nameOf(titleButton()).endsWith(DOCS_HEAD_TEXT.moreFailed)).toBe(true);
+    expect(titleButton().querySelector('.docs-title-dot')).toHaveAttribute('data-tone', 'failed');
   });
 
   it('the freshness dot sits before the title text (refinement (h))', async () => {
