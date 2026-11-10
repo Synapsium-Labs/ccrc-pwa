@@ -7,7 +7,7 @@ import { buildServer } from '../src/server.js';
 import { WS_TITLE_CAP } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { publicTicketSlug } from '../src/workspaceCreate.js';
+import { publicTicketSlug, slugWithoutTeamIds } from '../src/workspaceCreate.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -101,5 +101,16 @@ describe('publicTicketSlug', () => {
   it('refuses a title that is only the id, or too short', () => {
     expect(publicTicketSlug('KEY-123', ref, 'project-a')).toEqual({ ok: false, error: 'ticket-slug-public' });
     expect(publicTicketSlug('KEY-123 - x', ref, 'project-a')).toEqual({ ok: false, error: 'ticket-slug-public' });
+  });
+});
+
+describe('slugWithoutTeamIds', () => {
+  it('takes the team id out of a slug wherever it sits', () => {
+    expect(slugWithoutTeamIds('fix-key-123-crash', 'KEY', 'project-a')).toEqual({ ok: true, slug: 'fix-crash' });
+    expect(slugWithoutTeamIds('login-cleanup', 'KEY', 'project-a')).toEqual({ ok: true, slug: 'login-cleanup' });
+    expect(slugWithoutTeamIds('phase-2', 'KEY', 'project-a')).toEqual({ ok: true, slug: 'phase-2' });
+  });
+  it('refuses a slug with no words left', () => {
+    expect(slugWithoutTeamIds('key-123', 'KEY', 'project-a')).toEqual({ ok: false, error: 'ticket-slug-public' });
   });
 });

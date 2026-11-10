@@ -50,6 +50,27 @@ describe('draftPr and the linking standard', () => {
     }
   });
 
+  it("a public or unknown project's draft leaves the team's ids out of the commits, the plan and the title", () => {
+    const l = line({ commits: [
+      { sha: 'bbbbbbb', subject: 'fix KEY-123 login', body: 'Closes KEY-123 once merged.\n\nMore.' },
+    ] });
+    for (const mode of ['public', 'unknown'] as const) {
+      const d = draftPr(l, [{ id: '1', subject: 'KEY-123: wire the login', status: 'completed' } as never], { mode, teamKey: 'KEY' });
+      expect(`${d.title}\n${d.body}`).not.toMatch(/key-123/i);
+      expect(d.title).toBe('fix login');
+      expect(d.body).toContain('- [x] wire the login');
+      expect(d.body).toContain('- bbbbbbb fix login');
+    }
+  });
+
+  it("a project with no team key reads today's draft whatever its mode, as the route's unconfigured input does", () => {
+    const today = draftPr(line(), null);
+    for (const mode of ['public', 'unknown'] as const) {
+      expect(draftPr(line(), null, { mode, teamKey: null })).toEqual(today);
+    }
+    expect(today.body).toContain('Opened from ccrc workspace `project-a-key-123-fix` (`ws/key-123-fix` → `main`).');
+  });
+
   it("no team key: the draft is today's, byte for byte", () => {
     const today = draftPr(line(), null);
     expect(draftPr(line(), null, { mode: 'private', teamKey: null })).toEqual(today);

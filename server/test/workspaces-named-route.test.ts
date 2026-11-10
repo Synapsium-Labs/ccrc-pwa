@@ -4,7 +4,7 @@
 // send. Nothing here reaches the network (`deps.linear.fetch` is the seam) or a real ccd (the Runner is a spy).
 import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Runner } from '../src/exec.js';
 import { buildServer } from '../src/server.js';
@@ -13,7 +13,9 @@ import { LINEAR_KEY_FILE } from '../src/linear/connection.js';
 import type { FetchLike } from '../src/linear/client.js';
 import { WS_ID_MAX, WS_SLUG_MAX, WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { testDeps } from './helpers.js';
-import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { linearAnswer } from './linearFetchFake.js';
 import { linearServicesFake } from './linearServicesFake.js';
 
@@ -29,7 +31,7 @@ const linearOk = (identifier: string, title: string): Awaited<ReturnType<FetchLi
 let open: FastifyInstance | null = null;
 afterEach(async () => { await open?.close(); open = null; });
 
-interface Opts { verbs?: string[]; run?: Runner; fetch?: FetchLike; timeoutMs?: number; key?: boolean }
+interface Opts { verbs?: string[]; run?: Runner; fetch?: FetchLike; timeoutMs?: number; key?: boolean; coord?: CoordStore }
 interface Booted { app: FastifyInstance; calls: string[][]; fetched: { n: number } }
 
 async function boot(o: Opts = {}): Promise<Booted> {
@@ -50,6 +52,7 @@ async function boot(o: Opts = {}): Promise<Booted> {
       timeoutMs: o.timeoutMs,
     },
     linearRate: linearServicesFake().rate,
+    ...(o.coord === undefined ? {} : { coord: o.coord }),
   });
   open = app;
   return { app, calls, fetched };
@@ -176,6 +179,22 @@ describe("a blank name is today's create", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(calls).toEqual([['ws-add', 'project-a']]);
+  });
+});
+
+describe('a named create and the linking standard', () => {
+  it("a name carrying the team's id anywhere is made without it in a public or unread project, and as named in a private one", async () => {
+    const dir = mkTmp('ccrc-ws-named-');
+    const coord = new CoordStore(openCoordDb(path.join(dir, 'coord.db')));
+    try {
+      coord.setLinking('project-a', { teamKey: 'KEY', override: null }, 'd', 1);
+      const { app, calls } = await boot({ coord });
+      const res = await post(app, { name: 'fix key-123 crash' });
+      expect(res.json()).toMatchObject({ ok: true, slug: 'fix-crash' });
+      expect(calls[0]).toContain('fix-crash');
+      coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'd', 2);
+      expect((await post(app, { name: 'fix key-123 crash' })).json()).toMatchObject({ slug: 'fix-key-123-crash' });
+    } finally { coord.db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

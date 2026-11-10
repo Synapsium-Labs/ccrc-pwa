@@ -80,14 +80,14 @@ import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
-import { ticketRefOfBranch, trackerIdsIn } from './linking/policy.js';
+import { trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
 import { AuthAttempts } from './accounts/attempts.js';
 import { sessionIdHash } from './auth/sessions.js';
 import { resolveTitle } from './linear/resolve.js';
-import { classifyAddFailure, planCreate, publicTicketSlug } from './workspaceCreate.js';
+import { classifyAddFailure, planCreate, publicTicketSlug, slugWithoutTeamIds } from './workspaceCreate.js';
 import type { LinkingMode } from '../../shared/linking.js';
 import { classifyProjectAddFailure, planProjectAdd } from './projectAdd.js';
 import type { ProjectAddAnswer } from '../../shared/projectAdd.js';
@@ -3134,16 +3134,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     // D-8147: in a PUBLIC project the slug (the branch) is the title's words, never the ticket id.
     let slug = plan.ask.slug;
-    if (plan.ask.ticket !== null && deps.coord !== undefined) {
+    if (deps.coord !== undefined) {
       let row: ReturnType<CoordStore['linkingOf']> | undefined;
       try { row = deps.coord.linkingOf(project); } catch { row = undefined; }
-      // Only the project's own team's ticket is rewritten: a name like `phase-2` parses as a ticket but is no tracker id.
       // Anything but a measured or chosen PRIVATE reading (unmeasured and failed ones included) counts as public.
-      if (row !== undefined && row.teamKey !== null && plan.ask.ticket.key.toUpperCase() === row.teamKey.toUpperCase()
-        && row.mode !== 'private') {
-        const words = publicTicketSlug(title, plan.ask.ticket, project);
-        if (!words.ok) return refuseRoute(reply, words.error);
-        slug = words.slug;
+      if (row !== undefined && row.teamKey !== null && row.mode !== 'private') {
+        // Only the project's own team's ticket is rewritten: a name like `phase-2` parses as a ticket but is no tracker id.
+        if (plan.ask.ticket !== null && plan.ask.ticket.key.toUpperCase() === row.teamKey.toUpperCase()) {
+          const words = publicTicketSlug(title, plan.ask.ticket, project);
+          if (!words.ok) return refuseRoute(reply, words.error);
+          slug = words.slug;
+        }
+        // The team's id anywhere else in the slug (`fix key-123 crash`) reaches the public branch just the same.
+        const bare = slugWithoutTeamIds(slug, row.teamKey, project);
+        if (!bare.ok) return refuseRoute(reply, bare.error);
+        slug = bare.slug;
       }
     }
     const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
@@ -3904,10 +3909,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const linking = await sessionLinking(id);
     if (linking.mode !== 'private') {
       const ids = trackerIdsIn(`${body.title}\n${body.body}`, linking.teamKey);
-      if (ids.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids });
-      // The branch is pushed to the repository too: a head branch named for the team's ticket is refused, and said so.
-      const ref = linking.branch === null ? null : ticketRefOfBranch(linking.branch, linking.teamKey);
-      if (ref !== null) return refuseRoute(reply, 'tracker-id-public', { ids: [ref], in: 'branch' });
+      if (ids.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids, mode: linking.mode });
+      // The branch is pushed to the repository too: a head branch carrying the team's ticket ANYWHERE in its name (not
+      // only at the start) is refused, and said so.
+      const refs = linking.branch === null ? [] : trackerIdsIn(linking.branch, linking.teamKey);
+      if (refs.length > 0) return refuseRoute(reply, 'tracker-id-public', { ids: refs, in: 'branch', mode: linking.mode });
     }
     const b64 = Buffer.from(body.body, 'utf8').toString('base64');
     const argv = CCD_ARGV.prOpen(id, body.title, b64, body.draft === true);

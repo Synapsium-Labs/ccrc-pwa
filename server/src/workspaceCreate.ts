@@ -13,6 +13,7 @@
 import { WS_TITLE_CAP, WS_WRAPPER_CAP } from './ccdargv.js';
 import { ACCOUNT_ID_RE } from '../../shared/roster.js';
 import type { WsCreateRefusal } from '../../shared/refusal.js';
+import { trackerIdsIn } from './linking/policy.js';
 import {
   deriveWorkspaceSlug, fitSlug, isWsProject, NAME_REFUSAL_TEXT, slugifyWords, WS_ID_MAX, WS_SLUG_MAX, WS_SLUG_MIN,
   workspaceId, type LinearRef, type NameRefusal, type SlugAsk,
@@ -147,4 +148,19 @@ export function publicTicketSlug(title: string, ticket: LinearRef, project: stri
   if (slug.length < WS_SLUG_MIN) return { ok: false, error: 'ticket-slug-public' };
   if (workspaceId(project, slug).length > WS_ID_MAX) return { ok: false, error: 'id-too-long' };
   return { ok: true, slug };
+}
+
+/**
+ * D-8147: a slug that carries the project's team id ANYWHERE (`fix-key-123-crash`) in a project that is not private. The
+ * id is taken out of the words; fewer than `WS_SLUG_MIN` characters left is `ticket-slug-public`. A slug with no id is
+ * returned as it is.
+ */
+export function slugWithoutTeamIds(slug: string, teamKey: string, project: string):
+  { ok: true; slug: string } | { ok: false; error: 'ticket-slug-public' | 'id-too-long' } {
+  if (trackerIdsIn(slug, teamKey).length === 0) return { ok: true, slug };
+  const id = new RegExp(`(?<![A-Za-z0-9_])${teamKey}-\\d+(?![A-Za-z0-9_])`, 'gi');
+  const bare = fitSlug(slugifyWords(slug.replace(id, ' ').replace(/-/g, ' ')), WS_SLUG_MAX).slug;
+  if (bare.length < WS_SLUG_MIN) return { ok: false, error: 'ticket-slug-public' };
+  if (workspaceId(project, bare).length > WS_ID_MAX) return { ok: false, error: 'id-too-long' };
+  return { ok: true, slug: bare };
 }

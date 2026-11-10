@@ -67,6 +67,10 @@ describe('GET /api/sessions/:id/pr and the linking standard', () => {
     return (res.json() as { draft: { body: string } }).draft.body;
   };
 
+  it("a project with no linking row keeps today's footer (no key, nothing to protect)", async () => {
+    expect(await draftBody()).toContain('Opened from ccrc workspace `project-a-key-123-fix`');
+  });
+
   it("a private project's draft carries Refs KEY-123; a public one's names no id", async () => {
     coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'test', 1);
     expect(await draftBody()).toContain('Refs KEY-123');
@@ -84,7 +88,7 @@ describe('POST /api/sessions/:id/pr and the linking standard', () => {
     coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 1);
     const res = await open('Fix the login (KEY-123)', 'Body text\n');
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ ok: false, error: 'tracker-id-public', ids: ['KEY-123'] });
+    expect(res.json()).toEqual({ ok: false, error: 'tracker-id-public', ids: ['KEY-123'], mode: 'public' });
     expect(sentToCcd()).toBe(false);
     const inBody = await open('Fix the login', 'Closes key-123\n');
     expect(inBody.json()).toMatchObject({ error: 'tracker-id-public', ids: ['KEY-123'] });
@@ -127,9 +131,26 @@ describe('POST /api/sessions/:id/pr and the linking standard', () => {
     coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 1);
     const res = await open('Fix the login', 'Closes #12\n');
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ ok: false, error: 'tracker-id-public', ids: ['KEY-123'], in: 'branch' });
+    expect(res.json()).toEqual({ ok: false, error: 'tracker-id-public', ids: ['KEY-123'], in: 'branch', mode: 'public' });
     expect(sentToCcd()).toBe(false);
     coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'test', 2);
     expect((await open('Fix the login', 'Closes #12\n')).statusCode).toBe(200);
+  });
+
+  it('a head branch carrying the ticket anywhere in its name is refused too', async () => {
+    writeFileSync(path.join(home, '.cc-sessions', 'project-a-key-123-fix.branch'), 'ws/fix-key-123-crash');
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'public' }, 'test', 1);
+    const res = await open('Fix the login', 'Closes #12\n');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'tracker-id-public', ids: ['KEY-123'], in: 'branch' });
+    expect(sentToCcd()).toBe(false);
+  });
+
+  it('a measured-public repository stays public under a stored private override', async () => {
+    coord.setLinking('project-a', { teamKey: 'KEY', override: 'private' }, 'test', 1);
+    coord.recordLinkingReading('project-a', { state: 'measured', visibility: 'public', slug: 'owner/repo', template: 'absent', at: 5 });
+    const res = await open('Fix the login', 'Closes KEY-123\n');
+    expect(res.statusCode).toBe(409);
+    expect(sentToCcd()).toBe(false);
   });
 });

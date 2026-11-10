@@ -6,8 +6,11 @@ import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire
 /** A visibility reading is kept this long before the sweep takes another. */
 export const VISIBILITY_MAX_AGE_MS = 24 * 3_600_000;
 
-/** Which rule applies: the override wins; a measured private/internal repository is private, public is public; nothing measured is unknown. */
+/** Which rule applies: a measured PUBLIC repository is public whatever the override says (a mis-chosen `private` never
+ *  turns the id-writing acts on for a public repository); otherwise the override wins; a measured private/internal
+ *  repository is private; nothing measured is unknown. */
 export function linkingMode(override: LinkingOverride | null, measured: ProjectLinkingWire['measured']): LinkingMode {
+  if (measured.state === 'measured' && measured.visibility === 'public') return 'public';
   if (override !== null) return override;
   if (measured.state !== 'measured') return 'unknown';
   return measured.visibility === 'public' ? 'public' : 'private';
@@ -33,6 +36,19 @@ export function trackerIdsIn(text: string, teamKey: string | null): string[] {
     if (!out.includes(id)) out.push(id);
   }
   return out;
+}
+
+/** `text` with the team's tracker ids taken out, line by line, and the punctuation they leave behind tidied
+ *  (`fix (KEY-123) login` → `fix login`, `KEY-123: fix` → `fix`). No team key: the text unchanged. */
+export function withoutTrackerIds(text: string, teamKey: string | null): string {
+  if (trackerIdsIn(text, teamKey).length === 0) return text;
+  const re = new RegExp(`(?<![A-Za-z0-9_])${escapeRe(teamKey as string)}-\\d+(?![A-Za-z0-9_])`, 'gi');
+  return text.split('\n').map((line) => {
+    const bare = line.replace(re, '');
+    if (bare === line) return line;
+    return bare.replace(/\(\s*\)|\[\s*\]/g, '').replace(/(^|\s)[:;,]\s+/g, '$1')
+      .replace(/(\S)[ \t]{2,}/g, '$1 ').replace(/\s+([,.:;])/g, '$1').replace(/[ \t]+$/, '');
+  }).join('\n');
 }
 
 /** The operator's write body: exactly `teamKey` and `override`; a key in the Linear shape (uppercased) or null. */

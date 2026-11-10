@@ -72,6 +72,16 @@ describe('POST /api/projects/:project/linking', () => {
     expect(res.json().linking).toMatchObject({ teamKey: null, override: null, mode: 'unknown' });
   });
 
+  it('refuses override private while the last reading is public, and still saves a key under a stored private', async () => {
+    app = await open({ coord });
+    coord!.setLinking('project-a', { teamKey: 'KEY', override: null }, 'd', 1);
+    coord!.recordLinkingReading('project-a', { state: 'measured', visibility: 'public', slug: 'owner/repo', template: 'absent', at: 5 });
+    const res = await post(app, 'project-a', { teamKey: 'KEY', override: 'private' });
+    expect([res.statusCode, res.json().error]).toEqual([409, 'override-private-public']);
+    expect(coord!.linkingOf('project-a').override).toBeNull();
+    expect((await post(app, 'project-a', { teamKey: 'KEY', override: 'public' })).statusCode).toBe(200);
+  });
+
   it('refuses bad-team-key and bad-override with 400 and writes nothing', async () => {
     app = await open({ coord });
     for (const key of ['', '1K', 'TOO_LONG_KEY_NAME_X', 'KE Y', 'KEY-1', 7]) {
@@ -200,7 +210,7 @@ describe('POST /api/projects/:project/pr-template', () => {
     return { calls, runCcd };
   };
 
-  it('refuses no-team-key and repo-unmeasured before any ccd call', async () => {
+  it('refuses no-team-key before any ccd call; an unmeasured project goes on to ccd, which reads the visibility itself', async () => {
     const { calls, runCcd } = ccd({ ok: true });
     app = await open({ coord, runCcd });
     measure('private');
@@ -209,8 +219,9 @@ describe('POST /api/projects/:project/pr-template', () => {
     coord!.setLinking('project-a', { teamKey: 'KEY', override: null }, 'd', 1);
     coord!.recordLinkingReading('project-a', { state: 'unmeasured' });
     const unmeasured = await tmpl(app);
-    expect([unmeasured.statusCode, unmeasured.json().error]).toEqual([409, 'repo-unmeasured']);
-    expect(calls).toEqual([]);
+    // ccd answers (here: a failure); the route did not stop at 'repo-unmeasured'
+    expect(unmeasured.json().error).not.toBe('repo-unmeasured');
+    expect(calls.length).toBe(1);
   });
 
   it('refuses repo-public on an override to public', async () => {

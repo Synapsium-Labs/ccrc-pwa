@@ -4,7 +4,7 @@ import type { CcdResult } from './coord/ports.js';
 import { ccdEnding } from './lifecycle.js';
 import { isHead40 } from '../../shared/landing.js';
 import type { LinkingMode } from '../../shared/linking.js';
-import { ticketRefOfBranch, trackerIdsIn } from './linking/policy.js';
+import { ticketRefOfBranch, trackerIdsIn, withoutTrackerIds } from './linking/policy.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -428,12 +428,20 @@ export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null, linking?: Dra
   if (commits.length > 0) {
     parts.push(['## Commits', ...commits.map((c) => `- ${c.sha.slice(0, 7)} ${c.subject}`)].join('\n'));
   }
-  // A project that is not private names neither the workspace id nor the branch: both can carry the team's ticket (D-8147).
-  if (linking !== undefined && linking.mode !== 'private') parts.push(`Opened from ccrc (→ \`${line.baseShort}\`).`);
+  // A project that is not private AND has a team key names neither the workspace id nor the branch: both can carry the
+  // team's ticket (D-8147). With no key there is no id to protect and the footer is today's, byte for byte.
+  const guarded = linking !== undefined && linking.mode !== 'private' && linking.teamKey !== null;
+  if (guarded) parts.push(`Opened from ccrc (→ \`${line.baseShort}\`).`);
   else parts.push(`Opened from ccrc workspace \`${line.id}\` (\`${line.branch}\` → \`${line.baseShort}\`).`);
   // NEVER empty: an empty --body suppresses the repo's PR template entirely,
   // and ccd refuses one for that reason.
-  return { title, body: parts.join('\n\n') + '\n' };
+  const body = parts.join('\n\n') + '\n';
+  // The same guard leaves the team's ids out of what the sheet shows (its body is read-only, so the POST route's
+  // refusal of an id there is one the operator could never edit away): the title and every line of the body.
+  if (!guarded) return { title, body };
+  const bareTitle = withoutTrackerIds(title, linking.teamKey).trim();
+  return { title: bareTitle === '' ? withoutTrackerIds(deslug(line.branch), linking.teamKey).trim() || 'Changes' : bareTitle,
+    body: withoutTrackerIds(body, linking.teamKey) };
 }
 
 // ── `ccd pr-landing` (PR landing in ccrc, stage 1) ───────────────────────────────────────────────────────────────

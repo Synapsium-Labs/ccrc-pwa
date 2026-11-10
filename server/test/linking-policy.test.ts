@@ -2,6 +2,7 @@
 // Neutral examples only: KEY-123, project-a.
 import { describe, it, expect } from 'vitest';
 import {
+  withoutTrackerIds,
   VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue,
 } from '../src/linking/policy.js';
 import type { ProjectLinkingWire } from '../../shared/linking.js';
@@ -10,10 +11,24 @@ type Measured = ProjectLinkingWire['measured'];
 const measured = (visibility: 'public' | 'private' | 'internal'): Measured =>
   ({ state: 'measured', visibility, slug: 'owner/repo', template: 'absent', at: 1 });
 
+describe('withoutTrackerIds', () => {
+  it('takes the team ids out and tidies what they leave', () => {
+    expect(withoutTrackerIds('- [x] fix KEY-123 login', 'KEY')).toBe('- [x] fix login');
+    expect(withoutTrackerIds('fix (key-123) login', 'KEY')).toBe('fix login');
+    expect(withoutTrackerIds('- abc1234 KEY-123: fix login\nplain', 'KEY')).toBe('- abc1234 fix login\nplain');
+    expect(withoutTrackerIds('see OTHER-9 and KEY-7.', 'KEY')).toBe('see OTHER-9 and.');
+  });
+  it('is the text itself with no key or no id', () => {
+    expect(withoutTrackerIds('fix KEY-123', null)).toBe('fix KEY-123');
+    expect(withoutTrackerIds('fix  it', 'KEY')).toBe('fix  it');
+  });
+});
+
 describe('linkingMode', () => {
-  it('an override wins over any reading', () => {
+  it('an override wins over any reading, except that a measured public repository is never private', () => {
     expect(linkingMode('public', measured('private'))).toBe('public');
-    expect(linkingMode('private', measured('public'))).toBe('private');
+    expect(linkingMode('private', measured('public'))).toBe('public');
+    expect(linkingMode('private', measured('internal'))).toBe('private');
     expect(linkingMode('private', { state: 'unmeasured' })).toBe('private');
     expect(linkingMode('public', { state: 'failed', reason: 'x', at: 1 })).toBe('public');
   });

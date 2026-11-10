@@ -57,6 +57,13 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     const coord = opts.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     try {
+      // `private` on a repository ccrc last read as public is refused: it would turn the id-writing acts on there.
+      // A stored `private` is not re-refused (saving the key re-sends it); `linkingMode` already reads such a row as public.
+      const before = coord.linkingOf(project);
+      const m = before.measured;
+      if (parsed.write.override === 'private' && before.override !== 'private' && m.state === 'measured' && m.visibility === 'public') {
+        return refuseRoute(reply, 'override-private-public');
+      }
       coord.setLinking(project, parsed.write, opts.by(req), now());
       return { ok: true, linking: coord.linkingOf(project) };
     } catch (err) {
@@ -104,7 +111,7 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
    * `POST /api/projects/:project/pr-template` (no body): the operator's tap that opens a pull request adding the pull
    * request template to a PRIVATE project. NOT in `auth/gate.ts`'s EXEMPT table: session-gated when armed, open dark, no
    * box token. The route decides nothing but the order of its refusals (all from the stored row, before any ccd call):
-   * no key stored, nothing measured and no override, the mode public. The act is `ccd pr-template`; ccd re-reads the
+   * no key stored, the mode public (an unmeasured project is read by ccd itself at the act). The act is `ccd pr-template`; ccd re-reads the
    * visibility itself and refuses a public repository and a template already on the default branch in its own words.
    * On success the stored reading's template cell is written `present` (a project never measured has no cell to update).
    */
@@ -115,7 +122,8 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     const row = coord.linkingOf(project);
     if (row.teamKey === null) return refuseRoute(reply, 'no-team-key');
     const mode = row.mode;
-    if (mode === 'unknown') return refuseRoute(reply, 'repo-unmeasured');
+    // An unmeasured project (a fresh add: the visibility lane has not reached it) goes on to ccd, which reads the
+    // visibility itself and refuses anything but a private or internal repository: fail-closed at the act.
     if (mode === 'public') return refuseRoute(reply, 'repo-public');
     if (!ccdCan(opts.fleetState?.(), 'prTemplate')) return refuseRoute(reply, 'unsupported');
     let argv: CcdArgv;

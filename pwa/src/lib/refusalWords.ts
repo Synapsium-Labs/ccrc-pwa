@@ -363,6 +363,7 @@ export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
   'tracker-id-public': 'This repository is public: remove the ticket id from the title and body. Link the ticket from Linear instead.',
   'ticket-slug-public': 'This repository is public, so a workspace name cannot be just a ticket id. Name the workspace in words.',
   'template-failed': 'The template pull request could not be opened. Nothing was changed. Try again.',
+  'override-private-public': 'GitHub reads this repository as public, so it cannot be set to Private: a private rule would write ticket ids into a public repository. Choose Automatic or Public.',
 };
 
 /** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
@@ -374,10 +375,13 @@ const LINKING_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>
     if (ids.length === 0) return null;
     // The head branch carries the id (the workspace was named before the project was known to be public): no edit of the
     // sheet fixes it, so the sentence says what does.
+    const unread = body['mode'] === 'unknown';
     if (body['in'] === 'branch') {
+      if (unread) return `ccrc has not read this repository's visibility yet, and this workspace's branch carries ${ids.join(', ')}, so it will not open the pull request. Try again in a few minutes, or set the visibility in Settings.`;
       return `This repository is public and this workspace's branch is named for ${ids.join(', ')}, so ccrc will not open the pull request. Add a new workspace named in words and move the work there.`;
     }
-    return `This repository is public: remove ${ids.join(', ')} from the title and body. Link the ticket from Linear instead.`;
+    if (unread) return `ccrc has not read this repository's visibility yet, so ${ids.join(', ')} stays out of the pull request. Try again in a few minutes, or set the visibility in Settings.`;
+    return `This repository is public: remove ${ids.join(', ')} from the title and body. If a commit message carries it, reword that commit first. Link the ticket from Linear instead.`;
   },
 };
 
