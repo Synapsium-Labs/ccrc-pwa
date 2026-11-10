@@ -334,16 +334,27 @@ not after.
    — `project`, `wave` and `waveOf` are the reviewed run's and are derived
    server-side; do not send them. `review-in-flight` means a review run is
    already open for that wave: close it first (`{"state":"failed"}` if the
-   reviewer died), then retry. `cap-review-rounds` means the work run has had
-   its three review rounds: do not retry the open. Decide it as
-   `references/decision-procedure.md` step 7 does: lift the cap with
-   `ccrc-api runs review-rounds` when the last review's open findings are
-   regressions or gaps in what the PR claims to cover, otherwise apply the
-   cutoff and land with known limits. `coord-lift-off` means the operator
-   switched lifts off: keep the cap, park the thread behind the server's ask,
-   and work the others. `cap-not-reached` means there is nothing to lift: open
-   the review. A 404 is a block of class P4 (an older server without the
-   door), so record the block with `wakeOn: update`. A bare `400 bad-request` with no `detail` on
+   reviewer died), then retry. When a review round's report lands and the
+   work run has had its three review rounds, decide BEFORE opening the next,
+   as `references/decision-procedure.md` step 7 does and by the rules in
+   `references/wave-lifecycle.md` (Extending a reached review cap): extend
+   with `"$API" runs review-rounds <work run id> --json -` and a one-line
+   reason when the last review's open findings are regressions or gaps in what
+   the PR claims to cover, otherwise apply the cutoff, rule on the findings you
+   hold and land with known limits. Extending first means the open is never
+   refused, so the operator is never asked or pushed. The extension's
+   refusals: `coord-lift-off` means the operator switched lifts off on this
+   box (the default): keep the cap, park the thread behind the server's ask
+   and work the others; `cap-not-reached` means there is nothing to lift: open
+   the review; `no-review-rounds-door` and a 404 mean an older server, a block
+   of class P4, so record the block with `wakeOn: update`; `not-your-programme`
+   and `run-closed` are not retried (re-read the run and your claim), and
+   `not-found` means the id is wrong: re-read it with `runs list`.
+   `cap-review-rounds` on an open means you opened without deciding: do not
+   retry the open. The server has told the operator (one ask, with the last
+   review's open findings); a late extension still closes that ask, but the
+   operator has already been pushed once, so decide at the cap, not at the
+   refusal. A bare `400 bad-request` with no `detail` on
    this open means the SERVER lane has not landed yet (this branch deploys
    server first; the plan's Task 14 says why) — record the block with
    `wakeOn: update`, wait for the next wake and

@@ -4626,12 +4626,17 @@ describe('the coordinator skill: every stop gets its recovery or its class (D-81
 
   it('step 5 takes a cap-review-rounds through the lift door and lands with known limits otherwise, and parks a bare 400', () => {
     const s = step(5);
-    expect(s).toContain('`cap-review-rounds` means the work run has had its three review rounds');
-    expect(s).toContain('`ccrc-api runs review-rounds`');
+    expect(s).toContain('decide BEFORE opening the next');
+    expect(s).toContain('runs review-rounds <work run id>');
+    expect(s).toContain('the open is never refused, so the operator is never asked or pushed');
+    expect(s).toContain('`cap-review-rounds` on an open means you opened without deciding');
     expect(s).toContain('references/decision-procedure.md');
     expect(s).toContain('`coord-lift-off`');
     expect(s).toContain('`cap-not-reached`');
-    expect(s).toContain('A 404 is a block of class P4');
+    expect(s).toContain('`no-review-rounds-door` and a 404 mean an older server, a block of class P4');
+    expect(s).toContain('`not-your-programme`');
+    expect(s).toContain('`run-closed`');
+    expect(s).toContain('`not-found`');
     expect(s).toContain('land with known limits');
     expect(s).not.toContain('the cap is theirs to lift; rule on the findings you hold, or wait');
     expect(s).toContain('record the block with `wakeOn: update`');
