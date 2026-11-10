@@ -18,8 +18,10 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | merged |
 | W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
-| W1a, foundations | The skill-size ratchet, and each skill's contract moved first | #2555 (supersedes #2530); plan `w1a-skill-ratchet.md` | in review |
-| spec | The operator's ruling on the ratchet's scope | #2556 | in review |
+| W1a, foundations | Each role skill's contract moved first, behind a notice that tells a session how to see a cut | #2555 (supersedes #2530) | merged |
+| spec | The operator's ruling on the ratchet's scope | #2556 | merged |
+| W1a, foundations | The coordinator skill made lean: its procedures in reference files, the wave lifecycle one file per step | #2557, #2558 and #2560 (the tests, first); #2559 | merged |
+| W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
 | W1a, foundations | Ports for time and chance | plan `w1a-time-ports.md` | planned |
 | W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | plan `w1a-roles.md` | planned |
 | W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | planned |
@@ -56,6 +58,16 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   optimise the skills. Reference files are not capped. #2555 builds it: each role skill's contract is now the first
   section of its file, behind a notice that tells a session how to see a cut, and a test holds the contract inside
   16,000 bytes. No sentence of a contract changed. The coordinator's contract has about 2,300 bytes left.
+- **The coordinator skill is lean (2026-11-10).** Its `SKILL.md` went from 55,886 bytes to 23,583: the contract, a map
+  of where each procedure lives, and the sections a coordinator needs at every step. The steps of a wave, the API
+  calls and the cross-project wave moved to `references/wave-steps.md`, `api.md` and `cross-project.md`. The wave
+  lifecycle, one file of 155,109 bytes, is now a short index and ten parts, one per step. No rule was added, removed
+  or reworded: every moved section is the original text. A coordinator reads the part for the step it is on, and reads
+  it again after a compaction. The tests went first (#2557, #2558, #2560) and pass on both layouts, so the move itself
+  (#2559) needed no test edit. The worker skill keeps its sections: a worker needs them every wave, and it ships no
+  references of its own.
+- **A clause shorter is not a clause better.** The long clauses of the coordinator contract carry rules, and the
+  sentences that read like rationale are pinned by tests on purpose. They were left as they are.
 - **No D-numbers are defined yet.** The spec defines none, and the plans name each recorded decision
   `D-TBD-<slug>`. The programme mints real numbers through the ledger door when its run opens, and replaces each
   slug in the same act. Until then the plans cannot merge: `server/test/dtbd.test.ts` fails on a concrete slug.
@@ -121,9 +133,9 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 - **What can start now.** W0's Tasks 1 to 7, and every W1a foundation. They do not depend on each other, except
   that the role table follows the mail-pace table (it widens `MAIL_PACE`'s key), and the simulator follows the ports
   for time and chance.
-- **What was built before the programme's run opened.** The mail-pace table (#2528) and the skill-size ratchet
-  (#2530). Each touches only its own files and changes nothing that runs, so each went up as a pull request of its
-  own.
+- **What was built before the programme's run opened.** The mail-pace table (#2528), each role skill's contract moved
+  first (#2555), and the lean coordinator skill (#2557, #2558, #2560, #2559), with the cap on each `SKILL.md` behind
+  it. Each touches only its own files and changes nothing that runs, so each went up as a pull request of its own.
 - **What waits for the run.** The role table, the ports for time and chance, the simulator and the case lane touch
   files that other programmes edit (`shared/api.ts`, `server/src/fleet.ts`, `server/src/coord/stall.ts`, the test
   tree's shared helpers, a `coord.db` migration slot). The spec has the wave claim those files through the peer

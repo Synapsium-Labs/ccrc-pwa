@@ -465,5 +465,7 @@ programme's run open to mint the three numbers above. No code dependency.
 5. **The scope: every skill file, or `SKILL.md` only.** Ruled by the operator on 2026-11-10: cap each `SKILL.md`,
    and hold each contract inside what a compaction keeps. So where this plan says every `.md` under a skill
    directory, read every `SKILL.md`: reference files are not capped. The test gained a sixth rule, R6: the
-   contract is the file's first section, a notice stands before it, and it ends within 16,000 bytes. It was built
-   so, with each role skill's contract moved first, in #2555.
+   contract is the file's first section, a notice stands before it, and it ends within 16,000 bytes. Each role
+   skill's contract moved first in #2555. The coordinator's procedures then moved to reference files, with the wave
+   lifecycle split into one file per step (#2559), so its `SKILL.md` is 23,583 bytes where this plan measured 55,305.
+   The test is #2565, with caps measured on those files.
