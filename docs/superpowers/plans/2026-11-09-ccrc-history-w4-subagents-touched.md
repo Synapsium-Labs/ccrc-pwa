@@ -1013,9 +1013,9 @@ it('SA9 no card or steer side effects', () => {
 it('a subagent boundary whose anchor names no row is raw_leaf', () => { /* failure row 24, DM25's rule */ });
 it('SA27 forked copies and a true conflict', () => {
   // two holdings sharing a prefix, then different rows: every row stored, transcript_forked counted,
-  // each leaf from the copy that holds its boundary; one message uuid with two bodies: one entry, one entry_variants row
+  // each leaf from the copy that holds its boundary; one message uuid with two bodies: one entry, two entry_variants rows (one per body, nothing dropped)
   expect(counter(db, 'transcript_forked')).toBeGreaterThan(0);
-  expect(variantsOf(db, conflictUuid)).toBe(1);
+  expect(variantsOf(db, conflictUuid)).toBe(2);
 });
 ```
 
