@@ -17,13 +17,15 @@ import type { CcrcConfig } from '../config.js';
 import type { SessionVerdict } from '../exec.js';
 import type { FleetIO } from '../io.js';
 import {
-  DEAD_COORDINATOR_GAP_MS, deadCoordinatorJournal, type DeadCoordinatorJournal, type DeadCoordinatorJournalTrust,
+  DEAD_COORDINATOR_GAP_MS, deadCoordinatorDeliberateRow, deadCoordinatorJournal, deadCoordinatorStoppedByPerson,
+  type DeadCoordinatorJournal, type DeadCoordinatorJournalRow, type DeadCoordinatorJournalTrust,
 } from '../deadCoordinator.js';
+import { type ChildMarkRead } from '../../../shared/runBelongs.js';
 import { claimantFacts, verdictOfFacts, type ClaimantVerdict } from './reclaim.js';
 import type { WatcherCoordPort } from './ports.js';
 import type { GoneAnchor } from './store.js';
 import {
-  blockedByOf, claimantGone, claimantReading, runStuck, runWaitsOn, secondsToMs, stuckCause, stuckSince,
+  blockedByOf, claimantGone, claimantReading, closeRowOf, runStuck, runWaitsOn, secondsToMs, stuckCause, stuckSince,
   type PersonFacts, type PersonReading, type RunStuckFacts, type StoredTimes,
 } from './runStuck.js';
 import type { RunVerdict, RunVerdicts } from './runVerdicts.js';
@@ -44,6 +46,9 @@ export interface RunStuckPassDeps {
   /** The claimant's last busy turn (R4), `'unread'` before the watcher has seen the session since it started. Absent, every
    *  reading is unread, and E1's quiet arm gives no verdict (R2). */
   readonly claimantBusyAt?: (claimant: string) => number | null | 'unread';
+  /** E5 (D-8078): a session's `.child` marker through its one reader, or null when the registry cannot say. Absent, no run reads
+   *  `name-reused` (an unread marker is doubt, never a reused name). */
+  readonly childMark?: (sessionId: string) => Promise<ChildMarkRead | null>;
 }
 
 interface Measured {
@@ -105,20 +110,40 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
     });
   }
 
+  // E5 (D-8078): a started run whose session's `.child` marker names a LATER run. The marker is read once per session; a marker that
+  // cannot be read is doubt, so the run reads no reused name this pass.
+  const reusedBy = new Map<number, number>();
+  if (deps.childMark !== undefined) {
+    const marks = new Map<string, ChildMarkRead | null>();
+    for (const r of open) {
+      if (r.state === 'planned' || r.sessionId === null) continue;
+      if (!marks.has(r.sessionId)) marks.set(r.sessionId, await deps.childMark(r.sessionId));
+      const mark = marks.get(r.sessionId) ?? null;
+      if (mark !== null && mark.kind === 'child' && mark.runId > r.id) reusedBy.set(r.id, mark.runId);
+    }
+  }
+  const reusedSessions = idsOf(open.flatMap((r) => (reusedBy.has(r.id) && r.sessionId !== null ? [r.sessionId] : [])));
+
   // THE JOURNAL for the dead ones, in one read; a read that throws is `unreadable`, never "no history".
   const trust = await deps.journalTrust();
   const dead = people.filter((id) => measured.get(id)!.person.verdict.state === 'dead');
   let journalOf: (id: string) => DeadCoordinatorJournal;
+  let rowsOf: (id: string) => readonly DeadCoordinatorJournalRow[] = () => [];
   try {
-    const rows = coord.deadCoordinatorJournalRows(dead);
+    const rows = coord.deadCoordinatorJournalRows(idsOf([...dead, ...reusedSessions]));
     journalOf = (id) => {
       const j = rows.get(id);
       return j === undefined ? { kind: 'no-history' } : deadCoordinatorJournal(j.rows, j.hasHistory, trust.trust);
     };
+    rowsOf = (id) => rows.get(id)?.rows ?? [];
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     journalOf = () => ({ kind: 'unreadable', detail });
   }
+  // E3s (D-8078): a coordinator's stop is a PERSON's only when the journal's newest deliberate act says so.
+  const stoppedByPerson = new Set(dead.filter((id) => deadCoordinatorStoppedByPerson(deadCoordinatorDeliberateRow(rowsOf(id), trust.trust))));
+  const withStop = (p: PersonFacts | null, id: string | null): PersonFacts | null =>
+    p === null || id === null || !stoppedByPerson.has(id) ? p : { ...p, stoppedByPerson: true };
   const anchors = coord.deadAnchors();
   if (!anchors.ok) throw new Error(anchors.detail);
   const prevGone = coord.goneSince();
@@ -191,6 +216,14 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
   for (const r of open) {
     const c = r.claimedBy === null ? null : measured.get(r.claimedBy) ?? null;
     const w = r.state === 'planned' || r.sessionId === null ? null : measured.get(r.sessionId) ?? null;
+    const reusedRun = reusedBy.get(r.id);
+    const laterRun = reusedRun === undefined ? null : coord.run(reusedRun);
+    const nameReusedAt = laterRun !== null && laterRun.ok && laterRun.run !== null ? laterRun.run.dispatchedAt ?? laterRun.run.dispatchStartedAt ?? null : null;
+    // R6 for a reused name: the old workspace's unpushed work is accounted for only when the trusted journal records a reap or
+    // a purge of the session after this run's dispatch.
+    const dispatchAt = r.dispatchedAt ?? r.dispatchStartedAt;
+    const nameReusedClear = reusedRun !== undefined && r.sessionId !== null && trust.trust.untrusted === null && dispatchAt !== null
+      && rowsOf(r.sessionId).some((x) => (x.act === 'reap' || x.act === 'purge') && x.outcome === 'done' && x.at !== null && x.at > dispatchAt);
     const cj = r.claimedBy === null ? null : journalOf(r.claimedBy);
     const wj = r.sessionId === null || w === null ? null : journalOf(r.sessionId);
     let targetClosedAt: number | null = null;
@@ -213,15 +246,15 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
       supervisedAt: c?.supervisedAt ?? null,
       goneSinceCoordinator: r.claimedBy === null ? null : goneRows.get(r.claimedBy)?.firstGoneAt ?? null,
       goneSinceWorker: r.sessionId === null ? null : goneRows.get(r.sessionId)?.firstGoneAt ?? null,
-      openedAt: r.openedAt, dispatchStartedAt: r.dispatchStartedAt, targetClosedAt, overtakenAt, laterReviewAt,
+      openedAt: r.openedAt, dispatchStartedAt: r.dispatchStartedAt, targetClosedAt, overtakenAt, laterReviewAt, nameReusedAt,
     };
     factsOf.set(r.id, {
       id: r.id, state: r.state as RunState, kind: r.kind as RunKind, dispatchStartedAt: r.dispatchStartedAt,
       dispatchedAt: r.dispatchedAt, lastMoveAt: lastMoveOf(r.id),
-      claimant: c?.person ?? null, claimantJournal: cj, worker: w?.person ?? null, workerJournal: wj,
+      claimant: withStop(c?.person ?? null, r.claimedBy), claimantJournal: cj, worker: w?.person ?? null, workerJournal: wj,
       target, laterReviewMoved: laterReviewAt !== null, overtaken: overtakenAt !== null,
       e1Quiet: r.state === 'planned' && r.kind === 'work' && e1QuietProgrammes.has(r.program),
-      aloneInProgramme: false,
+      aloneInProgramme: false, nameReused: reusedRun !== undefined, nameReusedClear,
       reviewOpen: r.state === 'awaiting-review' ? reviewedOpen.has(r.id) : null,
       behind: null, times,
     });
@@ -260,9 +293,11 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
     const withBehind: RunStuckFacts = { ...f, behind };
     const waitsOn = runWaitsOn(withBehind);
     const gone = f.claimant !== null && claimantReading(f.claimant, f.claimantJournal) === 'gone';
+    const closeRow = closeRowOf(withBehind, stuck.get(r.id)!);
     answers.set(r.id, {
       stuck: stuck.get(r.id)!, ...(waitsOn === undefined ? {} : { waitsOn }),
       blockedBy: blockedByOf(withBehind), coordinatorGone: gone,
+      ...(closeRow === null ? {} : { closeRow }), ...(closeRow !== null && f.nameReusedClear === true ? { nameReusedClear: true } : {}),
     });
   }
   const programmes = new Map<string, boolean>();
