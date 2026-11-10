@@ -667,7 +667,9 @@ on hook context.
   - The pinned sum of the hook's slots becomes 1,500 + 1 + 2,400 + 1 + 4,000 + 1 + 2,048 = 9,951 characters. That is
     under Claude Code's 10,000-character cap, and the test names the 49 characters left.
 - **The card.** The main thread reads it as its first tool call, `card`, in pages. Its budget is 15k tokens, counted
-  as a tool result. The server trims live state by rank, and never trims the constitution pointer.
+  as a tool result. The server trims live state by rank, and never trims the constitution pointer. Open holds and
+  unsettled operator messages are never trimmed either. If they do not fit, the card lists their ids and says how
+  many it left out (I8).
   - Until this generation has read the current hash, every other Overlord door refuses `card-unread`. The mail gate
     holds its deliveries, and no hold is taken for it.
   - The card, probe and note doors skip `authority-rolled-back`, `overlord-off`, `launch-profile-unmet`,
@@ -1059,7 +1061,7 @@ Only the fence is the Overlord's alone.
 |---|---|---|
 | `active` | It works. A renewal may be due | none |
 | `draining` | No new hold is taken (the readiness word reads `renewing`). Standing holds are kept or released by the retention table (§6.7). The mail gate holds deliveries, and delivered but unacknowledged ones are queued again. The lane waits until no reader is running | 120, then back to `active` with a hold-off. Outside the budget |
-| `checkpointed` | The server assembles the checkpoint and asks for the handover note | 60; skipped on a hard trigger |
+| `checkpointed` | The server assembles the checkpoint and asks for the handover note | 60, then `clearing` without the note; skipped on a hard trigger |
 | `clearing` | The session's host ends the conversation and starts a fresh one | 90, for all tries |
 | `carded` | The anchor is injected, the card is read, and the server sees the served hash come back | 45, with one re-nudge |
 | `probing` | The probes run | 165, two rounds at most |
@@ -1073,7 +1075,9 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
   outside that budget. From `draining` to `probing`, the doors accept only card, probe and note calls.
 - **The receipt has two halves.** The first: the old conversation ended. The second: the new one started, and read the
   card hash the server served.
-  - A failure before the first half returns the generation to `active`, with a hold-off (Table 11.5b).
+  - A failure before the first half returns the generation to the state it left: `active` with a hold-off (Table
+    11.5b), or `degraded` if the renewal began there. A generation never becomes `active` without having read its
+    card and passed its probes.
   - A failure after it retries within the state's deadline, then goes to `degraded`.
   - `renew(session, n)` is idempotent on n, so a retry never starts two conversations.
 - **`degraded`** blocks soft triggers only. A hard trigger still renews. The operator's "Renew now" and a rebind (§3.1)
@@ -1086,6 +1090,9 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
     never enters the context, so the model never sees it.
   - The Overlord always renews by a fresh start, so each generation has a door process of its own.
   - Each write carries a counter, so a copied key shows as a fork.
+  - A start the server did not receive is reported again when the server is back, and mints its generation then. ccd
+    removes the key file at every start. So a door process holds no key until its own generation is minted, and an
+    earlier generation's key never serves a new conversation.
   - An older term is refused `stale-designation`. A wrong generation or key is refused `stale-generation`.
   - **Why.** Today the client reads its uuid from the registry file at the moment of the call (`ccd/ccrc-api`). So any
     process in the pane passes as current: a reader started before a renewal, the old body after a rebind, a forked
@@ -2768,7 +2775,8 @@ sequenceDiagram
 
 *Figure 5. One more hop, taken only where the Overlord may settle. A `cannot-decide` release is held for the
 Overlord. An `operator-only` release, a lapse, and any row the hold predicate refuses go straight to the operator,
-and the Overlord's brief follows. Every path that reaches the operator pushes exactly once.*
+and the Overlord's brief follows. Every path that reaches the operator pushes at most once, as today's build would
+for a row of that level.*
 
 ### 6.3 How the Overlord decides
 
@@ -2865,6 +2873,9 @@ it: the evidence floor and the ask-or-act decider.
   - **Stated confidence gates nothing.** The Overlord states a probability that the operator would agree. It is
     recorded and scored (§9.5), and used only to rank. Models' stated confidence runs high, which is why the brief
     shows the cell's measured record instead (§6.6).
+- **One transaction ends the hold.** The answer door ends the hold and moves the row's revision in the transaction
+  that writes the act row, `pending` for an effect outside the database. So a tap made before that write is stale,
+  and the row cannot be escalated while a key press is in flight.
 - **All checks meet in one place.** The answer door runs `overlordMayAct` inside the transaction that commits the act
   (§7.1). It returns `ask-is-cheaper`, `evidence-too-weak`, `operator-only` or `identity-too-weak` as ordinary answers,
   and the Overlord escalates on any of them.
@@ -2902,13 +2913,14 @@ from a ready Overlord, and a breaker stops the tier when holds keep lapsing.
 | `unmeasured` | The registry cannot be read, or the server started less than one sweep ago |
 | `dead` | It measures dead, and neither `restarting` nor `renewing` (below) matches. So a swap landing or a crash restart within its bounds reads `restarting`, and a renewal reads `renewing`, never `dead` |
 | `restarting` | It is within its measured restart time, and it has restarted at most twice in the last hour |
-| `renewing` | Its generation is in `draining`, `checkpointed`, `clearing`, `carded` or `probing` (§3.3.11). A pending designation reads `renewing`, through generation 1's state |
+| `renewing` | Its generation is in `draining`, `checkpointed`, `clearing`, `carded` or `probing` (§3.3.11), or has not read its card or passed its probes. A pending designation reads `renewing`, through generation 1's state |
 | `degraded` | Its generation is `degraded`: chat only |
 | `stranded` | No account can serve it, a swap is blocked, or its last turn failed on its account |
 | `dialog-open` | A dialog has stood in its pane for 30 s |
 | `wedged` | A turn has run over ten minutes, or it is working with no hook event for five minutes |
 | `deaf` | Two held rows from two sources went past half their windows with no door call since each was offered, or an operator message was neither picked up nor settled within 2 minutes of `ready`. The prompt route's settlement mark settles a message too (§3.8) |
 | `saturated` | Its inbox cannot be served in time (the admission test, §6.8) |
+| `unproved` | None of the above, but no proof yet since the word last left `ready` |
 | `ready` | None of the above, with positive proof newer than the moment the word last left `ready` |
 
 *Table 6.4a. The readiness word. Every input is something the server already measures, or a call it received.*
@@ -3175,7 +3187,8 @@ taken only where the Overlord may settle the row alone, and it delays the push, 
   meets this refusal (§6.6).
 - **Revisions decide a race.** Every Overlord write door carries the target row's revision. A stale revision at an
   Overlord door changes nothing, and returns the row and the act that moved it. An operator's tap is never refused
-  for a stale revision: it is applied, and the act it raced gets one of three outcomes (§10.3):
+  for a stale revision: it is applied at the row's current revision, as a correction of the act it raced, so each
+  revision still carries at most one effect (I3). The act it raced gets one of three outcomes (§10.3):
   - `superseded`: the operator's tap was made against a revision from before the Overlord's answer. The operator's
     answer stands, and it feeds no tripwire and not M4. For an ask the Overlord already answered, the operator's
     answer goes to the coordinator as a correction.
@@ -3183,9 +3196,13 @@ taken only where the Overlord may settle the row alone, and it delays the push, 
   - `overturned`: the operator's tap was made with the Overlord's answer in view.
 - **Pushes go through an outbox.** Reaching the operator and pushing are two facts in two columns, `reachedOperatorAt`
   and `pushedAt` (H18).
-  - The reach stamp and one outbox row are written in one transaction.
-  - One sender drains the outbox. It marks a row sent when the push service accepts it, and sends every unsent row
-    again at boot.
+  - A row, its hold or its reach stamp, and its outbox row are written in the transaction that raises or releases
+    it. A hold's outcome, the reach stamp and one outbox row are written in one transaction too. A row is stamped at
+    most once.
+  - One sender drains the outbox. It marks a row sent when the push service accepts it. It retries an unsent row,
+    with backoff, while it runs, and sends every unsent row again at boot.
+  - A row whose level makes no push today still gets its outbox row, marked silent. The sender marks it sent at once
+    and shows nothing, so the pushes stay those of today's build (I9).
   - Each push carries the row's own tag, so a repeat replaces the first on the device.
   - The promise: exactly one reach, at least one push attempt, at most one notification shown (invariant I2).
   - One L1 decider, `pushDue(row)`, is asked on every event: a reach, a change of level or urgency, a batch flush. The
@@ -3204,9 +3221,10 @@ taken only where the Overlord may settle the row alone, and it delays the push, 
 | Cause | New holds | Standing holds |
 |---|---|---|
 | `renewing`, `restarting` | none | kept if the deadline is later than the word's own bound (the renewal budget, the measured restart time); the rest released at once |
-| `saturated` | none | kept |
+| `saturated`, `unproved` | none | kept |
+| `unmeasured`, because the server has only just started | none | kept until the boot re-seed decides them |
 | `deaf` on one row (`deaf`) | as before | that row only is released. The word becomes `deaf` for all after two rows from two sources |
-| `absent`, `off`, `unmeasured`, `dead`, `stranded`, `dialog-open`, `wedged`, `deaf`, `degraded` | none | all released in one grouped push |
+| `absent`, `off`, `unmeasured` because the registry cannot be read, `dead`, `stranded`, `dialog-open`, `wedged`, `deaf`, `degraded` | none | all released in one grouped push |
 | the rung leaves `full` (`rung`), a kind is disarmed (`disarmed`), engagement leaves `full` (`engagement`) | none of that scope | those released |
 | a class is raised on a held row (`class-raised`); its grant is revoked, suspended or expires (`grant-ended`) | not applicable | that row released |
 | the 85% load line is crossed (Table 6.8a) | no item hold | kept to their deadlines |
@@ -3485,7 +3503,7 @@ server suspends without being asked.*
   - **After eight hours unseen**, the answer falls back to an ordinary item for the operator.
   - **The commit re-checks.** The transaction that makes it `effective` runs `overlordMayAct`, the fence, the rung and
     the row's state again.
-  - **Staging settles the hold.** The held row's push is the staging push.
+  - **Staging settles the hold.** It writes the row's reach stamp, and the staging push is its outbox row.
   - **No ask answer is ever staged.** A child waits on a live dialog. An O3 ask goes to the operator with the
     recommendation.
   - **A window that ran out unseen adds no evidence.** It is never agreement.
@@ -3693,8 +3711,9 @@ condition lifts by itself. A latch is cleared only by the operator.*
   - Each is graded by which door was called. While the replay body can tell drills from real cases, drills are
     advisory: a missed drill is counted and shown on the Week page, and latches nothing. Once it cannot, a missed
     drill latches as Table 7.5a says.
-- **Pause.** One tap on the Overlord place, with no step-up. `operatorRung` becomes `chat`, and every hold is released
-  into a handover brief (§4.1). It needs no step-up because it only lowers autonomy, and lowering never needs one.
+- **Pause.** One tap on the Overlord place, with no step-up. `operatorRung` becomes `chat`. Every hold is released as
+  `off` releases it: each row reaches the operator in one grouped push, and the handover brief lists them (§4.1). It
+  needs no step-up because it only lowers autonomy, and lowering never needs one.
 - **`off` is one transaction.** Holds are released. Undelivered `overlord` mail and kickoffs are cancelled. Follow-up
   nudges stop. Open requests whose owner has not acknowledged move to `needs-you`. Pending acts are settled by
   measuring (§7.1).
@@ -3757,6 +3776,9 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
   alone cannot see it. The server sends its authority epoch to every agent and every signed-in console. Each keeps the
   highest it has seen. A server whose epoch is lower than a witness's refuses `authority-rolled-back`.
   - **An agent on the server's own host is no witness:** the same snapshot restores its copy.
+  - **A narrowing is done only once a witness holds it.** A change that narrows authority (a revoke, a suspension, a
+    lower rung) is reported to the operator as done only once at least one witness off the volume holds its epoch.
+    Until then the console shows it as taking effect.
   - **After each boot, grants read as suspended and the rung is capped at `advise`** until one witness off the
     server's volume has answered (Table 7.2a, Table 7.5a). On one box that is the first signed-in console.
 - **A detected restore latches the ladder at `chat`** (Table 7.5a), and latches every grant suspended (Table 7.2a).
@@ -4533,7 +4555,8 @@ the answer fields: its chosen option, cited ids and stated probability.*
 | State | When | Leaves to |
 |---|---|---|
 | `pending` | Written before an effect outside the database | `done`, `refused` or `unknown` |
-| `unknown` | The settle could not measure the effect | `done` or `refused`, only by a measurement |
+| `unknown` | The settle could not measure the effect. Its question goes to the operator | `done` or `refused`, only by a measurement |
+| `refused`, for an answer | The effect did not happen: the boot pass measured no key press, or the door refused it | Terminal. Its question goes to the operator, unless the row has already closed, so a row never stays open with nobody holding it |
 | `staged` | A grant-backed O3 answer waits out its veto window (§7.2) | `effective` (the veto clock), `vetoed` (the operator's Veto), `voided` (a change of authority, or eight hours unseen and fallen back to the operator) or `preempted` (the operator answering first, Answer now included; its outcome is `concurred` when the operator picks the same option) |
 | `done`, `refused`, `effective`, `vetoed`, `voided`, `preempted`, `shadow` | Settled. `shadow` is kept so the log's words never change. In version 1 nothing writes it: a shadow answer is a sealed prediction (§9.5), and a shadow grant is scored from those predictions (§7.2) | none |
 
@@ -4870,6 +4893,9 @@ one fixed order, so the first refusal is the same on every door.
 - **The server's own bodies only read.** The replay body and the auditor pass step 1 by their per-run key, for reads
   only. Their reads skip steps 3 to 11, and every write they call is refused `not-the-overlord`. The replay key
   serves every read as of its question's date (§9.5).
+- **Two more refusals at the answer doors.** An answer to a hold whose deadline has passed is refused
+  `operator-has-it`. After a boot, every Overlord door answers `renewing` until the boot pass has re-seeded the holds
+  (§11.5).
 - **After the gates.** Write doors refuse `unwitnessed` once the fence passes. The egress check runs on the body after
   `overlordMayAct` allows. Then the policy port is asked: it allows everything by default, and an outside authoriser can
   only refuse what `overlordMayAct` allowed.
@@ -5143,15 +5169,15 @@ per guard proves the guard exists, not that the machines compose (H33).
 
 | # | Invariant |
 |---|---|
-| I1 | A held row reaches the operator by its deadline, or within one sweep of the first boot after it |
-| I2 | A row that reached the operator has exactly one reach stamp and one outbox row. That row is sent, deferred by the attention budget to a stated time, or settled with no push because the operator opened the console (§4.2) |
+| I1 | A held row is settled by the Overlord by its deadline, or reaches the operator by its deadline, or within one sweep of the first boot after it |
+| I2 | A row that reached the operator has exactly one reach stamp and one outbox row. That row is sent (the sender marks it once the push service accepts it), silent because today's build pushes nothing for a row of that level, deferred by the attention budget to a stated time, or settled with no push because the operator opened the console (§4.2) |
 | I3 | At most one effect per natural key, and every effect has an act row |
 | I4 | Every act of a class other than none commits with a live grant in scope, a consumed command for its proposal, a request bound to an operator message, or, for `state-a-fact`, a cited stated entry resting on an operator message |
 | I5 | A write is accepted only from the current term, generation and act key |
 | I6 | A lineage's class never loses a member of O1 to O6 |
 | I7 | After a restore, no authority field is wider than the journal's |
 | I8 | After a crash at any step, the next card lists every unsettled message and open hold |
-| I9 | While `mayHold` is false, pushes and row states equal those of a build without the Overlord |
+| I9 | While `mayHold` is false, the pushes and states of question rows equal those of a build without the Overlord |
 | I10 | Every open row is on the operator's list at all times |
 
 *Table 11.7a. The invariants. The invariant monitor (§10.4) checks the same predicates in production, except I9, which
