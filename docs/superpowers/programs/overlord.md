@@ -14,6 +14,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The builders' gaps closed, and the ratchet's scope put to the operator | #2533 | merged |
 | spec | The second model check's fixes: 38 findings in authority, restore, requests and pushes; I11 and I12 | #2538 | merged |
 | spec | The third round's fixes: 80 findings from an audit of every decider table and a model of accounts, privacy and joint faults; I13 | #2539 | merged |
+| spec | The seams of the four follow-ups closed: 29 restatements brought into line, the door gate order completed | #2542 | in review |
 | W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | The skill-size ratchet | #2530 (draft); plan `w1a-skill-ratchet.md` | built. Waits for the operator's ruling on its scope |
@@ -61,7 +62,8 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   second is W1's authority and restore model, done early. The third round is two pieces. One enumerates every
   decider table over its whole domain: total, ordered safely, monotonic, and agreeing with its restatements. The
   other models the reservation arithmetic, the operator's messages, the privacy rules and the joint cases of a
-  restore. Together they made 80 findings, and #2539 writes them in.
+  restore. Together they made 80 findings, and #2539 writes them in. A last reader went through every line the
+  follow-ups changed and found 29 passages that still stated an old rule. #2542 closes them.
 - **On a reserved account the Overlord's load reads its reserve.** The third round found that guests at their
   ceiling held a reserved account near the Overlord's soft line, so it left with most of its reserve unspent. The
   model's fix lowered the guests' ceiling from 58% of the account to 30%. The operator had ruled that a fenced
