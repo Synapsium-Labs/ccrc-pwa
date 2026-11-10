@@ -503,16 +503,17 @@ describe('`auth-dir-fate`, the judge of that folder', () => {
   });
 });
 
-const CODEX_ROSTER = (ports: number[]) => ({
+const CODEX_ROSTER = (ports: number[], bridge?: 'direct') => ({
   ...AUTH_ROSTER,
   accounts: [...AUTH_ROSTER.accounts, {
     id: 'lane-c', label: 'lane·c', configDirSuffix: '.claude-lane-c', homeAble: true, hue: 'green', telemetry: 'codex',
-    exec: { kind: 'codex', provider: 'openai', proxyPort: ports[0], litellmPort: ports[1], authDir: `${AUTH_ROOT}/lane-c` },
+    exec: { kind: 'codex', provider: 'openai', proxyPort: ports[0], litellmPort: ports[1], authDir: `${AUTH_ROOT}/lane-c`,
+      ...(bridge === undefined ? {} : { bridge }) },
   }],
 });
 
-async function codexLane(prefix: string, opts: { runtime?: boolean } = {}): Promise<{ home: string; authDir: string; old: string }> {
-  const { home } = await codexBox(prefix, { ...opts, roster: CODEX_ROSTER(await freePorts(2)) });
+async function codexLane(prefix: string, opts: { runtime?: boolean; bridge?: 'direct' } = {}): Promise<{ home: string; authDir: string; old: string }> {
+  const { home } = await codexBox(prefix, { runtime: opts.runtime, roster: CODEX_ROSTER(await freePorts(2), opts.bridge) });
   const authDir = join(home, AUTH_ROOT, 'lane-c');
   plantBackendCredential(authDir);
   return { home, authDir, old: readFileSync(join(authDir, 'auth.json'), 'utf8') };
@@ -883,6 +884,67 @@ describe('the check of a sign-in, on the real fetch arm', () => {
     expect(answerOf(r)['error']).toBe('codex-runtime-absent');
     expect(detailOf(r)).toContain('nothing was sent');
     expect(detailOf(r)).toContain('ccrc install');
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  // codex-bridge Stage 4, Task 6: a `direct` lane serves without the LiteLLM runtime, so its Sign in again must check
+  // the new sign-in without one too. The check is the probe's own fetch, under the interpreter the lane's probe runs
+  // under: the system python3 for a `direct` lane. `directArm` is that python3 on the lane's PATH: the probe's
+  // stand-in for the program on stdin (`-I -`), the real interpreter for everything else.
+  const directArm = (home: string, answer = CODEX_RAW): { rec: string; standIn: string } => {
+    const pr = probeRuntime(home, answer);
+    const standIn = join(home, 'probe-stand-in');
+    writeFileSync(standIn, pr.python, { mode: 0o755 });
+    const real = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(join(home, '.local', 'bin', 'python3'),
+      `#!/bin/sh\nif [ "$#" -eq 2 ] && [ "$1" = -I ] && [ "$2" = - ]; then exec '${standIn}' "$@"; fi\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    return { rec: pr.rec, standIn };
+  };
+  /** Which interpreters ran the probe's program, each named once. */
+  const probeRuns = (rec: string): string[] => [...new Set(readFileSync(join(rec, 'argv0'), 'utf8').trim().split('\n'))];
+  /** A direct lane with its lane.json rendered, which is where the lane library reads a lane's mode. */
+  const directLane = async (prefix: string, runtime: boolean): Promise<{ home: string; authDir: string; old: string }> => {
+    const lane = await codexLane(prefix, { runtime, bridge: 'direct' });
+    expect(ccrcAuth(lane.home, ['models', 'lane-c', 'init', 'codex'], '', host).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(lane.home, '.ccrc', 'codex', 'lane-c', 'lane.json'), 'utf8'))['bridge']).toBe('direct');
+    return lane;
+  };
+
+  it('a direct lane with no runtime checks the sign-in under the system python3 and installs it', async () => {
+    const { home, authDir, old } = await directLane('ccrc-codex-check-direct-', false);
+    const { rec, standIn } = directArm(home);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    // The check reads the scratch sign-in. A first sign-in's refresh follows it and reads the lane's own folder.
+    expect(probeRuntimeCalls(rec).map((c) => c.env['CHATGPT_TOKEN_DIR'])).toEqual([scratchDir(home), authDir]);
+    expect(probeRuns(rec), 'a run of the probe\'s program was not the system python3\'s').toEqual([standIn]);
+    expect(readFileSync(join(authDir, 'auth.json'), 'utf8'), 'the new sign-in was not installed').not.toBe(old);
+  }, 60_000);
+
+  it('a direct lane with a runtime on the box still checks under the system python3', async () => {
+    const { home } = await directLane('ccrc-codex-check-direct-rt-', true);
+    const { rec, standIn } = directArm(home);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(probeRuns(rec), 'the runtime\'s interpreter ran the check of a direct lane').toEqual([standIn]);
+  }, 60_000);
+
+  it('a direct lane with no usable python3 is `codex-check-unrun`, never told to build a runtime, and nothing is sent', async () => {
+    const { home, authDir, old } = await directLane('ccrc-codex-check-direct-nopy-', false);
+    const { rec } = directArm(home);
+    // Silent when asked its version, so whether it can run the check cannot be told.
+    writeFileSync(join(home, '.local', 'bin', 'python3'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('codex-check-unrun');
+    expect(detailOf(r)).not.toContain('ccrc install');
+    expect(existsSync(join(rec, 'argv0')), 'the check ran').toBe(false);
     laneUntouched(home, authDir, old);
   }, 60_000);
 
