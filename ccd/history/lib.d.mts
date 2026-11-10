@@ -799,7 +799,15 @@ export function escapeArchive(s: string): string;
 export function quoteGist(gist: string, pairIdx: PairIndex, max?: number): string | null;
 export function nodeRangeText(earliestMs: number | null, latestMs: number | null): string;
 export interface SteerPrev { id: string; range: string; kind: string; status?: string | undefined; gist: string; flag: boolean }
-export function composeSteerFile(i: { leafId: string; prev: SteerPrev | null; children: readonly unknown[]; pairIdx: PairIndex }): { text: string; bytes: number };
+/** The parent add-on's instruction text, with `{PARENT_ID}` where the parent's id goes (W3 Task 4). */
+export const PARENT_ADDON_INSTRUCTION: string;
+/** The floor of the add-on's searched quote cap, in chars; the ceiling is PREV_GIST_MAX. */
+export const PARENT_QUOTE_CAP_MIN: 40;
+/** `parentId` (a string) adds the parent add-on over `children`, the parent's stored children oldest first, under both byte
+ *  and char bounds; absent or null, no add-on. Throws a RangeError when the add-on does not fit at PARENT_QUOTE_CAP_MIN. */
+export function composeSteerFile(i: {
+  leafId: string; prev: SteerPrev | null; children: readonly SteerPrev[]; parentId?: string | null | undefined; pairIdx: PairIndex;
+}): { text: string; bytes: number };
 // --- W3 Task 1B: the steer file on the card's lifecycle (spec §7.1, §9.4)
 export const STEER_DIR: 'steer';
 export function steerIdOk(id: string): boolean;
@@ -1101,7 +1109,7 @@ export interface CardPredictionInputs {
   plainBoundOther: boolean; slots: readonly CardSlot[]; newestCondensed: string | null; familyIds: readonly string[];
 }
 export type CardPrediction =
-  | { act: 'write'; line: string; leafId: string; parentId: string | null; parentKind: 'predicted' | 'newest-condensed' | null }
+  | { act: 'write'; line: string; leafId: string; parentId: string | null; parentKind: 'predicted' | 'newest-condensed' | null; children: string[] }
   | { act: 'skip'; reason: 'fork-qualified'; plainLeafId: string }
   | { act: 'skip'; reason: 'no-epoch' | 'no-rows' };
 export function predictedSpanStart(i: { firstRowUuid: string | null; lastBoundary: CardBoundary | null }): string | null;

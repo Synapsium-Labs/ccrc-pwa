@@ -162,6 +162,40 @@ describe('the card prediction and the card file decision (spec 8.6, 6.1, 6.3; W1
     expect([ninth.parentId, ninth.parentKind]).toEqual([null, null]);
   });
 
+  it('the add-on appears exactly when planCardPrediction answers parentKind predicted, and names its parentId and children', () => {
+    // children is the planFanIn group the prediction already computed: oldest first, ending with the leaf being written (W3 Task 4, D2)
+    const seven = Array.from({ length: 7 }, (_, k) => leafOf(`s-${k}`));
+    const leaf = leafOf('h-7');
+    const p = writeOf(libCard.planCardPrediction({
+      ...base, lastBoundary: { uuid: 'b-7', headUuid: 'h-7' }, slots: seven.map((nodeId) => ({ nodeId, parented: false })),
+    }));
+    expect([p.parentKind, p.parentId, p.children]).toEqual(['predicted', libCard.parentId([...seven, leaf]), [...seven, leaf]]);
+    // the add-on is the composer's answer to a parentId: present with it, absent without it
+    const ownIdx = libCard.makePairIndex([]);
+    const compose = (parentId?: string | null) => libCard.composeSteerFile({
+      leafId: leaf, prev: null, pairIdx: ownIdx, parentId,
+      children: seven.map((id) => ({ id, range: 'unknown..unknown', kind: 'steered_leaf', status: 'ok', gist: 'g', flag: false })),
+    }).text;
+    expect(compose(p.parentId)).toContain(`<ccrc-node id="${p.parentId}" depth="1">`);
+    expect(compose(null)).not.toContain('<ccrc-node');
+    expect(compose(undefined)).not.toContain('<ccrc-node');
+    // a group that starts after a parented run still ends with the leaf
+    const ids = Array.from({ length: 15 }, (_, k) => leafOf(`t-${k}`));
+    const at = { ...base, lastBoundary: { uuid: 'b-15', headUuid: 'h-15' } };
+    const after8 = writeOf(libCard.planCardPrediction({ ...at, slots: ids.map((nodeId, k) => ({ nodeId, parented: k < 8 })) }));
+    expect(after8.children).toEqual([...ids.slice(8), leafOf('h-15')]);
+    // a run of eight slots with one not final gives no predicted parent, so no children (and no add-on)
+    const gappy = writeOf(libCard.planCardPrediction({
+      ...base, lastBoundary: { uuid: 'b-8', headUuid: 'h-8' }, slots: seven.concat(leafOf('s-7')).map((nodeId, k) => ({ nodeId: k === 3 ? null : nodeId, parented: false })),
+    }));
+    expect([gappy.parentKind, gappy.parentId, gappy.children]).toEqual([null, null, []]);
+    // another parent kind, or none, names no children
+    const N = `N${'c'.repeat(20)}`;
+    const newest = writeOf(libCard.planCardPrediction({ ...base, newestCondensed: N }));
+    expect([newest.parentKind, newest.children]).toEqual(['newest-condensed', []]);
+    expect(writeOf(libCard.planCardPrediction(base)).children).toEqual([]);
+  });
+
   it("with no predicted parent the epoch's newest condensed node is named; a malformed one, or none, names no parent", () => {
     const N = `N${'c'.repeat(20)}`;
     const p = writeOf(libCard.planCardPrediction({ ...base, newestCondensed: N }));
@@ -193,7 +227,7 @@ describe('the card prediction and the card file decision (spec 8.6, 6.1, 6.3; W1
     const leaf = leafOf('h-1');
     const next = leafOf('h-2');
     const lineOf = (id: string, parent: string | null = null): string => libCard.cardLine({ leaf: id.slice(0, 7), parent });
-    const write = (id: string, line: string): libCard.CardPrediction => ({ act: 'write', line, leafId: id, parentId: null, parentKind: null });
+    const write = (id: string, line: string): libCard.CardPrediction => ({ act: 'write', line, leafId: id, parentId: null, parentKind: null, children: [] });
     const value = (v: string): libCard.Presence<string> => ({ state: 'value', value: v });
     const absent: libCard.Presence<string> = { state: 'absent' };
     const unreadable: libCard.Presence<string> = { state: 'unreadable' };
