@@ -372,6 +372,26 @@ operator ruling (D-8102). The graceful stop ships with stage 3. The spike's meas
 with its results note. The rule as first written made native handoff primary only if it fired with both gates set, the next
 wake adopted across the account change, and no second restart authority engaged (or one could be switched off).
 
+**As measured (wave 5, 2026-11-10).** Step 5 was measured live after one `ccd swap --interrupt` of a session with
+four interrupted workflows, on Claude Code 2.1.314. Two `Workflow({scriptPath, resumeFromRunId})` calls were
+refused with `scriptPath must be a script path this tool returned, or a file you can already read (the working
+directory or a directory you have added)`:
+- the old root's path, as the tool had returned it before the swap;
+- the same relative path under the current root, which the carry had hard-linked to the same file.
+
+Two calls were accepted, and each run completed with completed agents returned from cache and the interrupted agent
+run again from its start:
+- a copy of the script in the working directory;
+- the whole script passed inline as `script` with `resumeFromRunId`.
+
+The `/add-dir` row was not run, because the operator declined it. History agrees for the root paths: every such call
+on disk was refused from 2026-10-22, 17 of 17, after most had been accepted up to 2026-10-21. After the swap, nothing
+redrove the idle session for 15.5 minutes. ccd sends no resume prompt to a session that was idle when stopped, seven
+stopped-task notifications started no turn, and the stall watch's orphaned-task mail woke it. Step 6 did not run, and
+no five-hour arm ran: the lent account's plan has no five-hour window, and a weekly limit cannot show the case (item
+145), so §5.4 rule 2's and §11 item 3's longer bound for delegated work stays open. Step 7 reads doctor's
+`oom-policy` PASS. The results note is `docs/superpowers/plans/2026-11-07-session-continuity-wave5-spike-results.md`.
+
 ### 5.3 Stage 3 — recovery at every restart (ccd, hook, prompt)
 
 **The graceful stop.** Every ccd stop that will be followed by a resume sends `SIGTERM` to the Claude Code process
