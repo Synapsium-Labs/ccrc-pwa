@@ -65,7 +65,7 @@ same read-only connection. Calls count in the window by `at` (`--since`/`--until
   M8: a `routine` or `big` call whose text names an O1 to O4 act (a wording heuristic, so a human audits the list beside the
   hook's deny log): `m8-listed` and `m8-o1`..`m8-o4` are printed, and `--out` gets `m8-audit.csv` (id, class, act, excerpt).
 
-`transcripts --pinned-from-server` also reads the pinned programmes from the server (M2): `runs list` names the
+`transcripts --pinned-from-server` also reads the pinned programmes from the server (M2): `runs list --closed 1` (closed runs included) names the
 programmes, `goals show <slug>` says which hold a pinned spec (`specPath`). The client is `ccrc-api` (or `--ccrc-api PATH`)
 and ONLY those two verbs are ever run; any other is refused (exit 2) before the client starts. It adds `pinned-programmes`
 and `m2` (the dialog row, over coordinator transcripts whose commands name a pinned programme's slug).
