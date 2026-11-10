@@ -411,11 +411,13 @@ reported in the pull request that met it.
 
 ## Where things stand
 
-**Done:** Task 0 (#2572), Task 1 (#2569), Task 2 (#2586), Task 3 (#2573), Task 4 (#2575) and Task 6.
-In review: Task 5 (#2588) and Task 9 (#2593, then #2590).
+**Done:** Task 0 (#2572), Task 1 (#2569), Task 2 (#2586), Task 3 (#2573), Task 4 (#2575), Task 5 (#2588),
+Task 6 (#2595), Task 8 (the README) and Task 9 (#2593, #2590). Task 10 needed no change. The first release that
+carries all of it is the one cut from Task 9's merge.
 
-**Needs before it starts:** nothing else in wave 4a but Task 7's ruling. Task 7 waits for ruling 3. Wave 4b waits for wave
-4a on `main`. R1 to R5 are the operator's.
+**Still to build:** Task 7, which waits for ruling 3, and wave 4c, which waits for R4.
+
+**The operator's:** R1 to R5. R1 needs nothing but a build at or after v0.0.1076 on the fleet box.
 
 **Open questions for the operator:** the six rulings above, most important first: 2 (the verdict), 1 (the order of
 the stages), 3 (new lanes), 4 (when the runtime leaves).
