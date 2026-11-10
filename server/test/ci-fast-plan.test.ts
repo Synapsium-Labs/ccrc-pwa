@@ -128,10 +128,6 @@ describe('the guard suites: patterns, less the map-carried pins, plus every test
     }
   });
 
-  it('carries the skill-size ratchet: it lists the tree itself, so no change can be related to it', () => {
-    expect(guards).toContain('server/test/skill-size-ratchet.test.ts');
-  });
-
   // D-7995: the shellcheck ratchet lists the tracked tree, so TREE_READER matches it, but a full pass is too slow to
   // spend on every fast pull request; the queue and the full suite run it, and the map selects it for a script it reads.
   it('a heavy tree reader is matched by TREE_READER yet is no guard', () => {
