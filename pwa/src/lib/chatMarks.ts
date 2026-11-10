@@ -128,35 +128,15 @@ const NOT_BEFORE_COMMIT = '#';
 // The grammar, one sticky pattern per kind, tried in this priority order at each position. A match is a name only
 // when the boundary checks in `nameAt` hold.
 const DOC = /docs\/[A-Za-z0-9._/-]*\.md/y;
-/** What may stand where a GitHub owner and a repository stand, as patterns: the characters of each segment, wider than the
- *  console's one GitHub grammar (`parseGithubRepo`, `shared/projectAdd.ts`; this file imports nothing), which alone decides
- *  whether a match IS a repository. A match it refuses opens nothing and stays text. Chat's qualified PR name and its message
- *  evidence (`chatRepoEvidence.ts`, Task C21) read them from here. */
-export const GITHUB_OWNER_PATTERN = '[A-Za-z0-9-]+';
-export const GITHUB_REPO_PATTERN = '[A-Za-z0-9._-]+';
+/** What may stand where a GitHub owner and a repository stand in a qualified name, as patterns: the characters of each
+ *  segment, wider than the console's one GitHub grammar (`parseGithubRepo`; this file imports nothing). Which repository a match
+ *  is, and whether it is one the chat can tell, is decided by the one reader, `chatRepoEvidence.ts#qualifiedRepo` (Task C21,
+ *  review 1760 F7): a match it refuses opens nothing and stays text. */
+const GITHUB_OWNER_PATTERN = '[A-Za-z0-9-]+';
+const GITHUB_REPO_PATTERN = '[A-Za-z0-9._-]+';
 /** A PR that names its repository (Task C21, D-8172): `owner/repo#12`. Tried only where a document path may start, so it is
- *  never the tail of a path or a host (`x/a/b#1`, `github.com/a/b#1`), and refused where it reads as a path or a slash pair
- *  of prose rather than a repository (`notQualified`). */
+ *  never the tail of a path or a host (`x/a/b#1`, `github.com/a/b#1`); a document path is tried first. */
 const QUALIFIED_PR = new RegExp(`(${GITHUB_OWNER_PATTERN})/(${GITHUB_REPO_PATTERN})#(\\d{1,6})`, 'y');
-
-/** The file extensions a qualified name's repository may not end in (`src/lib/x.ts#12` is a path and a line, not a PR; Task C21
- *  review 1758 F3). Lower case, compared in lower case after the last dot. */
-export const FILE_EXTENSIONS: readonly string[] = [
-  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'md', 'mdx', 'yml', 'yaml', 'json', 'sh', 'py', 'txt', 'html', 'css', 'toml', 'sql',
-  'log', 'csv', 'lock',
-];
-
-/** Whether `owner/repo#n` is refused as a qualified name (review 1758 F3): its repository ends in a `FILE_EXTENSIONS` entry, its
- *  owner or repository is all digits or one character (`1/2#3`, `24/7#1`, `abc1234/x#5`), or both are upper case only
- *  (`TCP/IP#4`, `N/A#1`, `I/O#5`). What is left follows GitHub's own `owner/repo#n` notation without knowing that the repository
- *  exists, so a prose pair such as `client/server#1` still reads as one (spec R15). */
-function notQualified(owner: string, repo: string): boolean {
-  const dot = repo.lastIndexOf('.');
-  if (dot >= 0 && FILE_EXTENSIONS.includes(repo.slice(dot + 1).toLowerCase())) return true;
-  const slight = (seg: string): boolean => seg.length === 1 || /^\d+$/.test(seg);
-  const upper = (seg: string): boolean => !/[a-z]/.test(seg) && /[A-Z]/.test(seg);
-  return slight(owner) || slight(repo) || (upper(owner) && upper(repo));
-}
 const PR = /#(\d{1,6})/y;
 const RUN = /(?:run|review)\s+(\d+)/iy;
 const ITEM = /item\s+(\d+)/iy;
@@ -183,7 +163,7 @@ function nameAt(text: string, at: number): { mark: Mark; end: number } | null {
     }
   }
   m = pathOk ? stickyAt(QUALIFIED_PR, text, at) : null;
-  if (m && !wordAfter(text, at + m[0].length) && !notQualified(m[1]!, m[2]!)) {
+  if (m && !wordAfter(text, at + m[0].length)) {
     return { mark: { kind: 'pr', id: m[3]!, text: m[0], repo: `${m[1]!}/${m[2]!}` }, end: at + m[0].length };
   }
   for (const [re, kind] of KEYWORDS) {

@@ -308,6 +308,41 @@ describe('a PR or commit opens the repository the message means (Task C21, D-817
     expect(container.querySelectorAll('.msg-assist a > code')).toHaveLength(2);
   });
 
+  // Review 1760 F4: the grammar reads a qualified name's boundary from the message's source, as the evidence reader does, so
+  // under `_` or `__` emphasis neither counts it (the bare #12 opens home) and under `*` both do.
+  it('under _ or __ emphasis neither reader counts a qualified name; under * both do', () => {
+    for (const text of ['_owner-b/repo-b#12_ then #12', '__owner-b/repo-b#12__ then #12', '_see owner-b/repo-b#12_ then #12']) {
+      const { container } = assistant(text);
+      expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')]), text).toEqual([
+        ['#12', 'https://github.com/owner-a/repo-a/issues/12'],
+      ]);
+      cleanup();
+    }
+    const { container } = assistant('*owner-b/repo-b#12* then #12');
+    expect(anchors(container).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['owner-b/repo-b#12', 'https://github.com/owner-b/repo-b/issues/12'],
+      ['#12', 'https://github.com/owner-b/repo-b/issues/12'],
+    ]);
+  });
+
+  it('the worker path reads the same source boundary under emphasis', async () => {
+    // The message also names owner-c, so the bare #12 is text (rule 3a); the `_`-wrapped owner-b name must not link either.
+    const body = '_owner-b/repo-b#12_ then #12 and *owner-c/repo-c#7*.';
+    const sync = assistant(body).container.querySelector('.msg-assist')!.innerHTML;
+    cleanup();
+    const long = `${body}\n\n${'a'.repeat(CHAT_SYNC_MAX_BYTES)}`;
+    const calls: (() => void)[] = [];
+    vi.spyOn(chatRunner, 'parse').mockImplementation((src) => new Promise<ParseOutcome>((resolve) => {
+      calls.push(() => resolve(parseMarkdown(src, 'chat')));
+    }));
+    const { container } = assistant(long);
+    await act(async () => { calls[0]!(); });
+    expect(container.querySelector('.msg-assist p')!.outerHTML).toBe(sync);
+    expect([...container.querySelectorAll('.msg-assist a')].map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['owner-c/repo-c#7', 'https://github.com/owner-c/repo-c/issues/7'],
+    ]);
+  });
+
   it('a whole code span holding owner/repo#n links there', () => {
     const { container } = assistant('See `owner-b/repo-b#12`.', CROSS);
     expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual(['https://github.com/owner-b/repo-b/issues/12']);

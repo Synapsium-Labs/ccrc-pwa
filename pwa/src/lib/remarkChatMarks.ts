@@ -7,7 +7,9 @@
 // What it writes:
 //   - a text node becomes `markRuns`' runs: a name is a text node drawn as a `span` carrying `MARK_ATTR.kind` and
 //     `MARK_ATTR.id` (and `MARK_ATTR.repo` when the name says its repository, `owner/repo#12`: desktop polish Task C21),
-//     a status word in S3's position a `span` carrying `MARK_ATTR.status`;
+//     a status word in S3's position a `span` carrying `MARK_ATTR.status`; a qualified name at a text node's edge is a name
+//     only where the message's SOURCE gives it a name boundary there (`edgeQualified`: under `_` emphasis it is text, as the
+//     raw-text evidence reader reads it; review 1760 F4);
 //   - S2: a `strong` whose whole content is plain text that is a status word carries `MARK_ATTR.status` (a bold holding
 //     inline code or a link is never marked: fix round 1, review 1574 F-B);
 //   - S1: a body cell whose first child is text starting with a status word has that word split off as a status span;
@@ -28,7 +30,8 @@
 // Inline code, link text and raw html hold no sentence end, a name in link text is a name there too, and a `<br>` is a
 // line break (review 1601 F3; desktop-polish Task C14, D-8110).
 import {
-  LabelScan, MARK_ATTR, leadKind, leadingStatus, markRuns, nameSpans, statusTone, type LeadKind, type MarkRun, type Span,
+  LabelScan, MARK_ATTR, leadKind, leadingStatus, markRuns, nameSpans, statusTone, wordAfter, wordBefore, type LeadKind,
+  type MarkRun, type Span,
 } from './chatMarks';
 
 interface MdNode {
@@ -36,7 +39,9 @@ interface MdNode {
   value?: string;
   children?: MdNode[];
   data?: { hName?: string; hProperties?: Record<string, unknown> };
+  position?: { start?: { offset?: number }; end?: { offset?: number } };
 }
+
 
 /** The node types the walk never enters: a name inside one is not prose. */
 const SKIP: ReadonlySet<string> = new Set([
@@ -149,9 +154,24 @@ function splitLeadingStatus(cell: MdNode): void {
   cell.children!.splice(0, 1, ...parts);
 }
 
+/** Whether the qualified name (`owner/repo#n`) at `from`..`to` of text node `node` is refused because the message's SOURCE
+ *  puts a word character right before or after it, where the node itself starts or ends (Task C21, review 1760 F4). Under
+ *  `_` or `__` emphasis the node holds `org-b/project-b#12` while the source reads `_org-b/project-b#12_`; the message
+ *  evidence reader (`chatRepoEvidence.ts`) reads the source, where `_` is a word character and the name is no name, so the
+ *  grammar reads that boundary too and the two agree: under `_` neither counts it, under `*` both do. A node with no position
+ *  or a plugin run with no source keeps the node's own boundary. */
+function edgeQualified(node: MdNode, from: number, to: number, source: string | null): boolean {
+  if (source === null) return false;
+  const start = node.position?.start?.offset;
+  const end = node.position?.end?.offset;
+  if (from === 0 && start !== undefined && wordBefore(source, start)) return true;
+  return to === (node.value ?? '').length && end !== undefined && wordAfter(source, end);
+}
+
 /** A text node as `markRuns`' runs (`blockRuns`' when its block made them); `null` when there is nothing to mark. Where
- *  `labels` is false (a header cell) a status run stays text, joined to the text beside it, and only names are marked. */
-function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | undefined): MdNode[] | null {
+ *  `labels` is false (a header cell) a status run stays text, joined to the text beside it, and only names are marked. A
+ *  qualified name the source's boundary refuses (`edgeQualified`) stays text. */
+function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | undefined, source: string | null): MdNode[] | null {
   const out: MdNode[] = [];
   let marked = false;
   const pushText = (value: string): void => {
@@ -159,9 +179,14 @@ function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | unde
     if (last !== undefined && last.data === undefined) last.value = (last.value ?? '') + value;
     else out.push({ type: 'text', value });
   };
+  let at = 0;
   for (const r of made ?? markRuns(node.value ?? '')) {
+    const from = at;
+    at += r.kind === 'mark' ? r.mark.text.length : r.text.length;
     if (r.kind === 'text' || (r.kind === 'status' && !labels)) {
       pushText(r.text);
+    } else if (r.kind === 'mark' && r.mark.repo !== undefined && edgeQualified(node, from, at, source)) {
+      pushText(r.mark.text);
     } else if (r.kind === 'mark') {
       marked = true;
       const attrs: Record<string, string> = { [MARK_ATTR.kind]: r.mark.kind, [MARK_ATTR.id]: r.mark.id };
@@ -176,9 +201,12 @@ function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | unde
 }
 
 /** Chat's marks over an mdast tree, in place. */
-export function remarkChatMarks(): (tree: unknown) => void {
-  return (tree: unknown): void => {
+export function remarkChatMarks(): (tree: unknown, file?: unknown) => void {
+  return (tree: unknown, file?: unknown): void => {
     const root = tree as MdNode;
+    const value = (file as { value?: unknown } | undefined)?.value;
+    // The message's source, for `edgeQualified`: react-markdown and the parse worker both hand the plugin a file holding it.
+    const source = typeof value === 'string' ? value : null;
     markLeads(root);
     // Each entry carries `labels`: false inside a table's header row (its first row), where no status label of any
     // kind is written, S1, S2 or S3 (fix round 2, review 1575 F3). This flag is the one place that gates all three.
@@ -197,7 +225,7 @@ export function remarkChatMarks(): (tree: unknown) => void {
       const next: MdNode[] = [];
       children.forEach((child, index) => {
         if (child.type === 'text' && child.data?.hName === undefined) {
-          const runs = textRuns(child, labels, made.get(child));
+          const runs = textRuns(child, labels, made.get(child), source);
           if (runs === null) next.push(child);
           else for (const run of runs) next.push(run);
           return;

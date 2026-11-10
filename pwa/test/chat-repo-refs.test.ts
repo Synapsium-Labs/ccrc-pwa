@@ -1,5 +1,5 @@
 // Desktop polish Task C21 (D-8172; chat reading spec 2026-11-06 sections 4.1 and 4.2, row R15): a PR or commit name in chat opens
-// the repository the message means, or stays text, never a wrong repository. The rule, first that applies wins:
+// the repository the message means, or stays text; where the code cannot tell, text. The rule, first that applies wins:
 //   1. `owner/repo#n` names its repository and links there in any session;
 //   2. a bare `#n` or commit links where the SAME message names one repository for it (a pull, issue or commit address, or
 //      `owner/repo#n`), and stays text where it names two;
@@ -12,6 +12,14 @@ import type { ProjectRow, RunSummary } from '../../shared/api';
 import { markRuns, type Mark } from '../src/lib/chatMarks';
 import { claimsRunElsewhere, refHref, type ChatRefContext } from '../src/lib/chatRefs';
 import { messageRepos, repoKey } from '../src/lib/chatRepoEvidence';
+
+// Review 1760 F10: budgets measured against their mutants (c21.md): each bound is about 20 to 90 times the real code's time and 10
+// to 26 times below its mutant's.
+const COMMIT_N = 20_000;
+const COMMIT_BOUND_MS = 500;
+const REPEAT_N = 20_000;
+const REPEAT_BOUND_MS = 500;
+const NAMED_BOUND_MS = 600;
 
 const HOME: ChatRefContext = {
   repo: 'org-a/project-a', project: 'project-a', branch: null, knownRuns: new Set(), knownItems: new Set(), runsElsewhere: false,
@@ -172,13 +180,32 @@ describe('fix round 1: the evidence reader\'s edges (Task C21, review 1758)', ()
       'docs/foo.md#12', 'https://example.com/a/b#12', './a/b#12', '~/a/b#12', 'a_b/c#3', 'x/a/b#1', 'a/b#12abc',
     ];
     for (const t of text) expect(links(t, HOME).filter(([, href]) => href !== null), t).toEqual([]);
-    // A one-character repository is no qualified name, so a SHA before a slash reads as the commit it was on main.
-    expect(links('abc1234/x#5', HOME)).toEqual([['abc1234', 'https://github.com/org-a/project-a/commit/abc1234']]);
+    // A one-character repository is refused, so `abc1234/x#5` is a qualified name the chat cannot tell: text (review 1760 F7).
+    expect(links('abc1234/x#5', HOME)).toEqual([['abc1234/x#5', null]]);
+    // Review 1760 F3: the widened list of file extensions.
+    for (const t of [
+      'cmd/main.go#12', 'src/lib.rs#3', 'include/foo.h#2', 'app/main.c#7', 'etc/nginx.conf#4', 'src/App.vue#5', 'lib/util.rb#6',
+      'pkg/Main.java#7', 'public/logo.svg#2', 'docs/spec.pdf#3', 'styles/app.scss#9', 'cfg/app.ini#1', 'src/x.cpp#2',
+    ]) expect(links(t, HOME), t).toEqual([[t, null]]);
   });
 
-  it('F3: the evidence reader refuses what the grammar refuses', () => {
-    expect(links('config/app.yml#3 then #3', HOME)).toEqual([['#3', issue('org-a/project-a', 3)]]);
+  // Review 1760 F2 (a): a qualified name the exceptions refuse is an UNKNOWN repository, so its bare sibling is text too.
+  it('F3: a refused qualified name is an unknown repository, and its bare sibling stays text', () => {
+    expect(links('config/app.yml#3 then #3', HOME)).toEqual([['config/app.yml#3', null], ['#3', null]]);
+    expect(links('app/models.rb#7 then #7', HOME)).toEqual([['app/models.rb#7', null], ['#7', null]]);
+    expect(links('vercel/next.js#123 is fixed; see #123', HOME)).toEqual([['vercel/next.js#123', null], ['#123', null]]);
+    expect(links('see vercel/next.js#123 and also #7', HOME)).toEqual([['vercel/next.js#123', null], ['#7', null]]);
+    expect(links('vercel/nextjs#123 is fixed; see #123', HOME))
+      .toEqual([['vercel/nextjs#123', issue('vercel/nextjs', 123)], ['#123', issue('vercel/nextjs', 123)]]);
+    // A document path is a document, not a refused repository: the bare #5 beside it still opens home.
     expect(links('see docs/plan.md#12 and #5', HOME)).toEqual([['#5', issue('org-a/project-a', 5)]]);
+  });
+
+  // Review 1760 F7: one reader decides, after its trim of trailing dots and `.git`.
+  it('F3: the exceptions are asked of the repository readRepo read', () => {
+    for (const t of ['config/app.yml.#3', 'notes/a.md.#2', 'ow/repo.ts.git#3', 'vercel/next.js.#1']) {
+      expect(links(t, HOME), t).toEqual([[t, null]]);
+    }
   });
 
   it('F4: both readers trim a qualified name\'s trailing dots the same way', () => {
@@ -190,8 +217,13 @@ describe('fix round 1: the evidence reader\'s edges (Task C21, review 1758)', ()
   it('F6: only a name is evidence: a qualified name or a page number the boundary does not end counts for nothing', () => {
     expect(links('owner-b/repo-b#12x then #12', HOME)).toEqual([['#12', issue('org-a/project-a', 12)]]);
     expect(links('\u00e9owner-b/repo-b#12 then #12', HOME)).toEqual([['#12', issue('org-a/project-a', 12)]]);
-    // A host the name boundary does not start (a letter before it) is no address at all.
-    expect(links('#12 \u00e9github.com/o/r/pull/12', HOME)).toEqual([['#12', issue('org-a/project-a', 12)]]);
+    // A host the name boundary does not start (a letter or `_` before it) names an unknown repository: text (review 1760 F5).
+    expect(links('#12 \u00e9github.com/o/r/pull/12', HOME)).toEqual([['#12', null]]);
+    expect(links('\u4fee\u590d\u89c1github.com/owner-b/repo-b/pull/12 \u3002 #12 \u5df2\u5408\u5e76', HOME)).toEqual([['#12', null]]);
+    expect(links('\u89c1api.github.com/repos/owner-b/repo-b/pulls/12 #12', HOME)).toEqual([['#12', null]]);
+    expect(links('_github.com/owner-b/repo-b/pull/12_ #12', HOME)).toEqual([['#12', null]]);
+    // With a scheme in front, the same address is read.
+    expect(links('\u4fee\u590d\u89c1https://github.com/owner-b/repo-b/pull/12 \u3002 #12', HOME)).toEqual([['#12', issue('owner-b/repo-b', 12)]]);
     // The page still names its repository, so the bare #12 beside it is text under rule 3a.
     expect(links('github.com/owner-b/repo-b/pull/12x and #12', HOME)).toEqual([['#12', null]]);
   });
@@ -213,12 +245,93 @@ describe('fix round 1: the evidence reader\'s edges (Task C21, review 1758)', ()
     expect([...said.named].sort()).toEqual(['org-b/project-b', 'org-c/project-c']);
   });
 
+  // Review 1760 F10: the bound sits between the real code and a scan of every address, with room on both sides (c21.md has the
+  // measured margin).
   it('F5: a commit name asks only the addresses that share its prefix', () => {
-    const shas = Array.from({ length: 20_000 }, (_, i) => (0x1000000 + i).toString(16) + 'abc');
+    const shas = Array.from({ length: COMMIT_N }, (_, i) => (0x1000000 + i).toString(16) + 'abc');
     const said = messageRepos(shas.map((sha) => `github.com/org-b/project-b/commit/${sha}`).join('\n'));
     const t = performance.now();
-    for (const sha of shas) expect(refHref({ kind: 'commit', id: sha, text: sha }, HOME, said)?.href).toContain('/org-b/project-b/');
-    expect(performance.now() - t).toBeLessThan(3000);
+    const hrefs = shas.map((sha) => refHref({ kind: 'commit', id: sha, text: sha }, HOME, said)?.href ?? '');
+    const took = performance.now() - t;
+    expect(hrefs.every((h) => h.includes('/org-b/project-b/'))).toBe(true);
+    expect(took).toBeLessThan(COMMIT_BOUND_MS);
+  });
+
+  // Review 1760 F9: the same commit address many times is one address.
+  it('F5: one commit address repeated many times costs one', () => {
+    const sha = 'abcdef1234';
+    const said = messageRepos(`github.com/org-b/project-b/commit/${sha} ${sha}\n`.repeat(REPEAT_N));
+    const t = performance.now();
+    for (let i = 0; i < REPEAT_N; i += 1) refHref({ kind: 'commit', id: sha, text: sha }, HOME, said);
+    const took = performance.now() - t;
+    expect(took).toBeLessThan(REPEAT_BOUND_MS);
+  });
+
+  // Review 1760 F8: "names another repository" costs the same for every bare name in a message.
+  it('F5: many repositories and many bare names in one message stay cheap', () => {
+    const repos = Array.from({ length: 20_000 }, (_, i) => `github.com/org-b/project-${i}`).join(' ');
+    const said = messageRepos(repos);
+    const mark: Mark = { kind: 'pr', id: '1', text: '#1' };
+    const t = performance.now();
+    for (let i = 0; i < 120_000; i += 1) refHref(mark, HOME, said);
+    const took = performance.now() - t;
+    expect(took).toBeLessThan(NAMED_BOUND_MS);
+  });
+});
+
+// Fix round 2 (review 1760): the gh reader, emphasis, and what is not read.
+describe('fix round 2: gh commands, emphasis and the unread spellings (Task C21, review 1760)', () => {
+  const home = (n: number): string => issue('org-a/project-a', n);
+
+  it('F1: a gh flag reaches only its own command\'s number, and a command ends where the ruling says', () => {
+    const rows: [string, [string, string | null][]][] = [
+      ['Ran gh pr view 12, then gh pr view 40 --repo owner-b/repo-b. #12 is green', [['#12', null]]],
+      ["Ran `gh pr view 12` and `gh pr view 40 -R 'owner-b/repo-b'`; #12 is green.", [['#12', null]]],
+      ['gh pr view 12 then cp -R owner-b/repo-b /x; #12', [['#12', home(12)]]],
+      ['gh pr view 12, then grep -R src/lib . and #12 is fine', [['#12', home(12)]]],
+      ['gh pr comment 12 --body "see -R owner-c/repo-c" --repo owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh pr view 12 --repo owner-b/repo-b and gh pr view 12 --repo owner-c/repo-c #12', [['#12', null]]],
+      ['gh pr view 12 -R owner-b/repo-b -R owner-c/repo-c #12', [['#12', issue('owner-c/repo-c', 12)]]],
+      // The number is the command's third positional, wherever its flags stand.
+      ['gh pr view --repo owner-b/repo-b 12 and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      // A quoted flag value is a value; a word that is exactly a quoted flag is that flag, as the shell passes it.
+      ['gh issue view 12 -R "owner-b/repo-b" and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ["gh issue view 12 '-R' owner-b/repo-b and #12", [['#12', issue('owner-b/repo-b', 12)]]],
+      // A quoted gh is an argument, not the next command.
+      ['gh pr comment 12 --body "gh" --repo owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      // A comma or a full stop before a space ends the command, before any positional bound would.
+      ['I ran gh pr list, --repo owner-b/repo-b next, then #12', [['#12', home(12)]]],
+      ['I ran gh pr list. --repo owner-b/repo-b is next for #12', [['#12', home(12)]]],
+    ];
+    for (const [text, expected] of rows) expect(links(text, HOME), text).toEqual(expected);
+  });
+
+  it('F6: gh api paths are evidence, GH_REPO names a repository, and the gh word starts at the name boundary', () => {
+    const rows: [string, [string, string | null][]][] = [
+      ['gh api repos/owner-b/repo-b/pulls/12 and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh api /repos/owner-b/repo-b/issues/12/comments and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      ['gh api repos/owner-b/repo-b and #12', [['#12', null]]],
+      ['GH_REPO=owner-b/repo-b gh pr view 12 and #12', [['#12', null]]],
+      ['\u00e9gh pr view 12 --repo owner-b/repo-b and #12', [['#12', home(12)]]],
+      ['sigh pr view 12 --repo owner-b/repo-b and #12', [['#12', home(12)]]],
+    ];
+    for (const [text, expected] of rows) expect(links(text, HOME), text).toEqual(expected);
+  });
+
+  // Not read, by the ruling (R15 lists them): each leaves the bare #12 where main left it.
+  it('F6: the spellings that are not read', () => {
+    for (const text of [
+      'gh pr view 12 -Rowner-b/repo-b and #12', 'gh repo clone owner-b/repo-b and #12', '#12 in owner-b/repo-b',
+      'In owner-b/repo-b, #12 is green', 'gitlab.com/owner-b/repo-b/-/merge_requests/12 #12',
+      'gh pr view 12 \\\n  --repo owner-b/repo-b and #12',
+    ]) expect(links(text, HOME).filter(([t]) => t === '#12'), text).toEqual([['#12', home(12)]]);
+  });
+
+  it('F4: in raw text a qualified name under _ is no name, under * it is (the render half is in chat-links)', () => {
+    expect(links('_owner-b/repo-b#12_ then #12', HOME)).toEqual([['#12', home(12)]]);
+    expect(links('__owner-b/repo-b#12__ then #12', HOME)).toEqual([['#12', home(12)]]);
+    expect(links('*owner-b/repo-b#12* then #12', HOME))
+      .toEqual([['owner-b/repo-b#12', issue('owner-b/repo-b', 12)], ['#12', issue('owner-b/repo-b', 12)]]);
   });
 });
 
@@ -233,8 +346,8 @@ describe('messageRepos reads what one message says about repositories (Task C21)
     expect([...messageRepos('Cloned https://github.com/org-b/project-b.git now').named]).toEqual(['org-b/project-b']);
   });
 
-  it('a host that only ends in github.com, or a path that only contains owner/repo#n, names nothing', () => {
-    expect([...messageRepos('notgithub.com/org-b/project-b/pull/1').named]).toEqual([]);
+  it('a host directly after a letter names an unknown repository, and a path that only contains owner/repo#n names nothing', () => {
+    expect([...messageRepos('notgithub.com/org-b/project-b/pull/1').named]).toEqual(['?host:github.com/org-b/project-b/pull/1']);
     expect([...messageRepos('x/org-b/project-b#1').named]).toEqual([]);
   });
 

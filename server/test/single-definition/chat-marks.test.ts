@@ -41,4 +41,14 @@ describe("chat's marks have one recogniser table and one plugin (chat reading Ta
     expect(holders(decl('routedHref')), 'routedHref').toEqual(['pwa/src/lib/routes.ts']);
     expect(holders(decl('useArrival')), 'useArrival').toEqual(['pwa/src/lib/useArrival.ts']);
   });
+
+  // Desktop polish Task C21 (D-8172; spec R15): which repository a PR or commit name opens is decided by one reader of what a
+  // message names and one decider of the session's runs elsewhere, so a second list of file extensions, a second evidence
+  // reader or a second repository reader cannot appear beside them unnoticed (review 1760 F12).
+  it('the message evidence, the one repository reader and the runs-elsewhere decider are each declared once (Task C21)', () => {
+    for (const name of ['FILE_EXTENSIONS', 'messageRepos', 'readRepo', 'qualifiedRepo', 'namesOtherThan']) {
+      expect(holders(decl(name)), name).toEqual(['pwa/src/lib/chatRepoEvidence.ts']);
+    }
+    expect(holders(decl('claimsRunElsewhere')), 'claimsRunElsewhere').toEqual(['pwa/src/lib/chatRefs.ts']);
+  });
 });
