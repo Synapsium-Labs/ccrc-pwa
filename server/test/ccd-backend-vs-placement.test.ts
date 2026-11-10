@@ -6,7 +6,7 @@
 // while their own comments state a BACKEND reason:
 //
 //   1. `--remote-control` — Claude Code's own protocol; Codex cannot answer it.
-//   2. `_inject_spawn_effort` — types Claude-specific input into the TUI.
+//   2. the `--effort` default on the spawn argv (was `_inject_spawn_effort`, a settle keystroke, until D-8149).
 //   3. the transcript sanitiser — exists FOR the cross-backend hop.
 //   4. the 429 exclusion row — the Codex lane's only "pool is full" signal.
 //
@@ -120,10 +120,10 @@ describe('the four callers now ask the backend question', () => {
     expect(line).toContain('_is_anthropic_backend "$target"');
   });
 
-  it('Remote Control and the effort injection are gated on the backend', () => {
+  it('Remote Control and the spawn-argv effort default are gated on the backend', () => {
     expect(code.find((l) => l.includes("rcflag=\"--remote-control")))
       .toContain('_is_anthropic_backend');
-    expect(code.find((l) => l.includes('_inject_spawn_effort "$tname"')))
+    expect(code.find((l) => l.includes('-n "$SPAWN_EFFORT"')))
       .toContain('_is_anthropic_backend');
   });
 

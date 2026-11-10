@@ -139,15 +139,15 @@ describe('_pane_auto_continue_armed holds when it cannot measure', () => {
   });
 });
 
-// THE TWO SITES THE POPULATION SCAN CANNOT SEE.
+// THE SITE THE POPULATION SCAN CANNOT SEE.
 //
 // Task 5's scan finds a guard by looking for a phrase-carrying `grep` and
-// walking back through the same function. Edits 4g and 4h sit in functions that
-// carry NO phrase grep — `_spawn_settle` only renders the gate loop's rc, and
-// `_inject_spawn_effort` decides on an empty input box — so neither is in
-// `POPULATION` and neither would red when deleted. These two cases are their
+// walking back through the same function. Edit 4g sits in a function that
+// carries NO phrase grep (`_spawn_settle` only renders the gate loop's rc), so
+// it is not in `POPULATION` and would not red when deleted. This case is its
 // mechanism, and the Global Constraint that every guard ships with a test that
-// reds on its deletion is what requires them.
+// reds on its deletion is what requires it. (Edit 4h's site, the settle's
+// `/effort` keystroke, is gone: D-8149 moved the default onto the spawn argv.)
 describe('rc 6 is a LIVE pane too narrow to read \u2014 never a session that is not there', () => {
   /** `has-session` steered by $ALIVE, `list-panes` answering a NARROW active
    *  pane, `capture-pane` silent. The pair is the point: a real tmux cannot
@@ -217,49 +217,6 @@ describe('the two stand-downs outside the phrase population', () => {
     expect(out, 'the sentence must say how to widen this pane').toContain('open and close its terminal drawer');
     expect(out, 'the pre-pin cause is no longer true and must not be told to the operator')
       .not.toContain('narrows new panes');
-  });
-
-  it('_inject_spawn_effort types nothing into a narrow pane (edit 4h)', () => {
-    // The /effort injection is a keystroke into a pane whose state it read with
-    // a phrase match one line earlier. On a narrow pane that read is worthless,
-    // so the whole function stands down before the first `capture-pane`.
-    const out = h.sh(
-      `${panesRecording(`1 ${NARROW}`)} sleep() { :; }; SPAWN_EFFORT=ultracode;`
-      + ' _inject_spawn_effort cc-demo 2>"$HOME/ccd-err";'
-      + ' cat "$HOME/ccd-err"; cat "$HOME/ccd-calls" 2>/dev/null || true');
-    expect(out).toContain(`pane is under ${READER_MIN_COLS} columns, skipped /effort`);
-    expect(out, 'a pane too narrow to read is a pane too narrow to type into')
-      .not.toContain('send-keys');
-    // THE ASSERTIONS ABOVE ARE STRONGER THAN THIS PLACE USED TO CLAIM. The
-    // paragraph that stood here said that with the guard deleted the case
-    // "still reports no `send-keys`", because the widened
-    // `_pane_auto_continue_armed` one line below would answer ARMED on the same
-    // unmeasurable pane and return first — so only the MESSAGE pinned the
-    // guard. Both halves are false. The mechanism half was falsified by this
-    // branch's own commit 73c27283, which removed that call's `id` argument and
-    // did not sweep the justification: with no id it is the plain phrase
-    // classifier over an EMPTY capture, and it answers NOT armed.
-    //
-    // RE-MEASURED 2026-09-16, on a COPY of `ccd/ccd` with the guard line
-    // deleted and this exact stub: stderr empty, and the recorded calls are
-    // `capture-pane -t cc-demo -p`, `capture-pane -t cc-demo -p -e`,
-    // `send-keys -t cc-demo -l /effort ultracode`, `send-keys -t cc-demo Enter`,
-    // and `capture-pane -t cc-demo -p` again — the `Yes, switch` check that
-    // runs after Enter. The control (shipped tree) records the width query
-    // alone. So deleting
-    // this guard reds BOTH assertions above — the message and the `send-keys`
-    // — not neither.
-    //
-    // WHAT THE TWO BELOW ADD is the thing neither of those can see: WHICH pane
-    // was measured. The stubs answer the width query whatever target it names,
-    // so a guard that measured `$t` rather than the stripped id stands down
-    // here just the same — and `_pane_measurable` would rebuild it as
-    // `cc-cc-demo`, a session that does not exist.
-    // Since D-3525 `$t` is the ANCHORED name (`=cc-demo:`), so a guard handed
-    // it would rebuild `=cc-=cc-demo_:` — the second assertion's pattern
-    // covers that spelling as well as the unanchored `cc-cc-demo`.
-    expect(out, 'the guard measured a pane').toContain('-t =cc-demo:');
-    expect(out, '`cc-` stripped once, not twice').not.toMatch(/cc-=?cc-demo/);
   });
 });
 

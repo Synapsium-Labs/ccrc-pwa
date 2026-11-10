@@ -74,13 +74,13 @@ describe('a top-level row (D-6202)', () => {
     install(); seed(TOP, false);
     const { lines } = spawnBoth(TOP);
     expect(lines).toEqual([
-      line('claude', `--settings '${acctFile()}'`, `--resume '${UUID}'`),
-      line('claude', `--settings '${acctFile()}'`, `--session-id '${UUID}'`),
+      line('claude', `--effort high --settings '${acctFile()}'`, `--resume '${UUID}'`),
+      line('claude', `--effort high --settings '${acctFile()}'`, `--session-id '${UUID}'`),
     ]);
     // the rest of today's line, byte for byte: removing the one flag gives the line with no account file at all
     fs.rmSync(acctFile());
     const without = spawnBoth(TOP).lines;
-    expect(lines.map((l) => l.replace(`--settings '${acctFile()}'`, ''))).toEqual(without);
+    expect(lines.map((l) => l.replace(` --settings '${acctFile()}'`, ''))).toEqual(without);
     expect(h.reg(TOP, 'deny-settings')).toBeNull();
     expect(h.reg(TOP, 'childshell')).toBeNull();
   });
@@ -138,7 +138,7 @@ describe('the composer fails open for the spawn (D-6202; the operator\'s Q8 ruli
     install(); seed(TOP, false); seed(CHILD, true);
     fs.rmSync(acctFile());
     const top = spawnBoth(TOP);
-    expect(top.lines).toEqual([line('claude', '', `--resume '${UUID}'`), line('claude', '', `--session-id '${UUID}'`)]);
+    expect(top.lines).toEqual([line('claude', '--effort high', `--resume '${UUID}'`), line('claude', '--effort high', `--session-id '${UUID}'`)]);
     expect(warnings(top.err)).toHaveLength(1);
     const child = spawnBoth(CHILD);
     for (const l of child.lines) expect(settingsOf(l)).toEqual([childFile()]);

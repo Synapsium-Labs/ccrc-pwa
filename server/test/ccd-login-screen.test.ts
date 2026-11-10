@@ -278,7 +278,7 @@ describe('_spawn (wiring): skips /effort injection exactly when login-gated', ()
   const spawnAgainstPane = (paneText: string): string[] => {
     h.sh(
       // Trailing `; :` because `_spawn`'s own last statement is
-      // `[[ ... ]] && _inject_spawn_effort ...` — on the login-gated pane
+      // a `[[ ... ]] && _redrive_after_spawn ...` — on a login-gated pane
       // that condition is false, so `_spawn`'s exit code is 1 and, being the
       // last command in the snippet, would make `h.sh` throw on a perfectly
       // correct skip. The `:` gives the snippet its own success exit code.
@@ -297,9 +297,10 @@ describe('_spawn (wiring): skips /effort injection exactly when login-gated', ()
     expect(calls.some((c) => c.includes('/effort'))).toBe(false);
   });
 
-  it('DOES send /effort keystrokes once the TUI is healthy (positive control — proves the harness would catch the previous test if the skip were dropped)', () => {
+  it('a healthy TUI is not typed /effort either: the default rides the spawn argv as --effort (D-8149)', () => {
     const calls = spawnAgainstPane(boxed());
-    expect(calls.some((c) => c.includes('/effort'))).toBe(true);
+    expect(calls.some((c) => c.includes('/effort'))).toBe(false);
+    expect(calls.some((c) => c.includes('new-session') && c.includes('--effort high'))).toBe(true);
   });
 });
 

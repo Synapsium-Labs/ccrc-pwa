@@ -1501,7 +1501,7 @@ SPAWN_SETTLE_S=240              # WALL-CLOCK bound on the startup-gate wait, on 
 SPAWN_SETTLE_SUPERVISE_S=1350   # what `cmd_supervise` (systemd ExecStart, no ceiling) RAISES it to.
                                 # A global 240 would make every systemd restart of a large session
                                 # settle unconfirmed — the "700k+-token resumes take minutes between
-                                # gates" case — which suppresses _inject_spawn_effort and lights a
+                                # gates" case — which suppresses the settle's old /effort keystroke (removed, D-8149) and lights a
                                 # warning on a healthy row. Above SPAWN_GATE_TRIES x 2s, so on this
                                 # path the ITERATION cap still fires first and the window is exactly
                                 # today's.
@@ -1548,11 +1548,11 @@ SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer
                                 # an unbounded probe turns a wedge into a silent supervisor hang.
 SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
 SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
-SPAWN_EFFORT="high"             # /effort sent at settle to a session with NO routing record ("" disables):
+SPAWN_EFFORT="high"             # --effort on the spawn argv of a session whose record has NO effort field ("" disables), D-8149:
                                 # the coordinator row's effort, never ultracode (coordinator clause 19,
-                                # pinned by routing-references.test.ts). A session WITH a record never gets this keystroke:
-                                # its own effort field rides `--effort`/`--settings` on the
-                                # spawn argv instead (`_spawn_start`, routing spec §5.2).
+                                # pinned by routing-references.test.ts). It rides `--effort` (session only), never a settle
+                                # keystroke: the plain `/effort <level>` form is saved as the ACCOUNT's default. A session WITH an
+                                # effort field has that field on the argv instead (`_spawn_start`, routing spec §5.2).
                                 # ultracode DOES have `--settings` keys (measured Claude Code
                                 # 2.1.270, D-2809) — the old premise here (no settings.json key)
                                 # was wrong; `/effort ultracode` was measured NOT to persist a
@@ -20224,7 +20224,7 @@ _pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR
   # smallest` is precisely what creates that pane. `_auto_stale_check`'s guard
   # is the same silence one rung earlier. Every OTHER §6.3 stand-down already
   # speaks — `_compact_note … pane-narrow`, `_accept_first_run_prompts`' rc 6 and
-  # `_spawn_settle`'s sentence for it, `_inject_spawn_effort`'s stderr, and
+  # `_spawn_settle`'s sentence for it, the settle's old `/effort` keystroke (removed, D-8149)'s stderr, and
   # `_redrive_after_spawn`'s own `$REG/swap.log` line, whose shape this copies.
   #
   # FLOORED, AND THE FLOOR IS NOT OPTIONAL. This runs on the 5s supervise tick,
@@ -22024,7 +22024,7 @@ _route_unread_note() {   # id field — journal a field whose FILE is on disk bu
   # condition and not `_route_reject_note`'s — those two both got a VALUE and
   # then could not judge it, or judged it bad; here nothing was ever read, so
   # the line names neither bytes nor a count, and says instead that the field is
-  # PRESENT, which is the part an operator needs: `_inject_spawn_effort` asks
+  # PRESENT, which is the part an operator needs: the settle's old `/effort` keystroke (removed, D-8149) asks
   # the filesystem, so an unreadable `effort` file still suppresses the box
   # default (`SPAWN_EFFORT`) while contributing no value of its own. Without
   # this line that suppression had no channel at all — the session simply came
@@ -22056,7 +22056,7 @@ _route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
   # into one rc: the field is absent, or its file is there and its bytes could
   # not be read. Absent is silence and always was; present-but-unreadable gets
   # its own line, because it can change behaviour (an unreadable `effort` file
-  # still suppresses `SPAWN_EFFORT` — `_inject_spawn_effort` asks the
+  # still suppresses `SPAWN_EFFORT` — the settle's old `/effort` keystroke (removed, D-8149) asks the
   # filesystem) with nothing anywhere to say so. `_route_unread_note` is the
   # one that tells them apart; both still answer nothing, so fail-closed and
   # every caller's contract are unchanged.
@@ -23330,7 +23330,7 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # writer, `actor=operator-session`; that writer's swap.log `route` line
 # records it.
 #
-# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_inject_spawn_effort` (the
+# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. the settle's old `/effort` keystroke (removed, D-8149) (the
 # settle's `/effort`) and `_route_apply_now` (`route --apply`, a degraded class
 # among them) journal each `/model` and `/effort` they are about to type in
 # `$REG/<id>.typed`, one row `<epoch> <model|effort> <value>`, and a command of
@@ -25835,7 +25835,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # handshake that can never complete. `$wrapper` is already set above (the
   # incomplete-registry guard reads it), so this costs nothing extra to check.
   # This mirrors `_spawn_settle`'s `_is_home_able` guard around
-  # `_inject_spawn_effort`: the same "the external backend doesn't take
+  # the settle's old `/effort` keystroke (removed, D-8149): the same "the external backend doesn't take
   # Claude-specific input" reasoning, gating a different line of the same spawn.
   #
   # PER-SESSION OVERRIDE (task #37, ruling 2026-08-13): a row stamped `rc=off`
@@ -25866,9 +25866,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # lane's settings.json decides. Effort IS an argv matter here (Task 8,
   # controller ruling S1-R8/D-2809): a recorded non-auto effort rides
   # `--effort`, and `--settings` carries the measured ultracode/enableWorkflows
-  # keys, both composed below on the Anthropic arm. The settle's keystroke
-  # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
-  # session with nothing composed here.
+  # keys, both composed below on the Anthropic arm. A session with no
+  # `effort` field takes the box default as `--effort` too, composed below
+  # (D-8149); nothing is typed at settle any more.
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # EVERY spawn reads, here at the one choke point: a revival (Claude Code exited — a pane-scope OOM kill, /exit — and `_supervised_start`'s two unsupervised fallbacks) reads; a spawn that a stop's keep already read for (swap landing, start after stop, ws-restore after ws-archive, refusal restart) does not read again (§5.7). BEFORE the floor line below, or an older ccd's session would open its journal first and the keep read nothing
   _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
   rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
@@ -26076,6 +26076,14 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   fi
   # D-6793: no class named (or `default`) on a lane whose settings.json defaults to Fable runs Opus; a named class is never overridden.
   [[ -z "${rclass:-}" || "$rclass" == default ]] && _is_anthropic_backend "$wrapper" && _lane_default_is_fable "$wrapper" && routeflags="--model opus${routeflags:+ $routeflags}"
+  # D-8149 — THE BOX DEFAULT RIDES THE ARGV, NEVER A KEYSTROKE. A session whose record carries no `effort` file (no
+  # record at all, or a record naming only a class) takes `SPAWN_EFFORT` as `--effort`, here, once, so BOTH spawn lines
+  # and a swap respawn (all `_spawn_start`) carry the same level. The settle used to type the plain `/effort <level>`
+  # form, which Claude Code 2.1.321 saves as the ACCOUNT's default for new sessions (`modelSettings.<model>.effortLevel`
+  # in the config dir's user settings); `--effort` is session-only. Haiku takes no effort level, so it gets none. Deliberately NOT a top-level `effortLevel` in
+  # `--settings`: that applies to every model. A present effort file (any value, `auto` included) already decided above.
+  [[ -n "$SPAWN_EFFORT" && ! -e "$REG/$id.effort" && "${rclass:-}" != haiku ]] && _is_anthropic_backend "$wrapper" \
+    && routeflags="${routeflags:+$routeflags }--effort $SPAWN_EFFORT"
   # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
   # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
   # retry may not spawn a differently-contained pane than the attempt it
@@ -26331,12 +26339,11 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
   # (rc 2 fails `== 0` too) rather than dropping it.
   # BACKEND, not placement: this types Claude-specific input into the TUI.
-  _is_anthropic_backend "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname" "$id"
   # D-2231 — after the effort injection, so its local-command chatter is already
   # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
   # (a keystroke there is the swap's job), rc 2 is a login screen.
   #
-  # UNGATED on home-ability, unlike `_inject_spawn_effort` above — deliberately:
+  # UNGATED on home-ability, unlike the `--effort` argv default composed in `_spawn_start` — deliberately:
   # a non-home-able lane never has `_resume_env`'s flag set, so its transcript
   # never carries the resume pair `_transcript_stalled_pair` looks for, and the
   # measurement fails closed (rc 1, not-stalled) rather than needing a second
@@ -26438,73 +26445,6 @@ _spawn_workdirid_pending() {   # id logical -> 0 the pending line stands at $REG
   rm -f -- "$temp" 2>/dev/null
   rm -f -- "$field" 2>/dev/null && return 1
   return 2
-}
-
-_inject_spawn_effort() {   # tmuxname [id] — apply the settle-time effort, once the TUI is up.
-  # The id is the second argument; the one-argument form strips `cc-` from the
-  # name, which is the id only for a name with no `.` or `:` (wave 9 M8).
-  # THE EFFORT FIELD DECIDES (routing spec 2026-09-14 §5.2, controller rulings
-  # S1-R8 and S1-R11): a session whose record carries an `effort` file — ANY
-  # value, including `auto` and including bytes no vocabulary admits — never
-  # gets this keystroke, because that level was already applied on the spawn
-  # argv (`_spawn_start`'s `--effort`/`--settings`) or was `auto`, which means
-  # the lane decides. A session with no `effort` file gets `SPAWN_EFFORT`,
-  # exactly as before, WHATEVER ELSE the record holds.
-  #
-  # THE FIELD, NOT `_route_any` — the distinction is the whole of S1-R11.
-  # `_route_any` is true for all seven files, two of which (`degraded`, `inert`)
-  # ccd writes ITSELF: slice 3's degradation stamp alone would then have read as
-  # "the record carried an effort" and silently switched off the box default on
-  # a session whose operator never chose an effort at all. So this asks about
-  # ONE file — and it asks the FILESYSTEM, with the same `[[ -e ]]` test
-  # `_route_any` uses, so an EMPTY `effort` file still counts as present: a
-  # field somebody wrote is a field somebody meant.
-  #
-  # NOT `if _reg_get "$id" effort`, which is what stood here and is the reason
-  # `ccd-crosspool.test.ts`'s "no call site can see that rc" case redded at the
-  # tip. That case exists to hand the duty to the first caller that branches on
-  # `_reg_get`'s exit code, and the duty is real: `_reg_get` guards with `-f`,
-  # so a field that is a symlink to `/dev/null` — the one input that suite
-  # measures as having MOVED — answered rc 1 with the file plainly there, and
-  # this branch then typed `SPAWN_EFFORT` over a session whose operator had
-  # chosen an effort. Presence is not a read's exit code.
-  #
-  # `_route_effort_for` is still called on the record path for its JOURNALING
-  # side effect only (the haiku+effort refusal note and the unrecognised-value
-  # reject note) — its return value is never typed, so nothing unrecognised
-  # reaches a keystroke because nothing recognised does either.
-  local t id="${2:-${1#cc-}}" level; t=$(_tmux_at "$1")
-  _pane_measurable "$id" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
-  if [[ -e "$REG/$id.effort" ]]; then
-    _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
-    return 0
-  fi
-  level="$SPAWN_EFFORT"
-  [[ -n "$level" ]] || return 0
-  # NO id, for the reason argued at `_auto_compact_check`'s copy: the guard
-  # seven lines above already measured this pane, so passing it here could only
-  # relabel an unmeasurable pane as an armed auto-continue.
-  if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-    echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 0
-  fi
-  # Only type into an EMPTY input box — a restored draft would swallow the slash
-  # command. `-e` for the same reason the auto-compact guard passes it: without
-  # the escape codes a dim ghost-suggestion reads as a draft and /effort is
-  # skipped on every fresh session that shows one.
-  # No box on screen (a dialog is open) refuses too: the Enter would answer it (D-8116).
-  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in
-    draft) echo "ccd: input box not empty, skipped /effort $level" >&2; return 0 ;;
-    absent) echo "ccd: no input box on screen (a dialog is open), skipped /effort $level" >&2; return 0 ;;
-  esac
-  sleep 1
-  _typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)
-  tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
-  # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
-  sleep 2
-  if _pane_effort_switch_dialog "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-    tmux send-keys -t "$t" Enter
-  fi
-  return 0
 }
 
 _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is the unsubmitted resume pair | 1 not | 2 unreadable (D-2231)
@@ -27903,7 +27843,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # runs as the unit's ExecStart with nothing timing it out, and a 700k-token
   # resume legitimately takes minutes between gates. A global SPAWN_SETTLE_S
   # here would make every systemd restart of a large session settle
-  # unconfirmed — suppressing _inject_spawn_effort and lighting a warning on a
+  # unconfirmed — suppressing the settle's old /effort keystroke (removed, D-8149) and lighting a warning on a
   # healthy row.
   #
   # SIGNALLED THE SAME WAY CCD_IN_UNIT IS, one line up, and for the same reason

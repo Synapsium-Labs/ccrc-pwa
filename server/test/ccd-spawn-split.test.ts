@@ -761,7 +761,7 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
    *  one definition, read twice. */
   const expectedCommand = (sidflag: string, rc: boolean): string =>
     `cd '${h.home}' && ${paneFragment(h, 'myid', h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)}${sessionTmpToken(h)} ${sessionPanePath(h)} '${h.home}/.local/bin/claude' `
-    + `${rc ? "--remote-control 'myid' " : ' '}${sidflag} --dangerously-skip-permissions`;
+    + `${rc ? "--remote-control 'myid' --effort high " : '--effort high '}${sidflag} --dangerously-skip-permissions`;
 
   const UUID = 'deadbeef-0000-4000-8000-000000000000';
 

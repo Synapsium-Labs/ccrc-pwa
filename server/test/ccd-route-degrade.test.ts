@@ -47,7 +47,7 @@ const spawnBoth = (id: string): string[] => {
   return lines.map(composed);
 };
 const today = (sidflag: string): string =>
-  `cd '${h.home}' && ${paneFragment(h, 'myid', h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)}${sessionTmpToken(h)} ${sessionPanePath(h)} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
+  `cd '${h.home}' && ${paneFragment(h, 'myid', h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)}${sessionTmpToken(h)} ${sessionPanePath(h)} '${h.home}/.local/bin/claude' --effort high ${sidflag} --dangerously-skip-permissions`;
 
 // Fixture helpers, ccd-swap-target-class.test.ts's style.
 const now = (): number => Math.floor(Date.now() / 1000);
