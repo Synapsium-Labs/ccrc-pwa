@@ -4748,6 +4748,10 @@ describe('the coordinator skill: the references carry the new dispositions (D-81
     // Row 31 at dispatch, the workspace-spent permanent causes, row 35.
     expect(one('workspace-spent', 1)).toContain('P4');
     expect(one('intent-held')).toContain('settle');
+    // The meaning cell survives: the row keeps three cells, and `holder` is defined.
+    const held = rowsOf(t, 'intent-held')[0]!;
+    expect(held.split(' | ').length).toBeGreaterThanOrEqual(3);
+    expect(held).toContain('`holder` the run and its programme');
     // Rows 19 (stored), 22, 20, 21.
     expect(one('hold-invalid', 1)).toContain('end request');
     expect(one('hold-oversize', 1)).toContain('end request');
