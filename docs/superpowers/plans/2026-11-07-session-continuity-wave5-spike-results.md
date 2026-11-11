@@ -264,8 +264,8 @@ coordinator's ruling, ruled 2026-11-08 01:03 UTC (the programme ledger), added i
 
 The operator lent one existing account, which was real but idle, instead of two blank scratch accounts (items 95 and 112).
 `scratch-a` is that account, alone in `pool-s`. There is no `scratch-b`. The subject was swapped onto one real lane,
-`lane-r`, and was swapped back after Task 3 (section 2.6). The coordinator numbers these twelve departures at
-acceptance; none has a deviation number here (thirteen in all):
+`lane-r`, and was swapped back after Task 3 (section 2.6). The coordinator numbered these thirteen departures at
+acceptance, D-8252 to D-8264, in `2026-11-07-session-continuity-wave5-departures.md`:
 - `lent-account-is-real-not-scratch`, `loan-pool-of-one`, `untagged-account-tagged-for-the-loan`;
 - `task-3-reads-under-a-real-lane-root`, `swap-back-after-task-3`, `lent-lane-homed-rows`;
 - `lent-account-stays-home-able`: `scratch-a` stayed home-able, so a real session homed on it ran there too, as
@@ -296,8 +296,10 @@ run.
 operator typed a go-ahead into the subject's pane at 22:44:38Z, 2 h 52 min later (item 143). This is part of what a
 resume-after-swap test costs on this harness. The go-ahead covered Task 3 step 1's work. Just before it, the
 subject's pane was revived at 22:44:32Z (its SessionStart hook fired again, with the same uuid and the same root, and
-no resume prompt). ccd had hibernated the pane at 21:57:06Z (`hibernate <subject>: idle 2h`); what woke it at 22:44:32Z is not
-recorded; a server-composed `ensure (resume)` followed at 22:44:35Z, and the operator's go-ahead at 22:44:38Z. That was a restart before Task 3 began, not a confound.
+no resume prompt). ccd had hibernated the pane at 21:57:06Z (`hibernate <subject>: idle 2h`). A server-composed
+`ensure (resume)` woke it at 22:44:32Z (its `.woke` stamp) and logged its completion at 22:44:35Z, and the operator's
+go-ahead followed at 22:44:38Z. What prompted the server to compose the ensure is not recorded on the fleet box. That was a
+restart before Task 3 began, not a confound.
 
 **Builds actually run**, read from the `version` field of the subject's transcript:
 - 2.1.319 until 19:52Z, although `claude --version` printed 2.1.322, the build on disk;
