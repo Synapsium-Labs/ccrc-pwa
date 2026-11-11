@@ -2635,7 +2635,10 @@ export const MIGRATIONS: readonly string[] = [
   //
   // NEW TABLES AND NULLABLE-OR-DEFAULTED COLUMNS ONLY: an older build opening a file at `user_version 59` takes rule 3 (it
   // warns, reads as-is and migrates nothing); its `SELECT`s name their own columns and never name these, and its
-  // `INSERT INTO programs` / `project_linking` / `runs` lists name theirs, so every added column takes its default. The
+  // `INSERT INTO programs` / `project_linking` / `runs` lists name theirs, so every added column takes its default. So a
+  // programme an older build creates on a migrated file (a rollback, then this build again) reads `planRequired` 1, like
+  // any programme created after this build: when this build returns, its next `runs open` with no epic is refused
+  // `plan-missing`, whose recovery is the coordinator's `plan put` with that programme's home (`references/plan.md`). The
   // plan's own number for this entry was 57; slots 55 to 58 went first (coordinator_calls, lane_arm_settings,
   // testbox_events, practice_cases), so it is 59. RE-MEASURE the slot before the PR and before merge (it must print 58
   // before this entry is counted):

@@ -12134,7 +12134,7 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
   'calls-v1': true,
   /** D-8181 (Linear hierarchy wave 2): this server answers the plan verbs (`plan put`, `plan show`, `plan close` and their
    *  siblings, `server/src/coord/planRoutes.ts`) and refuses a `runs open` the plan refuses (`wave-epic-mismatch`,
-   *  `plan-missing`, `reserved-programme`, `ticket-unavailable`, `plan-closed`). `ccrc-api plan` refuses `unsupported`,
+   *  `plan-missing`, `reserved-programme`, `ticket-unavailable`, `plan-closed`). `ccrc-api plan` refuses `no-plan-door`,
    *  unsent, when a current cap file omits this word. Added by the change that builds the plan routes, cut after them. */
   'plan-v1': true,
 };

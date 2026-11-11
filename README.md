@@ -1500,6 +1500,7 @@ the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-ap
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
+the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
