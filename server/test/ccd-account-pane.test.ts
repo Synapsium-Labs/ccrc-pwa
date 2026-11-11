@@ -192,11 +192,12 @@ describe('ccd account-pane — the structural guards', () => {
     // it). `$(_tmux_at …)` is NOT admitted here: it anchors a NAME, and a name
     // can be `cc-auth-*`. This is the assertion that keeps the fifteenth
     // honest. The floor is asserted on LINES, which is what the loop iterates.
-    const lines = src.split('\n').filter((l) => l.includes('tmux send-keys'));
+    // D-8270: every fleet call is `_tmx …`, the socket lookup's wrapper, so the scan reads that spelling.
+    const lines = src.split('\n').filter((l) => l.includes('_tmx send-keys'));
     expect(lines.length, 'the scan matched no send-keys at all').toBeGreaterThanOrEqual(9);
     for (const l of lines) {
       expect(l, `send-keys with a target ccd did not derive from a registry id: ${l.trim()}`)
-        .toMatch(/tmux send-keys -t "(\$t|\$\(_tmux_t "\$id"\))"/);
+        .toMatch(/_tmx send-keys -t "(\$t|\$\(_tmux_t "\$id"\))"/);
     }
   });
 

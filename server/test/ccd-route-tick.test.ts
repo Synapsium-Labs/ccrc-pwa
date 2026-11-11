@@ -185,7 +185,7 @@ describe('structural: the tick is wired in, and the predicate was EXTRACTED rath
     const body = all.slice(start + 1, end).filter((l) => !l.trim().startsWith('#'));
     expect(body.join('\n')).toContain('_pane_for_keystroke "$id"');
     expect(body.join('\n')).toContain('_idle_for_keystroke "$id"');
-    expect(body.filter((l) => l.includes('tmux capture-pane')),
+    expect(body.filter((l) => /(?:tmux|_tmx) capture-pane/.test(l)),   // `_tmx`: the socket lookup's spelling (D-8270)
       'the compactor re-grew a capture of its own — the predicate is extracted, not copied').toEqual([]);
   });
 });

@@ -120,6 +120,29 @@ case "${OSTYPE:-}" in
   *) case "$(uname -s 2>/dev/null)" in Darwin) CCD_OS=darwin ;; esac ;;
 esac
 
+# >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call goes through `_tmx`, or, where a
+# wrapper execs the argv (a timeout, a scope, `exec`), through the TMX `_tmx_argv` leaves, so moving the fleet to
+# another server is a change of setting. The setting is the first line of ~/.ccrc/tmux-socket: absent or empty is
+# tmux's default server and adds no flag; a socket name puts `-L <name>` first; anything else asks no tmux at all and
+# answers why with rc 1, never the "can't find session" that reads as gone. A file, not a variable: every process on
+# the box reads one answer, and no caller redirects a door with its environment. Twin: shared/tmux-target.ts.
+_tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
+  local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
+  TMX_SOCK=""; TMX_WHY=""
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ]; then IFS= read -r s < "$f" || :; else TMX_WHY="$f cannot be read"; return 1; fi
+  [[ -z "$s" || "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] \
+    || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
+  TMX_SOCK="$s"
+}
+_tmx_argv() {   # [home] -> TMX, the argv every fleet tmux call starts with
+  if _tmx_sock "$@"; then TMX=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else TMX=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+}
+_tmx() { local TMX TMX_SOCK TMX_WHY; _tmx_argv; "${TMX[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server
+# <<< D-8270 tmux socket lookup
+
 # GNU `mv -fT`: rename, and REFUSE when the destination is a directory.
 #
 # THE REFUSAL IS LOAD-BEARING, not incidental — see the note in `cmd_ws_hold`
@@ -9188,7 +9211,7 @@ _acct_live() {   # <id>
   # the comparison below is an EXACT match against `cc-<sid>` for rows this
   # registry already named, so a stray warning line adds a name nothing matches.
   # It cannot remove a real one.
-  names="$(_plat_timeout 5 tmux list-sessions -F '#{session_name}' 2>&1)"; rc=$?
+  local TMX; _tmx_argv; names="$(_plat_timeout 5 "${TMX[@]}" list-sessions -F '#{session_name}' 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     case "$names" in
       *"no server running"*|*"error connecting to"*) names="" ;;

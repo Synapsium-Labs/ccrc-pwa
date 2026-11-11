@@ -18,6 +18,29 @@
 # (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
 
+# >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call goes through `_tmx`, or, where a
+# wrapper execs the argv (a timeout, a scope, `exec`), through the TMX `_tmx_argv` leaves, so moving the fleet to
+# another server is a change of setting. The setting is the first line of ~/.ccrc/tmux-socket: absent or empty is
+# tmux's default server and adds no flag; a socket name puts `-L <name>` first; anything else asks no tmux at all and
+# answers why with rc 1, never the "can't find session" that reads as gone. A file, not a variable: every process on
+# the box reads one answer, and no caller redirects a door with its environment. Twin: shared/tmux-target.ts.
+_tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
+  local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
+  TMX_SOCK=""; TMX_WHY=""
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ]; then IFS= read -r s < "$f" || :; else TMX_WHY="$f cannot be read"; return 1; fi
+  [[ -z "$s" || "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] \
+    || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
+  TMX_SOCK="$s"
+}
+_tmx_argv() {   # [home] -> TMX, the argv every fleet tmux call starts with
+  if _tmx_sock "$@"; then TMX=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else TMX=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+}
+_tmx() { local TMX TMX_SOCK TMX_WHY; _tmx_argv; "${TMX[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server
+# <<< D-8270 tmux socket lookup
+
 # ── epoch milliseconds, on two userlands ────────────────────────────────
 # `date +%s%3N` is GNU. BSD's date has no `%N`: it prints the literal letter,
 # so the format answers `17876553263N` — not a number, which the `--argjson
@@ -2980,7 +3003,7 @@ if [[ -n "${TMUX_PANE:-}" ]]; then
     if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
   done
   tname=""
-  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
+  [[ -n "$hooktmo" ]] && _tmx_argv && tname=$("$hooktmo" 2 "${TMX[@]}" display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
   [[ "$tname" == cc-?* ]] && id="${tname#cc-}"
 # THE FALLBACK, AND ONLY FOR A FORK (D-4953). The `elif` is the no-pane half of
 # the gate: a process with a pane is answered by the pane or by nobody, and the

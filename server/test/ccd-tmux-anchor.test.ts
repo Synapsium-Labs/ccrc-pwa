@@ -330,12 +330,16 @@ function kaProbe(id: string): string {
   const fn = /\n(_ka_pane_probe\(\) \{[\s\S]*?\n\})\n/.exec(src);
   if (fn === null) throw new Error('ccd-telemetry-keepalive has no _ka_pane_probe');
   const prefix = /^KA_TMUX_PREFIX='([^']*)'/m.exec(src)?.[1];
+  // The probe calls tmux through the file's copy of the socket lookup (D-8270), so the lookup rides with it.
+  const lookup = /\n(# >>> D-8270 tmux socket lookup[\s\S]*?\n# <<< D-8270 tmux socket lookup)\n/.exec(src);
+  if (lookup === null) throw new Error('ccd-telemetry-keepalive has no copy of the tmux socket lookup');
   // The harness's own containment, like every ccd spawn in this suite: its
   // `tmux` is the private-socket shim planted above (create-if-absent keeps it).
   const env = ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home }, { systemd: true, tmux: true });
   const r = spawnSync('bash', ['-c',
     `command -v timeout >/dev/null 2>&1 || timeout() { shift; "$@"; }
      KA_TMUX_PREFIX='${prefix}'; KA_PANE_DEADLINE=5
+     ${lookup[1]}
      ${fn[1]}
      _ka_pane_probe "$1"; printf '%s' "$KA_PANE_VERDICT"`, 'ka', id],
   { encoding: 'utf8', cwd: h.home, env });
@@ -432,8 +436,9 @@ const KA_SRC = fs.readFileSync(KEEPALIVE, 'utf8');
 const executable = (src: string): string[] =>
   src.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l));
 
-/** A tmux COMMAND on the line — `tmux <verb>`, never `type -t tmux`. */
-const TMUX_CALL = /(?:^|[\s;|&(!{`])tmux\s+[a-z][a-z-]*/;
+/** A tmux COMMAND on the line — `tmux <verb>`, never `type -t tmux`; since D-8270 every fleet call is spelled through
+ *  the socket lookup, `_tmx <verb>` or, behind a wrapper that execs its argv, `"${TMX[@]}" <verb>`. */
+const TMUX_CALL = /(?:^|[\s;|&(!{`])(?:tmux|_tmx|"\$\{TMX\[@\]\}")\s+[a-z][a-z-]*/;
 /** The `-t` argument, as bash would group it: `"$( … )"` with its inner
  *  quotes, any other double- or single-quoted word, or a bare word. */
 const T_ARG = /\s-t\s+("\$\([^()]*\)"|"[^"]*"|'[^']*'|[^\s;|&)]+)/g;

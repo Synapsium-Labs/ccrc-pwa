@@ -457,7 +457,7 @@ _check_tmux_skew() {
   fi
 
   local vline client
-  vline="$(tmux -V 2>/dev/null)"
+  vline="$(_tmx -V 2>/dev/null)"
   client="$(_dr_trim "${vline#tmux }")"
   if [ -z "$client" ]; then
     _dr_skip tmux_skew "'tmux -V' printed \"$vline\", which names no client version, so there is nothing to compare a server against"
@@ -465,7 +465,7 @@ _check_tmux_skew() {
   fi
 
   local server rc
-  server="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux display-message -p '#{version}' 2>/dev/null)"; rc=$?
+  local TMX; _tmx_argv; server="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "${TMX[@]}" display-message -p '#{version}' 2>/dev/null)"; rc=$?
   if [ "$rc" -eq 124 ]; then
     # NOT the "no server" sentence below: a server that holds the socket
     # without answering and a socket nobody holds are two different facts
@@ -11701,7 +11701,7 @@ _dr_session_paths() {   # -> DR_SESSION_PATHS, DR_SESSION_COUNTS, DR_SESSION_TOT
   local role="" out="" name pid p="" l
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   [ "$role" = server ] && return 1
-  out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>/dev/null)" || out=""
+  local TMX; _tmx_argv; out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "${TMX[@]}" list-panes -a -F '#{session_name} #{pane_pid}' 2>/dev/null)" || out=""
   while read -r name pid; do
     case "$name" in cc-*) ;; *) continue ;; esac   # `_tmux`'s prefix: an operator's own tmux session is not a fleet session
     case "$pid" in ''|*[!0-9]*) continue ;; esac
