@@ -132,17 +132,51 @@ const API = new RegExp(`${HOST_START}api\\.github\\.com/repos/(${SEG})/(${SEG})(
 const RAW = new RegExp(`${HOST_START}(?:raw\\.githubusercontent|codeload\\.github)\\.com/(${SEG})/(${SEG})`, 'gi');
 /** The path of `gh api`, with or without its leading slash, and its pulls and issues, ending at the word's end, `/`, `?` or `#`. */
 const GH_API_PATH = new RegExp(`^/?repos/(${SEG})/(${SEG})(?:/(?:pulls|issues)/(\\d+)(?=$|[/?#]))?`);
-/** `GH_REPO=o/r`, the environment `gh` reads its repository from. */
-const GH_REPO_ENV = /GH_REPO=(['"]?)([^\s'"`;&|]+)/g;
+/** A `gh api` path word anywhere in a message, for the net (Task C22, review 1769 F2): `repos/o/r`, with or without its leading
+ *  slash, where a word starts (no letter, digit, `_`, `.`, `/` or `-` before it, so `api.github.com/repos/…` and
+ *  `src/repos/…` are not one). */
+const GH_PATH_WORD = new RegExp(`(?<![\\w./-])/?repos/(${SEG})/(${SEG})`, 'g');
+/** `GH_REPO=o/r`, the environment `gh` reads its repository from, and its YAML `env:` spelling `GH_REPO: o/r` (Task C22, review
+ *  1769 F8). */
+const GH_REPO_ENV = /GH_REPO(?:=|:[ \t]*)(['"]?)([^\s'"`;&|]+)/g;
+
+/** A letter or a digit, in any script, read by whole code point: what may not stand beside a `gh` word. */
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+const letterOrDigit = (cp: number | undefined): boolean => cp !== undefined && LETTER_OR_DIGIT.test(String.fromCodePoint(cp));
+
+/** Where the `gh` word starting at `at` ends, or null where none starts there (Task C22, review 1769 F4): `gh` in any case, or
+ *  `gh.exe`, with no letter or digit directly before or after it. Punctuation, a quote, a backtick, a bracket, an apostrophe
+ *  (`gh's`) and the text's start or end are boundaries, so `gh-pages` holds one. */
+function ghWordEnd(text: string, at: number): number | null {
+  if (at > 0) {
+    const pair = at >= 2 && /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(text.slice(at - 2, at));
+    if (letterOrDigit(text.codePointAt(pair ? at - 2 : at - 1))) return null;
+  }
+  const exe = text.slice(at + 2, at + 6).toLowerCase() === '.exe' && !letterOrDigit(text.codePointAt(at + 6));
+  const end = exe ? at + 6 : at + 2;
+  return letterOrDigit(text.codePointAt(end)) ? null : end;
+}
+
+/** A whole word that is a `gh` word (`ghWordEnd`): it ends the command before it. */
+const GH_COMMAND_WORD = /^gh(?:\.exe)?$/i;
 
 /** What a word of a `gh` command is: a flag, the value of the flag before it, or a positional. */
 type Role = 'flag' | 'value' | 'positional';
 
-/** One word of a `gh` command: its text with quotes removed, whether any of it was quoted, and its role. */
+/** One word of a `gh` command: its text with quotes removed, whether any of it was quoted, its role, and where it starts and
+ *  ends in the message. */
 interface Word {
   readonly text: string;
   readonly quoted: boolean;
   readonly role: Role;
+  readonly at: number;
+  readonly end: number;
+}
+
+/** Where a word a command read stands in the message: the net counts a repository flag or path inside one as that command's. */
+interface Span {
+  readonly at: number;
+  readonly end: number;
 }
 
 /** Whether the character at `at` ends a `gh` command, outside quotes (review 1760 F1): a backtick, a line break, `;`, `&`, `|`, or
@@ -161,10 +195,12 @@ function endsCommand(text: string, at: number): boolean {
  *  (`-a`, `-c`, `-e`, `-l`, `-m`, `-r`, `-s` and `--comment` in `pr` and `issue`); `-i` is `--include` in `api` but the
  *  interval in `pr checks`. Every other flag written without `=`, and every flag of any other group, takes the next word as
  *  its value: those groups' commands carry no number, so a set there could change nothing the chat reads. A boolean this list
- *  misses costs at most a link to text, never a home link: every repository flag of a `gh` message names its repository
- *  whether or not its command reads it (`repoFlags`, review 1768's net), and a command that loses its repository flag gives
- *  its number to an unknown repository (`ghCommand`). An entry it wrongly held could read a flag's value as the command's
- *  number, so it holds only what that help lists, and the test compares it entry by entry. */
+ *  misses costs at most a link to text, never a home link. In `pr` and `issue`: every repository flag of a `gh` message names
+ *  its repository whether or not its command reads it (`repoFlags`, review 1768's net), and a command that loses its repository
+ *  flag gives its number to an unknown repository (`ghCommand`). In `api`, whose repository is its path: every `repos/o/r`
+ *  word of a `gh` message names its repository too (Task C22, review 1769 F2; at Task C20 a path taken as a missed boolean's
+ *  value could open home). An entry it wrongly held could read a flag's value as the command's number, so it holds only what
+ *  that help lists, and the test compares it entry by entry. */
 export const GH_BOOLEAN_FLAGS: { readonly api: ReadonlySet<string>; readonly prIssue: ReadonlySet<string> } = {
   api: new Set(['--allow-escape-sequences', '--include', '-i', '--paginate', '--silent', '--slurp', '--verbose']),
   prIssue: new Set([
@@ -180,10 +216,21 @@ export const GH_BOOLEAN_FLAGS: { readonly api: ReadonlySet<string>; readonly prI
 /** A `gh` command group with a boolean set (`GH_BOOLEAN_FLAGS`), or null for every other group. */
 type Group = keyof typeof GH_BOOLEAN_FLAGS;
 
+/** Whether `-<letter>` is one of `gh`'s booleans in command group `group` (`GH_BOOLEAN_FLAGS`; a group with no set has none). */
+const isBoolean = (flag: string, group: Group | null): boolean => group !== null && GH_BOOLEAN_FLAGS[group].has(flag);
+
 /** Whether the flag `flag`, read in command group `group`, takes the next word as its value: written without `=`, and not one
- *  of `gh`'s booleans for that group (`GH_BOOLEAN_FLAGS`; a group with no set has none). */
-const takesValue = (flag: string, group: Group | null): boolean =>
-  !flag.includes('=') && !(group !== null && GH_BOOLEAN_FLAGS[group].has(flag));
+ *  of `gh`'s booleans for that group. A run of short flags (`-dw`, `-iXGET`, `-XPATCH`) is read as `gh` reads it, letter by
+ *  letter: booleans until the first letter that takes a value, which takes the rest of the word as that value, glued on, so the
+ *  word takes the next one only where that letter is its last (Task C22, review 1769 F2). */
+function takesValue(flag: string, group: Group | null): boolean {
+  if (flag.includes('=')) return false;
+  if (flag.startsWith('--') || flag.length <= 2) return !isBoolean(flag, group);
+  for (let k = 1; k < flag.length; k += 1) {
+    if (!isBoolean(`-${flag.charAt(k)}`, group)) return k === flag.length - 1;
+  }
+  return false;
+}
 
 /** A command's own number written `#n` where its number stands, read where the command ends at it (`ghWords`). */
 const HASH_NUMBER = /#(\d+)(?!\w)/y;
@@ -221,11 +268,11 @@ function ghWords(
    *  that is no flag), else it joins the command's words with its role. */
   const close = (): boolean => {
     if (!reading) return false;
-    const word = { text: cur, quoted };
+    const word = { text: cur, quoted, at: start, end: i };
     reading = false;
     cur = '';
     quoted = false;
-    if (!word.quoted && word.text === 'gh') return true;
+    if (!word.quoted && GH_COMMAND_WORD.test(word.text)) return true;
     if (expecting) {
       words.push({ ...word, role: 'value' });
       expecting = false;
@@ -307,23 +354,29 @@ const REPO_FLAG_WORD = /^(?:--repo(?:=|$)|-[A-Za-z]*?R)/;
 function ghCommand(
   words: readonly Word[],
   voided: boolean,
-): { repo: SaidRepo | null; number: string | null; lost: boolean } | null {
+): { repo: SaidRepo | null; number: string | null; lost: boolean; claims: Span[] } | null {
   const [head, verbOrPath, third] = words.filter((w) => w.role === 'positional');
   const numbered = (head?.text === 'pr' || head?.text === 'issue') && third !== undefined && /^#?\d+$/.test(third.text);
   const number = numbered ? third.text.replace('#', '') : null;
   if (head?.text === 'api' && verbOrPath !== undefined) {
     const m = GH_API_PATH.exec(verbOrPath.text);
-    if (m !== null) return { repo: said(`${m[1]!}/${m[2]!}`), number: m[3] ?? null, lost: voided };
+    if (m !== null) return { repo: said(`${m[1]!}/${m[2]!}`), number: m[3] ?? null, lost: voided, claims: [verbOrPath] };
   }
   let flag: string | null = null;
   let lost = false;
+  // The words this command reads as a repository flag, its own or lost: the net counts what it finds in them as this
+  // command's, and every other repository flag as no command's (Task C22, review 1769 F3).
+  const claims: Span[] = [];
   // A quoted argument is one word, so a flag inside it (`--body "see -R o/r"`) is never a word of its own, and neither is a
   // flag's value (`--body "--repo=o/r"`); a word that is exactly a quoted flag (`'-R'`) reaches `gh` as that flag once the
   // shell removes its quotes. An unquoted value spelled as a repository flag is one `gh` reads as that value, so the
   // command's repository is lost (review 1768 G1).
   words.forEach((w, i) => {
     if (w.role === 'value') {
-      if (!w.quoted && REPO_FLAG_WORD.test(w.text)) lost = true;
+      if (!w.quoted && REPO_FLAG_WORD.test(w.text)) {
+        lost = true;
+        claims.push(w);
+      }
       return;
     }
     if (w.role !== 'flag') return;
@@ -333,9 +386,11 @@ function ghCommand(
       else lost = true;
     } else if (w.text.startsWith('--repo=')) flag = w.text.slice('--repo='.length);
     else if (REPO_FLAG_WORD.test(w.text)) lost = true;
+    else return;
+    claims.push(w);
   });
   if (flag === null && !lost) return null;
-  return { repo: flag === null ? null : flagRepo(flag), number, lost: lost || voided };
+  return { repo: flag === null ? null : flagRepo(flag), number, lost: lost || voided, claims };
 }
 
 /** A repository flag's spelling where a word starts (no letter, digit, `_` or `-` before it): `--repo`, or a run of short
@@ -344,38 +399,75 @@ const REPO_FLAG = /(?<![\w-])(?:--repo(?![\w-])|-[A-Za-z]*?R)/g;
 /** A character that ends a repository flag's unquoted value. */
 const VALUE_END = /[\s`;&|,()<>"']/;
 
-/** The value of the repository flag whose spelling ends at `at`: after `=`, after spaces or tabs, or glued on; a quoted value
- *  has its quotes removed. Null where none can be read: nothing there, a line break first, or a quote left open on its line
- *  (the grammar trims a line break, so a quote closed on a later line is refused here). */
-function repoFlagValue(text: string, at: number): string | null {
+/** The value of the repository flag whose spelling ends at `at`, read no further than `limit`, where the next repository flag's
+ *  spelling starts: after `=`, after spaces or tabs, or glued on; a quoted value has its quotes removed. Null where none can
+ *  be read: nothing there, a line break first, or a quote not closed on its line before `limit` (the grammar trims a line
+ *  break, so a quote closed on a later line is refused here). A value never runs past the next flag, so each character is
+ *  read once however many flags a run of them holds (Task C22, review 1769 F1). */
+function repoFlagValue(text: string, at: number, limit: number): string | null {
   let k = at;
   const c = text.charAt(k);
   if (c === '=') k += 1;
   else if (c === ' ' || c === '\t') {
+    // A flag starts at a `-`, never inside a run of spaces, so this run ends at `limit` at the latest.
     while (text.charAt(k) === ' ' || text.charAt(k) === '\t') k += 1;
   }
   const q = text.charAt(k);
   if (q === '"' || q === "'") {
-    const shut = text.indexOf(q, k + 1);
-    return shut === -1 || text.slice(k + 1, shut).includes('\n') ? null : text.slice(k + 1, shut);
+    for (let e = k + 1; e < limit; e += 1) {
+      const ch = text.charAt(e);
+      if (ch === q) return text.slice(k + 1, e);
+      if (ch === '\n') return null;
+    }
+    return null;
   }
   let e = k;
-  while (e < text.length && !VALUE_END.test(text.charAt(e))) e += 1;
+  while (e < limit && !VALUE_END.test(text.charAt(e))) e += 1;
   return e > k ? text.slice(k, e) : null;
 }
 
-/** The net (Task C20 fix round 2, review 1768): every repository flag in a message that holds a `gh` word names its repository
- *  for rule 3, wherever it stands: inside or outside the command the reader reads, after a flag it lost, in a quoted body,
- *  after a `#` word. One the chat cannot read names an unknown repository. So a parser corner that loses a command's
- *  repository flag costs at most a link to text, never a home link. `ghCommand` still decides which number a repository
- *  is for. A flag of another program (`cp -R src/lib`) in such a message names its word too, and its bare names are text. */
-function repoFlags(text: string): SaidRepo[] {
-  const out: SaidRepo[] = [];
-  for (const m of text.matchAll(REPO_FLAG)) {
-    const value = repoFlagValue(text, m.index + m[0].length);
-    out.push(value === null ? LOST : flagRepo(value));
+/** What the net found (`repoFlags`): every repository it names by key, those no command claimed, and whether it read any
+ *  repository flag at all. */
+interface Net {
+  readonly named: Map<string, SaidRepo>;
+  readonly unclaimed: Map<string, SaidRepo>;
+  flags: boolean;
+}
+
+/** Whether the net's find at `index` stands in a word a command read (`claims`, in message order): `cursor` walks the claims
+ *  with the finds, which come in message order too, so the walk is one pass. */
+function claimedAt(claims: readonly Span[], cursor: { i: number }, index: number): boolean {
+  while (cursor.i < claims.length && claims[cursor.i]!.end <= index) cursor.i += 1;
+  return cursor.i < claims.length && claims[cursor.i]!.at <= index;
+}
+
+/** The net (Task C20 fix round 2, review 1768; Task C22, review 1769): every repository flag in a message that holds a `gh`
+ *  word names its repository for rule 3, wherever it stands: inside or outside the command the reader reads, after a flag it
+ *  lost, in a quoted body, after a `#` word. One the chat cannot read names an unknown repository. So does every `gh api`
+ *  path word `repos/o/r` (review 1769 F2). So a parser corner that loses a command's repository flag or path costs at most a
+ *  link to text, never a home link. `ghCommand` still decides which number a repository is for; a repository the net finds
+ *  in no word a command read (`claims`) is no command's, so it is a candidate for every number the message gives a
+ *  repository (`messageRepos`, review 1769 F3). A flag of another program (`cp -R src/lib`) in such a message names its word
+ *  too, and its bare names are text. One forward pass: each flag's value ends where the next flag starts (`repoFlagValue`). */
+function repoFlags(text: string, claims: readonly Span[]): Net {
+  const net: Net = { named: new Map(), unclaimed: new Map(), flags: false };
+  const found = (r: SaidRepo, claimed: boolean): void => {
+    if (!net.named.has(r.key)) net.named.set(r.key, r);
+    if (!claimed && !net.unclaimed.has(r.key)) net.unclaimed.set(r.key, r);
+  };
+  const flagCursor = { i: 0 };
+  const flags = text.matchAll(REPO_FLAG);
+  for (let m = flags.next(); !m.done; ) {
+    const next = flags.next();
+    const at = m.value.index;
+    const value = repoFlagValue(text, at + m.value[0].length, next.done ? text.length : next.value.index);
+    net.flags = true;
+    found(value === null ? LOST : flagRepo(value), claimedAt(claims, flagCursor, at));
+    m = next;
   }
-  return out;
+  const pathCursor = { i: 0 };
+  for (const m of text.matchAll(GH_PATH_WORD)) found(said(`${m[1]!}/${m[2]!}`), claimedAt(claims, pathCursor, m.index));
+  return net;
 }
 
 /** One message's evidence, read in one forward pass of each reader over its raw text. */
@@ -429,35 +521,51 @@ export function messageRepos(text: string): MessageRepos {
     if (!wordBefore(text, m.index)) named.add(said(m[2]!).key);
   }
   // `gh` commands, each read from its own words to its own end, so a flag reaches only its command's number (review 1760 F1).
-  // A `gh` word starts where the name boundary starts one and a space follows it (review 1760 F6).
+  // The net runs in a message that holds a `gh` word (`ghWordEnd`, Task C22 review 1769 F4); a command is read where a space
+  // follows that word (review 1760 F6).
   let holdsGh = false;
   const hashed: string[] = [];
-  for (let at = text.indexOf('gh'); at >= 0; at = text.indexOf('gh', at)) {
-    if (wordBefore(text, at) || !/\s/.test(text.charAt(at + 2))) {
-      at += 2;
+  const claims: Span[] = [];
+  const gh = /gh/gi;
+  for (let m = gh.exec(text); m !== null; m = gh.exec(text)) {
+    const end = ghWordEnd(text, m.index);
+    if (end === null) continue;
+    holdsGh = true;
+    if (!/\s/.test(text.charAt(end))) {
+      gh.lastIndex = end;
       continue;
     }
-    holdsGh = true;
-    const read = ghWords(text, at + 2);
+    const read = ghWords(text, end);
     const command = ghCommand(read.words, read.voided);
     if (command !== null) {
       if (command.repo !== null) named.add(command.repo.key);
       if (command.number !== null) atNumber(command.number, command.lost || command.repo === null ? LOST : command.repo);
+      claims.push(...command.claims);
     }
     if (read.hashed !== null) hashed.push(read.hashed);
-    at = Math.max(read.end, at + 2);
+    gh.lastIndex = Math.max(read.end, end);
   }
+  let unclaimed: ReadonlyMap<string, SaidRepo> = new Map();
   if (holdsGh) {
-    const flagged = repoFlags(text);
-    for (const r of flagged) named.add(r.key);
+    const net = repoFlags(text, claims);
+    for (const key of net.named.keys()) named.add(key);
+    unclaimed = net.unclaimed;
     // A command ended by its own `#n` (a shell comment, review 1766 F7) read no repository for it. Where the message names
     // one by a flag, that number is in a repository the chat cannot tell (review 1768 G3).
-    if (flagged.length > 0) for (const n of hashed) atNumber(n, LOST);
+    if (net.flags) for (const n of hashed) atNumber(n, LOST);
   }
   for (const q of qualifiedNames(text)) {
     const r = qualifiedRepo(q.repo);
     named.add(r.key);
     atNumber(q.id, r);
+  }
+  // A repository the net found in no command's words is a candidate for every number the message gives a repository, so a
+  // number with another repository is text (Task C22, review 1769 F3). A number given none goes to rule 3, which that
+  // repository already decides. Two such candidates tell one repository from many, so a number takes at most two of them.
+  if (unclaimed.size > 0) {
+    const extra: SaidRepo[] = [];
+    for (const r of unclaimed.values()) if (extra.push(r) === 2) break;
+    for (const at of numbers.values()) for (const r of extra) if (!at.has(r.key)) at.set(r.key, r);
   }
   return { named, numbers, commits: commitIndex(exact, addresses) };
 }

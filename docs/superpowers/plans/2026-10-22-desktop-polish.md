@@ -3311,6 +3311,35 @@ are fixed. Details in `c20.md`.
 **Acceptance.** Every item is fixed, or recorded as fixed already or as record-only, in `c20.md`; every reproduction of
 reviews 1762 and 1766 is a row; the mutation count is recorded. **Rollback.** A plain revert.
 
+### Task C22: the gh reader's net reads in linear time, and its last gaps fail toward text (D-8196) — now
+
+**Why.** Review 1769, the last review of Task C20, found the net reading a spaceless run of repository flags in quadratic time
+and memory (F1, a regression C20 introduced), and four gaps where a bare name still opened home or another repository the
+message did not mean (F2 to F4, F8). The rule stays as Tasks C21 and C20 set it in R15: open the repository the message means,
+or stay text. Every change here fails toward text. The receipts are in `c22.md`.
+
+**Items, and what was done.**
+- **F1, cost.** A repository flag's value is read no further than the next repository flag's start, so each character is read
+  a bounded number of times and the net keeps one key per distinct repository. Budget pins over 1 MiB runs of `-R=`,
+  `--repo=`, `-R/`, `-R:`, `-sR=` and `--repo.`, with margins measured against round 2's net.
+- **F2, the api path.** A glued short flag value (`-XPATCH`, `-Hx:y`, `-q.title`, `-iXGET`) is one word and takes no next
+  word, so the path after it is read. The net also names the repository of every `repos/o/r` path word in a `gh` message, the
+  way it names a `-R` flag, so a lost path gives text or its repository, never home.
+- **F3, unclaimed flags.** A repository the net finds in no word a command read is a candidate for every number the message
+  gives a repository, so rule 2 sees two repositories and gives text.
+- **F4, the gate.** A `gh` word is `gh` in any case, or `gh.exe`, with no letter or digit in any script on either side;
+  punctuation, quotes, backticks, brackets, an apostrophe and the text's start or end are boundaries.
+- **F8.** `GH_REPO: o/r`, the YAML `env:` spelling, names its repository.
+- **F9.** `c20.md`'s round-2 mutant total is corrected; its G8 row and the boolean list's doc comment say what holds for `api`.
+- **F5, F6, F7.** F5 stands as ruled (all three lost-command-number arms); F6 and F7 stay recorded.
+
+R15 gains one sentence for each changed rule, and nothing else in the spec changes.
+
+- **D-8196** - `gh-net-linear-and-last-gaps`: Task C22, issued on 2026-11-11. Review 1769's carried findings: the net's flag values end at the next flag (F1), glued short flag values and `repos/o/r` path words (F2), unclaimed repository flags as candidates for every number (F3), the `gh` word gate (F4) and `GH_REPO: o/r` (F8), each failing toward text; `c20.md`'s record corrected (F2, F9). Departures are named by slug in `c22.md`.
+
+**Acceptance.** Every review 1769 shape the brief names is a row; the budget pins hold with recorded margins; the mutation
+count is recorded in `c22.md`. **Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
