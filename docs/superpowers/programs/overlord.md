@@ -18,7 +18,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | merged |
 | spec | The operator's approval, the rulings on the review's fifteen questions, R16 and R17 (H40 to H45) | #2605 | merged |
 | W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | #2632; plan `w0-spike.md` | merged |
-| W0b | The spike, Tasks 8 to 11 (fleet reads, the subject, account facts, the quiz baseline), then Task 12 for both halves | plan `w0-spike.md` | waits for the operator's setup item (item 163) |
+| W0b | The spike, Tasks 8 to 11 (fleet reads, the subject, account facts, the quiz baseline), then Task 12 for both halves | run 1820; plan `w0-spike.md` | running: the subject is set up; the lanes and account facts wait on item 163 |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | Each role skill's contract moved first, behind a notice that tells a session how to see a cut | #2555 (supersedes #2530) | merged |
 | spec | The operator's ruling on the ratchet's scope | #2556 | merged |
@@ -26,8 +26,8 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
 | W1a, foundations | Ports for time and chance | #2623; plan `w1a-time-ports.md` | merged |
 | W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | #2624; plan `w1a-roles.md` | merged |
-| W1a, foundations | The trigger table and the case lane, in shadow | run 1785, #2644; plan `w1a-triggers-cases.md` | wave-done verified 2026-11-11; under review (run 1793) |
-| W1a, foundations | The simulator's skeleton and the first model | run 1788, #2649; plan `w1a-simulator.md` | open: Tasks 1 to 6 done, waiting on its fast run |
+| W1a, foundations | The trigger table and the case lane, in shadow | #2644; plan `w1a-triggers-cases.md` | merged (962f88b64) |
+| W1a, foundations | The simulator's skeleton and the first model | #2649; plan `w1a-simulator.md` | merged (c8c7a116f) |
 | W1a, the machine | Generations, the receipt and renewal for every long-lived role; the anchor and the card; notes; probes; launch profiles | not planned yet | waits for W0's measurements |
 | W1 | Designate and talk | not planned yet | waits for W1a (D-8126's build, #2606, merged 2026-11-11) |
 | W2 | Route and follow up | not planned yet | follows W1 |
@@ -100,8 +100,9 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   are W0a's three, all of method: the rig tooling beyond the files Task 2 named, the scenario arms split one
   environment to a run, and the force arm pinning its setting sources. D-8240 is the simulator's: the reach
   invariant's clock stops while the server is down. D-8241 is the trigger table's: the case read looks back two
-  windows, so a consumed episode never counts again. D-8242 is the simulator's second: its world bounds the scheduled
-  calls, so a zero-delay re-arm fails instead of hanging. Nine numbers of the block remain unwritten.
+  windows, so a consumed episode does not count again unless its rows span more than 14 days. D-8242 is the simulator's second: its world bounds the scheduled
+  calls, so a zero-delay re-arm fails instead of hanging. D-8243 is W0b's: it runs on the fleet's own accounts.
+  Eight numbers of the block remain unwritten.
 - **Review 1780 on the time ports (2026-11-11), at 65415597a.** Panel verdict: no critical finding. One important
   finding was kept by two of three refuters: the ambient scan missed the `globalThis.`, `?.` and `node:process` forms.
   Six minor findings and five observations; one raised-important finding (a zero-delay re-arm hangs the fake's
@@ -142,6 +143,41 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   nested route with a recursive scan and a raw-text backstop, and takes five of the minors.
 - **Neither the role table nor the time ports added the role table's files to `TIME_PORT_FILES`,** because each
   landed without the other. The trigger table's piece adds them, beside its own files.
+- **Reviews 1793, 1802, 1814 and 1817 on the trigger table (2026-11-11).** Round one (1793, at e5983d990) found five
+  important items. F1, an occurrence is one run, arm and key, is the spec's §10.5 definition and stays; a test pins the
+  known width (three queued deliveries behind one gate are three occurrences of `mail-stuck`). The rest were fixed: a
+  case never opens below its evidence (`casesDue` skips an episode later than `now`), four missing reds, and a failed
+  run read is warned and answered as `unread: 'runs'`. Round two (1802) found that the rewritten test no longer pinned
+  "a failed read lowers the count"; fixed with a test only. Round three (1814) found four minors and nothing blocking.
+  Ruled: accept. The merge queue then put #2644 out: #2444 had landed a `coord.db` migration 57 first. The cap was
+  lifted by one round, the worker took `main` and moved its migration to 58 with its body unchanged, and round four
+  (1817) found nothing. Recorded, not fixed: the read-bound sentence is broad for an episode wholly older than 28
+  days (no count goes wrong); the note's line 3 still speaks of a fold; the D-8241 residual has no test (shadow, so a
+  wrong count, never a wrong act); the tick test sees only the dispatch, and no oracle grid input is later than now.
+- **Open for W4b (2026-11-11, review 1793 F1).** A per-delivery arm (`mail-stuck`, `coord-deaf`, the quiet ladder's
+  moving key) counts one stall more than once, because an occurrence is one run, arm and key. The lane runs in shadow,
+  so this changes no act. Whether the spec's definition should change is the question for the cases going live in
+  W4b, where the shadow counts show how often it happens.
+- **Reviews 1796, 1813 and 1816 on the simulator (2026-11-11).** Round one (1796, at e6ad26dd9) judged D-8240 sound
+  against spec I1 and D-8242 sound with a false premise, and found five important items: `simulate` could not see an
+  async rejection; four more decider mutants (M5 to M8) survived all 32 seeds; the runner's failing-baseline arm had no
+  red row; the model had two homes; D-8242's premise. Ruled: make `simulate` async and fix M5 and M6 in the scenario,
+  so both join the mutant set; M7 and M8 stay known survivors; the research copy stays as W0's record with one header
+  line pointing at the test copy. Round two (1813) found five minors; one, a pending promise passing silently, was
+  fixed with the rest in a short last round: `settle()` throws on a pending call, two runs at once are refused, the
+  redundant microtask turn is gone, and the boot phase and the three resets are pinned. Round three (1816) found four
+  minors and nothing blocking. Ruled: accept. Recorded, not fixed: `settle()`'s throw names no scenario or seed; two
+  `sawTwo = false` resets are equivalent mutants; a crash leaves a cancelled server call's promise pending, which
+  would trip the throw (no async lane does this yet); the advisories of round one, in the note's known limits.
+- **Open for the spec (2026-11-11, review 1796 F2).** Both coordinator-blocked invariants fail only towards the
+  operator: a push that comes late or not at all. Nothing checks a push that comes early or too often, so mutants M7
+  (rung 1 on first sight of held mail) and M8 (rung 2 at minute 0) survive. Spec Table 11.7b names no such invariant.
+  Whether it needs a "no push before its cause" invariant is the spec's question, for the wave that turns the push
+  lane on.
+- **Owed by the time-ports owner (2026-11-11).** Three local `mulberry32` copies that D-8225's nine missed;
+  `fakeTime.ts`'s "one of nine local copies" comment; `time-ports-contract.test.ts`'s title after docs-grammar's copy;
+  and the scan gaps the simulator's note adds (`(process as any).hrtime()`, `global.globalThis.Math.random()`, and
+  `date('subsec', col)`). None is the simulator's to fix.
 - **Open for the stall code's owner (2026-11-11, the simulator plan's question 2).** After a restart, a re-opened
   coord-blocked episode can push rung 1 after a rung 2, because the run-less push latch is in memory (D-3751).
   `stall.ts` documents "pushes it once more", not a lower push. The simulator's worked example states the rung never
@@ -220,23 +256,31 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 - **Public repository.** Plans, commits, branch names and issues carry no private names, hosts, accounts or people.
 - **A kept `Cancel` is a scheduler** (review 1780, O1). A file that keeps the `Cancel` from `scheduler.after(…)` on an
   object field or at module scope schedules, so it is L4, but the ring rule's timer reader sees only `setTimeout` and
-  `setInterval`. The first piece that keeps one (the renewal lane, or the simulator) teaches the reader `.after(` first.
-  The simulator piece may also cap how many calls one `advance` fires, so a zero-delay re-arm fails instead of hanging.
+  `setInterval`. The first piece that keeps one (the renewal lane) teaches the reader `.after(` first. The simulator
+  bounds the scheduled calls per world instead (D-8242), so a zero-delay re-arm fails rather than hanging.
+- **A simulator predicate that reads sweep times assumes the simulator's beat** (review 1816 F1). CB-reach's
+  threshold arm is exact only where sweeps fire at the boot's phase plus whole sweeps, as in the simulator. D-8214 runs
+  a simulator predicate unchanged in the W1 monitor, where sweeps drift, so the monitor carries the real sweep phase or
+  keeps the plan's looser bound, `max(m + COORD_BLOCKED_HELD_MS, steadySince) + STALL_SWEEP_MS`. The same holds for
+  D-8240's down rule, which a monitor that sees only boots cannot apply.
+- **An async lane in the simulator runs after the timers** (the simulator's known limit). A continuation after an
+  `await` runs after the whole `runUntil`, so an async lane is not interleaved with the timers, and only microtasks
+  are drained. A W1 piece that tests an async lane in the simulator says so, or extends the world.
 
 ## Next-wave brief
 
 - **Where to start.** Read the spec's "In short", §14 (the build order) and "Where things stand". Then read the plan
   of the piece you take. Each plan is self-contained.
-- **Running now (2026-11-11).** W0a (run 1774, its last fix round), the trigger table and case lane (run 1785) and
-  the simulator (run 1788), one worker each. Their claims are placed by each worker before its first edit, through
-  the peer protocol (§3.3.9). The role table (#2624) and the time ports (#2623) have merged.
-- **Next.** The simulator's Task 6 once W0a's #2632 merges; W0b once the operator answers the setup item. Then W1a's
-  machine pieces, planned from W0's measurements.
+- **Running now (2026-11-11).** W0b (run 1820), on the subject the operator set up. W0a (#2632) and the four W1a
+  foundations have merged: the role table (#2624), the time ports (#2623), the trigger table and case lane (#2644)
+  and the simulator (#2649).
+- **Next.** W1a's machine pieces, planned from W0's measurements.
 - **What was built before the programme's run opened.** The mail-pace table (#2528), each role skill's contract moved
   first (#2555), and the lean coordinator skill (#2557, #2558, #2560, #2559), with the cap on each `SKILL.md` behind
   it.
 - **What must not start.** W1 and later. They wait for W1a (D-8126's build, #2606, has merged).
-- **What the operator owes.** W0b's setup, item 163 (on the fleet's own accounts), and W0's question 1 (item 154).
+- **What the operator owes.** The rest of W0b's setup, item 163 (the lanes, the account facts, the accounts running
+  Fable), the console acts W0b asks for, and W0's question 1 (item 154).
   Question 2, the replay baseline, is put during Task 11. The reserved accounts
   are named in Settings once W1's reservation rule is live.
 - **What to report.** Each piece ends with its pull request merged through the queue, its plan's "Deviations found"
