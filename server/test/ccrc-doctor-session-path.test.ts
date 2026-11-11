@@ -13,6 +13,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, sy
 import { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { CCD } from './ccdWsHelpers.js';
 import { BASH, CCRC_SRC, CHECKS_SRC, REPO, doctorEnv, healthy, installDoctorHooks, lineFor, realPath, runDoctor, shq, stub } from './ccrc-doctorFixture.js';
 
 removeTmpFixturesEachTest();
@@ -233,7 +234,7 @@ describe('ccrc doctor: path measures the PATH a session gets', () => {
 
   it('doctor\'s session to come is the PATH ccd\'s launch step really makes, from any manager PATH (D-8333)', () => {
     const home = healthy('ccrc-doctor-spath-step-');
-    const step = /^SESSION_PANE_PATH=(\$'.*')$/m.exec(readFileSync(join(REPO, 'ccd', 'ccd'), 'utf8'))?.[1];
+    const step = /^SESSION_PANE_PATH=(\$'.*')$/m.exec(readFileSync(CCD, 'utf8'))?.[1];
     expect(step, 'ccd defines its launch step').toBeTruthy();
     const bin = localBin(home);
     for (const p of ['/usr/bin:/bin', `${bin}:/usr/bin`, `/usr/bin:${bin}`, `/opt${bin}:/usr/bin`, '']) {
