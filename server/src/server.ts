@@ -82,6 +82,7 @@ import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/ro
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
+import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
@@ -242,6 +243,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/secrets',
   // The plan (D-8181): epic, checkpoint and ticket titles and a close's reason are written by sessions.
   '/api/programmes/:slug/plan',
+  // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
+  '/api/hierarchy',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2094,6 +2097,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
     },
     now: () => Date.now(),
+  });
+
+  // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
+  registerHierarchyRoutes(app, {
+    plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),

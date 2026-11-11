@@ -477,12 +477,44 @@ export function setHierarchySettings(db: DatabaseSync, project: string, s: Hiera
   });
 }
 
+/** Every project the hierarchy settings can name: each `project_linking` row and each programme's home, with its settings. */
+export interface HierarchyProjectFacts { project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean }
+export function hierarchyProjectsOf(db: DatabaseSync): HierarchyProjectFacts[] {
+  const rows = db.prepare(
+    'SELECT project, teamKey, initiatives, linearOwner, ownsTeam FROM project_linking '
+    + 'UNION ALL SELECT homeProject, NULL, \'on\', NULL, 0 FROM programs WHERE homeProject IS NOT NULL '
+    + 'AND homeProject NOT IN (SELECT project FROM project_linking) GROUP BY homeProject ORDER BY 1',
+  ).all() as unknown as Raw[];
+  return rows.map((r) => ({
+    project: r.project as string, teamKey: (r.teamKey as string | null) ?? null, initiatives: r.initiatives === 'off' ? 'off' as const : 'on' as const,
+    linearOwner: (r.linearOwner as string | null) ?? null, ownsTeam: r.ownsTeam === 1,
+  }));
+}
+/** The coordinator of a project's newest programme (the plan owner of the newest programme homed there), else null. */
+export function latestProgrammeCoordinator(db: DatabaseSync, project: string): string | null {
+  const progs = db.prepare('SELECT slug FROM programs WHERE homeProject = ? AND slug <> ? ORDER BY createdAt DESC, rowid DESC')
+    .all(project, LINEAR_SYNC_PROGRAMME) as unknown as Raw[];
+  for (const p of progs) {
+    const owner = planOwnerOf(db, p.slug as string);
+    if (owner !== null) return owner;
+  }
+  return null;
+}
+/** Every session id that has claimed a run or declared a plan: the ids a Linear owner may name. */
+export function coordinatorIdsOf(db: DatabaseSync): string[] {
+  const rows = db.prepare(
+    'SELECT claimedBy AS id FROM runs WHERE claimedBy IS NOT NULL UNION SELECT planBy FROM programs WHERE planBy IS NOT NULL ORDER BY 1',
+  ).all() as unknown as Raw[];
+  return rows.map((r) => r.id as string);
+}
+
 // ── The port ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const PORT_FUNCTIONS = {
   planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, hierarchySettingsOf, setHierarchySettings,
+  hierarchyProjectsOf, latestProgrammeCoordinator, coordinatorIdsOf,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };
