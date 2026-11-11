@@ -92,6 +92,13 @@ describe('the initiatives probe and the provenance line', () => {
     expect(readInitiativesProbe({ data: null, errors: [{ message: 'x', extensions: { code: 'SOMETHING_ELSE' } }] })).toBe('unknown');
   });
 
+  it('the issue write rows answer the identifier beside the id', () => {
+    for (const op of ['issueCreate', 'issueUpdate'] as const) {
+      const r = LINEAR_CCRC_OPS[op].shape(linearRecord(FIXTURE[op]).body);
+      expect(r).toMatchObject({ ok: true, value: { identifier: expect.stringMatching(/^[A-Za-z][A-Za-z0-9]*-\d+$/) } });
+    }
+  });
+
   it('withCcrcProvenance appends the line once', () => {
     expect(withCcrcProvenance(withCcrcProvenance('a'))).toBe(`a\n\n${LINEAR_CCRC_PROVENANCE_LINE}`);
     expect(withCcrcProvenance('')).toBe(LINEAR_CCRC_PROVENANCE_LINE);

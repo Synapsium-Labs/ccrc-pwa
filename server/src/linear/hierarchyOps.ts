@@ -63,7 +63,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const STATE_TYPE = /^[a-z_]{1,32}$/;
-const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_]{0,15}-[0-9]{1,9}$/;
+const IDENTIFIER = /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/;
 const TEAM_KEY = /^[A-Za-z][A-Za-z0-9]{0,15}$/;
 
 const uuid: Read<string> = (v) => (isLinearUuid(v) ? v : BAD);
@@ -189,7 +189,7 @@ const listShape = (key: string, read: Read<Record<string, unknown>>, paged: bool
 };
 
 /** A mutation's answer: `success` true, and for a create the new object's id. */
-const writeShape = (key: string, object: string | null, creates: boolean) => (body: unknown): CcrcShaped => {
+const writeShape = (key: string, object: string | null, creates: boolean, withIdentifier = false) => (body: unknown): CcrcShaped => {
   const data = dataOf(body);
   if (isShaped(data)) return data;
   const payload = data[key];
@@ -198,7 +198,10 @@ const writeShape = (key: string, object: string | null, creates: boolean) => (bo
   if (object === null) return { ok: true, value: {}, created: null };
   const id = at(payload[object], 'id', uuid);
   if (id === BAD) return MALFORMED;
-  return { ok: true, value: { id }, created: creates ? id : null };
+  if (!withIdentifier) return { ok: true, value: { id }, created: creates ? id : null };
+  const ident = at(payload[object], 'identifier', identifier);
+  if (ident === BAD) return MALFORMED;
+  return { ok: true, value: { id, identifier: ident }, created: creates ? id : null };
 };
 
 /** Whether the initiatives capability answered: `nodes` means on. The off answer is unrecorded until FX2 (design §15),
@@ -280,9 +283,9 @@ export const LINEAR_CCRC_OPS: Readonly<Record<CcrcOpName, CcrcOpRow>> = Object.f
   issueRelationCreate: write('issueRelationCreate', D.issueRelationCreate, 'relation-create',
     createVars('issueId', 'relatedIssueId', 'type'), writeShape('issueRelationCreate', 'issueRelation', true)),
 
-  issueCreate: write('issueCreate', LINEAR_DOCUMENTS.create, 'create', createVars(...ISSUE_KEYS), writeShape('issueCreate', 'issue', true)),
+  issueCreate: write('issueCreate', LINEAR_DOCUMENTS.create, 'create', createVars(...ISSUE_KEYS), writeShape('issueCreate', 'issue', true, true)),
   issueUpdate: write('issueUpdate', LINEAR_DOCUMENTS.update, 'update', updateVars(...ISSUE_KEYS),
-    writeShape('issueUpdate', 'issue', false)),
+    writeShape('issueUpdate', 'issue', false, true)),
   issueComment: write('issueComment', LINEAR_DOCUMENTS.comment, 'comment', createVars('issueId', 'body'), writeShape('commentCreate', 'comment', true)),
   issueLink: write('issueLink', LINEAR_DOCUMENTS.link, 'link', readVars('issueId', 'url', 'title'), writeShape('attachmentLinkURL', 'attachment', true)),
 });
