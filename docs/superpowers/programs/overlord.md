@@ -17,7 +17,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The seams of the four follow-ups closed: 29 restatements brought into line, the door gate order completed | #2542 | merged |
 | spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | merged |
 | spec | The operator's approval, the rulings on the review's fifteen questions, R16 and R17 (H40 to H45) | #2605 | merged |
-| W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | run 1774, #2632; plan `w0-spike.md` | wave-done verified 2026-11-11; under review (run 1783) |
+| W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | run 1774, #2632; plan `w0-spike.md` | review 1783: no critical finding; fix round 1 sent 2026-11-11 |
 | W0b | The spike, Tasks 8 to 11 (fleet reads, the subject, account facts, the quiz baseline), then Task 12 for both halves | plan `w0-spike.md` | waits for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | Each role skill's contract moved first, behind a notice that tells a session how to see a cut | #2555 (supersedes #2530) | merged |
@@ -116,6 +116,13 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   helper named like a clock or chance member, so an aliased import of one read as ambient (latent, no hit in the
   tree). Five minors: two unpinned guards, `'subsec'` with modifiers, the note's wording, and more recorded gaps.
   Ruled: fix all six in a second, last round. The index's wording of D-8232 and D-8233 is corrected here to match.
+- **Review 1783 on W0a (2026-11-11), at 3465cf67c.** No critical finding; 12 important and 5 minor, most of them
+  rows or spec paragraphs that claim more than their committed scenario shows (the D-6798 conflict rested on an
+  uncommitted run), plus four rig holes: the bypass scope was a spelling check, a positional argument could ride a
+  launch, a `cd` leaked out of a snapshot, and the mock's main-request marker lived outside the tree. The refute pass
+  was reduced: the reviewer verified six findings itself and left the rest unrefuted. Ruled: one fix round. Re-measure
+  the D-6798 row from a committed scenario, close the rig holes with tests, word every row as what the tree reproduces,
+  and keep design consequences out of the spec's "As measured" paragraphs.
 - **A work branch cannot edit an existing plan file** (2026-11-11, measured on #2623) unless its commit carries a
   Ledger-Edit trailer, as W0a's did: the ledger-guard CI step refuses it. So a worker writes its departures, its rulings within the plan and its deferred minors in a new note
   beside its plan (the time ports' is `2026-11-10-overlord/w1a-time-ports/departures.md`), and this coordinator folds
