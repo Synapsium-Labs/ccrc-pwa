@@ -136,11 +136,12 @@ python3 -I deploy/measure-codex-watch.py --lane <id> --flip <UTC stamp> [--basel
 - **What it reads, and nothing else.** `<home>/.ccrc/codex/<id>/lane.json` (the mode, the auth directory and the
   files' names), `bridge.stats.json`, the auth status file (never the credential), `<home>/.ccrc/logs/codex/<id>/
   litellm.log`, the lane's advance and windows files under `<home>/.ccrc/models/`, and every
-  `<home>/.claude*/projects/*/*.jsonl`. From a transcript row it reads `type`, `subtype`, `timestamp`, `uuid`,
+  `<home>/.claude*/projects/**/*.jsonl`. From a transcript row it reads `type`, `subtype`, `timestamp`, `uuid`,
   `isSidechain`, `isApiErrorMessage`, `version`, `compactMetadata.trigger`, `compactMetadata.preTokens`, `message.id`
   and `message.model`, never a row's text.
-- **What leaves.** Counts, rates, stamps, model names, and the names the bridge's drift counters already hold. No
-  session id, path, prompt or request id.
+- **What leaves.** Counts, rates, stamps, model and class names, Claude Code version numbers, the status's state,
+  last error code and unsaved flag, the store's outcome names and its entry (state, reason, set-aside), each event's
+  kind, and the names the bridge's drift counters already hold. No session id, path, prompt or request id.
 - **The five criteria**, each `pass`, `fail` or `unmeasured` with its numbers, as the Stage 2 runbook's step 5 words
   them:
   1. `outcomes.emptyArguments` is 0.
@@ -151,9 +152,11 @@ python3 -I deploy/measure-codex-watch.py --lane <id> --flip <UTC stamp> [--basel
   3. The compaction rate, on the main thread only, against a comparable baseline: the baseline is cut at the last
      class advance or window change before the flip. Each model's baseline rate is weighted by the watch's calls,
      and the reading fails only when the watch's boundaries exceed that expectation and the one-sided Poisson test
-     gives p < 0.05. It reads `unmeasured` when the compaction point moved more than 10%, or when the comparable
-     baseline holds fewer than 5 sessions or 20 boundaries. The box scope, a paired reading and the version mix are
-     context.
+     gives p < 0.05. A session that began before the cut is left out of the comparable baseline. A model counts only
+     when its own comparable baseline holds 5 sessions and 20 boundaries. It reads `unmeasured` when the compaction
+     point moved more than 10% or is missing on either side, when the comparable baseline holds fewer than 5 sessions
+     or 20 boundaries, when any watch boundary falls on a model with no such baseline, and when a model file cannot
+     be read or may have lost an entry. The box scope, a paired reading and the version mix are context.
   4. The credential, in the auth library's own vocabulary. It fails when the library's `bars` refuses the status,
      when the code is in `NEEDS_SIGNIN_CODES` or `CONFIG_ERROR_CODES`, with no credential, with an expired token, or
      when the last refresh is older than half the token's life plus 900 s. Any other code is context.

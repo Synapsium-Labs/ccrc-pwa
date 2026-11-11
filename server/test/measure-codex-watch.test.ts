@@ -81,12 +81,13 @@ function writeStatus(over: Record<string, unknown> = {}, opts: { credential?: bo
     'sys.modules["ccgpt_auth"] = lib',
     'spec.loader.exec_module(lib)',
     'd, fields = sys.argv[2], json.loads(sys.argv[3])',
+    'unsaved = fields.pop("unsaved", False)',
     'p = lib.paths_for(d)',
     'if sys.argv[5] == "1" and not os.path.exists(p.credential):',
     '    fd = os.open(p.credential, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)',
     '    os.write(fd, sys.argv[4].encode()); os.close(fd)',
     'with lib.held(d):',
-    '    ok = lib.write_status(d, identity=lib._current_identity(p.credential), unsaved=False, **fields)',
+    '    ok = lib.write_status(d, identity=lib._current_identity(p.credential), unsaved=unsaved, **fields)',
     'sys.exit(0 if ok else 1)',
   ].join('\n'), AUTH_LIB, authDir(), JSON.stringify(fields), SENTINEL_CREDENTIAL, opts.credential === false ? '0' : '1'],
   { encoding: 'utf8' });
@@ -141,7 +142,7 @@ const assistant = (at: string, model: string, id?: string, extra: Extra = {}): s
 const user = (at: string): string =>
   JSON.stringify({ type: 'user', uuid: `row-${++seq}`, sessionId: SENTINEL_SESSION, timestamp: at,
     message: { role: 'user', content: SENTINEL_TEXT } });
-const boundary = (at: string, trigger: 'auto' | 'manual', uuid?: string, extra: Extra = {}, preTokens = 380000): string =>
+const boundary = (at: string, trigger: 'auto' | 'manual', uuid?: string, extra: Extra = {}, preTokens: number | null = 380000): string =>
   JSON.stringify({ type: 'system', subtype: 'compact_boundary', uuid: uuid ?? `row-${++seq}`, sessionId: SENTINEL_SESSION,
     timestamp: at, content: 'Conversation compacted', compactMetadata: { trigger, preTokens }, ...extra });
 const transcript = (configDir: string, name: string, rows: string[]): void =>
@@ -152,7 +153,7 @@ const plus = (from: string, minutes: number): string => new Date(Date.parse(from
 const calls = (from: string, n: number, model = 'gpt-model-a', extra: Extra = {}): string[] =>
   Array.from({ length: n }, (_, i) => assistant(plus(from, i + 1), model, undefined, extra));
 
-interface SessionOpts { model?: string; preTokens?: number; extra?: Extra; config?: string }
+interface SessionOpts { model?: string; preTokens?: number | null; extra?: Extra; config?: string }
 /** One transcript file: `n` calls of a model from `from`, one a minute, then `autos` automatic boundaries. */
 const session = (name: string, from: string, n: number, autos: number, o: SessionOpts = {}): void =>
   transcript(o.config ?? '.claude-lane-a', name, [user(from), ...calls(from, n, o.model, o.extra),
@@ -197,6 +198,21 @@ const move = (at: string, from: string, to: string): HistoryEntry =>
 /** The lane's measured windows, in the shape `deploy/models-op.mjs` writes. */
 const writeWindows = (windows: Record<string, Record<string, unknown>>): void =>
   write(modelsFile('windows'), JSON.stringify({ windows }));
+
+const CUT = '2026-10-24T00:00:00Z';
+/** An advance at CUT cuts the baseline, and the comparable baseline after it keeps its power. Before the cut: one
+ *  session of 200 gpt-model-a calls and 40 automatic boundaries at `prePre`. After it: five sessions of 60 calls and 4
+ *  boundaries each (300 and 20) at `postPre`. The watch: 400 calls and `watchAutos` boundaries at 168k. */
+function cutFixture(prePre: number, postPre: number, watchAutos: number): void {
+  write(path.join(laneDir(), 'lane.json'), JSON.stringify(lane()));
+  writeStats();
+  writeStatus();
+  write(logFile(), litellmLog(990, 10));
+  writeAdvance({ sonnet: [move(CUT, 'gpt-model-old', 'gpt-model-a')] });
+  session('old', '2026-10-23T00:00:00.000Z', 200, 40, { preTokens: prePre });
+  for (let i = 0; i < 5; i++) session(`new-${i}`, `2026-10-2${4 + (i % 3)}T0${i + 1}:00:00.000Z`, 60, 4, { preTokens: postPre });
+  session('w', '2026-10-28T00:00:00.000Z', 400, watchAutos, { preTokens: 168000 });
+}
 
 interface Run { code: number | null; stdout: string; stderr: string }
 const run = (args: string[] = []): Run => {
@@ -315,13 +331,28 @@ describe('measure-codex-watch.py: the 5xx rate measures like for like', () => {
     expect(c.baseline.span).toMatch(/no stamps/);
   });
 
-  it('4xx is excluded on both sides, and printed', () => {
+  it('only POST message lines enter the baseline: a GET or OPTIONS of the same route is an access line, never a call', () => {
+    passing();
+    write(logFile(), litellmLog(990, 10) + [
+      'INFO:     127.0.0.1:63000 - "GET /v1/messages HTTP/1.1" 500 Internal Server Error',
+      'INFO:     127.0.0.1:63001 - "OPTIONS /v1/messages?beta=true HTTP/1.1" 200 OK',
+      'INFO:     127.0.0.1:63002 - "GET /v1/messages HTTP/1.1" 200 OK',
+    ].join('\n') + '\n');
+    const rep = report();
+    expect(criterion(rep, '5xx-rate').baseline).toMatchObject({ fiveXx: 10, twoXx: 990, n: 1000 });
+    expect(rep.litellmLog).toMatchObject({ accessLines: 1005, posts: 1000 });
+  });
+
+  it('4xx is excluded on both sides, and printed with its share of each side\'s answers', () => {
     passing();
     writeStats({ outcomes: { ...OUTCOMES, '4xx': 500 } });
     write(logFile(), litellmLog(990, 10, { refused: 3000 }));
     const c = criterion(report(), '5xx-rate');
-    expect(c.watch).toMatchObject({ fourXx: 500, n: 994, rate: Number((4 / 994).toFixed(6)) });
+    // Every rate carries six significant figures, as every other statistic does.
+    expect(c.watch).toMatchObject({ fourXx: 500, n: 994, rate: Number((4 / 994).toPrecision(6)) });
     expect(c.baseline).toMatchObject({ fourXx: 3000, n: 1000, rate: 0.01 });
+    expect(c.watch.fourXxShare).toBe(Number((500 / 1494).toPrecision(6)));
+    expect(c.baseline.fourXxShare).toBe(0.75);
   });
 
   it('a rise that is not significant passes, with its p', () => {
@@ -415,10 +446,27 @@ describe('measure-codex-watch.py: the credential, in the library\'s own vocabula
     expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'fail', checks: { credentialPresent: 'fail' } });
   });
 
-  it('a token that has expired fails', () => {
+  it('a token that has expired fails, and one that expires at this very second has expired', () => {
     passing();
     writeStatus({ expiresAt: NOW_S - 60 });
     expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'fail', checks: { expiry: 'fail' } });
+    writeStatus({ expiresAt: NOW_S });
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'fail', checks: { expiry: 'fail', cadence: 'pass' } });
+  });
+
+  it('a token life that is not positive leaves the cadence unmeasured', () => {
+    passing();
+    writeStatus({ expiresAt: NOW_S + 1800, lastRefreshAt: NOW_S + 1800 });
+    const c = criterion(report(), 'credential');
+    expect(c).toMatchObject({ verdict: 'unmeasured', checks: { cadence: 'unmeasured', expiry: 'pass' }, lifeSeconds: 0 });
+    expect(c.reason).toContain('no positive token life');
+  });
+
+  it('prints the library\'s unsaved flag: a refreshed credential held only in memory shows', () => {
+    passing();
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'pass', unsaved: false });
+    writeStatus({ unsaved: true });
+    expect(criterion(report(), 'credential').unsaved).toBe(true);
   });
 
   it('a refresh older than half the life plus 900 s fails, and one just inside it passes', () => {
@@ -486,15 +534,76 @@ describe('measure-codex-watch.py: the compaction rate measures like for like', (
     expect(rep.events).toEqual([warn]);
     const c = criterion(rep, 'compaction-rate');
     expect(c.warnings).toEqual([warn]);
+    // The windows file keeps each model's latest entry only, so a set in the watch hides any earlier one: flagged.
+    expect(rep.eventSources.hiddenEarlierSets).toEqual(['gpt-model-a']);
     expect(c.verdict).toBe('pass');
   });
 
-  it('an unreadable model file is tolerated, and its reason printed', () => {
+  it('an absent model file is no event; one that cannot be read holds the criterion unmeasured, with its reason', () => {
     passing();
-    write(modelsFile('advance'), 'not json');
+    expect(report().eventSources).toEqual({ advance: 'absent', windows: 'absent' });
+    for (const [file, body, why] of [
+      ['advance', 'not json', 'not JSON'],
+      ['advance', JSON.stringify({ v: 2, classes: {} }), 'not an advance file of version 1'],
+      ['advance', JSON.stringify([1]), 'not a JSON object'],
+      ['windows', JSON.stringify({ windows: [] }), 'not a windows file'],
+    ] as const) {
+      fs.rmSync(path.join(home, '.ccrc', 'models'), { recursive: true, force: true });
+      write(modelsFile(file), body);
+      const rep = report();
+      expect(rep.eventSources[file], body).toBe(why);
+      const c = criterion(rep, 'compaction-rate');
+      expect(c.verdict, body).toBe('unmeasured');
+      expect(c.reason, body).toContain(`the ${file} file cannot be read (${why}): an event in the baseline may be unseen`);
+      expect(c.box.reads, body).toBe('unmeasured');
+    }
+  });
+
+  it('an entry with no readable stamp, or of another shape, holds the criterion unmeasured', () => {
+    passing();
+    writeAdvance({ sonnet: [{ ...move('2026-10-24T00:00:00Z', 'gpt-model-old', 'gpt-model-a'), at: 'yesterday' }] });
+    let rep = report();
+    expect(rep.eventSources.undated).toBe(1);
+    expect(criterion(rep, 'compaction-rate').reason).toContain('1 event entries carry no readable stamp');
+    fs.rmSync(modelsFile('advance'));
+    writeWindows({ 'gpt-model-a': 'not an entry' } as unknown as Record<string, Record<string, unknown>>);
+    rep = report();
+    expect(rep.eventSources.unshaped).toBe(1);
+    expect(criterion(rep, 'compaction-rate').reason).toContain('1 event entries are of another shape');
+    fs.rmSync(modelsFile('windows'));
+    write(modelsFile('advance'), JSON.stringify({ v: 1, classes: { sonnet: { history: 'none' } }, pending: null }));
+    expect(criterion(report(), 'compaction-rate').verdict).toBe('unmeasured');
+  });
+
+  it('an advance history at its cap whose oldest entry is after the baseline\'s start may have lost a move: unmeasured', () => {
+    passing();
+    // recordMove keeps the newest HISTORY_CAP entries: ten, every one in the watch, is what eviction leaves behind.
+    const ten = Array.from({ length: 10 }, (_, i) => move(`2026-10-${28 + (i % 3)}T0${i}:00:00Z`, 'gpt-model-a', 'gpt-model-a'));
+    writeAdvance({ sonnet: ten });
+    let rep = report();
+    expect(rep.windows.comparable).toEqual([BASE, FLIP]);
+    expect(rep.eventSources.capped).toEqual([{ class: 'sonnet', oldest: '2026-10-28T00:00:00Z' }]);
+    let c = criterion(rep, 'compaction-rate');
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('the sonnet advance history holds its cap of 10 entries, the oldest at 2026-10-28T00:00:00Z, '
+      + 'after the baseline\'s start: an earlier move may be lost');
+    // Nine entries, or ten whose oldest is before the baseline's start, lose nothing the baseline needs.
+    writeAdvance({ sonnet: ten.slice(1) });
+    expect(report().eventSources.capped).toBeUndefined();
+    writeAdvance({ sonnet: [move('2026-10-20T00:00:00Z', 'gpt-model-old', 'gpt-model-a'), ...ten.slice(1)] });
+    rep = report();
+    expect(rep.eventSources.capped).toBeUndefined();
+    c = criterion(rep, 'compaction-rate');
+    expect(c.verdict).toBe('pass');
+  });
+
+  it('an event stamped at or after --until is in no list', () => {
+    passing();
+    writeAdvance({ sonnet: [move(UNTIL, 'gpt-model-a', 'gpt-model-b'), move('2026-11-05T00:00:00Z', 'gpt-model-b', 'gpt-model-c')] });
+    writeWindows({ 'gpt-model-a': { tokens: 180000, setAt: '2026-11-04T00:00:00.000Z', source: 'refusal' } });
     const rep = report();
-    expect(rep.eventSources).toMatchObject({ advance: 'not JSON', windows: 'absent' });
-    expect(criterion(rep, 'compaction-rate').verdict).toBe('pass');
+    expect(rep.events).toEqual([]);
+    expect(criterion(rep, 'compaction-rate').warnings).toEqual([]);
   });
 
   it('a compaction point shift above 10% reads unmeasured, and one within it does not', () => {
@@ -535,6 +644,33 @@ describe('measure-codex-watch.py: the compaction rate measures like for like', (
     const point = criterion(report(), 'compaction-rate').watch.point;
     // p10 and p90 by linear interpolation between order statistics: h = (n - 1) q.
     expect(point).toEqual({ n: 6, p10: 155000, median: median(pre), p90: 295000 });
+  });
+
+  it('a side whose automatic boundaries carry no compaction point, or a baseline point on too few, reads unmeasured', () => {
+    passing();
+    // The four sessions after the first carry no preTokens: the comparable point rests on the first one's 4.
+    for (const [name, from] of [['before-2', '2026-10-24T01:00:00.000Z'], ['before-3', '2026-10-25T01:00:00.000Z'],
+      ['before-4', '2026-10-25T12:00:00.000Z'], ['before-5', '2026-10-26T01:00:00.000Z']] as const) {
+      session(name, from, 50, 4, { preTokens: null });
+    }
+    let c = criterion(report(), 'compaction-rate');
+    expect(c.comparable).toMatchObject({ automatic: 20, point: { n: 4, median: 380000 } });
+    expect(c.pointShift).toMatchObject({ baseline: { median: 380000, n: 4 }, watch: { median: 380000, n: 4 }, shift: 0 });
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('the comparable baseline\'s compaction point rests on 4 preTokens values (needs 20)');
+    // None at all in the baseline: no point to compare the watch's with.
+    transcript('.claude-lane-a', 'before', [user('2026-10-23T00:00:00.000Z'), ...calls('2026-10-23T00:00:00.000Z', 200),
+      ...[4, 5, 6, 7].map((h) => boundary(`2026-10-23T0${h}:00:00.000Z`, 'auto', undefined, {}, null))]);
+    c = criterion(report(), 'compaction-rate');
+    expect(c.reason).toContain('the compaction point is unmeasured in the comparable baseline: none of its 20 automatic '
+      + 'boundaries carries preTokens');
+    // And none in the watch.
+    passing();
+    transcript('.claude-lane-a', 'after', [user('2026-10-28T00:00:00.000Z'), ...calls('2026-10-28T00:00:00.000Z', 400),
+      ...[8, 9].map((h) => boundary(`2026-10-28T0${h}:00:00.000Z`, 'auto', undefined, {}, null))]);
+    c = criterion(report(), 'compaction-rate');
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('the compaction point is unmeasured in the watch: none of its 2 automatic boundaries carries preTokens');
   });
 
   it('sidechain rows are excluded on both sides, and counted as context', () => {
@@ -586,20 +722,95 @@ describe('measure-codex-watch.py: the compaction rate measures like for like', (
     writeStats();
     writeStatus();
     write(logFile(), litellmLog(990, 10));
-    // Baseline: gpt-model-a 300 calls and 6 boundaries (0.02), gpt-model-b 100 calls and 14 (0.14), in six sessions.
-    for (let i = 0; i < 5; i++) session(`a-${i}`, `2026-10-2${3 + (i % 3)}T0${i}:00:00.000Z`, 60, i === 0 ? 2 : 1);
-    session('b-0', '2026-10-26T00:00:00.000Z', 100, 14, { model: 'gpt-model-b' });
-    // Watch: a 400 calls and 4 boundaries, b 50 and 9, and gpt-model-c, which has no baseline, 30 and 2.
-    session('w-a', '2026-10-28T00:00:00.000Z', 400, 4);
-    session('w-b', '2026-10-29T00:00:00.000Z', 50, 9, { model: 'gpt-model-b' });
-    session('w-c', '2026-10-30T00:00:00.000Z', 30, 2, { model: 'gpt-model-c' });
+    // Baseline, each model with power of its own (5 sessions and 20 boundaries): gpt-model-a 300 calls and 20
+    // boundaries (1/15), gpt-model-b 100 calls and 40 (0.4), in ten sessions.
+    for (let i = 0; i < 5; i++) session(`a-${i}`, `2026-10-2${3 + (i % 3)}T0${i}:00:00.000Z`, 60, 4);
+    for (let i = 0; i < 5; i++) session(`b-${i}`, `2026-10-26T0${i}:00:00.000Z`, 20, 8, { model: 'gpt-model-b' });
+    // Watch: a 400 calls and 25 boundaries, b 50 and 20, and gpt-model-c, which has no baseline, 30 calls and no
+    // boundary (so nothing of the watch's compaction goes unread).
+    session('w-a', '2026-10-28T00:00:00.000Z', 400, 25);
+    session('w-b', '2026-10-29T00:00:00.000Z', 50, 20, { model: 'gpt-model-b' });
+    session('w-c', '2026-10-30T00:00:00.000Z', 30, 0, { model: 'gpt-model-c' });
     const c = criterion(report(), 'compaction-rate');
-    const expected = 400 * 6 / 300 + 50 * 14 / 100;   // 15, where a pooled rate would say 450 * 20 / 400 = 22.5
-    expect(c.standardised).toMatchObject({ expected, observed: 13, note: NOTE,
-      noBaseline: { 'gpt-model-c': { watchCalls: 30, watchAutomatic: 2 } } });
-    expect(c.standardised.cells['gpt-model-a']).toEqual({ baselineCalls: 300, baselineAutomatic: 6, watchCalls: 400, watchAutomatic: 4 });
-    expect(c.standardised.p).toBeCloseTo(poissonSf(13, 15), 5);
+    const expected = 400 * 20 / 300 + 50 * 40 / 100;   // 46.67, where a pooled rate would say 450 * 60 / 400 = 67.5
+    expect(c.standardised.expected).toBeCloseTo(expected, 3);
+    expect(c.standardised).toMatchObject({ observed: 45, note: NOTE,
+      noBaseline: { 'gpt-model-c': { watchCalls: 30, watchAutomatic: 0 } }, thin: {} });
+    expect(c.standardised.cells['gpt-model-a']).toEqual({ baselineCalls: 300, baselineAutomatic: 20, baselineSessions: 5,
+      watchCalls: 400, watchAutomatic: 25 });
+    expect(c.standardised.p).toBeCloseTo(poissonSf(45, expected), 5);
     expect(c.verdict).toBe('pass');
+  });
+
+  it('the standardisation reads the COMPARABLE baseline: an advance cuts a high-rate stretch out of it', () => {
+    // Before the cut: 200 calls and 40 boundaries (0.2) at 380k. After it: 300 calls and 20 (1/15) at 168k, the
+    // watch's point. Against the comparable baseline 40 watch boundaries over 400 calls is a significant excess;
+    // against the whole requested baseline (60 over 500, expected 48) it would not be.
+    cutFixture(380000, 168000, 40);
+    const rep = report();
+    expect(rep.windows.comparable).toEqual([CUT, FLIP]);
+    const c = criterion(rep, 'compaction-rate');
+    expect(c.baseline).toMatchObject({ calls: 500, automatic: 60, sessions: 6 });
+    expect(c.comparable).toMatchObject({ calls: 300, automatic: 20, sessions: 5, point: { n: 20, median: 168000 } });
+    expect(c.standardised.cells['gpt-model-a']).toEqual({ baselineCalls: 300, baselineAutomatic: 20, baselineSessions: 5,
+      watchCalls: 400, watchAutomatic: 40 });
+    expect(c.standardised.expected).toBeCloseTo(400 * 20 / 300, 3);
+    expect(c.standardised.observed).toBe(40);
+    expect(c.standardised.p).toBeCloseTo(poissonSf(40, 400 * 20 / 300), 5);
+    // The requested baseline's median point is 380k; the comparable one's is the watch's, so no shift is read.
+    expect(c.pointShift).toMatchObject({ baseline: { median: 168000, n: 20 }, watch: { median: 168000, n: 40 } });
+    expect(c.verdict).toBe('fail');
+  });
+
+  it('the compaction point is compared against the COMPARABLE baseline\'s: a shift after the cut is read', () => {
+    cutFixture(168000, 380000, 40);   // the requested baseline's median is 168k, the comparable one's 380k
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('the compaction point moved (baseline 380.0k, watch 168.0k): the context window changed');
+  });
+
+  it('a file that began before the cut is not in the comparable baseline, and is counted apart', () => {
+    passing();
+    writeAdvance({ sonnet: [move('2026-10-24T00:00:00Z', 'gpt-model-old', 'gpt-model-a')] });
+    // It starts at 23:00 the day before and runs 120 calls, one a minute: 60 of them after the cut, then 2 boundaries.
+    transcript('.claude-lane-a', 'straddle', [...calls('2026-10-23T22:59:00.000Z', 120),
+      boundary('2026-10-24T02:00:00.000Z', 'auto'), boundary('2026-10-24T02:01:00.000Z', 'auto')]);
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.comparable).toMatchObject({ calls: 200, automatic: 16, sessions: 4,
+      beganBeforeCut: { files: 1, calls: 60, automatic: 2 } });
+    expect(c.baseline).toMatchObject({ calls: 520, automatic: 22, beganBeforeCut: null });
+  });
+
+  it('a no-baseline model that holds watch boundaries reads unmeasured: its compaction is unread', () => {
+    passing();
+    session('w-b', '2026-10-29T00:00:00.000Z', 5000, 30, { model: 'gpt-model-b' });
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.standardised).toMatchObject({ observed: 4, noBaseline: { 'gpt-model-b': { watchCalls: 5000, watchAutomatic: 30 } } });
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('30 of 34 automatic watch boundaries (5000 of 5400 calls) are on models whose comparable '
+      + 'baseline is absent or under 5 sessions and 20 boundaries');
+  });
+
+  it('a model whose baseline is thin is folded out of the standardisation, and gated like a model with none', () => {
+    passing();
+    session('b-thin', '2026-10-26T03:00:00.000Z', 1, 1, { model: 'gpt-model-b' });
+    session('w-b', '2026-10-29T00:00:00.000Z', 5000, 1000, { model: 'gpt-model-b' });
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.standardised.thin).toEqual({ 'gpt-model-b': { baselineCalls: 1, baselineAutomatic: 1, baselineSessions: 1,
+      watchCalls: 5000, watchAutomatic: 1000 } });
+    expect(c.standardised).toMatchObject({ expected: 20, observed: 4 });
+    expect(c.standardised.cells['gpt-model-b']).toBeUndefined();
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('1000 of 1004 automatic watch boundaries');
+  });
+
+  it('a watch whose models have no powered baseline at all reads unmeasured, never pass', () => {
+    passing();
+    removeTranscript('after');
+    transcript('.claude-lane-a', 'after', [user('2026-10-28T00:00:00.000Z'), ...calls('2026-10-28T00:00:00.000Z', 50, 'gpt-model-b')]);
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('no model the watch called has a powered comparable baseline');
   });
 
   it('a significant excess fails, with its p; an excess that is not significant passes', () => {
@@ -629,9 +840,10 @@ describe('measure-codex-watch.py: the compaction rate measures like for like', (
     transcript('.claude-lane-b', 'other', calls('2026-10-28T00:00:00.000Z', 25));
     const c = criterion(report(), 'compaction-rate');
     expect(c.paired).toEqual({ files: 1, comparable: { calls: 25, automatic: 1, rate: 0.04 },
-      watch: { calls: 30, automatic: 2, rate: Number((2 / 30).toFixed(6)) } });
+      watch: { calls: 30, automatic: 2, rate: Number((2 / 30).toPrecision(6)) } });
     expect(c.watch.versions).toEqual({ '2.1.300': 400, '2.1.322': 30 });
-    expect(c.box).toMatchObject({ reads: expect.any(String), standardised: { observed: 6 } });
+    expect(c.box).toMatchObject({ reads: expect.any(String), standardised: { observed: 6 },
+      windowedBy: 'this lane\'s flip and events, for every config directory: not like for like for another lane' });
     expect(c.box.power).toMatchObject({ sessions: 6 });
   });
 });
@@ -832,6 +1044,9 @@ describe('measure-codex-watch.py: its second spellings are bound to their homes'
       fs.readFileSync(path.join(ROOT, 'shared', 'model-advance.mjs'), 'utf8'));
     expect(adv).not.toBeNull();
     expect(src()).toMatch(new RegExp(`^ADVANCE_VERSION = ${adv![1]}\\b`, 'm'));
+    const cap = /^export const HISTORY_CAP = (\d+);$/m.exec(fs.readFileSync(path.join(ROOT, 'shared', 'model-advance.mjs'), 'utf8'));
+    expect(cap).not.toBeNull();
+    expect(src()).toMatch(new RegExp(`^HISTORY_CAP = ${cap![1]}\\b`, 'm'));
     const word = /source: '([a-z-]+)', refusedTokensEstimate: ref\.tokens/.exec(op());
     expect(word).not.toBeNull();
     expect(src()).toMatch(new RegExp(`^REFUSAL_SOURCE = "${word![1]}"`, 'm'));
@@ -854,6 +1069,28 @@ describe('measure-codex-watch.py: read-only, and nothing but counts leaves', () 
       for (const out of [text.stdout, text.stderr, json.stdout, json.stderr]) expect(out, s).not.toContain(s);
     }
     expect(criterion(JSON.parse(json.stdout), 'compaction-rate').watch.versions).toMatchObject({ other: 1 });
+  });
+
+  it('an event or store name outside the name grammar reads other, in either form: a path, a space, a newline, length', () => {
+    passing();
+    const odd = [`/var/tmp/${SENTINEL_TEXT}`, `a ${SENTINEL_TEXT}`, `a\n${SENTINEL_TEXT}`, `${SENTINEL_TEXT}-${'x'.repeat(64)}`];
+    for (const v of odd) {
+      fs.rmSync(path.join(home, '.ccrc', 'models'), { recursive: true, force: true });
+      const classes = { [v]: { family: null, hold: null, previous: null,
+        history: [{ at: '2026-10-29T00:00:00Z', how: v, from: v, to: v, ok: true }] } };
+      write(modelsFile('advance'), JSON.stringify({ v: 1, classes, pending: null }));
+      writeWindows({ [v]: { tokens: 180000, setAt: '2026-10-29T00:00:00.000Z' } });
+      writeStats({ store: { state: v, reason: v, at: null, setAside: { at: null, found: v, file: v } } });
+      const json = run(['--json']);
+      const text = run();
+      expect(json.code, json.stderr).toBe(0);
+      for (const out of [json.stdout, text.stdout, json.stderr, text.stderr]) expect(out, JSON.stringify(v)).not.toContain(SENTINEL_TEXT);
+      const rep = JSON.parse(json.stdout);
+      const adv = rep.events.find((e: { class?: string }) => e.class !== undefined);
+      expect(adv).toMatchObject({ kind: 'other', class: 'other', from: 'other', to: 'other' });
+      expect(rep.events.find((e: { model?: string }) => e.model !== undefined).model).toBe('other');
+      expect(rep.bridge.store).toEqual({ state: 'other', reason: 'other', at: null, setAside: { at: null, found: 'other', file: 'other' } });
+    }
   });
 
   it('the text form carries the verdict and each criterion on a line of its own', () => {

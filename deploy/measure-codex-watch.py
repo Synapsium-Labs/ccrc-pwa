@@ -18,11 +18,14 @@ home to read (default: this user's). `--now` (epoch seconds) pins the clock for 
 WHAT IT READS, AND NOTHING ELSE:
   <home>/.ccrc/codex/<lane>/lane.json            the mode, the config directory, the auth directory, the stats name
   <home>/.ccrc/codex/<lane>/<stats name>         the bridge's stats file, version 1 (ccd/codexbridge/stats.py),
-                                                 under the name lane.json gives it
+                                                 under the name lane.json gives it: its outcomes, routes, refusals,
+                                                 unexplained names, since/updatedAt and store entry
   <home>/<auth directory>/                       the auth library's non-secret status, through that library's own
                                                  `read_status` (ccd/ccgpt-auth.py, loaded from this tree). It stats
                                                  the credential to tell a current status from a stale one, and
-                                                 never opens it.
+                                                 never opens it. Of the status it reads `state`, `lastErrorCode`,
+                                                 `expiresAt`, `lastRefreshAt`, `updatedAt`, `identity` (only whether
+                                                 it is null) and `unsaved`; the library's `bars` reads `configHash`.
   <home>/.ccrc/logs/codex/<lane>/litellm.log     the LiteLLM tier's log: access lines only, method, path and status
   <home>/.ccrc/models/<lane>.advance.json        the class advances (shared/model-advance.mjs; written by
                                                  deploy/models-op.mjs): each `classes.<class>.history[]` entry's
@@ -35,17 +38,25 @@ WHAT IT READS, AND NOTHING ELSE:
                                                  `message.id` and `message.model`. Never a row's text.
 
 WHAT LEAVES: counts, rates, statistics, stamps, model and class names, Claude Code version numbers, the lane id and
-its mode, the status file's state and last error code, the store's outcome names, and the names the bridge's drift
-counters hold (bounded by the bridge when it wrote them, bounded again here). No session id, uuid, path below the
-home, prompt, request id, advance reason or account identity is printed (`measure-codex-watch.test.ts` pins it with
-sentinels).
+its mode, the status file's state, last error code and unsaved flag, the store's outcome names, the store entry's
+state, reason and set-aside record (its stamp, what it found and the copy's file name), each event's kind and ok, why
+a model file was not read, and the names the bridge's drift counters hold (bounded by the bridge when it wrote them,
+bounded again here). A name from a model file or the store entry is printed only when it is name-shaped with no `/`
+(EVENT_NAME_RE), else `other`. No session id, uuid, path below the home, prompt, request id, advance reason or
+account identity is printed (`measure-codex-watch.test.ts` pins it with sentinels).
 
 EVENTS. Every class advance (advance, revert or hand move) and every measured window (`window`, or `lowering` when
 its source is a refusal, D25) stamped in [baseline-since, until) is printed with its stamp, kind, class or model and
 from/to, in the report's `events`, because each may change the context window Claude Code runs under. The windows
-file keeps only each model's latest entry, so it shows the last set of each window, never every one. An event in
-(baseline-since, flip) cuts the baseline: the COMPARABLE baseline is [the last such event, flip). An event in the
-watch is printed as a warning and cuts nothing.
+file keeps only each model's latest entry, so it shows the last set of each window, never every one: an entry set at
+or after the flip is flagged (`hiddenEarlierSets`), because an earlier set of it in the baseline is invisible. An
+event in (baseline-since, flip) cuts the baseline: the COMPARABLE baseline is [the last such event, flip), and a
+transcript file that began before the cut (its first call is earlier) is left out of it and counted apart
+(`beganBeforeCut`), because a changed window applies to the sessions started after it. An event in the watch is
+printed as a warning and cuts nothing. An absent model file is no event; one that is unreadable, not JSON or of
+another version or shape, an entry with no readable stamp or of another shape, and a class history at its cap
+(HISTORY_CAP entries, recordMove drops older ones) whose oldest entry is after baseline-since each leave the cut
+unknown, so compaction-rate reads `unmeasured` with the reason.
 
 THE FIVE CRITERIA:
   empty-tool-calls  `outcomes.emptyArguments` is 0.
@@ -53,7 +64,8 @@ THE FIVE CRITERIA:
                     which the report prints: the whole time on `direct`, not one week of it. Baseline: the POST lines
                     of litellm.log whose path, its query string stripped, is exactly /v1/messages; count_tokens POSTs
                     are counted apart and printed, never in the rate, because the bridge answers count_tokens itself
-                    (`outcomes.countTokens`, outside 2xx). 4xx is printed and kept out of both rates (local refusals
+                    (`outcomes.countTokens`, outside 2xx). 4xx is printed, with its share of each side's answers,
+                    and kept out of both rates (local refusals
                     and client errors: a refused model name on either tier). `client-gone` and `drain-cut` are
                     printed and are not upstream failures. The log has no stamps, so its share is over the whole
                     file. The test is exact and one-sided: p = P(X >= x_w), X ~ Binomial(x_b + x_w, n_w / (n_w +
@@ -66,15 +78,21 @@ THE FIVE CRITERIA:
                     is counted once by its `message.id`, a boundary once by its `uuid`, and a main-thread boundary
                     belongs to the model that answered last before it on the main thread of its file. Per model,
                     standardised by the watch's calls: expected = the sum over the models with a baseline of
-                    watchCalls[m] * baseAutomatic[m] / baseCalls[m]; observed = those models' watch boundaries; a
-                    model with no baseline is printed and left out of both. `fail` iff observed > expected AND the
-                    one-sided Poisson p = P(X >= observed | expected) < 0.05; sessions cluster, so p is indicative.
-                    `unmeasured` when a window has no call; when the compaction point (the median automatic
-                    `preTokens`) moved more than 10% between the comparable baseline and the watch, because then
-                    the context window changed; and when the comparable baseline holds fewer than 5 transcript files
-                    with a counted call or fewer than 20 automatic boundaries. Context, never the verdict: n, p10,
+                    watchCalls[m] * baseAutomatic[m] / baseCalls[m]; observed = those models' watch boundaries. A
+                    model counts only when its own comparable baseline holds 5 files with a call of it and 20 of its
+                    automatic boundaries; one with no baseline (`noBaseline`) or a thinner one (`thin`) is printed
+                    and left out of both. `fail` iff observed > expected AND the one-sided Poisson p = P(X >=
+                    observed | expected) < 0.05; sessions cluster, so p is indicative. `unmeasured` when a window has
+                    no call; when the compaction point (the median automatic `preTokens`) moved more than 10%
+                    between the comparable baseline and the watch, because then the context window changed; when a
+                    side has automatic boundaries and no point, or the comparable baseline's point rests on fewer
+                    than 20 values; when the comparable baseline holds fewer than 5 transcript files with a counted
+                    call or fewer than 20 automatic boundaries; when any automatic watch boundary is on a model left
+                    out (its compaction is unread); when no model counts; and when the model files leave the cut
+                    unknown (EVENTS, above). Context, never the verdict: n, p10,
                     median and p90 of the automatic `preTokens` per window, the same reading for every config
-                    directory under the home (`box`), a paired reading (files with at least 20 main-thread calls in
+                    directory under the home (`box`, windowed by THIS lane's flip and events, so another lane's
+                    directory is not read like for like), a paired reading (files with at least 20 main-thread calls in
                     both windows, summed per side), and the Claude Code `version` mix as calls per version.
   credential        read through the auth library, in its own vocabulary. `fail` when the library's `bars` says the
                     status bars the credential (needs-signin, or a config-error under this configuration); when the
@@ -84,8 +102,8 @@ THE FIVE CRITERIA:
                     lastRefreshAt > life / 2 + 900 s. `unmeasured` when lastRefreshAt or expiresAt is missing or not a
                     number, or the library reads no current status, and nothing fails. Any other last error code is
                     printed as "last upstream or refresh code", with the status's own update stamp, and never fails;
-                    so is any other state. This is one moment, not the week: whether it stayed so is the doctor's
-                    history and the operator's.
+                    so is any other state, and the library's `unsaved` flag. This is one moment, not the week:
+                    whether it stayed so is the doctor's history and the operator's.
   drift             every family's `unexplained` list in the stats file is empty.
 
 Also printed, as context: the stats file's cumulative `store:*` outcome counts and the store entry (its state, reason
@@ -109,6 +127,9 @@ import time
 LANE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 STAMP_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?Z$")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.:/<>-]{1,64}$")   # a model, a family, a counter's name: printed only when bounded
+# A name a model file or the store entry holds (a class, a model id, a move's kind, an outcome, a file name): no `/`,
+# so nothing path-shaped leaves, even from a hand-edited file.
+EVENT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
 VERSION_RE = re.compile(r"^[0-9]{1,4}(?:\.[0-9]{1,6}){1,3}(?:[-+][A-Za-z0-9.]{1,32})?$")   # a Claude Code build
 REL_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")   # a path below the home, as lane.json names one
 ACCESS_RE = re.compile(r'"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (\S+) HTTP/[0-9.]+" ([1-5][0-9]{2})\b')
@@ -124,6 +145,7 @@ AUTH_LIBRARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardi
 ADVANCE_FILE = "%s.advance.json"
 WINDOWS_FILE = "%s.windows.json"
 ADVANCE_VERSION = 1   # shared/model-advance.mjs ADVANCE_VERSION
+HISTORY_CAP = 10      # shared/model-advance.mjs HISTORY_CAP: recordMove keeps a class's newest this many entries
 REFUSAL_SOURCE = "refusal"   # deploy/models-op.mjs lowerWindowsOp: a window D25 lowered after a refusal
 # The LiteLLM log's routes: the message route is the baseline; count_tokens is counted apart.
 MESSAGES_PATH = "/v1/messages"
@@ -207,12 +229,21 @@ def bounded_or_none(name):
     return None if name is None else bounded(name)
 
 
+def named(name):
+    """A model file's or the store entry's name, bounded by EVENT_NAME_RE."""
+    return name if isinstance(name, str) and EVENT_NAME_RE.match(name) else OTHER
+
+
+def named_or_none(name):
+    return None if name is None else named(name)
+
+
 def version_name(value):
     return value if isinstance(value, str) and VERSION_RE.match(value) else OTHER
 
 
 def rate(part, whole):
-    return round(part / whole, 6) if whole > 0 else None
+    return sig(part / whole) if whole > 0 else None
 
 
 def sig(value):
@@ -376,11 +407,11 @@ def store_entry(store):
         return None
     aside = store.get("setAside")
     return {
-        "state": bounded(store.get("state")),
-        "reason": bounded_or_none(store.get("reason")),
+        "state": named(store.get("state")),
+        "reason": named_or_none(store.get("reason")),
         "at": stamp_or_none(store.get("at")),
-        "setAside": {"at": stamp_or_none(aside.get("at")), "found": bounded_or_none(aside.get("found")),
-                     "file": bounded_or_none(aside.get("file"))} if isinstance(aside, dict) else None,
+        "setAside": {"at": stamp_or_none(aside.get("at")), "found": named_or_none(aside.get("found")),
+                     "file": named_or_none(aside.get("file"))} if isinstance(aside, dict) else None,
     }
 
 
@@ -472,11 +503,14 @@ def log_section(home, lane):
 
 
 # ── the window events ──────────────────────────────────────────────────────────────────────────────────────────────
-def read_events(home, lane, base, until):
+def read_events(home, lane, base, flip, until):
     """(events, sources): every advance-history entry and every windows entry stamped in [base, until), and per file
-    `read` or why it was not. An absent or unreadable file is tolerated; an entry with no readable stamp is counted in
-    `sources.undated` and cuts nothing."""
-    events, sources, undated = [], {}, 0
+    `read` or why it was not. An absent file is no event. Anything that leaves the baseline's cut unknown is counted in
+    `sources` for `event_doubts`: a file that cannot be read, an entry with no readable stamp (`undated`) or of another
+    shape (`unshaped`), and a class history at its cap whose oldest entry is after `base` (`capped`: recordMove dropped
+    what came before). A windows entry set at or after the flip hides any earlier set of that window
+    (`hiddenEarlierSets`), printed and never a cut."""
+    events, sources, undated, unshaped, capped, hidden = [], {}, 0, 0, [], []
     models = os.path.join(home, ".ccrc", "models")
 
     adv, why = read_json(os.path.join(models, ADVANCE_FILE % lane))
@@ -489,14 +523,25 @@ def read_events(home, lane, base, until):
         sources["advance"] = "read"
         for cls, entry in sorted(classes.items()):
             history = entry.get("history") if isinstance(entry, dict) else None
-            for e in history if isinstance(history, list) else []:
-                at = row_epoch(e.get("at")) if isinstance(e, dict) else None
+            if not isinstance(history, list):
+                unshaped += 1
+                continue
+            stamps = []
+            for e in history:
+                if not isinstance(e, dict):
+                    unshaped += 1
+                    continue
+                at = row_epoch(e.get("at"))
                 if at is None:
                     undated += 1
-                elif base <= at < until:
-                    events.append({"at": at, "kind": bounded(e.get("how")), "class": bounded(cls),
-                                   "from": bounded_or_none(e.get("from")), "to": bounded_or_none(e.get("to")),
+                    continue
+                stamps.append(at)
+                if base <= at < until:
+                    events.append({"at": at, "kind": named(e.get("how")), "class": named(cls),
+                                   "from": named_or_none(e.get("from")), "to": named_or_none(e.get("to")),
                                    "ok": e.get("ok") if isinstance(e.get("ok"), bool) else None})
+            if len(history) >= HISTORY_CAP and stamps and min(stamps) > base:
+                capped.append({"class": named(cls), "oldest": iso(min(stamps))})
 
     win, why = read_json(os.path.join(models, WINDOWS_FILE % lane))
     entries = win.get("windows") if win is not None else None
@@ -507,18 +552,43 @@ def read_events(home, lane, base, until):
     else:
         sources["windows"] = "read"
         for model, entry in sorted(entries.items()):
-            at = row_epoch(entry.get("setAt")) if isinstance(entry, dict) else None
+            if not isinstance(entry, dict):
+                unshaped += 1
+                continue
+            at = row_epoch(entry.get("setAt"))
             if at is None:
                 undated += 1
-            elif base <= at < until:
+                continue
+            if at >= flip:
+                hidden.append(named(model))
+            if base <= at < until:
                 tokens = entry.get("tokens")
                 events.append({"at": at, "kind": "lowering" if entry.get("source") == REFUSAL_SOURCE else "window",
-                               "model": bounded(model), "from": None,
+                               "model": named(model), "from": None,
                                "to": tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else None})
-    if undated:
-        sources["undated"] = undated
+    for key, value in (("undated", undated), ("unshaped", unshaped), ("capped", capped), ("hiddenEarlierSets", hidden)):
+        if value:
+            sources[key] = value
     events.sort(key=lambda e: (e["at"], e["kind"]))
     return events, sources
+
+
+def event_doubts(sources):
+    """The reasons the baseline's cut cannot be known from the model files. Each holds compaction-rate unmeasured: a
+    file or entry read as no event would let the comparable baseline widen across a change nobody saw."""
+    out = []
+    for key in ("advance", "windows"):
+        if sources.get(key) not in ("read", "absent"):
+            out.append("the %s file cannot be read (%s): an event in the baseline may be unseen"
+                       % (key, sources.get(key)))
+    if sources.get("undated"):
+        out.append("%d event entries carry no readable stamp: where they fall is unknown" % sources["undated"])
+    if sources.get("unshaped"):
+        out.append("%d event entries are of another shape: what they changed is unknown" % sources["unshaped"])
+    for c in sources.get("capped", []):
+        out.append("the %s advance history holds its cap of %d entries, the oldest at %s, after the baseline's start: "
+                   "an earlier move may be lost" % (c["class"], HISTORY_CAP, c["oldest"]))
+    return out
 
 
 def place_events(events, base, flip):
@@ -541,19 +611,32 @@ def is_gpt(model):
 
 def new_window():
     return {"calls": 0, "automatic": 0, "manual": 0, "apiErrors": 0, "models": {}, "automaticByModel": {},
-            "versions": {}, "sidechain": {"calls": 0, "automatic": 0, "manual": 0}}
+            "sessionsByModel": {}, "versions": {}, "sidechain": {"calls": 0, "automatic": 0, "manual": 0}}
 
 
 class Tally:
     """One scope's counts, per window (the windows overlap: the comparable baseline is inside the requested one). A
     call is counted once by its message id and a boundary once by its uuid, each per window and per thread; a file is
-    known by its index in the scan, never by its path."""
+    known by its index in the scan, never by its path. With a cut, a file that began before it is kept out of the
+    comparable window and counted apart (`beganBeforeCut`)."""
 
-    def __init__(self, windows):
+    def __init__(self, windows, cut):
+        self.cut = cut
         self.out = {name: new_window() for name in windows}
         self.seen = {name: {key: set() for key in ("call", "row", "side-call", "side-row")} for name in windows}
         self.points = {name: [] for name in windows}
         self.files = {name: {} for name in windows}   # file index -> [main-thread calls, automatic boundaries]
+        self.model_files = {name: {} for name in windows}   # model -> the files with a main-thread call of it
+        self.before_cut = {"files": set(), "calls": 0, "automatic": 0, "seen": set()}
+
+    def early(self, what, key, fi):
+        """A main-thread call or automatic boundary in the comparable window, from a file that began before the cut."""
+        b = self.before_cut
+        if (what, key) in b["seen"]:
+            return
+        b["seen"].add((what, key))
+        b[what] += 1
+        b["files"].add(fi)
 
     def call(self, where, key, model, version, side, fi):
         for name in where:
@@ -567,6 +650,7 @@ class Tally:
                 continue
             w["calls"] += 1
             bump(w["models"], bounded(model))
+            self.model_files[name].setdefault(bounded(model), set()).add(fi)
             bump(w["versions"], version_name(version))
             self.files[name].setdefault(fi, [0, 0])[0] += 1
 
@@ -594,7 +678,13 @@ class Tally:
                 w[key] = dict(sorted(w[key].items()))
             w["rate"] = rate(w["automatic"], w["calls"])
             w["sessions"] = sum(1 for calls, _ in self.files[name].values() if calls > 0)
+            w["sessionsByModel"] = {m: len(f) for m, f in sorted(self.model_files[name].items())}
             w["point"] = point_of(self.points[name])
+            w["beganBeforeCut"] = None
+        if self.cut is not None:
+            b = self.before_cut
+            self.out["comparable"]["beganBeforeCut"] = {"files": len(b["files"]), "calls": b["calls"],
+                                                        "automatic": b["automatic"]}
         out = dict(self.out)
         out["paired"] = self.paired("comparable", "watch")
         return out
@@ -614,15 +704,19 @@ class Tally:
 def scan(home, dirs, lane_dir, windows):
     """(the lane's counts or None, the box's counts), in one pass over every transcript under the config directories
     `dirs`. The lane's are the files under `lane_dir`; the box's are all of them. A boundary, and an API error row,
-    belongs to the model that answered last before it on its own thread of its own file."""
-    box = Tally(windows)
-    lane = Tally(windows) if lane_dir is not None else None
+    belongs to the model that answered last before it on its own thread of its own file. When an event cut the
+    baseline, a file that began before the cut (its first call, on either thread, is earlier) is not in the
+    comparable window: a changed window applies to the sessions started after it (the Stage 2 runbook, step 5)."""
+    cut = windows["comparable"][0] if windows["comparable"][0] > windows["baseline"][0] else None
+    box = Tally(windows, cut)
+    lane = Tally(windows, cut) if lane_dir is not None else None
     fi = 0
     for cfg in dirs:
         tallies = [box, lane] if lane is not None and cfg == lane_dir else [box]
         for path in sorted(glob.glob(os.path.join(home, cfg, "projects", "**", "*.jsonl"), recursive=True)):
             fi += 1
             last = {False: None, True: None}   # the last model per thread: main, sidechain
+            began = None                       # the stamp of the file's first call
             try:
                 f = open(path, "r", encoding="utf-8", errors="replace")
             except OSError:
@@ -640,31 +734,42 @@ def scan(home, dirs, lane_dir, windows):
                         continue
                     kind = row.get("type")
                     at = row_epoch(row.get("timestamp"))
-                    where = [n for n, (a, b) in windows.items() if at is not None and a <= at < b]
                     uuid = row.get("uuid") if isinstance(row.get("uuid"), str) else None
                     side = row.get("isSidechain") is True
+                    msg = row.get("message") if isinstance(row.get("message"), dict) else {}
+                    model = msg.get("model")
+                    if (began is None and at is not None and kind == "assistant" and isinstance(model, str) and model
+                            and not model.startswith("<") and row.get("isApiErrorMessage") is not True):
+                        began = at
+                    where = [n for n, (a, b) in windows.items() if at is not None and a <= at < b]
+                    early = cut is not None and "comparable" in where and (began is None or began < cut)
+                    if early:
+                        where = [n for n in where if n != "comparable"]
                     if kind == "assistant":
-                        msg = row.get("message") if isinstance(row.get("message"), dict) else {}
                         if row.get("isApiErrorMessage") is True:
                             if where and uuid and is_gpt(last[side]):
                                 for t in tallies:
                                     t.row(where, uuid, "apiErrors", side, fi)
                             continue
-                        model = msg.get("model")
                         if not isinstance(model, str) or not model or model.startswith("<"):
                             continue
                         last[side] = model
                         key = msg.get("id") if isinstance(msg.get("id"), str) else uuid
-                        if where and key and is_gpt(model):
+                        if key and is_gpt(model):
                             for t in tallies:
-                                t.call(where, key, model, row.get("version"), side, fi)
+                                if where:
+                                    t.call(where, key, model, row.get("version"), side, fi)
+                                if early and not side:
+                                    t.early("calls", key, fi)
                     elif kind == "system" and row.get("subtype") == "compact_boundary":
-                        if where and uuid and is_gpt(last[side]):
+                        if (where or early) and uuid and is_gpt(last[side]):
                             meta = row.get("compactMetadata") if isinstance(row.get("compactMetadata"), dict) else {}
                             what = "manual" if meta.get("trigger") == "manual" else "automatic"
                             pre = num(meta.get("preTokens"))
                             for t in tallies:
                                 t.row(where, uuid, what, side, fi, model=last[side], pre=pre)
+                                if early and not side and what == "automatic":
+                                    t.early("automatic", uuid, fi)
     return (lane.done() if lane is not None else None), box.done()
 
 
@@ -673,39 +778,67 @@ def config_dirs(home):
 
 
 # ── the compaction reading, for one scope ─────────────────────────────────────────────────────────────────────────
-def compaction_reading(tx):
-    """(verdict, reasons, fields) for one scope's counts: the per-model standardisation, the power, the point."""
+def compaction_reading(tx, doubts=()):
+    """(verdict, reasons, fields) for one scope's counts: the per-model standardisation, the power, the point.
+
+    A model is a cell of the standardisation only when its own comparable baseline has the lane's power (POWER_SESSIONS
+    files with a call of it and POWER_AUTOMATIC of its automatic boundaries): a thin cell would set `expected` from a
+    handful of rows. A model with no baseline (`noBaseline`) or a thin one (`thin`) is left out of both sides, and when
+    such models hold any automatic watch boundary the reading is unmeasured: that compaction is unread, and an excess
+    there would otherwise pass. `doubts` are reasons from outside the counts (`event_doubts`)."""
     comp, watch = tx["comparable"], tx["watch"]
-    cells, nobase, expected, observed = {}, {}, 0.0, 0
+    cells, nobase, thin, expected, observed = {}, {}, {}, 0.0, 0
     for m in sorted(set(watch["models"]) | set(watch["automaticByModel"])):
         wc, wa = watch["models"].get(m, 0), watch["automaticByModel"].get(m, 0)
         bc, ba = comp["models"].get(m, 0), comp["automaticByModel"].get(m, 0)
-        if bc > 0:
-            cells[m] = {"baselineCalls": bc, "baselineAutomatic": ba, "watchCalls": wc, "watchAutomatic": wa}
+        bs = comp["sessionsByModel"].get(m, 0)
+        if bc == 0:
+            nobase[m] = {"watchCalls": wc, "watchAutomatic": wa}
+        elif bs < POWER_SESSIONS or ba < POWER_AUTOMATIC:
+            thin[m] = {"baselineCalls": bc, "baselineAutomatic": ba, "baselineSessions": bs, "watchCalls": wc,
+                       "watchAutomatic": wa}
+        else:
+            cells[m] = {"baselineCalls": bc, "baselineAutomatic": ba, "baselineSessions": bs, "watchCalls": wc,
+                        "watchAutomatic": wa}
             expected += wc * ba / bc
             observed += wa
-        else:
-            nobase[m] = {"watchCalls": wc, "watchAutomatic": wa}
     p = poisson_sf(observed, expected) if cells else None
+    pb, pw = comp["point"], watch["point"]
+    mb, mw = pb["median"], pw["median"]
     fields = {
         "standardised": {"expected": sig(expected) if cells else None, "observed": observed if cells else None,
-                         "p": sig(p), "note": CLUSTER_NOTE, "cells": cells, "noBaseline": nobase},
+                         "p": sig(p), "note": CLUSTER_NOTE, "cells": cells, "noBaseline": nobase, "thin": thin},
         "power": {"sessions": comp["sessions"], "automatic": comp["automatic"],
                   "needs": {"sessions": POWER_SESSIONS, "automatic": POWER_AUTOMATIC}},
+        "pointShift": {"baseline": {"median": mb, "n": pb["n"]}, "watch": {"median": mw, "n": pw["n"]},
+                       "shift": sig(abs(mw - mb) / mb) if mb is not None and mw is not None and mb > 0 else None,
+                       "bound": POINT_SHIFT},
     }
-    reasons = []
+    reasons = list(doubts)
     for name, label in (("comparable", "comparable baseline"), ("watch", "watch")):
         if tx[name]["calls"] == 0:
             reasons.append("no GPT-model call in the %s window" % label)
-    mb, mw = comp["point"]["median"], watch["point"]["median"]
+    for name, label, point in (("comparable", "comparable baseline", pb), ("watch", "watch", pw)):
+        if tx[name]["automatic"] > 0 and point["n"] == 0:
+            reasons.append("the compaction point is unmeasured in the %s: none of its %d automatic boundaries carries "
+                           "preTokens" % (label, tx[name]["automatic"]))
+    if comp["automatic"] >= POWER_AUTOMATIC and 0 < pb["n"] < POWER_AUTOMATIC:
+        reasons.append("the comparable baseline's compaction point rests on %d preTokens values (needs %d)"
+                       % (pb["n"], POWER_AUTOMATIC))
     if mb is not None and mw is not None and abs(mw - mb) > POINT_SHIFT * mb:
         reasons.append("the compaction point moved (baseline %.1fk, watch %.1fk): the context window changed"
                        % (mb / 1000, mw / 1000))
     if comp["sessions"] < POWER_SESSIONS or comp["automatic"] < POWER_AUTOMATIC:
         reasons.append("the comparable baseline holds %d sessions and %d boundaries (needs %d and %d)"
                        % (comp["sessions"], comp["automatic"], POWER_SESSIONS, POWER_AUTOMATIC))
+    unread = list(nobase.values()) + list(thin.values())
+    ua, uc = sum(u["watchAutomatic"] for u in unread), sum(u["watchCalls"] for u in unread)
+    if ua > 0:
+        reasons.append("%d of %d automatic watch boundaries (%d of %d calls) are on models whose comparable "
+                       "baseline is absent or under %d sessions and %d boundaries: their compaction is unread"
+                       % (ua, watch["automatic"], uc, watch["calls"], POWER_SESSIONS, POWER_AUTOMATIC))
     if not reasons and not cells:
-        reasons.append("no model the watch called has a call in the comparable baseline")
+        reasons.append("no model the watch called has a powered comparable baseline")
     if reasons:
         return "unmeasured", reasons, fields
     return ("fail" if observed > expected and p < ALPHA else "pass"), [], fields
@@ -720,7 +853,7 @@ def five_xx(add, bridge, bridge_why, log, log_why):
     x_w, ok_w, four_w = o.get("5xx", 0), o.get("2xx", 0), o.get("4xx", 0)
     n_w = ok_w + x_w
     watch = {"fiveXx": x_w, "twoXx": ok_w, "fourXx": four_w, "n": n_w, "rate": rate(x_w, n_w),
-             "interval": clopper_pearson(x_w, n_w)}
+             "interval": clopper_pearson(x_w, n_w), "fourXxShare": rate(four_w, n_w + four_w)}
     extra = {"watch": watch, "clientGone": o.get("client-gone", 0), "drainCut": o.get("drain-cut", 0),
              "countTokens": o.get("countTokens", 0), "since": bridge["since"]}
     if n_w == 0:
@@ -732,7 +865,8 @@ def five_xx(add, bridge, bridge_why, log, log_why):
     msg = log["messages"]
     x_b, n_b = msg["5xx"], msg["2xx"] + msg["5xx"]
     base = {"fiveXx": x_b, "twoXx": msg["2xx"], "fourXx": msg["4xx"], "n": n_b, "rate": rate(x_b, n_b),
-            "interval": clopper_pearson(x_b, n_b), "countTokens": log["countTokens"], "span": log["span"]}
+            "interval": clopper_pearson(x_b, n_b), "fourXxShare": rate(msg["4xx"], n_b + msg["4xx"]),
+            "countTokens": log["countTokens"], "span": log["span"]}
     if n_b == 0:
         add("5xx-rate", "unmeasured", baseline=base, reason="litellm.log holds no POST %s answered 2xx or 5xx"
             % MESSAGES_PATH, **extra)
@@ -789,6 +923,9 @@ def credential(add, auth, lib, auth_why, mode, now):
         "sinceRefreshSeconds": int(now - refreshed) if refreshed is not None else None,
         "lifeSeconds": int(life) if life is not None else None,
         "cadenceBoundSeconds": sig(bound), "checks": checks,
+        # The library's flag for a refreshed credential held only in its process's memory (commit_record): the file
+        # still holds the consumed one. Printed for the operator; no ruling makes it fail yet.
+        "unsaved": auth.get("unsaved") if isinstance(auth.get("unsaved"), bool) else None,
     }
     if failed:
         add("credential", "fail", failed=failed, **fields)
@@ -798,24 +935,28 @@ def credential(add, auth, lib, auth_why, mode, now):
         add("credential", "pass", **fields)
 
 
-def compaction(add, lane_tx, box_tx, events):
+BOX_WINDOWED = "this lane's flip and events, for every config directory: not like for like for another lane"
+
+
+def compaction(add, lane_tx, box_tx, events, doubts):
     warnings = [e for e in events if e["where"] == "watch"]
     if lane_tx is None:
-        add("compaction-rate", "unmeasured", reason="lane.json names no config directory", warnings=warnings)
+        add("compaction-rate", "unmeasured", reason="; ".join(list(doubts) + ["lane.json names no config directory"]),
+            warnings=warnings)
         return
-    verdict, reasons, fields = compaction_reading(lane_tx)
-    box_verdict, box_reasons, box_fields = compaction_reading(box_tx)
+    verdict, reasons, fields = compaction_reading(lane_tx, doubts)
+    box_verdict, box_reasons, box_fields = compaction_reading(box_tx, doubts)
     rest = {"baseline": lane_tx["baseline"], "comparable": lane_tx["comparable"], "watch": lane_tx["watch"],
             **fields, "warnings": warnings, "paired": lane_tx["paired"],
-            "box": {"reads": box_verdict, "reason": "; ".join(box_reasons) or None, **box_fields,
-                    "paired": box_tx["paired"]}}
+            "box": {"reads": box_verdict, "reason": "; ".join(box_reasons) or None, "windowedBy": BOX_WINDOWED,
+                    **box_fields, "paired": box_tx["paired"]}}
     if reasons:
         add("compaction-rate", verdict, reason="; ".join(reasons), **rest)
     else:
         add("compaction-rate", verdict, **rest)
 
 
-def criteria(mode, bridge, bridge_why, log, log_why, lane_tx, box_tx, events, auth, lib, auth_why, now):
+def criteria(mode, bridge, bridge_why, log, log_why, lane_tx, box_tx, events, doubts, auth, lib, auth_why, now):
     out = []
 
     def add(name, verdict, **fields):
@@ -828,7 +969,7 @@ def criteria(mode, bridge, bridge_why, log, log_why, lane_tx, box_tx, events, au
         n = bridge["outcomes"].get("emptyArguments", 0)
         add("empty-tool-calls", "pass" if n == 0 else "fail", emptyArguments=n)
     five_xx(add, bridge, bridge_why, log, log_why)        # 2. the 5xx rate
-    compaction(add, lane_tx, box_tx, events)              # 3. the compaction rate
+    compaction(add, lane_tx, box_tx, events, doubts)      # 3. the compaction rate
     credential(add, auth, lib, auth_why, mode, now)       # 4. the credential
     # 5. drift
     if bridge is None:
@@ -903,7 +1044,7 @@ def main(argv=None):
                           % (iso(base), iso(flip), iso(until)))
         home = os.path.abspath(args.home)
         lane = read_lane(home, args.lane)
-        events, sources = read_events(home, args.lane, base, until)
+        events, sources = read_events(home, args.lane, base, flip, until)
         comparable = place_events(events, base, flip)
         windows = {"baseline": (base, flip), "comparable": (comparable, flip), "watch": (flip, until)}
 
@@ -913,8 +1054,8 @@ def main(argv=None):
         auth, lib, auth_why = read_auth_status(home, lane["authDir"])
         lane_tx, box_tx = scan(home, config_dirs(home), lane["configDir"], windows)
 
-        items = criteria(lane["mode"], bridge, bridge_why, log, log_why, lane_tx, box_tx, events, auth, lib,
-                         auth_why, now)
+        items = criteria(lane["mode"], bridge, bridge_why, log, log_why, lane_tx, box_tx, events,
+                         event_doubts(sources), auth, lib, auth_why, now)
         rep = {
             "lane": args.lane, "mode": lane["mode"],
             "windows": {name: [iso(a), iso(b)] for name, (a, b) in windows.items()},
