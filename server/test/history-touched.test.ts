@@ -459,7 +459,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
   // for good; a blocked synchronous open cannot be interrupted by vitest's timeout, so each of these cases runs the verb in a child
   // with a hard timeout and asserts the child ended by itself.
   describe('a graph.json that is not a regular file (D-8190)', () => {
-    const BOUND_MS = 10_000;
+    const BOUND_MS = 60_000;   // the mutant hangs for good, so a wide bound keeps its signal and spares a loaded box a false red
     const bounded = (args: string[]): CliRun => runCli(box, ['touched', ...args], { env: withPane(box, ID), timeoutMs: BOUND_MS });
     const endedByItself = (r: CliRun): void => {
       expect(r.signal, `the child was killed by the ${BOUND_MS} ms bound (it hung): ${r.stderr}`).toBeNull();
