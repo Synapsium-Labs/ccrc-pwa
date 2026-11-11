@@ -30,6 +30,12 @@ const GH_FLAG_RUN_BOUND_MS = 1500;
 // commit-candidate pins read 3 MiB, so a native indexOf writer goes red with room (c24.md).
 const GH_COMMIT_CANDIDATES_BOUND_MS = 1500;
 const GH_COMMIT_CANDIDATES_BYTES = 3 << 20;
+// Task C24 fix round 1 (review 1819's merge-queue run, where the 1 MiB storm test took 5,562 ms): a test that reads one large
+// message or several carries its own timeout, every message at its bound plus room to build the strings, so vitest's default
+// 5 s per test cannot fail one whose every message is within its bound. The per-message bound stays the linearity assertion.
+const LARGE_BUILD_MS = 5000;
+const largeTimeout = (messages: number, boundMs: number): number => messages * boundMs + LARGE_BUILD_MS;
+const F5_READER_TIMEOUT_MS = 2000 + 3000 + LARGE_BUILD_MS;
 
 const HOME: ChatRefContext = {
   repo: 'org-a/project-a', project: 'project-a', branch: null, knownRuns: new Set(), knownItems: new Set(), runsElsewhere: false,
@@ -254,7 +260,7 @@ describe('fix round 1: the evidence reader\'s edges (Task C21, review 1758)', ()
     const said = messageRepos(mib);
     expect(performance.now() - t).toBeLessThan(3000);
     expect([...said.named].sort()).toEqual(['org-b/project-b', 'org-c/project-c']);
-  });
+  }, F5_READER_TIMEOUT_MS);
 
   // Review 1760 F10: the bound sits between the real code and a scan of every address, with room on both sides (c21.md has the
   // measured margin).
@@ -522,20 +528,21 @@ describe('Task C20: the gh reader, reserved pages and the commit index (reviews 
     ]);
   });
 
+  // Many commands, each closing a quote or leaving one open, all on one line but for the one shape that ends in a break.
+  // Review 1768's net reads every repository flag: an open quote after each, a run and a glued value, and a quoted value
+  // broken by a line.
+  const quoteUnits = [
+    "gh pr view 1 'a'; ", 'gh -b "a" | ', "gh pr view 1 it's ", "gh pr view 1 it's\n", "gh '",
+    "gh x -R 'a ", 'gh -sRx --repo=y ', 'gh x -R "a\n',
+  ];
   it('F3: the gh reader stays linear over 1 MiB of apostrophes and quotes', () => {
-    // Many commands, each closing a quote or leaving one open, all on one line but for the one shape that ends in a break.
-    // Review 1768's net reads every repository flag: an open quote after each, a run and a glued value, and a quoted value
-    // broken by a line.
-    for (const unit of [
-      "gh pr view 1 'a'; ", 'gh -b "a" | ', "gh pr view 1 it's ", "gh pr view 1 it's\n", "gh '",
-      "gh x -R 'a ", 'gh -sRx --repo=y ', 'gh x -R "a\n',
-    ]) {
+    for (const unit of quoteUnits) {
       const text = unit.repeat(Math.ceil((1 << 20) / unit.length));
       const t = performance.now();
       messageRepos(text);
       expect(performance.now() - t, unit).toBeLessThan(GH_QUOTES_BOUND_MS);
     }
-  });
+  }, largeTimeout(quoteUnits.length, GH_QUOTES_BOUND_MS));
 
   // F5: distinct SHAs sharing one seven-character prefix cost one range each (c20.md has the measured margin against the
   // bucket scan it replaced).
@@ -761,16 +768,17 @@ describe('Task C22: the gh net in linear time, and its last gaps fail toward tex
     for (const [text, expected] of table) expect(links(text, HOME), text).toEqual(expected);
   };
 
+  const runUnits = ['-R=', '--repo=', '-R/', '-R:', '-sR=', '--repo.'];
   it('F1: a spaceless run of repository flags reads in linear time and memory (c22.md has the margins)', () => {
     // Each flag's value ends where the next flag starts, so the run is read once; round 2 re-read the rest of it per flag.
-    for (const unit of ['-R=', '--repo=', '-R/', '-R:', '-sR=', '--repo.']) {
+    for (const unit of runUnits) {
       const text = `gh ${unit.repeat(Math.ceil((1 << 20) / unit.length))}`;
       const t = performance.now();
       const said = messageRepos(text);
       expect(performance.now() - t, unit).toBeLessThan(GH_FLAG_RUN_BOUND_MS);
       expect(said.named.size, unit).toBeLessThanOrEqual(2);
     }
-  });
+  }, largeTimeout(runUnits.length, GH_FLAG_RUN_BOUND_MS));
 
   it('F1: a value still reads as before where no flag starts inside it', () => {
     rows([
@@ -1001,9 +1009,11 @@ describe('Task C23: a command claims its repository flags only where it gives a 
     ]);
   });
 
+  const wordPrefixes = ['gh ', 'gh pr view 12 '];
+  const wordUnits = ['-R ', '--repo ', '-R a ', "'-R' "];
   it('L2-1: one command holding many flag words reads in linear time, with no spread into call arguments (c23.md)', () => {
-    for (const prefix of ['gh ', 'gh pr view 12 ']) {
-      for (const unit of ['-R ', '--repo ', '-R a ', "'-R' "]) {
+    for (const prefix of wordPrefixes) {
+      for (const unit of wordUnits) {
         const text = `${prefix}${unit.repeat(Math.ceil((1 << 20) / unit.length))}`;
         const t = performance.now();
         const said = messageRepos(text);
@@ -1011,7 +1021,7 @@ describe('Task C23: a command claims its repository flags only where it gives a 
         expect(said.named.size, `${prefix}${unit}`).toBeLessThanOrEqual(3);
       }
     }
-  });
+  }, largeTimeout(wordPrefixes.length * wordUnits.length, GH_FLAG_RUN_BOUND_MS));
 
   it('L3-1: a quoted value that names the command\'s own repository leaves it the number\'s', () => {
     rows([['gh pr comment 12 -R owner-b/repo-b --body "--repo=owner-b/repo-b" and #12', [['#12', b(12)]]]]);
@@ -1096,7 +1106,7 @@ describe('Task C23: a command claims its repository flags only where it gives a 
     const said = messageRepos(text);
     expect(performance.now() - t).toBeLessThan(GH_COMMIT_CANDIDATES_BOUND_MS);
     expect(said.commits.sorted.length).toBe(parts.length * 3);
-  });
+  }, largeTimeout(1, GH_COMMIT_CANDIDATES_BOUND_MS));
 
   it('review 1800 A: the net reads the message as the shell joins it, so a split flag spelling is read in every context', () => {
     const lf = (t: string): string => t;
@@ -1174,7 +1184,7 @@ describe('Task C23: a command claims its repository flags only where it gives a 
     expect(performance.now() - t).toBeLessThan(GH_COMMIT_CANDIDATES_BOUND_MS);
     // Each commit takes its page's repository and at most two candidates.
     expect(said.commits.sorted.length).toBe(n * 3);
-  });
+  }, largeTimeout(1, GH_COMMIT_CANDIDATES_BOUND_MS));
 
   it('L2-2: a value the net cuts at the next flag names an unknown repository, never home', () => {
     rows([
@@ -1345,15 +1355,15 @@ describe('Task C24: the net reads the raw and the joined text, and reads quotes 
     }
   });
 
+  const stormUnits = ["'\\\n", "$'\\'\\\n", "x'y\\\n'z ", "'a\\\\\n", '"\'\\\n', "-R 'o/r'x\\\n", '-R \\\n\\\n', "g\\\nh -R\\\n'o/r'\\\n "];
   it('the joined reading stays linear: quote, continuation and glued-tail storms at 1 MiB', () => {
-    const units = ["'\\\n", "$'\\'\\\n", "x'y\\\n'z ", "'a\\\\\n", '"\'\\\n', "-R 'o/r'x\\\n", '-R \\\n\\\n', "g\\\nh -R\\\n'o/r'\\\n "];
-    for (const unit of units) {
+    for (const unit of stormUnits) {
       const text = `gh pr view 12 ${unit.repeat(Math.ceil((1 << 20) / unit.length))}`;
       const t = performance.now();
       messageRepos(text);
       expect(performance.now() - t, unit).toBeLessThan(GH_FLAG_RUN_BOUND_MS);
     }
-  });
+  }, largeTimeout(stormUnits.length, GH_FLAG_RUN_BOUND_MS));
 });
 
 describe('messageRepos reads what one message says about repositories (Task C21)', () => {
