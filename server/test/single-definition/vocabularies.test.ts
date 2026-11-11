@@ -8,7 +8,7 @@ import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK
   DELEGATION_CARRIER_STATES, DELEGATION_DISPOSITIONS } from '../../../shared/api.js';
 import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
-import { callsIn, symbolOf } from '../scan/symbols.js';
+import { callsIn, parsedFile, symbolOf } from '../scan/symbols.js';
 import { ALL, ALL_MJS, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
 
 
@@ -1609,5 +1609,25 @@ describe('W4 addendum P10 — one run-id grammar', () => {
     expect(shared.RUN_ID_RE.source).toBe(`^${RUN_ID_SOURCE}$`);
     expect(model.RUN_ID_RE).toBe(shared.RUN_ID_RE);
     expect(lib.RUN_ID_RE).toBe(shared.RUN_ID_RE);
+  });
+});
+
+// — Overlord W1a: the trigger table (spec §9.7) —
+describe('the trigger table has one definition (Overlord §9.7)', () => {
+  const HOME = 'shared/practice-triggers.ts';
+  for (const [what, re] of [
+    ['the TriggerSignature type', /export type TriggerSignature\b/],
+    ['the TRIGGER_TABLE list', /export const TRIGGER_TABLE\b/],
+    ['the parseSignature reader', /export function parseSignature\b/],
+  ] as const) {
+    it(`${what} is declared in exactly one file, ${HOME}`, () => {
+      const holders = ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders).toEqual([HOME]);
+    });
+  }
+  it('TRIGGER_TABLE is derived from STALL_ARMS, never a hand list', () => {
+    const b = parsedFile(HOME).bindings.filter((x) => x.name === 'TRIGGER_TABLE');
+    expect(b, 'one binding').toHaveLength(1);
+    expect(b[0]!.init).toMatch(/\bSTALL_ARMS\b/);
   });
 });

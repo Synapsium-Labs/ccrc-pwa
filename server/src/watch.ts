@@ -165,6 +165,7 @@ import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } fro
 import { createRunVerdicts, type RunVerdicts } from './coord/runVerdicts.js';
 import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
+import { casesPass } from './coord/casesLane.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
 import { readBranchFacts, readBranchOpenPr } from './coord/runCloseFacts.js';
 import { abandonRefusal } from './coord/close.js';
@@ -2761,6 +2762,8 @@ export class FleetWatcher {
       void this.sweepRunStuck().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the runs-closed notice's drain (D-8073), on its own minute.
       void this.sweepUntold().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the CASE lane (Overlord §10.5, Table 11.1c's `cases` row), in shadow: it records cases and sends nothing.
+      void this.sweepCases().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -6015,6 +6018,13 @@ export class FleetWatcher {
     await this.runLane('runUntold', () => untoldPass({
       coord, measure: (id) => measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, id, Date.now()),
     }));
+  }
+
+  /** The case lane (Overlord spec §10.5, W1a): one read-and-record pass in shadow, on the wall clock the time ports carry. */
+  async sweepCases(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('cases', () => casesPass({ coord, now: () => this.deps.time.clock.wall() }));
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */

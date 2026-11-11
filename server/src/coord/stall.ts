@@ -1,4 +1,6 @@
 import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
+import { STALL_ARMS, isStallArm } from '../../../shared/stall-watch.js';
+import type { StallArm } from '../../../shared/stall-watch.js';
 import { sessionRoleOf } from '../roleOf.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
@@ -6,7 +8,7 @@ import { stallWatchSays } from '../sessionReading.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
- * this file `./db.js` and `node:sqlite`. Its permitted value imports are L0, `shared/api.ts`, `stallWatchSays` from `../sessionReading.js` and `sessionRoleOf` from `../roleOf.js` (both L1, which import only L0).
+ * this file `./db.js` and `node:sqlite`. Its permitted value imports are L0, `shared/api.ts`, `shared/stall-watch.ts` (the arms), `stallWatchSays` from `../sessionReading.js` and `sessionRoleOf` from `../roleOf.js` (both L1, which import only L0).
  *
  * Spelled ONCE here: the subject prefixes, and the observation-detail heads that `stallDetail` writes and
  * `parseStallDetail` reads back. `single-definition.test.ts` reds on a second quoted copy anywhere in the four
@@ -52,29 +54,9 @@ const STALL_SENDER = 'operator';
 
 // ── arms, holds, markers ─────────────────────────────────────────────────────────────────────────────────────
 
-/** The watch's arms: wave 1's (§4.2) and wave 2's (§5.2). Each key is added with the code that fires it, and
- *  `STALL_ARM_WAVE` says which wave's arming it answers to. */
-const STALL_ARM_MAP = {
-  quiet: 'the ladder: the worker holds the ball and has been idle past the quiet threshold (r1 worker, r2 coordinator, r3 operator)',
-  'limit-cap': 'the usage-limit hold past its cap: one operator push per episode',
-  'dialog-cap': 'a dialog with no question behind it, past the quiet threshold: one operator push per dialog, keyed on its live stamp',
-  'coord-ball': 'the coordinator has held the ball past its cap with no mail on the run: one operator push per episode',
-  'orphan-d': 'a restart killed background tasks the session ran at its last turn end, and it sat idle past ORPHAN_D_IDLE_MS (any session): a mail to it, then an operator push',
-  restarted: 'a restart cut a run worker\'s background tasks short (D5, #759): a mail to the worker at once, then one heads-up to its coordinator, at most one per worker on its run per RESTARTED_HEADS_UP_MS',
-  'orphan-e': 'the session ended its turn over a wake-bearing background task and sat idle past ORPHAN_E_IDLE_MS with no turn: a mail to it',
-  failed: 'the turn ended on a StopFailure and the session sat idle past FAILED_IDLE_MS: by its STOP_FAILURE_ERRORS class, a mail to it or to the coordinator',
-  frozen: 'the marker reads working under a busy word and no hook event arrived for FROZEN_NO_EVENT_MS: the coordinator, or the operator',
-  dead: 'the worker read orphan or never-started, or was absent from the registry, for DEAD_GRACE_MS: the coordinator, or the operator',
-  'coord-deaf': 'the worker passed the ball to its coordinator and that mail sat unacked COORD_DEAF_MS from its first delivery, or DELEGATE_CAP_MS + COORD_DEAF_MS from its queue while it stays queued behind the gate: one operator push',
-  'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle (a live idle or shell word in every mode, the strict mode included, an accepted residual; or a finished turn under a live busy, which the `busy` mode delivers on only while the strict mode is absent), or behind a registry gate: one operator push per delivery',
-  'marker-unreadable': 'the turn marker read unmeasured or malformed for MARKER_UNREADABLE_MS: one operator push per episode',
-  'coord-blocked': 'mail to a coordinator (no child marker, claiming an open run) still queued COORD_BLOCKED_HELD_MS from its queue time, whatever word it reads: one operator push per episode naming the gate reason, rung 2 at a COORD_BLOCKED_STRETCH_MS busy or waiting stretch or a COORD_BLOCKED_OLD_MS old mail; it only reports (D-6942)',
-} as const;
-export type StallArm = keyof typeof STALL_ARM_MAP;
-export const STALL_ARMS = Object.keys(STALL_ARM_MAP) as StallArm[];
-function isStallArm(v: string): v is StallArm {
-  return Object.prototype.hasOwnProperty.call(STALL_ARM_MAP, v);
-}
+// The arms' one definition is `shared/stall-watch.ts` (L0); re-exported here so no caller changes.
+export { STALL_ARMS };
+export type { StallArm };
 /** Which wave's arming each arm answers to. A wave-2 arm needs `stall-watch-w2-live` besides its recipient's markers
  *  (`stallNotifyDelivery`; planning departure `w2-arms-ship-dark` (D-3605)). Total over the arms, so a new arm is a compile
  *  error until it is placed. */

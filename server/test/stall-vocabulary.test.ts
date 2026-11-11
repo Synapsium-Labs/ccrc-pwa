@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { STALL_ARMS as L0_ARMS, isStallArm } from '../../shared/stall-watch.js';
 import {
   STALL_ARMS, STALL_CHECK_PREFIX, STALL_HOLDS, STALL_MARKERS, STALL_READ_FAILURES, STALL_REPLY_PREFIX,
   STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX, STALL_WRITE_MISSES,
@@ -297,13 +298,13 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts (L0), stallWatchSays from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts and shared/stall-watch.ts (L0), stallWatchSays from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(['../../../shared/api.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
+      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
     // From sessionReading, `stallWatchSays` ALONE, and on exactly this one line: a second name, or a second import
     // from the module, would let the lane reach the policy table or `turnSays` and spell a policy name of its own.
@@ -313,6 +314,18 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     // role of its own. roleOf.ts is L1 and imports only L0.
     const fromRoleOf = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/roleOf\.js\1;?$/gm)].map((m) => m[0].trim());
     expect(fromRoleOf, 'the one import from roleOf').toEqual([`import { sessionRoleOf } from '../roleOf.js';`]);
+    // From shared/stall-watch.ts (L0), the arm list and its guard, by name and source, on one line; the type import
+    // (`StallArm`) is a separate `import type` line.
+    const fromStallWatch = [...c.matchAll(/^\s*import\s(?!type\b)[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/stall-watch\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromStallWatch, 'the one value import from stall-watch').toEqual([`import { STALL_ARMS, isStallArm } from '../../../shared/stall-watch.js';`]);
+  });
+});
+
+describe('the arm vocabulary lives in L0', () => {
+  it('the arms have one definition, in L0, and stall.ts re-exports the same list', () => {
+    expect(L0_ARMS).toBe(STALL_ARMS);
+    for (const a of STALL_ARMS) expect(isStallArm(a), a).toBe(true);
+    for (const w of ['', 'limit-capp', 'constructor', 'toString']) expect(isStallArm(w), w).toBe(false);
   });
 });
 

@@ -2593,6 +2593,35 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX testbox_events_by_at ON testbox_events(at);
   `,
+  // ── 58: user_version 57 -> 58 ─────────────────────────────────────────────
+  // The case lane's table (Overlord spec §10.5, W1a): `practice_cases`, one row per case a trigger signature has earned
+  // (`shared/practice-triggers.ts#signatureText`). `state` is `open` and nothing else in W1a (a later review moves it);
+  // `mode` is the lane's mode word (`shadow`: recorded, no review offered); `cause` is a `CaseCause`; `programmes` and
+  // `evidence` are JSON arrays (programme slugs, run_events ids), ascending. Its one writer is `openPracticeCase` in
+  // `practiceCasesStore.ts`, a compare-and-set on the signature's newest `openedAt`.
+  //
+  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 58` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
+  // This build's writer names its columns, so a later build that adds a column to `practice_cases` must make it nullable
+  // or give it a DEFAULT, or this build's writer fails after a rollback.
+  // RE-MEASURE the slot before the PR and before merge (it must print 57 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE practice_cases (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    signature   TEXT NOT NULL,     -- a trigger signature's text (shared/practice-triggers.ts#signatureText)
+    state       TEXT NOT NULL,     -- 'open'; W1a writes nothing else, a later review moves it
+    mode        TEXT NOT NULL,     -- 'shadow' in W1a: recorded, no review offered
+    cause       TEXT NOT NULL,     -- a CaseCause: 'count' | 'programmes'
+    occurrences INTEGER NOT NULL,
+    programmes  TEXT NOT NULL,     -- JSON array of programme slugs, ascending
+    evidence    TEXT NOT NULL,     -- JSON array of run_events ids, ascending
+    windowFrom  INTEGER NOT NULL,
+    openedAt    INTEGER NOT NULL
+  );
+  CREATE INDEX practice_cases_by_signature ON practice_cases(signature, openedAt);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

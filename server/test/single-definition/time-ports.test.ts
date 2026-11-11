@@ -15,7 +15,14 @@ const TIME_PORT_FAMILIES = new RegExp('^(?:server/src/(?:time|overlord|continuit
 /** Single files of the programme that sit outside those families (the coordinator's ruling on run 1776: the W1a
  *  pieces that land later add their own files here, in their own pull request). The one list; nothing else names
  *  scoped files. */
-const TIME_PORT_FILES: readonly string[] = [];
+const TIME_PORT_FILES: readonly string[] = [
+  'server/src/coord/casesLane.ts',
+  'server/src/coord/practiceCases.ts',
+  'server/src/coord/practiceCasesStore.ts',
+  'shared/practice-triggers.ts',
+  'server/src/roleOf.ts',
+  'shared/fleetRoles.ts',
+];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */
 const THE_ADAPTER = 'server/src/time/system.ts';

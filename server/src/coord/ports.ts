@@ -77,8 +77,8 @@ export type WatcherCoordMember =
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markUnreachable' | 'maxMailDeliveryId'
   | 'maxRunEventId' | 'mergingRuns' | 'moveItem' | 'node' | 'nodeByLabel' | 'nodes' | 'noteDispatchRefusal' | 'noteGate'
-  | 'noteLeaseDetail' | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'outstandingMailFor' | 'parkDelivery'
-  | 'parkedDeliveries' | 'poolEpoch' | 'programOpenRunCount' | 'programmeActivity' | 'programmeLeftPlannedAt' | 'projectDelegationCheckpoint'
+  | 'noteLeaseDetail' | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'outstandingMailFor' | 'parkDelivery'
+  | 'parkedDeliveries' | 'poolEpoch' | 'practiceCaseNewest' | 'programOpenRunCount' | 'programmeActivity' | 'programmeLeftPlannedAt' | 'projectDelegationCheckpoint'
   | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'queueDelivery' | 'queueRunCloseWarning'
   | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'recentProvenance' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordStallObservation'
@@ -86,7 +86,7 @@ export type WatcherCoordMember =
   | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'reviveParkedDeliveries' | 'rollSettings' | 'run'
   | 'runCloseAnchors' | 'runCloseChoice' | 'runCloseRuns' | 'runCloseWarning' | 'runCloseWarningProgrammes' | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
   | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGoneSince' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'staleAllocations'
-  | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallSettings' | 'stalledDispatchRunIds'
+  | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds'
   | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'unlandedBriefs'
   | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'wakeParked';
 
