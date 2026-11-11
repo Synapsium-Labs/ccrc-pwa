@@ -682,3 +682,252 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(ask(server, 'touched')[0]).toBe(9);
   }, HEAVY);
 });
+
+
+// ── Task 4C: touched's cost at the measured node_refs size (W4 addendum P9, P13) ─────────────────────────────────────
+// Skipped unless HISTORY_BENCH=1. One fixture store at the size act M3 measured on the one session-hosting node (68,456
+// node_refs rows, 5,697 nodes), its kinds in the proportions classifyRef gives a mixed corpus, built through a writer handle
+// on a fixture HOME under the temp root. It times runTouched in-process on a read-only handle, in both forms (the shipped
+// unordered selects, and P13's ordered ones through runTouched's `ordered` argument), cold and warm, and writes its figures
+// to $HISTORY_BENCH_OUT (default: beside the fixture, removed with the run). Cold is a freshly opened read-only handle per run (the OS page cache cannot be dropped
+// here, so it is a cold handle and statement cache, not a cold disk); warm is 20 timed runs on one handle after one untimed.
+describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => {
+  const RUNS = 20;
+  const REFS_TOTAL = 68_456;
+  const NODES_TOTAL = 5_697;
+  /** The kinds' shares of the corpus, summing to 1: what classifyRef yields for refs mined from tool calls and summaries. */
+  const MIX: Array<[string, number]> = [
+    ['path', 0.60], ['path:symbol', 0.12], ['test', 0.10], ['url', 0.06], ['sha', 0.05], ['d-number', 0.04], ['issue', 0.03],
+  ];
+  const QFILE = 'ccd/history/recall.mjs';
+  const QSYM = 'runTouched';
+  const SYM_FILES = [QFILE, 'ccd/history/cli.mjs', 'server/test/history-touched.test.ts'];
+
+  function prng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const pct = (xs: number[], p: number): number => {
+    const s = [...xs].sort((x, y) => x - y);
+    return s[Math.min(s.length - 1, Math.ceil((p / 100) * s.length) - 1)]!;
+  };
+  const r2 = (n: number): number => Math.round(n * 100) / 100;
+
+  it.skipIf(process.env['HISTORY_BENCH'] !== '1')('touched cost at the measured node_refs size', async () => {
+    const rnd = prng(8188);
+    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!;
+    const root = mkTmp('ccrc-hist-touched-bench-root-');
+    const box = makeHistoryBox('ccrc-hist-touched-bench-', { roster: LANE_ROSTER });
+    const ID = 'lane-a-demo';
+    const TA = 'a1a1a1a1-1111-4111-8111-111111111111';
+    const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+    const sw = runSweep(box);
+    expect(sw.code, sw.stderr).toBe(0);
+    seedFamily(box, { id: ID, project: 'demo', uuid: TA, generation: G1, rows: [
+      userRow({ uuid: `${TA.slice(0, 8)}-0000-4000-8000-000000000001`, ts: new Date(Date.UTC(2026, 9, 1)).toISOString(), sessionId: TA, cwd: root, text: 'bench question' }),
+      assistantRow({ uuid: `${TA.slice(0, 8)}-0000-4000-8000-000000000002`, ts: new Date(Date.UTC(2026, 9, 1, 0, 0, 1)).toISOString(), sessionId: TA, cwd: root, text: 'Bench answer.', requestId: 'req_1', msgId: 'msg_1' }),
+    ] });
+    const dbFile = path.join(box.root, 'db', 'history.db');
+    const store = (await import('../../ccd/history/store.mjs')) as unknown as {
+      openReader(p: string): DatabaseSync; openWriter(p: string): DatabaseSync; userVersion(db: DatabaseSync): number;
+    };
+    const R = (await import('../../ccd/history/recall.mjs')) as unknown as {
+      runTouched(rc: unknown, a: { arg: string; limit: number; ordered?: boolean }): { exit: number; total: number; items: Array<Record<string, any>> };
+      TOUCHED_SELECTS: Record<'file' | 'symbol' | 'fileOrdered' | 'symbolOrdered', string>;
+    };
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as { makePairIndex(x: unknown[]): unknown };
+
+    // ── the fixture ──
+    const W = store.openWriter(dbFile);
+    const fam = W.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(ID, G1) as { session_pk: number };
+    const ep = W.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL ORDER BY seq LIMIT 1').get(fam.session_pk) as { seq: number };
+    const tr = W.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(TA) as { transcript_pk: number };
+    W.prepare('UPDATE epochs SET cwd = ?, cwd_real = ? WHERE session_pk = ?').run(root, root, fam.session_pk);
+    const T0 = Date.UTC(2026, 8, 1);
+    const SPAN = 70 * 86_400_000;
+    const nodeIds: string[] = [];
+    const insNode = W.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id,
+      boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms)
+      VALUES (?, ?, ?, ?, ?, 0, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`);
+    W.exec('BEGIN');
+    for (let i = 0; i < NODES_TOTAL; i += 1) {
+      const id = `Lb${i.toString(36).padStart(5, '0')}`;
+      nodeIds.push(id);
+      const latest = T0 + Math.floor(rnd() * SPAN);
+      const gist = `Worked on step ${i} of the bench change and ran the suite. ${'Then it adjusted the parser and the tests for the case. '.repeat(1 + Math.floor(rnd() * 3))}`;
+      insNode.run(id, fam.session_pk, ep.seq, tr.transcript_pk, rnd() < 0.85 ? 'native_leaf' : 'raw_leaf', gist, latest - 600_000, latest, Date.now());
+    }
+    W.exec('COMMIT');
+
+    // value pools
+    const DIRS = ['ccd/history', 'ccd', 'server/src/coord', 'server/src', 'server/test', 'agent/src', 'pwa/src/screens', 'pwa/src/lib', 'pwa/test', 'shared', 'ui/src/components', 'deploy', 'docs/superpowers/specs', 'docs/superpowers/plans', '.github/workflows'];
+    const STEMS = ['store', 'derive', 'lib', 'sweep', 'card', 'steer', 'census', 'routes', 'schema', 'watch', 'dispatch', 'turnidle', 'api', 'Screen', 'Words', 'index', 'config', 'tokens', 'helpers', 'fixtures'];
+    const EXTS = ['mjs', 'ts', 'tsx', 'md', 'json', 'sh', 'css'];
+    const files: string[] = [];
+    for (let i = 0; files.length < 900; i += 1) files.push(`${pick(DIRS)}/${pick(STEMS)}${i % 7 === 0 ? i : ''}.${pick(EXTS)}`);
+    const SYMS = ['runGrep', 'runTree', 'runDescribe', 'readContext', 'classifyRef', 'capRefs', 'openReader', 'sweepStalls', 'planRun', 'decideScope', 'parseReadArgs', 'makePairIndex'];
+    const tests = files.filter((f) => /\.(?:ts|mjs)$/.test(f)).slice(0, 250).map((f) => `${f.replace(/\.[a-z]+$/, '')}.test.ts`);
+    const hex = (n: number): string => { let s = ''; while (s.length < n) s += Math.floor(rnd() * 16).toString(16); return /[a-f]/.test(s) ? s : `a${s.slice(1)}`; };
+    const abs = (f: string): string => (rnd() < 0.4 ? `${root}/${f}` : f);
+    const suf = (): string => (rnd() < 0.35 ? (rnd() < 0.5 ? `:${1 + Math.floor(rnd() * 900)}` : `:${1 + Math.floor(rnd() * 400)}-${401 + Math.floor(rnd() * 400)}`) : '');
+    const gen: Record<string, () => string> = {
+      path: () => `${abs(pick(files))}${suf()}`,
+      'path:symbol': () => `${pick(files)}:${pick(SYMS)}`,
+      test: () => abs(pick(tests)),
+      url: () => `https://github.com/example-org/example-repo/pull/${1 + Math.floor(rnd() * 2700)}`,
+      sha: () => hex(7 + Math.floor(rnd() * 6)),
+      'd-number': () => `D-${6000 + Math.floor(rnd() * 2300)}`,
+      issue: () => `#${1 + Math.floor(rnd() * 2700)}`,
+    };
+    const quota = new Map<string, number>();
+    let left = REFS_TOTAL;
+    MIX.forEach(([k, share], i) => { const n = i === MIX.length - 1 ? left : Math.round(REFS_TOTAL * share); quota.set(k, n); left -= n; });
+    const perNode = new Map<string, number>();
+    const seenRef = new Set<string>();
+    const insRef = W.prepare('INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
+    const planted = { file: 0, symbol: 0 };
+    const put = (kind: string, value: string, hot?: 'file' | 'symbol'): boolean => {
+      if ((quota.get(kind) ?? 0) <= 0) return false;
+      for (let tries = 0; tries < 50; tries += 1) {
+        const id = pick(nodeIds);
+        const key = `${id}\0${kind}\0${value}`;
+        if (seenRef.has(key) || (perNode.get(id) ?? 0) >= 40) continue;
+        seenRef.add(key);
+        perNode.set(id, (perNode.get(id) ?? 0) + 1);
+        quota.set(kind, quota.get(kind)! - 1);
+        insRef.run(id, kind, value, rnd() < 0.7 ? 'tool_use' : rnd() < 0.8 ? 'model' : 'meta');
+        if (hot !== undefined) planted[hot] += 1;
+        return true;
+      }
+      return false;
+    };
+    W.exec('BEGIN');
+    // The queried file and symbol: planted rows, so each query returns a realistic number of matches.
+    for (let i = 0; i < 140; i += 1) put('path', `${abs(QFILE)}${suf()}`, 'file');
+    for (let i = 0; i < 20; i += 1) put('path:symbol', `${QFILE}:${pick(SYMS)}`, 'file');
+    for (let i = 0; i < 10; i += 1) put('path', `docs/tools/recall.mjs${suf()}`, 'file');               // a decoy sharing the basename
+    for (let i = 0; i < 25; i += 1) put('path:symbol', `${QFILE}:${QSYM}`, 'symbol');
+    for (let i = 0; i < 5; i += 1) put('path:symbol', `ccd/history/cli.mjs:${QSYM}`, 'symbol');
+    for (let i = 0; i < 6; i += 1) put('path:symbol', `server/test/history-touched.test.ts:${QSYM}`, 'symbol');
+    for (let i = 0; i < 100; i += 1) put('path', `${abs('ccd/history/cli.mjs')}${suf()}`);
+    for (let i = 0; i < 60; i += 1) put('test', abs('server/test/history-touched.test.ts'));
+    for (const [kind] of MIX) { while ((quota.get(kind) ?? 0) > 0) put(kind, gen[kind]!()); }
+    W.exec('COMMIT');
+    W.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    W.close();
+    const bytes = fs.statSync(dbFile).size + (fs.existsSync(`${dbFile}-wal`) ? fs.statSync(`${dbFile}-wal`).size : 0);
+
+    // a graph for the symbol-with-graph shape: the symbol's label on three files, among others
+    const writeGraph = (on: boolean): void => {
+      fs.rmSync(path.join(root, 'graphify-out'), { recursive: true, force: true });
+      if (!on) return;
+      fs.mkdirSync(path.join(root, 'graphify-out'), { recursive: true });
+      const nodes = [...SYM_FILES.map((f) => ({ label: QSYM, file: f })), ...files.slice(0, 200).map((f) => ({ label: pick(SYMS), file: f }))];
+      fs.writeFileSync(path.join(root, 'graphify-out', 'graph.json'), JSON.stringify({ nodes: nodes.map((n, i) => ({ id: `g${i}`, label: n.label, source_file: n.file })), links: [] }));
+    };
+
+    function contextOn(db: DatabaseSync) {
+      const version = store.userVersion(db);
+      const fams = db.prepare('SELECT session_pk, ccrc_id, generation, first_seen_ms FROM sessions WHERE ccrc_id = ? AND merged_into IS NULL ORDER BY session_pk').all(ID) as
+        { session_pk: number; ccrc_id: string; generation: string; first_seen_ms: number }[];
+      const sessionPks = fams.map((f) => Number(f.session_pk));
+      const storeId = (db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string } | undefined)?.v ?? null;
+      return {
+        db, version, storeId, nowMs: Date.now(), home: box.home, id: ID, gen: G1, scopeArgs: [], pairIdx: lib.makePairIndex([]),
+        scope: { kind: 'family', id: ID, generation: G1, project: 'demo', workdir: null, sessionPks, transcriptPks: [Number(tr.transcript_pk)],
+          families: fams.map((f) => ({ sessionPk: Number(f.session_pk), ccrcId: f.ccrc_id, generation: f.generation, firstSeenMs: Number(f.first_seen_ms) })) },
+      };
+    }
+    const counts = (() => {
+      const d = new DatabaseSync(dbFile, { readOnly: true });
+      try {
+        return {
+          node_refs: (d.prepare('SELECT count(*) AS c FROM node_refs').get() as { c: number }).c,
+          nodes: (d.prepare('SELECT count(*) AS c FROM nodes').get() as { c: number }).c,
+          byKind: d.prepare('SELECT kind, count(*) AS c FROM node_refs GROUP BY kind ORDER BY c DESC').all(),
+          matchesFile: (d.prepare("SELECT count(*) AS c FROM node_refs WHERE kind IN ('path','path:symbol','test') AND value LIKE '%recall.mjs%'").get() as { c: number }).c,
+          matchesSymbol: (d.prepare("SELECT count(*) AS c FROM node_refs WHERE kind = 'path:symbol' AND value LIKE '%:runTouched'").get() as { c: number }).c,
+        };
+      } finally { d.close(); }
+    })();
+    expect(counts.node_refs).toBe(REFS_TOTAL);
+    expect(counts.nodes).toBe(NODES_TOTAL);
+    const shapes = [
+      { name: 'path', arg: QFILE, graph: false },
+      { name: 'symbol with graph', arg: QSYM, graph: true },
+      { name: 'symbol without graph', arg: QSYM, graph: false },
+      // Beyond the measured size, for the worst case of the cut: 11,000 more path refs (79,456 rows in all) on one basename.
+      { name: 'path, capped (+11000 rows)', arg: 'src/hot5/index.ts', graph: false },
+    ] as const;
+    const ms = (t0: bigint): number => Number(process.hrtime.bigint() - t0) / 1e6;
+    const results: Array<Record<string, unknown>> = [];
+    const answers = new Map<string, string[]>();
+    for (const shape of shapes) {
+      if (shape.name.startsWith('path, capped')) {
+        const w = store.openWriter(dbFile);
+        const ins = w.prepare('INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
+        w.exec('BEGIN');
+        for (let i = 0; i < 11_000; i += 1) ins.run(nodeIds[i % nodeIds.length]!, 'path', `src/hot${i}/index.ts`, 'tool_use');
+        w.exec('COMMIT');
+        w.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+        w.close();
+      }
+      writeGraph(shape.graph);
+      for (const form of ['unordered', 'ordered'] as const) {
+        const ordered = form === 'ordered';
+        const ask = (rc: unknown) => R.runTouched(rc, { arg: shape.arg, limit: 20, ordered });
+        const cold: number[] = [];
+        for (let i = 0; i < RUNS; i += 1) {
+          const db = store.openReader(dbFile);
+          const t0 = process.hrtime.bigint();
+          const out = ask(contextOn(db));
+          cold.push(ms(t0));
+          expect(out.exit, `${shape.name} ${form}`).toBe(0);
+          db.close();
+        }
+        const db = store.openReader(dbFile);
+        const rc = contextOn(db);
+        const first = ask(rc);
+        answers.set(`${shape.name}/${form}`, first.items.map((it) => String(it['nodeId'])));
+        const warm: number[] = [];
+        for (let i = 0; i < RUNS; i += 1) { const t0 = process.hrtime.bigint(); ask(rc); warm.push(ms(t0)); }
+        // the select alone: the rows each candidate select returns, and its time warm
+        const sels = shape.name.startsWith('path') ? [[ordered ? R.TOUCHED_SELECTS.fileOrdered : R.TOUCHED_SELECTS.file, shape.arg.endsWith('index.ts') ? '%index.ts%' : '%recall.mjs%']]
+          : [[ordered ? R.TOUCHED_SELECTS.symbolOrdered : R.TOUCHED_SELECTS.symbol, `%:${QSYM}`],
+            ...(shape.graph ? ['recall.mjs', 'cli.mjs', 'history-touched.test.ts'].map((b) => [ordered ? R.TOUCHED_SELECTS.fileOrdered : R.TOUCHED_SELECTS.file, `%${b}%`]) : [])];
+        const selWarm: number[] = [];
+        let candidateRows = 0;
+        for (let i = 0; i < RUNS; i += 1) {
+          const t0 = process.hrtime.bigint();
+          let n = 0;
+          for (const [sql, pat] of sels as string[][]) n += (db.prepare(sql!).all(pat!, 10_001) as unknown[]).length;
+          selWarm.push(ms(t0));
+          candidateRows = n;
+        }
+        const plans = (sels as string[][]).map(([sql, pat]) => ({ pattern: pat, plan: (db.prepare(`EXPLAIN QUERY PLAN ${sql!.replace('LIMIT ?', 'LIMIT 10001')}`).all(pat!) as Array<{ detail: string }>).map((p) => p.detail) }));
+        db.close();
+        results.push({
+          shape: shape.name, form, total: first.total, candidateRows,
+          cold: { p50: r2(pct(cold, 50)), p95: r2(pct(cold, 95)), max: r2(Math.max(...cold)) },
+          warm: { p50: r2(pct(warm, 50)), p95: r2(pct(warm, 95)), max: r2(Math.max(...warm)) },
+          selectsWarm: { p50: r2(pct(selWarm, 50)), p95: r2(pct(selWarm, 95)) }, plans,
+        });
+      }
+    }
+    // the ordered form answers the same rows as the unordered while nothing is capped
+    for (const shape of shapes.slice(0, 3)) expect(answers.get(`${shape.name}/ordered`), shape.name).toEqual(answers.get(`${shape.name}/unordered`));
+    const out = process.env['HISTORY_BENCH_OUT'] ?? path.join(path.dirname(root), 'touched-bench.json');   // the run's temp root goes with the run: name a path to keep the figures
+    fs.writeFileSync(out, JSON.stringify({ fixtureBytes: bytes, counts, planted, runs: RUNS, results }, null, 2));
+    const rows = results.map((r) => {
+      const c = r['cold'] as { p50: number; p95: number }; const w = r['warm'] as { p50: number; p95: number };
+      return `${String(r['shape']).padEnd(22)} ${String(r['form']).padEnd(9)} cand=${String(r['candidateRows']).padStart(4)} total=${String(r['total']).padStart(4)}  cold p50 ${c.p50} p95 ${c.p95}  warm p50 ${w.p50} p95 ${w.p95}`;
+    });
+    fs.writeFileSync(`${out}.txt`, `${rows.join('\n')}\n`);
+    console.log(`touched bench: fixture ${bytes} bytes, ${counts.node_refs} node_refs, ${counts.nodes} nodes\n${rows.join('\n')}`);
+  }, 1_800_000);
+});

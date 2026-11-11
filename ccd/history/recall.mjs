@@ -2130,6 +2130,25 @@ export function expandVerb(rc, parsed) {
 
 const TOUCHED_FILE_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind IN ('path','path:symbol','test') AND value LIKE ? ESCAPE '\\' LIMIT ?";
 const TOUCHED_SYMBOL_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind = 'path:symbol' AND value LIKE ? ESCAPE '\\' LIMIT ?";
+// P13's ordered form of the same two selects (ruled: the cap if its p95 is measured under 2 s): each joins `nodes` and orders before
+// its cut, so a capped ranking is exact. Task 4C's bench runs both forms through runTouched's `ordered` argument; the default
+// is lib's TOUCHED_ORDERED_CAP, false in this build.
+const TOUCHED_ORDER_BY = 'ORDER BY n.latest_ms DESC, r.node_id, r.kind, r.value LIMIT ?';
+const TOUCHED_FILE_ORDERED_SQL = `SELECT r.node_id, r.kind, r.value, r.origin, n.latest_ms FROM node_refs r JOIN nodes n ON n.node_id = r.node_id WHERE r.kind IN ('path','path:symbol','test') AND r.value LIKE ? ESCAPE '\\' ${TOUCHED_ORDER_BY}`;
+const TOUCHED_SYMBOL_ORDERED_SQL = `SELECT r.node_id, r.kind, r.value, r.origin, n.latest_ms FROM node_refs r JOIN nodes n ON n.node_id = r.node_id WHERE r.kind = 'path:symbol' AND r.value LIKE ? ESCAPE '\\' ${TOUCHED_ORDER_BY}`;
+/** The four candidate selects, for the bench's query plans (read-only text). */
+export const TOUCHED_SELECTS = Object.freeze({
+  file: TOUCHED_FILE_SQL, symbol: TOUCHED_SYMBOL_SQL, fileOrdered: TOUCHED_FILE_ORDERED_SQL, symbolOrdered: TOUCHED_SYMBOL_ORDERED_SQL,
+});
+/** The merge order of the ordered form: the select's own ORDER BY (a missing time last, newest first, then node id, kind, value). */
+function touchedOrderCmp(x, y) {
+  const a = x.latest_ms ?? null;
+  const b = y.latest_ms ?? null;
+  if (a !== b) { if (a === null) return 1; if (b === null) return -1; return a > b ? -1 : 1; }
+  if (x.node_id !== y.node_id) return x.node_id < y.node_id ? -1 : 1;
+  if (x.kind !== y.kind) return x.kind < y.kind ? -1 : 1;
+  return x.value < y.value ? -1 : x.value > y.value ? 1 : 0;
+}
 /** What touched's human page holds back from the cap besides its header and blocks: the shown, next and disclosure lines. */
 const TOUCHED_RESERVE = 600;
 /** The gist text a row shows, at most. */
@@ -2180,7 +2199,7 @@ function touchedGist(rc, gist) {
   return one === '' ? null : one;
 }
 
-/** `touched` over a ReadContext. `a` is { arg, limit }. */
+/** `touched` over a ReadContext. `a` is { arg, limit }, and optionally `ordered` (P13's selects; default TOUCHED_ORDERED_CAP). */
 export function runTouched(rc, a) {
   const pending = pendingFor(rc, 'touched');
   if (pending !== null) return pending;
@@ -2222,14 +2241,27 @@ export function runTouched(rc, a) {
   }
   const limit = xlib.TOUCHED_CANDIDATE_MAX + 1;
   const selects = [];
-  if (q.kind === 'symbol') selects.push([TOUCHED_SYMBOL_SQL, `%:${xlib.likeEscape(q.symbol)}`]);
-  for (const base of new Set(wantFiles.map((w) => w.file.slice(w.file.lastIndexOf('/') + 1)))) selects.push([TOUCHED_FILE_SQL, `%${xlib.likeEscape(base)}%`]);
+  const ordered = a.ordered ?? xlib.TOUCHED_ORDERED_CAP;
+  if (q.kind === 'symbol') selects.push([ordered ? TOUCHED_SYMBOL_ORDERED_SQL : TOUCHED_SYMBOL_SQL, `%:${xlib.likeEscape(q.symbol)}`]);
+  for (const base of new Set(wantFiles.map((w) => w.file.slice(w.file.lastIndexOf('/') + 1)))) selects.push([ordered ? TOUCHED_FILE_ORDERED_SQL : TOUCHED_FILE_SQL, `%${xlib.likeEscape(base)}%`]);
 
   // The candidates, under one cap of every select's distinct rows together.
   const seen = new Set();
   const candidates = [];
   let capped = false;
-  for (const [sql, pattern] of selects) {
+  if (ordered) {
+    // Every select orders and cuts alike, then their rows merge under the same order before the one cut.
+    const pool = new Map();
+    for (const [sql, pattern] of selects) {
+      for (const r of db.prepare(sql).all(pattern, limit)) {
+        const key = `${r.node_id}\0${r.kind}\0${r.value}`;
+        if (!pool.has(key)) pool.set(key, r);
+      }
+    }
+    const merged = [...pool.values()].sort(touchedOrderCmp);
+    capped = merged.length > xlib.TOUCHED_CANDIDATE_MAX;
+    candidates.push(...merged.slice(0, xlib.TOUCHED_CANDIDATE_MAX));
+  } else for (const [sql, pattern] of selects) {
     if (capped) break;   // the cap is reached: the remaining selects add nothing the answer would keep
     for (const r of db.prepare(sql).all(pattern, limit)) {
       const key = `${r.node_id}\0${r.kind}\0${r.value}`;
