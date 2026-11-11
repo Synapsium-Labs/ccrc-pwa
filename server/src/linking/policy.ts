@@ -2,6 +2,7 @@
 // else. A private repository carries the ticket id; a public or unmeasured one never does.
 import { LINEAR_TEAM_KEY_SHAPE } from '../../../shared/linear.js';
 import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
+import { PUBLIC_TEXT_CLASSES } from './publicTextClasses.js';
 
 /** A visibility reading is kept this long before the sweep takes another. */
 export const VISIBILITY_MAX_AGE_MS = 24 * 3_600_000;
@@ -81,4 +82,36 @@ export function visibilityDue(rows: readonly { project: string; at: number | nul
     if (best === null || r.at < best.at) best = { project: r.project, at: r.at };
   }
   return best ? best.project : null;
+}
+
+/** The path a text is read as by the hashed class: its exemptions key on a file, and plan text is nobody's file. */
+const TEXT_FILE = 'plan-text';
+
+/** D-8181 (design §4.3, §6.1): may this text reach a tracker? A `private` project's text passes; a `public` or `unknown`
+ *  one (unmeasured is treated as public, as `linkingMode` does everywhere) is refused if it names one of the team's
+ *  tracker ids (`trackerIdsIn`, the ids listed) or any topology class matches (the class named). A hashed hit names its
+ *  class and `#h8`, never the text; the sentence the operator sees is the word's fixed one. Each line is read alone and each
+ *  consecutive pair as a phrase broken across a line, as the tree scan reads a file. */
+export function publicTextVerdict(text: string, teamKey: string | null, mode: LinkingMode):
+  { ok: true } | { ok: false; word: 'linear-text-public'; class: string; ids?: string[] } {
+  if (mode === 'private') return { ok: true };
+  const ids = trackerIdsIn(text, teamKey);
+  if (ids.length > 0) return { ok: false, word: 'linear-text-public', class: 'tracker id', ids };
+  const lines = text.split('\n');
+  for (const cls of PUBLIC_TEXT_CLASSES) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (cls.skipLine?.(line, TEXT_FILE)) continue;
+      if (cls.match !== undefined) {
+        const hits = [...cls.match(line, TEXT_FILE),
+          ...(cls.matchPair !== undefined && i + 1 < lines.length ? cls.matchPair(line, lines[i + 1]!, TEXT_FILE) : [])];
+        if (hits.length > 0) return { ok: false, word: 'linear-text-public', class: `${cls.name} #${hits[0]!}` };
+        continue;
+      }
+      for (const m of line.matchAll(cls.pattern!)) {
+        if (!cls.allowed?.(m[0])) return { ok: false, word: 'linear-text-public', class: cls.name };
+      }
+    }
+  }
+  return { ok: true };
 }

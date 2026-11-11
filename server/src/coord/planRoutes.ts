@@ -16,6 +16,7 @@ import {
   type CheckpointView, type EpicView, type PlanPutBody, type PlanRefusal, type PlanView, type TicketView,
 } from '../../../shared/plan.js';
 import { programmeNameFromSlug } from '../../../shared/api.js';
+import { publicTextVerdict } from '../linking/policy.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import type { AttributionRead } from './openRun.js';
 import type { CoordStore } from './store.js';
@@ -160,6 +161,19 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
 
   const refuse = (reply: FastifyReply, word: PlanRefusal, detail: string): FastifyReply => refuseRoute(reply, word, { detail });
 
+  /** D-8181 (design §4.3): the public-text check on every text a plan verb is about to store, each judged by its own
+   *  project's linking mode and team key (a project with no reading is `unknown`, which is public). Runs before the write, so
+   *  a refused text stores nothing. The detail names the class (and a tracker id's ids), never the text. */
+  const textRefusal = (coord: CoordStore, texts: ReadonlyArray<readonly [project: string, text: string | undefined]>): Refused | null => {
+    for (const [project, text] of texts) {
+      if (text === undefined || text === '') continue;
+      const l = coord.linkingOf(project);
+      const v = publicTextVerdict(text, l.teamKey, l.mode);
+      if (!v.ok) return { refuse: v.word, detail: v.ids === undefined ? v.class : `${v.class}: ${v.ids.join(', ')}` };
+    }
+    return null;
+  };
+
   const WRITE_LIMIT = { rateLimit: { max: 1200, timeWindow: '1 minute' } } as const;
   /** The box-token lane's verdict, answered `unauthenticated` on any but `ok`, whatever the sign-in flag says: no cookie takes its place. */
   const refuseToken = (reply: FastifyReply, verdict: ReturnType<typeof checkMailToken>): FastifyReply | undefined =>
@@ -220,9 +234,18 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const verdict = ownerVerdict(caller, owner);
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator writes its plan' };
     if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
-    const put = maskPut(parsed.put);
-    const home = storedHome ?? put.home;
+    const home = storedHome ?? parsed.put.home;
     if (home === undefined) return { refuse: 'plan-bad-body', detail: 'the programme has no home project' };
+    const texts: [string, string | undefined][] = [[home, parsed.put.title]];
+    for (const e of parsed.put.epics) {
+      const ep = e.project ?? home;
+      texts.push([ep, e.title], [ep, e.summary], [ep, e.droppedWhy]);
+      for (const c of e.checkpoints) texts.push([ep, c.title]);
+      for (const t of e.tickets ?? []) texts.push([t.project ?? ep, t.title], [t.project ?? ep, t.body]);
+    }
+    const unfit = textRefusal(coord, texts);
+    if (unfit !== null) return unfit;
+    const put = maskPut(parsed.put);
     const d = diffPlan(stored, put, { home, doneWhenCount: (coord.goalsFor(slug).doneWhen ?? []).length, workspaceOfProject: (p) => ws.get(p) ?? null });
     if (!d.ok) return { refuse: d.word, detail: d.detail };
     const newRow = exists ? null : { home, title: put.title ?? programmeNameFromSlug(slug) };
@@ -245,6 +268,9 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (matches.length > 1) return { refuse: 'plan-bad-body', detail: `checkpoint ${checkpoint} is in more than one epic: name the epic` };
     const cp = matches[0]!;
     if (cp.state === 'dropped') return { refuse: 'plan-bad-body', detail: `checkpoint ${checkpoint} was dropped` };
+    const metUnfit = 'path' in evidence
+      ? textRefusal(coord, [[stored.epics.find((e) => e.checkpoints.some((c) => c.id === cp.id))!.project, evidence.path]]) : null;
+    if (metUnfit !== null) return metUnfit;
     if (cp.state === 'open') plan.markCheckpointMet(cp.id, 'path' in evidence ? { path: mask(evidence.path) } : evidence, opts.now());
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
@@ -268,6 +294,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       return { refuse: 'unknown-checkpoint', detail: `no checkpoint ${ticket.checkpoint} in epic ${epicKey}` };
     }
     const project = ticket.project ?? epic.project;
+    const addUnfit = textRefusal(coord, [[project, ticket.title], [project, ticket.body]]);
+    if (addUnfit !== null) return addUnfit;
     if (workspaceClash(ws, project, epic.project)) return { refuse: 'ticket-workspace-mismatch', detail: `ticket ${ticket.key} is in another workspace than epic ${epicKey}` };
     plan.insertTicket({
       program: slug, epicKey, checkpointKey: ticket.checkpoint ?? null, key: ticket.key, kind: ticket.kind, title: mask(ticket.title),
@@ -292,6 +320,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const { ticket } = found;
     if (ticket.state !== 'open') return { refuse: 'plan-bad-body', detail: `ticket ${m.ticket} is ${ticket.state}: only an open ticket moves or drops` };
     if (m.drop !== undefined) {
+      const dropUnfit = textRefusal(coord, [[ticket.project, m.drop.why]]);
+      if (dropUnfit !== null) return dropUnfit;
       plan.updateTicket(ticket.id, { state: 'dropped', droppedWhy: mask(m.drop.why) }, opts.now());
       return { ok: true, plan: viewOf(plan, coord, slug) };
     }
@@ -324,6 +354,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const epic = stored.epics.find((e) => e.key === parsed.drop.epic);
     if (epic === undefined) return { refuse: 'unknown-epic', detail: `no epic ${parsed.drop.epic}` };
     if (epic.state !== 'dropped') {
+      const epicUnfit = textRefusal(coord, [[epic.project, parsed.drop.why]]);
+      if (epicUnfit !== null) return epicUnfit;
       if (epic.tickets.some((t) => t.state === 'started')) return { refuse: 'plan-bad-body', detail: 'a ticket of this epic has a run working' };
       const why = mask(parsed.drop.why);
       const changes = NO_PLAN_CHANGES();
@@ -347,6 +379,9 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!coord.programs().some((p) => p.slug === slug)) return { refuse: 'plan-bad-body', detail: `no programme ${slug}` };
     if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was already closed' };
     if (coord.programOpenRunCount(slug) > 0) return { refuse: 'plan-runs-open', detail: 'a run of this programme is not finished' };
+    const home = coord.programHome(slug);
+    const closeUnfit = home === null ? null : textRefusal(coord, [[home, parsed.close.why]]);
+    if (closeUnfit !== null) return closeUnfit;
     plan.closePlan(slug, parsed.close.outcome, parsed.close.why === undefined ? null : mask(parsed.close.why), opts.now());
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
