@@ -1256,3 +1256,12 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     expect(users).toMatchObject({ ok: true, viewerId: VIEWER, users: [{ id: USER_A }] });
   });
 });
+
+describe('the session body shaper stays narrower than the ccrc journal list (D-8180)', () => {
+  it('a session update naming team or milestone is still refused by the proxy body shaper', () => {
+    for (const key of ['team', 'milestone', 'projectMilestoneId', 'teamId']) {
+      const v = validateLinearCall('update', { ref: 'AAA-12', body: { [key]: 'x' } });
+      expect(v.ok, key).toBe(false);
+    }
+  });
+});

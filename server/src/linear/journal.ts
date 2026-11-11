@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import { isMintedActor, type AccountActor } from '../accounts/audit.js';
-import type { LinearPolicyRefusal } from './policy.js';
+import { LINEAR_CCRC_JOURNAL_OPS } from './hierarchyOps.js';
+import type { CcrcPass, LinearPolicyRefusal } from './policy.js';
 import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
 
 /**
@@ -33,9 +34,11 @@ import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
  */
 
 /** Every op a row records: the three session writes, then the four Settings key acts. */
-export const LINEAR_JOURNAL_OPS = ['create', 'update', 'comment', 'link', 'key-add', 'key-replace', 'key-remove', 'key-check'] as const;
+export const LINEAR_JOURNAL_OPS = [
+  'create', 'update', 'comment', 'link', ...LINEAR_CCRC_JOURNAL_OPS, 'key-add', 'key-replace', 'key-remove', 'key-check',
+] as const;
 export type LinearJournalOp = (typeof LINEAR_JOURNAL_OPS)[number];
-export type LinearWriteOp = Extract<LinearJournalOp, 'create' | 'update' | 'comment' | 'link'>;
+export type LinearWriteOp = Exclude<LinearJournalOp, 'key-add' | 'key-replace' | 'key-remove' | 'key-check'>;
 
 /** `pending` until the route answers; then exactly one of the others. */
 export const LINEAR_JOURNAL_OUTCOMES = ['pending', 'ok', 'refused', 'denied', 'failed', 'unknown'] as const;
@@ -45,11 +48,37 @@ export type LinearSettledOutcome = Exclude<LinearJournalOutcome, 'pending'>;
 /** Each write op's closed list of field names (spec §5.3's bodies, less `requestId`, which changes nothing). A row's
  *  `fields` is the changed names, comma-separated, in this list's order. A key act changes no field. */
 export const LINEAR_JOURNAL_FIELDS: Readonly<Record<LinearWriteOp, readonly string[]>> = {
-  create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent'],
-  update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent'],
+  // `milestone` and `team` are written by ccrc only (the sync, the migration, put back): the session body shaper has
+  // no `projectMilestoneId` and no `teamId` on update, so a session can send neither.
+  create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent', 'milestone'],
+  update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent', 'milestone', 'team'],
   comment: ['body'],
   link: ['url', 'title'],
+  'initiative-create': ['name', 'description', 'status'],
+  'initiative-update': ['name', 'description', 'status'],
+  'initiative-link': ['project'],
+  'initiative-unlink': ['project'],
+  'project-create': ['name', 'description', 'status', 'teams', 'initiative'],
+  'project-update': ['name', 'description', 'status', 'teams', 'initiative'],
+  'milestone-create': ['name', 'description', 'targetDate', 'project'],
+  'milestone-update': ['name', 'description', 'targetDate', 'project'],
+  'relation-create': ['type', 'related'],
 };
+
+/** A ccrc pass's actor: minted by {@link ccrcActor} only, as the account audit's actor is by `actorOf`. Its text is
+ *  `ccrc:<pass>`; it is attribution, never a grant. */
+export interface CcrcActor { readonly pass: CcrcPass; toString(): string }
+const CCRC_PASSES: ReadonlySet<string> = new Set<CcrcPass>(['plan-sync', 'drift-restore', 'migration', 'put-back']);
+const MINTED_CCRC = new WeakSet<CcrcActor>();
+export function ccrcActor(pass: CcrcPass): CcrcActor {
+  if (!CCRC_PASSES.has(pass)) throw new Error('not a ccrc pass');
+  const text = `ccrc:${pass}`;
+  const a: CcrcActor = Object.freeze({ pass, toString: () => text });
+  MINTED_CCRC.add(a);
+  return a;
+}
+export const isCcrcActor = (a: unknown): a is CcrcActor =>
+  typeof a === 'object' && a !== null && MINTED_CCRC.has(a as CcrcActor);
 
 export const LINEAR_JOURNAL_RETENTION_DAYS = 365;
 /** The most items one `viaFleet` read takes: a page of any list the proxy answers is well under it. */
@@ -61,8 +90,8 @@ export interface LinearPendingInput {
   /** The attributed pair on a session write; null on a key act. */
   sessionId: string | null;
   sessionUuid: string | null;
-  /** The account gate's actor on a key act; null on a session write. */
-  actor: AccountActor | null;
+  /** The account gate's actor on a key act, a minted ccrc actor on a ccrc write; null on a session write. */
+  actor: AccountActor | CcrcActor | null;
   /** The slot the write routed to, or null when none was chosen (a key add before its check has learned it). */
   workspaceId: string | null;
   /** The team the resolve found (spec §4.5), never the reference's prefix; null on a key act. */
@@ -85,7 +114,8 @@ export type LinearJournalSettle = { ok: true } | { ok: false; why: LinearJournal
 export type LinearJournalCode = RouteRefusal | LinearPolicyRefusal;
 
 const OPS: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OPS);
-const WRITE_OPS: ReadonlySet<string> = new Set(['create', 'update', 'comment', 'link']);
+const WRITE_OPS: ReadonlySet<string> = new Set(['create', 'update', 'comment', 'link', ...LINEAR_CCRC_JOURNAL_OPS]);
+const CCRC_OPS: ReadonlySet<string> = new Set(LINEAR_CCRC_JOURNAL_OPS);
 const SETTLED: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OUTCOMES.filter((o) => o !== 'pending'));
 const CODES: ReadonlySet<string> = new Set<string>([...ROUTE_REFUSALS, ...LINEAR_POLICY_REFUSALS]);
 /** The client's SAFE_RE (`ccd/ccrc-api`), bounded as the mail path bounds a session id. */
@@ -120,11 +150,14 @@ function fieldsText(op: LinearJournalOp, fields: unknown): string | null | 'refu
 function pendingRefusal(e: LinearPendingInput): LinearJournalRefusal | null {
   if (typeof e.op !== 'string' || !OPS.has(e.op)) return 'op';
   const write = WRITE_OPS.has(e.op);
-  if (write ? !(isSafe(e.sessionId) && isSafe(e.sessionUuid)) : (e.sessionId !== null || e.sessionUuid !== null)) return 'session';
-  if (write ? e.actor !== null : !isMintedActor(e.actor)) return 'actor';
+  // A ccrc write (a hierarchy op, or any write under a ccrc actor) carries no session pair and a minted ccrc actor.
+  const ccrc = CCRC_OPS.has(e.op) || (e.actor !== null && typeof e.actor === 'object' && isCcrcActor(e.actor));
+  if (ccrc ? (e.sessionId !== null || e.sessionUuid !== null)
+    : write ? !(isSafe(e.sessionId) && isSafe(e.sessionUuid)) : (e.sessionId !== null || e.sessionUuid !== null)) return 'session';
+  if (ccrc ? !isCcrcActor(e.actor) : write ? e.actor !== null : !isMintedActor(e.actor)) return 'actor';
   if (e.workspaceId !== null && !isUuid(e.workspaceId)) return 'workspace';
   if (write ? (e.teamKey !== null && !isTeamKey(e.teamKey)) : e.teamKey !== null) return 'team';
-  if (e.target !== null && !isIdentifier(e.target)) return 'target';
+  if (e.target !== null && !(isIdentifier(e.target) || (ccrc && isUuid(e.target)))) return 'target';
   if ((e.op === 'update' || e.op === 'comment' || e.op === 'link') && e.target === null) return 'target';
   if (!write && e.target !== null) return 'target';
   if (fieldsText(e.op, e.fields) === 'refused') return 'fields';
@@ -132,12 +165,12 @@ function pendingRefusal(e: LinearPendingInput): LinearJournalRefusal | null {
 }
 
 /** The first rule a settle of a known outcome breaks against the row's op, or `null`. `result` rides only an `ok` create (an
- *  identifier) or an `ok` comment (a UUID); `code` only a row that did not end `ok`. */
+ *  identifier), an `ok` hierarchy op (a UUID or an identifier) or an `ok` comment (a UUID); `code` only a row that did not end `ok`. */
 function settleRefusal(op: string, outcome: LinearSettledOutcome, code: unknown, result: unknown, masked: unknown,
   decisionId: unknown): LinearJournalRefusal | null {
   if (code !== undefined && (typeof code !== 'string' || !CODES.has(code) || outcome === 'ok')) return 'code';
   if (result !== null && result !== undefined) {
-    const fits = outcome === 'ok' && ((op === 'create' && isIdentifier(result)) || ((op === 'comment' || op === 'link') && isUuid(result)));
+    const fits = outcome === 'ok' && ((CCRC_OPS.has(op) && (isUuid(result) || isIdentifier(result))) || (op === 'create' && isIdentifier(result)) || ((op === 'comment' || op === 'link') && isUuid(result)));
     if (!fits) return 'result';
   }
   if (masked !== null && masked !== undefined && !(Number.isSafeInteger(masked) && (masked as number) >= 0)) return 'masked';
