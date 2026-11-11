@@ -563,7 +563,8 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
   from `caseReadFrom(now)`, two windows back (`practiceCases.ts`), so every episode's earliest row is in the decider's
   input, and the decider still counts only episodes that began inside the window. The read is the same statement with
   a lower bound, so the M17d plan is unchanged. Residual: an episode whose rows span more than 14 days can still count
-  again; one episode's stall rungs span hours.
+  again. One episode's rows can span that long when a shadow rung is re-sent live under the same key, or on the
+  wave-1 ladder's late rungs (`2026-11-10-overlord/w1a-triggers-cases/departures.md`).
 
 **Settled by the spec's later edition, so no longer deviations:** one occurrence is one episode
 (one run, one arm, one key), live or shadow; "two programmes" is read inside the 14 days; a case consumes its

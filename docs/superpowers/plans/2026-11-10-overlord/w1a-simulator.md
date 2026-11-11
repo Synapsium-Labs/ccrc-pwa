@@ -790,12 +790,18 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
   coordinator-blocked reach violation as this plan words the invariant: a mail fell due at the very instant the server
   crashed, and the invariant judged the boot line, and any line during the downtime, on the old clock. The scenario
   records a `server crash down` line, and the reach invariant's clock stops from that line until the boot, which
-  restarts it. Two control rows pin this. The run-less push latch's own behaviour across a restart is untouched; it is
+  restarts it. Three control rows pin this. The run-less push latch's own behaviour across a restart is untouched; it is
   the stall code owner's open question in the programme's ledger.
-- **D-8242, sim-world-bounds-scheduled-calls, addition** — the plan offered a fire-count cap on one `advance` as
-  optional. It sits in the world instead, as a budget of scheduled calls per world (`SimWorld`'s `maxCalls`, 200,000
+- **D-8242, sim-world-bounds-scheduled-calls, addition** — no plan offered a fire-count cap; the budget is the
+  worker's own addition. It sits in the world, as a budget of scheduled calls per world (`SimWorld`'s `maxCalls`, 200,000
   by default), so a zero-delay re-arm fails instead of hanging: past the budget the call is not made, the fake records a
-  warning, the re-arm stops and `simulate` throws. The fake is untouched.
+  warning, the re-arm stops and `simulate` throws. The fake is untouched. A scenario that needs more than 200,000
+  calls changes `run.ts`; `Scenario` carries no budget of its own.
+- **Rulings within the plan, and known limits** (2026-11-11, reviews 1796, 1813 and 1816): `simulate` is async; it
+  drains the microtasks a scheduled call's promise needs before it judges, throws when one is still pending, and
+  refuses to nest. CB-rung-never-falls takes its episodes from the lane's held lines, not from the decider's return.
+  CB-reach's threshold arm is exact, from the last boot's sweep phase. These, the survivors M7 and M8, and the known
+  limits are recorded in `2026-11-10-overlord/w1a-simulator/departures.md`.
 
 **Settled by the spec's later edition, so no longer deviations:** the skeleton drives the new
 deciders on the fake ports, with crash and gap injection; the real lanes join once the watcher's runner reads
