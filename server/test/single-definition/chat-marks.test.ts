@@ -61,4 +61,12 @@ describe("chat's marks have one recogniser table and one plugin (chat reading Ta
     // Review 1768 G7: the value-flag list of round 1 is gone, and a second list in its place would read flags two ways.
     expect(holders(decl('GH_VALUE_FLAGS')), 'GH_VALUE_FLAGS').toEqual([]);
   });
+
+  // Task C22 (D-8196; review 1769 F2 and F4): what a gh word is and what a gh api path word is are each one reader, so the
+  // net and the command reader cannot read them two ways.
+  it('the gh word and the gh api path word are each declared once (Task C22)', () => {
+    for (const name of ['ghWordEnd', 'GH_COMMAND_WORD', 'GH_PATH_WORD']) {
+      expect(holders(decl(name)), name).toEqual(['pwa/src/lib/chatRepoEvidence.ts']);
+    }
+  });
 });

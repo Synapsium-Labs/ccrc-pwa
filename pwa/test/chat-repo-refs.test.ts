@@ -24,6 +24,8 @@ const NAMED_BOUND_MS = 600;
 const SHARED_PREFIX_N = 12_000;
 const SHARED_PREFIX_BOUND_MS = 500;
 const GH_QUOTES_BOUND_MS = 1500;
+// Task C22 (review 1769 F1): measured against round 2's net in c22.md.
+const GH_FLAG_RUN_BOUND_MS = 1500;
 
 const HOME: ChatRefContext = {
   repo: 'org-a/project-a', project: 'project-a', branch: null, knownRuns: new Set(), knownItems: new Set(), runsElsewhere: false,
@@ -298,7 +300,8 @@ describe('fix round 2: gh commands, emphasis and the unread spellings (Task C21,
       ['gh pr view 12, then grep -R src/lib . and #12 is fine', [['#12', null]]],
       // With no gh word in the message there is no net: another program's flag names nothing.
       ['cp -R owner-b/repo-b /x; #12', [['#12', home(12)]]],
-      ['gh pr comment 12 --body "see -R owner-c/repo-c" --repo owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
+      // Task C22 (review 1769 F3): the net's flag in the body is no command's, so owner-c is a candidate for #12 too: text.
+      ['gh pr comment 12 --body "see -R owner-c/repo-c" --repo owner-b/repo-b and #12', [['#12', null]]],
       ['gh pr view 12 --repo owner-b/repo-b and gh pr view 12 --repo owner-c/repo-c #12', [['#12', null]]],
       ['gh pr view 12 -R owner-b/repo-b -R owner-c/repo-c #12', [['#12', issue('owner-c/repo-c', 12)]]],
       // The number is the command's third positional, wherever its flags stand.
@@ -474,9 +477,11 @@ describe('Task C20: the gh reader, reserved pages and the commit index (reviews 
       ['gh pr view 12 "--repo" owner-b/repo-b and #12', [['#12', issue('owner-b/repo-b', 12)]]],
       // A flag inside a quoted body is no flag of the command, but it names its repository (review 1768's net).
       ['gh pr view 12 --body "--repo owner-b/repo-b" and #12', [['#12', null]]],
-      // Review 1766 F9: the word after a flag that takes a value is that value, even when it is spelled as a flag.
-      ['gh pr comment 12 -R owner-b/repo-b --body "--repo=owner-c/repo-c" and #12', [['#12', issue('owner-b/repo-b', 12)]]],
-      ["gh pr comment 12 -R owner-b/repo-b --body '-R' owner-c/repo-c and #12", [['#12', issue('owner-b/repo-b', 12)]]],
+      // Review 1766 F9: the word after a flag that takes a value is that value, even when it is spelled as a flag, so the
+      // command's PR 12 is owner-b's. Since Task C22 (review 1769 F3) the net's flag inside that value is no command's, and a
+      // candidate for #12 too: text.
+      ['gh pr comment 12 -R owner-b/repo-b --body "--repo=owner-c/repo-c" and #12', [['#12', null]]],
+      ["gh pr comment 12 -R owner-b/repo-b --body '-R' owner-c/repo-c and #12", [['#12', null]]],
       ['gh pr comment 12 --body "--repo=owner-c/repo-c" and #12', [['#12', null]]],
     ]);
   });
@@ -594,7 +599,8 @@ describe('Task C20 fix round 2: a lost repository flag gives text, never home (r
     // The report's M07 and M10: a value flag wrongly listed would make its value the command's number or path.
     rows([
       ['gh pr view -m 12 -R owner-b/repo-b and #12', [['#12', null]]],
-      ['gh api --method repos/owner-b/repo-b/pulls/12 and #12', [['#12', home(12)]]],
+      // Since Task C22 (review 1769 F2) the net names a lost path's repository: text, never home.
+      ['gh api --method repos/owner-b/repo-b/pulls/12 and #12', [['#12', null]]],
     ]);
   });
 
@@ -737,6 +743,161 @@ describe('Task C20 fix round 2: a lost repository flag gives text, never home (r
       ['gh pr list; non-Rust x-R y --repository z and #12', [['#12', home(12)]]],
     ]);
     expect([...messageRepos('gh pr list; cp -R owner-b/repo-b /x').named]).toEqual(['owner-b/repo-b']);
+  });
+});
+
+// Task C22 (D-8196): review 1769. The net reads in linear time, a lost gh api path gives text or its repository, a
+// repository flag no command claimed is a candidate for every number, and a gh word is any gh with no letter or digit beside it.
+// Every change fails toward text.
+describe('Task C22: the gh net in linear time, and its last gaps fail toward text (review 1769)', () => {
+  const home = (n: number): string => issue('org-a/project-a', n);
+  const b = (n: number): string => issue('owner-b/repo-b', n);
+  const c = (n: number): string => issue('owner-c/repo-c', n);
+  const rows = (table: [string, [string, string | null][]][]): void => {
+    for (const [text, expected] of table) expect(links(text, HOME), text).toEqual(expected);
+  };
+
+  it('F1: a spaceless run of repository flags reads in linear time and memory (c22.md has the margins)', () => {
+    // Each flag's value ends where the next flag starts, so the run is read once; round 2 re-read the rest of it per flag.
+    for (const unit of ['-R=', '--repo=', '-R/', '-R:', '-sR=', '--repo.']) {
+      const text = `gh ${unit.repeat(Math.ceil((1 << 20) / unit.length))}`;
+      const t = performance.now();
+      const said = messageRepos(text);
+      expect(performance.now() - t, unit).toBeLessThan(GH_FLAG_RUN_BOUND_MS);
+      expect(said.named.size, unit).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('F1: a value still reads as before where no flag starts inside it', () => {
+    rows([
+      ['gh pr view 12 -R=owner-b/repo-b and #12', [['#12', null]]],
+      ['gh pr list --repo=owner-b/repo-b; gh pr view 12 --repo=owner-b/repo-b and #12', [['#12', b(12)]]],
+      // A value that would run into the next flag ends there: both are unknown, and the bare name is text.
+      ['gh pr list -R=-R=owner-b/repo-b and #12', [['#12', null]]],
+      ['gh pr list -R "owner-b/repo-b -R x" and #12', [['#12', null]]],
+    ]);
+    expect([...messageRepos('gh pr list -R=-R=owner-b/repo-b').named].sort()).toEqual(['?gh:lost', 'owner-b/repo-b']);
+    // For the net, a quote not closed before the next flag is unreadable, and the next flag reads its own value; the command
+    // reader still takes the whole quoted word as its value.
+    expect([...messageRepos('gh pr list -R "owner-b/repo-b -R x"').named].sort())
+      .toEqual(['?gh:lost', '?owner-b/repo-b -r x', '?x']);
+  });
+
+  it('F2: a glued short flag value is one word and takes no next word, so the api path is read', () => {
+    rows([
+      ['gh api -XPATCH repos/owner-b/repo-b/issues/12 -f state=closed; #12 is closed', [['#12', b(12)]]],
+      ['gh api -XGET repos/owner-b/repo-b/pulls/12; #12', [['#12', b(12)]]],
+      ['gh api -Hx:y repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
+      ['gh api -q.title repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
+      ['gh api -iXGET repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
+      // A commit path names its repository and no number: the bare commit is text.
+      ['gh api -XGET repos/owner-b/repo-b/commits/1234567abc and 1234567abc', [['1234567abc', null]]],
+      // Controls: the spaced spellings, as before.
+      ['gh api -X PATCH repos/owner-b/repo-b/issues/12 and #12', [['#12', b(12)]]],
+      ['gh api --method PATCH repos/owner-b/repo-b/issues/12 and #12', [['#12', b(12)]]],
+      ['gh api -X=GET repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
+      // A run of booleans whose last letter takes a value takes the next word: here the method, so the path follows.
+      ['gh api -iX GET repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
+      // In pr and issue too: a glued value before -R leaves -R the command's.
+      ['gh pr view 12 -L5 -R owner-b/repo-b and #12', [['#12', b(12)]]],
+      // A run of booleans whose last letter takes a value takes the next word, as gh reads it; the command reader still
+      // attributes only -R, --repo and --repo=, so the run loses its repository.
+      ['gh pr merge 40 -dR owner-b/repo-b and #40', [['#40', null]]],
+    ]);
+  });
+
+  it('F2: a lost api path gives text, never home: every repos/o/r word of a gh message names its repository', () => {
+    rows([
+      // An unclosed quote on the path itself: text, as on main.
+      ["gh api 'repos/owner-b/repo-b/pulls/12 and #12", [['#12', null]]],
+      ['gh api "repos/owner-b/repo-b/pulls/12 and #12', [['#12', null]]],
+      // A multi-line quoted --jq before the path, bare and fenced.
+      ["gh api --jq '.title\n| ascii' repos/owner-b/repo-b/pulls/12 and #12", [['#12', null]]],
+      ["```\ngh api --jq '.title\n| ascii' repos/owner-b/repo-b/pulls/12\n```\n#12 is the one", [['#12', null]]],
+      // A line continuation before the path.
+      ['gh api \\\n  repos/owner-b/repo-b/pulls/12 and #12', [['#12', null]]],
+      ['```\ngh api \\\n  /repos/owner-b/repo-b/pulls/12\n```\n#12', [['#12', null]]],
+      // A boolean the api set does not hold (a future gh flag) takes the path as its value.
+      ['gh api --unknown-bool repos/owner-b/repo-b/pulls/12 and #12', [['#12', null]]],
+      // A lost path is no command's, so another command naming its number elsewhere does not decide it (F3); a read path is
+      // its command's, so it is no candidate for another number.
+      ['gh api --unknown-bool repos/owner-b/repo-b/pulls/12; gh pr view 12 -R owner-c/repo-c; #12', [['#12', null]]],
+      ['gh api repos/owner-b/repo-b/pulls/12; gh pr view 13 -R owner-c/repo-c; #13', [['#13', c(13)]]],
+      // A path word in prose of a gh message names its repository too, the way -R does.
+      ['gh pr list, then the endpoint /repos/owner-b/repo-b/pulls; #12', [['#12', null]]],
+      // Controls: no gh word, no net; a placeholder or a longer path names nothing; home named is home.
+      ['the endpoint repos/owner-b/repo-b/pulls/12 and #12', [['#12', home(12)]]],
+      ['gh pr list; gh api repos/{owner}/{repo}/pulls and #12', [['#12', home(12)]]],
+      ['gh pr list; see src/repos/owner-b/repo-b and #12', [['#12', home(12)]]],
+      ['gh pr list --json title; repos/org-a/project-a/pulls and #12', [['#12', home(12)]]],
+    ]);
+  });
+
+  it('F3: a repository flag no command claimed is a candidate for every number the message gives a repository', () => {
+    rows([
+      ['```\ngh pr view 12 \\\n--repo owner-b/repo-b --json state\ngh pr view 12 --repo owner-c/repo-c --json state\n```\n'
+        + '#12 is merged in both', [['#12', null]]],
+      ['gh issue edit 12 13 --add-label bug -R owner-b/repo-b; gh issue view 12 -R owner-c/repo-c; #12', [['#12', null]]],
+      ['gh issue edit 12 13 --add-label bug -R owner-b/repo-b\r\ngh issue view 12 -R owner-c/repo-c\r\n#12', [['#12', null]]],
+      ['gh pr view 12 \\\n--repo owner-b/repo-b\nowner-c/repo-c#12 and #12', [['owner-c/repo-c#12', c(12)], ['#12', null]]],
+      // The two shapes newer than main.
+      ['gh pr merge 40 now -R owner-b/repo-b, then owner-c/repo-c#40 and #40', [['owner-c/repo-c#40', c(40)], ['#40', null]]],
+      ['gh pr view 12 --list 30 -R owner-b/repo-b; gh -R owner-c/repo-c pr view 12; #12', [['#12', null]]],
+      // Controls: an unclaimed flag naming the same repository leaves one; a number with no repository goes to rule 3, so an
+      // unclaimed flag never makes a link of its own; claimed flags are their commands'.
+      ['gh pr view 12 -R owner-b/repo-b; cp -R owner-b/repo-b /x; #12', [['#12', b(12)]]],
+      ['cp -R src/lib /x; gh pr list; #12', [['#12', null]]],
+      ['gh pr view 12 \\\n--repo owner-b/repo-b\n#12', [['#12', null]]],
+      ['gh pr view 12 -R owner-b/repo-b; gh pr view 13 -R owner-c/repo-c; #12 and #13', [['#12', b(12)], ['#13', c(13)]]],
+      // A lost command's flag is that command's too: its value spelled as a flag, a run, a glued spelling.
+      ['gh pr merge 40 -s -R owner-b/repo-b; gh pr view 41 -R owner-c/repo-c; #41', [['#41', c(41)]]],
+      ['gh pr merge 40 -sR owner-b/repo-b; gh pr view 41 -R owner-c/repo-c; #41', [['#41', c(41)]]],
+      ['gh pr view 40 -Rowner-b/repo-b; gh pr view 41 -R owner-c/repo-c; #41', [['#41', c(41)]]],
+      // Two unclaimed repositories, one of them the number's own: still two, text.
+      ['gh pr view 12 -R owner-b/repo-b; cp -R owner-b/repo-b /x; cp -R owner-c/repo-c /y; #12', [['#12', null]]],
+    ]);
+  });
+
+  it('F4: a gh word is gh in any case, or gh.exe, with no letter or digit beside it', () => {
+    rows([
+      ['Pass `-R owner-b/repo-b` to `gh`: #12 is there', [['#12', null]]],
+      ['I passed -R owner-b/repo-b to gh, and #12 merged.', [['#12', null]]],
+      ["gh's -R owner-b/repo-b flag; #12 merged", [['#12', null]]],
+      ['gh: -R owner-b/repo-b; #12', [['#12', null]]],
+      ['(gh) -R owner-b/repo-b; #12', [['#12', null]]],
+      ['[gh] -R owner-b/repo-b; #12', [['#12', null]]],
+      ['"gh" -R owner-b/repo-b; #12', [['#12', null]]],
+      // At the text's end, with and without a trailing line break: the pair agrees.
+      ['#12 merged after -R owner-b/repo-b with gh', [['#12', null]]],
+      ['#12 merged after -R owner-b/repo-b with gh\n', [['#12', null]]],
+      ['GH pr view 12 -R owner-b/repo-b and #12', [['#12', b(12)]]],
+      ['gh.exe pr view 12 -R owner-b/repo-b and #12', [['#12', b(12)]]],
+      ['GH.EXE pr view 12 --repo owner-b/repo-b; #12', [['#12', b(12)]]],
+      // The accepted cost: gh-pages holds a gh word, so another program's -R makes the bare name text.
+      ['Pushed gh-pages, then cp -R dist /x; #12', [['#12', null]]],
+      // A letter or a digit in any script beside it makes no gh word (the CJK shape stays as on main: recorded in c22.md).
+      ['修复见gh pr view 12 -R owner-b/repo-b and #12', [['#12', home(12)]]],
+      ['ghost -R owner-b/repo-b and #12', [['#12', home(12)]]],
+      ['a high -R owner-b/repo-b and #12', [['#12', home(12)]]],
+      ['gh2 -R owner-b/repo-b and #12', [['#12', home(12)]]],
+      // A letter outside the BMP is read whole, as one letter.
+      ['𝐀gh pr view 12 -R owner-b/repo-b and #12', [['#12', home(12)]]],
+      // A gh word in any case ends the command before it, so the next one reads its own words.
+      ['gh GH pr view 12 -R owner-b/repo-b and #12', [['#12', b(12)]]],
+      // gh then a full stop is a gh word: `.exec` is no `.exe`.
+      ['gh.exec -R owner-b/repo-b and #12', [['#12', null]]],
+    ]);
+  });
+
+  it('F8: the YAML env spelling GH_REPO: o/r names its repository', () => {
+    rows([
+      ['```yaml\nenv:\n  GH_REPO: owner-b/repo-b\nrun: gh pr view 12\n```\n#12', [['#12', null]]],
+      ['GH_REPO: "owner-b/repo-b" and #12', [['#12', null]]],
+      ['GH_REPO:\towner-b/repo-b and #12', [['#12', null]]],
+      // Controls: the home repository is home; a word ending in GH_REPO is none.
+      ['GH_REPO: org-a/project-a and #12', [['#12', home(12)]]],
+      ['MY_GH_REPO: owner-b/repo-b and #12', [['#12', home(12)]]],
+    ]);
   });
 });
 
