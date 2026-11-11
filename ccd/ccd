@@ -4066,18 +4066,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, and D-5941's `prbranch` 51 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 51: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # The 52: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
   # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `typerefuse`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -20488,6 +20488,60 @@ _pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR
   return 0
 }
 
+_pane_type_ready() {   # id site [append] -> 0 ccd may type into the pane now | 1 refused, and said so in swap.log (D-8271)
+  # THE ONE CHECK BEFORE ccd TYPES (operator ruling SH-9, D-8271). Every function
+  # that presses a key into a session's pane calls this before its first key, or
+  # is a continuation of a sequence whose every caller did (`_route_escape`
+  # closing the picker ccd itself opened, `_route_model_ack_wait` confirming the
+  # dialog ccd's own keystroke raised, `_answer_two_option_dialog` answering a
+  # startup gate the spawn loop checked for). `ccd-typing-check.test.ts` holds
+  # that census against this file. Three refusals, read in this order:
+  #   narrow    — the active pane is under READER_MIN_COLS, or tmux would not
+  #               measure it: `_pane_measurable`, the same floor every screen
+  #               reader in this file stands down on, so a site never types on
+  #               the strength of a reading taken on a pane it cannot read;
+  #   copy-mode — the pane is in a tmux mode (`#{pane_in_mode}`, copy-mode when a
+  #               person scrolls it): the keys go to the mode, not to Claude
+  #               Code, and a literal write can hang there (measured, server
+  #               `GET /api/sessions/:id/pane/history`'s note). A tmux that will
+  #               not answer the question refuses too;
+  #   draft     — the input box holds text (`_pane_box_read`'s `draft`), a person
+  #               half way through a sentence that a key of ours would submit or
+  #               corrupt.
+  # NO BOX IS NOT A REFUSAL HERE. `absent` is a dialog standing where the box
+  # was, and the spawn gates and the picker's own dialogs are answered exactly
+  # there; the sites that must see an EMPTY box (the stale Enter, the redrive)
+  # keep their own stricter read ahead of this one.
+  # `append` is `ccd clip`, the operator's own verb, which adds a path to the box
+  # and presses no Enter: a draft is what it adds to, and it reads nothing off
+  # the screen, so only the copy-mode rung applies.
+  # FLOORED PER REASON. A refused tick retries every 5 s; one line per episode
+  # (the first refusal, a change of reason, or the same reason again after
+  # COMPACT_NOTE_FLOOR, D-2013's budget) keeps swap.log readable. A pass ends the
+  # episode, so the next refusal speaks at once.
+  local id="$1" site="$2" kind="${3:-}" t why="" detail="" mode said said_why saidts now
+  t=$(_tmux_t "$id")
+  if [[ "$kind" != append ]] && ! _pane_measurable "$id"; then
+    why=narrow; detail="the pane is under ${READER_MIN_COLS} columns or tmux would not measure it"
+  elif ! mode=$(tmux display-message -p -t "$t" '#{pane_in_mode}' 2>/dev/null); then
+    why=copy-mode; detail="tmux would not say whether the pane is in a mode"
+  elif [[ "$mode" == 1 ]]; then
+    why=copy-mode; detail="the pane is in a tmux mode (copy-mode: a person is scrolling it)"
+  elif [[ "$kind" != append && "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" == draft ]]; then
+    why=draft; detail="the input box holds a half-typed draft"
+  fi
+  if [[ -z "$why" ]]; then
+    [[ -e "$REG/$id.typerefuse" ]] && rm -f -- "$REG/$id.typerefuse"
+    return 0
+  fi
+  now=$(date +%s)
+  said=$(_reg_get "$id" typerefuse); said_why="${said%% *}"; saidts="${said##* }"
+  [[ "$said_why" == "$why" && "$saidts" =~ ^[0-9]+$ && $((now - saidts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 1
+  _reg_set "$id" typerefuse "$why $now"
+  echo "$(date '+%F %T') type-refused $id: $why at $site, $detail" >> "$REG/swap.log"
+  return 1
+}
+
 # FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is waiting out a limit on its own (D-2229).
   # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
@@ -20707,6 +20761,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
     echo "$(date '+%F %T') stale-skip $id: usage limit has reset but $why [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
     return 0
   fi
+  _pane_type_ready "$id" stale || return 0   # D-8271: the one typing check (copy-mode, width, draft)
   echo "$(date '+%F %T') stale-resume $id: usage limit has reset; pressing Enter for Claude Code's own continuation [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
   tmux send-keys -t "$t" Enter
   return 0
@@ -22647,6 +22702,8 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # a wider contract than "is this pane typeable" for one string.
   _reg_get_to wrapper "$id" wrapper   # D-4963: a builtin read, no subshell
   t=$(_tmux_t "$id")
+  # D-8271: the one typing check (copy-mode, width, draft). A refusal stamps nothing, so the next tick asks again.
+  _pane_type_ready "$id" compact || return 0
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
   # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
@@ -23133,7 +23190,7 @@ _route_escape() {   # id — leave the pane as we found it after an unacknowledg
   return 0
 }
 
-_route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop
+_route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop | 3 the typing check refused, nothing typed (D-8271)
   # `ultracode` HAS NO SLIDER DELTA and needs none: it is the one level whose
   # PLAIN form is session-only by construction (D-2810, measured — the ack reads
   # `(this session only)` and settings.json is byte-identical), because there is
@@ -23154,6 +23211,8 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
   # auth-pane scan in `ccd-account-pane.test.ts` can see it derive.
   local id="$1" level="$2" t n i
   t=$(_tmux_t "$id")
+  _pane_type_ready "$id" route || return 3   # D-8271: the one typing check; rc 3 is "nothing typed", never an attempt
+  _typed_note "$id" effort "$level"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7); after the check, so a refusal journals nothing
   local -a stops=()
   if [[ "$level" == ultracode ]]; then
     tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
@@ -23450,7 +23509,7 @@ _route_model_close() {   # id — `_route_escape`, and ONE more only while the p
   return 0
 }
 
-_route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row
+_route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row | 3 the typing check refused, nothing typed (D-8271)
   # THE CURSOR IS READ, NEVER ASSUMED. The picker opens on the CURRENT model's
   # row, not on row 1, and `Up` on row 1 WRAPS to the last row on both lanes
   # (measured) — so "press Up×N to pin at the top" walks somewhere unpredictable
@@ -23489,6 +23548,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   # that stays the only picker answers `no-picker-row`.
   local id="$1" cls="$2" w="$3" t pane="" picker="" base rows n cur label desc want target=0 curs=0 exact=0 i tlabel="" tdesc=""
   t=$(_tmux_t "$id")
+  _pane_type_ready "$id" route || return 3   # D-8271: the one typing check; rc 3 is "nothing typed", never an attempt
+  _typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7); after the check, so a refusal journals nothing
   base=$(_pane_model_picker "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
   tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
@@ -23569,8 +23630,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # writer, `actor=operator-session`; that writer's swap.log `route` line
 # records it.
 #
-# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_route_apply_now` (`route --apply`, a degraded class
-# among them) journals each `/model` and `/effort` it is about to type in
+# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_route_apply_now`'s typers (`route --apply`, a degraded class
+# among them) journal each `/model` and `/effort` they are about to type, once the typing check passed (D-8271), in
 # `$REG/<id>.typed`, one row `<epoch> <model|effort> <value>`, and a command of
 # the same kind and value within TYPED_MATCH_WINDOW of a row is ccd's. The
 # `routeapplied` stamp cannot serve: the spawn writes it from the composed argv
@@ -23964,10 +24025,10 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
   have=$(_route_applied_get "$id" class)
   if [[ -n "$cls" && "$cls" != "$have" ]]; then
-    _typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
-    _route_type_model "$id" "$cls" "$w"; rc=$?
+    _route_type_model "$id" "$cls" "$w"; rc=$?   # journals its own keystroke (`_typed_note`) once the typing check passed
     case "$rc" in
       0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
+      3) return 1 ;;   # D-8271: refused before a key and logged by the check; transient, so not an attempt
       2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; _route_try_bump "$id"; return 1 ;;
       *) _route_note "$id" apply-unconfirmed "class=$cls"; _route_try_bump "$id"; return 1 ;;
     esac
@@ -23978,10 +24039,10 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
       _route_applied_set "$id" effort auto
       _route_note_clear "$id"
     else
-      _typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
-      _route_type_effort "$id" "$eff"; rc=$?
+      _route_type_effort "$id" "$eff"; rc=$?   # journals its own keystroke (`_typed_note`) once the typing check passed
       case "$rc" in
         0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
+        3) return 1 ;;   # D-8271: refused before a key and logged by the check; transient, so not an attempt
         # rc 2 is `no-slider-stop` — a level with no stop on the measured slider
         # (S4-R9). Its own refusal word rather than `apply-unconfirmed`, because
         # the remedy is different: nothing was typed at all and no acknowledgement
@@ -24628,7 +24689,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
   # or lost auth): waiting longer cannot fix it; 6 = a live pane under READER_MIN_COLS, or of unreadable width, so every gate stood down. 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
-  local t fromswap="${2:-0}" bound i pane t0; t=$(_tmux_at "$1")
+  local t fromswap="${2:-0}" bound i pane t0 id="${1#cc-}"; t=$(_tmux_at "$1")
   # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
   # bound anyone can reason about: gate branches sleep 2 EXTRA seconds each, so
   # the same 450 iterations are ~900s plain and ~1350s when gates fire. The
@@ -24724,6 +24785,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # bare Enter is `No, disable external imports` — the operator's own imports
     # silently switched off for that project, on that lane, permanently.
     if _pane_external_import_gate "$pane"; then
+      _pane_type_ready "$id" spawn || { sleep 1; continue; }   # D-8271: the one typing check, before each gate is answered
       _answer_two_option_dialog "$pane" "$t" "allow external imports"; sleep 2; continue
     fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
@@ -24731,6 +24793,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # without it supervise sits here for the full window and never reaches its watch loop.
     echo "$pane" | grep -Eq "/rc active|\? for shortcuts|esc to interrupt|shift\+tab to cycle|← for agents" && return 0
     if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Resume from summary"; then
+      _pane_type_ready "$id" spawn || { sleep 1; continue; }
       if [[ "$fromswap" == "1" ]]; then
         # Swap landing: auto-compact — the target account pays one summary, not a full
         # 700k-token history re-read (user decision 2026-07-03). Option 1 is the default.
@@ -24742,12 +24805,15 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
       sleep 2; continue
     fi
     if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Try the new fullscreen renderer"; then
+      _pane_type_ready "$id" spawn || { sleep 1; continue; }
       tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter; sleep 2; continue
     fi
     if echo "$pane" | grep -q "Bypass Permissions mode"; then
+      _pane_type_ready "$id" spawn || { sleep 1; continue; }
       _answer_two_option_dialog "$pane" "$t" "Yes, I accept"; sleep 2; continue
     fi
     if echo "$pane" | grep -q "trust this folder"; then
+      _pane_type_ready "$id" spawn || { sleep 1; continue; }
       _answer_two_option_dialog "$pane" "$t" "trust this folder"; sleep 2; continue
     fi
     # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
@@ -26957,6 +27023,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
     draft) echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0 ;;
     absent) echo "$(date '+%F %T') redrive-skip $id: no input box on screen (a dialog is open)" >> "$REG/swap.log"; return 0 ;;
   esac
+  _pane_type_ready "$id" redrive || return 0   # D-8271: the one typing check (copy-mode, width, draft)
   echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "$(_resume_prompt_for "$id")"; sleep 1; tmux send-keys -t "$t" Enter   # D-5237: the prompt the flag carried
   return 0
@@ -32897,6 +32964,8 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
     [[ -n "$id" ]] || die "no attached cc session (attach with 'cc <wrapper> <project>', or pass an id)"
   fi
   _alive "$id" || die "session not alive: $id"
+  # D-8271: the one typing check, its `append` rung only: a pane in copy-mode would swallow the path.
+  _pane_type_ready "$id" clip append || die "not typing into $id: the pane is in a tmux mode (copy-mode); leave it and clip again"
   local dir="$HOME/.cc-clips/$id"; mkdir -p "$dir"
   local dest; dest="$(_clip_dest "$dir" "$png")"
   mv -f "$png" "$dest"
