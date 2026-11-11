@@ -13,6 +13,7 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { seedRoster, testDeps } from './helpers.js';
+import { quietWatcher } from './laneQuiet.js';
 
 afterEach(() => { vi.restoreAllMocks(); removeTmpFixtures(); });
 
@@ -180,14 +181,16 @@ describe('the watcher', () => {
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
+    const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     try {
-      const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
-      const w = new FleetWatcher(deps as never, new Bus(), 10_000);
       const spy = vi.spyOn(w, 'sweepCases').mockResolvedValue(undefined);
       await w.tick();
       await w.tick();
       expect(spy).toHaveBeenCalled();
     } finally {
+      // Quieted here, not by quietAtTestEnd: the lanes tick() fired must settle before the store they write is closed.
+      await quietWatcher(w);
       coord.db.close();
     }
   });
