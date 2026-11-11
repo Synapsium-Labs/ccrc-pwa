@@ -477,17 +477,32 @@ export function setHierarchySettings(db: DatabaseSync, project: string, s: Hiera
   });
 }
 
+/** Name one coordinator the owner of every project in ONE transaction, leaving each project's other settings. Returns the count. */
+export function setLinearOwnerForAll(db: DatabaseSync, linearOwner: string): number {
+  return tx(db, () => {
+    const rows = hierarchyProjectsOf(db);
+    for (const r of rows) {
+      db.prepare(
+        'INSERT INTO project_linking (project, initiatives, linearOwner, ownsTeam) VALUES (?, ?, ?, ?) '
+        + 'ON CONFLICT(project) DO UPDATE SET linearOwner = excluded.linearOwner',
+      ).run(r.project, r.initiatives, linearOwner, r.ownsTeam ? 1 : 0);
+    }
+    return rows.length;
+  });
+}
+
 /** Every project the hierarchy settings can name: each `project_linking` row and each programme's home, with its settings. */
-export interface HierarchyProjectFacts { project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean }
+export interface HierarchyProjectFacts { project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean; /** The `project_linking` row's insertion order: the first project that set a team key. Null for a project with no row. */ order: number | null }
 export function hierarchyProjectsOf(db: DatabaseSync): HierarchyProjectFacts[] {
   const rows = db.prepare(
-    'SELECT project, teamKey, initiatives, linearOwner, ownsTeam FROM project_linking '
-    + 'UNION ALL SELECT homeProject, NULL, \'on\', NULL, 0 FROM programs WHERE homeProject IS NOT NULL '
+    'SELECT project, teamKey, initiatives, linearOwner, ownsTeam, rowid AS ord FROM project_linking '
+    + 'UNION ALL SELECT homeProject, NULL, \'on\', NULL, 0, NULL FROM programs WHERE homeProject IS NOT NULL '
     + 'AND homeProject NOT IN (SELECT project FROM project_linking) GROUP BY homeProject ORDER BY 1',
   ).all() as unknown as Raw[];
   return rows.map((r) => ({
     project: r.project as string, teamKey: (r.teamKey as string | null) ?? null, initiatives: r.initiatives === 'off' ? 'off' as const : 'on' as const,
     linearOwner: (r.linearOwner as string | null) ?? null, ownsTeam: r.ownsTeam === 1,
+    order: (r.ord as number | null) ?? null,
   }));
 }
 /** The coordinator of a project's newest programme (the plan owner of the newest programme homed there), else null. */
@@ -514,7 +529,7 @@ const PORT_FUNCTIONS = {
   planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, hierarchySettingsOf, setHierarchySettings,
-  hierarchyProjectsOf, latestProgrammeCoordinator, coordinatorIdsOf,
+  hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

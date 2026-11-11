@@ -70,6 +70,24 @@ describe('hierarchy routes', () => {
     expect(body.coordinators).toEqual([{ id: 'sess-1', live: false }, { id: 'sess-2', live: true }]);
   });
 
+  it("a shared team key answers the owning project's named owner, over the sharer's own", async () => {
+    claim('prog-b', 'project-b', 'sess-1', 1);
+    claim('prog-a', 'project-a', 'sess-2', 2);
+    db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-a', 'AAA'), ('project-b', 'AAA')").run();
+    await setProject('project-a', { initiatives: 'on', linearOwner: 'sess-2', ownsTeam: true });
+    await setProject('project-b', { initiatives: 'on', linearOwner: 'sess-1', ownsTeam: false });
+    const rows = (await get()).json().projects as { project: string; ownerNow: { id: string; source: string } }[];
+    expect(rows.map((r) => [r.project, r.ownerNow.id, r.ownerNow.source])).toEqual([['project-a', 'sess-2', 'named'], ['project-b', 'sess-2', 'named']]);
+  });
+
+  it('with no project marked ownsTeam, the first project that set the key owns it', async () => {
+    claim('prog-a', 'project-a', 'sess-1', 1);
+    claim('prog-b', 'project-b', 'sess-2', 2);
+    db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-b', 'AAA'), ('project-a', 'AAA')").run();
+    const rows = (await get()).json().projects as { project: string; ownerNow: { id: string } }[];
+    expect(rows.map((r) => [r.project, r.ownerNow.id])).toEqual([['project-a', 'sess-2'], ['project-b', 'sess-2']]);
+  });
+
   it('a hibernated owner reads live', async () => {
     // `coordinatorPresenceIn` answers `alive` for an asleep session, so the route's `live` follows it.
     claim('prog-a', 'project-a', 'sess-1', 1);

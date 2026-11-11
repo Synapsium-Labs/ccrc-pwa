@@ -45,10 +45,17 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
 
   /** The owner now of a project, by the rule `linearOwnerOf` holds (design §7.5). */
   const ownerNow = (plan: PlanStorePort, rows: readonly HierarchyProjectFacts[], row: HierarchyProjectFacts): HierarchyProjectRow['ownerNow'] => {
-    const holder = row.ownsTeam || row.teamKey === null
-      ? null : rows.find((r) => r.project !== row.project && r.ownsTeam && r.teamKey === row.teamKey)?.project ?? null;
+    // A shared team key answers one project's owner: the project marked `ownsTeam`, else the first that set the key. Its named owner
+    // (not this row's) applies, and its latest programme's coordinator is the default.
+    let holder: HierarchyProjectFacts | null = null;
+    if (!row.ownsTeam && row.teamKey !== null) {
+      const sharing = rows.filter((r) => r.teamKey === row.teamKey);
+      holder = sharing.find((r) => r.ownsTeam)
+        ?? sharing.filter((r) => r.order !== null).sort((x, y) => (x.order as number) - (y.order as number))[0] ?? null;
+      if (holder !== null && holder.project === row.project) holder = null;
+    }
     const o = linearOwnerOf(row.project, {
-      named: row.linearOwner, ownsTeamProject: holder,
+      named: (holder ?? row).linearOwner, ownsTeamProject: holder?.project ?? null,
       latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf,
     });
     return { id: o.id, source: o.source, live: o.live };
@@ -87,13 +94,8 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     try {
       return await opts.serial(async () => {
         if (!plan.coordinatorIdsOf().includes(b)) return refuseRoute(reply, 'bad-request', { detail: 'linearOwner' });
-        const by = opts.by(req);
-        const at = now();
-        const rows = plan.hierarchyProjectsOf();
-        for (const r of rows) {
-          plan.setHierarchySettings(r.project, { initiatives: r.initiatives, linearOwner: b, ownsTeam: r.ownsTeam }, by, at);
-        }
-        return { ok: true, projects: rows.length };
+        const projects = plan.setLinearOwnerForAll(b);
+        return { ok: true, projects };
       });
     } catch (err) {
       return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
