@@ -60,7 +60,7 @@ Item 3 (the permission pass's 30 s bound, D-5946) is not one of the four named g
   (#2293 thought it "would need its own word"). The shape is the same, a checked-out branch that does not exist, and
   so is the remedy. Reusing the word adds no row to `EXPIRE_TOKEN_KIND`, the reclaim kinds or the kept-word table, and
   the expiry lane already reports it as attention (`terminal`).
-- **D-5946 (plan task P4-6) is not taken, and needs a ruling before it is.** The prune leaves read-only directories under an
+- **The permission prune is not taken, and needs a ruling before it is** (D-5946, plan task P4-6). The prune leaves read-only directories under an
   ignored `node_modules`, `cdk.out` or `dist` unnormalised, and the ignored scan's fallback only catches what `du`
   or the inside scan cannot read. A directory that is `r-x` reads and sizes cleanly, so no fallback runs. But
   `git worktree remove --force` cannot empty it. The tail then answers `worktree-remove-failed` after the pin and the
