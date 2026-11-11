@@ -73,7 +73,7 @@ import { loadGraph, GRAPH_MAX_BYTES } from '../compact-card.mjs';
  * @property {number} total                            N: the true in-scope count
  * @property {string[] | null} next                    the argv after `history` on the next: line
  * @property {string} [hint]
- * @property {string} [note]                           `touched`'s disclosure: the human form prints it as its last line, --json carries it as `note` (Ruling R4)
+ * @property {string} [note]                           `touched`'s disclosure: the human form prints it as its last line, --json carries it as `note` (spec addendum 3.5)
  * @property {boolean} [candidatesCapped]              `touched` hit its candidate cap: --json carries `candidatesCapped` and its sentence
  * @property {string} [candidatesCappedNote]           the sentence for the form that capped (ordered or unordered)
  */

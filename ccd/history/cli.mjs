@@ -986,7 +986,7 @@ function emitRefusal(r, json, pairIdx) {
   return r.exit;
 }
 
-/** `touched`'s two additions to the envelope (Ruling R4): its disclosure rides --json as `note`, and a capped candidate set says so.
+/** `touched`'s two additions to the envelope (spec addendum 3.5): its disclosure rides --json as `note`, and a capped candidate set says so.
  *  A result without either (every other verb) adds nothing. */
 function touchedExtras(res) {
   return {

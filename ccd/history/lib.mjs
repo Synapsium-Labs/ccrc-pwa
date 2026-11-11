@@ -8884,9 +8884,9 @@ export const TOUCHED_CANDIDATE_MAX = 10000;
 export const TOUCHED_ORDERED_CAP = true;
 /** Printed last on every answer (and carried as `note` by --json). */
 export const TOUCHED_DISCLOSURE = 'refs keep one origin each (the first seen) and at most 40 per node; a node may have touched this file without listing it.';
-/** Printed when the ordered candidate cap was hit (Ruling R14): the shown rows are the newest matches. */
+/** Printed when the ordered candidate cap was hit (spec addendum 3.5 P13): the shown rows are the newest matches. */
 export const TOUCHED_ORDERED_CAPPED_NOTE = '(candidates capped at 10000: the newest are shown, and older matches may be missing)';
-/** Printed after the refs of the one node the ordered cut falls inside (Ruling R14). */
+/** Printed after the refs of the one node the ordered cut falls inside (spec addendum 3.5 P13). */
 export const TOUCHED_REFS_CUT_NOTE = '(refs cut at the cap)';
 /** Printed when the unordered candidate cap was hit. */
 export const TOUCHED_CAPPED_NOTE = '(candidates capped at 10000: the ranking covers those only, and newer matches may be missing)';
@@ -8901,7 +8901,7 @@ function stripDotSlash(p) {
   return out;
 }
 
-/** The argument's shape (Ruling R2): `path` and `test` are a path (its `:N`/`:N-M` suffix and a leading `./` dropped),
+/** The argument's shape (spec addendum 3.5): `path` and `test` are a path (its `:N`/`:N-M` suffix and a leading `./` dropped),
  *  `path:symbol` splits at its LAST `:`, a bare identifier is a symbol (even when classifyRef calls it `sha`),
  *  anything else is null (bad-args). */
 export function touchedQuery(arg) {
@@ -8970,12 +8970,12 @@ function resolveInIndex(t, index) {
 
 /** A normalised ref against one query file. `exact` on equality; `outside` refs match only the same absolute path;
  *  `suffix` for a relative ref with no `..` segment whose `/<ref>` ends `file`, when the graph resolves it to
- *  exactly `file` (Ruling R8), or, with no graph, when the ref has two segments or more (D-8189: a bare basename
+ *  exactly `file` (resolveToken's unique answer), or, with no graph, when the ref has two segments or more (D-8189: a bare basename
  *  never matches without a graph). Otherwise null. */
 export function matchRef(ref, file, graph) {
   if (ref.outside) return ref.path === file ? 'outside' : null;
   if (ref.path === file) return 'exact';
-  // R3: an absolute (outside) query is matched only by an outside ref of that exact path, never by suffix.
+  // An absolute (outside) query is matched only by an outside ref of that exact path, never by suffix.
   if (file.startsWith('/')) return null;
   const p = ref.path;
   if (p === '' || p.startsWith('/') || p.split('/').includes('..')) return null;

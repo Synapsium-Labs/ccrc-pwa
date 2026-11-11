@@ -119,7 +119,7 @@ describe('touched deciders', () => {
     expect(matchRef({ path: '/elsewhere/x.mjs', outside: true }, 'elsewhere/x.mjs', graphOf(['elsewhere/x.mjs']))).toBeNull();
   });
 
-  it('R3 an absolute query is matched by no relative ref, with or without a graph', () => {
+  it('an absolute query is matched by no relative ref, with or without a graph', () => {
     const rel = { path: 'x/y.mjs', outside: false };
     expect(matchRef(rel, '/elsewhere/x/y.mjs', null)).toBeNull();
     expect(matchRef(rel, '/elsewhere/x/y.mjs', graphOf(['/elsewhere/x/y.mjs']))).toBeNull();
@@ -156,7 +156,7 @@ describe('touched deciders', () => {
     expect(run(stored, 'server/x.mjs', [], two)).toEqual([]);
     const one = graphOf(['ccd/x.mjs', 'server/y.mjs']);
     expect(run(stored, 'ccd/x.mjs', [], one).map((r) => r.match)).toEqual(['suffix']);
-    // a graph that lacks the file loses the suffix match (Ruling R8)
+    // a graph that lacks the file loses the suffix match (the graph's unique answer decides, D-8189)
     expect(run(stored, 'ccd/x.mjs', [], graphOf(['server/y.mjs']))).toEqual([]);
     // a boundary that is not a segment boundary never matches
     expect(matchRef({ path: 'x.mjs', outside: false }, 'ccd/ax.mjs', graphOf(['ccd/ax.mjs']))).toBeNull();
@@ -671,7 +671,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(first).not.toHaveProperty('refsCut');
   }, HEAVY);
 
-  it('TC24 the cut inside a node\'s refs (R14): that node\'s row says its refs were cut, in the human line and as refsCut', () => {
+  it('TC24 the cut inside a node\'s refs (P13): that node\'s row says its refs were cut, in the human line and as refsCut', () => {
     // 9,990 newest candidates sit in an epoch no scope holds, so the one in-scope row is the node the cut falls inside (10 of its 20 refs kept).
     plantFiller('Lt24', 9_990, (j) => T0 + 8_000_000 + j, false);
     plant('Lt24mid', { latest: T0 + 5_000_000, refs: newestRefs('Lt24', 20) });
@@ -719,7 +719,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(items(cut).map((i) => i['nodeId'])).toEqual(['Lt30vis']);
   }, HEAVY);
 
-  it('R8 (W2-2a) under an as-of cut a node with a hidden source row loses its mined (tool_use) refs, and its row goes when none is left; model refs and a visible source stay', () => {
+  it('under an as-of cut (describe\'s rule) a node with a hidden source row loses its mined (tool_use) refs, and its row goes when none is left; model refs and a visible source stay', () => {
     const b = withDb((db) => db.prepare('SELECT e.entry_id AS id, e.uuid AS uuid FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id ORDER BY b.ord').all() as unknown as Array<{ id: number; uuid: string }>);
     const visible = withDb((db) => Number((db.prepare('SELECT min(entry_id) AS id FROM entries').get() as { id: number }).id));
     const hidden = Number(b[1]!.id);
@@ -758,7 +758,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(listed(), 'a graph with a unique answer lists it as a suffix').toEqual(['Lt34n1/suffix']);
   }, HEAVY);
 
-  it('a graph with no nodes answers as no graph (R11, failure row 28)', () => {
+  it('a graph with no nodes answers as no graph (failure row 28)', () => {
     plant('Lt32n1', { refs: [['path', 'lib/tc32.mjs']] });
     plantGraph([]);
     const r = touched(['lib/tc32.mjs']);
