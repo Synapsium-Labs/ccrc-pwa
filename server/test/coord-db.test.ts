@@ -269,7 +269,7 @@ describe('openCoordDb', () => {
     })).toThrow('nope');
     const slugs = (db.prepare("SELECT slug FROM programs WHERE slug <> 'linear-sync' ORDER BY slug").all() as { slug: string }[])
       .map((r) => r.slug);
-    expect(slugs).toEqual(['a']);   // D-8181: the reserved `linear-sync` row (migration 58) is left out of every count here
+    expect(slugs).toEqual(['a']);   // D-8181: the reserved `linear-sync` row (migration 59) is left out of every count here
     db.close();
   });
 });

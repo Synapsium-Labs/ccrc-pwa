@@ -1,4 +1,4 @@
-// D-8181: migration 58 (the plan model) and the plan store (`coord/planStore.ts`), over a real coord.db.
+// D-8181: migration 59 (the plan model) and the plan store (`coord/planStore.ts`), over a real coord.db.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { hierarchySettingsOf, setHierarchySettings } from '../src/coord/planStor
 import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const PLAN_SLOT = 58;   // the plan model's migration (the plan's own number was 57; slots 55 to 57 went first)
+const PLAN_SLOT = 59;   // the plan model's migration (the plan's own number was 57; slots 55 to 58 went first)
 let dir: string;
 let db: DatabaseSync;
 let store: CoordStore;
@@ -51,7 +51,7 @@ const openWork = (program = 'prog-a', wave = 1, kind: 'work' | 'review' = 'work'
 };
 const dispatch = (runId: number) => store.dispatchRun({ runId, sessionId: 's1', workspace: 'ws', branch: 'b', resumed: false, clearedAt: null, items: [] });
 
-describe('migration 58', () => {
+describe('migration 59', () => {
   it('applies on a file one version older and an older build\'s statements still run', () => {
     const p = path.join(mkTmp('ccrc-plan-mig-'), '.ccrc', 'coord.db');
     mkdirSync(path.dirname(p), { recursive: true });

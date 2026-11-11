@@ -5359,7 +5359,7 @@ export class CoordStore {
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {
-    // D-8181: the reserved `linear-sync` row (migration 58) is the sync's own item home, not a programme anyone runs.
+    // D-8181: the reserved `linear-sync` row (migration 59) is the sync's own item home, not a programme anyone runs.
     const rows = this.db.prepare('SELECT slug, title, state FROM programs WHERE slug <> ? ORDER BY slug')
       .all(LINEAR_SYNC_PROGRAMME) as { slug: string; title: string; state: string }[];
     // D-8: read through the guard, never a cast — the same rule `run()` below

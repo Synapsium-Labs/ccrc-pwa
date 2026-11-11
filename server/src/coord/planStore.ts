@@ -77,7 +77,7 @@ export type OpenRunTicket =
   | { kind: 'existing'; id: number; epicId: number; reproject: string | null }
   | { kind: 'new'; epicId: number; project: string; title: string };
 
-/** A project's hierarchy settings (the `project_linking` columns of migration 58). */
+/** A project's hierarchy settings (the `project_linking` columns of migration 59). */
 export interface HierarchySettingsBody { initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean }
 
 // ── Row readers ────────────────────────────────────────────────────────────────────────────────────────────────────────
