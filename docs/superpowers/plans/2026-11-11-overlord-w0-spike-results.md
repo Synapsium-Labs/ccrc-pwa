@@ -13,7 +13,23 @@
 
 ## In short
 
-To be written when the rows are complete (Task 12).
+- **Measured (W0a):** W0-00 to W0-19 and W0-27 on Claude Code 2.1.312 and 2.1.322, in the rig against a mock API,
+  plus box-token and tree reads. Every scenario is in `server/test/delegation-rig/scenarios-overlord/`; nothing from a
+  run is committed.
+- **The design stands on:** the hook cap (10,000 characters per hook command, so the anchor slot stands); every start
+  source delivers its context, and a fork reports `fork`; the workspace memory file survives `/clear` and compaction;
+  a compaction keeps the session id, `/clear` mints one; auto memory, forks, agent view and the subagent model each
+  have a per-session switch that holds (the model only with `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`); the door process
+  serves typed tools under the restricted launch with no prompt, readers are scoped by `agent_type`, and pinned sources
+  load nothing from the account config; a PreCompact refusal is honoured once a turn; and the first model holds every
+  invariant on this edition.
+- **What the outcomes change (proposals, last section):** D-6798's no-model arm refuses every Agent call under FORCE;
+  crons survive `/clear` (the profile denies them); the profile must carry ccrc's hook and the bypass acceptance; an
+  automatic compaction is read by PreCompact `auto`; the sidecar gains the token count and window size.
+- **Inconclusive, so the conservative branch:** the idle-compaction switch (the 45-minute trigger is load-bearing),
+  Claude Code's own switch on a flagged request (the statusline journals model changes too), and the typed `/clear`'s
+  reliability (no run ever took that path: fresh start only).
+- **Waiting for W0b:** W0-20 to W0-26, W0-28, and the fleet halves of W0-06, W0-09, W0-12 and W0-19.
 
 ## The builds
 
@@ -209,8 +225,26 @@ same path is not shown here (the mock's usage figures are fixed numbers): it is 
 anchor's re-injection keys on SessionStart `compact`. **Proposal (last section):** W1a reads an automatic compaction
 by PreCompact `auto`, not by SessionStart `compact`, until a real one is measured.
 
-**W0-06, the fresh start's time and the roll's overhead.** Recorded below when the renewal-time runs end. The fleet
-half (the roll's overhead from ccd's lifecycle journal) is W0b's.
+**W0-06, the fresh start's time (rig half, both builds).** `ov-renew-time-<size>` grew a transcript with padded
+mock replies, then relaunched the pane ten times by resume and ten times fresh, each to its ready prompt. Times are
+from the relaunch to the ready prompt (the rig polls every 0.25 s, which is the resolution) and to the SessionStart
+hook (its capture's file name), on a box at load about 8 of 16 cores:
+
+| Transcript | Build | Resume: ready p50 / p95 | Resume: SessionStart p95 | Fresh: ready p50 / p95 | Fresh: SessionStart p95 |
+|---|---|---|---|---|---|
+| 0.26 MB | 2.1.312 | 0.26 / 0.51 s | 0.31 s | 0.26 / 0.26 s | 0.26 s |
+| 0.26 MB | 2.1.322 | 0.26 / 0.26 s | 0.28 s | 0.26 / 0.26 s | 0.22 s |
+| 1.17 MB | 2.1.312 | 0.51 / 0.77 s | 0.56 s | 0.26 / 0.26 s | 0.26 s |
+| 1.17 MB | 2.1.322 | 0.76 / 0.77 s | 0.63 s | 0.26 / 0.26 s | 0.27 s |
+| 5.25 MB | 2.1.312 | 1.78 / 1.78 s | 1.75 s | 0.26 / 0.26 s | 0.26 s |
+| 5.25 MB | 2.1.322 | 1.78 / 1.78 s | 1.76 s | 0.26 / 0.26 s | 0.27 s |
+
+**A fresh start does not grow with the old transcript; a resume grows about linearly, under 2 s at 5 MB.** These are
+the binary's own times against a local mock: no network, no tool-server start, no ccd unit start and no stop of the
+old process are in them. The roll's overhead on the fleet (a `hibernate` act to the next `claude-session@` start) is
+W0b's read (Task 8), and it decides the row: **outcome so far, the fresh start adds well under a second to whatever
+the roll costs, so unless W0b measures the roll's overhead above 59 s at p95, the deadlines stand** (`clearing` 90 s,
+`carded` 45 s, the 360 s budget).
 
 **W0-08, what `/clear` and a fresh start do to work in flight (rig, both builds, identical).** `ov-clear-effects`
 started, in one main turn, a reader (`Agent`, `model: sonnet`, whose request the mock held for 100 s), a background
@@ -243,6 +277,18 @@ StopFailure `invalid_request`, and no recovery compaction was attempted. The ses
 under the same hook passed (PreCompact `manual`, passed), compacted and answered the next prompt. **Outcome: honoured,
 turn intact, asked again at every turn's start, so the arm refuses once and lets the next through (the soft budget),
 not armed to refuse forever.**
+
+**W0-14, the auto-compact window and idle compaction per session (rig, both builds, identical).** The window: set per
+session by `CLAUDE_CODE_AUTO_COMPACT_WINDOW` at launch, it took effect (W0-05 and W0-13 drove proactive compactions at
+100,000). Idle compaction: `ov-idle-on` (`idleCompaction: true`) and `ov-idle-off` (`false`) each answered one prompt
+reporting 150,000 input tokens of a 1,000,000 window, then stayed idle 65 minutes (3,900 s, timed). **Neither arm, on
+either build, compacted**: no PreCompact, no summarising request, and the next prompt went out with the whole
+history. With the switch on, nothing fired either, so the rig cannot show the switch working: the idle trigger may
+need a fuller window, a longer idle, or real usage figures (D-5373's fleet measurement saw it at about 55 minutes on
+real sessions). **Outcome: inconclusive for the idle switch, which selects the conservative branch: the 45-minute
+idle renewal trigger is load-bearing, and W1a pins it** (renew before Claude Code's own idle compaction can fire),
+while the profile still sets `idleCompaction: false`. (The four idle runs ended `rc=2` after their bundles were
+written: the rig script was edited during the run and bash read past its end; the bundles are complete.)
 
 ## The launch profile (Task 6: W0-09 to W0-12, W0-15 to W0-19), measured 2026-11-11
 
@@ -466,3 +512,60 @@ long text.
 
 **Outcome (W0-27): no violation; the machines compose as specified** on the merged edition, within what the model
 covers. The deciders' anchors are a maintenance debt, not a contradiction.
+
+## Rows waiting for W0b
+
+W0-20 (nudge-and-read against typed text), W0-21 (a swap with a stand-in renewal), W0-22 (a continuity record per
+lane: its client side is W0-01, W0-02, W0-15 and W0-16 above, for 2.1.312 and 2.1.322), W0-23 (billing per account),
+W0-24 (the Fable proxy's error), W0-26 (restarts per session-hour and the restart time; its read half is above) and
+W0-28 (the replay baseline) wait for the operator's setup item (programme item 155) and W0b. So do the fleet halves of
+W0-06 (the roll's overhead), W0-09 and W0-19 (the account config census) and W0-12 (real fallback notices in the
+history).
+
+## Departures from the plan (for the coordinator to number)
+
+Each is named by a plain-words slug; the coordinator issues its number and defines it in the index plan.
+
+- **w0a-rig-tooling-beyond-the-named-files, method.** Task 5 and Task 6 needed rig features the plan's Task 2 did not
+  list, each added test first in `server/test/delegation-rig-w0.test.ts`: the mock gained `pad` and `chunk_chars`
+  (a measured transcript size without a megabyte scenario file), `launch.files` gained `cfg2` targets and an
+  `@RIG_PROJECT@` path placeholder (project memory per config), a `paneSnap` verb (a dialog's text), the emitter
+  `--tag`, `--tag-source` and `--log-payload`, and `sessionsSnap` records transcript sizes. `timing` lines go to the
+  bundle's own `timing` file, not `notes`, because `notes` is the failure-and-outcome channel `build-matrix.mjs` reads
+  (the delegation suite's notes census went red when they shared it). No delegation scenario's behaviour changed.
+- **w0a-scenario-arms-split, method.** A run has one environment and one settings file, so `ov-memory`,
+  `ov-subagent-model` and `ov-config-load` are two files each (an `-off`, `-force` or `-pinned` arm). The renewal
+  timing runs ten resumes and then ten fresh starts, not alternating: a fresh start would make the next resume pick
+  the fresh session. The idle arms seed 150,000 tokens of reported usage so an idle compaction has something to
+  compact.
+- **w0a-force-arm-pins-sources, method.** ccrc's own hook (D-6798) refuses every Agent call under
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, so the force arm pins its setting sources to `project,local` (with its grants
+  in a `--settings` file) to measure the model at all. That interaction is itself a finding (below).
+
+## Proposals the outcomes select (for the coordinator; the design is not edited)
+
+1. **The D-6798 arm and FORCE (W0-11).** Under `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` the PreToolUse payload carries no
+   `model`, so ccrc's no-model arm refuses every Agent call. W1's launch profile sets FORCE; W1 must exempt a session
+   whose profile pins FORCE from that arm (by its role), or the Overlord cannot start a reader.
+2. **An automatic compaction is read by PreCompact `auto` (W0-05).** Under the rig an automatic compaction sent no
+   summarising request and fired no SessionStart `compact`. Until a real one is measured, W1a reads an automatic
+   compaction by PreCompact `auto` (and the anchor's re-injection does not wait on SessionStart `compact`).
+3. **The profile denies the cron tools (W0-08).** Session crons survive `/clear`, and durable ones a fresh start, so H1
+   gains `CronCreate`, `CronList` and `CronDelete` in the deny set (or `CLAUDE_CODE_DISABLE_CRON=1`).
+4. **The profile registers ccrc's hook (W0-19, W0-15).** Pinned sources drop the account settings and with them ccrc's
+   hook; the profile's `--settings` file carries the hook registration, and the sandbox check verifies the hook fired.
+5. **Record the bypass acceptance before an unattended start (W0-15).** A fresh account config stops at the bypass
+   acceptance dialog (default "No, exit"). Designation's precondition, or the profile, records the acceptance.
+6. **A typed `/model` opens a dialog (W0-12).** Mid-conversation it asks "Switch model?" and saves the model as the
+   account's default. The design already sends no `/model` to the Overlord; what types `/model` today (Table 1.2a)
+   meets this dialog, which readiness's `dialog-open` covers. A follow-up issue for today's lanes, not W0.
+7. **The scope arm keys on `agent_type` (W0-16).** A reader whose definition lists the act door may call it; the arm
+   refuses any door but the read door when PreToolUse's `agent_type` is a reader type.
+8. **The sidecar gains the token count and the window size (W0-18)**, `total_input_tokens` and `context_window_size`,
+   in W1a; the profile may set `refreshInterval` if a fresh sample during long idle matters.
+9. **Re-point the deciders' anchors (W0-27)** when the simulator piece moves the model: 14 anchored sentences were
+   reworded by later editions, so those checks did not run on this edition. Two text findings from the checks that
+   did run: Figure 3 draws `needs-you` to `done` with no actor in Table 5.1b, and the note door at `off` (Table 7.1a
+   has no cell for it).
+10. **The uuid comments (W0-05).** The attribution comment in `server/src/coord/routes.ts` and the socket header in
+    `server/src/sessionws.ts` say a compaction rotates the uuid; it does not. A follow-up issue, not W0.
