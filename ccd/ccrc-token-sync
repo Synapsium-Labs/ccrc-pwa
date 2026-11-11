@@ -453,9 +453,11 @@ cmd_sync() {
   if [ "$rc" -eq 0 ] && [ "$status" = 400 ]; then
     R_PROOF=proved
   elif [ "$rc" -eq 0 ] && [ "$status" = 401 ]; then
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     R_PROOF=proof-failed
     _ts_refuse proof-failed "the server refused the value it handed out (GET $PROOF_PATH answered 401)"
   else
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     R_PROOF=proof-unmeasured
     _ts_refuse proof-unmeasured "the proof call was not measured (GET $PROOF_PATH: ${status:-no status}, curl rc $rc)"
   fi

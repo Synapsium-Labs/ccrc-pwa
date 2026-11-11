@@ -449,8 +449,10 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
       `\n__CCD_REDACT_CLI_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[5]))).digest('hex')}\n`);
     expect(verifyMarker(readFileSync(join(dest, pair[0]), 'utf8')), 'the release tree itself carries no stamp').toBe('foreign');
     expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a library digest').toContain('\n__CCD_LIB_SHA256=stamp-at-install\n');
-    expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a redactor digest').toContain(
-      '\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n');
+    // Each placeholder is checked as its own whole line: they need not be adjacent, since each carries its own
+    // shellcheck directive line above it (D-8198).
+    expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a redactor digest').toContain('\n__CCD_REDACT_SHA256=stamp-at-install\n');
+    expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a redactor-cli digest').toContain('\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n');
   });
 
   // ── Stage 4, Task 6: the artifact carries its own identity ──────────────
