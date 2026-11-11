@@ -44,8 +44,11 @@ function declare(program = 'prog-a'): void {
     tickets: { insert: [tkIn('e1', 't1', { program, checkpointKey: 'c1' })], update: [], drop: [] },
   }), 'coord-a', 10, { home: 'project-a', title: 'Prog A' });
 }
-const openWork = (program = 'prog-a', wave = 1, kind: 'work' | 'review' = 'work', reviews?: number) =>
-  store.openRun({ program, title: 'w', project: 'project-a', wave, waveOf: 2, claimedBy: 'coord-a', homeProject: 'project-a', kind, reviews });
+const openWork = (program = 'prog-a', wave = 1, kind: 'work' | 'review' = 'work', reviews?: number) => {
+  const r = store.openRun({ program, title: 'w', project: 'project-a', wave, waveOf: 2, claimedBy: 'coord-a', homeProject: 'project-a', kind, reviews });
+  if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+  return r;
+};
 const dispatch = (runId: number) => store.dispatchRun({ runId, sessionId: 's1', workspace: 'ws', branch: 'b', resumed: false, clearedAt: null, items: [] });
 
 describe('migration 58', () => {
