@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../../shared/api.js';
+import { callsIn, symbolOf } from '../scan/symbols.js';
 import { ALL, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -709,6 +710,8 @@ describe('the session role is enumerated and narrowed once in shared/api.ts, and
 // Overlord spec C49 (W1a roles plan, Task 5). The role vocabulary has one table and one reader: `FLEET_ROLES` and
 // `FleetRole` in shared/fleetRoles.ts, `roleOf` and `sessionRoleOfReading` in server/src/roleOf.ts. `FLEET_ROLE_NAMES`
 // is derived from the table, and the old two-word derivation of `SessionRole` is spelled nowhere. Code lines only.
+// KNOWN WIDTH: only the `kind === 'none' ? 'coordinator'` spelling is seen; an inverted test, double quotes, an `||` chain
+// or a `switch` is not.
 describe('one role vocabulary and one reader (Overlord spec C49)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
   it('CONTROL: the patterns see a definition and pass over a comment', () => {
@@ -727,11 +730,10 @@ describe('one role vocabulary and one reader (Overlord spec C49)', () => {
   it('roleOf and sessionRoleOfReading are defined in server/src/roleOf.ts only, and sessionRoleOf goes through roleOf', () => {
     expect(holders(/\bfunction\s+roleOf\b|\broleOf\s*=/)).toEqual(['server/src/roleOf.ts']);
     expect(holders(/\bfunction\s+sessionRoleOfReading\b|\bsessionRoleOfReading\s*=/)).toEqual(['server/src/roleOf.ts']);
-    // The file is found by its holder, not named by a literal path: a literal read of a server/src file is counted by ARCH-06's ratchet.
-    const [reader] = ALL.filter((f) => /\bfunction\s+roleOf\b/.test(stallCode(f)));
-    expect(stallCode(reader!)).toMatch(/\bsessionRoleOf\s*=[^;]*\broleOf\(/);
+    // The pin reads the symbol's calls (scan/symbols.ts), not the file's text.
+    expect(callsIn(symbolOf('server/src/roleOf.ts', 'sessionRoleOf')).map((c) => c.name)).toContain('roleOf');
   });
-  it('the old two-word derivation is spelled nowhere', () => {
+  it('the old two-word ternary is spelled nowhere', () => {
     expect(holders(/kind\s*===\s*'none'\s*\?\s*'coordinator'/)).toEqual([]);
   });
 });
