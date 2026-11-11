@@ -39,7 +39,7 @@ import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, UNCONFIRMED_TEXT, useResultLine } from './settingsText';
 import { TestBoxBuilds } from './TestBoxBuilds';
 import { TestBoxConnect } from './TestBoxConnect';
-import { TestBoxManage } from './TestBoxManage';
+import { TestBoxKeyNotice, TestBoxManage, type TestboxKeyNotice } from './TestBoxManage';
 import { TESTBOX_CONNECT_TEXT } from './testboxAdminWords';
 import { TESTBOX_UNANSWERED, testboxFailure } from './testboxFailure';
 import type { TestboxBlock, TestboxPoll } from './useTestboxView';
@@ -188,6 +188,8 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
   const waitsForParity = admin !== undefined && admin.parity !== 'pass' && block.switch !== 'on';
   // A Replace's disconnect landed: the flow that mounts next opens at step 1 (TC16, spec §2.9).
   const [replacing, setReplacing] = useState(false);
+  // An access key act's notice (D-8337): kept here, so it outlives the connected card a Revoke unmounts.
+  const [keyNotice, setKeyNotice] = useState<TestboxKeyNotice | null>(null);
 
   const flip = (on: boolean): void => {
     if (switching) return;
@@ -241,10 +243,11 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
   return (
     <>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{T.stale}</p>}
+      {keyNotice !== null && <TestBoxKeyNotice band={band} notice={keyNotice} onDone={() => setKeyNotice(null)} />}
       {flow && <TestBoxConnect band={band} onChanged={poll.reload} begin={replacing}
         sync={admin === undefined ? undefined : `${admin.connected}:${admin.hostKey}:${admin.parity}:${admin.act?.sub ?? ''}:${admin.act?.outcome ?? ''}`} />}
       {admin?.connected === true && (
-        <TestBoxManage band={band} onChanged={poll.reload} onReplaced={() => setReplacing(true)} fleetRows={fleetRows} onFleetChanged={onFleetChanged}
+        <TestBoxManage band={band} onChanged={poll.reload} onReplaced={() => setReplacing(true)} onKeyNotice={setKeyNotice} fleetRows={fleetRows} onFleetChanged={onFleetChanged}
           boxRelease={box?.release ?? null} runsInProgress={box?.runs.inProgress ?? 0} />
       )}
       <div className="testbox-head" data-testbox="head">

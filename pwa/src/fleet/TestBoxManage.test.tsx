@@ -22,6 +22,9 @@ const FP = `SHA256:${'A'.repeat(43)}`;
 const NEW_FP = `SHA256:${'N'.repeat(43)}`;
 const LINE = `from="192.0.2.2" ssh-ed25519 ${'B'.repeat(68)} ccrc-testbox`;
 const SHA = 'f'.repeat(64);
+/** An access key's PUBLIC words, as a line-code refusal names them (D-8337), and the line a rotate answers. */
+const KEY_WORDS = `ssh-ed25519 ${'K'.repeat(68)} ccrc-testbox-admin`;
+const NEW_LINE = `from="192.0.2.2",restrict ssh-ed25519 ${'N'.repeat(68)} ccrc-testbox-admin`;
 
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const baseStatus = (over: Partial<TestboxAdminStatus> = {}): TestboxAdminStatus => ({
@@ -679,6 +682,48 @@ describe('the section: Replace returns to step 1 and shows the new fingerprint a
     await settle();
     expect(card().querySelector('[data-testbox="manage"]')).toBeNull();
   });
+
+  it('a Revoke whose box was not reached leaves the line to remove by hand above the card, after the card is gone, until Done (D-8337)', async () => {
+    atBand('phone');
+    const f = fakeFleet();
+    f.box.on['key-revoke'] = () => { f.box.status = baseStatus(); return { refuse: refused(409, 'testbox-admin-refused', { code: 'revoked-box-skipped', line: KEY_WORDS }) }; };
+    const reload = vi.fn();
+    const view = render(<TestBoxSection poll={poll(block({ admin: admin() }), reload)} />);
+    await settle();
+    await press(card().querySelector('[data-testbox="revoke-key"]'));
+    await press(document.querySelector<HTMLElement>('[data-testbox="sheet-confirm"]'));
+    expect(f.posts('key-revoke')[0]!.body).toEqual({ fields: {} });
+    expect(reload).toHaveBeenCalled();
+    // the block re-reads: nothing is connected, so the connected card is gone; the notice is the section's and stays
+    view.rerender(<TestBoxSection poll={poll(block({ state: 'off', box: null, admin: admin({ connected: false, hostKey: 'none', parity: 'none' }) }), reload)} />);
+    await settle();
+    expect(card().querySelector('[data-testbox="manage"]')).toBeNull();
+    const notice = card().querySelector<HTMLElement>('[data-testbox="key-notice"]')!;
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).toContain(TESTBOX_ADMIN_CODE_SENTENCE['revoked-box-skipped']);
+    expect(notice.querySelector('[data-testbox="key-notice-line"]')!.textContent).toBe(KEY_WORDS);
+    // a revoked key: EVERY ccrc line goes (an interrupted act may have left another key's), not just the one shown
+    expect(notice.textContent).toContain(T.handLineHead);
+    expect(T.handLineHead).toContain('every line that ends in ccrc-testbox-admin');
+    await press(notice.querySelector('[data-testbox="key-notice-copy"]'));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(KEY_WORDS);
+    await press(notice.querySelector('[data-testbox="key-notice-done"]'));
+    expect(card().querySelector('[data-testbox="key-notice"]')).toBeNull();
+  });
+
+  it('a Revoke that reached the box says so above the card, with no line (D-8337)', async () => {
+    atBand('wide');
+    const f = fakeFleet();
+    f.box.on['key-revoke'] = () => { f.box.status = baseStatus(); };
+    render(<TestBoxSection poll={poll(block({ admin: admin() }))} />);
+    await settle();
+    await press(card().querySelector('[data-testbox="revoke-key"]'));
+    await press(document.querySelector<HTMLElement>('[data-testbox="sheet-confirm"]'));
+    const notice = card().querySelector<HTMLElement>('[data-testbox="key-notice"]')!;
+    expect(notice.textContent).toContain(T.revoked);
+    expect(notice.querySelector('[data-testbox="key-notice-line"]')).toBeNull();
+    expect(notice.querySelector('[data-testbox="key-notice-copy"]')).toBeNull();
+  });
 });
 
 describe('blocked: one line and the one control that resolves it', () => {
@@ -769,6 +814,118 @@ describe('blocked: one line and the one control that resolves it', () => {
     await press(q('[data-testbox="check-access"]'));
     expect(screen.getByText(`Login: ${TESTBOX_ADMIN_CODE_SENTENCE['auth-refused']}`)).toBeInTheDocument();
     expect(q('[data-testbox="access-line"]')).not.toBeNull();
+  });
+});
+
+describe('Rotate key and Revoke key (D-8337)', () => {
+  const fillPassphrase = async (): Promise<void> => {
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'a passphrase' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm with passphrase' }));
+    await settle();
+  };
+  const confirm = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-testbox="sheet-confirm"]')!;
+
+  it('Rotate opens one sheet on a tap, sends nothing until Confirm, asks for the step-up, then sends one key-rotate with no field', async () => {
+    const f = fakeFleet();
+    let first = true;
+    f.box.on['key-rotate'] = () => {
+      if (first) { first = false; return { refuse: refused(403, 'step-up-required') }; }
+      return { result: { line: NEW_LINE } };
+    };
+    const onKeyNotice = vi.fn();
+    await mount({ onKeyNotice });
+    await press(q('[data-testbox="rotate-key"]'));
+    expect(sheet().getAttribute('data-sheet')).toBe('rotate');
+    expect(sheet().textContent).toContain(T.rotateHow);
+    expect(sheet().textContent).toContain(T.rotateThen);
+    expect(f.posts()).toHaveLength(0);
+    await press(confirm());
+    expect(f.posts('key-rotate')[0]!.body).toEqual({ fields: {} });
+    expect(document.querySelector('[data-step-up]')).not.toBeNull();
+    expect(confirm()).toBeDisabled();
+    await fillPassphrase();
+    await press(confirm());
+    expect(f.posts('key-rotate')).toHaveLength(2);
+    expect(document.querySelector('[data-testbox="sheet"]')).toBeNull();
+    expect(manage().textContent).toContain(T.rotated);
+    expect(onKeyNotice).not.toHaveBeenCalled();
+    // the card never draws the new line: nothing about the key but the sentence
+    expect(manage().textContent).not.toContain('N'.repeat(68));
+  });
+
+  it('Cancel on either sheet sends nothing', async () => {
+    const f = fakeFleet();
+    await mount();
+    for (const id of ['rotate-key', 'revoke-key']) {
+      await press(q(`[data-testbox="${id}"]`));
+      await press(document.querySelector<HTMLElement>('[data-testbox="sheet-cancel"]'));
+    }
+    expect(f.posts()).toHaveLength(0);
+  });
+
+  it('a box that did not take the new key says nothing changed, in the sheet, and the card stays as it was', async () => {
+    const f = fakeFleet();
+    f.box.on['key-rotate'] = () => ({ refuse: refused(409, 'testbox-admin-refused', { code: 'new-key-refused' }) });
+    const onKeyNotice = vi.fn();
+    await mount({ onKeyNotice });
+    await press(q('[data-testbox="rotate-key"]'));
+    await press(confirm());
+    expect(sheet().textContent).toContain(TESTBOX_ADMIN_CODE_SENTENCE['new-key-refused']);
+    expect(onKeyNotice).not.toHaveBeenCalled();
+    expect(manage()).not.toBeNull();
+  });
+
+  it('a rotate whose old line stayed hands the section the sentence and the old key\'s words, and closes the sheet', async () => {
+    const f = fakeFleet();
+    f.box.on['key-rotate'] = () => ({ refuse: refused(409, 'testbox-admin-refused', { code: 'old-line-kept', line: KEY_WORDS }) });
+    const onKeyNotice = vi.fn();
+    const onChanged = vi.fn();
+    await mount({ onKeyNotice, onChanged });
+    await press(q('[data-testbox="rotate-key"]'));
+    await press(confirm());
+    // a rotate keeps the new key's line: the head names only the old key's line, never every ccrc line
+    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: TESTBOX_ADMIN_CODE_SENTENCE['old-line-kept'], line: KEY_WORDS, head: T.handLineHeadRotate });
+    expect(onChanged).toHaveBeenCalled();
+    expect(document.querySelector('[data-testbox="sheet"]')).toBeNull();
+    expect(manage().textContent).not.toContain(T.rotated);
+  });
+
+  it('Revoke names what goes in its sheet and, once done, hands the section its sentence', async () => {
+    const f = fakeFleet();
+    f.box.on['key-revoke'] = () => { f.box.status = baseStatus(); };
+    const onKeyNotice = vi.fn();
+    await mount({ onKeyNotice });
+    await press(q('[data-testbox="revoke-key"]'));
+    expect(sheet().getAttribute('data-sheet')).toBe('revoke');
+    expect(sheet().textContent).toContain(T.revokeBox);
+    expect(sheet().textContent).toContain(T.revokeFleet);
+    expect(sheet().textContent).not.toContain(T.kept);
+    await press(confirm());
+    expect(f.posts('key-revoke')[0]!.body).toEqual({ fields: {} });
+    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: T.revoked, line: null, head: null });
+    await waitFor(() => expect(document.querySelector('[data-testbox="manage"]')).toBeNull());
+  });
+
+  it('a revoke whose unpair did not finish hands the section its line', async () => {
+    const f = fakeFleet();
+    f.box.on['key-revoke'] = () => { f.box.status = baseStatus(); return { refuse: refused(409, 'testbox-admin-refused', { code: 'revoked-unpair-failed', line: KEY_WORDS }) }; };
+    const onKeyNotice = vi.fn();
+    await mount({ onKeyNotice });
+    await press(q('[data-testbox="revoke-key"]'));
+    await press(confirm());
+    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: TESTBOX_ADMIN_CODE_SENTENCE['revoked-unpair-failed'], line: KEY_WORDS, head: T.handLineHead });
+  });
+
+  it('a changed host key holds Rotate (it needs the box it trusts) and leaves Revoke, as it leaves Disconnect', async () => {
+    fakeFleet(connected({ hostKey: 'changed' }));
+    await mount();
+    expect(q('[data-testbox="rotate-key"]')).toBeDisabled();
+    expect(q('[data-testbox="revoke-key"]')).toBeEnabled();
+  });
+
+  it('a ledger row of either act reads in words', () => {
+    expect(ledgerLine(event(1, { act: 'key-rotate' }) as never)).toContain(T.rotateKey);
+    expect(ledgerLine(event(2, { act: 'key-revoke', outcome: 'refused', code: 'revoked-box-skipped' }) as never)).toContain(T.revokeKey);
   });
 });
 

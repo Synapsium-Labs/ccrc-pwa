@@ -241,19 +241,21 @@ export function isPrNumber(v: unknown): boolean {
 
 export type TestboxAdminSub =
   | 'status' | 'read' | 'key' | 'probe' | 'pin' | 'preflight' | 'connect' | 'settings-fleet' | 'settings-box'
-  | 'cancel' | 'parity' | 'repair' | 'apply-release' | 'disconnect';
+  | 'cancel' | 'parity' | 'repair' | 'apply-release' | 'disconnect' | 'key-rotate' | 'key-revoke';
 export const TESTBOX_ADMIN_SUB_MAP: Record<TestboxAdminSub, true> = {
   status: true, read: true, key: true, probe: true, pin: true, preflight: true, connect: true, 'settings-fleet': true,
   'settings-box': true, cancel: true, parity: true, repair: true, 'apply-release': true, disconnect: true,
+  'key-rotate': true, 'key-revoke': true,
 };
 
 /** The acts the ledger records (spec §2.10) and the cancel that ends one. */
 export type TestboxAct =
   | 'connect' | 'confirm-host-key' | 'install' | 'pair' | 'settings-fleet' | 'settings-box' | 'parity' | 'switch'
-  | 'repair' | 'replace' | 'disconnect' | 'apply-release' | 'cancel';
+  | 'repair' | 'replace' | 'disconnect' | 'apply-release' | 'cancel' | 'key-rotate' | 'key-revoke';
 export const TESTBOX_ACT_MAP: Record<TestboxAct, true> = {
   connect: true, 'confirm-host-key': true, install: true, pair: true, 'settings-fleet': true, 'settings-box': true,
   parity: true, switch: true, repair: true, replace: true, disconnect: true, 'apply-release': true, cancel: true,
+  'key-rotate': true, 'key-revoke': true,
 };
 export const TESTBOX_ACTS: readonly TestboxAct[] = Object.freeze(Object.keys(TESTBOX_ACT_MAP) as TestboxAct[]);
 
@@ -272,7 +274,8 @@ export type TestboxAdminCode =
   | 'verify-failed' | 'copy-failed' | 'box-value-refused' | 'install-refused' | 'install-failed' | 'pair-failed'
   | 'status-not-ok' | 'pairing-keys-in-ccrc-env' | 'key-in-ccrc-env' | 'runs-in-progress' | 'idle-deadline'
   | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped' | 'interrupted'
-  | 'unpair-failed' | 'address-not-private' | 'box-already-set';
+  | 'unpair-failed' | 'address-not-private' | 'box-already-set' | 'new-key-refused' | 'old-line-kept' | 'revoked-box-skipped'
+  | 'revoked-unpair-failed';
 /** Each code in one line that names no value (no address, path, key or setting text), for the card. */
 export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'busy': 'Another test box act is already running; wait for it to end or cancel it.',
@@ -314,7 +317,19 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'address-not-private': 'The box is not on a private network, so ccrc will not connect to it. Use an address on a tailnet, a VPN or your provider\'s private network.',
   'box-already-set': 'A box is already set up here, so its address and port change only through Replace or Start over.',
   'interrupted': 'The act stopped before it finished, because the fleet host restarted or its unit was stopped; run it again.',
+  // D-8337: the access key's Rotate and Revoke.
+  'new-key-refused': 'The box did not take the new access key, so ccrc took it out again and kept the old one, which still works.',
+  'old-line-kept': 'ccrc now uses its new access key, but the box still lets the old key in; remove the old key\'s line shown by hand.',
+  'revoked-box-skipped': 'ccrc deleted its access key and forgot the box, but did not remove its lines from the box; remove them by hand as shown.',
+  'revoked-unpair-failed': 'ccrc deleted its access key, but the box\'s unpair or the removal of its line did not finish; finish both by hand.',
 };
+/** The codes whose refusal carries `line`: the PUBLIC words of an access key whose line the operator removes from the box's
+ *  authorized_keys by hand (D-8337). Never a private key; the route holds it to one printable line. */
+export type TestboxLineCode = Extract<TestboxAdminCode, 'old-line-kept' | 'revoked-box-skipped' | 'revoked-unpair-failed'>;
+export const TESTBOX_LINE_CODES: readonly TestboxLineCode[] = Object.freeze(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);
+const TESTBOX_LINE_CODE_SET: ReadonlySet<string> = new Set(TESTBOX_LINE_CODES);
+/** A refusal code that carries `line` (one of `TESTBOX_LINE_CODES`). */
+export function isTestboxLineCode(v: string): v is TestboxLineCode { return TESTBOX_LINE_CODE_SET.has(v); }
 export const TESTBOX_ADMIN_CODE_MAP: Record<TestboxAdminCode, true> = Object.fromEntries(
   Object.keys(TESTBOX_ADMIN_CODE_SENTENCE).map((k) => [k, true]),
 ) as Record<TestboxAdminCode, true>;
@@ -434,6 +449,10 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
   'repair': spec({}, { long: true, act: 'repair' }),
   'apply-release': spec({}, { long: true, act: 'apply-release' }),
   'disconnect': spec({ replace: f('--replace', 'true') }, { stepUp: true, act: 'disconnect' }),
+  // D-8337: a new access key put on the box with the old one, and the key taken off the box and deleted. Both replace or remove a
+  // credential (C14), and both read the connection, the key and the pin from the state, so they take no field.
+  'key-rotate': spec({}, { stepUp: true, act: 'key-rotate' }),
+  'key-revoke': spec({}, { stepUp: true, act: 'key-revoke' }),
 } satisfies Record<TestboxAdminSub, TestboxAdminSubSpec>);
 
 /** The fleet-host settings whose change needs the passkey step-up although `settings-fleet` does not (C14 rules a plain value

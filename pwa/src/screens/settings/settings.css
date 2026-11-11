@@ -282,6 +282,11 @@
 .testbox-pairing > div { display: grid; min-width: 0; }
 .testbox-pairing dd { margin: 0; }
 .testbox-sheet-list { display: grid; margin: 0; padding: 0; list-style: none; }
+/* An access key act's notice (D-8337), above the card: its sentence, the public key words to remove by hand (wrapping anywhere, as
+   every key line does), and its buttons, full width one per row on a phone and side by side from the laptop band. */
+.testbox-key-notice { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
+.testbox-key-notice-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-key-notice:not([data-band='phone']) .testbox-key-notice-row { grid-template-columns: repeat(2, auto); justify-content: start; }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); align-items: start; column-gap: var(--pad-card); }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main > * { grid-column: 1 / -1; }
 .testbox-manage:not([data-band='phone']) .testbox-manage-main > .testbox-manage-state { grid-column: 1; grid-row: 1; }
