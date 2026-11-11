@@ -152,3 +152,60 @@ describe('every history redaction door, byte for byte, as main reads it (D-5867,
     expect(h.digest('hex')).toBe('c53e5589ecfbc9e997627e1ed863fe0c5648d74556c8161ceaa5fde89cbf3c02');
   }, 120_000);
 });
+
+// The mutation table's two history rows (plan Step 5; the history coordinator's ack), kept as CONTROL rows: each mutant is
+// built as a temporary copy of the trusted bytes with one edit, asserted to apply exactly once, and shown to change what the
+// pins above read. Run against the real suites, mutant 1 reds 29 rows (the rule-set and digest pins above, 18 of
+// history-lib's (j) cases among them (j5), (j7) and (j14), the owed-hit probe rows) and mutant 2 reds 18 ((j7) and (j14)
+// among them). Neither reds (j9) or (j10): those hold v2(base) and subtraction for ANY two rule sets, so a swapped base
+// leaves them green, which the first row shows.
+describe('CONTROL: the two history mutants change what the pins read (D-5867, C1l PR 2, Step 5)', () => {
+  const REDACT = path.join(REPO, 'shared', 'redact.mjs');
+  /** A copy of lib.mjs (and, when `redactEdit` is given, of shared/redact.mjs) with one edit each, loaded fresh. */
+  const mutant = async (libEdit: [string, string] | null, redactEdit: [string, string] | null): Promise<Record<string, never>> => {
+    const dir = mkTmp('ccrc-history-redact-mutant-');
+    dirs.push(dir);
+    const once = (bytes: string, [from, to]: [string, string], what: string): string => {
+      expect(bytes.split(from).length - 1, `CONTROL: the ${what} edit applies exactly once`).toBe(1);
+      return bytes.replace(from, to);
+    };
+    let redactUrl = pathToFileURL(REDACT).href;
+    if (redactEdit !== null) {
+      const copy = path.join(dir, 'redact.mjs');
+      writeFileSync(copy, once(readFileSync(REDACT, 'utf8'), redactEdit, 'redact.mjs'));
+      redactUrl = pathToFileURL(copy).href;
+    }
+    let src = readFileSync(LIB, 'utf8').replace(/'\.\.\/\.\.\/shared\/([A-Za-z0-9_-]+\.mjs)'/g, (_m, f: string) =>
+      JSON.stringify(f === 'redact.mjs' ? redactUrl : pathToFileURL(path.join(REPO, 'shared', f)).href));
+    if (libEdit !== null) src = once(src, libEdit, 'lib.mjs');
+    const copy = path.join(dir, 'lib-mutant.mjs');
+    writeFileSync(copy, `${src}\nexport { BASE_RULES as __BASE_RULES, CONTEXT_RULES as __CONTEXT_RULES };\n`);
+    return await import(/* @vite-ignore */ `${pathToFileURL(copy).href}?mutant=${process.pid}-${Date.now()}-${Math.random()}`) as Record<string, never>;
+  };
+  const TEXT = 'password=abc&def';
+  const idx = lib.makePairIndex(lib.secretPairs([]).pairs);
+  const fieldBase = (m: Record<string, never>): string =>
+    (m as unknown as typeof lib).redactDoorReadings((m as unknown as typeof lib).redactField)!.base(TEXT, idx) as string;
+  it('CONTROL: the base read through the trusted bytes ends v1\'s named value at `&`, and the door masks it whole', () => {
+    const r = lib.redactDoorReadings(lib.redactField)!;
+    expect(r.base(TEXT, idx)).toBe(`password=${lib.REDACTED_MARK}&def`);
+    expect(lib.redactField(TEXT, idx)).toBe(`password=${lib.REDACTED_MARK}`);
+  });
+  it('mutant 1, BASE_RULES built from the history-v2 profile: the base set is not the captured one, and the base reading moves; v2(base) still holds', async () => {
+    const m = await mutant(["const BASE_RULES = historyRules('history-base');", "const BASE_RULES = historyRules('history-v2');"], null);
+    expect(dumpSet(m.__BASE_RULES)).not.toEqual(FIXTURE.BASE_RULES);
+    expect(fieldBase(m)).toBe(`password=${lib.REDACTED_MARK}`);
+    const ml = m as unknown as typeof lib;
+    const r = ml.redactDoorReadings(ml.redactField)!;
+    expect(ml.redactField(TEXT, idx), '(j9)\'s relation holds under the mutant').toBe(r.v2(r.base(TEXT, idx), idx));
+  });
+  it('mutant 2, a pattern edit to history-named-value-v1 (the rule only history-base lists): the base reading moves, the v2 set does not', async () => {
+    const m = await mutant(null, [
+      "'history-named-value-v1': ['namedValue', (final) => namedValueV1(final)],",
+      "'history-named-value-v1': ['namedValue', (final) => (final ? namedValueV1(true) : new RegExp(String.raw`([\"']?)([^\\s\"'` + '`' + ',;]+)', 'y'))],",
+    ]);
+    expect(dumpSet(m.__BASE_RULES)).not.toEqual(FIXTURE.BASE_RULES);
+    expect(dumpSet(m.__CONTEXT_RULES)).toEqual(FIXTURE.CONTEXT_RULES);
+    expect(fieldBase(m)).toBe(`password=${lib.REDACTED_MARK}`);
+  });
+});
