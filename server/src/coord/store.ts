@@ -122,7 +122,7 @@ import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
-import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
+import { LIFECYCLE_PARK_ERRORS, REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -1347,8 +1347,10 @@ export type RequeueRole =
 
 /** One heir `reviveParkedDeliveries` queued (D-5914): `from` is the parked delivery it revives, `heir` the new one. */
 export interface RevivedDelivery { readonly from: number; readonly heir: number; readonly mailId: number; readonly toId: string }
-/** `reviveParkedDeliveries`'s answer: every heir it queued, `[]` for none. Typed, never `void`. */
-export interface ReviveParkedResult { readonly revived: readonly RevivedDelivery[] }
+/** One park `reviveParkedDeliveries` closed (D-8282): `from` is the park, `closing` its heir born closed. */
+export interface ClosedPark { readonly from: number; readonly closing: number; readonly mailId: number; readonly toId: string }
+/** `reviveParkedDeliveries`'s answer: every heir it queued and every park it closed, `[]` for none. Never `void`. */
+export interface ReviveParkedResult { readonly revived: readonly RevivedDelivery[]; readonly closed: readonly ClosedPark[] }
 
 /** What an heir is rendered from: the mail's own columns and its run's (`queueHeir`). Selected by the re-queue and
  *  the revive alike, through `HEIR_SOURCE_COLUMNS` below, so the two selects cannot disagree about an envelope. */
@@ -1449,10 +1451,17 @@ export const MAIL_REBIND_SUPERSEDED_ERROR = 'recipient rebound';
  */
 export const MAIL_CHILD_RECLAIMED_ERROR = 'child workspace reclaimed';
 
-/** The four parks that are DECISIONS rather than abandonment — a run closing
+/** D-8282: the CLOSING HEIR's sentence. A lifecycle park whose recipient reads live again (a later incarnation) and
+ *  which the revive declines (an earlier wave, a notice its owner re-sends, the role moved on, another copy carries the
+ *  mail) gets one heir born closed with this `lastError`, naming the park in `revivedFrom`. A decision, not
+ *  abandonment, so it joins `DELIBERATE_CANCEL_ERRORS_SQL`; the park keeps its own reason beside it. No apostrophe. */
+export const MAIL_RECIPIENT_BACK_CLOSED_ERROR = 'recipient came back, mail not re-sent';
+
+/** The five parks that are DECISIONS rather than abandonment — a run closing
  *  (`closeRun`), a chair changing hands (`reclaimProgram`), an occupant
- *  changing (`bindSession`) and a child workspace reclaimed
- *  (`cancelDeliveriesTo`, child-reclamation wave 3) — as one SQL list, so the
+ *  changing (`bindSession`), a child workspace reclaimed
+ *  (`cancelDeliveriesTo`, child-reclamation wave 3) and a declined park closed
+ *  on its recipient's return (`closeDeclinedParks`, D-8282) — as one SQL list, so the
  *  read-side exclusion below names a set rather than growing a second
  *  hand-written `!=` per writer. Every future "this delivery was cancelled on
  *  purpose" park joins HERE and inherits the exclusion; a park that means "we
@@ -1460,7 +1469,7 @@ export const MAIL_CHILD_RECLAIMED_ERROR = 'child workspace reclaimed';
  *  must never be added, because those are exactly the rows that predicate
  *  exists to keep visible. */
 const DELIBERATE_CANCEL_ERRORS_SQL =
-  `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}','${MAIL_CHILD_RECLAIMED_ERROR}')`;
+  `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}','${MAIL_CHILD_RECLAIMED_ERROR}','${MAIL_RECIPIENT_BACK_CLOSED_ERROR}')`;
 
 /** D-5914 (spec 2026-10-20 §3.2, #125): THE ONE "this park has an heir" fragment. A delivery some later delivery
  *  names as its parent (`revivedFrom`, migration 40) is not abandoned: its heir carries the attention now, and counts
@@ -2786,9 +2795,13 @@ export class CoordStore {
    *
    * One transaction, so a sweep racing another sees each parent with or without its heir, never half. Answers every
    * heir it queued, in parent-id order; `[]` when nothing qualified. Never `void`.
+   *
+   * D-8282: then, in the same transaction, every lifecycle park to a live recipient that is STILL without an heir is
+   * one this revive declined, and each reason above is permanent, so it is closed (`closeDeclinedParks`) rather than
+   * left counting in `unreadMail` for the recipient's later incarnation.
    */
   reviveParkedDeliveries(liveIds: readonly string[]): ReviveParkedResult {
-    if (liveIds.length === 0) return { revived: [] };
+    if (liveIds.length === 0) return { revived: [], closed: [] };
     const heads = REVIVE_SKIPPED_SUBJECT_HEADS;
     return tx(this.db, () => {
       const rows = this.db.prepare(
@@ -2807,10 +2820,37 @@ export class CoordStore {
         'GROUP BY m.id ORDER BY MIN(d.id)',
       ).all(...REVIVABLE_PARK_ERRORS, ...REVIVE_SKIPPED_SENDERS, ...heads.flatMap((h) => [h, h]), ...liveIds) as unknown as
         (HeirSource & { deliveryId: number; toId: string })[];
-      return { revived: rows.map((r) => ({
+      const revived = rows.map((r) => ({
         from: r.deliveryId, heir: this.queueHeir(r, r.toId, r.deliveryId), mailId: r.mailId, toId: r.toId,
-      })) };
+      }));
+      return { revived, closed: this.closeDeclinedParks(liveIds) };
     });
+  }
+
+  /** D-8282: `reviveParkedDeliveries`' second half, inside its transaction and after its heirs exist. A lifecycle park
+   *  (`LIFECYCLE_PARK_ERRORS`) on an open run whose recipient is in `liveIds` and has no heir was declined, so it gets
+   *  ONE closing heir: a new delivery of the mail naming it in `revivedFrom` (`queueDelivery`, the parent's envelope
+   *  kept verbatim), parked at once with `MAIL_RECIPIENT_BACK_CLOSED_ERROR`. The park is never written; `HAS_HEIR_SQL`
+   *  retires it in every read, the deliberate-cancel list retires the closing heir, and both stay in the history. */
+  private closeDeclinedParks(liveIds: readonly string[]): ClosedPark[] {
+    const rows = this.db.prepare(
+      'SELECT d.id AS id, d.mailId AS mailId, d.toId AS toId, d.envelope AS envelope ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE ${ABANDONED_PARK_SQL} AND d.rejectCode = 'undeliverable' ` +
+      `AND d.lastError IN (${placeholders(LIFECYCLE_PARK_ERRORS.length)}) ` +
+      `AND d.toId IN (${placeholders(liveIds.length)}) ORDER BY d.id`,
+    ).all(...LIFECYCLE_PARK_ERRORS, ...liveIds) as unknown as { id: number; mailId: number; toId: string; envelope: string }[];
+    return rows.map((r) => {
+      const closing = this.queueDelivery(r.mailId, r.toId, r.envelope, r.id).id;
+      const w = this.closeHeirDelivery(closing);
+      if (!w.changed) throw new Error(`closing heir ${closing} of delivery ${r.id} did not park (row is ${w.state})`);
+      return { from: r.id, closing, mailId: r.mailId, toId: r.toId };
+    });
+  }
+
+  /** D-8282: the closing heir's one write, on the deliberate parks' shape (`parkSupersededDeliveries`). */
+  private closeHeirDelivery(id: number): DeliveryWrite {
+    return this.writeDelivery(id, "state = 'rejected', rejectCode = 'undeliverable', lastError = ?", [MAIL_RECIPIENT_BACK_CLOSED_ERROR], 'outstanding');
   }
 
   /**

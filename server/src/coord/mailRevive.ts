@@ -33,8 +33,13 @@ import {
  * ceiling reject (`parked 24 h, never delivered: …`), whose recipient was live throughout and whose sender was told and
  * owns the re-send.
  */
+/** The LIFECYCLE PARK alone (D-8282): mail parked while its recipient read dead, so a recipient that reads live again is
+ *  a later incarnation of that session. These are the parks `CoordStore.reviveParkedDeliveries` closes when it declines
+ *  to revive one; the legacy live-recipient parks below never had a dead incarnation and are not closed. */
+export const LIFECYCLE_PARK_ERRORS: readonly string[] = DEAD_LIFECYCLES.map(sessionDeadError);
+
 export const REVIVABLE_PARK_ERRORS: readonly string[] = [
-  ...DEAD_LIFECYCLES.map(sessionDeadError),
+  ...LIFECYCLE_PARK_ERRORS,
   'draft-present',
   'enter-ignored',
 ];

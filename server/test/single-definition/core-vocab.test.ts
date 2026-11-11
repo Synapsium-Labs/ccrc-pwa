@@ -504,23 +504,25 @@ describe('Build 7 nouns', () => {
   // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
   // explaining the constant is a guard someone deletes.
   it('spells the deliberate-cancel SET once — the constant, never a hand-written SQL list', () => {
-    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound|child workspace reclaimed)';
-    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,3}\\)`);
+    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound|child workspace reclaimed|recipient came back, mail not re-sent)';
+    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,4}\\)`);
     expect(LIST.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
     expect(LIST.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
     expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound','child workspace reclaimed')")).toBe(true);
+    // D-8282: the fifth member, the closing heir's sentence.
+    expect(LIST.test("NOT IN ('run closed','recipient came back, mail not re-sent')")).toBe(true);
     expect(LIST.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
 
     const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
     expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
-    // …and the one definition is still built from the four named constants, so
+    // …and the one definition is still built from the five named constants, so
     // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
-      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}','\$\{MAIL_CHILD_RECLAIMED_ERROR\}'\)`/);
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}','\$\{MAIL_CHILD_RECLAIMED_ERROR\}','\$\{MAIL_RECIPIENT_BACK_CLOSED_ERROR\}'\)`/);
     for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR',
-                        'MAIL_REBIND_SUPERSEDED_ERROR', 'MAIL_CHILD_RECLAIMED_ERROR']) {
+                        'MAIL_REBIND_SUPERSEDED_ERROR', 'MAIL_CHILD_RECLAIMED_ERROR', 'MAIL_RECIPIENT_BACK_CLOSED_ERROR']) {
       const defs = ALL.filter((f) =>
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
