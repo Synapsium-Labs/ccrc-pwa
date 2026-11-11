@@ -84,7 +84,8 @@ export type ItemAction =
   | { verb: 'linear-report'; migrationId: number }
   | { verb: 'linear-drift'; bindingId: number }
   | { verb: 'linear-initiatives'; workspaceId: string }
-  | { verb: 'linear-owner'; project: string };
+  | { verb: 'linear-owner'; project: string }
+  | ReleaseReviewAction;
 /** The five hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). */
 export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner';
 export type LinearItemAct = 'approve' | 'return' | 'put-back' | 'done' | 'hand' | 'keep' | 'check-again' | 'name';
@@ -105,6 +106,14 @@ export const LINEAR_ITEM_ACTS: Readonly<Record<LinearActionVerb, readonly Linear
 export type LinearItemAction = Extract<ItemAction, { verb: LinearActionVerb }>;
 export const isLinearItemAction = (a: ItemAction | null): a is LinearItemAction =>
   a !== null && Object.prototype.hasOwnProperty.call(LINEAR_ITEM_ACTS, a.verb);
+/** D-8293: a REVIEW child kept past its ceiling (`review-report-stale`, D-5942). `runId` is the run it reviewed, still open,
+ *  so that run's close settles the item as it settles every action item of the run; `reviewRunId` is the review run that
+ *  minted the child, and `sessionId` the child. The operator's `act` releases the review's report: the child reclaim sweep
+ *  stops keeping the workspace for that run, and the ordinary reclaim takes it, pinning its work first. There is no `decline`:
+ *  the coordinator keeps a report it still cites by withdrawing the item inside its hold. */
+/** The release-review action's verb, the one spelling a store query binds (D-8293). */
+export const RELEASE_REVIEW_VERB = 'release-review' as const;
+export interface ReleaseReviewAction { verb: 'release-review'; runId: number; reviewRunId: number; sessionId: string }
 /** The `end-run` action, and the one place its verb is spelled for the readers that ask which action an item carries. */
 export type EndRunAction = Extract<ItemAction, { verb: 'end-run' }>;
 export const isEndRunAction = (a: ItemAction | null): a is EndRunAction => a !== null && a.verb === 'end-run';
@@ -113,7 +122,12 @@ export const endRunAction = (runId: number, stuckReason: StuckReason | null): En
 export type CloseRefusedAction = Extract<ItemAction, { verb: 'close-refused' }>;
 export const isCloseRefusedAction = (a: ItemAction | null): a is CloseRefusedAction => a !== null && a.verb === 'close-refused';
 export const closeRefusedAction = (runId: number, doors: ItemDoors): CloseRefusedAction => ({ verb: 'close-refused', runId, doors });
-/** Can the operator's `act` abandon the run for this action: an `end-run`, or a `close-refused` with an abandoning door. */
+/** The `release-review` action (D-8293). */
+export const isReleaseReviewAction = (a: ItemAction | null): a is ReleaseReviewAction => a !== null && a.verb === 'release-review';
+export const releaseReviewAction = (runId: number, reviewRunId: number, sessionId: string): ReleaseReviewAction =>
+  ({ verb: 'release-review', runId, reviewRunId, sessionId });
+/** Can the operator's `act` abandon the run for this action: an `end-run`, or a `close-refused` with an abandoning door. A
+ *  `release-review` act abandons nothing. */
 export const actAbandons = (a: ItemAction | null): boolean =>
   a !== null && (a.verb === 'end-run' || (a.verb === 'close-refused' && a.doors.some((d) => ABANDONING_DOORS.includes(d))));
 /** Reads a stored action column; null when it is not an `ItemAction`. The one reader of the column's JSON. */
@@ -142,6 +156,12 @@ export function parseItemAction(text: string): ItemAction | null {
     return project === null ? null : { verb: 'linear-owner', project };
   }
   if (typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
+  if (o['verb'] === 'release-review') {
+    const review = o['reviewRunId'];
+    const session = o['sessionId'];
+    if (typeof review !== 'number' || !Number.isInteger(review) || typeof session !== 'string' || session === '') return null;
+    return releaseReviewAction(o['runId'], review, session);
+  }
   if (o['verb'] === 'close-refused') {
     const doors = o['doors'];
     if (!Array.isArray(doors) || doors.length === 0 || !doors.every(isItemDoor)) return null;
@@ -233,7 +253,7 @@ export interface ItemView {
    *  `{unreadable: true}`: the box cannot read the slot (a directory it cannot search, an I/O error; review 1418 F2), so
    *  whether a value is stored is not known: neither stored nor nothing stored. */
   secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null; tail: '' } | { unreadable: true } | null;
-  /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run` or `close-refused`. `null` on an ordinary item, and
+  /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run`, `close-refused` or `release-review` (D-8293). `null` on an ordinary item, and
    *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
   action?: ItemAction | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null; actor?: ItemActor }[];

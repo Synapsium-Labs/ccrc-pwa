@@ -808,6 +808,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     actItem: async (itemId: number, opts?: ReadOpts): Promise<CloseAnswer> => closeAnswerOf(await request(`/api/items/${itemId}/act`, { method: 'POST' }, opts)),
     /** `POST /api/items/:id/decline` (D-8076): Keep the run. The item closes as declined and its asker is told. Body-less. */
     declineItem: (itemId: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${itemId}/decline`),
+    /** `POST /api/items/:id/act` on a release-review item (D-8293): Release a review child kept past its ceiling. Body-less and
+     *  session only. It abandons nothing: the item closes done and the child reclaim sweep takes the workspace on its next passes. */
+    releaseReviewItem: (itemId: number) =>
+      postJson<{ readonly ok: true; readonly released: true; readonly item: ItemView }>(`/api/items/${itemId}/act`),
     /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING
      *  coordinator after the one they name has died. The wedge it opens is the
      *  one two readers create between them by answering the lowest-id

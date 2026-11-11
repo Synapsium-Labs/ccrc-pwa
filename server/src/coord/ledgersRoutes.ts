@@ -32,7 +32,7 @@ import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusa
 import {
   ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
+  actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
   nextItemState, outsideDocLink, secretAnswer, secretTailOf,
   type CoordinatorPresence, type GoalsRead, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
@@ -735,7 +735,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
 
   /**
    * `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10, "The act"): the operator's Abandon run on an end-request item, and Abandon or Abandon anyway on a refused-close item (Task 27,
-   * D-8077; `endRunItemRefusal` says which items may). Decline stays an end request's alone.
+   * D-8077; `endRunItemRefusal` says which items may), and Release on a release-review item (D-8293), which abandons nothing.
+   * Decline stays an end request's alone.
    * SESSION ONLY and BODY-LESS: no box token, and no field of the request is read, so a caller cannot name another run or an
    * archive (the abandon route's own rule, D-280). The whole act runs inside `withAbandon`'s coordMutex hold, in the spec's
    * order: read the item (open, not held, carrying an action that may abandon); run the abandon arm as the operator
@@ -749,7 +750,23 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!coord) return refuseRoute(reply, 'not-configured');
     const id = itemIdOf(req);
     if (id === null) return bad(reply, 'the item id is a positive integer');
-    if (coord.itemById(id) === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    const first = coord.itemById(id);
+    if (first === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    // D-8293: Release on a review child kept past its ceiling. The act IS the release (`CoordStore.reviewChildReleased` reads it
+    // back), so it is the item's own move and nothing else: no run moves and no fleet act runs here; the child reclaim sweep takes
+    // the workspace on its next passes, pinning its work first. No await: the item is read and moved in one step.
+    if (isReleaseReviewAction(first.action)) {
+      const now = deps.now();
+      const verdict = nextItemState(first.state, 'act', 'operator', { programmeHasOpenRun: true });
+      if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${first.state}, not open` });
+      if (first.heldUntil !== null && first.heldUntil > now) {
+        return refuseRoute(reply, 'not-open', { detail: `item ${id} is held and is not yet on the operator's list` });
+      }
+      const moved = coord.moveItem(id, 'act', 'operator', {}, now, { programmeHasOpenRun: true });
+      if (!moved.ok) return refuseRoute(reply, moved.why, { detail: `item ${id} cannot be released from here` });
+      deps.bus.emit('waiting');
+      return reply.code(200).send({ ok: true, released: true, item: viewOfItem(coord, moved.item, now, deps.presenceOf, secretOf) });
+    }
     return deps.withAbandon(coord, async (abandon) => {
       // Read again inside the hold: the item may have moved while this act waited for it.
       const item = coord.itemById(id);

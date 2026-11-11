@@ -35,12 +35,16 @@ import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
  *  only decides whether the sweep acts on that (`live`), the fact is always read so the shadow can say it. A read that
  *  throws reaches the pass's per-child catch, which keeps the child. */
 export function childReclaimReviewedRun(
-  coord: Pick<CoordStore, 'laterReviewClosedFor'>, reviewRunId: number, reviewedId: number, state: RunState, names: readonly string[],
+  coord: Pick<CoordStore, 'laterReviewClosedFor' | 'reviewChildReleased'>, reviewRunId: number, reviewedId: number, state: RunState,
+  names: readonly string[],
 ): Extract<ChildReclaimReviewedRunRead, { kind: 'run' }> {
   if (isTerminalRunState(state)) return { kind: 'run', state };
+  // D-8293: the operator's release on the ceiling's item. Carried only when it stands, so an unreleased read is unchanged.
+  const released = coord.reviewChildReleased(reviewRunId) ? { released: true } : {};
   const by = coord.laterReviewClosedFor(reviewedId, reviewRunId);
-  if (by === null) return { kind: 'run', state };
-  return { kind: 'run', state, superseded: { by, live: readSwitches(names)[CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER] === 'set' } };
+  if (by === null) return { kind: 'run', state, ...released };
+  return { kind: 'run', state, ...released,
+    superseded: { by, live: readSwitches(names)[CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER] === 'set' } };
 }
 
 /** A digest stand-in for the first, hold-free look at a held child (never sent anywhere). */

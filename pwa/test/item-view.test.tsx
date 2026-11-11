@@ -3,7 +3,7 @@
 // panel puts in the operator's words, and the button stays enabled so the operator can try again.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { ITEM_MOVE_REFUSALS, ANSWER_MAX, WAITS_ON_WORDS, endRunAction } from '../../shared/ledgers';
+import { ITEM_MOVE_REFUSALS, ANSWER_MAX, WAITS_ON_WORDS, endRunAction, releaseReviewAction } from '../../shared/ledgers';
 import { api } from '../src/lib/api';
 import { run as runFixture } from './rollupFixture';
 import { LEDGER_ROUTE_REFUSALS } from '../../shared/refusal';
@@ -501,6 +501,24 @@ describe('an end-request item in the item view (Task 24, spec 2026-11-04 §10; D
     cleanup();
     show(endItem({ state: 'done', closedAt: NOW }), { runs: [live] });
     expect(screen.queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
+  });
+});
+
+describe('a release-review item in the item view (D-8293)', () => {
+  const releaseItem = (over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
+    id: 51, runId: 7, title: 'Review workspace kept: Port the API · review of wave 1',
+    why: 'This review\'s workspace (demo-rv) is kept.\nNo coordinator on record', action: releaseReviewAction(7, 9, 'demo-rv'), ...over,
+  });
+
+  it('carries Release workspace and no Mark done; its confirm calls act and steps back', async () => {
+    const release = vi.spyOn(api, 'releaseReviewItem').mockResolvedValue({ ok: true, released: true, item: releaseItem({ state: 'done' }) });
+    const onActed = vi.fn();
+    show(releaseItem(), { runs: [], onActed });
+    expect(screen.queryByRole('button', { name: 'Mark done' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Release workspace' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Release workspace' }));
+    await waitFor(() => expect(release).toHaveBeenCalledWith(51));
+    await waitFor(() => expect(onActed).toHaveBeenCalledTimes(1));
   });
 });
 

@@ -5,6 +5,8 @@
 //   * A refused-close item (`ItemAction` verb `close-refused`, Task 27): one control per door it carries. "Abandon" and "Abandon
 //     anyway" open the same `AbandonSheet` (its confirm calls `/act`; "Abandon anyway" adds "The branch stays on disk."), "Hand to
 //     a coordinator" opens `ResumeSheet` at its third step, and the three links open the run, its worker or its coordinator.
+//   * A release-review item (`ItemAction` verb `release-review`, D-8293): a review child kept past its ceiling. "Release
+//     workspace", which opens `ReleaseReviewSheet` whose confirm calls `/act`. It needs no run among the runs heard.
 //   * A run whose review cap waits: "Lift cap", which opens the unchanged `LiftCapSheet`.
 // The sheets are mounted ONCE by whichever screen draws the controls (`useItemActs`), on `RunsScreen`'s idiom, and the controls
 // only tell it which target to open. A saved copy of the list draws the controls disabled (`enabled`), like every other act.
@@ -12,10 +14,13 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, cn } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
-import { isCloseRefusedAction, isEndRunAction, type CloseRefusedAction, type ItemDoor, type ItemView } from '../../../shared/ledgers';
+import {
+  isCloseRefusedAction, isEndRunAction, isReleaseReviewAction, type CloseRefusedAction, type ItemDoor, type ItemView, type ReleaseReviewAction,
+} from '../../../shared/ledgers';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { KeepRunSheet, type KeepRunTarget } from '../fleet/KeepRunSheet';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
+import { ReleaseReviewSheet, type ReleaseReviewTarget } from '../fleet/ReleaseReviewSheet';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { resumeHeirs } from '../fleet/resumeHeirs';
 import { inAppClick } from '../fleet/settingsText';
@@ -26,7 +31,7 @@ import { runPath, sessionPath } from '../lib/routes';
 import './ledgers.css';
 
 /** The controls' words, once. */
-export const ITEM_ACT_WORDS = { abandon: 'Abandon run', keep: 'Keep the run', lift: 'Lift cap' } as const;
+export const ITEM_ACT_WORDS = { abandon: 'Abandon run', keep: 'Keep the run', lift: 'Lift cap', release: 'Release workspace' } as const;
 
 /** The words of each door of a refused-close item (spec §12.2, A19). */
 export const ITEM_DOOR_WORDS: Readonly<Record<ItemDoor, string>> = {
@@ -53,6 +58,7 @@ export interface ItemActs {
   readonly hand: (item: ItemView, run: RunSummary) => void;
   readonly keep: (item: ItemView, runId: number) => void;
   readonly lift: (run: RunSummary) => void;
+  readonly release: (item: ItemView, action: ReleaseReviewAction) => void;
 }
 
 /** The run an end-request item asks to end, or `null` when it is not one, is not open, or the run is not among the runs heard. */
@@ -68,9 +74,16 @@ export const closeRefusedOf = (item: ItemView): CloseRefusedAction | null => {
   return isCloseRefusedAction(action) && item.state === 'open' ? action : null;
 };
 
-/** Does this item carry controls of its own (an end request, or a refused close)? The row then lays them beside itself. */
+/** The release-review action an open item carries, or `null` (D-8293). */
+export const releaseReviewOf = (item: ItemView): ReleaseReviewAction | null => {
+  const action = item.action ?? null;
+  return isReleaseReviewAction(action) && item.state === 'open' ? action : null;
+};
+
+/** Does this item carry controls of its own (an end request, a refused close, or a review child to release)? The row then lays
+ *  them beside itself. */
 export const carriesControls = (item: ItemView, runs: readonly RunSummary[] | null): boolean =>
-  endRunOf(item, runs) !== null || closeRefusedOf(item) !== null;
+  endRunOf(item, runs) !== null || closeRefusedOf(item) !== null || releaseReviewOf(item) !== null;
 
 /** The sheets and the targets that open them. Render `sheets` once, anywhere under the screen. `sessions` (the fleet
  *  rows heard, or `null`) lets the abandon sheet say whether the run's workspace is a child's. `onActed` is told when an
@@ -80,11 +93,13 @@ export function useItemActs(sessions: readonly FleetSession[] | null = null, onA
   const [hand, setHand] = useState<RunSummary | null>(null);
   const [keep, setKeep] = useState<KeepRunTarget | null>(null);
   const [lift, setLift] = useState<RunSummary | null>(null);
+  const [release, setRelease] = useState<ReleaseReviewTarget | null>(null);
   const acts: ItemActs = {
     abandon: (item, run, anyway = false) => setAbandon({ item: item.id, run, anyway }),
     hand: (_item, run) => setHand(run),
     keep: (item, runId) => setKeep({ itemId: item.id, runId }),
     lift: setLift,
+    release: (item, action) => setRelease({ itemId: item.id, sessionId: action.sessionId, reviewedRunId: action.runId }),
   };
   const sheets = (
     <>
@@ -96,6 +111,7 @@ export function useItemActs(sessions: readonly FleetSession[] | null = null, onA
                    heirs={hand === null || sessions === null ? [] : resumeHeirs(sessions, hand.project, hand.claimedBy, true)} />
       <KeepRunSheet target={keep} onClose={() => setKeep(null)} {...(onActed === undefined ? {} : { onDone: onActed })} />
       <LiftCapSheet run={lift} onClose={() => setLift(null)} />
+      <ReleaseReviewSheet target={release} onClose={() => setRelease(null)} {...(onActed === undefined ? {} : { onDone: onActed })} />
     </>
   );
   return { acts, sheets };
@@ -146,12 +162,24 @@ export function CloseRefusedControls({ item, runs, acts, enabled = true }: {
   );
 }
 
-/** Whatever controls an item carries: an end request's two, a refused close's doors, or nothing. */
+/** A release-review item's one control (D-8293), or nothing for any other item. */
+export function ReleaseReviewControls({ item, acts, enabled = true }: { item: ItemView; acts: ItemActs; enabled?: boolean }): ReactNode {
+  const action = releaseReviewOf(item);
+  if (action === null) return null;
+  return (
+    <div className="wl-acts" role="group" aria-label={`Workspace ${action.sessionId}`} data-item-acts={item.id}>
+      <Button variant="primary" size="fit" disabled={!enabled} onClick={() => acts.release(item, action)}>{ITEM_ACT_WORDS.release}</Button>
+    </div>
+  );
+}
+
+/** Whatever controls an item carries: an end request's two, a refused close's doors, a review child's Release, or nothing. */
 export function ItemControls(props: { item: ItemView; runs: readonly RunSummary[] | null; acts: ItemActs; enabled?: boolean }): ReactNode {
   return (
     <>
       <EndRunControls {...props} />
       <CloseRefusedControls {...props} />
+      <ReleaseReviewControls {...props} />
     </>
   );
 }

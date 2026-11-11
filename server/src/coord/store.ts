@@ -10840,6 +10840,12 @@ export class CoordStore {
   lastEndedEndRequest(runId: number, askerId: string) { return ledgers.lastEndedEndRequest(this.db, runId, askerId); }
   /** The refused-close items that still wait (held or not): the lane re-measures them each pass. */
   openCloseRefusedItems(): ItemRow[] { return ledgers.openCloseRefusedItems(this.db); }
+  /** D-8293: the release-review items that still wait, held or not (`ledgersStore.ts`). */
+  openReleaseReviewItems(): ItemRow[] { return ledgers.openReleaseReviewItems(this.db); }
+  /** D-8293: whether a release-review item was ever raised for this review run. */
+  releaseReviewItemRaised(reviewRunId: number): boolean { return ledgers.releaseReviewItemRaised(this.db, reviewRunId); }
+  /** D-8293: whether the operator released this review run's report (`ledgersStore.ts`, the one read of the fact). */
+  reviewChildReleased(reviewRunId: number): boolean { return ledgers.reviewChildReleased(this.db, reviewRunId); }
   /** The sessions of the review runs of a run: the workers who may ask to end the run they review. */
   reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
   setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
