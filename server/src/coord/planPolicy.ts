@@ -340,9 +340,14 @@ export function programmeEnd(f: {
   return f.openTickets === 0 ? 'done' : null;
 }
 
+/** THE one definition of a live epic for opening a run: any epic but a dropped one. A `done` epic that lists the wave still
+ *  takes a run (a later wave, or another run in a settled wave), and `attachTicketInTx` reopens it. The gate and the store
+ *  both ask this. */
+export const epicAdmitsRun = (state: EpicState): boolean => state !== 'dropped';
+
 /** The epic a wave's runs belong to: the first epic, in the order given, that lists the wave and is not dropped. */
 export function epicForWave(epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number): number | null {
-  return epics.find((e) => e.state !== 'dropped' && e.waves.includes(wave))?.id ?? null;
+  return epics.find((e) => epicAdmitsRun(e.state) && e.waves.includes(wave))?.id ?? null;
 }
 
 // ── Callers ────────────────────────────────────────────────────────────────────────────────────────────────────────────

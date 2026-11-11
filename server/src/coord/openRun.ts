@@ -1,7 +1,7 @@
 import { isPositiveDecimalSafeInteger, isRegistryId, shapeProgramSlug } from '../../../shared/api.js';
 import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../../shared/plan.js';
-import { epicForWave } from './planPolicy.js';
+import { epicAdmitsRun, epicForWave } from './planPolicy.js';
 import type { OpenRunTicket } from './planStore.js';
 
 /**
@@ -395,9 +395,11 @@ const GATES = [
     const slug = c.slug!, wave = c.b.wave as number, project = c.b.project as string;
     const p = c.f.plan(slug);
     if (p.ended) return { refused: 'plan-closed' };
-    const live = p.epics.filter((e) => e.state !== 'dropped');
+    const live = p.epics.filter((e) => epicAdmitsRun(e.state));
     if (live.length === 0) {
       if (p.required) return { refused: 'plan-missing' };
+      // A named ticket matches nothing in a programme with no live epic: say so rather than open without it.
+      if (typeof c.b.ticket === 'string') return { refused: 'ticket-unavailable' };
       c.ticket = null;
       return undefined;
     }

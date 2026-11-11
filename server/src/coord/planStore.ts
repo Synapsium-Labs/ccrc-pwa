@@ -13,7 +13,7 @@ import {
   type BindingKind, type BindingState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
   type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
-import { epicIsDone } from './planPolicy.js';
+import { epicAdmitsRun, epicIsDone } from './planPolicy.js';
 import { tx } from './tx.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -347,9 +347,11 @@ export function attachTicketInTx(
   if (run.ticketId !== null) return { ok: true };
   if (planEndOf(db, run.program) !== null) return { ok: false, refused: 'plan-closed' };
   const epic = epicById(db, ticket.epicId);
-  if (epic === null || epic.program !== run.program || (epic.state !== 'planned' && epic.state !== 'active')) {
+  if (epic === null || epic.program !== run.program || !epicAdmitsRun(epic.state)) {
     return { ok: false, refused: 'wave-epic-mismatch' };
   }
+  // A settled epic that lists the wave takes the run and is live again; it settles afresh when this run's ticket closes.
+  if (epic.state === 'done') db.prepare("UPDATE plan_epics SET state = 'active', doneAt = NULL WHERE id = ? AND state = 'done'").run(epic.id);
   let ticketId: number;
   if (ticket.kind === 'existing') {
     const t = ticketById(db, ticket.id);

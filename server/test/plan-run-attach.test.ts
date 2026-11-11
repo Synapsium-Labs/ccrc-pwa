@@ -87,6 +87,24 @@ describe('runs attach to tickets (D-8181)', () => {
     expect(ticketsOf(w).map((t) => t.runId)).toEqual([work.id]);
   });
 
+  it('a later wave still opens after its epic settled done, and the epic is live again', async () => {
+    const w = await world();
+    await declare(w, { home: 'project-a', epics: [epic('e1', [1, 2], { checkpoints: [] })] });
+    const a = (await open(w)).json() as { id: number };
+    for (const to of ['dispatched', 'closing', 'done'] as const) expect(w.coord.advance(a.id, to, 'test').ok, to).toBe(true);
+    expect(w.plan.planOf('prog-a').epics[0]!.state).toBe('done');
+    const b = await open(w, { ...OPEN, wave: 2 });
+    expect(b.statusCode, b.body).toBe(200);
+    expect(w.plan.planOf('prog-a').epics[0]!.state).toBe('active');
+    expect((await open(w, { ...OPEN, title: 'Again' })).statusCode).toBe(200);
+  });
+
+  it('a named ticket in a programme with no epics (planRequired 0) is ticket-unavailable', async () => {
+    const w = await world();
+    seedLegacyProgramme(w.coord.db, 'prog-a', 'project-a');
+    expect(refused(await open(w, { ...OPEN, ticket: 't1' }))).toEqual([409, 'ticket-unavailable']);
+  });
+
   it('a new slug with no row and no plan is plan-missing', async () => {
     const w = await world();
     expect(refused(await open(w))).toEqual([409, 'plan-missing']);
