@@ -44,6 +44,8 @@ import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { accountOpsFor } from './accounts/ops.js';
+import { TestboxAudit } from './testboxAudit.js';
+import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -318,6 +320,11 @@ deps.linearRefresher = linearRefresher;
 // routes (A14 onward).
 const accountAudit = new AccountAudit(coord.db);
 deps.accountAudit = accountAudit;
+// The test box ledger (D-8166) over the same coord.db, and the ONE `TestboxAdminOps` arm, chosen by `cfg.fleetMode` ONLY as the
+// account arm is: a remote fleet gets the agent's `testbox-admin` op, and the local spawner is never constructed there.
+const testboxAudit = new TestboxAudit(coord.db);
+deps.testboxAudit = testboxAudit;
+deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
 // The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);
@@ -377,8 +384,9 @@ push?.setMasker(masker);
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
 // coordination sweeps, which another branch holds (D-5620). The Linear journal's 365 days ride the same beat (D-7671).
 accountAudit.sweep(Date.now());
+testboxAudit.sweep(Date.now());
 linearJournal.sweep(Date.now());
-setInterval(() => { accountAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
+setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();

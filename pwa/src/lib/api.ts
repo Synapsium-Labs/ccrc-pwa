@@ -30,6 +30,7 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
@@ -998,6 +999,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     testboxToolsSync: () =>
       postJsonOr<{ readonly ok: boolean; readonly outcome?: unknown; readonly detail?: unknown } | 'unreadable'>(
         '/api/testbox/tools-sync', 'unreadable'),
+    /** `GET /api/testbox/admin` (test box connect plan TC12, D-8166): `{ok, status, events}`, session-gated. `useTestboxAdmin`
+     *  reads it through the shared status reader; the type here is the envelope only. */
+    testboxAdmin: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly status: unknown; readonly events: unknown }>('/api/testbox/admin', opts),
+    /** `POST /api/testbox/admin/:sub` (TC12): `{fields}` and nothing else; the answer is the re-read status, the ledger and what the act
+     *  may say. A 2xx the card cannot read is `unreadable` (it may have landed, so the card re-reads). `opts.signal` only: a write has no
+     *  time limit, because its outcome is never guessed. */
+    testboxAdminAct: async (sub: TestboxAdminSub, fields: TestboxAdminFields, opts?: ReadOpts) =>
+      (await (await request(`/api/testbox/admin/${sub}`, jsonInit({ fields }), opts)).json().catch(() => 'unreadable')) as
+        { readonly ok: true; readonly status: unknown; readonly events: unknown; readonly result?: unknown } | 'unreadable',
     /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
      *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
      *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */

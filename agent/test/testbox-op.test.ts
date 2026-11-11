@@ -160,7 +160,7 @@ describe('the testbox ops on the wire (D-7411, D-7555)', () => {
     const ops = (await c.hello() as AgentReady).ops!;
     expect(ops).toContain(TESTBOX_OP);
     expect(ops).toContain(TESTBOX_TOOLS_SYNC_OP);
-    expect(ops).toHaveLength(9);
+    expect(ops).toHaveLength(10);
     expect(ops.filter((w) => !CAP_WORD.test(w))).toEqual([]);
     expect(TESTBOX_TOOLS_SYNC_OP).toBe('testbox-tools-sync');
   });

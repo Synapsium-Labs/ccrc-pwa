@@ -39,6 +39,26 @@ export interface TestboxCounts {
   readonly byReason: Readonly<Partial<Record<TestboxFallbackId, number>>>;
 }
 
+/** What the connect surface adds to the block (`server/src/testbox.ts`'s `TestboxBlockAdmin`, D-8166): the connection, the host
+ *  key's state, the act in flight or last ended (read by the connect flow from its own route, so only checked as an object
+ *  here) and the parity record's word. Absent: an older server, whose card draws no connect flow and gates no switch. */
+export interface TestboxBlockAdmin {
+  readonly connected: boolean;
+  readonly hostKey: 'pinned' | 'changed' | 'none';
+  readonly act: Readonly<Record<string, unknown>> | null;
+  readonly parity: 'pass' | 'fail' | 'stale' | 'none';
+}
+
+const HOST_KEYS: Record<TestboxBlockAdmin['hostKey'], true> = { pinned: true, changed: true, none: true };
+const PARITY_WORDS: Record<TestboxBlockAdmin['parity'], true> = { pass: true, fail: true, stale: true, none: true };
+
+function readAdmin(v: unknown): TestboxBlockAdmin | undefined {
+  if (!isRecord(v) || typeof v.connected !== 'boolean') return undefined;
+  if (!isText(v.hostKey) || !own(HOST_KEYS, v.hostKey) || !isText(v.parity) || !own(PARITY_WORDS, v.parity)) return undefined;
+  if (!(v.act === null || isRecord(v.act))) return undefined;
+  return v as unknown as TestboxBlockAdmin;
+}
+
 /** The block, as the card reads it (`server/src/testbox.ts`'s `TestboxBlock`; its `cells` are not read: the card
  *  marks each differing cell through `versionCellsDiffer` itself). */
 export interface TestboxBlock {
@@ -50,6 +70,8 @@ export interface TestboxBlock {
   readonly host: TestboxHostMeasure | null;
   readonly box: StatusAnswer | null;
   readonly counts: TestboxCounts | null;
+  /** The connect surface; absent when the server has none. */
+  readonly admin?: TestboxBlockAdmin;
 }
 
 /** A landed read: the block, or `null` when the server's poll has not made its first pass. */
@@ -95,9 +117,11 @@ export function asTestboxBlock(v: unknown): TestboxBlock | null {
   const box = readBox(v.box);
   const counts = readCounts(v.counts);
   if (host === undefined || box === undefined || counts === undefined) return null;
+  const admin = own(v, 'admin') ? readAdmin(v.admin) : null;
+  if (admin === undefined) return null;
   return {
     state: v.state as TestboxState, reasons: v.reasons as string[], summary: v.summary, switch: v.switch as TestboxSwitch,
-    at: v.at, host, box, counts,
+    at: v.at, host, box, counts, ...(admin === null ? {} : { admin }),
   };
 }
 

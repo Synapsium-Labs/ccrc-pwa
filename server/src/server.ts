@@ -85,6 +85,7 @@ import { trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
+import { registerTestboxAdminRoutes } from './testboxAdmin.js';
 import { AuthAttempts } from './accounts/attempts.js';
 import { sessionIdHash } from './auth/sessions.js';
 import { resolveTitle } from './linear/resolve.js';
@@ -2170,6 +2171,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return { lane: read.lanes[id] ?? { kind: 'absent' }, disabled: read.disabled.has(id) };
     },
     sessionsOn: accountSessionsOn,
+  });
+  // The test box connect routes (test box connect plan TC12, D-8166), registered from their own file, which
+  // `auth-gate.test.ts`'s `ROUTES` reads by name: session-only behind the same account gate, on the `testbox-admin-v1` cap, a
+  // step-up on the four subs that put, replace or remove a credential or a pin. The ONE `TestboxAdminOps` arm `index.ts`
+  // built; a server with none (a test, a script) answers `fleetFailed` once the gate passes.
+  const testboxAdminOps = deps.testboxAdmin;
+  registerTestboxAdminRoutes(app, {
+    gate: accountGate,
+    ops: { run: async (sub, fields) => testboxAdminOps === undefined ? { kind: 'not-started' } : testboxAdminOps.run(sub, fields) },
+    audit: deps.testboxAudit,
+    fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
   });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated

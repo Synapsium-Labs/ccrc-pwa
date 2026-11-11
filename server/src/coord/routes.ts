@@ -97,7 +97,11 @@ import {
   type AdvanceOk, type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
   type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView, type LeaseDoorAnswer,
 } from '../../../shared/api.js';
-import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
+import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal, type RouteRefusal } from '../../../shared/refusal.js';
+import { TESTBOX_PARITY_REQUIRED_SENTENCE } from '../../../shared/api.js';
+import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
+import { knownFleetIdentity } from '../accounts/audit.js';
+import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
 import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
 import { landingAdvanceOf } from './landingEntry.js';
 import { landingEjectionAsk } from './landingLine.js';
@@ -2232,20 +2236,34 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null });
   });
   app.post('/api/testbox/switch', async (req, reply) => {
+    // D-8166 (TC13): every request writes one `switch` ledger row, by the session that asked.
+    const row = (outcome: TestboxActOutcome, code?: TestboxAdminCode | RouteRefusal): void =>
+      writeSwitchRow({ audit: deps.testboxAudit, fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity) }, switchActorOf(req, sessionAuth(req).device), outcome, code);
     const body = req.body as { on?: unknown } | null | undefined;
     if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      row('refused', 'bad-request');
       return refuseRoute(reply, 'bad-request');
     }
-    if (!ccdCan(deps.fleetState, 'testboxRemote')) return refuseRoute(reply, 'unsupported');
+    if (!ccdCan(deps.fleetState, 'testboxRemote')) { row('refused', 'unsupported'); return refuseRoute(reply, 'unsupported'); }
+    // `on` needs a passing parity record (spec §2.8, T9), read fresh; `off` is never gated.
+    const refused = body.on ? await switchOnGate(deps.testboxAdmin, deps.fleetState) : null;
+    if (refused !== null) { row(refused.audit, refused.code); return refuseRoute(reply, refused.word, refused.extra); }
     const res = await deps.runCcd(CCD_ARGV.testboxRemote(body.on ? 'on' : 'off'));
     // D-6840: the not-ran arm FIRST. A verb that never ran, or may not have, said nothing, so its forged code is not
     // read as the verb's refusal: the answer is the one not-ran sentence (`notRanSentence`), since whether the switch
     // moved is unmeasured, and the pass forced here re-reads the block's `switch`, the authoritative answer either way.
     if (res.ran === false) {
+      row('unknown', 'fleetFailed');
       void watcher?.testboxLane.sweep(true);
       return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd testbox-remote', res) });
     }
-    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    // The second layer of the same gate: ccd checks the files itself (and the verb's stale mark the status does not carry).
+    if (!res.ok && body.on && parityRefusedByCcd(res.stderr)) {
+      row('refused', 'parity-required');
+      return refuseRoute(reply, 'parity-required', { detail: TESTBOX_PARITY_REQUIRED_SENTENCE });
+    }
+    if (!res.ok) { row('failed', 'fleetFailed'); return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr }); }
+    row('ok');
     // `requested`, never the switch: the authoritative answer is the block's `switch`, re-read by a pass now.
     void watcher?.testboxLane.sweep(true);
     return reply.code(200).send({ ok: true, requested: body.on });

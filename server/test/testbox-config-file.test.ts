@@ -50,7 +50,7 @@ function values(root: string, n: 2 | 3 | 4): Record<string, string> {
     CCRC_TESTBOX_REGISTRY_PROXY: `127.0.0.${n + 1}:48${n}0`, CCRC_TESTBOX_REGISTRY_UPSTREAM: `https://registry${n}.testbox.invalid`,
     CCRC_TESTBOX_TMPFS: n === 2 ? 'on' : 'off', CCRC_TESTBOX_LOG_TAIL: `${n}${n}`, CCRC_TESTBOX_SESSION_RUNS: String(n),
     CCRC_TESTBOX_SERVICE_USER: `ccrc-tb-svc${n}`, CCRC_TESTBOX_LISTEN: `127.0.0.${n + 10}:74${n}0`,
-    CCRC_TESTBOX_SERVICE_TOKEN_FILE: path.join(root, `tb${n}-token`), CCRC_TESTBOX_UNIT_MAX: `${n}h`,
+    CCRC_TESTBOX_SERVICE_TOKEN_FILE: path.join(root, 'var', 'lib', `ccrc-tb-svc${n}`, `tb${n}-token`), CCRC_TESTBOX_UNIT_MAX: `${n}h`,
   };
 }
 const envFile = (v: Record<string, string>): string => Object.entries(v).map(([k, x]) => `${k}="${x}"`).join('\n') + '\n';
@@ -250,12 +250,14 @@ describe('a change to the box file is applied by a re-run: one reload and one re
     expect(r.code, r.stderr).toBe(0);
     const calls = sysLog(F.b).slice(n).map((a) => a.join(' ')).filter((l) => l.startsWith('systemctl '));
     // nftables.service runs already, so its enable --now starts nothing (no flush); the load step reloads the file and
-    // re-adds the running units' cgroups (D-7568), and the service restarts once.
+    // re-adds the running units' cgroups (D-7568), and the service restarts once (enabled again first, and the egress timer started:
+    // a box that was unpaired and paired anew keeps its marker, so a re-run must leave both enabled).
     expect(calls).toEqual([
       'systemctl daemon-reload', 'systemctl enable --now nftables.service',
       ...['tailscaled', 'systemd-resolved', 'systemd-timesyncd', 'ccrc-testbox', 'ccrc-testbox-tools'].map((u) => `systemctl show -P ControlGroup ${u}.service`),
       'systemctl start --no-block ccrc-testbox-egress.service',
-      'systemctl restart ccrc-testbox.service', 'systemctl start ccrc-testbox-egress.service',
+      'systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer', 'systemctl restart ccrc-testbox.service',
+      'systemctl start ccrc-testbox-egress.timer', 'systemctl start ccrc-testbox-egress.service',
     ]);
     expect(sysLog(F.b).slice(n).map((a) => a.join(' ')).filter((l) => l.startsWith('[nftables.service]'))).toEqual([]);
     expect(dropIns(F.b)).toEqual(expectedDropIns(v));
@@ -266,7 +268,7 @@ describe('a change to the box file is applied by a re-run: one reload and one re
     const m = sysLog(F.b).length;
     const again = await install(F.b, { staging: W.staging, env: F.env });
     expect(again.code, again.stderr).toBe(0);
-    expect(sysLog(F.b).slice(m).map((a) => a[0])).toEqual(['findmnt', 'xfs_info']);
+    expect(sysLog(F.b).slice(m).map((a) => a[0])).toEqual([...Array<string>(6).fill('getent'), 'findmnt', 'xfs_info']);   // one user query each for the service, push and install users and the three run users
     expect(readFileSync(path.join(F.b.root, 'etc', 'ccrc-testbox', 'installed'), 'utf8')).toContain(`release\t${BOOT_TAG}\n`);
   });
 });

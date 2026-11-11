@@ -8,6 +8,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type {
   AccountOpAnswer,
   AccountOpReq,
+  TestboxAdminOpAnswer,
+  TestboxAdminReq,
   AgentReady,
   AgentReq,
   CapsReq,
@@ -36,7 +38,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP, READDIR_MTIMES_OP,
+  ACCOUNT_OP, TESTBOX_ADMIN_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP, READDIR_MTIMES_OP,
   TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, type TestboxReq, type TestboxToolsSyncReq,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
@@ -72,6 +74,10 @@ import { makeTokenSyncSpawn, tokenSyncAnswer, tokenSyncEnv, type TokenSyncSpawn 
 import {
   accountSpawnBounds, buildAccountArgv, decodeAccountStdin, makeAccountOpSpawn, readFleetIdentity, type AccountOpSpawn,
 } from './accountop.js';
+import {
+  buildTestboxAdminArgv, makeTestboxAdminSpawn, testboxAdminSpawnArgv, testboxAdminSpawnBounds, type TestboxAdminSpawn,
+} from './testboxAdminOp.js';
+import type { TestboxAdminArgvRefusal } from '../../shared/testbox-admin.js';
 import type { AccountArgvRefusal } from '../../shared/account-argv.js';
 import { canonicalize, checkPath, checkReadTarget, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
@@ -93,6 +99,7 @@ export interface AgentOpts {
   spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (a process-group spawn) — tests inject a recorder; the `update` op's ONLY spawn
   spawnTokenSync?: TokenSyncSpawn; // default makeTokenSyncSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `token-sync` op's ONLY spawn
   spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
+  spawnTestboxAdmin?: TestboxAdminSpawn; // default makeTestboxAdminSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `testbox-admin` op's ONLY spawn
   diskSeams?: Partial<DiskSeams>; // default realDiskSeams() — tests inject the statfs/stat/mountinfo reads; the `disk` op's ONLY disk reads
   pressureSeams?: Partial<PressureSeams>; // default: the two /proc/pressure files — tests inject the text (#1170)
   backupSeams?: Partial<BackupSeams>; // default: this process's environment — tests inject CCRC_BACKUP_STATE_DIR (D-7858)
@@ -465,6 +472,7 @@ interface ConnCtx {
   spawnTokenSync: TokenSyncSpawn;
   tokenSyncGate: TokenSyncGate;
   spawnAccount: AccountOpSpawn;
+  spawnTestboxAdmin: TestboxAdminSpawn;
   diskSeams: Partial<DiskSeams>;
   pressureSeams: Partial<PressureSeams>;
   backupSeams: Partial<BackupSeams>;
@@ -783,6 +791,25 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, outcome));
       return;
     }
+    case 'testbox-admin': {
+      // Test box connect spec §2.1, §2.11 (plan TC11, D-8166). The FIFTH wire-triggered spawn outside the exec
+      // whitelist (agent/CLAUDE.md). `validateReq` has already built the argv once; it is built AGAIN here from the
+      // typed frame, and a caller bug that lets a bad one through answers the builder's refusal, never a spawn. The
+      // launcher is absolute, argv comes only from `buildTestboxAdminArgv` (no free argv), there is NO stdin, and the
+      // port hands the child an explicit {HOME, PATH, LANG}. Nothing here consults the exec whitelist, and nothing
+      // may. The log line names the op and the sub, never a field.
+      const built = testboxAdminSpawnArgv(req.sub, req.fields);
+      let outcome: TestboxAdminOpAnswer;
+      if (!built.ok) outcome = testboxAdminRefusal(ctx.cfg.home, built.why);
+      else {
+        const file = updateLauncherPath(ctx.cfg.home);
+        const spawned = await ctx.spawnTestboxAdmin(file, built.argv, testboxAdminSpawnBounds(req.sub, req.fields));
+        outcome = { ...spawned, fleetIdentity: readFleetIdentity(ctx.cfg.home) };
+      }
+      console.warn(`ccrc-agent: testbox-admin ${req.sub} -> ${outcome.kind}`);
+      send(ws, ok(req.id, outcome));
+      return;
+    }
     default: {
       // Exhaustive today (every `AgentReq` op above), but kept as a
       // defensive fallback rather than removed — a future protocol variant
@@ -825,6 +852,15 @@ export interface ReqRefusal {
  *  predates the op". Nothing was spawned. */
 export interface AccountReqRefusal { accountRefused: AccountArgvRefusal; id: number }
 
+/** `validateReq`'s answer for a `testbox-admin` frame the builder refused (connect spec §2.1): answered `ok: true` with
+ *  `kind: 'refused'` and the node's `fleetIdentity`; `bad-request` keeps meaning "this agent predates the op". */
+export interface TestboxAdminReqRefusal { testboxAdminRefused: TestboxAdminArgvRefusal; id: number }
+
+/** A `testbox-admin` refusal's payload, with the node's identity read at answer time. */
+function testboxAdminRefusal(home: string, why: TestboxAdminArgvRefusal): TestboxAdminOpAnswer {
+  return { kind: 'refused', why, fleetIdentity: readFleetIdentity(home) };
+}
+
 /** An `account` refusal's payload, with the node's identity read at answer time. */
 function accountRefusal(home: string, why: AccountArgvRefusal): AccountOpAnswer {
   return { kind: 'refused', why, fleetIdentity: readFleetIdentity(home) };
@@ -842,7 +878,7 @@ function accountRefusal(home: string, why: AccountArgvRefusal): AccountOpAnswer 
  * the actual gate: every op's required fields are checked here, by type,
  * before the frame is ever allowed to reach a handler.
  */
-function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | null {
+function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | TestboxAdminReqRefusal | null {
   if (typeof msg.id !== 'number') return null;
   const id = msg.id;
   switch (msg.op) {
@@ -970,6 +1006,17 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       };
       if (typeof msg.stdinB64 === 'string') req.stdinB64 = msg.stdinB64;
       return req;
+    }
+    case 'testbox-admin': {
+      // The ONE builder (`buildTestboxAdminArgv`, never a regex here). Every failure is a `TestboxAdminReqRefusal`
+      // carrying the builder's word; a frame with a key beyond `t`, `id`, `op`, `sub`, `fields` is malformed
+      // (`bad-request`); a frame that passes is retyped, so nothing past this point sees an unvalidated value.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op' && k !== 'sub' && k !== 'fields')) return null;
+      const built = buildTestboxAdminArgv(msg.sub, msg.fields);
+      if (!built.ok) return { testboxAdminRefused: built.why, id };
+      return {
+        t: 'req', id, op: 'testbox-admin', sub: msg.sub as TestboxAdminReq['sub'], fields: msg.fields as TestboxAdminReq['fields'],
+      } satisfies TestboxAdminReq;
     }
     default:
       return null;
@@ -1271,6 +1318,7 @@ function handleConnection(
     spawnTokenSync: opts.spawnTokenSync,
     tokenSyncGate,
     spawnAccount: opts.spawnAccount,
+    spawnTestboxAdmin: opts.spawnTestboxAdmin,
     diskSeams: opts.diskSeams,
     pressureSeams: opts.pressureSeams,
     backupSeams: opts.backupSeams,
@@ -1324,7 +1372,7 @@ function handleConnection(
       // D-7555: no field either) and `backup` (D-7858, no field). It is required in `ReadyFrame`, so it cannot
       // be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, BACKUP_OP, READDIR_MTIMES_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -1357,6 +1405,12 @@ function handleConnection(
       if ('accountRefused' in req) {
         console.warn(`ccrc-agent: account refused -> ${req.accountRefused}`);
         send(ws, ok(req.id, accountRefusal(opts.home, req.accountRefused)));
+        return;
+      }
+      // A `testbox-admin` frame the builder refused (connect spec §2.1): answered with the identity, nothing spawned.
+      if ('testboxAdminRefused' in req) {
+        console.warn(`ccrc-agent: testbox-admin refused -> ${req.testboxAdminRefused}`);
+        send(ws, ok(req.id, testboxAdminRefusal(opts.home, req.testboxAdminRefused)));
         return;
       }
       // Defense in depth: even a validated request could hit an unforeseen
@@ -1420,6 +1474,8 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     spawnTokenSync: rawOpts.spawnTokenSync ?? makeTokenSyncSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
     // The `account` op's port gets the same explicit environment, from the same configured home (spec §13.2).
     spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
+    // The `testbox-admin` op's port, the same explicit environment from the same configured home (connect spec §2.1).
+    spawnTestboxAdmin: rawOpts.spawnTestboxAdmin ?? makeTestboxAdminSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
     diskSeams: rawOpts.diskSeams ?? {},
     pressureSeams: rawOpts.pressureSeams ?? {},
     backupSeams: rawOpts.backupSeams ?? {},

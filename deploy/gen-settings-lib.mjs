@@ -6,7 +6,7 @@
 // The ccd-* sweeps never source ccd/ccrc, so they read ~/.ccrc/ccrc.env through a library file. That file is a
 // GENERATED COPY, never a move and never a hand-kept second reader: ccd/ccrc keeps `_ccrc_knob` and the byte-wise model
 // it reads through exactly where they are (moving them would shift every line citation and slice that names them), and
-// this script copies the `CCD_OS` detection block, the `BOX_ENV_FILE=` line, the `CCRC_SETTINGS=` line, the eight
+// this script copies the `CCD_OS` detection block, the `BOX_ENV_FILE=` line, the two test box overlay lines (`CCRC_TESTBOX_OVERLAY_FILE=`, `TB_OVERLAY_KEYS=(`), the `CCRC_SETTINGS=` line, the eight
 // functions of that closure and the checks two sweeps and ccd's spawn (D-8121) share with `ccrc settings`, each whole, out of it, in ccd/ccrc's order.
 // server/test/ccrc-settings-lib.test.ts holds the committed file equal to what this writes. Run it after any edit to that
 // block, to those two lines, to `_ccrc_knob`, to a `_box_*` function or to a check the library carries. It reads no environment.
@@ -76,6 +76,9 @@ export function settingsLibText(ccrcText) {
     platformBlock(lines),
     '',
     oneLine(lines, /^BOX_ENV_FILE=/, 'BOX_ENV_FILE='),
+    // D-8166: the test box overlay's path and the sixteen keys that read it, so the sweeps read the overlay as ccrc does.
+    oneLine(lines, /^CCRC_TESTBOX_OVERLAY_FILE=/, 'CCRC_TESTBOX_OVERLAY_FILE='),
+    oneLine(lines, /^TB_OVERLAY_KEYS=\(/, 'TB_OVERLAY_KEYS=('),
     '',
     oneLine(lines, /^CCRC_SETTINGS=\(/, 'CCRC_SETTINGS=('),
     '',

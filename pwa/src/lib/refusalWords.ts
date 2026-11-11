@@ -5,7 +5,8 @@ import type {
   AskRefuseCode, InterruptRefusal, MoveSkipWhy, QuestionDoorRefusal, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateRouteError,
 } from '../../../shared/api';
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
-import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
+import { SWAP_REFUSALS, TESTBOX_ADMIN_ROUTE_REFUSALS, TESTBOX_PARITY_REQUIRED_SENTENCE, type SwapRefusal, type TestboxAdminRouteRefusal } from '../../../shared/api';
+import { TESTBOX_ADMIN_CODE_SENTENCE } from '../../../shared/testbox-admin';
 import type { LinkingRefusal } from '../../../shared/linking';
 import type { RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX } from '../../../shared/ledgers';
@@ -735,3 +736,42 @@ export const NOTIFICATION_QUESTION_DOOR_TEXT: Readonly<Record<QuestionDoorRefusa
 export const SET_ACCOUNT_POOLS_REFUSAL_TEXT: Readonly<Record<SetAccountPoolsRefuseCode, string>> = {
   'multi-pool-not-supported': 'An account can be in only one pool.',
 };
+
+/**
+ * The test box connect routes' words (D-8166; `GET /api/testbox/admin`, `POST /api/testbox/admin/:sub`,
+ * `POST /api/testbox/switch`), one fixed sentence per word and none naming a value. `testbox-admin-refused` carries a closed
+ * `code` beside it, said through `TESTBOX_ADMIN_CODE_SENTENCE`; the word's own sentence is the floor for a code this build
+ * does not know. `auth-off` and `insecure-origin` are the account gate's two dark answers: the card says sign-in is required
+ * and draws no button. Keyed by the vocabulary the routes answer with, so a word gained without a sentence reads `null`
+ * here and the card's own floor, never a bare slug.
+ */
+export const TESTBOX_ROUTE_TEXT: Readonly<Record<TestboxAdminRouteRefusal | 'auth-off' | 'insecure-origin' | 'unsupported' | 'unauthenticated' | 'outcome-unknown' | 'fleetFailed' | 'bad-request', string>> = {
+  'testbox-admin-refused': 'The test box refused that.',
+  'parity-required': TESTBOX_PARITY_REQUIRED_SENTENCE,
+  'auth-off': 'Sign-in is off on this console, and connecting a test box needs it.',
+  'insecure-origin': 'This console is not served over HTTPS, and connecting a test box needs it.',
+  'unsupported': 'The fleet host is too old to connect a test box from here. Update it first.',
+  'unauthenticated': 'Sign in again to go on.',
+  'outcome-unknown': 'No answer came back in time, so it is not known whether that went through.',
+  'fleetFailed': 'The fleet host could not do that just now.',
+  'bad-request': 'The server did not accept that request. Reload the page and try again.',
+};
+
+/** The two words that mean the account gate is dark (`auth-off`, `insecure-origin`): the card draws no button for them. */
+export const TESTBOX_GATE_DARK_TEXT: Readonly<Record<'auth-off' | 'insecure-origin', string>> = {
+  'auth-off': TESTBOX_ROUTE_TEXT['auth-off'],
+  'insecure-origin': TESTBOX_ROUTE_TEXT['insecure-origin'],
+};
+
+/** A failed test box call in its words, or `null` for a refusal this build does not name (the caller's floor speaks). The
+ *  closed `code` of `testbox-admin-refused` wins over the word; both are read off the body, never branched on a literal. */
+export function testboxRouteText(err: unknown): string | null {
+  if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
+    const body = err.body as { error?: unknown; code?: unknown };
+    if (body.error === TESTBOX_ADMIN_ROUTE_REFUSALS[0] && typeof body.code === 'string') {
+      const said = refusalText(new ApiError(err.status, { error: body.code }), TESTBOX_ADMIN_CODE_SENTENCE);
+      if (said !== null) return said;
+    }
+  }
+  return refusalText(err, TESTBOX_ROUTE_TEXT);
+}

@@ -15,6 +15,11 @@
 //     queue, fallbacks), the versions table open under it, the rest behind the disclosure;
 //   * wide: the same, with the versions table and the pristine-installs table open side by side.
 // Every table is one shape (`TestboxTable`), so the four are one block written once.
+//
+// THE CONNECT SURFACE (D-8166, TC15). A block that carries `admin` (a server with the connect routes) mounts `TestBoxConnect`
+// above the card while no box is connected or parity has not passed, and draws the switch's On disabled, with the sentence
+// that says why, until the record passes: the server refuses `{on: true}` the same way (`parity-required`), and turning the
+// switch OFF is never gated. A block without `admin` is an older server and is drawn as it always was.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, RadioFieldset, Section, Skeleton, elapsedWords, useDesk, useMediaQuery, useNow } from '@ccrc/ui';
@@ -25,7 +30,11 @@ import { ApiError, api, apiErrorText } from '../lib/api';
 import { isRecord } from '../lib/wire';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, UNCONFIRMED_TEXT, useResultLine } from './settingsText';
+import { TestBoxConnect } from './TestBoxConnect';
+import { TestBoxManage } from './TestBoxManage';
+import { TESTBOX_CONNECT_TEXT } from './testboxAdminWords';
 import type { TestboxBlock, TestboxPoll } from './useTestboxView';
+import type { BoxSettingRow } from '../../../shared/api';
 
 /** The wide band's query: the width at which the shell's other wide layouts start (`tokens.css`'s 1600). */
 export const TESTBOX_WIDE_QUERY = '(min-width: 1600px)';
@@ -122,7 +131,15 @@ function useBand(): TestboxBand {
   return !desk ? 'phone' : wide ? 'wide' : 'laptop';
 }
 
-export function TestBoxSection({ poll }: { poll: TestboxPoll }): ReactNode {
+export interface TestBoxSectionProps {
+  poll: TestboxPoll;
+  /** The fleet host's own settings rows (the Settings page's nodes), for the connected card's Settings; null when not reported. */
+  fleetRows?: readonly BoxSettingRow[] | null;
+  /** A fleet-side settings save landed: the page re-reads its nodes. */
+  onFleetChanged?: () => void;
+}
+
+export function TestBoxSection({ poll, fleetRows = null, onFleetChanged }: TestBoxSectionProps): ReactNode {
   const { view, failure } = poll;
   const card = SETTINGS_CARDS.automation.testbox;
   const band = useBand();
@@ -131,7 +148,7 @@ export function TestBoxSection({ poll }: { poll: TestboxPoll }): ReactNode {
       {failure === 'not-configured' ? (
         <p className="settings-note">{COLLECT_SECTION_TEXT.notAvailable}</p>
       ) : view !== null && view.block !== null ? (
-        <TestboxBody block={view.block} stale={failure !== null} poll={poll} band={band} />
+        <TestboxBody block={view.block} stale={failure !== null} poll={poll} band={band} fleetRows={fleetRows} onFleetChanged={onFleetChanged} />
       ) : view !== null ? (
         <p className="settings-note">{T.unpolled}</p>
       ) : failure !== null ? (
@@ -151,13 +168,20 @@ function refusalText(err: unknown): string {
   return detail ?? apiErrorText(err);
 }
 
-function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale: boolean; poll: TestboxPoll; band: TestboxBand }): ReactNode {
+function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
+  block: TestboxBlock; stale: boolean; poll: TestboxPoll; band: TestboxBand; fleetRows: readonly BoxSettingRow[] | null; onFleetChanged?: () => void;
+}): ReactNode {
   const now = useNow(30_000);
   const [switching, setSwitching] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const switchLine = useResultLine();
   const syncLine = useResultLine();
   const box = block.box;
+  const admin = block.admin;
+  const flow = admin !== undefined && (!admin.connected || admin.parity !== 'pass');
+  const waitsForParity = admin !== undefined && admin.parity !== 'pass' && block.switch !== 'on';
+  // A Replace's disconnect landed: the flow that mounts next opens at step 1 (TC16, spec §2.9).
+  const [replacing, setReplacing] = useState(false);
 
   const flip = (on: boolean): void => {
     if (switching) return;
@@ -211,6 +235,12 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
   return (
     <>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{T.stale}</p>}
+      {flow && <TestBoxConnect band={band} onChanged={poll.reload} begin={replacing}
+        sync={admin === undefined ? undefined : `${admin.connected}:${admin.hostKey}:${admin.parity}:${admin.act?.sub ?? ''}:${admin.act?.outcome ?? ''}`} />}
+      {admin?.connected === true && (
+        <TestBoxManage band={band} onChanged={poll.reload} onReplaced={() => setReplacing(true)} fleetRows={fleetRows} onFleetChanged={onFleetChanged}
+          boxRelease={box?.release ?? null} runsInProgress={box?.runs.inProgress ?? 0} />
+      )}
       <div className="testbox-head" data-testbox="head">
         <div className="testbox-switch" data-testbox="switch">
           <RadioFieldset<'on' | 'off'>
@@ -219,9 +249,10 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
             value={block.switch === 'unknown' ? null : block.switch}
             disabled={switching}
             onPick={(v) => flip(v === 'on')}
-            options={[{ value: 'on', label: T.on }, { value: 'off', label: T.off }]}
+            options={[{ value: 'on', label: T.on, disabled: waitsForParity }, { value: 'off', label: T.off }]}
           />
           <p className="settings-note">{T.switchNote}</p>
+          {waitsForParity && <p className="settings-note" data-testbox="switch-waits">{TESTBOX_CONNECT_TEXT.switchWaits}</p>}
           {block.switch === 'unknown' && <p className={SETTINGS_AMBER_NOTE}>{T.switchUnknown}</p>}
           <ResultLine line={switchLine.line} />
         </div>

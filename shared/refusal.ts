@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, TestboxAdminRouteRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import type { LinkingRefusal } from './linking.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
@@ -214,6 +214,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | EndRequestRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
+  // The test box connect routes (D-8166): their one word of their own.
+  | TestboxAdminRouteRefusal
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
   | LinearProxyRefusal
   // The write routes (accounts plan Task A17, D-7739): their words of their own.
@@ -316,7 +318,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // refuses to act on now (the lock held, the last placeable lane, a verb's own refusal: the request was well formed),
   // and 502 for an outcome the server could not learn, the status `fleetFailed` answers for a fleet that did not
   // answer, because the box may have acted and the cure is the re-read, never the caller's retry.
-  'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'outcome-unknown': 502, 'check-unrecorded': 502,
+  'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'testbox-admin-refused': 409, 'parity-required': 409, 'outcome-unknown': 502, 'check-unrecorded': 502,
   // The write routes (accounts plan Task A17, D-7739): CHOSEN, not measured — new words, on the lane routes' rule. 400
   // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
   // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry

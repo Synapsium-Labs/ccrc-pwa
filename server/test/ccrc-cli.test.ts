@@ -225,7 +225,7 @@ describe('ccrc: dispatch and usage', () => {
     // owns what it does, this line owns that an operator can find it.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|settings\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\|test\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|settings\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\|test\|testbox-admin\}/);
     // `settings` joined it with the box settings view (D-6914): the read-only verb that prints and records what the box's
     // settings resolve to, by display class. It sits after `coordination-snapshot`, which `install-census` pins right after `backup`.
     // `server/test/ccrc-settings-verb.test.ts` owns what it does; this row owns that an operator can find it.

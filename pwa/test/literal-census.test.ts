@@ -129,6 +129,13 @@ const duplicated = (m: Map<string, string[]>): string[] =>
     .map(([k]) => k)
     .sort();
 
+/** The reason the test box's shape sentences are two literals (D-8166). */
+const TESTBOX_SHAPE_COPY = 'TWO TABLES, ONE ORIGIN, AGREEING TODAY. `TESTBOX_SHAPE_SENTENCE` (shared/testbox-admin.ts) is the L0 copy of '
+  + '`_tb_shape_says` (ccd/testbox-knobs), one sentence per shape class, and `BOX_SETTING_REFUSAL_WORDS` (shared/api.ts) is the closed list '
+  + 'of words a box-settings row\'s `why` may be, every sentence `_set_says` prints. `readTestboxAdminStatus` accepts the union of the two '
+  + '(`REFUSAL_SENTENCES`), and `server/test/box-settings-table.test.ts` holds the second to the bash it was read from, so each table '
+  + 'has its own owner and a fold would make a reword of one a silent reword of the other.';
+
 /** Every cross-file literal, with the reason it is still two literals.
  *
  *  An entry is a decision, not an exemption: either these two sentences are
@@ -148,6 +155,19 @@ const REGISTERED: Record<string, string> = {
     + 'section\'s rewording silently reword the other. The repo\'s own pattern '
     + 'is a copy table per surface (`ABANDON_COPY`, `RECLAIM_COPY`), and this '
     + 'is that pattern costing one duplicated sentence.',
+  // D-8166 (test box connect, TC1; found by TC15's run of this census, which no earlier task of the plan ran): the shape sentences of
+  // the test box's own settings, spelled once in `shared/testbox-admin.ts` and once in `shared/api.ts`.
+  ...Object.fromEntries([
+    'a URL such as https://testbox.invalid',
+    'a list of file name patterns',
+    'a whole number from 1 to 99',
+    'a whole number with a K, M or G suffix',
+    'a whole number with an s, m, h or d suffix',
+    'an absolute path, or one starting ~/, with no . or .. part',
+  ].map((sentence) => [sentence, TESTBOX_SHAPE_COPY])),
+  'not 32 lowercase hex characters': 'TWO READERS, TWO COPIES, agreeing today. `runId` (shared/testbox.ts) refuses a run id and `actState` '
+    + '(shared/testbox-admin.ts) an act id, each its own reader of its own wire (the shared readers say each refusal in its own file, '
+    + 'which names the field), so folding them would make one reader\'s rewording silently reword the other.',
 };
 
 describe('literal census', () => {
