@@ -2855,9 +2855,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */
   const ccd502 = (reply: FastifyReply, res: { stderr: string }, extra: Record<string, unknown> = {}) =>
     reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr), ...extra });
-  const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
+  const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv, extra: Record<string, unknown> = {}) => {
     const res = await deps.runCcd(argv);
-    return res.ok ? { ok: true } : ccd502(reply, res);
+    return res.ok ? { ok: true, ...extra } : ccd502(reply, res, extra);
   };
 
   /**
@@ -3628,10 +3628,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const movedSpread = claims.moved !== null ? { moved: claims.moved } : {};
     // The argv is `stopArgvFor`'s (above), shared with the archive door: `--surface` and the two id shapes are argued
     // there.
-    const res = await deps.runCcd(stopArgvFor(id, rec, identity));
     // A stop that failed after the claims moved says so (`moved`), as the archive door's answers do.
-    if (!res.ok) return ccd502(reply, res, movedSpread);
-    return { ok: true, ...movedSpread };
+    return runCcdOr502(reply, stopArgvFor(id, rec, identity), movedSpread);
   });
 
   // Attachment upload: stage the bytes under ~/.cc-clips/<id>/ and return the
