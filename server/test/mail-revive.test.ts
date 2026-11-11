@@ -11,7 +11,9 @@ import type { Runner } from '../src/exec.js';
 import type { Deps } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore, MAIL_REPLAY_CEILING_ERROR, MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
+import {
+  CoordStore, MAIL_RECIPIENT_BACK_CLOSED_ERROR, MAIL_REPLAY_CEILING_ERROR, MAIL_RUN_CLOSED_ERROR, toRunSummary,
+} from '../src/coord/store.js';
 import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { parkExpiredError, parkNoticeSubject, sessionDeadError } from '../src/coord/delivery.js';
 import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS, revivable } from '../src/coord/mailRevive.js';
@@ -27,7 +29,7 @@ import type { PushPayload } from '../src/push.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { quietAtTestEnd } from './laneQuiet.js';
-import { okRun } from './coordReadHelpers.js';
+import { okRun, okRuns } from './coordReadHelpers.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -356,11 +358,14 @@ describe('reviveParkedDeliveries: one mail, one live copy per role (the dedupe b
 
   it('a copy that is delivered and not acked is live: it holds the revive too', () => {
     const s = store();
-    const { runId, mailId, copy } = handedOver(s);
+    const { runId, parked, mailId, copy } = handedOver(s);
     s.markDelivered(copy, NOW + 2);
     expect(s.reclaimProgram(runId, COORD, NOW + 3, null)).toMatchObject({ ok: true });
-    expect(s.reviveParkedDeliveries([COORD]).revived).toEqual([]);
-    expect(deliveriesOf(s, mailId)).toHaveLength(2);
+    const { revived, closed } = s.reviveParkedDeliveries([COORD]);
+    expect(revived).toEqual([]);
+    // D-8282: the live copy carries the mail, so the declined park is closed, not left beside it.
+    expect(closed.map((c) => c.from)).toEqual([parked]);
+    expect(deliveriesOf(s, mailId).filter((x) => x.state !== 'rejected').map((x) => x.id)).toEqual([copy]);
   });
 
   it('two parks of one mail to one chair revive once, in the one sweep, from the older', () => {
@@ -529,6 +534,109 @@ describe('revivable: "reads live" is the park arm\'s own predicate', () => {
   });
 });
 
+// ── D-8282: a park the revive declines is closed once its recipient is back ────────────────────────────────────────
+// A lifecycle park was written while its recipient read dead; the recipient reading live again is a later incarnation
+// of the session. The revive decides what comes back to it, and every reason it declines is permanent (an earlier wave,
+// a notice its owner re-sends, the role moved on, another copy carries the mail), so a declined park would count in
+// `unreadMail` for the current incarnation for ever. It is closed instead: a closing heir names it in `revivedFrom`,
+// born `rejected` with its own reason, and both rows stay in the record.
+
+describe('a park the revive declines is closed once its recipient is back (D-8282)', () => {
+  /** A brief from an earlier wave, parked while the worker read dead, then a re-dispatch: the restarted-session case. */
+  const staleBrief = (s: CoordStore): { runId: number; d: number } => {
+    const runId = dispatchedRun(s);
+    const d = send(s, { runId, subject: 'wave-brief' });
+    park(s, d);
+    vi.setSystemTime(NOW + 10);
+    s.markDispatched(runId, WORKER, null, null, true, NOW + 10);
+    return { runId, d };
+  };
+
+  it('the restarted session: its earlier wave\'s park stops counting, and stays in the record with its reason', () => {
+    const s = store();
+    const { runId, d } = staleBrief(s);
+    const before = row(s, d);
+    expect(unread(s, runId)).toBe(1);
+
+    const { revived, closed } = s.reviveParkedDeliveries([WORKER]);
+
+    expect(revived).toEqual([]);
+    expect(closed).toHaveLength(1);
+    const c = closed[0]!;
+    expect(c).toMatchObject({ from: d, mailId: before.mailId, toId: WORKER });
+    expect(row(s, c.closing)).toMatchObject({ mailId: before.mailId, toId: WORKER, state: 'rejected',
+      rejectCode: 'undeliverable', lastError: MAIL_RECIPIENT_BACK_CLOSED_ERROR, revivedFrom: d });
+    expect(row(s, d), 'the parked row itself is never written').toEqual(before);
+    expect(unread(s, runId)).toBe(0);
+    expect(s.outstandingMailFor(WORKER)).toEqual([]);
+    expect(s.abandonedCount(WORKER)).toBe(0);
+    expect(s.runHealth([runId], []).get(runId)!.mailParked).toBe(0);
+    // Never dropped: the history read holds the park and the close, each with its reason.
+    const history = s.mailForRecipient(WORKER);
+    expect(history.map((m) => [m.deliveryId, m.lastError]).sort())
+      .toEqual([[d, ORPHAN], [c.closing, MAIL_RECIPIENT_BACK_CLOSED_ERROR]].sort());
+    // Closed once: a second sweep closes nothing more and revives nothing.
+    expect(s.reviveParkedDeliveries([WORKER])).toEqual({ revived: [], closed: [] });
+    expect(deliveriesOf(s, before.mailId)).toHaveLength(2);
+  });
+
+  it('a notice the revive never re-sends is closed too, and the console\'s unread count (the board\'s wire row) drops', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    const notice = send(s, { runId, fromId: 'operator', subject: `${STALL_CHECK_PREFIX} still there?` });
+    park(s, notice);
+    // `GET /api/runs` ships `runs({includeClosed:true})` through `toRunSummary`; the console renders `unreadMail`.
+    const board = (): number => toRunSummary(okRuns(s.runs({ includeClosed: true })).find((r) => r.id === runId)!).unreadMail;
+    expect(board()).toBe(1);
+    expect(s.reviveParkedDeliveries([WORKER]).closed.map((c) => c.from)).toEqual([notice]);
+    expect(board()).toBe(0);
+  });
+
+  it('a still-current park keeps counting: its recipient not back, or a park that is not a lifecycle park', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    const dead = send(s, { runId });
+    park(s, dead);
+    // Recipient still dead (not in the live set): nothing closes, the mail still counts.
+    expect(s.reviveParkedDeliveries([])).toEqual({ revived: [], closed: [] });
+    expect(s.reviveParkedDeliveries(['lane-a-bystander'])).toEqual({ revived: [], closed: [] });
+    expect(unread(s, runId)).toBe(1);
+    // The 24 h ceiling reject, the replay-ceiling park and a purged recipient were never a dead incarnation: the
+    // recipient reading live closes none of them (spec 2026-10-20 §3.1 keeps them counting until the run closes).
+    const s2 = store();
+    const run2 = dispatchedRun(s2);
+    for (const e of [parkExpiredError('enter-ignored'), MAIL_REPLAY_CEILING_ERROR, 'recipient not in registry']) {
+      park(s2, send(s2, { runId: run2 }), e);
+    }
+    expect(s2.reviveParkedDeliveries([WORKER])).toEqual({ revived: [], closed: [] });
+    expect(unread(s2, run2)).toBe(3);
+  });
+
+  it('a current park is revived, not closed, and a closed run\'s park is left alone', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    const d = send(s, { runId });
+    park(s, d);
+    expect(s.reviveParkedDeliveries([WORKER]).closed).toEqual([]);
+    expect(unread(s, runId)).toBe(1);   // the heir, outstanding
+
+    const s2 = store();
+    const { runId: run2, d: stale } = staleBrief(s2);
+    expect(s2.advance(run2, 'failed', 'operator')).toMatchObject({ ok: true });
+    expect(s2.reviveParkedDeliveries([WORKER]).closed).toEqual([]);
+    expect(deliveriesOf(s2, row(s2, stale).mailId)).toHaveLength(1);
+  });
+
+  it('the closing heir is never revived, and a rebind re-queues neither it nor its parent', () => {
+    const s = store();
+    const { runId, d } = staleBrief(s);
+    expect(s.reviveParkedDeliveries([WORKER]).closed).toHaveLength(1);
+    expect(s.reviveParkedDeliveries([WORKER, COORD])).toEqual({ revived: [], closed: [] });
+    expect(s.bindSession(runId, 'lane-a-new-worker')).toMatchObject({ rebound: true, reissued: 0 });
+    expect(deliveriesOf(s, row(s, d).mailId)).toHaveLength(2);
+  });
+});
+
 // ── the mail pass ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 const seedRegistry = (home: string, id: string): void => {
@@ -578,6 +686,27 @@ describe('sweepMail: the revive is its first act', () => {
     expect(told).toHaveLength(1);
     expect(told[0]).toMatchObject({ sessionId: SENDER });
     expect(told[0]!.title).toContain('revived');
+  });
+
+  it('D-8282: a restarted recipient\'s earlier-wave park is closed by the sweep, and the run stops counting it', async () => {
+    const { w, s, home } = await watcher();
+    seedRegistry(home, WORKER);
+    seedSupervised(home, WORKER);
+    const runId = dispatchedRun(s);
+    const d = send(s, { runId });
+    park(s, d);
+    s.markDispatched(runId, WORKER, null, null, true, Date.now() + 1);   // the next wave, while the worker read dead
+    vi.setSystemTime(Date.now() + 2);
+    expect(unread(s, runId)).toBe(1);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await w.sweepMail();
+      const all = deliveriesOf(s, row(s, d).mailId);
+      expect(all.map((x) => [x.state, x.revivedFrom])).toEqual([['rejected', null], ['rejected', d]]);
+      expect(row(s, all[1]!.id).lastError).toBe(MAIL_RECIPIENT_BACK_CLOSED_ERROR);
+      expect(unread(s, runId)).toBe(0);
+      expect(log.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(`delivery ${d} `))).toHaveLength(1);
+    } finally { log.mockRestore(); }
   });
 
   it('a recipient the park arm still reads dead (orphan: no heartbeat), or one the registry does not list, gets nothing', async () => {

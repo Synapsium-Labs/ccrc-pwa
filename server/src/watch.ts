@@ -7693,7 +7693,9 @@ export class FleetWatcher {
     const liveIds = records
       .filter((r) => revivable(lifecycleInputFor(r, false, now), { listed: true, registryPresent: true }))
       .map((r) => r.id);
-    const { revived } = store.reviveParkedDeliveries(liveIds);
+    const { revived, closed } = store.reviveParkedDeliveries(liveIds);
+    // D-8282: a declined park closed for its recipient's later incarnation; both rows stay in the record.
+    for (const c of closed) console.log(`ccrc-server: mail: delivery ${c.from} to ${c.toId} closed on its return (${c.closing})`);
     for (const r of revived) {
       // Told once: the heir is minted once per parent (`HAS_HEIR_SQL`), and the tag names the parent.
       this.pushSenderNotice(store, r.mailId, r.toId,
