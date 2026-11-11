@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { EXEC_KINDS } from '../../shared/roster.js';
 
-/** `shared/roster.ts` and `shared/roster-json.mjs` each declare their own
- *  `EXEC_KINDS`, by hand, and nothing compares them. `single-definition.test.ts`
- *  scans `/\.tsx?$/` over four TypeScript roots, so the `.mjs` copy is invisible
- *  to it. The asymmetry is what makes this worth a suite of its own:
+/** `exec.kind`'s closed set has ONE definition: `EXEC_KINDS` in `shared/roster.ts`, an exported `as const` array
+ *  that every TypeScript reader imports (D-8192). `shared/roster-json.mjs` keeps a mirror only because the bare-Node
+ *  validator (`gen-wrappers`, `account-op`, `gen-accounts`) cannot import TypeScript, and this suite pins that mirror
+ *  equal to the definition IN ORDER. Order matters because the refusal both parsers print names the kinds in the
+ *  set's own order. The asymmetry is what makes this worth a suite of its own:
  *
  *    - a kind in the PARSER but not the mirror -> `ccrc install` refuses a
  *      roster the server boots on. Loud, and recoverable.
@@ -15,32 +17,46 @@ import { fileURLToPath } from 'node:url';
  *      green deploy. That is the outcome the mirror's own header calls the
  *      worst available one.
  *
- *  So this extracts both literals from source text and compares the SETS. It
- *  deliberately does not import either module: importing `shared/roster.ts`
- *  would give the value, not the declaration, and a value cannot show that the
- *  two files were written to agree. */
+ *  The mirror is read from its source text (its declaration is what must agree), the definition is imported (it is
+ *  the value every TypeScript reader gets). */
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-function execKindsIn(file: string): string[] {
-  const src = readFileSync(path.join(root, file), 'utf8');
-  const m = src.match(/EXEC_KINDS[^=]*=\s*new Set\(\[([^\]]*)\]\)/);
-  if (m === null) throw new Error(`no EXEC_KINDS declaration found in ${file} - re-read it`);
-  return [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!).sort();
+function mirroredExecKinds(): string[] {
+  const src = readFileSync(path.join(root, 'shared/roster-json.mjs'), 'utf8');
+  const m = src.match(/EXEC_KINDS[^=]*=\s*(?:Object\.freeze\()?\[([^\]]*)\]/);
+  if (m === null) throw new Error('no EXEC_KINDS declaration found in shared/roster-json.mjs - re-read it');
+  return [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
 }
 
-describe('EXEC_KINDS parity between the parser and its bare-Node mirror', () => {
-  it('finds a declaration in both files', () => {
-    expect(execKindsIn('shared/roster.ts').length).toBeGreaterThanOrEqual(4);
-    expect(execKindsIn('shared/roster-json.mjs').length).toBeGreaterThanOrEqual(4);
+describe('EXEC_KINDS: one definition in shared/roster.ts, one bare-Node mirror pinned to it in order (D-8192)', () => {
+  it('the definition is real: at least four kinds, codex among them, none repeated', () => {
+    expect(EXEC_KINDS.length).toBeGreaterThanOrEqual(4);
+    expect(EXEC_KINDS).toContain('codex');
+    expect(new Set(EXEC_KINDS).size).toBe(EXEC_KINDS.length);
   });
 
-  it('the two sets are identical', () => {
-    expect(execKindsIn('shared/roster-json.mjs')).toEqual(execKindsIn('shared/roster.ts'));
+  it('shared/roster.ts declares it once, as an exported array', () => {
+    const src = readFileSync(path.join(root, 'shared/roster.ts'), 'utf8');
+    expect(src.match(/^export const EXEC_KINDS = \[[^\]]*\] as const;$/gm)).toHaveLength(1);
+    expect(src.match(/\bconst EXEC_KINDS\b/g)).toHaveLength(1);
   });
 
-  it('both name codex', () => {
-    expect(execKindsIn('shared/roster.ts')).toContain('codex');
-    expect(execKindsIn('shared/roster-json.mjs')).toContain('codex');
+  it('shared/roster-json.mjs mirrors it exactly, in order', () => {
+    expect(mirroredExecKinds()).toEqual([...EXEC_KINDS]);
+  });
+
+  it('both parsers refuse an unknown kind naming every kind, in the definition\'s order', async () => {
+    const { parseRoster } = await import('../../shared/roster.js');
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const quoted = EXEC_KINDS.map((k) => JSON.stringify(k));
+    const said = `${quoted.slice(0, -1).join(', ')} or ${quoted[quoted.length - 1]}`;
+    const roster = { version: 1, accounts: [{ id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude',
+      exec: { kind: 'bespoke' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }] };
+    for (const parse of [parseRoster, rosterFromJson] as const) {
+      let caught: unknown;
+      try { parse(roster); } catch (e) { caught = e; }
+      expect((caught as { remedy?: string } | undefined)?.remedy, parse.name).toContain(`to ${said}.`);
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseRoster, RosterError, POOL_NAME_RE, CODEX_BRIDGE_MODES, CODEX_UPSTREAMS } from '../../shared/roster.js';
+import { parseRoster, RosterError, POOL_NAME_RE, CODEX_BRIDGE_MODES, CODEX_UPSTREAMS, EXEC_KINDS, type ExecKind } from '../../shared/roster.js';
 
 const one = (over: Record<string, unknown> = {}) => ({
   version: 1,
@@ -10,13 +10,11 @@ const one = (over: Record<string, unknown> = {}) => ({
   }],
 });
 
-const TOOLCHAIN_EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
-type ToolchainExecKind = typeof TOOLCHAIN_EXEC_KINDS[number];
 
 /** A valid roster except for a reserved GPT-lane id — ccrc's `ccrc-codex` or `ccgpt-runtime`, or `ccgpt`,
  *  another repository's live launcher (D-3478). Every kind is represented because the collision is
  *  about the launcher name, not the account's current execution contract. */
-const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
+const toolchainCollisionRoster = (id: string, kind: ExecKind) => ({
   version: 1,
   accounts: [
     {
@@ -66,7 +64,7 @@ describe('parseRoster', () => {
   it.each(['ccrc-codex', 'ccgpt-runtime', 'ccgpt'] as const)(
     'refuses the reserved GPT-lane id %s for every execution kind',
     (id) => {
-      for (const kind of TOOLCHAIN_EXEC_KINDS) {
+      for (const kind of EXEC_KINDS) {
         try {
           parseRoster(toolchainCollisionRoster(id, kind));
           throw new Error(`expected ${id}/${kind} to be refused`);

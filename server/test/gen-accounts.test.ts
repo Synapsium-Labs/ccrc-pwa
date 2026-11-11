@@ -40,7 +40,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseRoster, MODEL_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
+import { parseRoster, MODEL_ID_RE, POOL_NAME_RE, EXEC_KINDS, type ExecKind } from '../../shared/roster.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
@@ -55,11 +55,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-accounts.mjs');
 
-const TOOLCHAIN_EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
-type ToolchainExecKind = typeof TOOLCHAIN_EXEC_KINDS[number];
 
 /** This deliberately drives `rosterFromJson`, not the TypeScript parser. */
-const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
+const toolchainCollisionRoster = (id: string, kind: ExecKind) => ({
   version: 1,
   accounts: [
     {
@@ -302,7 +300,7 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
   it.each(['ccrc-codex', 'ccgpt-runtime', 'ccgpt'] as const)(
     'rosterFromJson refuses the reserved GPT-lane id %s for every execution kind',
     (id) => {
-      for (const kind of TOOLCHAIN_EXEC_KINDS) {
+      for (const kind of EXEC_KINDS) {
         expect(() => rosterFromJsonSync(toolchainCollisionRoster(id, kind)))
           .toThrow(`account id "${id}" collides with`);
       }

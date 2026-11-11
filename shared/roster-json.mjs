@@ -214,7 +214,12 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
  *  a real subprocess. Read both; neither alone is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
-const EXEC_KINDS = new Set(['upstream', 'generated', 'external', 'codex']);
+// Mirrors `shared/roster.ts`'s `EXEC_KINDS`, the one definition of `exec.kind`'s closed set, IN ORDER: this
+// validator runs under bare Node and cannot import TypeScript, so it keeps this one copy, and
+// `roster-exec-parity.test.ts` pins it equal to the definition (D-8192). The refusal below is built from it.
+const EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'];
+const EXEC_KINDS_SAID =
+  `${EXEC_KINDS.slice(0, -1).map((k) => JSON.stringify(k)).join(', ')} or ${JSON.stringify(EXEC_KINDS[EXEC_KINDS.length - 1])}`;
 // Mirror `shared/roster.ts`'s two codex word sets, IN ORDER: the first word is the default an absent key reads, and
 // `roster-exec-parity.test.ts` compares both declarations and both resolved defaults (codex-bridge spec D20).
 // EXPORTED for `deploy/account-op.mjs`'s `codex-mode` op (codex-bridge Stage 2, Task 12), which writes the word and so
@@ -300,9 +305,9 @@ function checkAccount(raw, index) {
   }
 
   const exec = raw['exec'];
-  if (!isPlainObject(exec) || typeof exec['kind'] !== 'string' || !EXEC_KINDS.has(exec['kind'])) {
+  if (!isPlainObject(exec) || typeof exec['kind'] !== 'string' || !EXEC_KINDS.includes(exec['kind'])) {
     bad(`account "${id}" has a missing or invalid exec.kind.`,
-      `Set exec.kind for account "${id}" to "upstream", "generated", "external" or "codex".`);
+      `Set exec.kind for account "${id}" to ${EXEC_KINDS_SAID}.`);
   }
   // HOISTED (D-1855). These two gates were conjoined with
   // `exec['kind'] === 'generated'` while the return below spread
