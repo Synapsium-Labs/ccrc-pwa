@@ -13,7 +13,7 @@ import {
   TESTBOX_ACTS, TESTBOX_ACT_OUTCOMES, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRING_KEYS,
   TESTBOX_PAIRED_BOX_KEYS, TESTBOX_RUN_SHAPING, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, TESTBOX_REPO_ROW_MAX_BYTES,
   buildTestboxAdminArgv, fitsTestboxShape, isBoxAddress, isPrivateNetworkAddress, isSshPort, isLoginUser, isHostKeyFingerprint, isPrNumber,
-  TESTBOX_STEP_UP_SETTINGS, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg,
+  TESTBOX_STEP_UP_SETTINGS, TESTBOX_LINE_CODES, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg,
   testboxAdminIsLong, testboxAdminNeedsStepUp,
   type TestboxAdminSub, type TestboxAdminFields, type TestboxParityRecord,
 } from '../../shared/testbox-admin.js';
@@ -44,7 +44,7 @@ const MIN: Record<TestboxAdminSub, Record<string, unknown>> = {
   'status': {}, 'read': {}, 'key': { address: '192.0.2.10' }, 'probe': {}, 'pin': { fingerprint: FP },
   'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
   'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } }, 'settings-box': { settings: { CCRC_TESTBOX_WORKERS: '3' } },
-  'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {},
+  'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {}, 'key-rotate': {}, 'key-revoke': {},
 };
 
 const build = (sub: unknown, fields: unknown) => buildTestboxAdminArgv(sub, fields);
@@ -61,15 +61,24 @@ const ip = (s: string): string => s.replace(/_/g, '.');
 describe('the sub table', () => {
   it('every sub has a spec and every spec a sub', () => {
     expect(Object.keys(TESTBOX_ADMIN_SUBS).sort()).toEqual([...SUBS].sort());
-    expect(SUBS).toHaveLength(14);
+    expect(SUBS).toHaveLength(16);
     expect(SUBS.sort()).toEqual([
-      'apply-release', 'cancel', 'connect', 'disconnect', 'key', 'parity', 'pin', 'preflight', 'probe', 'read', 'repair',
-      'settings-box', 'settings-fleet', 'status',
+      'apply-release', 'cancel', 'connect', 'disconnect', 'key', 'key-revoke', 'key-rotate', 'parity', 'pin', 'preflight', 'probe',
+      'read', 'repair', 'settings-box', 'settings-fleet', 'status',
     ]);
     for (const s of SUBS) expect(MIN[s], s).toBeDefined();
   });
-  it('step-up is exactly key, pin, connect and disconnect', () => {
-    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp).sort()).toEqual(['connect', 'disconnect', 'key', 'pin']);
+  it('step-up is exactly key, pin, connect, disconnect and the access key\'s rotate and revoke (D-8337)', () => {
+    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp).sort()).toEqual(['connect', 'disconnect', 'key', 'key-revoke', 'key-rotate', 'pin']);
+  });
+  it('key-rotate and key-revoke take no field, are short, and record acts of their own names (D-8337)', () => {
+    for (const s of ['key-rotate', 'key-revoke'] as const) {
+      expect(Object.keys(TESTBOX_ADMIN_SUBS[s].fields), s).toEqual([]);
+      expect(TESTBOX_ADMIN_SUBS[s].long, s).toBe(false);
+      expect(TESTBOX_ADMIN_SUBS[s].act, s).toBe(s);
+      refused(s, { address: '192.0.2.10' });
+      refused(s, { rotate: true });
+    }
   });
   it('a call needs the step-up when its sub does, or when settings-fleet changes the setting that guards secrets (the deny list), whatever else the body holds', () => {
     expect([...TESTBOX_STEP_UP_SETTINGS]).toEqual(['CCRC_TESTBOX_DENY_GLOBS']);
@@ -102,7 +111,7 @@ describe('the sub table', () => {
   it('the acts and outcomes are the ledger\'s closed vocabularies', () => {
     expect([...TESTBOX_ACTS]).toEqual([
       'connect', 'confirm-host-key', 'install', 'pair', 'settings-fleet', 'settings-box', 'parity', 'switch', 'repair',
-      'replace', 'disconnect', 'apply-release', 'cancel',
+      'replace', 'disconnect', 'apply-release', 'cancel', 'key-rotate', 'key-revoke',
     ]);
     expect([...TESTBOX_ACT_OUTCOMES]).toEqual(['ok', 'refused', 'failed', 'unknown']);
   });
@@ -252,6 +261,7 @@ describe('the argv builder', () => {
       'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } },
       'settings-box': { settings: { CCRC_TESTBOX_RUNS: '2' }, whenIdle: true },
       'cancel': {}, 'parity': { prs: [1, '2'] }, 'repair': {}, 'apply-release': {}, 'disconnect': { replace: true },
+      'key-rotate': {}, 'key-revoke': {},
     };
     for (const s of SUBS) expect(build(s, wire[s]).ok, s).toBe(true);
     // a list of K=V strings is not a settings map
@@ -628,8 +638,11 @@ describe('the codes', () => {
       'address-not-ip', 'no-egress', 'other-release', 'verify-failed', 'copy-failed', 'box-value-refused', 'install-refused',
       'install-failed', 'pair-failed', 'status-not-ok', 'pairing-keys-in-ccrc-env', 'key-in-ccrc-env', 'runs-in-progress',
       'idle-deadline', 'cancelled', 'gh-signed-out', 'parity-differs', 'not-connected', 'box-side-skipped',
-      'interrupted',
+      'interrupted', 'new-key-refused', 'old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed',
     ]) expect(TESTBOX_ADMIN_CODES, c).toContain(c);
+    // the codes whose refusal names a public key line for the operator to remove by hand (D-8337)
+    expect([...TESTBOX_LINE_CODES]).toEqual(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);
+    for (const c of TESTBOX_LINE_CODES) expect(TESTBOX_ADMIN_CODES).toContain(c);
     expect(TESTBOX_ADMIN_CODES.length).toBeGreaterThanOrEqual(35);
     for (const c of TESTBOX_ADMIN_CODES) {
       const s = TESTBOX_ADMIN_CODE_SENTENCE[c];

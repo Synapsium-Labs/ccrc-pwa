@@ -10,7 +10,7 @@ import {
 } from '../../shared/agent-protocol.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
 import {
-  TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_SUBS, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, buildTestboxAdminArgv, isHostKeyFingerprint,
+  TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_SUBS, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_LINE_CODES, buildTestboxAdminArgv, isHostKeyFingerprint,
   isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, testboxAdminIsLong, testboxAdminNeedsStepUp,
   type TestboxAct, type TestboxActOutcome, type TestboxAdminCode, type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub,
 } from '../../shared/testbox-admin.js';
@@ -33,8 +33,8 @@ import type { TestboxAudit, TestboxEventInput } from './testboxAudit.js';
  * ports, on `accounts/routes.ts`'s shape.
  *
  *  - SESSION-ONLY, behind the account gate (`accounts/gate.ts`): auth off, an insecure origin, any verdict but a session, the
- *    fleet's measured `testbox-admin-v1` cap, and, for the four subs whose spec says so (`key`, `pin`, `connect`,
- *    `disconnect`: they put, replace or remove a credential or a pin), a recent step-up. The gate runs before the body is
+ *    fleet's measured `testbox-admin-v1` cap, and, for the subs whose spec says so (`key`, `pin`, `connect`,
+ *    `disconnect`, and D-8337's `key-rotate` and `key-revoke`: they put, replace or remove a credential or a pin), a recent step-up. The gate runs before the body is
  *    read or the fleet asked. No box token reaches these routes, and no route is in `EXEMPT`.
  *  - THE BODY IS `{fields}` ONLY. `fields` passes `buildTestboxAdminArgv` (the ONE bounded builder both arms and the agent
  *    call) before any op; a field off its grammar is a 400 and nothing runs. No caller field can name `--from`.
@@ -123,12 +123,17 @@ function jsonOf(stdout: string): Record<string, unknown> | null {
 }
 
 const CODE_SET: ReadonlySet<string> = new Set(TESTBOX_ADMIN_CODES);
+const LINE_CODE_SET: ReadonlySet<string> = new Set(TESTBOX_LINE_CODES);
 const KEY_SET: ReadonlySet<string> = new Set([...TESTBOX_HOST_KEYS, ...TESTBOX_BOX_KEYS]);
 
 /** What one run means for the route. */
 export type Decision =
   | { kind: 'ok'; json: Record<string, unknown> }
   | { kind: 'refuse'; word: RouteRefusal; extra: Readonly<Record<string, unknown>>; audit: 'refused' | 'failed' | 'unknown'; code: TestboxAdminCode | RouteRefusal };
+
+/** One printable ASCII line, 1 to 1024 characters: the shape of a public access line. */
+const lineOf = (v: unknown): string | undefined =>
+  typeof v === 'string' && v.length >= 1 && v.length <= 1024 && /^[\x20-\x7e]+$/.test(v) ? v : undefined;
 
 /** The settings a refusal names: only keys this build knows, each once. */
 const keysOf = (v: unknown): string[] =>
@@ -146,9 +151,11 @@ export function decisionOf(ran: TestboxAdminOutcome): Decision {
       const j = jsonOf(ran.stdout);
       if (j !== null && j['ok'] === false && typeof j['code'] === 'string' && CODE_SET.has(j['code'])) {
         const keys = keysOf(j['keys']);
+        // D-8337: a refusal that leaves a line on the box for the operator to remove names that key's PUBLIC words, one line.
+        const line = LINE_CODE_SET.has(j['code']) ? lineOf(j['line']) : undefined;
         return {
           kind: 'refuse', word: 'testbox-admin-refused', audit: 'refused', code: j['code'] as TestboxAdminCode,
-          extra: keys.length > 0 ? { code: j['code'], keys } : { code: j['code'] },
+          extra: { code: j['code'], ...(keys.length > 0 ? { keys } : {}), ...(line === undefined ? {} : { line }) },
         };
       }
       if (j !== null && j['ok'] === true && ran.code === 0) return { kind: 'ok', json: j };
@@ -157,15 +164,12 @@ export function decisionOf(ran: TestboxAdminOutcome): Decision {
   }
 }
 
-/** One printable ASCII line, 1 to 1024 characters: the shape of a public access line. */
-const lineOf = (v: unknown): string | undefined =>
-  typeof v === 'string' && v.length >= 1 && v.length <= 1024 && /^[\x20-\x7e]+$/.test(v) ? v : undefined;
 const CHECK_RE = /^[a-z][a-z-]{0,23}$/;
 
 /** What `sub`'s answer may say beyond the status: each piece held to its grammar, anything else dropped. */
 export function resultOf(sub: TestboxAdminSub, j: Record<string, unknown>): TestboxAdminResult {
   const out: TestboxAdminResult = {};
-  if (sub === 'key') {
+  if (sub === 'key' || sub === 'key-rotate') {
     const line = lineOf(j['line']);
     if (line !== undefined) out.line = line;
   } else if (sub === 'probe' || sub === 'pin') {

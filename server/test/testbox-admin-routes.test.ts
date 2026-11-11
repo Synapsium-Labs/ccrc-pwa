@@ -49,7 +49,7 @@ const MIN: Record<TestboxAdminSub, Record<string, unknown>> = {
   'status': {}, 'read': {}, 'key': { address: '192.0.2.10' }, 'probe': {}, 'pin': { fingerprint: FP },
   'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
   'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } }, 'settings-box': { settings: { CCRC_TESTBOX_WORKERS: '3' } },
-  'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {},
+  'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {}, 'key-rotate': {}, 'key-revoke': {},
 };
 const POST_SUBS = (Object.keys(TESTBOX_ADMIN_SUB_MAP) as TestboxAdminSub[]).filter((s) => s !== 'status');
 const STEP_UP_SUBS = POST_SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp);
@@ -186,8 +186,8 @@ describe('every admin route is session-only and takes the account gate first (D-
     expect(r.rows()).toEqual([]);
   });
 
-  it('key, pin, connect and disconnect need a recent step-up; the rest need a session only', async () => {
-    expect(STEP_UP_SUBS.sort()).toEqual(['connect', 'disconnect', 'key', 'pin']);
+  it('key, pin, connect, disconnect, key-rotate and key-revoke need a recent step-up; the rest need a session only', async () => {
+    expect(STEP_UP_SUBS.sort()).toEqual(['connect', 'disconnect', 'key', 'key-revoke', 'key-rotate', 'pin']);
     const r = await openApp();
     const stale = await login(r.app);
     await fresh(r.app);   // a step-up on ANOTHER session counts for nothing here
@@ -508,6 +508,73 @@ describe('the ledger: one closed row per short act (spec §2.10, T10)', () => {
     for (const leak of ['192.0.2.10', 'ssh-ed25519', 'AAAAC3', '/', 'root', 'testbox.invalid']) expect(blob, leak).not.toContain(leak);
     // the one string a row may carry beside its vocabularies is the pin's fingerprint
     expect(blob).toContain(FP2);
+  });
+});
+
+describe('the access key\'s Rotate and Revoke through the route (D-8337)', () => {
+  const NEW_LINE = `from="192.0.2.5",restrict ssh-ed25519 ${'N'.repeat(68)} ccrc-testbox-admin`;
+  const OLD_WORDS = `ssh-ed25519 ${'O'.repeat(68)} ccrc-testbox-admin`;
+
+  it('a stale step-up is refused before anything runs, and writes no row', async () => {
+    const r = await openApp();
+    const stale = await login(r.app);
+    for (const sub of ['key-rotate', 'key-revoke']) {
+      const res = await post(r, sub, { fields: {} }, stale);
+      expect(res.statusCode, sub).toBe(REFUSAL_STATUS['step-up-required']);
+      expect(res.json(), sub).toMatchObject({ ok: false, error: 'step-up-required' });
+    }
+    expect(r.calls).toEqual([]);
+    expect(r.argv()).toEqual([]);
+    expect(r.rows()).toEqual([]);
+  });
+
+  it('a rotate answers the new public line and writes one ok row of its own act, with no key text in it', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('status', { out: CONNECTED });
+    r.stub('key-rotate', { out: { ok: true, line: NEW_LINE, private: '-----BEGIN OPENSSH PRIVATE KEY-----' } });
+    const res = await post(r, 'key-rotate', { fields: {} }, cookie);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().result).toEqual({ line: NEW_LINE });
+    expect(res.body).not.toContain('PRIVATE KEY');
+    expect(r.argv()).toContain('testbox-admin key-rotate --from pwa');
+    const rows = r.rows();
+    expect(rows.map((x) => [x['act'], x['outcome'], x['code'], x['fingerprint']])).toEqual([['key-rotate', 'ok', null, null]]);
+    expect(JSON.stringify(rows)).not.toContain('N'.repeat(68));
+  });
+
+  it('a refusal that leaves a line on the box carries that key\'s public words, and its row only the closed code', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    for (const [sub, code] of [['key-rotate', 'old-line-kept'], ['key-revoke', 'revoked-box-skipped'], ['key-revoke', 'revoked-unpair-failed']] as const) {
+      r.stub(sub, { out: { ok: false, code, line: OLD_WORDS } });
+      const res = await post(r, sub, { fields: {} }, cookie);
+      expect(res.statusCode, code).toBe(REFUSAL_STATUS['testbox-admin-refused']);
+      expect(res.json(), code).toEqual({ ok: false, error: 'testbox-admin-refused', code, line: OLD_WORDS });
+    }
+    expect(r.rows().map((x) => [x['act'], x['outcome'], x['code']])).toEqual([
+      ['key-rotate', 'refused', 'old-line-kept'], ['key-revoke', 'refused', 'revoked-box-skipped'], ['key-revoke', 'refused', 'revoked-unpair-failed'],
+    ]);
+    expect(JSON.stringify(r.rows())).not.toContain('O'.repeat(68));
+  });
+
+  it('a line rides only the codes that name one, and only as one printable line', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('key-rotate', { out: { ok: false, code: 'new-key-refused', line: OLD_WORDS } });
+    expect((await post(r, 'key-rotate', { fields: {} }, cookie)).json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'new-key-refused' });
+    r.stub('key-revoke', { out: { ok: false, code: 'revoked-box-skipped', line: `${OLD_WORDS}\n-----BEGIN OPENSSH PRIVATE KEY-----` } });
+    expect((await post(r, 'key-revoke', { fields: {} }, cookie)).json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'revoked-box-skipped' });
+  });
+
+  it('a field on either is a 400 and nothing runs', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    for (const sub of ['key-rotate', 'key-revoke']) {
+      const res = await post(r, sub, { fields: { address: '192.0.2.10' } }, cookie);
+      expect(res.statusCode, sub).toBe(400);
+    }
+    expect(r.calls).toEqual([]);
   });
 });
 
