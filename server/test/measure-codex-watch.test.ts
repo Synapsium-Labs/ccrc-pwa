@@ -2,9 +2,12 @@
 // the Stage 2 runbook's step 5). Every reading is pinned on a constructed fixture HOME with a known answer: a lane
 // directory with `lane.json` and the bridge's stats file (version 1, the shape `ccd/codexbridge/stats.py` documents),
 // the auth library's status file (WRITTEN BY THE LIBRARY ITSELF, over a placeholder credential, so the instrument reads
-// the bytes the writer writes), a LiteLLM log, and transcripts under the lane's config directory and another one.
+// the bytes the writer writes), a LiteLLM log, the lane's model files (its advance history and its measured windows),
+// and transcripts under the lane's config directory and another one.
 // "Unmeasured is never pass" and "nothing but counts leaves" are each pinned: the second by sentinels planted in a
-// prompt, a path, a session id and a request id.
+// prompt, a path, a session id, a request id, a row's uuid, a message id, a version field and an advance reason.
+// Every statistic the instrument prints is re-computed HERE by another method (exact rationals, a recurrence, a
+// closed form), never by calling the instrument's own arithmetic.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -26,7 +29,13 @@ const SENTINEL_SESSION = 'SENTINEL-SESSION-ID-9b7d';
 const SENTINEL_PROJECT = '-SENTINEL-PROJECT-PATH-2a6f';
 const SENTINEL_REQUEST = 'SENTINEL-REQUEST-ID-83e0';
 const SENTINEL_CREDENTIAL = 'SENTINEL-CREDENTIAL-BYTES-5d19';
-const SENTINELS = [SENTINEL_TEXT, SENTINEL_SESSION, SENTINEL_PROJECT, SENTINEL_REQUEST, SENTINEL_CREDENTIAL];
+const SENTINEL_UUID = 'SENTINEL-ROW-UUID-71aa';
+const SENTINEL_MESSAGE = 'SENTINEL-MESSAGE-ID-0f3c';
+const SENTINEL_VERSION = 'SENTINEL-VERSION-6e21';
+const SENTINEL_REASON = 'SENTINEL-ADVANCE-REASON-3b9d';
+const SENTINELS = [SENTINEL_TEXT, SENTINEL_SESSION, SENTINEL_PROJECT, SENTINEL_REQUEST, SENTINEL_CREDENTIAL,
+  SENTINEL_UUID, SENTINEL_MESSAGE, SENTINEL_VERSION, SENTINEL_REASON];
+const NOTE = 'sessions cluster: p is indicative';
 
 let home: string;
 let seq = 0;
@@ -34,28 +43,33 @@ let seq = 0;
 const laneDir = (): string => path.join(home, '.ccrc', 'codex', LANE);
 const authDir = (): string => path.join(home, '.local', 'share', 'ccrc', 'codex', `${LANE}-abc123`);
 const logFile = (): string => path.join(home, '.ccrc', 'logs', 'codex', LANE, 'litellm.log');
+const modelsFile = (kind: 'advance' | 'windows'): string => path.join(home, '.ccrc', 'models', `${LANE}.${kind}.json`);
 const write = (file: string, body: string): void => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, body);
 };
 
 type Stats = Record<string, unknown>;
+const OUTCOMES = { '2xx': 990, '4xx': 6, '5xx': 4, 'client-gone': 3, 'drain-cut': 1, compactionRequests: 7, countTokens: 40 };
 const stats = (over: Stats = {}): Stats => ({
   version: 1, lane: LANE, since: '2026-10-27T06:26:05.000Z', startedAt: '2026-10-28T09:00:00.000Z',
   updatedAt: '2026-11-03T06:59:00.000Z',
   routes: { 'backend/gpt-model-a': { requests: 900, bytesPerToken: 3.5, promptTokensMax: 300000, promptTokensLast: 1200 },
             'backend/gpt-model-b': { requests: 100, bytesPerToken: 3.5, promptTokensMax: 90000, promptTokensLast: 800 } },
   refusals: {},
-  outcomes: { '2xx': 990, '4xx': 6, '5xx': 4, 'client-gone': 3, 'drain-cut': 1, compactionRequests: 7, countTokens: 40 },
+  outcomes: OUTCOMES,
   names: { errorCode: { server_is_overloaded: 3 } },
   unexplained: { errorCode: [], responseHeader: [] },
   usageHeaders: null, lastUpstreamRequestId: SENTINEL_REQUEST,
   store: { state: 'ok', reason: null, at: null, setAside: null },
   ...over,
 });
+const writeStats = (over: Stats = {}): void => write(path.join(laneDir(), 'bridge.stats.json'), JSON.stringify(stats(over)));
+
 /** The lane's status file, written by the auth library's own `write_status` under its lock, over a placeholder
- *  credential whose bytes are a sentinel: the status is current only while its identity is that file's. */
-function writeStatus(over: Record<string, unknown> = {}): void {
+ *  credential whose bytes are a sentinel: the status is current only while its identity is that file's. With
+ *  `credential: false` no credential file is made, so the status is measured on none (identity null). */
+function writeStatus(over: Record<string, unknown> = {}, opts: { credential?: boolean } = {}): void {
   fs.mkdirSync(authDir(), { recursive: true, mode: 0o700 });
   const fields = { state: 'ok', expiresAt: NOW_S + 1800, lastRefreshAt: NOW_S - 1500, lastErrorCode: null,
     lastRequestId: SENTINEL_REQUEST, ...over };
@@ -68,53 +82,87 @@ function writeStatus(over: Record<string, unknown> = {}): void {
     'spec.loader.exec_module(lib)',
     'd, fields = sys.argv[2], json.loads(sys.argv[3])',
     'p = lib.paths_for(d)',
-    'if not os.path.exists(p.credential):',
+    'if sys.argv[5] == "1" and not os.path.exists(p.credential):',
     '    fd = os.open(p.credential, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)',
     '    os.write(fd, sys.argv[4].encode()); os.close(fd)',
     'with lib.held(d):',
     '    ok = lib.write_status(d, identity=lib._current_identity(p.credential), unsaved=False, **fields)',
     'sys.exit(0 if ok else 1)',
-  ].join('\n'), AUTH_LIB, authDir(), JSON.stringify(fields), SENTINEL_CREDENTIAL], { encoding: 'utf8' });
+  ].join('\n'), AUTH_LIB, authDir(), JSON.stringify(fields), SENTINEL_CREDENTIAL, opts.credential === false ? '0' : '1'],
+  { encoding: 'utf8' });
   expect(r.status, r.stderr).toBe(0);
 }
+/** The status file the library wrote, found by its content (its name is the library's to spell). */
+const statusFile = (): string => {
+  const f = fs.readdirSync(authDir()).map((n) => path.join(authDir(), n))
+    .find((p) => fs.statSync(p).isFile() && fs.readFileSync(p, 'utf8').includes('"configHash"'));
+  expect(f, 'the library wrote no status file').toBeTruthy();
+  return f!;
+};
+/** The library's own incident sets, read from the library: this suite spells no code list either. */
+const libraryCodes = (): string[] => {
+  const r = spawnSync('python3', ['-I', '-c', [
+    'import importlib.util, sys', 'sys.dont_write_bytecode = True',
+    'spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])',
+    'lib = importlib.util.module_from_spec(spec)', 'sys.modules["ccgpt_auth"] = lib', 'spec.loader.exec_module(lib)',
+    'print("\\n".join(sorted(lib.NEEDS_SIGNIN_CODES | lib.CONFIG_ERROR_CODES)))',
+  ].join('\n'), AUTH_LIB], { encoding: 'utf8' });
+  expect(r.status, r.stderr).toBe(0);
+  return r.stdout.split('\n').filter(Boolean);
+};
+
 const lane = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: LANE, configDir: '.claude-lane-a', authDir: `.local/share/ccrc/codex/${LANE}-abc123`, proxyPort: 14100,
   litellmPort: 14101, bridge: 'direct', upstream: 'backend',
   bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' }, ...over,
 });
 
-/** A LiteLLM log: `ok` POSTs answered 200, `bad` answered 500, and lines the reader must not count. */
-const litellmLog = (ok: number, bad: number): string => [
+/** A LiteLLM log: `ok` message POSTs answered 200 (every other one with a query string, as Claude Code sends them),
+ *  `bad` answered 500, `refused` answered 400, `countTokens` count_tokens POSTs answered 200, and lines the reader
+ *  must not count. */
+const litellmLog = (ok: number, bad: number, more: { refused?: number; countTokens?: number } = {}): string => [
   'INFO:     Started server process [1234]',
   'INFO:     127.0.0.1:50001 - "GET /health/liveliness HTTP/1.1" 200 OK',
-  ...Array.from({ length: ok }, (_, i) => `INFO:     127.0.0.1:${50002 + i} - "POST /v1/messages HTTP/1.1" 200 OK`),
+  'INFO:     127.0.0.1:50001 - "GET /v1/models HTTP/1.1" 200 OK',
+  ...Array.from({ length: ok }, (_, i) =>
+    `INFO:     127.0.0.1:${50002 + i} - "POST /v1/messages${i % 2 ? '?beta=true' : ''} HTTP/1.1" 200 OK`),
   ...Array.from({ length: bad }, (_, i) => `INFO:     127.0.0.1:${60000 + i} - "POST /v1/messages HTTP/1.1" 500 Internal Server Error`),
+  ...Array.from({ length: more.refused ?? 0 }, () => 'INFO:     127.0.0.1:61000 - "POST /v1/messages?beta=true HTTP/1.1" 400 Bad Request'),
+  ...Array.from({ length: more.countTokens ?? 0 }, () =>
+    'INFO:     127.0.0.1:62000 - "POST /v1/messages/count_tokens?beta=true HTTP/1.1" 200 OK'),
   `a line of text that is not an access line: ${SENTINEL_TEXT}`,
 ].join('\n') + '\n';
 
-const assistant = (at: string, model: string, id?: string, extra: Record<string, unknown> = {}): string =>
-  JSON.stringify({ type: 'assistant', uuid: `row-${++seq}`, sessionId: SENTINEL_SESSION, timestamp: at,
+type Extra = Record<string, unknown>;
+const assistant = (at: string, model: string, id?: string, extra: Extra = {}): string =>
+  JSON.stringify({ type: 'assistant', uuid: `row-${++seq}`, sessionId: SENTINEL_SESSION, timestamp: at, version: '2.1.300',
     message: { id: id ?? `msg-${seq}`, model, role: 'assistant', content: [{ type: 'text', text: SENTINEL_TEXT }] },
     ...extra });
 const user = (at: string): string =>
   JSON.stringify({ type: 'user', uuid: `row-${++seq}`, sessionId: SENTINEL_SESSION, timestamp: at,
     message: { role: 'user', content: SENTINEL_TEXT } });
-const boundary = (at: string, trigger: 'auto' | 'manual', uuid?: string): string =>
+const boundary = (at: string, trigger: 'auto' | 'manual', uuid?: string, extra: Extra = {}, preTokens = 380000): string =>
   JSON.stringify({ type: 'system', subtype: 'compact_boundary', uuid: uuid ?? `row-${++seq}`, sessionId: SENTINEL_SESSION,
-    timestamp: at, content: 'Conversation compacted', compactMetadata: { trigger, preTokens: 380000 } });
+    timestamp: at, content: 'Conversation compacted', compactMetadata: { trigger, preTokens }, ...extra });
 const transcript = (configDir: string, name: string, rows: string[]): void =>
   write(path.join(home, configDir, 'projects', SENTINEL_PROJECT, `${name}.jsonl`), rows.join('\n') + '\n');
+const plus = (from: string, minutes: number): string => new Date(Date.parse(from) + minutes * 60_000).toISOString();
 
 /** `n` GPT calls spread inside a window that starts at `from` (one a minute). */
-const calls = (from: string, n: number, model = 'gpt-model-a'): string[] => {
-  const t0 = Date.parse(from);
-  return Array.from({ length: n }, (_, i) => assistant(new Date(t0 + (i + 1) * 60_000).toISOString(), model));
-};
+const calls = (from: string, n: number, model = 'gpt-model-a', extra: Extra = {}): string[] =>
+  Array.from({ length: n }, (_, i) => assistant(plus(from, i + 1), model, undefined, extra));
 
-/** The passing fixture: 200 GPT calls and 4 automatic compactions before the flip, 400 and 4 after it. */
+interface SessionOpts { model?: string; preTokens?: number; extra?: Extra; config?: string }
+/** One transcript file: `n` calls of a model from `from`, one a minute, then `autos` automatic boundaries. */
+const session = (name: string, from: string, n: number, autos: number, o: SessionOpts = {}): void =>
+  transcript(o.config ?? '.claude-lane-a', name, [user(from), ...calls(from, n, o.model, o.extra),
+    ...Array.from({ length: autos }, (_, i) => boundary(plus(from, n + 1 + i), 'auto', undefined, o.extra, o.preTokens))]);
+
+/** The passing fixture. Baseline: five sessions, 400 GPT calls and 20 automatic compactions (rate 0.05); watch: 400
+ *  calls and 4 (rate 0.01). The 5xx: 4 of 994 against 10 of 1000. */
 function passing(): void {
   write(path.join(laneDir(), 'lane.json'), JSON.stringify(lane()));
-  write(path.join(laneDir(), 'bridge.stats.json'), JSON.stringify(stats()));
+  writeStats();
   writeStatus();
   write(logFile(), litellmLog(990, 10));
   transcript('.claude-lane-a', 'before', [
@@ -122,12 +170,33 @@ function passing(): void {
     boundary('2026-10-23T04:00:00.000Z', 'auto'), boundary('2026-10-23T05:00:00.000Z', 'auto'),
     boundary('2026-10-23T06:00:00.000Z', 'auto'), boundary('2026-10-23T07:00:00.000Z', 'auto'),
   ]);
+  session('before-2', '2026-10-24T01:00:00.000Z', 50, 4);
+  session('before-3', '2026-10-25T01:00:00.000Z', 50, 4);
+  session('before-4', '2026-10-25T12:00:00.000Z', 50, 4);
+  session('before-5', '2026-10-26T01:00:00.000Z', 50, 4);
   transcript('.claude-lane-a', 'after', [
     user('2026-10-28T00:00:00.000Z'), ...calls('2026-10-28T00:00:00.000Z', 400),
     boundary('2026-10-28T08:00:00.000Z', 'auto'), boundary('2026-10-28T09:00:00.000Z', 'auto'),
     boundary('2026-10-28T10:00:00.000Z', 'auto'), boundary('2026-10-28T11:00:00.000Z', 'auto'),
   ]);
 }
+const removeTranscript = (name: string, config = '.claude-lane-a'): void =>
+  fs.rmSync(path.join(home, config, 'projects', SENTINEL_PROJECT, `${name}.jsonl`));
+
+type HistoryEntry = Record<string, unknown>;
+/** The lane's advance file, in the shape `shared/model-advance.mjs`'s `parseAdvance` reads. */
+const writeAdvance = (history: Record<string, HistoryEntry[]>): void => {
+  const classes: Record<string, unknown> = {};
+  for (const c of ['haiku', 'sonnet', 'opus', 'fable']) {
+    classes[c] = { family: null, hold: null, previous: null, history: history[c] ?? [] };
+  }
+  write(modelsFile('advance'), JSON.stringify({ v: 1, classes, pending: null }));
+};
+const move = (at: string, from: string, to: string): HistoryEntry =>
+  ({ at, how: 'advance', from, to, ok: true, canary: 'passed', reason: SENTINEL_REASON });
+/** The lane's measured windows, in the shape `deploy/models-op.mjs` writes. */
+const writeWindows = (windows: Record<string, Record<string, unknown>>): void =>
+  write(modelsFile('windows'), JSON.stringify({ windows }));
 
 interface Run { code: number | null; stdout: string; stderr: string }
 const run = (args: string[] = []): Run => {
@@ -144,6 +213,47 @@ const report = (args: string[] = []): any => {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const criterion = (rep: any, name: string): any => rep.criteria.find((c: { name: string }) => c.name === name);
 
+// ── independent arithmetic (never the instrument's) ─────────────────────────────────────────────────────────────
+const choose = (n: number, k: number): bigint => {
+  let r = 1n;
+  for (let i = 1; i <= k; i++) r = (r * BigInt(n - k + i)) / BigInt(i);
+  return r;
+};
+/** P(X >= x), X ~ Binomial(n, a / (a + b)), in exact rationals. */
+const exactBinomSf = (x: number, n: number, a: number, b: number): number => {
+  const A = BigInt(a);
+  const B = BigInt(b);
+  let num = 0n;
+  for (let k = x; k <= n; k++) num += choose(n, k) * A ** BigInt(k) * B ** BigInt(n - k);
+  const den = (A + B) ** BigInt(n);
+  return Number((num * 10n ** 30n) / den) / 1e30;
+};
+/** P(X <= x), X ~ Binomial(n, p), by the pmf's recurrence from (1 - p)^n. */
+const recurrenceCdf = (x: number, n: number, p: number): number => {
+  let pmf = Math.exp(n * Math.log1p(-p));
+  let sum = pmf;
+  for (let k = 0; k < x; k++) {
+    pmf *= ((n - k) / (k + 1)) * (p / (1 - p));
+    sum += pmf;
+  }
+  return sum;
+};
+/** P(X >= x), X ~ Poisson(lambda), by the pmf's recurrence. */
+const poissonSf = (x: number, lambda: number): number => {
+  let term = Math.exp(-lambda);
+  let below = 0;
+  for (let k = 0; k < x; k++) {
+    below += term;
+    term *= lambda / (k + 1);
+  }
+  return 1 - below;
+};
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+};
+
 beforeEach(() => {
   home = mkTmp('ccrc-mcw-');
   seq = 0;
@@ -155,67 +265,374 @@ describe('measure-codex-watch.py: the five criteria', () => {
     const rep = report();
     expect(rep.lane).toBe(LANE);
     expect(rep.mode).toBe('direct');
-    expect(rep.windows).toEqual({ baseline: [BASE, FLIP], watch: [FLIP, UNTIL] });
+    expect(rep.windows).toEqual({ baseline: [BASE, FLIP], comparable: [BASE, FLIP], watch: [FLIP, UNTIL] });
     expect(rep.criteria.map((c: { name: string; verdict: string }) => [c.name, c.verdict])).toEqual([
       ['empty-tool-calls', 'pass'], ['5xx-rate', 'pass'], ['compaction-rate', 'pass'], ['credential', 'pass'],
       ['drift', 'pass'],
     ]);
     expect(rep.verdict).toBe('pass');
     expect(criterion(rep, 'empty-tool-calls').emptyArguments).toBe(0);
-    // 4 of 1000 answered against 10 of 1000 POSTs in the log; client-gone and drain-cut shown, never in the rate.
+    // 4 of 994 (2xx + 5xx) against 10 of 1000 message POSTs; 4xx, client-gone and drain-cut shown, never in the rate.
     expect(criterion(rep, '5xx-rate')).toMatchObject({
-      watch: { fiveXx: 4, answered: 1000, rate: 0.004 }, baseline: { fiveXx: 10, posts: 1000, rate: 0.01 },
+      watch: { fiveXx: 4, twoXx: 990, fourXx: 6, n: 994 }, baseline: { fiveXx: 10, twoXx: 990, fourXx: 0, n: 1000, rate: 0.01 },
       clientGone: 3, drainCut: 1,
     });
-    // 4 automatic compactions over 200 calls before, 4 over 400 after.
+    // 20 automatic compactions over 400 calls in five sessions before; 4 over 400 after.
     expect(criterion(rep, 'compaction-rate')).toMatchObject({
-      baseline: { calls: 200, automatic: 4, rate: 0.02 }, watch: { calls: 400, automatic: 4, rate: 0.01 },
+      baseline: { calls: 400, automatic: 20, rate: 0.05, sessions: 5 },
+      comparable: { calls: 400, automatic: 20, rate: 0.05, sessions: 5 },
+      watch: { calls: 400, automatic: 4, rate: 0.01, sessions: 1 },
+      standardised: { expected: 20, observed: 4, note: NOTE },
     });
     expect(criterion(rep, 'credential')).toMatchObject({ state: 'ok', lastErrorCode: null, sinceRefreshSeconds: 1500 });
     expect(rep.bridge.requests).toBe(1000);
+    expect(rep.events).toEqual([]);
   });
 
   it('one empty tool call fails the first criterion, and the lane', () => {
     passing();
-    write(path.join(laneDir(), 'bridge.stats.json'),
-      JSON.stringify(stats({ outcomes: { '2xx': 990, '4xx': 6, '5xx': 4, emptyArguments: 1 } })));
+    writeStats({ outcomes: { '2xx': 990, '4xx': 6, '5xx': 4, emptyArguments: 1 } });
     const rep = report();
     expect(criterion(rep, 'empty-tool-calls')).toMatchObject({ verdict: 'fail', emptyArguments: 1 });
     expect(rep.verdict).toBe('fail');
   });
 
-  it('a 5xx rate above the baseline fails', () => {
+  it('an unexplained name fails the drift criterion and is printed, as the doctor prints it', () => {
     passing();
-    write(logFile(), litellmLog(999, 1));   // baseline 0.001 against the bridge's 0.004
+    writeStats({ unexplained: { errorCode: ['a_new_code'], responseHeader: [] } });
     const rep = report();
-    expect(criterion(rep, '5xx-rate').verdict).toBe('fail');
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'fail', unexplained: { errorCode: ['a_new_code'] } });
+  });
+});
+
+describe('measure-codex-watch.py: the 5xx rate measures like for like', () => {
+  it('count_tokens lines do not enter the baseline, and are printed beside it', () => {
+    passing();
+    write(logFile(), litellmLog(990, 10, { countTokens: 500 }));
+    const c = criterion(report(), '5xx-rate');
+    expect(c.baseline).toMatchObject({ twoXx: 990, fiveXx: 10, n: 1000, countTokens: { '2xx': 500 } });
+    expect(c.countTokens).toBe(40);   // the bridge's own, answered locally: outside 2xx on its side too
+    expect(c.baseline.span).toMatch(/no stamps/);
+  });
+
+  it('4xx is excluded on both sides, and printed', () => {
+    passing();
+    writeStats({ outcomes: { ...OUTCOMES, '4xx': 500 } });
+    write(logFile(), litellmLog(990, 10, { refused: 3000 }));
+    const c = criterion(report(), '5xx-rate');
+    expect(c.watch).toMatchObject({ fourXx: 500, n: 994, rate: Number((4 / 994).toFixed(6)) });
+    expect(c.baseline).toMatchObject({ fourXx: 3000, n: 1000, rate: 0.01 });
+  });
+
+  it('a rise that is not significant passes, with its p', () => {
+    passing();
+    write(logFile(), litellmLog(999, 1));   // baseline 1 of 1000 against the bridge's 4 of 994
+    const c = criterion(report(), '5xx-rate');
+    expect(c.watch.rate).toBeGreaterThan(c.baseline.rate);
+    expect(c.p).toBeCloseTo(exactBinomSf(4, 5, 994, 1000), 5);
+    expect(c.p).toBeGreaterThan(0.05);
+    expect(c.verdict).toBe('pass');
+  });
+
+  it('a large significant rise fails', () => {
+    passing();
+    writeStats({ outcomes: { ...OUTCOMES, '2xx': 960, '5xx': 40 } });   // 40 of 1000 against 10 of 1000
+    const rep = report();
+    const c = criterion(rep, '5xx-rate');
+    expect(c.p).toBeCloseTo(exactBinomSf(40, 50, 1000, 1000), 8);
+    expect(c.p).toBeLessThan(0.05);
+    expect(c.verdict).toBe('fail');
     expect(rep.verdict).toBe('fail');
   });
 
-  it('a compaction rate above the baseline fails', () => {
+  it('p, the ratio and both Clopper-Pearson intervals agree with values computed independently', () => {
     passing();
-    transcript('.claude-lane-a', 'more', [assistant('2026-10-28T23:00:00.000Z', 'gpt-model-a'),
-      ...Array.from({ length: 9 }, (_, i) => boundary(`2026-10-29T0${i}:00:00.000Z`, 'auto'))]);   // 13 over 401
-    const rep = report();
-    expect(criterion(rep, 'compaction-rate')).toMatchObject({ verdict: 'fail', watch: { calls: 401, automatic: 13 } });
+    const c = criterion(report(), '5xx-rate');
+    expect(c.p).toBeCloseTo(exactBinomSf(4, 14, 994, 1000), 5);
+    expect(c.ratio).toBeCloseTo((4 / 994) / (10 / 1000), 5);
+    // An exact interval's ends are where the binomial tails reach 2.5%: P(X >= x | lo) and P(X <= x | hi).
+    for (const [side, x, n] of [['watch', 4, 994], ['baseline', 10, 1000]] as const) {
+      const [lo, hi] = c[side].interval;
+      expect(1 - recurrenceCdf(x - 1, n, lo), `${side} lower`).toBeCloseTo(0.025, 5);
+      expect(recurrenceCdf(x, n, hi), `${side} upper`).toBeCloseTo(0.025, 5);
+      expect(lo).toBeLessThan(x / n);
+      expect(hi).toBeGreaterThan(x / n);
+    }
+    // And the closed form at zero events: [0, 1 - 0.025^(1/n)].
+    writeStats({ outcomes: { ...OUTCOMES, '5xx': 0 } });
+    const zero = criterion(report(), '5xx-rate');
+    expect(zero.watch.interval[0]).toBe(0);
+    expect(zero.watch.interval[1]).toBeCloseTo(1 - 0.025 ** (1 / 990), 8);
+  });
+});
+
+describe('measure-codex-watch.py: the credential, in the library\'s own vocabulary', () => {
+  it('ok with an upstream overload code passes, and the code is printed as context with the status\'s stamp', () => {
+    passing();
+    writeStatus({ lastErrorCode: 'server_is_overloaded' });
+    const c = criterion(report(), 'credential');
+    expect(c).toMatchObject({ verdict: 'pass', state: 'ok', lastErrorCode: 'server_is_overloaded',
+      lastErrorCodeRole: 'last upstream or refresh code (context only)' });
+    expect(c.statusUpdatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  });
+
+  it('ok with refresh_token_reused fails', () => {
+    passing();
+    writeStatus({ lastErrorCode: 'refresh_token_reused' });
+    const c = criterion(report(), 'credential');
+    expect(c).toMatchObject({ verdict: 'fail', lastErrorCodeRole: 'incident', checks: { incidentCode: 'fail' } });
+  });
+
+  it('every code in the library\'s incident sets fails, whatever the state', () => {
+    passing();
+    const codes = libraryCodes();
+    expect(codes.length).toBeGreaterThanOrEqual(7);
+    for (const code of codes) {
+      writeStatus({ lastErrorCode: code });
+      expect(criterion(report(), 'credential').verdict, code).toBe('fail');
+    }
+  });
+
+  it('needs-signin fails, with no code beside it', () => {
+    passing();
+    writeStatus({ state: 'needs-signin' });
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'fail', checks: { bars: 'fail' } });
+  });
+
+  it('a config-error fails when the library says it bars this configuration, and is context when it is stale', () => {
+    passing();
+    writeStatus({ state: 'config-error' });
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'fail', checks: { bars: 'fail' } });
+    const f = statusFile();
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/"configHash": "[0-9a-f]+"/, `"configHash": "${'0'.repeat(64)}"`));
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'pass', state: 'config-error', checks: { bars: 'pass' } });
+  });
+
+  it('a credential the library measures as not present fails', () => {
+    passing();
+    fs.rmSync(authDir(), { recursive: true });
+    writeStatus({}, { credential: false });
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'fail', checks: { credentialPresent: 'fail' } });
+  });
+
+  it('a token that has expired fails', () => {
+    passing();
+    writeStatus({ expiresAt: NOW_S - 60 });
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'fail', checks: { expiry: 'fail' } });
+  });
+
+  it('a refresh older than half the life plus 900 s fails, and one just inside it passes', () => {
+    passing();
+    // expiresAt = now + 1800, lastRefreshAt = now - x: life 1800 + x, bound (1800 + x) / 2 + 900, late iff x > 3600.
+    writeStatus({ lastRefreshAt: NOW_S - 3599 });
+    expect(criterion(report(), 'credential')).toMatchObject({ verdict: 'pass', checks: { cadence: 'pass' } });
+    writeStatus({ lastRefreshAt: NOW_S - 3601 });
+    const c = criterion(report(), 'credential');
+    expect(c).toMatchObject({ verdict: 'fail', checks: { cadence: 'fail' }, lifeSeconds: 5401 });
+    expect(c.cadenceBoundSeconds).toBeCloseTo(5401 / 2 + 900, 6);
   });
 
   it.each([
-    ['a state that is not ok', { state: 'needs-signin' }],
-    ['a last error code', { lastErrorCode: 'refresh_token_reused' }],
-    ['a token that has expired', { expiresAt: NOW_S - 60 }],
-  ])('the credential fails on %s', (_what, over) => {
+    ['no lastRefreshAt', { lastRefreshAt: null }],
+    ['no expiresAt', { expiresAt: null }],
+  ])('%s reads unmeasured', (_what, over) => {
     passing();
     writeStatus(over);
-    expect(criterion(report(), 'credential').verdict).toBe('fail');
+    const c = criterion(report(), 'credential');
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toMatch(/lastRefreshAt|expiresAt/);
   });
 
-  it('an unexplained name fails the drift criterion and is printed, as the doctor prints it', () => {
+  it('a failing check outranks a missing stamp', () => {
     passing();
-    write(path.join(laneDir(), 'bridge.stats.json'),
-      JSON.stringify(stats({ unexplained: { errorCode: ['a_new_code'], responseHeader: [] } })));
+    writeStatus({ state: 'needs-signin', lastRefreshAt: null });
+    expect(criterion(report(), 'credential').verdict).toBe('fail');
+  });
+});
+
+describe('measure-codex-watch.py: the compaction rate measures like for like', () => {
+  it('an advance event inside the baseline cuts it, and is printed', () => {
+    passing();
+    writeAdvance({ sonnet: [move('2026-10-24T00:00:00Z', 'gpt-model-old', 'gpt-model-a')] });
     const rep = report();
-    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'fail', unexplained: { errorCode: ['a_new_code'] } });
+    expect(rep.windows.comparable).toEqual(['2026-10-24T00:00:00Z', FLIP]);
+    expect(rep.events).toEqual([{ at: '2026-10-24T00:00:00Z', kind: 'advance', class: 'sonnet', from: 'gpt-model-old',
+      to: 'gpt-model-a', ok: true, where: 'baseline', cuts: true }]);
+    const c = criterion(rep, 'compaction-rate');
+    expect(c.baseline).toMatchObject({ calls: 400, automatic: 20, sessions: 5 });
+    expect(c.comparable).toMatchObject({ calls: 200, automatic: 16, sessions: 4 });
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toMatch(/the comparable baseline holds 4 sessions and 16 boundaries \(needs 5 and 20\)/);
+  });
+
+  it('a window set inside the baseline cuts it too, and the last event before the flip wins', () => {
+    passing();
+    writeWindows({ 'gpt-model-a': { tokens: 200000, setAt: '2026-10-25T00:00:00.000Z' } });
+    writeAdvance({ sonnet: [move('2026-10-24T00:00:00Z', 'gpt-model-old', 'gpt-model-a')] });
+    const rep = report();
+    expect(rep.windows.comparable).toEqual(['2026-10-25T00:00:00Z', FLIP]);
+    expect(rep.events.map((e: { kind: string }) => e.kind)).toEqual(['advance', 'window']);
+    expect(criterion(rep, 'compaction-rate').comparable).toMatchObject({ calls: 150, sessions: 3 });
+  });
+
+  it('an event inside the watch is a warning and cuts nothing', () => {
+    passing();
+    writeWindows({ 'gpt-model-a': { tokens: 180000, setAt: '2026-10-29T00:00:00.000Z', source: 'refusal',
+      refusedTokensEstimate: 210000 } });
+    const rep = report();
+    expect(rep.windows.comparable).toEqual([BASE, FLIP]);
+    const warn = { at: '2026-10-29T00:00:00Z', kind: 'lowering', model: 'gpt-model-a', from: null, to: 180000,
+      where: 'watch', cuts: false };
+    expect(rep.events).toEqual([warn]);
+    const c = criterion(rep, 'compaction-rate');
+    expect(c.warnings).toEqual([warn]);
+    expect(c.verdict).toBe('pass');
+  });
+
+  it('an unreadable model file is tolerated, and its reason printed', () => {
+    passing();
+    write(modelsFile('advance'), 'not json');
+    const rep = report();
+    expect(rep.eventSources).toMatchObject({ advance: 'not JSON', windows: 'absent' });
+    expect(criterion(rep, 'compaction-rate').verdict).toBe('pass');
+  });
+
+  it('a compaction point shift above 10% reads unmeasured, and one within it does not', () => {
+    passing();
+    transcript('.claude-lane-a', 'after', [
+      user('2026-10-28T00:00:00.000Z'), ...calls('2026-10-28T00:00:00.000Z', 400),
+      ...[8, 9, 10, 11].map((h) => boundary(`2026-10-28T${String(h).padStart(2, '0')}:00:00.000Z`, 'auto', undefined, {}, 168000)),
+    ]);
+    let c = criterion(report(), 'compaction-rate');
+    expect(c.watch.point).toMatchObject({ n: 4, median: 168000 });
+    expect(c.comparable.point).toMatchObject({ n: 20, median: 380000 });
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toMatch(/the compaction point moved \(baseline 380\.0k, watch 168\.0k\): the context window changed/);
+    // 345,000 is 9.2% below 380,000: inside the 10%, so the criterion is measured. 330,000 is 13.2% below and
+    // 425,000 11.8% above: outside it, either way.
+    const watchAt = (pre: number): void => transcript('.claude-lane-a', 'after', [
+      user('2026-10-28T00:00:00.000Z'), ...calls('2026-10-28T00:00:00.000Z', 400),
+      ...[8, 9, 10, 11].map((h) => boundary(`2026-10-28T${String(h).padStart(2, '0')}:00:00.000Z`, 'auto', undefined, {}, pre)),
+    ]);
+    watchAt(345000);
+    expect(criterion(report(), 'compaction-rate').verdict).toBe('pass');
+    for (const [pre, shown] of [[330000, '330.0k'], [425000, '425.0k']] as const) {
+      watchAt(pre);
+      c = criterion(report(), 'compaction-rate');
+      expect(c.verdict, String(pre)).toBe('unmeasured');
+      expect(c.reason).toContain(`the compaction point moved (baseline 380.0k, watch ${shown})`);
+    }
+  });
+
+  it('the compaction point is n, p10, median and p90 of the automatic preTokens', () => {
+    passing();
+    const pre = [150000, 160000, 170000, 180000, 190000, 400000];
+    transcript('.claude-lane-a', 'after', [
+      user('2026-10-28T00:00:00.000Z'), ...calls('2026-10-28T00:00:00.000Z', 400),
+      ...pre.map((t, i) => boundary(plus('2026-10-28T08:00:00.000Z', i), 'auto', undefined, {}, t)),
+      boundary('2026-10-28T09:00:00.000Z', 'manual', undefined, {}, 999999),
+    ]);
+    const point = criterion(report(), 'compaction-rate').watch.point;
+    // p10 and p90 by linear interpolation between order statistics: h = (n - 1) q.
+    expect(point).toEqual({ n: 6, p10: 155000, median: median(pre), p90: 295000 });
+  });
+
+  it('sidechain rows are excluded on both sides, and counted as context', () => {
+    passing();
+    const side = { isSidechain: true };
+    session('agent-before', '2026-10-26T02:00:00.000Z', 100, 30, { extra: side });
+    session('agent-after', '2026-10-29T02:00:00.000Z', 100, 30, { extra: side });
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.comparable).toMatchObject({ calls: 400, automatic: 20, sessions: 5, sidechain: { calls: 100, automatic: 30 } });
+    expect(c.watch).toMatchObject({ calls: 400, automatic: 4, sidechain: { calls: 100, automatic: 30 } });
+    expect(c.verdict).toBe('pass');
+  });
+
+  it('a main-thread boundary belongs to the last main-thread model, not to a sidechain row between', () => {
+    passing();
+    transcript('.claude-lane-a', 'mixed', [
+      assistant('2026-10-29T00:00:00.000Z', 'gpt-model-a'),
+      assistant('2026-10-29T00:01:00.000Z', 'claude-model-x', undefined, { isSidechain: true }),
+      boundary('2026-10-29T00:02:00.000Z', 'auto'),
+    ]);
+    expect(criterion(report(), 'compaction-rate').watch).toMatchObject({ calls: 401, automatic: 5 });
+  });
+
+  it.each([
+    ['fewer than 5 sessions', (): void => removeTranscript('before-5'), 4, 16],
+    ['fewer than 20 boundaries', (): void => session('before-5', '2026-10-26T01:00:00.000Z', 50, 3), 5, 19],
+  ])('a low-power baseline reads unmeasured: %s', (_what, change, sessions, automatic) => {
+    passing();
+    change();
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.power).toMatchObject({ sessions, automatic });
+    expect(c.reason).toContain(`the comparable baseline holds ${sessions} sessions and ${automatic} boundaries (needs 5 and 20)`);
+  });
+
+  it('a file whose boundaries fall in the baseline but whose calls do not is no session of it', () => {
+    passing();
+    removeTranscript('before-5');
+    transcript('.claude-lane-a', 'tail', [assistant('2026-10-22T09:00:00.000Z', 'gpt-model-a'),
+      ...[1, 2, 3, 4].map((h) => boundary(`2026-10-23T1${h}:00:00.000Z`, 'auto'))]);
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.comparable).toMatchObject({ automatic: 20, sessions: 4 });
+    expect(c.verdict).toBe('unmeasured');
+    expect(c.reason).toContain('the comparable baseline holds 4 sessions and 20 boundaries (needs 5 and 20)');
+  });
+
+  it('the per-model standardisation weights each model\'s baseline rate by the watch\'s calls', () => {
+    write(path.join(laneDir(), 'lane.json'), JSON.stringify(lane()));
+    writeStats();
+    writeStatus();
+    write(logFile(), litellmLog(990, 10));
+    // Baseline: gpt-model-a 300 calls and 6 boundaries (0.02), gpt-model-b 100 calls and 14 (0.14), in six sessions.
+    for (let i = 0; i < 5; i++) session(`a-${i}`, `2026-10-2${3 + (i % 3)}T0${i}:00:00.000Z`, 60, i === 0 ? 2 : 1);
+    session('b-0', '2026-10-26T00:00:00.000Z', 100, 14, { model: 'gpt-model-b' });
+    // Watch: a 400 calls and 4 boundaries, b 50 and 9, and gpt-model-c, which has no baseline, 30 and 2.
+    session('w-a', '2026-10-28T00:00:00.000Z', 400, 4);
+    session('w-b', '2026-10-29T00:00:00.000Z', 50, 9, { model: 'gpt-model-b' });
+    session('w-c', '2026-10-30T00:00:00.000Z', 30, 2, { model: 'gpt-model-c' });
+    const c = criterion(report(), 'compaction-rate');
+    const expected = 400 * 6 / 300 + 50 * 14 / 100;   // 15, where a pooled rate would say 450 * 20 / 400 = 22.5
+    expect(c.standardised).toMatchObject({ expected, observed: 13, note: NOTE,
+      noBaseline: { 'gpt-model-c': { watchCalls: 30, watchAutomatic: 2 } } });
+    expect(c.standardised.cells['gpt-model-a']).toEqual({ baselineCalls: 300, baselineAutomatic: 6, watchCalls: 400, watchAutomatic: 4 });
+    expect(c.standardised.p).toBeCloseTo(poissonSf(13, 15), 5);
+    expect(c.verdict).toBe('pass');
+  });
+
+  it('a significant excess fails, with its p; an excess that is not significant passes', () => {
+    passing();
+    transcript('.claude-lane-a', 'more', [assistant('2026-10-28T23:00:00.000Z', 'gpt-model-a'),
+      ...Array.from({ length: 30 }, (_, i) => boundary(plus('2026-10-29T00:00:00.000Z', i), 'auto'))]);   // 34 over 401
+    let c = criterion(report(), 'compaction-rate');
+    expect(c.standardised).toMatchObject({ expected: 20.05, observed: 34 });
+    expect(c.standardised.p).toBeCloseTo(poissonSf(34, 20.05), 6);
+    expect(c.verdict).toBe('fail');
+    transcript('.claude-lane-a', 'more', [assistant('2026-10-28T23:00:00.000Z', 'gpt-model-a'),
+      ...Array.from({ length: 21 }, (_, i) => boundary(plus('2026-10-29T00:00:00.000Z', i), 'auto'))]);   // 25 over 401
+    c = criterion(report(), 'compaction-rate');
+    expect(c.standardised.observed).toBe(25);
+    expect(c.standardised.p).toBeCloseTo(poissonSf(25, 20.05), 6);
+    expect(c.standardised.p).toBeGreaterThan(0.05);
+    expect(c.verdict).toBe('pass');
+  });
+
+  it('prints the box scope, a paired reading and the version mix as context', () => {
+    passing();
+    transcript('.claude-lane-a', 'long', [
+      ...calls('2026-10-26T12:00:00.000Z', 25), boundary('2026-10-26T13:00:00.000Z', 'auto'),
+      ...calls('2026-10-27T12:00:00.000Z', 30, 'gpt-model-a', { version: '2.1.322' }),
+      boundary('2026-10-27T13:00:00.000Z', 'auto'), boundary('2026-10-27T13:01:00.000Z', 'auto'),
+    ]);
+    transcript('.claude-lane-b', 'other', calls('2026-10-28T00:00:00.000Z', 25));
+    const c = criterion(report(), 'compaction-rate');
+    expect(c.paired).toEqual({ files: 1, comparable: { calls: 25, automatic: 1, rate: 0.04 },
+      watch: { calls: 30, automatic: 2, rate: Number((2 / 30).toFixed(6)) } });
+    expect(c.watch.versions).toEqual({ '2.1.300': 400, '2.1.322': 30 });
+    expect(c.box).toMatchObject({ reads: expect.any(String), standardised: { observed: 6 } });
+    expect(c.box.power).toMatchObject({ sessions: 6 });
   });
 });
 
@@ -236,16 +653,29 @@ describe('measure-codex-watch.py: unmeasured is never pass', () => {
     ['another lane', { lane: 'lane-b' }],
   ])('a stats file of %s is not read', (_what, over) => {
     passing();
-    write(path.join(laneDir(), 'bridge.stats.json'), JSON.stringify(stats(over)));
+    writeStats(over);
     expect(criterion(report(), 'empty-tool-calls').verdict).toBe('unmeasured');
   });
 
-  it('a log with no access line leaves the 5xx criterion unmeasured and still shows the bridge\'s rate', () => {
+  it('a log with no message POST leaves the 5xx criterion unmeasured and still shows the bridge\'s rate', () => {
     passing();
-    write(logFile(), 'nothing a reader recognises\n');
+    write(logFile(), 'nothing a reader recognises\n'
+      + 'INFO:     127.0.0.1:1 - "POST /v1/messages/count_tokens HTTP/1.1" 200 OK\n');
     const c = criterion(report(), '5xx-rate');
-    expect(c).toMatchObject({ verdict: 'unmeasured', watch: { fiveXx: 4, answered: 1000, rate: 0.004 } });
+    expect(c).toMatchObject({ verdict: 'unmeasured', watch: { fiveXx: 4, n: 994 } });
     expect(c.reason).toMatch(/litellm\.log/);
+  });
+
+  it('a log whose message POSTs were all refused has no baseline: unmeasured', () => {
+    passing();
+    write(logFile(), litellmLog(0, 0, { refused: 50 }));
+    expect(criterion(report(), '5xx-rate').verdict).toBe('unmeasured');
+  });
+
+  it('a stats file with no 2xx or 5xx answer is unmeasured', () => {
+    passing();
+    writeStats({ outcomes: { '4xx': 6 } });
+    expect(criterion(report(), '5xx-rate').verdict).toBe('unmeasured');
   });
 
   it('no log at all is unmeasured, never a baseline of zero', () => {
@@ -256,9 +686,9 @@ describe('measure-codex-watch.py: unmeasured is never pass', () => {
 
   it('a window with no GPT call leaves the compaction criterion unmeasured', () => {
     passing();
-    fs.rmSync(path.join(home, '.claude-lane-a', 'projects', SENTINEL_PROJECT, 'before.jsonl'));
+    for (const f of ['before', 'before-2', 'before-3', 'before-4', 'before-5']) removeTranscript(f);
     const c = criterion(report(), 'compaction-rate');
-    expect(c).toMatchObject({ verdict: 'unmeasured', baseline: { calls: 0 } });
+    expect(c).toMatchObject({ verdict: 'unmeasured', comparable: { calls: 0 } });
   });
 
   it('no status file leaves the credential unmeasured', () => {
@@ -344,7 +774,7 @@ describe('measure-codex-watch.py: what a transcript row counts as', () => {
     passing();
     transcript('.claude-lane-a', 'early', calls('2026-10-20T00:00:00.000Z', 30));
     transcript('.claude-lane-a', 'late', calls('2026-11-04T00:00:00.000Z', 30));
-    expect(criterion(report(), 'compaction-rate')).toMatchObject({ baseline: { calls: 200 }, watch: { calls: 400 } });
+    expect(criterion(report(), 'compaction-rate')).toMatchObject({ baseline: { calls: 400 }, watch: { calls: 400 } });
   });
 
   it('another lane\'s config directory is in the box-wide figure and not in the lane\'s', () => {
@@ -356,9 +786,66 @@ describe('measure-codex-watch.py: what a transcript row counts as', () => {
   });
 });
 
-describe('measure-codex-watch.py: read-only, and nothing but counts leaves', () => {
-  it('prints no prompt text, session id, project path, request id or credential byte, in either form', () => {
+describe('measure-codex-watch.py: the store and the events are printed', () => {
+  it('prints the cumulative store outcomes and the store entry\'s set-aside, while the state reads ok', () => {
     passing();
+    writeStats({ outcomes: { ...OUTCOMES, 'store:DatabaseError': 1, 'store:set-aside': 1 },
+      store: { state: 'ok', reason: null, at: null,
+        setAside: { at: '2026-10-28T07:46:00.000Z', found: 'integrity-check', file: 'reasoning.sqlite.set-aside' } } });
+    const rep = report();
+    expect(rep.bridge.storeOutcomes).toEqual({ 'store:DatabaseError': 1, 'store:set-aside': 1 });
+    expect(rep.bridge.store).toEqual({ state: 'ok', reason: null, at: null,
+      setAside: { at: '2026-10-28T07:46:00.000Z', found: 'integrity-check', file: 'reasoning.sqlite.set-aside' } });
+    const text = run();
+    expect(text.stdout).toMatch(/store:DatabaseError=1/);
+  });
+
+  it('prints every event in the text form too, each on a line of its own', () => {
+    passing();
+    writeAdvance({ sonnet: [move('2026-10-24T00:00:00Z', 'gpt-model-old', 'gpt-model-a')] });
+    writeWindows({ 'gpt-model-a': { tokens: 180000, setAt: '2026-10-29T00:00:00.000Z', source: 'refusal' } });
+    const r = run();
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^event: 2026-10-24T00:00:00Z advance sonnet gpt-model-old -> gpt-model-a \(baseline, cuts the baseline\)$/m);
+    expect(r.stdout).toMatch(/^event: 2026-10-29T00:00:00Z lowering gpt-model-a none -> 180000 \(watch, a warning\)$/m);
+    expect(r.stdout).toMatch(/^comparable baseline: 2026-10-24T00:00:00Z to 2026-10-27T06:26:03Z$/m);
+  });
+});
+
+// A Python reader cannot import an `.mjs`, so the model files' names, the advance file's version and the windows
+// file's refusal word are spelled once more in the instrument; each is bound here to its one home, the
+// `measure-working-state.test.ts` idiom.
+describe('measure-codex-watch.py: its second spellings are bound to their homes', () => {
+  const src = (): string => fs.readFileSync(SCRIPT, 'utf8');
+  const op = (): string => fs.readFileSync(path.join(ROOT, 'deploy', 'models-op.mjs'), 'utf8');
+
+  it('ADVANCE_FILE and WINDOWS_FILE are models-op.mjs\'s advancePath and windowsPath', () => {
+    for (const [name, fn] of [['ADVANCE_FILE', 'advancePath'], ['WINDOWS_FILE', 'windowsPath']] as const) {
+      const def = new RegExp(`^const ${fn} = \\(id\\) => path\\.join\\(modelsDir\\(\\), \`\\$\\{id\\}([^\`]+)\`\\);$`, 'm').exec(op());
+      expect(def, fn).not.toBeNull();
+      expect(src(), name).toMatch(new RegExp(`^${name} = "%s${def![1]!.replace(/\./g, '\\.')}"$`, 'm'));
+    }
+  });
+
+  it('ADVANCE_VERSION is model-advance.mjs\'s, and REFUSAL_SOURCE is the word lower-windows writes', () => {
+    const adv = /^export const ADVANCE_VERSION = (\d+);$/m.exec(
+      fs.readFileSync(path.join(ROOT, 'shared', 'model-advance.mjs'), 'utf8'));
+    expect(adv).not.toBeNull();
+    expect(src()).toMatch(new RegExp(`^ADVANCE_VERSION = ${adv![1]}\\b`, 'm'));
+    const word = /source: '([a-z-]+)', refusedTokensEstimate: ref\.tokens/.exec(op());
+    expect(word).not.toBeNull();
+    expect(src()).toMatch(new RegExp(`^REFUSAL_SOURCE = "${word![1]}"`, 'm'));
+  });
+});
+
+describe('measure-codex-watch.py: read-only, and nothing but counts leaves', () => {
+  it('prints no prompt text, session id, project path, request id, uuid, message id, version or reason, in either form', () => {
+    passing();
+    transcript('.claude-lane-a', 'planted', [
+      assistant('2026-10-28T20:00:00.000Z', 'gpt-model-a', SENTINEL_MESSAGE, { version: SENTINEL_VERSION }),
+      boundary('2026-10-28T20:05:00.000Z', 'auto', SENTINEL_UUID),
+    ]);
+    writeAdvance({ sonnet: [move('2026-10-24T00:00:00Z', 'gpt-model-old', 'gpt-model-a')] });
     const text = run();
     const json = run(['--json']);
     expect(text.code, text.stderr).toBe(0);
@@ -366,6 +853,7 @@ describe('measure-codex-watch.py: read-only, and nothing but counts leaves', () 
     for (const s of SENTINELS) {
       for (const out of [text.stdout, text.stderr, json.stdout, json.stderr]) expect(out, s).not.toContain(s);
     }
+    expect(criterion(JSON.parse(json.stdout), 'compaction-rate').watch.versions).toMatchObject({ other: 1 });
   });
 
   it('the text form carries the verdict and each criterion on a line of its own', () => {
@@ -380,6 +868,8 @@ describe('measure-codex-watch.py: read-only, and nothing but counts leaves', () 
 
   it('writes nothing under the home it reads', () => {
     passing();
+    writeAdvance({ sonnet: [move('2026-10-24T00:00:00Z', 'gpt-model-old', 'gpt-model-a')] });
+    writeWindows({ 'gpt-model-a': { tokens: 200000, setAt: '2026-10-25T00:00:00.000Z' } });
     const list = (): string => spawnSync('find', [home, '-type', 'f', '-newer', path.join(laneDir(), 'lane.json')],
       { encoding: 'utf8' }).stdout;
     const before = list();

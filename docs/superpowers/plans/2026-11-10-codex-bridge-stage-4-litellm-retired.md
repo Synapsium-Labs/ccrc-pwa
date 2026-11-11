@@ -135,20 +135,32 @@ python3 -I deploy/measure-codex-watch.py --lane <id> --flip <UTC stamp> [--basel
   now. Stamps are `YYYY-MM-DDTHH:MM[:SS]Z`.
 - **What it reads, and nothing else.** `<home>/.ccrc/codex/<id>/lane.json` (the mode, the auth directory and the
   files' names), `bridge.stats.json`, the auth status file (never the credential), `<home>/.ccrc/logs/codex/<id>/
-  litellm.log`, and every `<home>/.claude*/projects/*/*.jsonl`. From a transcript row it reads `type`, `subtype`,
-  `timestamp`, `uuid`, `isSidechain`, `isApiErrorMessage`, `compactMetadata.trigger`, `message.id` and
-  `message.model`, never a row's text.
+  litellm.log`, the lane's advance and windows files under `<home>/.ccrc/models/`, and every
+  `<home>/.claude*/projects/*/*.jsonl`. From a transcript row it reads `type`, `subtype`, `timestamp`, `uuid`,
+  `isSidechain`, `isApiErrorMessage`, `version`, `compactMetadata.trigger`, `compactMetadata.preTokens`, `message.id`
+  and `message.model`, never a row's text.
 - **What leaves.** Counts, rates, stamps, model names, and the names the bridge's drift counters already hold. No
   session id, path, prompt or request id.
 - **The five criteria**, each `pass`, `fail` or `unmeasured` with its numbers, as the Stage 2 runbook's step 5 words
   them:
   1. `outcomes.emptyArguments` is 0.
-  2. The 5xx rate, `outcomes.5xx` over the sum of `routes.*.requests`, against the baseline's rate from
-     `litellm.log`. `client-gone` and `drain-cut` are shown and stay out of the rate.
-  3. The compaction rate in the baseline window against the watch window: automatic `compact_boundary` rows over
-     assistant calls, deduplicated by `message.id`, for rows a GPT model answered.
-  4. The credential: the status file's state, its last error code, and how long ago it last refreshed.
+  2. The 5xx rate, 5xx / (2xx + 5xx) on both sides: the stats file's outcomes against the `POST /v1/messages` lines
+     of `litellm.log`, query string stripped. `count_tokens` lines and 4xx are printed and stay out of both rates, as
+     do `client-gone` and `drain-cut`. It fails only when the watch's rate is higher and the exact one-sided
+     conditional binomial test gives p < 0.05. Both rates carry exact 95% intervals.
+  3. The compaction rate, on the main thread only, against a comparable baseline: the baseline is cut at the last
+     class advance or window change before the flip. Each model's baseline rate is weighted by the watch's calls,
+     and the reading fails only when the watch's boundaries exceed that expectation and the one-sided Poisson test
+     gives p < 0.05. It reads `unmeasured` when the compaction point moved more than 10%, or when the comparable
+     baseline holds fewer than 5 sessions or 20 boundaries. The box scope, a paired reading and the version mix are
+     context.
+  4. The credential, in the auth library's own vocabulary. It fails when the library's `bars` refuses the status,
+     when the code is in `NEEDS_SIGNIN_CODES` or `CONFIG_ERROR_CODES`, with no credential, with an expired token, or
+     when the last refresh is older than half the token's life plus 900 s. Any other code is context.
   5. The drift counters: every family's `unexplained` list is empty.
+
+  Every window event goes in the report's `events`, and the store's cumulative `store:*` outcomes go beside the
+  bridge. The instrument's docstring holds the full rules.
 - **Unmeasured is never pass.** A file that is absent, unreadable or of another version, a log with no line the
   reader recognises, and a window with no assistant call each read `unmeasured`, with the reason.
 - **The baseline window is the operator's to choose.** The lanes' measured windows were applied on 2026-10-22, five
@@ -370,7 +382,8 @@ line (Task 5).
 Nothing here is run by an agent unless the operator says so for that step.
 
 **R1. Take the watch's readings.** On the fleet box, for each lane, with the stamp of its switch from the Stage 2
-plan's records:
+plan's records. lane-b switched first (06:26:03Z) and lane-a six hours later (12:32:04Z), so each stamp is its own
+lane's:
 
 ```
 python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-b --flip 2026-10-27T06:26:03Z --baseline-since 2026-10-22T10:48:00Z
@@ -417,6 +430,12 @@ reported in the pull request that met it.
 **Done:** Task 0 (#2572), Task 1 (#2569), Task 2 (#2586), Task 3 (#2573), Task 4 (#2575), Task 5 (#2588),
 Task 6 (#2595), Task 8 (the README) and Task 9 (#2593, #2590). Task 10 needed no change. The first release that
 carries all of it is the one cut from Task 9's merge.
+
+**Task 0 was revised after its first live readings (2026-11-10).** Every failing reading came from the
+instrument's comparison, not from the lane. The 5xx rate counted `count_tokens` in the baseline only. The compaction
+rate compared a baseline taken mostly at the larger context window with a watch taken entirely at the smaller one.
+The credential failed on a stale upstream code. All three now measure like for like, and `unmeasured` still holds
+the stage.
 
 **Still to build:** wave 4c, which waits for R4. Task 7 is built: a new lane starts `direct`.
 
