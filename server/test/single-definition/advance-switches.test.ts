@@ -409,10 +409,11 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
   // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
-  // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
-  // `server/` any TS parser package counts (the 7.x compiler's `typescript/unstable/*` among them); elsewhere only the
-  // alias does, because the PWA's tests use the PWA's own TypeScript 6. KNOWN WIDTH: a `createRequire` require and a
-  // specifier built at run time are not seen.
+  // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). D-8288
+  // widens it to the whole repository: any TS parser package counts in every package (the 7.x compiler's
+  // `typescript/unstable/*` among them), because the PWA's census and scan suites now read the parser through
+  // `parse.ts` too (its `ts` export) rather than through the PWA's own TypeScript, and no other package declares the
+  // alias. KNOWN WIDTH: a `createRequire` require and a specifier built at run time are not seen.
   const SCAN_PARSER = 'typescript-api';
   const TS_PARSERS = ['typescript', SCAN_PARSER, 'oxc-parser', '@typescript-eslint/parser',
     '@typescript-eslint/typescript-estree', '@babel/parser', '@swc/core', 'acorn', 'esprima'];
@@ -425,8 +426,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     return [...new Set(r.stdout.split('\0').filter((f) => f && !/\.d\.[mc]?ts$/.test(f)))]
       .filter((f) => existsSync(path.join(ccrcRoot, f)))
-      .filter((f) => importsPkg(stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8')),
-        f.startsWith('server/') ? TS_PARSERS : [SCAN_PARSER]))
+      .filter((f) => importsPkg(stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8')), TS_PARSERS))
       .sort();
   };
 
@@ -443,8 +443,17 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(sees(`import x from ${q('typescript-api-extra')};`)).toBe(false);
   });
 
-  it('only scan/parse.ts imports a TS parser (D-5853)', () => {
+  it('only scan/parse.ts imports a TS parser, in any package (D-5853, D-8288)', () => {
     expect(parserImporters()).toEqual(['server/test/scan/parse.ts']);
+  });
+
+  it('no other package declares the parser alias: the server\'s pin is the one copy (D-8288)', () => {
+    for (const pkg of ['pwa', 'ui', 'agent']) {
+      const m = JSON.parse(readFileSync(path.join(ccrcRoot, pkg, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      expect({ pkg, dep: m.dependencies?.[SCAN_PARSER], dev: m.devDependencies?.[SCAN_PARSER] })
+        .toEqual({ pkg, dep: undefined, dev: undefined });
+    }
   });
 
   it('the parser is a dev-only dependency pinned exactly, and the lockfile resolves that version (D-5853)', () => {

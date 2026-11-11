@@ -1,6 +1,7 @@
 /**
  * D-5853 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0f; ARCH-00 (#525); spec
- * 2026-10-19-ccrc-consolidation-wave-design.md §8, rev 2.2). The ONE TypeScript parser the server's test scanners use.
+ * 2026-10-19-ccrc-consolidation-wave-design.md §8, rev 2.2). The ONE TypeScript parser the server's test scanners use,
+ * and, since D-8288, the PWA's source-parsing tests too (the `ts` export below).
  *
  * The server builds with TypeScript 7, whose package exports no `createSourceFile` (only `typescript/unstable/*`). The
  * operator chose (2026-10-20, OA-C1, option (a)) the stable, documented TypeScript 6 compiler API, installed as the
@@ -23,6 +24,13 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript-api';
+
+/** D-8288. The parser itself, for the suites that walk the raw TypeScript AST rather than read this file's facts: the
+ *  PWA's census and scan suites (`pwa/test/*`, `literalWalker.ts` among them) import it from here, so the repo has ONE
+ *  parser import and ONE pin (`typescript-api` in `server/package.json`), whatever TypeScript each package compiles
+ *  with. Parsing only: nothing that imports this builds a program to type-check shipped code. KNOWN WIDTH: a suite
+ *  that walks `ts` nodes is tied to this parser's AST, so swapping the parser here also moves those suites. */
+export { ts };
 
 /** One module edge: an `import`, an `export … from`, an `import x = require(…)`, a literal `import(…)` or a type
  *  query `import('…').T` / `typeof import('…')`, always type-only (D-6045: ARCH-04's ring rules see a type reached
