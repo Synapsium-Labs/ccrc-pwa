@@ -65,6 +65,7 @@ import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, fiveHourWords, i
 import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, RESUME_CARD_LINE_APPROVE, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, cancelRefused } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
+import { AccountHomeAble } from '../fleet/AccountHomeAble';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
@@ -502,6 +503,8 @@ export function AccountsScreen(): ReactNode {
           // off lane that is not ready says why it cannot be turned on; an on lane can always be switched off.
           const switchOn = acts.acked[wrapper] ?? answer.word !== 'off';
           const notReady = !switchOn && laneWire !== undefined && !laneWire.ready ? notReadyWords(laneWire.notReadyReason) : null;
+          // Whether new sessions start here (D-8195): the roster's `homeAble`, or as a placement ack set it.
+          const homeOn = acts.homeAcked[wrapper] ?? entry?.homeAble ?? true;
           const canAct = connect !== null && blocked === null && inRoster;
           // An Anthropic lane on a long-lived token: its credential act is Replace token (spec §4.4, §9).
           const tokenLane = entry?.provider === 'anthropic' && entry.kind === 'token';
@@ -623,6 +626,17 @@ export function AccountsScreen(): ReactNode {
                   busy={acts.busy[wrapper]}
                   onFlip={() => acts.flip(wrapper, !switchOn)}
                   onCheck={() => acts.check(wrapper)}
+                />
+              )}
+              {/* Start new sessions here (D-8195): its own row under the kill switch's, never inside it. */}
+              {connect !== null && inRoster && (
+                <AccountHomeAble
+                  id={wrapper}
+                  label={accountLabel(roster, wrapper)}
+                  on={homeOn}
+                  blocked={blocked}
+                  busy={acts.busy[wrapper]}
+                  onConfirm={(homeAble) => acts.place(wrapper, homeAble)}
                 />
               )}
               {/* The fold's credential act and Remove (spec §4.4; Task A19). Refused, they stay drawn and disabled, named by
