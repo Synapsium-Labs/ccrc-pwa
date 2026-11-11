@@ -78,6 +78,14 @@ describe('casesDue', () => {
       expect(due[0]!.evidence).toEqual([21, 31, 32]);
     }
   });
+  // The spec keys an occurrence by run, arm and key (§10.5), so an arm whose key is per delivery (`mail-stuck`, `coord-deaf`)
+  // or moves with each wait (the quiet ladder) can count one stall more than once; the shadow counts decide it in W4b.
+  it('known width (an open question for W4b): three queued deliveries behind one gate are three occurrences of mail-stuck', () => {
+    const rows = [row(11, 1, FROM + 1, 'mail-stuck', 101, 1), row(12, 1, FROM + 2, 'mail-stuck', 102, 1), row(13, 1, FROM + 3, 'mail-stuck', 103, 1)];
+    expect(casesDue({ rows, programOf: progs([1], 'prog-a'), newestCaseAt: new Map(), now: NOW })).toEqual([
+      { signature: 'stall-arm:mail-stuck', cause: 'count', occurrences: 3, programmes: ['prog-a'], evidence: [11, 12, 13], windowFrom: FROM },
+    ]);
+  });
   it('caseRunIds names each run of a parseable row once, ascending', () => {
     const rows = [row(1, 7, NOW, 'quiet'), row(2, 3, NOW, 'dead'), row(3, 7, NOW, 'dead'), { eventId: 4, runId: 1, at: NOW, detail: null }];
     expect(caseRunIds(rows)).toEqual([3, 7]);
