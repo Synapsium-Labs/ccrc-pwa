@@ -42,6 +42,13 @@ after it one `error` event, and it logs one line, `ccgpt-proxy: direct: <class n
 `errors.CODE_RE`, never `str(e)`, an argument or a traceback. The server's own `handle_error` (an exception outside a
 handler) logs the same line. No body, token or header value is logged or counted.
 
+ONE MORE LINE, FOR A PAGE. An upstream answer that is not the backend's own, judged by its media type (a non-2xx whose
+media type is not `application/json`, or a 2xx whose media type is neither `text/event-stream` nor absent: the CDN edge's
+HTML page, say) writes
+`ccgpt-proxy: direct: upstream-page <UTC stamp> status=<n> route=<messages|compact> type=<media type> edge=<yes|no>`
+(`log_upstream_page`), bounded tokens only, so the lane's bridge.log says when, on which route and with what status
+such an answer came. The answer itself is unchanged: `errors.classify_http` reads no code from it.
+
 THE START (`serve`). The stats file is loaded, then the reasoning store is opened (its start check, D-7676, reports
 to `Stats.store_event`), then the stats file is flushed, forced, before the port is bound (D-7677), so the file the
 doctor reads describes this process, its `startedAt` and its `store` entry, from its first moment.
@@ -376,6 +383,52 @@ def _media_type(headers: Mapping[str, str]) -> str:
     if not isinstance(value, str) or not value.strip():
         return "content-type:absent"
     return "content-type:" + value.split(";", 1)[0].strip().lower()
+
+
+# The log line of an upstream answer that is not the backend's own, judged by its media type (`is_upstream_page`,
+# `log_upstream_page`): that media type, as a token. A type or subtype outside this shape is logged as
+# `unrecognised`, never as received.
+_PAGE_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9.+_-]{0,31}/[a-z0-9][a-z0-9.+_-]{0,31}$")
+_MEDIA_PREFIX = "content-type:"
+_MEDIA_STREAM = _MEDIA_PREFIX + "text/event-stream"
+_MEDIA_JSON = _MEDIA_PREFIX + "application/json"
+_MEDIA_ABSENT = _MEDIA_PREFIX + "absent"
+
+
+def is_upstream_page(status: int, media: str) -> bool:
+    """Whether an upstream answer is not the backend's own, decided by its media type and never by its body: a 2xx whose
+    media type is neither `text/event-stream` nor absent (the backend's 2xx carries one of the two), or any other status
+    whose media type is not `application/json` (the backend's errors carry that, and `errors.classify_http` reads a code
+    from the JSON body). So an error whose JSON body rides another media type, or none, also writes the line; the
+    line says only what the answer's head said. `media` is `_media_type`'s answer."""
+    if 200 <= status < 300:
+        return media not in (_MEDIA_STREAM, _MEDIA_ABSENT)
+    return media != _MEDIA_JSON
+
+
+def log_upstream_page(status: int, headers: Mapping[str, str], *, compact: bool, now: Optional[float] = None) -> None:
+    """The one log line of an upstream answer that is not the backend's own (`is_upstream_page`), written to stderr,
+    which the lane's unit appends to its bridge.log:
+
+        ccgpt-proxy: direct: upstream-page <UTC stamp> status=<n> route=<messages|compact> type=<media type> edge=<yes|no>
+
+    `edge` is `yes` when the answer carries `cf-ray` and no `x-oai-request-id`: the CDN edge answered, not the backend.
+    Bounded tokens only: never the body, a request id, a header value other than the media type (and that only in the
+    shape _PAGE_TYPE_RE allows), or anything of the client's request. A line that cannot be written is dropped."""
+    try:
+        media = _media_type(headers)
+        kind = media[len(_MEDIA_PREFIX):]
+        if media != _MEDIA_ABSENT and not _PAGE_TYPE_RE.fullmatch(kind):
+            kind = errors.UNRECOGNISED_CODE
+        code = status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else 0
+        edge = "cf-ray" in headers and "x-oai-request-id" not in headers
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() if now is None else now))
+        sys.stderr.write("%supstream-page %s status=%d route=%s type=%s edge=%s\n"
+                         % (LOG_PREFIX, stamp, code, "compact" if compact else "messages", kind,
+                            "yes" if edge else "no"))
+        sys.stderr.flush()
+    except Exception:  # a log that cannot be written is dropped
+        pass
 
 
 def _fresh(lib: object, token: Optional[str], now: float) -> bool:
@@ -774,7 +827,10 @@ class _Request:
                 return errors.unavailable("the bridge stopped")
             up = self._waiting(out, self._post, turn, reading)
             st.stats.header_names(up.headers)
-            st.stats.name("responseHeader", _media_type(up.headers))
+            media = _media_type(up.headers)
+            st.stats.name("responseHeader", media)
+            if is_upstream_page(up.status, media):
+                log_upstream_page(up.status, up.headers, compact=turn.compaction)
             st.stats.usage_headers(up.headers)
             rid = errors.request_id_of(up.headers)  # the table's bounded reader of x-request-id / request-id / x-oai-request-id
             if 200 <= up.status < 300:
@@ -871,7 +927,7 @@ def _make_handler(state: _State) -> type:
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def log_message(self, *args: object) -> None:  # the bridge logs nothing per request
+        def log_message(self, *args: object) -> None:  # no line per request; one line per upstream page (log_upstream_page)
             pass
 
         def _write(self, data: bytes) -> None:
