@@ -35186,23 +35186,44 @@ _ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when th
 }
 
 _WS_HEAD_UNBORN_WHY=''
-_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC to that branch and the last
-  #                                `_ws_reclaim_tip_read` PROVED the branch absent; 1 when it is not so; 2 when
-  #                                HEAD could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
+_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is SYMBOLIC to a branch that names no commit: that
+  #                                branch, which the last `_ws_reclaim_tip_read` PROVED absent, or ANOTHER branch
+  #                                proven absent (D-8286); 1 when it is not so; 2 when HEAD, or the other branch it
+  #                                names, could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
   # THE ONE PREDICATE OF THE LADDER AND THE PIN (D-5944), so the audit never
   # promises what the pin refuses. An `update-ref -d` under a checkout leaves
   # HEAD naming nothing, and no WIP commit can stand on it. A DETACHED HEAD on a
   # gone branch is not this shape: it names a commit, and the pin keeps it.
   # `symbolic-ref` answers 1 for a detached HEAD; any other failure is a read
   # that did not run, which is never "not so".
-  local ref rc
+  # A HEAD ON ANOTHER BRANCH (D-8286, #2293's stated residue) is the same shape
+  # when that branch names no commit: an orphan checkout never born, or a drifted
+  # HEAD whose branch was deleted under it. The pin keeps a drifted HEAD's branch
+  # and commits the WIP commit on HEAD, and here HEAD resolves to nothing, so it
+  # refused on every pass a token the ladder had minted with an empty `head=`.
+  # Its branch is read three ways (`_ws_reclaim_branch_state`): only a branch
+  # PROVEN absent is this shape, a standing one is the ordinary drift, and a
+  # read that did not run is 2, never "not so".
+  local ref rc other st
   _WS_HEAD_UNBORN_WHY=''
-  [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
   ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null); rc=$?
   if (( rc == 0 )); then
-    [[ "$ref" == "refs/heads/$2" ]] || return 1
-    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
-    return 0
+    if [[ "$ref" == "refs/heads/$2" ]]; then
+      [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
+      _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+      return 0
+    fi
+    [[ "$ref" == refs/heads/?* ]] || return 1
+    other="${ref#refs/heads/}"
+    st=$(_ws_reclaim_branch_state "$1" "$other")
+    case "$st" in
+      "present "*) return 1 ;;
+      absent)
+        _WS_HEAD_UNBORN_WHY="$1 has $other checked out, but $other names no commit (never born, or gone from its repository) — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+        return 0 ;;
+    esac
+    _WS_HEAD_UNBORN_WHY="could not read whether $other, the branch $1 has checked out, exists"
+    return 2
   fi
   (( rc == 1 )) && return 1
   _WS_HEAD_UNBORN_WHY="could not read which branch $1 has checked out"

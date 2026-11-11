@@ -605,6 +605,46 @@ describe('rungs 7 to 9 and the identity refusal — the RECLAIM ladder’s, aske
     expect(refusalsOf(h.home), 'a terminal word: the audit journals it').toEqual([{ act: 'expire', token: 'branch-gone-checked-out' }]);
   }, 60_000);
 
+  // D-8286 — #2293's stated residue: a HEAD symbolic to ANOTHER branch that names no commit (an orphan checkout, or a
+  // drifted HEAD whose branch was deleted under it) passed the ladder with an empty `head=` and minted a token the pin
+  // then refused (`the HEAD … does not resolve`) on every pass. The one predicate the ladder and the pin share
+  // (`_ws_reclaim_head_unborn`) now asks it of whatever branch HEAD names, so the word is the same terminal one.
+  it.each([
+    ['an orphan checkout (never born)', (wt: string): void => { h.git(wt, 'checkout', '-q', '--orphan', 'ws/other'); }],
+    ['a drifted HEAD whose branch was deleted under it', (wt: string, main?: string): void => {
+      h.git(wt, 'checkout', '-q', '-b', 'ws/other');
+      h.git(main!, 'update-ref', '-d', 'refs/heads/ws/other');
+    }],
+  ])('a HEAD symbolic to another branch with no commit — %s — refuses branch-gone-checked-out, no token, and the verb refuses too', (_what, plant) => {
+    const { wt, main } = makeArchived(h);
+    plant(wt, main);
+    expect(h.git(wt, 'symbolic-ref', 'HEAD'), 'the CONTROL: HEAD names the other branch').toBe('refs/heads/ws/other');
+    const r = expireEvalOf(h);
+    expect(r.verdict, r.detail).toBe('branch-gone-checked-out');
+    expect(r.token, 'refused before any token is minted').toBe('');
+    expect(r.detail).toContain(`${wt} has ws/other checked out, but ws/other names no commit`);
+    const v = expireVerb(h, 'f'.repeat(64));
+    expect(JSON.parse(v.stdout)['refused'], v.stdout + v.stderr).toBe('branch-gone-checked-out');
+    expect(fs.existsSync(wt), 'the tree stands').toBe(true);
+    expect(fs.existsSync(reg('reaping')), 'no breadcrumb').toBe(false);
+  }, 90_000);
+
+  it('a HEAD drifted onto another branch that EXISTS still passes — that branch is kept, never refused', () => {
+    const { wt } = makeArchived(h);
+    h.git(wt, 'checkout', '-q', '-b', 'ws/other');
+    const r = expireEvalOf(h);
+    expect(r.verdict, r.detail).toBe('expirable');
+    expect(r.token).toMatch(/^[0-9a-f]{64}$/);
+  }, 60_000);
+
+  it('a branch HEAD names that cannot be read is unmeasured, never refused and never a token', () => {
+    const { wt } = makeArchived(h);
+    h.git(wt, 'checkout', '-q', '--orphan', 'ws/other');
+    const r = expireEvalOf(h, { pre: 'git() { case "$*" in *"show-ref --exists refs/heads/ws/other"*) return 1 ;; esac; command git "$@"; };' });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+  }, 60_000);
+
   it('the ws-expire verb refuses it at its in-lock recompute: nothing is pinned or removed', () => {
     const { wt, main } = makeArchived(h);
     h.git(main, 'update-ref', '-d', `refs/heads/${EXP_BRANCH}`);
