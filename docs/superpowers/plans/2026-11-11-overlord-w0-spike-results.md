@@ -328,17 +328,19 @@ column**; a resume fork is a separate act, and the fork refusal line (keyed on `
 **W0-11, the subagent model against a call that names another (rig, both builds, identical).** `ov-subagent-model`:
 `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` and an `--agents` reader defined with `model: sonnet`; the mock made four Agent
 calls in one turn (a general-purpose and a reader call each naming `opus`, and each naming no model). The two calls
-naming `opus` carried `model: opus` in their PreToolUse payload and **ran on Opus** (the sub request's `model`):
-neither the env nor the reader's definition held against a per-call model, as the documentation's order says. The two
-naming no model never ran: ccrc's own hook refused them (D-6798, "this Agent call names no model").
-`ov-subagent-model-force`, the same with `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` and the setting sources pinned
-(`project,local`, its grants in a `--settings` file, so ccrc's hook is not loaded): **all four calls ran on Sonnet.**
-`ov-subagent-model-force-hook`, the same with FORCE and the default sources, so ccrc's hook is loaded: **all four
-PreToolUse payloads carried no `model`**, the two that named `opus` included, ccrc's hook refused all four with its
-D-6798 reason, and no subagent started. **Outcome: a pin holds, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, so the profile
-uses it** (C55 stands; no PreToolUse arm is needed for the model). **A conflict found:** under FORCE the payload's
-`tool_input` reaches PreToolUse without `model`, so ccrc's D-6798 arm refuses every Agent call in such a session
-(proposal 1, last section).
+naming `opus` carried `model: opus` in their PreToolUse payload and **ran on Opus** (the sub request's `model`): neither
+the env nor the reader's definition held against a per-call model, as the documentation's order says. The two naming no
+model never ran: ccrc's own hook refused them (D-6798, "this Agent call names no model"). `ov-subagent-model-force`, the
+same with `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` and the setting sources pinned (`project,local`, its grants in a
+`--settings` file, so ccrc's hook is not loaded): **all four calls ran on Sonnet.** `ov-subagent-model-force-hook`, the
+same with FORCE and the default sources, so ccrc's hook is loaded: **all four PreToolUse payloads carried no `model`**,
+the two that named `opus` included, ccrc's hook refused all four with its D-6798 reason, and no subagent started. The
+refusals came back in two shapes: the two calls that named `opus` as the bare reason ("ccrc: this Agent call names no
+model…"), the two that named none as "PreToolUse:Agent hook error: ccrc: …", the shape the control's two refused calls
+take too; which path in Claude Code makes the difference is not measured. **Outcome: a pin holds,
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, so the profile uses it** (C55 stands; no PreToolUse arm is needed for the model).
+**A conflict found:** under FORCE the payload's `tool_input` reaches PreToolUse without `model`, so ccrc's D-6798 arm
+refuses every Agent call in such a session (proposal 1, last section).
 
 **W0-12, a typed `/model` and the flagged-request switch (rig, both builds, identical; the refusal emulated).**
 `ov-model-switch` registered `PreModelSwitch` and `PostModelSwitch` emitters and a statusline capture, with
@@ -599,4 +601,5 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
    did run: Figure 3 draws `needs-you` to `done` with no actor in Table 5.1b, and the note door at `off` (Table 7.1a
    has no cell for it).
 10. **The uuid comments (W0-05).** The attribution comment in `server/src/coord/routes.ts` and the socket header in
-    `server/src/sessionws.ts` say a compaction rotates the uuid; it does not. A follow-up issue, not W0.
+    `server/src/sessionws.ts` say a compaction rotates the uuid; a manual compaction does not, and a real automatic one
+    is unmeasured (W0-05). A follow-up issue, not W0.
