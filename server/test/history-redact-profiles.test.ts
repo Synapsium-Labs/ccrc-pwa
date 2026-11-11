@@ -156,7 +156,7 @@ describe('every history redaction door, byte for byte, as main reads it (D-5867,
 // The mutation table's two history rows (plan Step 5; the history coordinator's ack), kept as CONTROL rows: each mutant is
 // built as a temporary copy of the trusted bytes with one edit, asserted to apply exactly once, and shown to change what the
 // pins above read. Run against the real suites, mutant 1 reds 29 rows (the rule-set and digest pins above, 18 of
-// history-lib's (j) cases among them (j5), (j7) and (j14), the owed-hit probe rows) and mutant 2 reds 18 ((j7) and (j14)
+// history-lib's (j) cases among them (j5), (j7) and (j14), the owed-hit probe rows) and mutant 2 reds 17 ((j7) and (j14)
 // among them). Neither reds (j9) or (j10): those hold v2(base) and subtraction for ANY two rule sets, so a swapped base
 // leaves them green, which the first row shows.
 describe('CONTROL: the two history mutants change what the pins read (D-5867, C1l PR 2, Step 5)', () => {
