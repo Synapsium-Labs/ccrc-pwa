@@ -3340,6 +3340,36 @@ R15 gains one sentence for each changed rule, and nothing else in the spec chang
 **Acceptance.** Every review 1769 shape the brief names is a row; the budget pins hold with recorded margins; the mutation
 count is recorded in `c22.md`. **Rollback.** A plain revert.
 
+### Task C23: the gh reader claims a lost flag only where its command gives a number (D-8279) — now
+
+**Why.** Review 1778, the review of Task C22, carried four findings and two pre-existing holes: a command with no number of
+its own still claimed its repository flags, so a second source for the number won (A1, and main's `-s -R` and P2 shapes); a
+flag on the first line of a continued command was no command's (P1); a `gh` word standing where a flag value is expected
+formed a phantom command (A2); one command with many flag words threw `RangeError` (L2-1); and a C20 guard lost its pin
+(L3-1). The rule stays as R15 sets it: open the repository the message means, or stay text. The receipts are in `c23.md`.
+
+**Items, and what was done.**
+- **A1, P2 and the spaced `-s -R`.** A `gh` command that ends with no number of its own claims none of its repository flags,
+  read or lost, so each is a candidate for every number the message gives a repository, and rule 2 gives text.
+- **P1.** A line continuation (a backslash at a line's end) is whitespace inside a `gh` command.
+- **A2.** A `gh` word where a flag value is expected still ends the command, and the command it ends gives its number to an
+  unknown repository.
+- **L2-1.** No spread of an unbounded array into call arguments in `chatRepoEvidence.ts` or `chatRefs.ts`; budget pins for
+  one command holding many flag words at 1 MiB. `c22.md`'s "linear in time and memory" is corrected.
+- **L3-1.** A row whose quoted value names the command's own repository kills the C20 quoted-value mutant again; `c20.md` is
+  corrected.
+- **L3-5.** An unclaimed flag is a candidate for a commit the message gives a repository, as for a number.
+- **L2-2.** A value the net cuts at the next flag names an unknown repository, never home.
+- **Recorded only.** L2-3 and L1-M2/L3-6 are accepted costs that fail toward text; the CJK letter before `gh` stays home, as
+  ruled in C22. The record nits L3-2, L3-3 and L3-4 are fixed.
+
+R15 gains one sentence for each changed rule (A1, P1, A2, L3-5, L2-2), and nothing else in the spec changes.
+
+- **D-8279** - `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Departures are named by slug in `c23.md`.
+
+**Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
+differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

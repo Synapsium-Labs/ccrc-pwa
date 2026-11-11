@@ -336,10 +336,10 @@ describe('fix round 2: gh commands, emphasis and the unread spellings (Task C21,
       'gh repo clone owner-b/repo-b and #12', '#12 in owner-b/repo-b', 'In owner-b/repo-b, #12 is green',
       'gitlab.com/owner-b/repo-b/-/merge_requests/12 #12',
     ]) expect(links(text, HOME).filter(([t]) => t === '#12'), text).toEqual([['#12', home(12)]]);
-    // Since review 1768's net (Task C20), a glued -R and a flag after a continued line name their repository: text.
-    for (const text of ['gh pr view 12 -Rowner-b/repo-b and #12', 'gh pr view 12 \\\n  --repo owner-b/repo-b and #12']) {
-      expect(links(text, HOME).filter(([t]) => t === '#12'), text).toEqual([['#12', null]]);
-    }
+    // Since review 1768's net (Task C20), a glued -R names its repository: text.
+    expect(links('gh pr view 12 -Rowner-b/repo-b and #12', HOME)).toEqual([['#12', null]]);
+    // Since Task C23 (review 1778 P1) a continued line is the command's own, so its flag is the number's: owner-b.
+    expect(links('gh pr view 12 \\\n  --repo owner-b/repo-b and #12', HOME)).toEqual([['#12', issue('owner-b/repo-b', 12)]]);
   });
 
   it('F4: in raw text a qualified name under _ is no name, under * it is (the render half is in chat-links)', () => {
@@ -814,9 +814,9 @@ describe('Task C22: the gh net in linear time, and its last gaps fail toward tex
       // A multi-line quoted --jq before the path, bare and fenced.
       ["gh api --jq '.title\n| ascii' repos/owner-b/repo-b/pulls/12 and #12", [['#12', null]]],
       ["```\ngh api --jq '.title\n| ascii' repos/owner-b/repo-b/pulls/12\n```\n#12 is the one", [['#12', null]]],
-      // A line continuation before the path.
-      ['gh api \\\n  repos/owner-b/repo-b/pulls/12 and #12', [['#12', null]]],
-      ['```\ngh api \\\n  /repos/owner-b/repo-b/pulls/12\n```\n#12', [['#12', null]]],
+      // A line continuation before the path: since Task C23 (review 1778 P1) it is whitespace, so the path is read.
+      ['gh api \\\n  repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
+      ['```\ngh api \\\n  /repos/owner-b/repo-b/pulls/12\n```\n#12', [['#12', b(12)]]],
       // A boolean the api set does not hold (a future gh flag) takes the path as its value.
       ['gh api --unknown-bool repos/owner-b/repo-b/pulls/12 and #12', [['#12', null]]],
       // A lost path is no command's, so another command naming its number elsewhere does not decide it (F3); a read path is
@@ -847,7 +847,8 @@ describe('Task C22: the gh net in linear time, and its last gaps fail toward tex
       // unclaimed flag never makes a link of its own; claimed flags are their commands'.
       ['gh pr view 12 -R owner-b/repo-b; cp -R owner-b/repo-b /x; #12', [['#12', b(12)]]],
       ['cp -R src/lib /x; gh pr list; #12', [['#12', null]]],
-      ['gh pr view 12 \\\n--repo owner-b/repo-b\n#12', [['#12', null]]],
+      // Since Task C23 (review 1778 P1) the continued line is the command's, so its flag is the number's.
+      ['gh pr view 12 \\\n--repo owner-b/repo-b\n#12', [['#12', b(12)]]],
       ['gh pr view 12 -R owner-b/repo-b; gh pr view 13 -R owner-c/repo-c; #12 and #13', [['#12', b(12)], ['#13', c(13)]]],
       // A lost command's flag is that command's too: its value spelled as a flag, a run, a glued spelling.
       ['gh pr merge 40 -s -R owner-b/repo-b; gh pr view 41 -R owner-c/repo-c; #41', [['#41', c(41)]]],
@@ -897,6 +898,141 @@ describe('Task C22: the gh net in linear time, and its last gaps fail toward tex
       // Controls: the home repository is home; a word ending in GH_REPO is none.
       ['GH_REPO: org-a/project-a and #12', [['#12', home(12)]]],
       ['MY_GH_REPO: owner-b/repo-b and #12', [['#12', home(12)]]],
+    ]);
+  });
+});
+
+describe('Task C23: a command claims its repository flags only where it gives a number (review 1778)', () => {
+  const home = (n: number): string => issue('org-a/project-a', n);
+  const b = (n: number): string => issue('owner-b/repo-b', n);
+  const c = (n: number): string => issue('owner-c/repo-c', n);
+  const commitB = 'https://github.com/owner-b/repo-b/commit/1234567abc';
+  const rows = (table: [string, [string, string | null][]][]): void => {
+    for (const [text, expected] of table) expect(links(text, HOME), text).toEqual(expected);
+  };
+  /** `text`, then a second source naming #12 in owner-c/repo-c, and a bare #12. */
+  const second = (text: string): [string, [string, string | null][]] => [
+    `${text}; owner-c/repo-c#12 and #12`, [['owner-c/repo-c#12', c(12)], ['#12', null]],
+  ];
+  /** `text`, then a pull page of owner-c/repo-c's #12, and a bare #12. */
+  const page = (text: string): [string, [string, string | null][]] => [
+    `${text}; https://github.com/owner-c/repo-c/pull/12 and #12`, [['#12', null]],
+  ];
+
+  it('A1, P2 and the spaced -s -R: a command with no number of its own claims no repository flag', () => {
+    rows([
+      // A glued run before the number takes no next word, so the repository is a positional and the number is past them.
+      second('gh pr merge -sR owner-b/repo-b 12'),
+      second('gh pr merge -sdR owner-b/repo-b 12'),
+      second('gh -dR owner-b/repo-b pr view 12'),
+      page('gh pr merge -sR owner-b/repo-b 12'),
+      page('gh -dR owner-b/repo-b pr view 12'),
+      // The spaced -s takes -R as its value (main's hole).
+      second('gh pr merge -s -R owner-b/repo-b 12'),
+      page('gh pr merge -s -R owner-b/repo-b 12'),
+      // A value flag that swallows the number (P2).
+      second('gh pr merge -s 12 -R owner-b/repo-b'),
+      second('gh pr merge -m 12 -R owner-b/repo-b'),
+      second('gh pr list -e 12 --repo owner-b/repo-b'),
+      page('gh pr merge -s 12 --repo=owner-b/repo-b'),
+      // Controls, as before: the run after the number; -R, --repo and a run before it.
+      second('gh pr merge 12 -sR owner-b/repo-b'),
+      second('gh pr merge -R owner-b/repo-b 12'),
+      second('gh pr merge --repo owner-b/repo-b 12'),
+      second('gh pr merge -dR owner-b/repo-b 12'),
+      ['gh pr merge -R owner-b/repo-b 12 and #12', [['#12', b(12)]]],
+      ['gh pr merge 12 -sR owner-b/repo-b and #12', [['#12', null]]],
+      // A command that gives its number keeps its flags: another command's number is still decided by its own.
+      ['gh pr view 12 -R owner-b/repo-b; gh pr view 13 -R owner-c/repo-c; #12 and #13', [['#12', b(12)], ['#13', c(13)]]],
+      // The accepted cost: a numberless command's flag is a candidate for every number, so this owner-c link is text now.
+      ['gh pr list -R owner-b/repo-b; gh pr view 13 -R owner-c/repo-c; #13', [['#13', null]]],
+      // Its own repository still names one.
+      ['gh pr list -R owner-b/repo-b; gh pr view 13 -R owner-b/repo-b; #13', [['#13', b(13)]]],
+      // A gh api path is no repository flag: a path its command read stays that command's, with a number or without one
+      // (c23.md, api-path-claim-unchanged).
+      ['gh api repos/owner-b/repo-b; gh pr view 13 -R owner-c/repo-c; #13', [['#13', c(13)]]],
+    ]);
+  });
+
+  it('P1: a line continuation is whitespace inside a gh command, so a flag on the first line is the next line\'s number\'s', () => {
+    rows([
+      ['gh pr view --repo owner-b/repo-b \\\n12\nowner-c/repo-c#12 and #12', [['owner-c/repo-c#12', c(12)], ['#12', null]]],
+      ['gh -R owner-b/repo-b \\\npr view 12\nowner-c/repo-c#12 and #12', [['owner-c/repo-c#12', c(12)], ['#12', null]]],
+      ['gh pr view --repo owner-b/repo-b \\\r\n12\r\nowner-c/repo-c#12 and #12', [['owner-c/repo-c#12', c(12)], ['#12', null]]],
+      // With no second source the command's repository is the number's: a link, where it was text.
+      ['gh pr view --repo owner-b/repo-b \\\n12\n#12', [['#12', b(12)]]],
+      ['gh -R owner-b/repo-b \\\npr view 12\n#12', [['#12', b(12)]]],
+      ['gh pr view --repo owner-b/repo-b \\\r\n12\r\n#12', [['#12', b(12)]]],
+      // Controls: a backslash not at a line's end is a word; a line break with no backslash still ends the command.
+      ['gh pr view 12 \\ -R owner-b/repo-b and #12', [['#12', null]]],
+      ['gh pr view --repo owner-b/repo-b\n12 and #12', [['#12', null]]],
+    ]);
+  });
+
+  it('A2: a gh word where a flag value stands ends the command, and the command it ends gives its number to no repository', () => {
+    rows([
+      page('gh pr view 12 --title GH -R owner-b/repo-b'),
+      ['gh pr view 12 --title GH -R owner-b/repo-b and #12', [['#12', null]]],
+      page('gh pr view 12 --title Gh -R owner-b/repo-b'),
+      page('gh pr view 12 --title gh.exe -R owner-b/repo-b'),
+      page('gh pr view 12 --title GH.EXE -R owner-b/repo-b'),
+      page('gh pr view 12 --title gh -R owner-b/repo-b'),
+      second('gh issue edit 12 --add-label GH -R owner-b/repo-b'),
+      second('gh pr comment -b GH 12 -R owner-b/repo-b'),
+      // The void command's number is unknown even where the command after it gives a number of its own.
+      second('gh pr view 12 --title GH pr view 13 -R owner-b/repo-b'),
+      second('gh pr view 12 --title GH'),
+      // A flag read before the cut does not save the number; an api command cut after its path gives the path's number to no
+      // repository too.
+      ['gh pr view 12 -R owner-b/repo-b --title GH and #12', [['#12', null]]],
+      ['gh api repos/owner-b/repo-b/pulls/12 --jq GH and #12', [['#12', null]]],
+      // Controls: a quoted value is a value and reads normally; a gh word where no value is expected ends the command, which
+      // keeps its number.
+      ['gh pr view 12 --title "GH" -R owner-b/repo-b and #12', [['#12', b(12)]]],
+      second('gh pr view 12 --title "GH" -R owner-b/repo-b'),
+      ['gh pr view 12 -R owner-b/repo-b gh pr view 13 -R owner-c/repo-c; #12 and #13', [['#12', b(12)], ['#13', c(13)]]],
+    ]);
+  });
+
+  it('L2-1: one command holding many flag words reads in linear time, with no spread into call arguments (c23.md)', () => {
+    for (const prefix of ['gh ', 'gh pr view 12 ']) {
+      for (const unit of ['-R ', '--repo ', '-R a ', "'-R' "]) {
+        const text = `${prefix}${unit.repeat(Math.ceil((1 << 20) / unit.length))}`;
+        const t = performance.now();
+        const said = messageRepos(text);
+        expect(performance.now() - t, `${prefix}${unit}`).toBeLessThan(GH_FLAG_RUN_BOUND_MS);
+        expect(said.named.size, `${prefix}${unit}`).toBeLessThanOrEqual(3);
+      }
+    }
+  });
+
+  it('L3-1: a quoted value that names the command\'s own repository leaves it the number\'s', () => {
+    rows([['gh pr comment 12 -R owner-b/repo-b --body "--repo=owner-b/repo-b" and #12', [['#12', b(12)]]]]);
+  });
+
+  it('L3-5: an unclaimed flag is a candidate for a commit the message gives a repository, as for a number', () => {
+    rows([
+      [`${commitB}; gh pr list; cp -R owner-c/repo-c /x; 1234567abc`, [['1234567abc', null]]],
+      [`${commitB}; gh pr list; cp -R owner-c/repo-c /x; 1234567a`, [['1234567a', null]]],
+      // Two candidates, the first the address's own: still two repositories.
+      [`${commitB}; gh pr list; cp -R owner-b/repo-b /x; cp -R owner-c/repo-c /y; 1234567abc`, [['1234567abc', null]]],
+      // Controls: no unclaimed flag, or one naming the address's own repository, leaves the address's repository.
+      [`${commitB}; gh pr list; 1234567abc`, [['1234567abc', `${commitB}`]]],
+      [`${commitB}; gh pr list; cp -R owner-b/repo-b /x; 1234567abc`, [['1234567abc', `${commitB}`]]],
+      // A qualified name in the same message still opens its own repository (rule 1).
+      [`${commitB}; gh pr list; cp -R owner-c/repo-c /x; 1234567abc and owner-b/repo-b#12`,
+        [['1234567abc', null], ['owner-b/repo-b#12', b(12)]]],
+    ]);
+  });
+
+  it('L2-2: a value the net cuts at the next flag names an unknown repository, never home', () => {
+    rows([
+      ['gh pr list; -R org-a/project-a.-R=org-a/project-a; #12', [['#12', null]]],
+      // Controls: values that end before the next flag read as before.
+      ['gh pr list; -R org-a/project-a -R=org-a/project-a; #12', [['#12', home(12)]]],
+      ['gh pr list; -R org-a/project-a; #12', [['#12', home(12)]]],
+      // A value that ends at the text's end is whole, not cut.
+      ['#12; gh pr list -R org-a/project-a', [['#12', home(12)]]],
     ]);
   });
 });
