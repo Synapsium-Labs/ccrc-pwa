@@ -28,11 +28,11 @@ const AMBIENT_CALLS: Record<string, () => unknown> = {
 };
 
 describe('simulate and the seed-replay convention', () => {
-  it('the same seed gives the same lines, twice', () => {
-    expect(simulate(coin, 7, []).lines).toEqual(simulate(coin, 7, []).lines);
+  it('the same seed gives the same lines, twice', async () => {
+    expect((await simulate(coin, 7, [])).lines).toEqual((await simulate(coin, 7, [])).lines);
   });
-  it('two seeds give different lines', () => {
-    expect(simulate(coin, 1, []).lines).not.toEqual(simulate(coin, 2, []).lines);
+  it('two seeds give different lines', async () => {
+    expect((await simulate(coin, 1, [])).lines).not.toEqual((await simulate(coin, 2, [])).lines);
   });
   it('simSeeds: the defaults, one replayed seed, a soak, and a typo', () => {
     expect(simSeeds([5, 6], {})).toEqual([5, 6]);
@@ -42,37 +42,44 @@ describe('simulate and the seed-replay convention', () => {
     expect(() => simSeeds([5], { CCRC_SIM_SEEDS: '0' })).toThrow(/CCRC_SIM_SEEDS/);
     expect(() => simSeeds([5], { CCRC_SIM_SEED: '1', CCRC_SIM_SEEDS: '3' })).toThrow(/CCRC_SIM_SEED/);
   });
-  it('a violation names the scenario, seed, invariant, line and replay command', () => {
+  it('a violation names the scenario, seed, invariant, line and replay command', async () => {
     const neverTails: Invariant = { name: 'never-tails', says: 'no tails', check: (ls) => {
       const l = ls.find((x) => x.state === 'tails'); return l ? { invariant: 'never-tails', seq: l.seq, message: 'tails' } : null; } };
-    expect(() => assertScenario(coin, [neverTails], { seeds: [1], testFile: 'test/sim/run.test.ts', env: {} })).toThrow(
+    await expect(assertScenario(coin, [neverTails], { seeds: [1], testFile: 'test/sim/run.test.ts', env: {} })).rejects.toThrow(
       /scenario coin, seed 1: never-tails: tails \(line \d+\)\nreplay: cd server && CCRC_SIM_SEED=1 \.\/node_modules\/\.bin\/vitest run test\/sim\/run\.test\.ts/);
   });
-  it('an edge no seed reaches is red, and names the edge', () => {
+  it('an edge no seed reaches is red, and names the edge', async () => {
     const never = { ...coin, edges: ['heads', 'tails', 'edge'] as const };
-    expect(() => assertScenario(never, [], { seeds: [1, 2, 3], testFile: 't', env: {} })).toThrow(/never reached: edge/);
-    expect(() => assertScenario(never, [], { seeds: [1], testFile: 't', env: { CCRC_SIM_SEED: '1' } })).not.toThrow();
+    await expect(assertScenario(never, [], { seeds: [1, 2, 3], testFile: 't', env: {} })).rejects.toThrow(/never reached: edge/);
+    await expect(assertScenario(never, [], { seeds: [1], testFile: 't', env: { CCRC_SIM_SEED: '1' } })).resolves.toBeUndefined();
   });
-  it.each(['Date.now', 'performance.now', 'Math.random', 'setTimeout', 'setInterval', 'setImmediate'])('the ambient guard refuses %s', (name) => {
+  it.each(['Date.now', 'performance.now', 'Math.random', 'setTimeout', 'setInterval', 'setImmediate'])('the ambient guard refuses %s', async (name) => {
     const bad = { ...coin, setup: () => { AMBIENT_CALLS[name]!(); } };
-    expect(() => simulate(bad, 1, [])).toThrow(`ambient ${name} inside the simulator`);
+    await expect(simulate(bad, 1, [])).rejects.toThrow(`ambient ${name} inside the simulator`);
   });
-  it('a scheduled call that throws fails the run, not only a warning line', () => {
+  it('a scheduled call that throws fails the run, not only a warning line', async () => {
     const bad = { ...coin, setup: (ctx: SimContext<CoinEdge>) => {
       ctx.world.server.scheduler.after(1, () => { throw new Error('boom'); }); } };
-    expect(() => simulate(bad, 1, [])).toThrow('scenario coin, seed 1: ccrc-server: a scheduled call failed: boom');
+    await expect(simulate(bad, 1, [])).rejects.toThrow('scenario coin, seed 1: ccrc-server: a scheduled call failed: boom');
   });
-  it('a timer that re-arms at 0 ms fails the run at the budget, instead of hanging', () => {
+  it.each([
+    ['at once', async (): Promise<void> => { throw new Error('later'); }],
+    ['after three awaits', async (): Promise<void> => { await null; await null; await null; throw new Error('later'); }],
+  ])('a scheduled call that returns a promise rejecting %s fails the run', async (_when, fn) => {
+    const bad = { ...coin, setup: (ctx: SimContext<CoinEdge>) => { ctx.world.server.scheduler.after(1, fn); } };
+    await expect(simulate(bad, 1, [])).rejects.toThrow('scenario coin, seed 1: ccrc-server: a scheduled call failed: later');
+  });
+  it('a timer that re-arms at 0 ms fails the run at the budget, instead of hanging', async () => {
     const loop = { ...coin, setup: (ctx: SimContext<CoinEdge>) => {
       const again = (): void => { ctx.world.envAfter(0, again); };
       ctx.world.envAfter(0, again); } };
-    expect(() => simulate(loop, 1, [])).toThrow(/scheduled calls/);
+    await expect(simulate(loop, 1, [])).rejects.toThrow(/scheduled calls/);
   });
-  it('the real functions are back after a run, a failed one included', () => {
+  it('the real functions are back after a run, a failed one included', async () => {
     const g = globalThis;
     const saved = { now: Date.now, perf: performance.now, random: Math.random, st: g.setTimeout, si: g.setInterval, sim: g.setImmediate };
     const bad = { ...coin, setup: () => { throw new Error('boom'); } };
-    expect(() => simulate(bad, 1, [])).toThrow('boom');
+    await expect(simulate(bad, 1, [])).rejects.toThrow('boom');
     expect(Date.now).toBe(saved.now);
     expect(performance.now).toBe(saved.perf);
     expect(Math.random).toBe(saved.random);

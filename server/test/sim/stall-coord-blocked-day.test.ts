@@ -46,16 +46,39 @@ describe('the coord-blocked arm over a seeded day (Overlord W1a worked example, 
     const lines = seqOf([...DOWN, ['sim', 'x', 'end', 'sim', BOOT_AT + STALL_SWEEP_MS + 1]]);
     expect(byName('CB-reach').check(lines)?.invariant).toBe('CB-reach');
   });
-  it('CONTROL: CB-rung-never-falls goes red on rung-2 then rung-1 in one episode, and not across a boot', () => {
-    const open: Row = ['episode', '0', 'open', 'stalls', 0];
+  it('CONTROL: CB-reach judges a crash line while the server is still up, so a push missed before the crash is red', () => {
+    // Applied before it is judged, the crash would hide the miss: the server is down, then the boot restarts the clock.
+    const lines = seqOf([['server', 'boot', 'up', 'sim', 0], ['mail', '1', 'queued', 'worker', 0],
+      ['held', C, 'some', 'stalls', 60_000], ['server', 'crash', 'down', 'sim', COORD_BLOCKED_HELD_MS + STALL_SWEEP_MS + 1],
+      ['server', 'boot', 'up', 'sim', COORD_BLOCKED_HELD_MS + 3 * STALL_SWEEP_MS],
+      ['push', '0', 'rung-1', 'stalls', COORD_BLOCKED_HELD_MS + 3 * STALL_SWEEP_MS]]);
+    expect(byName('CB-reach').check(lines)).toMatchObject({ invariant: 'CB-reach', seq: 4 });
+  });
+  it('CONTROL: CB-reach wants the push at the first sweep at or after the threshold, not one sweep later', () => {
+    const late = (queuedAt: number, pushAt: number): SequenceLine[] => seqOf([['server', 'boot', 'up', 'sim', 0],
+      ['mail', '1', 'queued', 'worker', queuedAt], ['held', C, 'some', 'stalls', queuedAt],
+      ['verdict', C, 'rung-1', 'stalls', pushAt], ['push', String(queuedAt), 'rung-1', 'stalls', pushAt]]);
+    // A mail queued on a sweep falls due on a sweep: the push is due at that sweep itself.
+    expect(byName('CB-reach').check(late(0, COORD_BLOCKED_HELD_MS))).toBeNull();
+    expect(byName('CB-reach').check(late(0, COORD_BLOCKED_HELD_MS + STALL_SWEEP_MS))?.invariant).toBe('CB-reach');
+    // A mail queued half a sweep after one falls due between two: the next sweep is in time, and the sweep after is not.
+    const half = STALL_SWEEP_MS / 2;
+    expect(byName('CB-reach').check(late(half, COORD_BLOCKED_HELD_MS + STALL_SWEEP_MS))).toBeNull();
+    expect(byName('CB-reach').check(late(half, COORD_BLOCKED_HELD_MS + 2 * STALL_SWEEP_MS))?.invariant).toBe('CB-reach');
+  });
+  it('CONTROL: CB-rung-never-falls goes red on rung-2 then rung-1 while mail stays held, and not across a boot or a release', () => {
+    // The stretch is the lane's held lines; no episode line is needed, so a decider that returns none cannot hide a fall.
+    const held: Row = ['held', C, 'some', 'stalls', 0];
     const two: Row = ['verdict', C, 'rung-2', 'stalls', 60_000];
     const one: Row = ['verdict', C, 'rung-1', 'stalls', 180_000];
-    expect(byName('CB-rung-never-falls').check(seqOf([open, two, one]))?.invariant).toBe('CB-rung-never-falls');
+    expect(byName('CB-rung-never-falls').check(seqOf([held, two, one]))?.invariant).toBe('CB-rung-never-falls');
     const boot: Row = ['server', 'boot', 'up', 'sim', 120_000];
-    const reopen: Row = ['episode', '0', 'open', 'stalls', 120_000];
-    expect(byName('CB-rung-never-falls').check(seqOf([open, two, boot, reopen, one]))).toBeNull();
+    const heldAgain: Row = ['held', C, 'some', 'stalls', 120_000];
+    expect(byName('CB-rung-never-falls').check(seqOf([held, two, boot, heldAgain, one]))).toBeNull();
+    const none: Row = ['held', C, 'none', 'stalls', 120_000];
+    expect(byName('CB-rung-never-falls').check(seqOf([held, two, none, heldAgain, one]))).toBeNull();
   });
-  it('holds both invariants on every seed, and the seeds reach every edge', () => {
-    assertScenario(coordBlockedDay(stall), COORD_BLOCKED_INVARIANTS, { seeds: simSeeds(SEEDS), testFile: FILE });
+  it('holds both invariants on every seed, and the seeds reach every edge', async () => {
+    await assertScenario(coordBlockedDay(stall), COORD_BLOCKED_INVARIANTS, { seeds: simSeeds(SEEDS), testFile: FILE });
   });
 });

@@ -4,6 +4,9 @@
 import type { Cancel, Clock, Entropy, Scheduler, TimePorts } from '../../src/time/ports.js';
 import { fakeTime, type FakeTime } from '../fakeTime.js';
 
+/** How many microtask turns settle() waits at most for the promises scheduled calls returned. */
+const SETTLE_TURNS = 10_000;
+
 /** The time-ports fake, plus what it has not: a crash that drops the server's timers and boots it again as a world
  *  event, and a skew between the server's wall clock and the host's. Mono starts at 0 and runs on across a crash. */
 export class SimWorld {
@@ -23,6 +26,9 @@ export class SimWorld {
   // throw becomes the fake's warning, the re-arm stops and simulate fails on the warning.
   private readonly maxCalls: number;
   private calls = 0;
+  // Every promise a scheduled call returned and that has not settled yet, so that settle() can wait for them. The fake
+  // records a rejection in a `.catch` it attaches after the call returns, so the rejection lands one microtask later.
+  private readonly unsettled = new Set<Promise<unknown>>();
 
   constructor(opts: { readonly wallMs: number; readonly seed: number; readonly maxCalls?: number }) {
     this.maxCalls = opts.maxCalls ?? 200_000;
@@ -44,14 +50,30 @@ export class SimWorld {
   /** The world's own timer (the fleet, the operator, the coordinator): the fake's `after`. Survives crash(). */
   envAfter(ms: number, fn: () => unknown): Cancel { return this.time.ports.scheduler.after(ms, this.budgeted(fn)); }
 
-  /** Wraps a scheduled call: counts it, and past maxCalls throws instead of calling fn. */
+  /** Wraps a scheduled call: counts it, past maxCalls throws instead of calling fn, and keeps a promise it returns
+   *  until that promise settles. */
   private budgeted(fn: () => unknown): () => unknown {
     return () => {
       if (++this.calls > this.maxCalls) {
         throw new RangeError(`SimWorld: more than ${this.maxCalls} scheduled calls; a timer re-arms itself without end?`);
       }
-      return fn();
+      const out = fn();
+      if (out instanceof Promise) {
+        this.unsettled.add(out);
+        const drop = (): void => { this.unsettled.delete(out); };
+        out.then(drop, drop);
+      }
+      return out;
     };
+  }
+
+  /** Waits, on microtasks only, until every promise a scheduled call returned has settled, or until `SETTLE_TURNS`
+   *  turns have passed (a promise waiting on a timer the run never reached stays pending), and one turn more so that
+   *  the fake's own `.catch` has recorded a rejection. It never yields to a timer or to I/O, so nothing outside the
+   *  scenario runs while the ambient sources are stubbed. */
+  async settle(): Promise<void> {
+    for (let turn = 0; this.unsettled.size > 0 && turn < SETTLE_TURNS; turn++) await Promise.resolve();
+    await Promise.resolve();
   }
 
   /** Registers a boot routine and runs it now; each boot after a crash runs every routine again. */

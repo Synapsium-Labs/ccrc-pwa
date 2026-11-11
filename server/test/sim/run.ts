@@ -53,7 +53,11 @@ function stubAmbient(): () => void {
   return restore;
 }
 
-export function simulate<E extends string>(s: Scenario<E>, seed: number, inv: readonly Invariant[]): SimResult<E> {
+/** Runs one seed. Async because a scheduled call may return a promise: after the last timer, `world.settle()` waits on
+ *  microtasks for those promises, so a rejection is the fake's warning before the check, and the ambient sources stay
+ *  stubbed until then. A continuation after an `await` still runs only after the whole `runUntil`, at the run's end
+ *  time: a lane that awaits between its own steps is not interleaved with the timers (see the departures note). */
+export async function simulate<E extends string>(s: Scenario<E>, seed: number, inv: readonly Invariant[]): Promise<SimResult<E>> {
   const restore = stubAmbient();
   try {
     const world = new SimWorld({ wallMs: s.startWallMs, seed });
@@ -61,6 +65,7 @@ export function simulate<E extends string>(s: Scenario<E>, seed: number, inv: re
     const covered = new Set<E>();
     s.setup({ world, seq, cover: (edge) => { covered.add(edge); }, entropy: world.server.entropy });
     world.runUntil(s.durationMs);
+    await world.settle();
     const warning = world.time.warnings[0];
     if (warning !== undefined) throw new Error(`scenario ${s.name}, seed ${seed}: ${warning}`);
     seq.append({ kind: 'sim', id: s.name, state: 'end', actor: 'sim' });
@@ -121,14 +126,14 @@ function failureMessage(name: string, seed: number, v: Violation, lines: readonl
 
 /** Throws on the first seed with a violation, then on any edge no seed covered (skipped when the variables carry
  *  CCRC_SIM_SEED). The variables default to process.env. */
-export function assertScenario<E extends string>(
+export async function assertScenario<E extends string>(
   s: Scenario<E>, inv: readonly Invariant[],
   o: { readonly seeds: readonly number[]; readonly testFile: string; readonly env?: Readonly<Record<string, string | undefined>> },
-): void {
+): Promise<void> {
   const vars = o.env ?? process.env;
   const covered = new Set<E>();
   for (const seed of o.seeds) {
-    const r = simulate(s, seed, inv);
+    const r = await simulate(s, seed, inv);
     const v = r.violations[0];
     if (v !== undefined) throw new Error(failureMessage(s.name, seed, v, r.lines, o.testFile));
     for (const e of r.covered) covered.add(e);

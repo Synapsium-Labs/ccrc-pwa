@@ -16,9 +16,11 @@ export interface MutantResult { readonly id: string; readonly status: MutantStat
 export interface MutationReport {
   readonly results: readonly MutantResult[]; readonly score: number; readonly baselineCases: number;
 }
+/** One suite case: it kills the mutant by throwing, or by returning a promise that rejects. */
+export type SuiteCase = () => void | Promise<void>;
 export interface MutantSet<M> {
   readonly modulePath: string; readonly mutants: readonly Mutant[];
-  suite(mod: M): Readonly<Record<string, () => void>>;   // method syntax, so sets of different M share one record
+  suite(mod: M): Readonly<Record<string, SuiteCase>>;   // method syntax, so sets of different M share one record
 }
 
 const RELATIVE = /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)(['"])(\.{1,2}\/[^'"\n]*)\2/g;
@@ -41,7 +43,7 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 
 /** mutation-run.py's contract in TypeScript: `old` must occur exactly once; a baseline copy must pass first, else it
  *  throws; each mutant is written under one mkTmp directory, imported, and handed to `suite`; a suite case that
- *  throws kills it. A mutant whose `old` is absent or repeated, or whose copy fails to import, is `invalid`, and the
+ *  throws, or whose promise rejects, kills it. A mutant whose `old` is absent or repeated, or whose copy fails to import, is `invalid`, and the
  *  run then throws `invalid: <id>: <detail>` after the last mutant. */
 export async function runMutants<M>(set: MutantSet<M>): Promise<MutationReport> {
   const source = readFileSync(set.modulePath, 'utf8');
@@ -55,9 +57,9 @@ export async function runMutants<M>(set: MutantSet<M>): Promise<MutationReport> 
     return (await import(/* @vite-ignore */ pathToFileURL(file).href)) as M;
   };
   const errText = (err: unknown): string => (err instanceof Error ? `${err.name}: ${err.message}` : String(err));
-  const runCases = (cases: Readonly<Record<string, () => void>>): string | null => {
+  const runCases = async (cases: Readonly<Record<string, SuiteCase>>): Promise<string | null> => {
     for (const [name, fn] of Object.entries(cases)) {
-      try { fn(); } catch (err) { return `${name}: ${errText(err)}`; }
+      try { await fn(); } catch (err) { return `${name}: ${errText(err)}`; }
     }
     return null;
   };
@@ -68,7 +70,7 @@ export async function runMutants<M>(set: MutantSet<M>): Promise<MutationReport> 
     const cases = set.suite(base);
     baselineCases = Object.keys(cases).length;
     if (baselineCases === 0) throw new Error('the suite ran no case');
-    const failed = runCases(cases);
+    const failed = await runCases(cases);
     if (failed !== null) throw new Error(failed);
   } catch (err) {
     throw new Error(`baseline failed: ${message(err)}`);
@@ -88,14 +90,14 @@ export async function runMutants<M>(set: MutantSet<M>): Promise<MutationReport> 
       results.push({ id: m.id, status: 'invalid', detail: `syntax: ${message(err)}` });
       continue;
     }
-    let cases: Readonly<Record<string, () => void>>;
+    let cases: Readonly<Record<string, SuiteCase>>;
     try {
       cases = set.suite(mod);
     } catch (err) {
       results.push({ id: m.id, status: 'invalid', detail: `suite: ${errText(err)}` });
       continue;
     }
-    const failed = runCases(cases);
+    const failed = await runCases(cases);
     results.push(failed === null
       ? { id: m.id, status: 'survived', detail: 'every suite case passed' }
       : { id: m.id, status: 'killed', detail: failed });

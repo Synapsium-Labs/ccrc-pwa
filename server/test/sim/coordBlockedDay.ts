@@ -3,7 +3,7 @@
 // lane is mirrored from watch.ts's coord-blocked step: it keeps the episode and the push latch as volatile state in the
 // boot routine's closure, builds the input, calls the decider and applies the verdict. It imports no L3.
 import {
-  COORD_BLOCKED_HELD_MS, stallPushRoute,
+  COORD_BLOCKED_HELD_MS,
   type StallChildFact, type StallCoordBlockedInput, type StallCoordEpisode, type StallDeliveryRow, type StallMailRow,
   type StallRunRow, type StallSessionInput, type StallWorker, type TurnMark, type TurnMarkRead,
 } from '../../src/coord/stall.js';
@@ -164,21 +164,27 @@ export function coordBlockedDay(mod: CoordBlockedModule): Scenario<CoordBlockedE
   };
 }
 
-/** CB-reach (I1's shape, fails towards the operator): a mail held past the threshold reaches the operator within one
- *  sweep, unless the link is unmeasured. The clock stops while the server is down and restarts at its boot: a `server
- *  crash` line sets `up` false and a `server boot` line sets it true and restarts `steadySince`. Each line is judged
- *  before it is applied, so the boot line and every line during the downtime are judged while `up` is false. */
+/** CB-reach (I1's shape, fails towards the operator): a mail held past the threshold reaches the operator by the first
+ *  sweep at or after the threshold, unless the link is unmeasured, and within one sweep of the link being measured again
+ *  or of a boot. Sweeps run every STALL_SWEEP_MS from the last boot (the lane's `after(0)` at its boot, then
+ *  `after(STALL_SWEEP_MS)`), so the first sweep at or after a time is computed from that boot, not from the 5-minute
+ *  grid the mail is queued on: a push one sweep late is red wherever the threshold falls. The clock stops while the
+ *  server is down and restarts at its boot: a `server crash` line sets `up` false and a `server boot` line sets it true,
+ *  restarts `steadySince` and moves the sweeps' phase. Each line is judged before it is applied, so a crash line is
+ *  judged while `up` is still true, and the boot line and every line during the downtime are judged while it is false. */
 function reach(lines: readonly SequenceLine[]): Violation | null {
   const queued = new Map<string, number>();
   let pushed = false;
   let steadySince = lines.length > 0 ? lines[0]!.at : 0;
+  let phase = steadySince;
   let measured = true;
   let up = true;
+  const sweepAtOrAfter = (t: number): number => phase + Math.ceil((t - phase) / STALL_SWEEP_MS) * STALL_SWEEP_MS;
   for (const l of lines) {
     if (measured && up && !pushed) {
       for (const [id, at] of queued) {
-        if (l.at > Math.max(at + COORD_BLOCKED_HELD_MS, steadySince) + STALL_SWEEP_MS) {
-          return { invariant: 'CB-reach', seq: l.seq, message: `mail ${id} held past the threshold with no push within one sweep` };
+        if (l.at > Math.max(sweepAtOrAfter(at + COORD_BLOCKED_HELD_MS), steadySince + STALL_SWEEP_MS)) {
+          return { invariant: 'CB-reach', seq: l.seq, message: `mail ${id} held past the threshold with no push by its sweep` };
         }
       }
     }
@@ -187,7 +193,7 @@ function reach(lines: readonly SequenceLine[]): Violation | null {
     else if (l.kind === 'held' && l.state === 'none') pushed = false;
     else if (l.kind === 'push') pushed = true;
     else if (l.kind === 'server' && l.id === 'crash') up = false;
-    else if (l.kind === 'server' && l.id === 'boot') { up = true; steadySince = l.at; }
+    else if (l.kind === 'server' && l.id === 'boot') { up = true; steadySince = l.at; phase = l.at; }
     else if (l.kind === 'link') {
       measured = l.state === 'measured';
       if (measured) steadySince = l.at;
@@ -196,18 +202,21 @@ function reach(lines: readonly SequenceLine[]): Violation | null {
   return null;
 }
 
+/** CB-rung-never-falls: between two boots, while mail stays held, no rung-1 verdict follows a rung-2 one. The episode is
+ *  the lane's own `held some` .. `held none` stretch, the held mail the lane reads itself, never the episode the decider
+ *  hands back: a decider that never returns an episode would otherwise switch this invariant off. */
 function rungNeverFalls(lines: readonly SequenceLine[]): Violation | null {
-  let key = '';
+  let since = 0;
   let open = false;
   let sawTwo = false;
   for (const l of lines) {
     if (l.kind === 'server' && l.id === 'boot') { open = false; sawTwo = false; }
-    else if (l.kind === 'episode' && l.state === 'open') { open = true; sawTwo = false; key = l.id; }
-    else if (l.kind === 'episode' && l.state === 'closed') { open = false; sawTwo = false; }
+    else if (l.kind === 'held' && l.state === 'some') { open = true; sawTwo = false; since = l.at; }
+    else if (l.kind === 'held' && l.state === 'none') { open = false; sawTwo = false; }
     else if (l.kind === 'verdict' && open) {
       if (l.state === 'rung-2') sawTwo = true;
       else if (l.state === 'rung-1' && sawTwo) {
-        return { invariant: 'CB-rung-never-falls', seq: l.seq, message: `episode ${key} pushed a lower rung after rung 2` };
+        return { invariant: 'CB-rung-never-falls', seq: l.seq, message: `mail held since ${since} pushed a lower rung after rung 2` };
       }
     }
   }
@@ -215,6 +224,6 @@ function rungNeverFalls(lines: readonly SequenceLine[]): Violation | null {
 }
 
 export const COORD_BLOCKED_INVARIANTS: readonly Invariant[] = [
-  { name: 'CB-reach', says: 'a mail held past the threshold reaches the operator within one sweep, unless the link is unmeasured; the clock stops while the server is down and restarts at its boot', check: reach },
-  { name: 'CB-rung-never-falls', says: 'between two boots, inside one open episode, no rung-1 verdict follows a rung-2 one', check: rungNeverFalls },
+  { name: 'CB-reach', says: 'a mail held past the threshold reaches the operator by the first sweep at or after the threshold, and within one sweep of the link being measured again or of a boot, unless the link is unmeasured; the clock stops while the server is down and restarts at its boot', check: reach },
+  { name: 'CB-rung-never-falls', says: 'between two boots, while mail stays held (the lane\'s held lines), no rung-1 verdict follows a rung-2 one', check: rungNeverFalls },
 ];

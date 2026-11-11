@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { mergeBaseText } from '../mergeBase.js';
 import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } from './coordBlockedDay.js';
-import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet } from './mutate.js';
+import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { simulate } from './run.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -22,12 +22,15 @@ const COORD_BLOCKED_SET: MutantSet<CoordBlockedModule> = {
     { id: 'M2', old: 'Math.max(prev.rung, stallCoordRungNow(si, oldest, now))', new: 'stallCoordRungNow(si, oldest, now)' },
     { id: 'M3', old: 'input.episode ?? { since: oldest.since, rung: 0 }', new: '{ since: oldest.since, rung: 0 }' },
     { id: 'M4', old: 'if (oldest === undefined) return closed;', new: 'if (oldest === undefined) return { verdict: VERDICT_NONE, episode: input.episode };' },
+    // M5 and M6 came from review run 1796: the decider hands back no episode, and the push comes one sweep late.
+    { id: 'M5', old: "rung: 2, key: prev.since, to: 'operator' },\n    episode,", new: "rung: 2, key: prev.since, to: 'operator' },\n    episode: null," },
+    { id: 'M6', old: 'if (now - oldest.since < COORD_BLOCKED_HELD_MS) return 0;', new: 'if (now - oldest.since <= COORD_BLOCKED_HELD_MS) return 0;' },
   ],
   suite(mod) {
-    const cases: Record<string, () => void> = {};
+    const cases: Record<string, SuiteCase> = {};
     for (const seed of SEEDS) {
-      cases[`seed ${seed}`] = () => {
-        const r = simulate(coordBlockedDay(mod), seed, COORD_BLOCKED_INVARIANTS);
+      cases[`seed ${seed}`] = async () => {
+        const r = await simulate(coordBlockedDay(mod), seed, COORD_BLOCKED_INVARIANTS);
         if (r.violations.length > 0) throw new Error(`${r.violations[0]!.invariant}: ${r.violations[0]!.message}`);
       };
     }
@@ -45,6 +48,10 @@ it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers'
 it('BASELINE: an unmutated copy loaded the same way runs and passes every suite case', async () => {
   const r = await runMutants({ ...MUTANT_SETS[KEY]!, mutants: [] });
   expect([r.results, r.baselineCases]).toEqual([[], 32]);
+}, 60_000);
+it('a baseline whose case fails unmutated is a failure, never a run of kills', async () => {
+  const broken = { ...MUTANT_SETS[KEY]!, suite: () => ({ broken: () => { throw new Error('unmutated'); } }) };
+  await expect(runMutants(broken)).rejects.toThrow(/baseline failed: broken: Error: unmutated/);
 }, 60_000);
 it('a baseline that ran no case is a failure, never a pass', async () => {
   await expect(runMutants({ ...MUTANT_SETS[KEY]!, mutants: [], suite: () => ({}) })).rejects.toThrow(/baseline/);
