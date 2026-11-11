@@ -15,6 +15,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
+import { EXEC_KINDS } from '../../shared/roster.js';
 
 const CCD_ROOT = path.resolve(__dirname, '../../ccd');
 const HELPER = path.join(CCD_ROOT, 'ccd-account-auth');
@@ -1812,12 +1813,10 @@ describe('ccd-account-auth — openai-login for a CODEX lane runs ccrc\'s own ve
   // X4's other edge: EVERY kind the roster validator accepts has its own arm
   // in the gate, derived from the validator rather than typed here, so a kind
   // added to EXEC_KINDS and not to the helper reds HERE instead of reaching a
-  // phone as "not a kind ccrc knows".
-  const VALIDATOR_KINDS = ((): string[] => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../../shared/roster-json.mjs'), 'utf8');
-    const m = /const EXEC_KINDS = new Set\(\[([^\]]*)\]\)/.exec(src);
-    return m ? m[1]!.split(',').map((t) => t.trim().replace(/^'|'$/g, '')).filter(Boolean) : [];
-  })();
+  // phone as "not a kind ccrc knows". The kinds are the one definition,
+  // `shared/roster.ts`'s EXEC_KINDS (D-8192); the bare-Node validator's mirror
+  // is pinned equal to it, in order, by `roster-exec-parity.test.ts`.
+  const VALIDATOR_KINDS: string[] = [...EXEC_KINDS];
   it('X4: the validator\'s EXEC_KINDS is read, and names codex among at least four kinds', () => {
     expect(VALIDATOR_KINDS).toContain('codex');
     expect(VALIDATOR_KINDS.length).toBeGreaterThanOrEqual(4);

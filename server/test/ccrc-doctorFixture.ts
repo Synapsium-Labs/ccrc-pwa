@@ -41,6 +41,7 @@ import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync,
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import type { ExecKind } from '../../shared/roster.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 import { IS_DARWIN } from './platformFixtures.js';
@@ -364,7 +365,7 @@ export interface RosterEntry {
   id: string;
   configDirSuffix?: string;
   exec: {
-    kind: 'upstream' | 'generated' | 'external' | 'codex';
+    kind: ExecKind;
     secretsFile?: string;
     // The two provider fields the roster model carries. `writeRoster` spreads
     // the entry, so nothing else in this file changes — but a fixture writing a
