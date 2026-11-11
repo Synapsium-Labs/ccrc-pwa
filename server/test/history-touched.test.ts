@@ -1064,6 +1064,148 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
     })();
     expect(counts.node_refs).toBe(REFS_TOTAL);
     expect(counts.nodes).toBe(NODES_TOTAL);
+    // ── Review 1822: the wide-label cell, a symbol whose graph label spans 165 distinct basenames, at this fixture's size ──
+    // The graph holds only the 165 label nodes (a few tens of KB, so its parse is negligible); the store gets two refs on each of
+    // the 165 files, removed after the cell (the shapes below run on the fixture as built). The select count is measured by
+    // wrapping the handle's `prepare` and counting the executions of the four candidate selects: no production seam.
+    const os = await import('node:os');
+    const msSince = (t0: bigint): number => Number(process.hrtime.bigint() - t0) / 1e6;
+    const wideResults: Array<Record<string, unknown>> = [];
+    {
+      const SPAN165 = 165;
+      const wide = Array.from({ length: SPAN165 }, (_, i) => `bench165/d${i}/b165f${i}.ts`);
+      const w = store.openWriter(dbFile);
+      const ins = w.prepare('INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
+      w.exec('BEGIN');
+      wide.forEach((f, i) => { for (let k = 0; k < 2; k += 1) ins.run(nodeIds[(i * 37 + k) % nodeIds.length]!, 'path', f, 'tool_use'); });
+      w.exec('COMMIT');
+      w.close();
+      const wideRefs = (() => { const d = new DatabaseSync(dbFile, { readOnly: true }); try { return (d.prepare('SELECT count(*) AS c FROM node_refs').get() as { c: number }).c; } finally { d.close(); } })();
+      fs.rmSync(path.join(root, 'graphify-out'), { recursive: true, force: true });
+      fs.mkdirSync(path.join(root, 'graphify-out'), { recursive: true });
+      const wideGraph = path.join(root, 'graphify-out', 'graph.json');
+      fs.writeFileSync(wideGraph, JSON.stringify({ nodes: wide.map((f, i) => ({ id: `w${i}`, label: QSYM, source_file: f })), links: [] }));
+      const wideBytes = fs.statSync(wideGraph).size;
+      const executed: number[] = [];
+      const ask = (rc: ReturnType<typeof contextOn>) => {
+        let n = 0;
+        const sels = new Set<string>(Object.values(R.TOUCHED_SELECTS));
+        const counted = { prepare: (sql: string) => { const st = rc.db.prepare(sql); if (!sels.has(sql)) return st; return { all: (...a: unknown[]) => { n += 1; return (st.all as (...x: unknown[]) => unknown[])(...a); } }; }, exec: (sql: string) => rc.db.exec(sql) };
+        const out = R.runTouched({ ...rc, db: counted }, { arg: QSYM, limit: 20, ordered: true });
+        executed.push(n);
+        return out;
+      };
+      const load0 = os.loadavg()[0]!;
+      const cold: number[] = [];
+      for (let i = 0; i < RUNS; i += 1) {
+        const db = store.openReader(dbFile);
+        const t0 = process.hrtime.bigint();
+        const out = ask(contextOn(db));
+        cold.push(msSince(t0));
+        expect(out.exit, 'wide symbol cold').toBe(0);
+        db.close();
+      }
+      const db = store.openReader(dbFile);
+      const rc = contextOn(db);
+      const first = ask(rc);
+      const warm: number[] = [];
+      for (let i = 0; i < RUNS; i += 1) { const t0 = process.hrtime.bigint(); ask(rc); warm.push(msSince(t0)); }
+      db.close();
+      const load1 = os.loadavg()[0]!;
+      wideResults.push({
+        cell: `symbol over ${SPAN165} basenames, ordered`, refs: wideRefs, graphBytes: wideBytes, graphNodes: SPAN165, total: first.total,
+        selectCounts: [...new Set(executed)], expectedSelects: SPAN165 + 1,
+        cold: { p50: r2(pct(cold, 50)), p95: r2(pct(cold, 95)), max: r2(Math.max(...cold)) },
+        warm: { p50: r2(pct(warm, 50)), p95: r2(pct(warm, 95)), max: r2(Math.max(...warm)) },
+        loadBefore: r2(load0), loadAfter: r2(load1),
+      });
+      console.log(`wide symbol cell: ${JSON.stringify(wideResults[0])}`);
+      fs.rmSync(path.join(root, 'graphify-out'), { recursive: true, force: true });
+      const d = store.openWriter(dbFile);
+      d.exec("DELETE FROM node_refs WHERE value LIKE 'bench165/%'");
+      d.close();
+    }
+
+    // ── Review 1822: the reduced-cache cell, peak RSS of one `touched` symbol call in a child process, one graph against three distinct ones ──
+    // Each root's graph.json is its own file of about 19 MB (at most 20 MB), with the symbol's label on three files of its own, so the
+    // reduced cache has a parsed graph to release before the next root's parse. The child reads `process.resourceUsage().maxRSS`.
+    const rssResults: Array<Record<string, unknown>> = [];
+    {
+      const rssDir = mkTmp('ccrc-hist-touched-rss-');
+      onTestFinished(() => { fs.rmSync(rssDir, { recursive: true, force: true }); });
+      const RSS_NODES = 56_000;
+      const RSS_LINKS = 110_000;
+      const rssRoots: string[] = [root];
+      for (let k = 1; k < 3; k += 1) { const d = path.join(rssDir, `root${k}`); fs.mkdirSync(d, { recursive: true }); rssRoots.push(d); }
+      const graphInfo: Array<{ bytes: number; nodes: number; links: number }> = [];
+      rssRoots.forEach((d, k) => {
+        const gdir = path.join(d, 'graphify-out');
+        fs.rmSync(gdir, { recursive: true, force: true });
+        fs.mkdirSync(gdir, { recursive: true });
+        const fd = fs.openSync(path.join(gdir, 'graph.json'), 'w');
+        let buf = '{"nodes":[';
+        for (let i = 0; i < RSS_NODES; i += 1) {
+          const file = i < 3 ? `rss${k}/d${i}/r${k}f${i}.ts` : `src/g${k}pkg${i % 400}/mod${i % 30_000}.ts`;
+          buf += `${i === 0 ? '' : ','}{"id":"g${k}n${i}","label":"${i < 3 ? QSYM : `sym${k}x${i}`}","source_file":"${file}","file_type":"code","source_location":"L${i % 900}"}`;
+          if (buf.length > 1 << 20) { fs.writeSync(fd, buf); buf = ''; }
+        }
+        buf += '],"links":[';
+        for (let i = 0; i < RSS_LINKS; i += 1) {
+          buf += `${i === 0 ? '' : ','}{"source":"g${k}n${(i * 7) % RSS_NODES}","target":"g${k}n${(i * 13 + 1) % RSS_NODES}","relation":"calls","confidence":"EXTRACTED"}`;
+          if (buf.length > 1 << 20) { fs.writeSync(fd, buf); buf = ''; }
+        }
+        buf += ']}';
+        fs.writeSync(fd, buf);
+        fs.closeSync(fd);
+        const bytes = fs.statSync(path.join(gdir, 'graph.json')).size;
+        expect(bytes, `graph ${k} is at most 20 MB`).toBeLessThanOrEqual(20 * 1024 * 1024);
+        graphInfo.push({ bytes, nodes: RSS_NODES, links: RSS_LINKS });
+      });
+      const w = store.openWriter(dbFile);
+      const insE = w.prepare('INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, cwd, cwd_real, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const extraSeqs = [1, 2].map((j) => Number(ep.seq) + 100 + j);
+      extraSeqs.forEach((seq, j) => insE.run(fam.session_pk, seq, `c0000000-0000-4000-8000-${String(j).padStart(12, '0')}`, 'clear', 'fixture', 1, rssRoots[j + 1]!, rssRoots[j + 1]!, 1));
+      w.close();
+      const childFile = path.join(rssDir, 'child.mjs');
+      fs.writeFileSync(childFile, `
+import { DatabaseSync } from 'node:sqlite';
+const [storeUrl, recallUrl, libUrl, dbFile, id, gen, home, tpk, only] = process.argv.slice(2);
+const store = await import(storeUrl); const R = await import(recallUrl); const lib = await import(libUrl);
+const db = store.openReader(dbFile);
+const version = store.userVersion(db);
+let fams = db.prepare('SELECT session_pk, ccrc_id, generation, first_seen_ms FROM sessions WHERE ccrc_id = ? AND merged_into IS NULL ORDER BY session_pk').all(id);
+const sessionPks = fams.map((f) => Number(f.session_pk));
+const storeId = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get()?.v ?? null;
+const rc = { db, version, storeId, nowMs: Date.now(), home, id, gen, scopeArgs: [], pairIdx: lib.makePairIndex([]),
+  scope: { kind: 'family', id, generation: gen, project: 'demo', workdir: null, sessionPks, transcriptPks: [Number(tpk)],
+    families: fams.map((f) => ({ sessionPk: Number(f.session_pk), ccrcId: f.ccrc_id, generation: f.generation, firstSeenMs: Number(f.first_seen_ms) })) } };
+const t0 = Date.now();
+const out = R.runTouched(rc, { arg: ${JSON.stringify(QSYM)}, limit: 20, ordered: true });
+console.log(JSON.stringify({ maxRssKB: process.resourceUsage().maxRSS, ms: Date.now() - t0, exit: out.exit, total: out.total, items: out.items.length }));
+`);
+      const url = (rel: string): string => new URL(rel, import.meta.url).href;
+      const runChild = (): { maxRssKB: number; ms: number; exit: number; total: number; items: number } => JSON.parse(execFileSync(process.execPath, [childFile, url('../../ccd/history/store.mjs'), url('../../ccd/history/recall.mjs'), url('../../ccd/history/lib.mjs'), dbFile, ID, G1, box.home, String(tr.transcript_pk), 'x'], { encoding: 'utf8', timeout: 120_000 }).trim().split('\n').pop()!);
+      const rss = (name: string, hideExtra: boolean): void => {
+        const w2 = store.openWriter(dbFile);
+        w2.prepare('UPDATE epochs SET confirmed_ms = ? WHERE session_pk = ? AND seq IN (?, ?)').run(hideExtra ? null : 1, fam.session_pk, extraSeqs[0]!, extraSeqs[1]!);
+        w2.close();
+        const runs = [runChild(), runChild(), runChild()];
+        rssResults.push({ cell: name, roots: hideExtra ? 1 : 3, graphs: hideExtra ? [graphInfo[0]] : graphInfo, runs, peakRssMB: runs.map((r) => Math.round(r.maxRssKB / 1024)) });
+      };
+      // baseline: one root with no graph at all
+      const keep = path.join(root, 'graphify-out');
+      fs.renameSync(keep, `${keep}.off`);
+      rss('baseline: 1 root, no graph', true);
+      fs.renameSync(`${keep}.off`, keep);
+      rss('(i) 1 root, one graph', true);
+      rss('(ii) 3 roots, 3 distinct graphs', false);
+      console.log(`rss cells: ${JSON.stringify(rssResults)}`);
+      const d2 = store.openWriter(dbFile);
+      d2.prepare('DELETE FROM epochs WHERE session_pk = ? AND seq IN (?, ?)').run(fam.session_pk, extraSeqs[0]!, extraSeqs[1]!);
+      d2.close();
+      fs.rmSync(keep, { recursive: true, force: true });
+    }
+
     const shapes = [
       { name: 'path', arg: QFILE, graph: false },
       { name: 'symbol with graph', arg: QSYM, graph: true },
@@ -1220,7 +1362,7 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
     // the ordered form answers the same rows as the unordered while nothing is capped
     for (const shape of shapes.slice(0, 3)) expect(answers.get(`${shape.name}/ordered`), shape.name).toEqual(answers.get(`${shape.name}/unordered`));
     const out = process.env['HISTORY_BENCH_OUT'] ?? path.join(path.dirname(root), 'touched-bench.json');   // the run's temp root goes with the run: name a path to keep the figures
-    fs.writeFileSync(out, JSON.stringify({ fixtureBytes: bytes, counts, planted, runs: RUNS, results, graphBytes, graphCells }, null, 2));
+    fs.writeFileSync(out, JSON.stringify({ fixtureBytes: bytes, counts, planted, runs: RUNS, results, graphBytes, graphCells, wideResults, rssResults }, null, 2));
     const rows = results.map((r) => {
       const c = r['cold'] as { p50: number; p95: number }; const w = r['warm'] as { p50: number; p95: number };
       return `${String(r['shape']).padEnd(22)} ${String(r['form']).padEnd(9)} cand=${String(r['candidateRows']).padStart(4)} total=${String(r['total']).padStart(4)}  cold p50 ${c.p50} p95 ${c.p95}  warm p50 ${w.p50} p95 ${w.p95}`;
