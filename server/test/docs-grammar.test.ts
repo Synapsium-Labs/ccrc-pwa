@@ -15,6 +15,7 @@ import {
   isDocsProject, isDocsBareRef, isDocsQualifiedRef, isDocsCommit, isDocsRelPath, isDocsFingerprint, isDocsMaxBytes,
   parseDocsRef, docsRefText, type DocsRefSpec,
 } from '../../shared/docs.js';
+import { mulberry32 } from './fakeTime.js';
 
 /** The matcher shape `shared/docs.ts` builds, rebuilt here only to run a body this file has edited. */
 const full = (body: string): RegExp => new RegExp('^(?:' + body + ')$', 'u');
@@ -319,7 +320,6 @@ import * as grammarL0 from '../../shared/docs.js';
 import { makeCcdHarness as harnessForGrammar } from './ccdWsHelpers.js';
 import { parseOneLine as oneLineOfGrammar, runCcdDocs as runForGrammar } from './ccdDocsHelpers.js';
 import { unitJson as unitForGrammar } from './docsHelperPy.js';
-import { mulberry32 } from './fakeTime.js';
 
 describe('one grammar on both sides: L0 predicates and _docs_py agree (rows 2, 3, 63)', () => {
   const h = harnessForGrammar('ccd-docs-');
