@@ -15,6 +15,9 @@ explained here or fixed. The sources:
   `defer_loading`; `output_config.effort` rides the `effort-2025-11-24` beta (`ccd/ccgpt-proxy.py`'s effort hook).
 - Claude Code 2.1.310's `anthropic-beta` values, measured on the live lane's first traffic after the flip (runbook
   step 4, 2026-10-27; D-7093), each read against the Messages API's documentation and the client's own beta table.
+- The Stage 4 watch's stats files (both lanes, 2026-10-29 to 2026-11-04): the `redact-thinking-2026-02-12` beta and
+  the CDN edge's HTML error page's four header names (`content-type:text/html`, `cache-control`, `expires`,
+  `x-frame-options`), each explained at its entry below.
 - The fields inbound drops by rule (D-6426 and the plan's Task 2 table), and the names inbound counts for a shape
   it maps (a dropped `thinking` block, `is_error`, `output_config.format`, D-6425) or refuses by name (a `document`
   block, an `output_config.format` of another type, D-6414).

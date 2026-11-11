@@ -304,10 +304,11 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
 
   // Claude Code 2.1.310's nine `anthropic-beta` values, measured on the live lane's first traffic after the flip
   // (runbook step 4, 2026-10-27; D-7093), and `redact-thinking-2026-02-12`, Claude Code's `redact_thinking` beta, first
-  // seen on both lanes between 2026-10-29 and 2026-11-04 (ccd/codexbridge/known.py says why the bridge needs no action). Seven gate shapes the bridge never sends, answers itself or already counts by
-  // their own family; the two tool-change betas gate `tool_addition`/`tool_removal` blocks in a system entry, which
-  // inbound honours since D-7143 (ccd/codexbridge/inbound.py#_fold_tool_changes). All nine are explained, so the
-  // doctor is quiet on them.
+  // seen on both lanes between 2026-10-29 and 2026-11-04 (ccd/codexbridge/known.py says why the bridge needs no
+  // action). Seven of the nine gate shapes the bridge never sends, answers itself or already counts by their own
+  // family; the other two, the tool-change betas, gate `tool_addition`/`tool_removal` blocks in a system entry, which
+  // inbound honours since D-7143 (ccd/codexbridge/inbound.py#_fold_tool_changes). All ten are explained, so the doctor is
+  // quiet on them.
   const MEASURED_BETAS = [
     'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
     'inline-tools-2026-09-15', 'interleaved-thinking-2025-05-14', 'mid-conversation-tool-changes-2026-07-01',

@@ -23,7 +23,7 @@ import {
   type AuthScript,
 } from './codexAuthFixture.js';
 import {
-  BRIDGE_AUTH_LIB, BRIDGE_MODELS, driverLines, fakeResponses, killBridges, plantBridgeLane, runBridgeDriver, spawnBridge,
+  BRIDGE_AUTH_LIB, BRIDGE_MODELS, CCD_DIR, driverLines, fakeResponses, killBridges, plantBridgeLane, runBridgeDriver, spawnBridge,
   writeBridgeCatalogue, type BridgeLane, type ResponsesAnswer, type SpawnedBridge,
 } from './codexBridgeFixture.js';
 
@@ -1321,8 +1321,52 @@ describe.skipIf(!PY)('an upstream page logs one bounded line (the CDN edge answe
     });
   });
 
+  it('the edge marker needs cf-ray: an answer with neither cf-ray nor a request id reads edge=no', async () => {
+    await withBridge([{ status: 502, body: '<html></html>', headers: { 'content-type': 'text/html', 'cf-ray': null, 'x-oai-request-id': null } }], async ({ bridge }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status).toBe(503);
+      const lines = await linesWhen(bridge, 1);
+      expect(lines).toHaveLength(1);
+      expect(PAGE_LINE.exec(lines[0])!.slice(2)).toEqual(['502', 'messages', 'text/html', 'no']);
+    });
+  });
+
+  it('the stamp is UTC whatever the bridge process\'s own zone is', async () => {
+    // Etc/GMT-5 is five hours AHEAD of UTC: a local-time stamp would sit five hours after the request window
+    await withBridge([{ status: 502, body: '<html></html>', headers: edgeHeaders }], async ({ bridge }) => {
+      const before = Date.now();
+      await call(bridge, '/v1/messages', { body: messages() });
+      const lines = await linesWhen(bridge, 1);
+      expect(lines).toHaveLength(1);
+      const m = PAGE_LINE.exec(lines[0]);
+      expect(m, lines[0]).not.toBeNull();
+      const at = Date.parse(m![1]);
+      expect(at).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+      expect(at).toBeLessThanOrEqual(Date.now());
+    }, { env: { TZ: 'Etc/GMT-5' } });
+  });
+
+  it('a line that cannot be written is dropped, never raised into the request path', () => {
+    const prog = [
+      'import sys',
+      'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import server',
+      'class Full:',
+      '    def write(self, *a): raise OSError(28, "no space left")',
+      '    def flush(self): pass',
+      'sys.stderr = Full()',
+      'server.log_upstream_page(502, {"content-type": "text/html", "cf-ray": "x"}, compact=False)',
+      'sys.stderr = sys.__stderr__',
+      'print("returned")',
+    ].join('\n');
+    const r = spawnSync(PY!, ['-I', '-B', '-c', prog, CCD_DIR], { encoding: 'utf8', timeout: 30_000 });
+    expect(r.stderr).toBe('');
+    expect(r.stdout.trim()).toBe('returned');
+    expect(r.status).toBe(0);
+  });
+
   it('a media type outside the bounded shape is logged as unrecognised, never as received', async () => {
-    const odd = 'text/h tml;'.repeat(1);
+    const odd = 'text/h tml;';
     await withBridge([{ status: 503, body: '<html></html>', headers: { 'content-type': `${odd} SENTINEL-TYPE`, 'cf-ray': 'fx-ray-3' } }], async ({ bridge }) => {
       await call(bridge, '/v1/messages', { body: messages() });
       const lines = await linesWhen(bridge, 1);

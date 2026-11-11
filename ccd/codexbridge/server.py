@@ -42,8 +42,9 @@ after it one `error` event, and it logs one line, `ccgpt-proxy: direct: <class n
 `errors.CODE_RE`, never `str(e)`, an argument or a traceback. The server's own `handle_error` (an exception outside a
 handler) logs the same line. No body, token or header value is logged or counted.
 
-ONE MORE LINE, FOR A PAGE. An upstream answer whose body is not the backend's own (a non-2xx that is not JSON, or a 2xx
-that is neither an event stream nor without a content type: the CDN edge's HTML page, say) writes
+ONE MORE LINE, FOR A PAGE. An upstream answer that is not the backend's own, judged by its media type (a non-2xx whose
+media type is not `application/json`, or a 2xx whose media type is neither `text/event-stream` nor absent: the CDN edge's
+HTML page, say) writes
 `ccgpt-proxy: direct: upstream-page <UTC stamp> status=<n> route=<messages|compact> type=<media type> edge=<yes|no>`
 (`log_upstream_page`), bounded tokens only, so the lane's bridge.log says when, on which route and with what status
 such an answer came. The answer itself is unchanged: `errors.classify_http` reads no code from it.
@@ -394,9 +395,11 @@ _MEDIA_ABSENT = _MEDIA_PREFIX + "absent"
 
 
 def is_upstream_page(status: int, media: str) -> bool:
-    """Whether an upstream answer is not the backend's own: a 2xx that is not an event stream (the backend's 2xx carries
-    `text/event-stream`, or no content type at all), or any other status whose body is not JSON (the backend's errors
-    are JSON, which `errors.classify_http` reads). `media` is `_media_type`'s answer."""
+    """Whether an upstream answer is not the backend's own, decided by its media type and never by its body: a 2xx whose
+    media type is neither `text/event-stream` nor absent (the backend's 2xx carries one of the two), or any other status
+    whose media type is not `application/json` (the backend's errors carry that, and `errors.classify_http` reads a code
+    from the JSON body). So an error whose JSON body rides another media type, or none, also writes the line; the
+    line says only what the answer's head said. `media` is `_media_type`'s answer."""
     if 200 <= status < 300:
         return media not in (_MEDIA_STREAM, _MEDIA_ABSENT)
     return media != _MEDIA_JSON
