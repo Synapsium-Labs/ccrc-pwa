@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { healthy, runDoctor } from './ccrc-doctorFixture.js';
 
@@ -165,7 +166,7 @@ describe('the overlay ~/.ccrc/testbox.env: ccrc\'s one reader learns it for the 
       'CCRC_TESTBOX_URL=https://testbox.invalid:7790', 'CCRC_TESTBOX_TOKEN_FILE=/srv/fx/testbox.token',
       'CCRC_TESTBOX_GIT_URL_BASE=ssh://ccrc-tb-push@testbox.invalid/', 'CCRC_TESTBOX_GIT_KEY=/srv/fx/push.key',
       'CCRC_TESTBOX_POLL=2m', ''].join('\n') });
-    const r = spawnSync(BASH, [CCRC, 'settings', '--json'], { env: h.env, encoding: 'utf8', cwd: h.home, input: '', timeout: 60_000 });
+    const r = spawnSyncGroup(BASH, [CCRC, 'settings', '--json'], { env: h.env, encoding: 'utf8', cwd: h.home, input: '', timeout: 60_000 });
     expect(r.status, r.stderr).toBe(0);
     const doc = JSON.parse(r.stdout) as { settings?: { key: string; value?: string; set?: boolean; from?: string }[] };
     const rows = Object.fromEntries((doc.settings ?? []).map((s) => [s.key, s]));

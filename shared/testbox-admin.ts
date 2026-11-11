@@ -14,7 +14,7 @@
 // reader refuses any field it does not name and any value that does not fit its own grammar.
 import { BOX_SETTING_REFUSAL_WORDS, isReleaseTag, type BoxSettingRow } from './api.js';
 import { parseRepoRow, type Read, type TestboxRepoRow } from './testbox.js';
-import { utf8Bytes } from './utf8.js';
+import { utf8Bytes, utf8Decode, utf8Encode } from './utf8.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The keys: 16 on the fleet host, 28 on the box (spec M7), each with its shape class.
@@ -447,23 +447,10 @@ export function testboxAdminIsLong(sub: TestboxAdminSub, _fields?: unknown): boo
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// base64url, by hand: this file is L0 and has no Buffer.
+// base64url, by hand: this file is L0 and has no Buffer (its UTF-8 bytes come from shared/utf8.ts, the one home).
 // ---------------------------------------------------------------------------------------------------------------
 
 const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-function utf8Encode(s: string): number[] {
-  const out: number[] = [];
-  for (const ch of s) {
-    let c = ch.codePointAt(0)!;
-    if (c >= 0xd800 && c <= 0xdfff) c = 0xfffd;   // a lone surrogate, as TextEncoder writes it
-    if (c < 0x80) out.push(c);
-    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
-    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
-    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
-  }
-  return out;
-}
 
 function base64urlEncode(bytes: readonly number[]): string {
   let out = '';
@@ -486,25 +473,6 @@ function base64urlDecode(s: string): number[] | null {
     out.push((n >> 16) & 255);
     if (q[2]! >= 0) out.push((n >> 8) & 255);
     if (q[3]! >= 0) out.push(n & 255);
-  }
-  return out;
-}
-
-function utf8Decode(bytes: readonly number[]): string | null {
-  let out = '';
-  for (let i = 0; i < bytes.length;) {
-    const b = bytes[i]!;
-    const len = b < 0x80 ? 1 : b >= 0xc2 && b < 0xe0 ? 2 : b >= 0xe0 && b < 0xf0 ? 3 : b >= 0xf0 && b < 0xf5 ? 4 : 0;
-    if (len === 0 || i + len > bytes.length) return null;
-    let c = len === 1 ? b : b & (0xff >> (len + 1));
-    for (let k = 1; k < len; k++) {
-      const nb = bytes[i + k]!;
-      if ((nb & 0xc0) !== 0x80) return null;
-      c = (c << 6) | (nb & 63);
-    }
-    if ((len === 3 && c < 0x800) || (len === 4 && (c < 0x10000 || c > 0x10ffff)) || (c >= 0xd800 && c <= 0xdfff)) return null;
-    out += String.fromCodePoint(c);
-    i += len;
   }
   return out;
 }

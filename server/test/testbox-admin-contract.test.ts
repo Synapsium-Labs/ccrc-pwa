@@ -5,7 +5,6 @@
 // 44 keys and their classes read from `ccd/testbox-knobs`; the repository row as base64url JSON; the status reader that
 // names no address; the parity gate; and one plain sentence per code.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +19,7 @@ import {
 } from '../../shared/testbox-admin.js';
 import { parseRepoRow } from '../../shared/testbox.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -385,7 +385,7 @@ describe('the keys and their shapes', () => {
       '  if _tb_shape "$k" "$v"; then echo 1; else echo 0; fi',
       'done < "$3"',
     ].join('\n');
-    const r = spawnSync('bash', ['-c', script, 'driver', CCRC, KNOBS, input], { env, encoding: 'utf8', timeout: 120_000 });
+    const r = spawnSyncGroup('bash', ['-c', script, 'driver', CCRC, KNOBS, input], { env, encoding: 'utf8', timeout: 120_000 });
     expect(r.status, r.stderr).toBe(0);
     const bash = r.stdout.trim().split('\n');
     expect(bash).toHaveLength(lines.length);

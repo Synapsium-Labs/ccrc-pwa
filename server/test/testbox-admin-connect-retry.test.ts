@@ -28,8 +28,9 @@ function writeBoxFile(b: Box, content: string, shim: string): { rc: number; err:
 function shimOwners(dir: string): void {
   writeFileSync(path.join(dir, 'chown'), '#!/bin/sh\nexit 0\n');
   writeFileSync(path.join(dir, 'install'), '#!/bin/sh\na=\nwhile [ $# -gt 0 ]; do case $1 in -o|-g) shift 2;; *) a="$a \'$1\'"; shift;; esac; done\neval exec /usr/bin/install $a\n');
-  // GNU chmod/chown --reference is not on every test host: chmod copies the mode by stat, chown (above) does nothing
-  writeFileSync(path.join(dir, 'chmod'), '#!/bin/sh\ncase $1 in --reference=*) r=${1#--reference=}; m=$(stat -f %Lp "$r" 2>/dev/null || stat -c %a "$r"); shift; exec /bin/chmod "$m" "$@";; esac\nexec /bin/chmod "$@"\n');
+  // GNU chmod/chown --reference is not on every test host: chmod copies the mode by stat, chown (above) does nothing.
+  // GNU's `stat -c` first: GNU `stat -f` succeeds too, printing the FILESYSTEM's status, and BSD `stat -c` fails.
+  writeFileSync(path.join(dir, 'chmod'), '#!/bin/sh\ncase $1 in --reference=*) r=${1#--reference=}; m=$(stat -c %a "$r" 2>/dev/null || stat -f %Lp "$r"); shift; exec /bin/chmod "$m" "$@";; esac\nexec /bin/chmod "$@"\n');
   chmodSync(path.join(dir, 'chmod'), 0o755);
   chmodSync(path.join(dir, 'chown'), 0o755);
   chmodSync(path.join(dir, 'install'), 0o755);

@@ -189,7 +189,7 @@ const pad = (dir, stem) => dir + '/' + stem + 'x'.repeat(Math.max(0, 100 - dir.l
 it('long unix socket names', async () => {
   const under = fs.mkdtempSync(path.join(os.tmpdir(), 'tp-'));
   console.log('TP|socket|tmpdir|' + await bind(pad(under, 'live.sock-')));
-  console.log('TP|socket|tmp|' + await bind(pad('/tmp', 'dlgt-')));
+  console.log('TP|socket|tmp|' + await bind(pad('/tmp', 'dlgt-' + process.pid + '-')));
   fs.rmSync(under, { recursive: true, force: true });
 });
 EOF
@@ -220,7 +220,18 @@ _tp_fixture() {   # <worktree> <name> <command>... -> 0 iff both sides ran and p
   rm -f -- "${wt:?}/${pkg:?}/${f:?}" "${wt:?}/${pkg:?}/${cfg:?}"
   fx_names+=("$name")
   if [ "$ok" = 1 ]; then fx_results+=(pass); printf 'fixture %s: byte-identical on both sides\n' "$name"
-  else fx_results+=(fail); printf 'fixture %s: DIFFERS (or a leg could not run)\n' "$name"; total=$((total + 1)); fi
+  else
+    fx_results+=(fail); printf 'fixture %s: DIFFERS (or a leg could not run)\n' "$name"; total=$((total + 1))
+    # What each side printed, so a difference names itself (no `TP|` line on a side: that leg's last stderr lines).
+    local side
+    for side in local box; do
+      if [ -s "$TP_TMP/$tag.$side.lines" ]; then sed "s/^/$PROG: fixture $name: $side: /" "$TP_TMP/$tag.$side.lines" >&2
+      else
+        echo "$PROG: fixture $name: $side: no TP line" >&2
+        tail -n 15 "$TP_TMP/$tag.$side.err" 2>/dev/null | sed "s/^/$PROG: fixture $name: $side stderr: /" >&2 || :
+      fi
+    done
+  fi
 }
 
 fixtures_done=0
