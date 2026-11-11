@@ -26,8 +26,10 @@ const SHARED_PREFIX_BOUND_MS = 500;
 const GH_QUOTES_BOUND_MS = 1500;
 // Task C22 (review 1769 F1): measured against round 2's net in c22.md.
 const GH_FLAG_RUN_BOUND_MS = 1500;
-// Task C23 fix round 1 (review 1795 F5): measured against a quadratic mutant in c23.md.
+// Task C23 fix round 1 (review 1795 F5): measured against a quadratic mutant in c23.md. Task C24 (review 1808 M1): the two
+// commit-candidate pins read 3 MiB, so a native indexOf writer goes red with room (c24.md).
 const GH_COMMIT_CANDIDATES_BOUND_MS = 1500;
+const GH_COMMIT_CANDIDATES_BYTES = 3 << 20;
 
 const HOME: ChatRefContext = {
   repo: 'org-a/project-a', project: 'project-a', branch: null, knownRuns: new Set(), knownItems: new Set(), runsElsewhere: false,
@@ -1084,7 +1086,7 @@ describe('Task C23: a command claims its repository flags only where it gives a 
   it('review 1795 F5: the commit-candidate loop stays linear over many commit addresses', () => {
     const head = 'gh pr list; cp -R owner-b/repo-b /x; cp -R owner-c/repo-c /y; ';
     const parts: string[] = [];
-    for (let i = 0, size = head.length; size < 1 << 20; i += 1) {
+    for (let i = 0, size = head.length; size < GH_COMMIT_CANDIDATES_BYTES; i += 1) {
       const part = `https://github.com/owner-d/repo-d/commit/a${i.toString(16).padStart(9, '0')} `;
       parts.push(part);
       size += part.length;
@@ -1162,7 +1164,7 @@ describe('Task C23: a command claims its repository flags only where it gives a 
     const parts: string[] = ['gh pr list; '];
     let size = parts[0]!.length;
     let n = 0;
-    for (; size < 1 << 20; n += 1) {
+    for (; size < GH_COMMIT_CANDIDATES_BYTES; n += 1) {
       const part = `-R o/r${n.toString(36)} github.com/o/r/commit/a${n.toString(16).padStart(6, '0')} `;
       parts.push(part);
       size += part.length;
@@ -1183,6 +1185,165 @@ describe('Task C23: a command claims its repository flags only where it gives a 
       // A value that ends at the text's end is whole, not cut.
       ['#12; gh pr list -R org-a/project-a', [['#12', home(12)]]],
     ]);
+  });
+});
+
+describe('Task C24: the net reads the raw and the joined text, and reads quotes as the shell does (review 1808)', () => {
+  const home = (n: number): string => issue('org-a/project-a', n);
+  const b = (n: number): string => issue('owner-b/repo-b', n);
+  const c = (n: number): string => issue('owner-c/repo-c', n);
+  const lf = (t: string): string => t;
+  const crlf = (t: string): string => t.replaceAll('\\\n', '\\\r\n');
+  const rows = (ctx: ChatRefContext, table: [string, [string, string | null][]][]): void => {
+    for (const [text, expected] of table) expect(links(text, ctx), `${ctx.runsElsewhere ? 'CROSS' : 'HOME'}: ${text}`).toEqual(expected);
+  };
+
+  it('F1: a continuation glued to the word before a flag or a repos/ word no longer hides what the raw text names', () => {
+    for (const nl of [lf, crlf]) {
+      for (const ctx of [HOME, CROSS]) {
+        rows(ctx, [
+          [nl('gh pr view 12 --title foo\\\n--repo owner-b/repo-b and #12'), [['#12', null]]],
+          [nl('gh pr comment\\\n-R owner-b/repo-b and #12'), [['#12', null]]],
+          [nl('gh pr list; see\\\nrepos/owner-b/repo-b/pulls/12 and #12'), [['#12', null]]],
+          // The shell reads `owner-b/repo-b--repo`, a repository nobody means: the raw reading names org-a/project-a too.
+          [nl('gh pr view 12 -R owner-b/repo-b\\\n--repo org-a/project-a; #12'), [['#12', null]]],
+        ]);
+        // Controls: a space before the backslash, or an indented next line, keeps the flag a word of its own: the command's.
+        rows(ctx, [
+          [nl('gh pr view 12 --title foo \\\n--repo owner-b/repo-b and #12'), [['#12', b(12)]]],
+          [nl('gh pr view 12 --title foo\\\n  --repo owner-b/repo-b and #12'), [['#12', b(12)]]],
+        ]);
+      }
+    }
+    // The review's generated class: a word character, then a continuation, then a flag or a path, gives text in a home session.
+    const tails = ['--repo owner-b/repo-b', '--repo=owner-b/repo-b', '-R owner-b/repo-b', '-Rowner-b/repo-b', '-R=owner-b/repo-b',
+      '-sR owner-b/repo-b', "--repo 'owner-b/repo-b'", 'repos/owner-b/repo-b/pulls/12', '/repos/owner-b/repo-b/pulls/12'];
+    for (const before of ['foo', 'x1', 'x-']) {
+      for (const tail of tails) {
+        for (const head of ['gh pr view 12 --title ', 'gh pr list; see ']) {
+          for (const nl of ['\\\n', '\\\r\n']) {
+            const text = `${head}${before}${nl}${tail} and #12`;
+            expect(links(text, HOME), text).toEqual([['#12', null]]);
+          }
+        }
+      }
+    }
+  });
+
+  it('F2: an api.github.com address split before repos/ or its slash gives text, and so does one split anywhere else', () => {
+    for (const nl of [lf, crlf]) {
+      for (const ctx of [HOME, CROSS]) {
+        rows(ctx, [
+          [nl('gh pr view 12 -R owner-b/repo-b; curl https://api.github.com/\\\nrepos/owner-c/repo-c/pulls/12; #12'), [['#12', null]]],
+          [nl('gh pr view 12 -R owner-b/repo-b; curl https://api.github.com\\\n/repos/owner-c/repo-c/pulls/12; #12'), [['#12', null]]],
+          [nl('gh api repos/owner-b/repo-b/commits/1234567abc; curl https://api.github.com/\\\nrepos/owner-c/repo-c/commits/1234567abc and 1234567abc'),
+            [['1234567abc', null]]],
+          [nl('https://github.com/owner-b/repo-b/pull/12; gh api https://api.github.com/\\\nrepos/owner-c/repo-c/pulls/12; #12'),
+            [['#12', null]]],
+          // The address readers' older gap: an address split elsewhere is read joined as well as raw, so it names its number.
+          [nl('gh pr view 12 -R owner-b/repo-b; curl https://api.github.com/repos/owner-c/re\\\npo-c/pulls/12; #12'), [['#12', null]]],
+          [nl('https://github.com/owner-b/repo-b/pull/12; https://github.com/owner-c/repo-c/pu\\\nll/12; #12'), [['#12', null]]],
+        ]);
+      }
+      rows(HOME, [
+        [nl('gh pr checks; curl https://api.github.com\\\n/repos/owner-c/repo-c/pulls/12; #12'), [['#12', null]]],
+        // What only the joined reading finds may only add: a split address alone names owner-c, but gives #12 no repository.
+        [nl('see https://github.com/owner-c/repo-c/pu\\\nll/12 and #12'), [['#12', null]]],
+        [nl('see https://github.com/owner-c/repo-c/commit/1234\\\n567abc and 1234567abc'), [['1234567abc', null]]],
+        // It adds a repository to a name the raw reading gives one: the same one leaves the link, another makes it text.
+        [nl('https://github.com/owner-c/repo-c/pull/12; https://github.com/owner-c/repo-c/pu\\\nll/12 and #12'), [['#12', c(12)]]],
+        [nl('https://github.com/owner-b/repo-b/commit/1234567abc; https://github.com/owner-c/repo-c/commit/1234\\\n567abc and 1234567abc'),
+          [['1234567abc', null]]],
+        [nl('https://github.com/owner-c/repo-c/commit/1234567abc; https://github.com/owner-c/repo-c/commit/1234\\\n567abc and 1234567abc'),
+          [['1234567abc', 'https://github.com/owner-c/repo-c/commit/1234567abc']]],
+      ]);
+    }
+  });
+
+  it('F3: a continuation inside single quotes or $\'..\' is not joined, as in the shell; inside double quotes it is', () => {
+    for (const ctx of [HOME, CROSS]) {
+      rows(ctx, [
+        ["gh pr list -R 'org-a/proj\\\nect-a'; #12", [['#12', null]]],
+        ["gh pr list -R $'org-a/proj\\\nect-a'; #12", [['#12', null]]],
+        ["gh pr list -R'org-a/proj\\\nect-a'; #12", [['#12', null]]],
+      ]);
+    }
+    // Read through the address readers: owner-b's page names #12, and a split owner-c page adds owner-c to it only where it
+    // is joined, which makes #12 text. Unjoined (in single quotes) it names no number, so #12 opens owner-b.
+    const pull = 'https://github.com/owner-c/repo-c/pu\\\nll/12';
+    const withB = (t: string): string => `https://github.com/owner-b/repo-b/pull/12; ${t} and #12`;
+    rows(HOME, [
+      [withB(`'${pull}'`), [['#12', b(12)]]],
+      [withB(`$'${pull}'`), [['#12', b(12)]]],
+      [withB(`"${pull}"`), [['#12', null]]],
+      [withB(pull), [['#12', null]]],
+      // In $'..' a backslash escapes the quote after it, so the span goes on; in '..' it does not.
+      [withB(`$'it\\'s ${pull}'`), [['#12', b(12)]]],
+      [withB(`'x\\' ${pull}`), [['#12', null]]],
+      // A quote between two letters is prose, and a quote no closing one follows before a bare line break is a character.
+      [withB(`it's at ${pull}, don't`), [['#12', null]]],
+      [`${withB(`'tis ${pull}`)}\nthe end'`, [['#12', null]]],
+      // An escaped quote opens nothing.
+      [withB(`\\'${pull}'`), [['#12', null]]],
+    ]);
+  });
+
+  it('F4: a word glued after a closing quote belongs to the value, as the shell glues it', () => {
+    for (const nl of [lf, crlf]) {
+      rows(HOME, [
+        [nl("cp -R 'org-a/project-a'x /y; gh pr list; #12"), [['#12', null]]],
+        [nl("gh pr list; cp -R \\\n'org-a/project-a'\\\n-x /y; #12"), [['#12', null]]],
+        [nl('gh pr list -R "org-a/\\\nproject-a"x; #12'), [['#12', null]]],
+        [nl("gh pr list -R 'org-a/project-a'x; #12"), [['#12', null]]],
+        [nl("gh pr list; -R='org-a/project-a'1; #12"), [['#12', null]]],
+        // Controls: the value alone, and prose punctuation after the quote, still name the home repository.
+        [nl("gh pr list -R 'org-a/project-a'; #12"), [['#12', home(12)]]],
+        [nl("gh pr list; cp -R 'org-a/project-a' /y; #12"), [['#12', home(12)]]],
+        [nl("gh pr list; cp -R 'org-a/project-a'. Then #12"), [['#12', home(12)]]],
+        [nl("gh pr list; cp -R 'org-a/project-a'), then #12"), [['#12', home(12)]]],
+      ]);
+    }
+    expect([...messageRepos("gh pr list; cp -R 'owner-b/repo-b'x /y").named]).toContain('owner-b/repo-bx');
+  });
+
+  it('M5: the address, GH_REPO, qualified-name and gh-word readers read the joined text as well as the raw', () => {
+    for (const nl of [lf, crlf]) {
+      rows(HOME, [
+        [nl('G\\\nH_REPO=owner-b/repo-b; gh pr list -R \\\norg-a/project-a; #12'), [['#12', null]]],
+        // Control: without GH_REPO the shell reads only the home repository.
+        [nl('gh pr list -R \\\norg-a/project-a; #12'), [['#12', home(12)]]],
+        // A gh word the join forms makes the net run (review 1800 F3, which opened home): its flag names owner-b.
+        [nl('g\\\nh pr view 12 -R owner-b/repo-b and #12'), [['#12', null]]],
+        [nl('g\\\nh api repos/owner-b/repo-b/commits/1234567abc; https://api.github.com/repos/owner-c/repo-c/commits/1234567abc and 1234567abc'),
+          [['1234567abc', null]]],
+        // A qualified name split by a continuation names its repository, and adds it to a number the raw reading gives one.
+        [nl('owner-b/re\\\npo-b#12 and #12'), [['#12', null]]],
+        [nl('owner-b/re\\\npo-b#12; https://github.com/owner-c/repo-c/pull/12 and #12'), [['#12', null]]],
+        [nl('owner-b/re\\\npo-b#12; https://github.com/owner-b/repo-b/pull/12 and #12'), [['#12', b(12)]]],
+      ]);
+    }
+  });
+
+  it('M6 and M8: owner/repo@sha is not read; repro 1\'s other shapes give text in a cross session too', () => {
+    expect(links('Fixed in org-b/project-b@abc1234.', HOME)).toEqual([['abc1234', 'https://github.com/org-a/project-a/commit/abc1234']]);
+    expect(links('Fixed in org-b/project-b@abc1234.', CROSS)).toEqual([['abc1234', null]]);
+    for (const nl of [lf, crlf]) {
+      rows(CROSS, [
+        [nl('gh api repos/owner-c/repo-c/commits/1234567abc --re\\\npo owner-b/repo-b and 1234567abc'), [['1234567abc', null]]],
+        [nl('gh pr list -\\\nR owner-b/repo-b; gh api repos/owner-c/repo-c/commits/1234567abc and 1234567abc'),
+          [['1234567abc', null]]],
+      ]);
+    }
+  });
+
+  it('the joined reading stays linear: quote, continuation and glued-tail storms at 1 MiB', () => {
+    const units = ["'\\\n", "$'\\'\\\n", "x'y\\\n'z ", "'a\\\\\n", '"\'\\\n', "-R 'o/r'x\\\n", '-R \\\n\\\n', "g\\\nh -R\\\n'o/r'\\\n "];
+    for (const unit of units) {
+      const text = `gh pr view 12 ${unit.repeat(Math.ceil((1 << 20) / unit.length))}`;
+      const t = performance.now();
+      messageRepos(text);
+      expect(performance.now() - t, unit).toBeLessThan(GH_FLAG_RUN_BOUND_MS);
+    }
   });
 });
 

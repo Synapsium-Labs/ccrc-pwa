@@ -41,11 +41,14 @@ interface CommitIndex {
 }
 
 /** What one message names. `named`: every repository's key, unknown ones included. `numbers`: for a PR or issue number, each
- *  repository the message names that number in, by key. `commits`: the commit addresses (`CommitIndex`). */
+ *  repository the message names that number in, by key. `commits`: the commit addresses (`CommitIndex`). `joinedCommits`: the
+ *  commit addresses only the text as the shell joins it reads, which add a repository to a commit name `commits` already gives
+ *  one and give none to a name it gives none (Task C24, review 1808 M5). */
 export interface MessageRepos {
   readonly named: ReadonlySet<string>;
   readonly numbers: ReadonlyMap<number, ReadonlyMap<string, SaidRepo>>;
   readonly commits: CommitIndex;
+  readonly joinedCommits: CommitIndex;
 }
 
 /** `slug` without its trailing dots (a sentence's full stop), by a backward scan: linear in the dots, where a `/\.+$/` replace
@@ -202,27 +205,69 @@ function continuation(text: string, at: number): number {
   return (at - k) % 2 === 0 ? length : 0;
 }
 
-/** `text` as the shell joins it, every continuation (`continuation`) deleted, and `raw[i]`, where the joined text's `i`th
- *  character stands in `text` (`raw[text.length]` is `text`'s length), so the net can read a split flag and still tell which
- *  command's words it stands in (Task C23 fix round 2, review 1800 A). One pass; the text itself where it holds none. */
-function shellJoined(text: string): { readonly text: string; readonly raw: (at: number) => number } {
+/** One reading of a message: its text, and `raw(i)`, where that text's `i`th character stands in the message. */
+interface View {
+  readonly text: string;
+  readonly raw: (at: number) => number;
+}
+
+/** Where the single-quoted span opened by the quote at `at` closes, or -1 where that quote opens none and is a literal
+ *  character (Task C24, review 1808 F3). It opens one where the shell would, except between two letters or digits, where it
+ *  is prose (`don't`, `o'clock`), and it closes at the next quote, or, after `$` (`$'..'`), the next quote no backslash
+ *  escapes. A line break that a backslash does not stand before ends the search, so a prose quote never spans two lines; one a
+ *  backslash stands before stays in the span, unjoined, as in the shell. Where the search fails no quote of its kind stands
+ *  between, so no later search reads the same stretch again. */
+function singleQuoteEnd(text: string, at: number): number {
+  if (letterOrDigit(text.codePointAt(at - 1)) && letterOrDigit(text.codePointAt(at + 1))) return -1;
+  const escapes = text.charAt(at - 1) === '$';
+  for (let e = at + 1; e < text.length; e += 1) {
+    const c = text.charAt(e);
+    if (c === "'") return e;
+    if (escapes && c === '\\') e += 1;
+    else if (c === '\n' && text.charAt(e - 1) !== '\\' && !(text.charAt(e - 1) === '\r' && text.charAt(e - 2) === '\\')) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+/** `text` as the shell joins it, every continuation (`continuation`) outside a single-quoted span deleted, and `raw(i)`, where
+ *  the joined text's `i`th character stands in `text` (`raw(text.length)` is `text`'s length), so the net can read a split flag
+ *  and still tell which command's words it stands in (Task C23 fix round 2, review 1800 A). Inside `'..'` and `$'..'` a
+ *  continuation is kept, as the shell keeps it there (`singleQuoteEnd`, Task C24, review 1808 F3); inside double quotes it is
+ *  joined, as there too. A backslash and the character after it are one pair, so an escaped quote opens nothing and only an
+ *  odd run of backslashes before a line break joins. One pass; the text itself where it holds no continuation. */
+function shellJoined(text: string): View {
   if (!/\\\r?\n/.test(text)) return { text, raw: (at) => at };
   const raw = new Int32Array(text.length + 1);
   const pieces: string[] = [];
   let n = 0;
   let from = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    const length = continuation(text, i);
-    if (length === 0) {
-      raw[n] = i;
+  const keep = (to: number): void => {
+    for (; from < to; from += 1) {
+      raw[n] = from;
       n += 1;
+    }
+  };
+  for (let i = 0; i < text.length; ) {
+    const c = text.charAt(i);
+    if (c === '\\') {
+      const length = text.charAt(i + 1) === '\n' ? 2 : text.charAt(i + 1) === '\r' && text.charAt(i + 2) === '\n' ? 3 : 0;
+      if (length === 0) {
+        i += 2;
+        continue;
+      }
+      pieces.push(text.slice(from, i));
+      keep(i);
+      from = i + length;
+      i = from;
       continue;
     }
-    pieces.push(text.slice(from, i));
-    i += length - 1;
-    from = i + 1;
+    const shut = c === "'" ? singleQuoteEnd(text, i) : -1;
+    i = shut === -1 ? i + 1 : shut + 1;
   }
   pieces.push(text.slice(from));
+  keep(text.length);
   raw[n] = text.length;
   return { text: pieces.join(''), raw: (at) => raw[at]! };
 }
@@ -467,37 +512,48 @@ function ghCommand(
 /** A repository flag's spelling where a word starts (no letter, digit, `_` or `-` before it): `--repo`, or a run of short
  *  flags up to its first `R`, its value spaced or glued on (`-R o/r`, `-sR o/r`, `-Ro/r`, `-R=o/r`). */
 const REPO_FLAG = /(?<![\w-])(?:--repo(?![\w-])|-[A-Za-z]*?R)/g;
-/** A character that ends a repository flag's unquoted value. */
+/** A character that ends a repository flag's unquoted value, or the unquoted tail glued after its closing quote. */
 const VALUE_END = /[\s`;&|,()<>"']/;
 
-/** The value of the repository flag whose spelling ends at `at`, read no further than `limit`, where the next repository flag's
- *  spelling starts: after `=`, after spaces or tabs, or glued on; a quoted value has its quotes removed. Null where none can
- *  be read: nothing there, a line break first, or a quote not closed on its line before `limit` (the grammar trims a line
- *  break, so a quote closed on a later line is refused here). A value never runs past the next flag, so each character is
- *  read once however many flags a run of them holds (Task C22, review 1769 F1). An unquoted value that runs into the next
- *  flag is cut there, so it is unreadable too: what was cut off may have named another repository (Task C23, review 1778 L2-2:
- *  `-R o/r.-R=o/r` names no `o/r` from its first flag). */
-function repoFlagValue(text: string, at: number, limit: number): string | null {
+/** Past the line continuations standing at `at` (`continuation`): where the net reads the raw text, one between a flag and
+ *  its value is the space the shell reads it as (Task C24, review 1808 F1). */
+function pastContinuations(text: string, at: number): number {
   let k = at;
+  for (let length = continuation(text, k); length > 0; length = continuation(text, k)) k += length;
+  return k;
+}
+
+/** The value of the repository flag whose spelling ends at `at`, read no further than `limit`, where the next repository flag's
+ *  spelling starts: after `=`, after spaces, tabs or a line continuation, or glued on; a quoted value has its quotes removed,
+ *  and a word glued after its closing quote belongs to it, as the shell glues it (`'o/r'x` is `o/rx`; Task C24, review 1808
+ *  F4). An unquoted value or tail ends at a quote: the net reads inside quoted bodies, where that quote closes the body. Null
+ *  where none can be read: nothing there, a line break first, or a quote not closed on its line before `limit` (the grammar
+ *  trims a line break, so a quote closed on a later line is refused here). A value never runs past the next flag, so each
+ *  character is read once however many flags a run of them holds (Task C22, review 1769 F1). A value that runs into the next
+ *  flag is cut there, so it is unreadable too: what was cut off may have named another repository (Task C23, review 1778
+ *  L2-2: `-R o/r.-R=o/r` names no `o/r` from its first flag). */
+function repoFlagValue(text: string, at: number, limit: number): string | null {
+  let k = pastContinuations(text, at);
   const c = text.charAt(k);
-  if (c === '=') k += 1;
+  if (c === '=') k = pastContinuations(text, k + 1);
   else if (c === ' ' || c === '\t') {
     // A flag starts at a `-`, never inside a run of spaces, so this run ends at `limit` at the latest.
-    while (text.charAt(k) === ' ' || text.charAt(k) === '\t') k += 1;
+    while (text.charAt(k) === ' ' || text.charAt(k) === '\t' || continuation(text, k) > 0) k += continuation(text, k) || 1;
   }
+  let quoted = '';
+  let e = k;
   const q = text.charAt(k);
   if (q === '"' || q === "'") {
-    for (let e = k + 1; e < limit; e += 1) {
-      const ch = text.charAt(e);
-      if (ch === q) return text.slice(k + 1, e);
-      if (ch === '\n') return null;
-    }
-    return null;
+    e = k + 1;
+    while (e < limit && text.charAt(e) !== q && text.charAt(e) !== '\n') e += 1;
+    if (e === limit || text.charAt(e) !== q) return null;
+    quoted = text.slice(k + 1, e);
+    e += 1;
   }
-  let e = k;
+  const tail = e;
   while (e < limit && !VALUE_END.test(text.charAt(e))) e += 1;
   // A flag starts at `limit` unless it is the text's end, and no value ends at a flag's `-`, so reaching it cut the value.
-  return e === k || (e === limit && e < text.length) ? null : text.slice(k, e);
+  return e === k || (e === limit && e < text.length) ? null : quoted + text.slice(tail, e);
 }
 
 /** What the net found (`repoFlags`): every repository it names by key, those no command claimed, and whether it read any
@@ -523,34 +579,45 @@ function claimedAt(claims: readonly Span[], cursor: { i: number }, index: number
  *  in no word a command read (`claims`) is no command's, so it is a candidate for every number the message gives a
  *  repository (`messageRepos`, review 1769 F3). A flag of another program (`cp -R src/lib`) in such a message names its word
  *  too, and its bare names are text. It reads the message as the shell joins it (`shellJoined`), so a flag spelling split by a
- *  continuation is read in every context (Task C23 fix round 2, review 1800 A). One forward pass: each flag's value ends where
- *  the next flag starts (`repoFlagValue`). */
-function repoFlags(message: string, claims: readonly Span[]): Net {
-  // The net reads the text as the shell joins it, so a flag split by a continuation (`-` then `R`) is read; a find's offset
-  // is mapped back to the message, where the claims stand.
-  const { text, raw } = shellJoined(message);
+ *  continuation is read in every context (Task C23 fix round 2, review 1800 A), and it reads the raw message too, and names
+ *  what either reading finds (Task C24, review 1808 F1 and F2): a continuation glued to the word before a flag or a `repos/`
+ *  word joins the two, and the joined reading no longer sees a flag or a path where a word starts, so the join may only add
+ *  what the net finds, never hide what the raw text names. One forward pass per reading: each flag's value ends where the next
+ *  flag starts (`repoFlagValue`). */
+function repoFlags(views: readonly View[], claims: readonly Span[]): Net {
   const net: Net = { named: new Map(), unclaimed: new Map(), flags: false };
   const found = (r: SaidRepo, claimed: boolean): void => {
     if (!net.named.has(r.key)) net.named.set(r.key, r);
     if (!claimed && !net.unclaimed.has(r.key)) net.unclaimed.set(r.key, r);
   };
-  const flagCursor = { i: 0 };
-  const flags = text.matchAll(REPO_FLAG);
-  for (let m = flags.next(); !m.done; ) {
-    const next = flags.next();
-    const at = m.value.index;
-    const value = repoFlagValue(text, at + m.value[0].length, next.done ? text.length : next.value.index);
-    net.flags = true;
-    found(value === null ? LOST : flagRepo(value), claimedAt(claims, flagCursor, raw(at)));
-    m = next;
+  // Each reading maps a find's offset back to the message, where the claims stand, and walks the claims with its own cursor.
+  for (const { text, raw } of views) {
+    const flagCursor = { i: 0 };
+    const flags = text.matchAll(REPO_FLAG);
+    for (let m = flags.next(); !m.done; ) {
+      const next = flags.next();
+      const at = m.value.index;
+      const value = repoFlagValue(text, at + m.value[0].length, next.done ? text.length : next.value.index);
+      net.flags = true;
+      found(value === null ? LOST : flagRepo(value), claimedAt(claims, flagCursor, raw(at)));
+      m = next;
+    }
+    const pathCursor = { i: 0 };
+    for (const m of text.matchAll(GH_PATH_WORD)) found(said(`${m[1]!}/${m[2]!}`), claimedAt(claims, pathCursor, raw(m.index)));
   }
-  const pathCursor = { i: 0 };
-  for (const m of text.matchAll(GH_PATH_WORD)) found(said(`${m[1]!}/${m[2]!}`), claimedAt(claims, pathCursor, raw(m.index)));
   return net;
 }
 
-/** One message's evidence, read in one forward pass of each reader over its raw text. */
+/** One message's evidence, read in one forward pass of each reader over its raw text, and, where it holds a line continuation,
+ *  over the text as the shell joins it too (`shellJoined`): the address, `GH_REPO`, qualified-name and net readers name what
+ *  either reading finds, and a `gh` word in either makes the net run (Task C24, review 1808 M5). What only the joined reading
+ *  finds may only add: a repository it names, a repository for a number or a commit the raw reading already gives one, never
+ *  a number or a commit of its own, so it turns a link to text and never text to a link or one link to another. The `gh`
+ *  command reader reads the raw text only: it deletes a continuation itself (`ghWords`), and its claims stand in the raw
+ *  text. */
 export function messageRepos(text: string): MessageRepos {
+  const joined = shellJoined(text);
+  const views: readonly View[] = joined.text === text ? [joined] : [{ text, raw: (at) => at }, joined];
   const named = new Set<string>();
   const numbers = new Map<number, Map<string, SaidRepo>>();
   const exact = new Map<string, Map<string, SaidRepo>>();
@@ -570,37 +637,54 @@ export function messageRepos(text: string): MessageRepos {
     }
     exact.set(sha, at);
   };
-  /** The repository an address names, or null when the name boundary does not start its host (`修复见github.com/…`,
-   *  `_github.com/…`): that address names an unknown repository and is evidence for nothing (review 1760 F5). */
-  const addressed = (m: RegExpMatchArray, owner: string, repo: string): SaidRepo | null => {
-    if (!wordBefore(text, m.index!)) return said(`${owner}/${repo}`);
-    named.add(unknown(`host:${m[0]}`).key);
-    return null;
+  // What only the joined reading finds: numbers kept until every raw reader has written its own, and commit addresses in an
+  // index of their own (`joinedCommits`), each (repository, SHA) pair once.
+  const joinedNumbers: [string, SaidRepo][] = [];
+  const joinedExact = new Map<string, Map<string, SaidRepo>>();
+  const joinedAddresses: SaidCommit[] = [];
+  const atJoinedCommit = (sha: string, r: SaidRepo): void => {
+    const at = joinedExact.get(sha) ?? new Map<string, SaidRepo>();
+    if (!at.has(r.key)) {
+      at.set(r.key, r);
+      joinedAddresses.push({ repo: r, sha });
+    }
+    joinedExact.set(sha, at);
   };
-  for (const m of text.matchAll(PAGE)) {
-    if (RESERVED_OWNERS.has(m[1]!.toLowerCase())) continue;
-    const r = addressed(m, m[1]!, m[2]!);
-    if (r === null) continue;
-    named.add(r.key);
-    // A number or a SHA is evidence only where the name boundary ends it (`pull/12x` is not #12).
-    if (wordAfter(text, m.index + m[0].length)) continue;
-    if (m[3] !== undefined) atNumber(m[3], r);
-    if (m[4] !== undefined) atCommit(m[4].toLowerCase(), r);
-  }
-  for (const m of text.matchAll(API)) {
-    const r = addressed(m, m[1]!, m[2]!);
-    if (r === null) continue;
-    named.add(r.key);
-    if (wordAfter(text, m.index + m[0].length)) continue;
-    if (m[3] !== undefined) atNumber(m[3], r);
-    if (m[4] !== undefined) atCommit(m[4].toLowerCase(), r);
-  }
-  for (const m of text.matchAll(RAW)) {
-    const r = addressed(m, m[1]!, m[2]!);
-    if (r !== null) named.add(r.key);
-  }
-  for (const m of text.matchAll(GH_REPO_ENV)) {
-    if (!wordBefore(text, m.index)) named.add(said(m[2]!).key);
+  for (const { text: src } of views) {
+    const ownNumber = src === text ? atNumber : (n: string, r: SaidRepo): void => void joinedNumbers.push([n, r]);
+    const ownCommit = src === text ? atCommit : atJoinedCommit;
+    /** The repository an address names, or null when the name boundary does not start its host (`修复见github.com/…`,
+     *  `_github.com/…`): that address names an unknown repository and is evidence for nothing (review 1760 F5). */
+    const addressed = (m: RegExpMatchArray, owner: string, repo: string): SaidRepo | null => {
+      if (!wordBefore(src, m.index!)) return said(`${owner}/${repo}`);
+      named.add(unknown(`host:${m[0]}`).key);
+      return null;
+    };
+    for (const m of src.matchAll(PAGE)) {
+      if (RESERVED_OWNERS.has(m[1]!.toLowerCase())) continue;
+      const r = addressed(m, m[1]!, m[2]!);
+      if (r === null) continue;
+      named.add(r.key);
+      // A number or a SHA is evidence only where the name boundary ends it (`pull/12x` is not #12).
+      if (wordAfter(src, m.index + m[0].length)) continue;
+      if (m[3] !== undefined) ownNumber(m[3], r);
+      if (m[4] !== undefined) ownCommit(m[4].toLowerCase(), r);
+    }
+    for (const m of src.matchAll(API)) {
+      const r = addressed(m, m[1]!, m[2]!);
+      if (r === null) continue;
+      named.add(r.key);
+      if (wordAfter(src, m.index + m[0].length)) continue;
+      if (m[3] !== undefined) ownNumber(m[3], r);
+      if (m[4] !== undefined) ownCommit(m[4].toLowerCase(), r);
+    }
+    for (const m of src.matchAll(RAW)) {
+      const r = addressed(m, m[1]!, m[2]!);
+      if (r !== null) named.add(r.key);
+    }
+    for (const m of src.matchAll(GH_REPO_ENV)) {
+      if (!wordBefore(src, m.index)) named.add(said(m[2]!).key);
+    }
   }
   // `gh` commands, each read from its own words to its own end, so a flag reaches only its command's number (review 1760 F1).
   // The net runs in a message that holds a `gh` word (`ghWordEnd`, Task C22 review 1769 F4); a command is read where a space
@@ -630,19 +714,35 @@ export function messageRepos(text: string): MessageRepos {
     if (read.hashed !== null) hashed.push(read.hashed);
     gh.lastIndex = Math.max(read.end, end);
   }
+  // A `gh` word the shell's join forms (`g`, a continuation, `h`) makes the net run too, though no command is read from it.
+  if (!holdsGh && views.length > 1) {
+    for (const m of joined.text.matchAll(/gh/gi)) {
+      if (ghWordEnd(joined.text, m.index) !== null) {
+        holdsGh = true;
+        break;
+      }
+    }
+  }
   let unclaimed: ReadonlyMap<string, SaidRepo> = new Map();
   if (holdsGh) {
-    const net = repoFlags(text, claims);
+    const net = repoFlags(views, claims);
     for (const key of net.named.keys()) named.add(key);
     unclaimed = net.unclaimed;
     // A command ended by its own `#n` (a shell comment, review 1766 F7) read no repository for it. Where the message names
     // one by a flag, that number is in a repository the chat cannot tell (review 1768 G3).
     if (net.flags) for (const n of hashed) atNumber(n, LOST);
   }
-  for (const q of qualifiedNames(text)) {
-    const r = qualifiedRepo(q.repo);
-    named.add(r.key);
-    atNumber(q.id, r);
+  for (const { text: src } of views) {
+    for (const q of qualifiedNames(src)) {
+      const r = qualifiedRepo(q.repo);
+      named.add(r.key);
+      if (src === text) atNumber(q.id, r);
+      else joinedNumbers.push([q.id, r]);
+    }
+  }
+  for (const [n, r] of joinedNumbers) {
+    const at = numbers.get(Number(n));
+    if (at !== undefined && !at.has(r.key)) at.set(r.key, r);
   }
   // A repository the net found in no command's words is a candidate for every number the message gives a repository, so a
   // number with another repository is text (Task C22, review 1769 F3), and for every commit it gives one, as an address of
@@ -655,7 +755,7 @@ export function messageRepos(text: string): MessageRepos {
     // Each SHA is a key already, so the writer adds no key to the map this walks.
     for (const sha of exact.keys()) for (const r of extra) atCommit(sha, r);
   }
-  return { named, numbers, commits: commitIndex(exact, addresses) };
+  return { named, numbers, commits: commitIndex(exact, addresses), joinedCommits: commitIndex(joinedExact, joinedAddresses) };
 }
 
 /** `CommitIndex` over a message's distinct commit addresses: one sort, and one backward pass for `nextOther`. */
@@ -696,10 +796,18 @@ export function reposFor(kind: 'pr' | 'commit', id: string, message: MessageRepo
   if (kind === 'pr') return message.numbers.get(Number(id)) ?? new Map();
   const sha = id.toLowerCase();
   const out = new Map<string, SaidRepo>();
+  commitRepos(message.commits, sha, out);
+  // The joined reading's addresses only add to a commit the raw reading gives a repository (Task C24, review 1808 M5).
+  if (out.size === 1) commitRepos(message.joinedCommits, sha, out);
+  return out;
+}
+
+/** Adds to `out`, up to two, the repositories of `index`'s addresses where one SHA is a prefix of `sha` or `sha` of it. */
+function commitRepos(index: CommitIndex, sha: string, out: Map<string, SaidRepo>): void {
   const add = (r: SaidRepo): void => {
     if (out.size < 2 && !out.has(r.key)) out.set(r.key, r);
   };
-  const { exact, sorted, nextOther } = message.commits;
+  const { exact, sorted, nextOther } = index;
   // Every SHA in the range starts with the name's, and its next character is hex, below `g`.
   const from = firstFrom(sorted, sha);
   const to = firstFrom(sorted, `${sha}g`);
@@ -713,5 +821,4 @@ export function reposFor(kind: 'pr' | 'commit', id: string, message: MessageRepo
       if (out.size === 2) break;
     }
   }
-  return out;
 }
