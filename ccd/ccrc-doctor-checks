@@ -11660,17 +11660,20 @@ _check_pane-scope-stop() {
 #     first. So the global environment is the wrong question, and sessions on one
 #     server differ: a supervised spawn carries the user manager's PATH, one started
 #     from a shell carries that shell's.
-#   - Neither the unit, nor ccd, nor a generated wrapper changes PATH, and Claude Code
-#     writes the process PATH as the last line of its shell snapshot, so ~/.bashrc
-#     edits never apply to a session's commands.
+#   - Neither the unit nor a generated wrapper changes PATH, and Claude Code writes the
+#     process PATH as the last line of its shell snapshot, so ~/.bashrc edits never
+#     apply to a session's commands. ccd's launch line is the one step that does
+#     (`SESSION_PANE_PATH`, D-8050): it adds $HOME/.local/bin last when it is absent.
 #   - A pane's pid is the session's process (every link is an `exec`), so its
 #     environ is the PATH that session started with.
-# So: read every live session's environ, and with none to read, the manager's PATH.
+# So: read every live session's environ, and with none to read, the manager's PATH as
+# that launch step leaves it (`_dr_spawn_path`, D-8333): a session started now gets the
+# folder whatever the manager holds, so the manager's own value would warn for ever.
 # rc 1 means nothing could be read, and each caller then measures `$PATH` as it
 # always did: a server box (no session runs there), Darwin with no readable proc
 # tree, or a box with neither. NOT READ: a lane's settings.json `env` block, which
 # Claude Code applies inside the process, so a lane that sets PATH there reads as lacking.
-DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way"
+DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way. A session's own restart also gives it \$HOME/.local/bin, which ccd's launch line adds (D-8050)"
 
 # The commands a session calls bare. A generated wrapper is not here: ccd launches
 # those by absolute path. Only what this box installed is asked about.
@@ -11683,6 +11686,16 @@ _dr_environ_path() {   # <environ file> -> its PATH; rc 1 when it cannot be read
     case "$kv" in PATH=*) printf '%s' "${kv#PATH=}"; return 0 ;; esac
   done < "$1"
   return 1
+}
+
+# THE PATH ccd'S LAUNCH STEP MAKES OF A PANE'S (D-8333): `SESSION_PANE_PATH` in ccd, spelled
+# again here because doctor never sources ccd's body. `ccrc-doctor-session-path.test.ts`
+# runs ccd's own word and this over the same PATHs and goes red on a drift.
+_dr_spawn_path() {   # <a pane's PATH> -> the PATH the session it launches starts with
+  case ":$1:" in
+    *":$HOME/.local/bin:"*) printf '%s' "$1" ;;
+    *) printf '%s' "$1:$HOME/.local/bin" ;;
+  esac
 }
 
 _dr_session_add() {   # <PATH> -> counted once per session, stored once per distinct value
@@ -11724,8 +11737,8 @@ _dr_session_paths() {   # -> DR_SESSION_PATHS, DR_SESSION_COUNTS, DR_SESSION_TOT
     case "$l" in PATH=*) p="${l#PATH=}"; break ;; esac
   done <<< "$out"
   case "$p" in ''|\$*) return 1 ;; esac   # `$'…'` is systemd's quoting of a value this cannot read as a list
-  _dr_session_add "$p"
-  DR_SESSION_FROM="read from the user manager, whose PATH a supervised session inherits; no session is running to read"
+  _dr_session_add "$(_dr_spawn_path "$p")"
+  DR_SESSION_FROM="read from the user manager, whose PATH a supervised session inherits, with \$HOME/.local/bin added last as ccd's launch line adds it; no session is running to read"
   return 0
 }
 
