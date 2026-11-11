@@ -107,10 +107,10 @@ export const LANE_ARM_TEXT = {
   rows: {
     [ROSTER_CARD_LANE]: {
       legend: 'Roster card',
-      shadowNote: 'After a compaction, resume or clear, a coordinator gets no roster; the card it would have had is '
-        + 'appended to the shadow log on the fleet box.',
-      liveNote: 'After a compaction, resume or clear, a coordinator\'s first context lists the open runs it claims and '
-        + 'what is awaiting you.',
+      shadowNote: 'After a compaction, resume or clear, and on its first wake after an idle compaction, a coordinator '
+        + 'gets no roster; the card it would have had is appended to the shadow log on the fleet box.',
+      liveNote: 'After a compaction, resume or clear, and on its first wake after an idle compaction, a coordinator\'s '
+        + 'context lists the open runs it claims and what is awaiting you.',
       gate: null,
     },
   },
