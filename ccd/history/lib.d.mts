@@ -1142,6 +1142,30 @@ export interface ReadVerbSpec {
 }
 export const READ_OPTIONS: Readonly<Record<'grep' | 'describe' | 'expand' | 'tree', ReadVerbSpec>>;
 export const READ_VERBS: readonly string[];
+
+// ── touched (W4 addendum P8; D-8188, D-8189) ──
+export const TOUCHED_CANDIDATE_MAX: 10000;
+export const TOUCHED_LIMIT_DEFAULT: 20;
+export const TOUCHED_DISCLOSURE: string;
+export const TOUCHED_CAPPED_NOTE: string;
+export type TouchedQuery =
+  | { kind: 'path'; file: string }
+  | { kind: 'path-symbol'; file: string; symbol: string }
+  | { kind: 'symbol'; symbol: string };
+export function touchedQuery(arg: string): TouchedQuery | null;
+export function likeEscape(s: string): string;
+export function splitStoredRef(kind: string, value: string): { path: string; line: string | null; symbol: string | null };
+export function normaliseRefPath(path: string, nodeRoot: string | null, roots: readonly string[]): { path: string; outside: boolean };
+export function symbolMatches(ref: { symbol: string | null }, symbol: string): boolean;
+/** The graph's file index (compact-card.mjs `fileIndex`): every file, and the files by basename. */
+export interface TouchedGraphIndex { files: Set<string>; byBase: Map<string, string[]> }
+export type TouchedMatch = 'exact' | 'suffix' | 'outside';
+export function matchRef(ref: { path: string; outside: boolean }, file: string, graph: { index: TouchedGraphIndex } | null): TouchedMatch | null;
+export function rankTouched<T extends { nodeId: string; latestMs?: number | null }>(rows: readonly T[]): T[];
+/** One matched ref of a node for a file. `ref` is what touchedRows lists (kind, value, origin, line, symbol, ...). */
+export type TouchedMatchIn<R, N extends object> = N & { nodeId: string; file: string; match: TouchedMatch; ref: R };
+export type TouchedRow<R, N extends object> = Omit<N, 'ref' | 'match' | 'nodeId' | 'file'> & { nodeId: string; file: string; match: TouchedMatch; refs: R[] };
+export function touchedRows<R, N extends object>(matches: readonly TouchedMatchIn<R, N>[]): TouchedRow<R, N>[];
 export type ReadOpts = Readonly<Record<string, string | number | boolean | null>>;
 export type ReadArgs =
   | { ok: true; verb: string; positional: readonly string[]; opts: ReadOpts }
