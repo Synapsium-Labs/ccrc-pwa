@@ -252,18 +252,6 @@ describe('every predicate refuses a non-string at runtime', () => {
   });
 });
 
-/** mulberry32: a seeded PRNG, so the fuzz corpus is the same on every run and every box. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 const FUZZ_ALPHABET = 'ab.-_/09@{}~^:';
 /** The draw: the eight characters the grammar can accept, weighted four to one over the six it never can, so that
  *  enough of the corpus reaches the grammar's own lookaheads for the proof to say something. */
@@ -331,6 +319,7 @@ import * as grammarL0 from '../../shared/docs.js';
 import { makeCcdHarness as harnessForGrammar } from './ccdWsHelpers.js';
 import { parseOneLine as oneLineOfGrammar, runCcdDocs as runForGrammar } from './ccdDocsHelpers.js';
 import { unitJson as unitForGrammar } from './docsHelperPy.js';
+import { mulberry32 } from './fakeTime.js';
 
 describe('one grammar on both sides: L0 predicates and _docs_py agree (rows 2, 3, 63)', () => {
   const h = harnessForGrammar('ccd-docs-');

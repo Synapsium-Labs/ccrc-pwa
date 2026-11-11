@@ -41,6 +41,7 @@ import {
   type ChildReclaimAttention, type ChildReclaimKeptWord, type LifecycleAct, type LifecycleOutcome,
   type MirroredLifecycleEvent,
 } from '../../shared/api.js';
+import { mulberry32 } from './fakeTime.js';
 
 const NOW = 1_790_000_000_000;
 /** The lane's pass interval (`watch.ts`'s `CHILD_RECLAIM_SWEEP_MS`) — an
@@ -66,17 +67,6 @@ const at = (mono: number, wall: number = mono): ChildReclaimLaneNow => ({ monoMs
 /** What the lane knew when it sent one request. */
 const ask = (mono: number, licensed: boolean, asHolder = false, wall: number = mono): ChildReclaimAsk =>
   ({ at: at(mono, wall), licensed, asHolder });
-/** A small seeded PRNG (mulberry32), so a seeded row replays exactly. */
-const mulberry32 = (seed: number): (() => number) => {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6D2B79F5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
-  };
-};
 
 /** A child that is eligible on every count: minted by run 7, which is
  *  terminal, with nothing open on it, born at the same instant its minting

@@ -21,6 +21,7 @@ import {
   parseChildReclaimResult,
 } from '../src/coord/childReclaim.js';
 import type { LifecycleAct, LifecycleOutcome, MirroredLifecycleEvent } from '../../shared/api.js';
+import { mulberry32 } from './fakeTime.js';
 
 const NOW = 1_790_000_000_000;
 /** The lane's pass interval, an ARGUMENT to every pacing function (this L1 file imports no L4 constant). */
@@ -72,17 +73,6 @@ const seed = (rows: readonly MirroredLifecycleEvent[]): ChildReclaimTierState =>
 const refusedAttempt = (w: string): MirroredLifecycleEvent[] => [ev('reclaim', 'intent'), ev('reclaim', 'refused', { refusal: w })];
 /** A refused word no build was compiled to know: `childReclaimTokenKind` answers null for it. */
 const UNKNOWN_REFUSAL = 'a-word-this-build-never-knew';
-/** mulberry32: a seeded row replays exactly. */
-const mulberry32 = (s: number): (() => number) => {
-  let a = s >>> 0;
-  return () => {
-    a = (a + 0x6D2B79F5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
-  };
-};
 
 describe('the persistent tier: its two constants', () => {
   it('K is 4, the failure at which the ordinary ramp first reaches the ceiling, and the cap is four hours', () => {
