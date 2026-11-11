@@ -2151,8 +2151,9 @@ export const TOUCHED_SELECTS = Object.freeze({
  *  tree is too large", measured at an OR of 1000 LIKE terms), and one select per basename measured a cold p95 over 2 s at 165 of them on a loaded box (848 ms on a quiet one). */
 const TOUCHED_LABEL_CHUNK = 100;
 /** The label-file select over `n` basenames: the file select's text with its one LIKE repeated n times under OR. Built from the
- *  fixed template and a count of placeholders only; every value is bound, never interpolated. */
-function touchedLabelSql(n, ordered) {
+ *  fixed template and a count of placeholders only; every value is bound, never interpolated. Exported only because the bench reads it
+ *  (to EXPLAIN the select it runs); nothing else imports it. */
+export function touchedLabelSql(n, ordered) {
   const likes = Array.from({ length: n }, () => (ordered ? "r.value LIKE ? ESCAPE '\\'" : "value LIKE ? ESCAPE '\\'")).join(' OR ');
   return ordered
     ? `SELECT r.node_id, r.kind, r.value, r.origin, n.latest_ms FROM node_refs r JOIN nodes n ON n.node_id = r.node_id WHERE r.kind IN ('path','path:symbol','test') AND (${likes}) ${TOUCHED_ORDER_BY}`
@@ -2176,7 +2177,7 @@ const TOUCHED_NODE_COLS = ['node_id', 'session_pk', 'epoch_seq', 'kind', 'gist',
 /** A graph file's graph reduced to what touched reads, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or
  *  links all read as "no graph". `{ files, index, labelFiles }`: matchRef reads only `index`, and `labelFiles` is the distinct files whose
  *  graph nodes carry `symbol` as their label (an empty list with no symbol). The parsed graph (its nodes, links, byFile and degree) is
- *  dropped here, so only the reduced form is held while the next root's graph is parsed (review 1822). */
+ *  dropped here, so only the reduced form is held while the next root's graph is parsed (a cache of whole graphs held every parse until the call ended). */
 function touchedGraphOf(graphPath, load, symbol) {
   try {
     const g = load(graphPath, GRAPH_MAX_BYTES);
@@ -2386,7 +2387,7 @@ export function runTouched(rc, a) {
       if (m !== null) { add(w.file, m); listedUnderGraphFile = true; }
     }
     // The ref's own path is its file only when no graph file took it: a relative ref (`x.mjs:foo`) the graph's label file (`ccd/x.mjs`) matched
-    // is that file's row, listed once under the graph's name, and counted once (review 1822).
+    // is that file's row, listed once under the graph's name, and counted once (one stored ref is one row).
     if (q.kind === 'symbol' && c.kind === 'path:symbol' && !listedUnderGraphFile && xlib.symbolMatches(sp, q.symbol)) add(norm.path, norm.outside ? 'outside' : 'exact');
   }
   const ranked = xlib.rankTouched(xlib.touchedRows(matches));

@@ -505,7 +505,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     }, HEAVY);
   });
 
-  // Review 1822: one stored ref is one row, and the node is counted once, when a symbol query's label file and the ref's own path name one file.
+  // One stored ref is one row, and the node is counted once (the ref's own path is its file only when no graph file took it), when a symbol query's label file and the ref's own path name one file.
   it('a symbol query lists a relative path:symbol ref once, under the graph\'s file, and counts the node once', () => {
     plant('Lt38n1', { refs: [['path:symbol', 'tc38x.mjs:tc38foo', 'model']] });
     plantGraph([{ label: 'tc38foo', file: 'ccd/tc38x.mjs' }]);
@@ -522,19 +522,42 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
   const sortedBases = (files: string[]): string[] => [...new Set(files.map(baseOf))].sort();
   const fileOfBase = (files: string[], b: string): string => files.find((f) => baseOf(f) === b)!;
 
-  it('D-8191 two chunks answer what one select per basename did: 130 label basenames (two selects) list exactly the files that carry a ref, and the decoys stay out', () => {
+  it('D-8191 two chunks answer what one select per basename did: 130 label basenames (two selects) list exactly the files that carry a ref, and the selectable decoys stay out', () => {
     const files = labelFiles('d8a', 130);
     const bases = sortedBases(files);
     expect(bases.length, 'CONTROL: more than one chunk of 100').toBe(130);
     const picked = [files[0]!, fileOfBase(files, bases[0]!), fileOfBase(files, bases[99]!), fileOfBase(files, bases[100]!), fileOfBase(files, bases[129]!), files[57]!];
     const want = [...new Set(picked)];
     want.forEach((f, i) => plant(`Ld8a${i}`, { latest: T0 + 700_000 - i * 1000, refs: [['path', f]] }));
-    plant('Ld8adecoy1', { latest: T0 + 800_000, refs: [['path', 'ccd/d8a0/other8a.mjs'], ['path', 'ccd/d8adecoy/lab8a130.mjs']] });
-    plant('Ld8adecoy2', { latest: T0 + 801_000, refs: [['path:symbol', 'ccd/d8a0/lab8a0.mjs:otherSymbol']] });
+    // Every decoy holds a label basename (so a chunk's select returns it) and names no label file: a substring off a segment boundary,
+    // and the same basename under a path the graph does not resolve to the label file. One pair in each chunk.
+    const decoys: Array<[string, string]> = [
+      ['Ld8adecoy1', 'ccd/d8a0/x' + baseOf(files[0]!)], ['Ld8adecoy2', 'other/' + baseOf(files[0]!)],
+      ['Ld8adecoy3', 'ccd/d8a0/x' + bases[100]!], ['Ld8adecoy4', 'other/' + bases[129]!],
+    ];
+    decoys.forEach(([id, v], i) => plant(id, { latest: T0 + 800_000 + i * 1000, refs: [['path', v]] }));
+    for (const [id, v] of decoys) {
+      const b = bases.find((x) => v.includes(x))!;
+      const returned = withDb((db) => (db.prepare("SELECT value FROM node_refs WHERE kind IN ('path','path:symbol','test') AND value LIKE ? ESCAPE '\\'").all(`%${b}%`) as Array<{ value: string }>).map((r) => r.value));
+      expect(returned, `CONTROL: ${id} (${v}) is a candidate of the select for ${b}`).toContain(v);
+      expect(want.includes(v), `CONTROL: ${v} is not a label file`).toBe(false);
+    }
     plantGraph(files.map((f) => ({ label: 'd8aSym', file: f })));
     const j = touchedJson(['d8aSym']);
     expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
     expect(items(j).map((i) => [i['nodeId'], i['file']])).toEqual(want.map((f, i) => [`Ld8a${i}`, f]));
+  }, HEAVY);
+
+  // Spec addendum 3.5 step 5: a label file's candidates are file queries matched by path, and "whose symbol equals it" governs only the
+  // symbol select's refs. So a ref on a label file that carries ANOTHER symbol is listed for a symbol query.
+  it('D-8191 a path:symbol ref on a label file that carries another symbol is listed for the symbol query (label files match by path)', () => {
+    const files = labelFiles('d8s', 3);
+    plant('Ld8sother', { latest: T0 + 690_000, refs: [['path:symbol', `${files[1]!}:otherSymbol`]] });
+    plant('Ld8sown', { latest: T0 + 689_000, refs: [['path:symbol', 'ccd/d8sown/own.mjs:d8sSym']] });
+    plantGraph(files.map((f) => ({ label: 'd8sSym', file: f })));
+    const j = touchedJson(['d8sSym']);
+    expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(j).map((i) => [i['nodeId'], i['file'], i['match']])).toEqual([['Ld8sother', files[1]!, 'exact'], ['Ld8sown', 'ccd/d8sown/own.mjs', 'exact']]);
   }, HEAVY);
 
   it('D-8191 the last basename of a chunk is in its OR: the only ref sits on the 100th basename by sort order (and, in a second case, on the last of the final short chunk)', () => {
@@ -561,7 +584,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(items(j).map((i) => [i['nodeId'], i['file']])).toEqual([['Ld8b1', files[999]!]]);
   }, HEAVY);
 
-  it('D-8191 a row two selects both return is kept once: one ref value that two chunks match, and a path:symbol ref the symbol select and a chunk both return', () => {
+  it('D-8191 a ref two chunks match, and a path:symbol ref the symbol select and a chunk both return, are each listed once and counted once in the output (the pool\'s dedupe is pinned by the cap case below)', () => {
     // Sorted, `8c.mjs` is the first basename and `x8c.mjs` the 101st (99 `9f…` names between), so they sit in two chunks; the value
     // ccd/d8c/x8c.mjs holds both as substrings, and the path:symbol ref is also the symbol select's.
     const files = ['ccd/d8c/8c.mjs', ...Array.from({ length: 99 }, (_, i) => `ccd/d8c/9f${String(i).padStart(3, '0')}.mjs`), 'ccd/d8c/x8c.mjs'];
@@ -1030,6 +1053,7 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
     const R = (await import('../../ccd/history/recall.mjs')) as unknown as {
       runTouched(rc: unknown, a: { arg: string; limit: number; ordered?: boolean }): { exit: number; total: number; items: Array<Record<string, any>> };
       TOUCHED_SELECTS: Record<'file' | 'symbol' | 'fileOrdered' | 'symbolOrdered', string>;
+      touchedLabelSql(n: number, ordered: boolean): string;
     };
     const lib = (await import('../../ccd/history/lib.mjs')) as unknown as { makePairIndex(x: unknown[]): unknown };
 
@@ -1148,7 +1172,7 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
     })();
     expect(counts.node_refs).toBe(REFS_TOTAL);
     expect(counts.nodes).toBe(NODES_TOTAL);
-    // ── Review 1822: the wide-label cell, a symbol whose graph label spans 165 distinct basenames, at this fixture's size ──
+    // ── the wide-label cell (D-8191), a symbol whose graph label spans 165 distinct basenames, at this fixture's size ──
     // The graph holds only the 165 label nodes (a few tens of KB, so its parse is negligible); the store gets two refs on each of
     // the 165 files, removed after the cell (the shapes below run on the fixture as built). The select count is measured by
     // wrapping the handle's `prepare` and counting the executions of the candidate selects (the symbol select and D-8191's chunked label-file selects): no production seam.
@@ -1204,6 +1228,7 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
         warm: { p50: r2(pct(warm, 50)), p95: r2(pct(warm, 95)), max: r2(Math.max(...warm)) },
         loadBefore: r2(load0), loadAfter: r2(load1),
       });
+      expect(wideResults[0]!['selectCounts'], 'every run of the cell executed the symbol select and the two chunk selects, and no more').toEqual([wideResults[0]!['expectedSelects']]);
       console.log(`wide symbol cell: ${JSON.stringify(wideResults[0])}`);
       fs.rmSync(path.join(root, 'graphify-out'), { recursive: true, force: true });
       const d = store.openWriter(dbFile);
@@ -1211,8 +1236,8 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
       d.close();
     }
 
-    // ── Review 1822: the reduced-cache cell, peak RSS of one `touched` symbol call in a child process, one graph against three distinct ones ──
-    // Each root's graph.json is its own file of about 19 MB (at most 20 MB), with the symbol's label on three files of its own, so the
+    // ── the reduced-cache cell, peak RSS of one `touched` symbol call in a child process, one graph against three distinct ones ──
+    // Each root's graph.json is its own file of 16,292,788 bytes as written (at most 20 MB), with the symbol's label on three files of its own, so the
     // reduced cache has a parsed graph to release before the next root's parse. The child reads `process.resourceUsage().maxRSS`.
     const rssResults: Array<Record<string, unknown>> = [];
     {
@@ -1331,19 +1356,21 @@ console.log(JSON.stringify({ maxRssKB: process.resourceUsage().maxRSS, ms: Date.
         const warm: number[] = [];
         for (let i = 0; i < RUNS; i += 1) { const t0 = process.hrtime.bigint(); ask(rc); warm.push(ms(t0)); }
         // the select alone: the rows each candidate select returns, and its time warm
-        const sels = shape.name.startsWith('path') ? [[ordered ? R.TOUCHED_SELECTS.fileOrdered : R.TOUCHED_SELECTS.file, shape.arg.endsWith('index.ts') ? '%index.ts%' : '%recall.mjs%']]
-          : [[ordered ? R.TOUCHED_SELECTS.symbolOrdered : R.TOUCHED_SELECTS.symbol, `%:${QSYM}`],
-            ...(shape.graph ? ['recall.mjs', 'cli.mjs', 'history-touched.test.ts'].map((b) => [ordered ? R.TOUCHED_SELECTS.fileOrdered : R.TOUCHED_SELECTS.file, `%${b}%`]) : [])];
+        // each as [sql, patterns]: a label-file select is the one D-8191 runs (touchedLabelSql over the label's basenames), not a per-basename select
+        const asked = (sql: string, ...pats: string[]): [string, string[]] => [sql, pats];
+        const sels: Array<[string, string[]]> = shape.name.startsWith('path') ? [asked(ordered ? R.TOUCHED_SELECTS.fileOrdered : R.TOUCHED_SELECTS.file, shape.arg.endsWith('index.ts') ? '%index.ts%' : '%recall.mjs%')]
+          : [asked(ordered ? R.TOUCHED_SELECTS.symbolOrdered : R.TOUCHED_SELECTS.symbol, `%:${QSYM}`),
+            ...(shape.graph ? [asked(R.touchedLabelSql(3, ordered), '%recall.mjs%', '%cli.mjs%', '%history-touched.test.ts%')] : [])];
         const selWarm: number[] = [];
         let candidateRows = 0;
         for (let i = 0; i < RUNS; i += 1) {
           const t0 = process.hrtime.bigint();
           let n = 0;
-          for (const [sql, pat] of sels as string[][]) n += (db.prepare(sql!).all(pat!, 10_001) as unknown[]).length;
+          for (const [sql, pats] of sels) n += (db.prepare(sql).all(...pats, 10_001) as unknown[]).length;
           selWarm.push(ms(t0));
           candidateRows = n;
         }
-        const plans = (sels as string[][]).map(([sql, pat]) => ({ pattern: pat, plan: (db.prepare(`EXPLAIN QUERY PLAN ${sql!.replace('LIMIT ?', 'LIMIT 10001')}`).all(pat!) as Array<{ detail: string }>).map((p) => p.detail) }));
+        const plans = sels.map(([sql, pats]) => ({ patterns: pats, plan: (db.prepare(`EXPLAIN QUERY PLAN ${sql.replace('LIMIT ?', 'LIMIT 10001')}`).all(...pats) as Array<{ detail: string }>).map((p) => p.detail) }));
         db.close();
         results.push({
           shape: shape.name, form, total: first.total, candidateRows,
@@ -1541,6 +1568,25 @@ describe.skipIf(process.platform === 'darwin')('touched, project scope and the g
       return (recallLib as unknown as { runTouched(rc: unknown, a: unknown): { exit: number; total: number; blocks: string[] } }).runTouched(rc, a);
     } finally { db.close(); }
   };
+
+  // D-8191: how many selects a symbol query runs, counted through a wrapped `prepare` (the candidate selects read `node_refs` and bind a LIKE):
+  // the symbol select, and one select per chunk of at most 100 distinct label basenames. The chunk size is not exported, so the count is the pin.
+  it.each([[130, 3], [1000, 11]] as const)('D-8191 a symbol whose label spans %i basenames runs %i candidate selects (the symbol select and one per chunk of 100)', (span, expected) => {
+    const fx = fixtureFamily(`ccrc-hist-touched-count${span}-`);
+    const files = Array.from({ length: span }, (_, i) => `ccd/cnt${i}/cnt${i}.mjs`);
+    putGraph(fx.root, graphJson(files.map((f) => ({ label: 'cntSym', file: f }))));
+    addNode(fx, 'Lcn0001', fx.seq, [['path', files[span - 1]!]]);
+    const db = storeLib.openReader(fx.dbFile) as unknown as DatabaseSync;
+    try {
+      const rc = contextOn(fx, db);
+      let selects = 0;
+      const isCandidate = (sql: string): boolean => /FROM node_refs/.test(sql) && /value LIKE \?/.test(sql);
+      const counted = { prepare: (sql: string) => { const st = db.prepare(sql); if (!isCandidate(sql)) return st; return { all: (...a: unknown[]) => { selects += 1; return (st.all as (...x: unknown[]) => unknown[])(...a); } }; }, exec: (sql: string) => db.exec(sql) };
+      const out = (recallLib as unknown as { runTouched(rc: unknown, a: unknown): { exit: number; total: number } }).runTouched({ ...rc, db: counted }, { arg: 'cntSym', limit: 20, ordered: true });
+      expect(out.total, 'CONTROL: the ref on the last label file answers').toBe(1);
+      expect(selects).toBe(expected);
+    } finally { db.close(); }
+  }, HEAVY);
 
   it('an empty answer under --project (about 600 roots) prints one header per distinct graph state and stays within the 20,000-character cap', () => {
     const fx = fixtureFamily('ccrc-hist-touched-wide-');
