@@ -143,18 +143,24 @@ describe('a failing store', () => {
     expect(cases(s)).toEqual([]);
   });
 
-  it('(c) a run read that fails lowers the count, warns once and answers unread runs', async () => {
+  it('(c) two run reads that fail lower the count, warn once naming the first, and answer unread runs', async () => {
     const s = store();
-    const ids = [episode(s, T - 4 * H), episode(s, T - 3 * H), episode(s, T - 2 * H), episode(s, T - H)];
-    expect(ids).toHaveLength(4);
-    const first = (s.db.prepare('SELECT MIN(runId) AS r FROM run_events').get() as { r: number }).r;
+    // Five episodes on five runs, in run order; the reads of the first and the third runs fail.
+    const ids = [episode(s, T - 5 * H), episode(s, T - 4 * H), episode(s, T - 3 * H), episode(s, T - 2 * H), episode(s, T - H)];
+    const runs = (s.db.prepare('SELECT runId FROM run_events ORDER BY id').all() as { runId: number }[]).map((r) => r.runId);
+    const failing = new Map<number, RunReadResult>([
+      [runs[0]!, { ok: false, kind: 'run-unreadable', detail: 'x' }],
+      [runs[2]!, { ok: false, kind: 'run-unreadable', detail: 'y' }],
+    ]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const failed: RunReadResult = { ok: false, kind: 'run-unreadable', detail: 'x' };
-    const r = await casesPass({ coord: over(s, { run: (id) => (id === first ? failed : s.run(id)) }), now: () => T });
+    const r = await casesPass({ coord: over(s, { run: (id) => failing.get(id) ?? s.run(id) }), now: () => T });
     expect(r).toEqual({ opened: 1, superseded: 0, unread: 'runs' });
-    expect(cases(s)).toHaveLength(1);
-    expect(cases(s)[0]).toMatchObject({ cause: 'count' });
-    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([`ccrc-server: cases: runs read failed: 1 of 4 (run ${first}: x)`]);
+    // The runs the lane could not read are left out: three occurrences, and only the readable runs' rows as evidence.
+    const rows = cases(s);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ cause: 'count', occurrences: 3, evidence: JSON.stringify([ids[1], ids[3], ids[4]]) });
+    // One warning a pass, naming the first failure in run order.
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([`ccrc-server: cases: runs read failed: 2 of 5 (run ${runs[0]}: x)`]);
   });
 
   it('(e) an absent run is left out without a warning', async () => {
