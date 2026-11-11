@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { scaled } from './timeScale.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -197,7 +198,8 @@ type CpuRun = { status: number | null; stdout: string; stderr: string; cpuMs: nu
 /** `argv` run once under bash, `input` on its stdin: its status, its own output, and the CPU time it spent. */
 const childCpu = (argv: readonly string[], input: string, timeoutMs = scaled(120_000)): CpuRun => {
   // `times`' second line is the waited children's user and system time; it goes to stderr, after the run's own.
-  const r = spawnSync('bash', ['-c', '"$@"; s=$?; times >&2; exit $s', 'bash', ...argv],
+  // In a process group of its own (#896), so a timeout takes the jq it waits on with it.
+  const r = spawnSyncGroup('bash', ['-c', '"$@"; s=$?; times >&2; exit $s', 'bash', ...argv],
     { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' } });
   const lines = (r.stderr ?? '').replace(/\n$/, '').split('\n');
   const m = /^(\d+)m(\d+(?:\.\d+)?)s (\d+)m(\d+(?:\.\d+)?)s$/.exec(lines.at(-1) ?? '');
