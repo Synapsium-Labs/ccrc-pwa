@@ -18236,6 +18236,9 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # data for jq, never executed. Without it every transcript read answers NOT MEASURED.
   mkdir -p "$HOME/.cc-sessions/lib" || _ccrc_die "cannot create \$HOME/.cc-sessions/lib"
   _inst_atomic "$tree/ccd/lib/transcript.jq" "$HOME/.cc-sessions/lib/transcript.jq" 644
+  # The roster card's one builder (D4; its wake arm R-5a, D-8201), 0644: data for jq the hook loads with `jq -L`,
+  # placed before the hook. Without it the hook makes no card (fail open).
+  _inst_atomic "$tree/ccd/lib/roster-card.jq" "$HOME/.cc-sessions/lib/roster-card.jq" 644
   # `ccd carry-dedupe`'s program (#317), 0644: a script python3 runs. Without it the verb refuses by name.
   _inst_atomic "$tree/ccd/lib/carry-dedupe.py" "$HOME/.cc-sessions/lib/carry-dedupe.py" 644
   # The approval wait's ruling verifier (coordinator-first routing, plan Task 14, D-5297), 0644 for the same reason:
@@ -24670,6 +24673,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
   _upd_backup_copy "$HOME/.cc-sessions/lib/transcript.jq" transcript.jq
+  _upd_backup_copy "$HOME/.cc-sessions/lib/roster-card.jq" roster-card.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/carry-dedupe.py" carry-dedupe.py
   _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
@@ -29043,6 +29047,7 @@ _uninst_cc_sessions() {
   # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" \
+    "$reg/lib/roster-card.jq" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \

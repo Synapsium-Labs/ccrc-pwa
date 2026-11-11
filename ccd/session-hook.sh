@@ -9,8 +9,8 @@
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
 # (COMPACT_LOCK_WAIT_SERVE on compact SessionStart, the one acquisition a human
 # is waiting on) and never held across a fork the arm does not reap. A miss
-# publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the SessionStart arm's roster card, one
-# `_hook_timeout 4` server read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, fail-open
+# publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the roster card, one `_hook_timeout 4` server
+# read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
 # (no roster line on any failure), made even when unarmed (shadow). Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
@@ -63,7 +63,7 @@ _hook_timeout() {
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
 # is context to inject, on PreToolUse it is a permission decision OR context
 # (`additionalContext`) for the call that proceeds — and those two events are
-# the only ones this file prints on. Until D-1613 there was one printf and the
+# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's steer print. Until D-1613 there was one printf and the
 # rule was "the card, and nothing else, ever"; now there are three builders,
 # each naming its own `hookEventName`, which is what stops a card being
 # delivered as a decision or the other way round. A card that leaked onto
@@ -3190,6 +3190,46 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   return 0
 }
 
+# THE ROSTER CARD (D4, #757; its wake arm R-5a, D-8201): a coordinator's open runs, re-read from the server and put
+# back into its context. ABOVE THE `case`, the `_hook_history_card` exception (D-4748): it has TWO callers, the
+# SessionStart arm (compact, resume, clear), which runs before the tail, and the wake arm in the tail (the first wake
+# prompt after an idle compaction, which fires none of those three). The card's TEXT has one builder,
+# `ccd/lib/roster-card.jq` (`roster_card`), loaded with `jq -L` from the lib directory beside this file (a tree's
+# `ccd/lib`, or `~/.cc-sessions/lib` where the installers put it); a missing file is no card. The ONE server read
+# this file makes off the compaction arms (the header declares it): a single `_hook_timeout 4` call to
+# `ccrc-api runs list`, fail-open — an unreachable or slow server, a missing binary or an unparsable body yields no
+# roster line at all, never an error and never a wait beyond 4 s. Its own ceiling, ROSTER_CARD_MAX_CHARS, is added to
+# the emitter's worst case AFTER CARD_TOTAL_MAX_CHARS (a test pins the sum). Children, subagents and kill-switched
+# sessions get nothing (`_hook_roster_eligible`, the one spelling of that rule for both callers); a held coordinator
+# still gets its roster. Unarmed (no `coordinator-roster-card-live` marker) it only appends the card to a size-capped
+# shadow log the operator can read, naming the event (`compact`, `resume`, `clear` or `wake`); armed, it sets
+# CARD_ROSTER. The caller decides WHEN; this function decides nothing about the event.
+ROSTER_CARD_MAX_CHARS=2048
+ROSTER_CARD_LIB="${BASH_SOURCE[0]%/*}/lib"
+[[ -f "$ROSTER_CARD_LIB/roster-card.jq" ]] || ROSTER_CARD_LIB="$HOME/.cc-sessions/lib"
+CARD_ROSTER=""
+_hook_roster_eligible() {   # -> 0 iff this event may carry a roster card: main thread, not a child, no card kill switch
+  [[ -z "$paid" ]] || return 1
+  [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 1
+  return 0
+}
+_hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends the shadow log (unarmed); 0 on every path
+  local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
+  CARD_ROSTER=""
+  _hook_roster_eligible || return 0
+  body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
+  card=$(jq -L "$ROSTER_CARD_LIB" -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
+    --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) 'include "roster-card"; roster_card($me; $now; $max)' <<<"$body" 2>/dev/null) || return 0
+  [ -n "$card" ] || return 0
+  if [ -e "$REG/coordinator-roster-card-live" ]; then
+    CARD_ROSTER="$card"
+  elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then
+    mkdir -p "${log%/*}" 2>/dev/null
+    printf '%s %s %s\n%s\n' "$(_hook_epoch_ms)" "$id" "$1" "$card" >> "$log" 2>/dev/null
+  fi
+  return 0
+}
+
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend="" apr=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
@@ -3335,49 +3375,13 @@ case "$event" in
       esac
       return 0
     }
-    # THE ROSTER CARD (D4, #757): a coordinator's open runs, re-read from the server and put back into its context on
-    # compact, resume and clear. DEFINED HERE, in the arm (D-5358 precedent): nothing new goes above the tail line
-    # (D-3615). The ONE server read in this file off the compaction arms (the header declares it): a single
-    # `_hook_timeout 4` call to `ccrc-api runs list`, fail-open — an unreachable or slow server, a missing binary or
-    # unparsable body yields no roster line at all, never an error and never a wait beyond 4 s. Its own ceiling,
-    # ROSTER_CARD_MAX_CHARS, is added to the emitter's worst case AFTER CARD_TOTAL_MAX_CHARS (a test pins the sum).
-    # Children and kill-switched sessions get nothing; a held coordinator still gets its roster. Unarmed (no `coordinator-roster-card-live` marker) it
-    # only appends the card to a size-capped shadow log the operator can read; armed, it sets CARD_ROSTER.
-    ROSTER_CARD_MAX_CHARS=2048
-    # The jq program: keeps this coordinator's non-terminal runs, one line each, then an "awaiting you" line, all
-    # clipped to $max (surplus runs collapse into a "+N more" line). Every interpolated field goes through `s`
-    # (strings: a safe charset, 40 chars) or `n` (integers: a non-number reads 0), so no server byte injects prose.
-ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n: if type == "number" then floor else 0 end;
-      def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end; 
-      [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r |
-      if ($r | length) == 0 then empty else [$r[] | "#\(.id | n) \(.program | s) w\(.wave | n)\(if .waveOf then "/\(.waveOf | n)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail | n)"] as $l |
-        ([$r[] | select(.state == "awaiting-review") | "review #\(.id | n)"] + [$r[] | select((.health.mailParked | n) > 0) | "parked mail #\(.id | n) (\(.health.mailParked | n))"]) as $w |
-        ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f |
-        "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h |
-        (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
-        ([$h] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end'
-    _hook_roster_card() {
-      local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
-      CARD_ROSTER=""
-      [[ -z "$paid" && ( "$src" == compact || "$src" == resume || "$src" == clear ) ]] || return 0
-      [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 0
-      body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
-      card=$(jq -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
-        --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) "$ROSTER_PROGRAM" <<<"$body" 2>/dev/null) || return 0
-      [ -n "$card" ] || return 0
-      if [ -e "$REG/coordinator-roster-card-live" ]; then
-        CARD_ROSTER="$card"
-      elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then
-        mkdir -p "${log%/*}" 2>/dev/null
-        printf '%s %s %s\n%s\n' "$(_hook_epoch_ms)" "$id" "$src" "$card" >> "$log" 2>/dev/null
-      fi
-      return 0
-    }
+    # THE ROSTER CARD (D4, #757): `_hook_roster_card`, above the `case` (R-5a, D-8201), on compact, resume and clear
+    # of a main-thread session; the wake arm in the tail is its other caller.
     CARD_ROLE=""
     _hook_graph_card || true
     _hook_hold_card  || true
     _hook_role_card  || true
-    _hook_ccrc_card  || true; _hook_roster_card || true
+    _hook_ccrc_card  || true; case "$src" in compact|resume|clear) _hook_roster_card "$src" || true ;; esac
     # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
     # describes the compacted context and nothing else, so startup, resume
     # and clear never read the file. It is passed to the emitter SEPARATELY —
@@ -5824,6 +5828,42 @@ fi   # hs_skip
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
+# ── THE ROSTER CARD'S WAKE ARM (R-5a, D-8201; the worktree-economy spec's "wake arm for D4") ─────────────────────────
+# Claude Code's idle compaction (about 55 minutes after a turn ends, D-5373) starts no turn and fires none of the card's
+# three SessionStart events, so a coordinator next wakes on the server's mail nudge, or on its idle-compaction nudge,
+# with a compacted context and no roster. This arm is that wake as the box sees it: a main-thread UserPromptSubmit whose
+# prompt BEGINS with one of the server's two wake texts (`renderMailNudge`'s fixed head, IDLE_COMPACT_NUDGE_PROMPT;
+# `session-hook-roster-card.test.ts` holds both spellings to the server's), when the transcript's newest compaction is
+# an idle one with no turn since (`idle_compaction_open`, ccd/lib/transcript.jq: the server's own reading, held equal by
+# a parity table). Then the wake turn carries the SAME card as its context, from the same builder (`_hook_roster_card`,
+# `ccd/lib/roster-card.jq`), under the same switch: armed, ONE UserPromptSubmit envelope (`additionalContext`, the card
+# under ROSTER_CARD_MAX_CHARS) printed here, after the hookstate write, so the turn is on disk first; unarmed, the same
+# shadow log, event `wake`. Silence on every other path: an operator's prompt, a child, a subagent, the card kill
+# switch, a transcript that will not read, a turn already run since the compaction (the card went out on that wake), or
+# a server that does not answer within the card's one bounded read. The prefilter is builtins only, so every other
+# prompt pays one pattern test and nothing else.
+ROSTER_WAKE_MAIL='ccrc-mail: you have new mail.'
+ROSTER_WAKE_IDLE="Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop."
+ROSTER_WAKE_TAIL_BYTES=262144
+_hook_roster_wake() {   # UserPromptSubmit: prints at most one envelope carrying the card; 0 on every path
+  local tp="" open="" j=""
+  _hook_roster_eligible || return 0
+  tp=$(jq -r --arg m "$ROSTER_WAKE_MAIL" --arg i "$ROSTER_WAKE_IDLE" \
+    'if (.prompt | type) == "string" and ((.prompt | startswith($m)) or (.prompt | startswith($i))) then (.transcript_path | strings) else empty end' \
+    <<<"$payload" 2>/dev/null) || return 0
+  [[ "$tp" == /* && -f "$tp" ]] || return 0
+  open=$(tail -c "$ROSTER_WAKE_TAIL_BYTES" "$tp" 2>/dev/null \
+    | jq -L "$ROSTER_CARD_LIB" -rRs 'include "transcript"; idle_compaction_open' 2>/dev/null) || return 0
+  [[ "$open" == true ]] || return 0
+  _hook_roster_card wake || return 0
+  [ -n "$CARD_ROSTER" ] || return 0
+  j=$(jq -cn --arg c "${CARD_ROSTER:0:$ROSTER_CARD_MAX_CHARS}" \
+    '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) || return 0
+  printf '%s\n' "$j"
+}
+if [[ "$event" == UserPromptSubmit && ( "$payload" == *"$ROSTER_WAKE_MAIL"* || "$payload" == *"${ROSTER_WAKE_IDLE:0:30}"* ) ]]; then
+  _hook_roster_wake || true
+fi
 # ── THE APPROVAL WAIT (plan Task 14, spec §6.3 hook steps 1 to 7; D-5297, D-5439, D-5440, D-5441) ────────
 # A dispatched child's PermissionRequest (any tool but AskUserQuestion: the arm above set `apr`) may be ruled by its
 # coordinator, and this hook prints that ruling ONLY when the server signed it for this exact request. Here, after
