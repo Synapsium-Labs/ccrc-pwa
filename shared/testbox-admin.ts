@@ -319,8 +319,8 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'interrupted': 'The act stopped before it finished, because the fleet host restarted or its unit was stopped; run it again.',
   // D-8337: the access key's Rotate and Revoke.
   'new-key-refused': 'The box did not take the new access key, so ccrc took it out again and kept the old one, which still works.',
-  'old-line-kept': 'ccrc now uses its new access key, but could not remove the old key\'s line from the box; remove the line shown by hand.',
-  'revoked-box-skipped': 'ccrc deleted its access key and forgot the box, but did not remove the key\'s line from it; remove the line shown by hand.',
+  'old-line-kept': 'ccrc now uses its new access key, but the box still lets the old key in; remove the old key\'s line shown by hand.',
+  'revoked-box-skipped': 'ccrc deleted its access key and forgot the box, but did not remove its lines from the box; remove them by hand as shown.',
   'revoked-unpair-failed': 'ccrc deleted its access key, but the box\'s unpair or the removal of its line did not finish; finish both by hand.',
 };
 /** The codes whose refusal carries `line`: the PUBLIC words of an access key whose line the operator removes from the box's

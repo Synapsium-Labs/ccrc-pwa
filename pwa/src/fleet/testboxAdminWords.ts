@@ -444,7 +444,10 @@ export const TESTBOX_MANAGE_TEXT = {
   revokeThen: 'The next Connect makes a new key, with a new line to add to the box.',
   rotated: "Rotated. ccrc now logs in to the box with its new access key, and the old key's line is gone.",
   revoked: "Revoked. ccrc's access key is deleted and its line is gone from the box.",
-  handLineHead: "Remove the line that holds this key from the login user's authorized_keys on the box:",
+  // A revoked key: every ccrc line goes (an interrupted act may have left another key's line), and any line holding this key.
+  handLineHead: "On the box, remove from the login user's authorized_keys every line that ends in ccrc-testbox-admin, and any other line that holds this key:",
+  // A rotated key: the new key's line stays, so only the old key's line goes; Rotate key again also removes any other old line.
+  handLineHeadRotate: "On the box, remove the line that holds this old key from the login user's authorized_keys. Keep the line with ccrc's new key; Rotate key again also removes any other old line of ccrc's:",
   noticeDone: 'Done',
 } as const;
 

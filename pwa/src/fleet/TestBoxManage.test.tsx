@@ -702,6 +702,9 @@ describe('the section: Replace returns to step 1 and shows the new fingerprint a
     expect(notice).not.toBeNull();
     expect(notice.textContent).toContain(TESTBOX_ADMIN_CODE_SENTENCE['revoked-box-skipped']);
     expect(notice.querySelector('[data-testbox="key-notice-line"]')!.textContent).toBe(KEY_WORDS);
+    // a revoked key: EVERY ccrc line goes (an interrupted act may have left another key's), not just the one shown
+    expect(notice.textContent).toContain(T.handLineHead);
+    expect(T.handLineHead).toContain('every line that ends in ccrc-testbox-admin');
     await press(notice.querySelector('[data-testbox="key-notice-copy"]'));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(KEY_WORDS);
     await press(notice.querySelector('[data-testbox="key-notice-done"]'));
@@ -880,7 +883,8 @@ describe('Rotate key and Revoke key (D-8337)', () => {
     await mount({ onKeyNotice, onChanged });
     await press(q('[data-testbox="rotate-key"]'));
     await press(confirm());
-    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: TESTBOX_ADMIN_CODE_SENTENCE['old-line-kept'], line: KEY_WORDS });
+    // a rotate keeps the new key's line: the head names only the old key's line, never every ccrc line
+    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: TESTBOX_ADMIN_CODE_SENTENCE['old-line-kept'], line: KEY_WORDS, head: T.handLineHeadRotate });
     expect(onChanged).toHaveBeenCalled();
     expect(document.querySelector('[data-testbox="sheet"]')).toBeNull();
     expect(manage().textContent).not.toContain(T.rotated);
@@ -898,7 +902,7 @@ describe('Rotate key and Revoke key (D-8337)', () => {
     expect(sheet().textContent).not.toContain(T.kept);
     await press(confirm());
     expect(f.posts('key-revoke')[0]!.body).toEqual({ fields: {} });
-    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: T.revoked, line: null });
+    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: T.revoked, line: null, head: null });
     await waitFor(() => expect(document.querySelector('[data-testbox="manage"]')).toBeNull());
   });
 
@@ -909,7 +913,7 @@ describe('Rotate key and Revoke key (D-8337)', () => {
     await mount({ onKeyNotice });
     await press(q('[data-testbox="revoke-key"]'));
     await press(confirm());
-    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: TESTBOX_ADMIN_CODE_SENTENCE['revoked-unpair-failed'], line: KEY_WORDS });
+    expect(onKeyNotice).toHaveBeenCalledWith({ sentence: TESTBOX_ADMIN_CODE_SENTENCE['revoked-unpair-failed'], line: KEY_WORDS, head: T.handLineHead });
   });
 
   it('a changed host key holds Rotate (it needs the box it trusts) and leaves Revoke, as it leaves Disconnect', async () => {

@@ -68,8 +68,9 @@ type Sheeted = 'replace' | 'disconnect' | 'reset' | 'rotate' | 'revoke';
 interface Resetting { readonly key: string; readonly fleet: boolean }
 const LINE_CODES: ReadonlySet<string> = new Set(TESTBOX_LINE_CODES);
 
-/** What the section shows above the card after an access key act: a sentence, and the PUBLIC key words to remove by hand, if any. */
-export interface TestboxKeyNotice { readonly sentence: string; readonly line: string | null }
+/** What the section shows above the card after an access key act: a sentence, and the PUBLIC key words to remove by hand, if any,
+ *  under the head that says which lines go (a revoke: every ccrc line; a rotate: only the old key's). */
+export interface TestboxKeyNotice { readonly sentence: string; readonly line: string | null; readonly head: string | null }
 
 export interface TestBoxManageProps {
   band: Band;
@@ -163,7 +164,8 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
       if (code !== null && LINE_CODES.has(code)) {
         partial.current = true;
         admin.reload(); onChanged?.();
-        onKeyNotice?.({ sentence: codeSentence(code), line: refusalLineOf(err) });
+        const keyLine = refusalLineOf(err);
+        onKeyNotice?.({ sentence: codeSentence(code), line: keyLine, head: keyLine === null ? null : code === 'old-line-kept' ? T.handLineHeadRotate : T.handLineHead });
         return {};
       }
       if (code !== null && PARTIAL_DISCONNECT.has(code)) { admin.reload(); onChanged?.(); line.say(codeSentence(code), 'refusal'); return {}; }
@@ -313,7 +315,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
     if (kind === 'rotate') { line.say(T.rotated); return; }
     setSettingsOpen(false);
     setEdits({});
-    onKeyNotice?.({ sentence: T.revoked, line: null });
+    onKeyNotice?.({ sentence: T.revoked, line: null, head: null });
   };
 
   // -- blocked: the one control that resolves each -------------------------------------------------------------------
@@ -659,7 +661,7 @@ export function TestBoxKeyNotice({ band, notice, onDone }: { band: Band; notice:
       <p className="settings-note">{notice.sentence}</p>
       {notice.line !== null && (
         <>
-          <p className="settings-note">{T.handLineHead}</p>
+          <p className="settings-note">{notice.head ?? T.handLineHead}</p>
           <code className="testbox-key-line" data-testbox="key-notice-line">{notice.line}</code>
         </>
       )}
