@@ -24,7 +24,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The operator's ruling on the ratchet's scope | #2556 | merged |
 | W1a, foundations | The coordinator skill made lean: its procedures in reference files, the wave lifecycle one file per step | #2557, #2558 and #2560 (the tests, first); #2559 | merged |
 | W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
-| W1a, foundations | Ports for time and chance | run 1776, #2623; plan `w1a-time-ports.md` | wave-done verified 2026-11-11; under review (run 1780) |
+| W1a, foundations | Ports for time and chance | run 1776, #2623; plan `w1a-time-ports.md` | review 1780: no critical finding; fix round 1 sent 2026-11-11 |
 | W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775; plan `w1a-roles.md` | open |
 | W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | after the role table merges, and after #2606 |
 | W1a, foundations | The simulator's skeleton and the first model | plan `w1a-simulator.md` | after the time ports merge; its Task 6 after W0a's Task 7 |
@@ -96,6 +96,14 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   issued (2026-11-11), for the time ports: the SQL clock pattern also catches SQLite's date functions called with no
   time value, the ambient scan also sees `AbortSignal.timeout` and the timers modules, and the fake refuses re-entry.
   Seventeen numbers of the block remain unwritten.
+- **Review 1780 on the time ports (2026-11-11), at 65415597a.** Panel verdict: no critical finding. One important
+  finding was kept by two of three refuters: the ambient scan missed the `globalThis.`, `?.` and `node:process` forms.
+  Six minor findings and five observations; one raised-important finding (a zero-delay re-arm hangs the fake's
+  `advance`) was refuted by majority as the plan's own semantics. Lenses: correctness, 1 important and 5 minor; spec
+  and rings, 1 minor; does-it-reproduce, nothing (every suite reproduced, and 33 mutants of the scan each went red but
+  one). Ruled: fix the important finding and four minors (a refused draw consumes no draw, `'subsec'`, a red row for
+  the alias map, an L1 pin for the rules file); record two minors as known gaps; drop the deferred item on the system
+  adapter's header, which states the spec's own classification. The additions fall under D-8232 and D-8233.
 - **A work branch cannot edit an existing plan file** (2026-11-11, measured on #2623): the ledger-guard CI step
   refuses it. So a worker writes its departures, its rulings within the plan and its deferred minors in a new note
   beside its plan (the time ports' is `2026-11-10-overlord/w1a-time-ports/departures.md`), and this coordinator folds
@@ -153,6 +161,10 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   `server/test/scan/symbols.ts#sourceOfSymbol`, never the whole file as text. The literal-pin ratchet fails the
   other form.
 - **Public repository.** Plans, commits, branch names and issues carry no private names, hosts, accounts or people.
+- **A kept `Cancel` is a scheduler** (review 1780, O1). A file that keeps the `Cancel` from `scheduler.after(…)` on an
+  object field or at module scope schedules, so it is L4, but the ring rule's timer reader sees only `setTimeout` and
+  `setInterval`. The first piece that keeps one (the renewal lane, or the simulator) teaches the reader `.after(` first.
+  The simulator piece may also cap how many calls one `advance` fires, so a zero-delay re-arm fails instead of hanging.
 
 ## Next-wave brief
 
