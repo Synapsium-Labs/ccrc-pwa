@@ -18,4 +18,11 @@ describe('the time ports (Overlord spec §11.5, §3.6 H2): one definition, in th
     const edge = parsedFile('server/src/laneRunner.ts').imports.find((e) => e.specifier === './time/ports.js');
     expect(edge?.names).toContain('Clock');
   });
+
+  it('the Node timer ceiling is spelled once, in time/rules.ts', () => {
+    const spelled = /\b2_?147_?483_?647\b/;
+    const holders = walkSrc({ roots: ['server/src', 'shared'], min: 300 })
+      .filter((f) => spelled.test(codeOnly(readFileSync(path.join(REPO, f), 'utf8'))));
+    expect(holders).toEqual(['server/src/time/rules.ts']);
+  });
 });
