@@ -97,6 +97,15 @@ describe('the fake alone', () => {
     f.advance(10);
     expect([f.ports.clock.wall(), f.ports.clock.mono(), n, f.pending()]).toEqual([FAKE_T0 + 5000 + 3_600_000 + 10, 10, 0, 0]);
   });
+  it('a firing call cannot advance or restart the fake: re-entry is refused, never a clock moved backwards', () => {
+    const f = fakeTime(); const errs: string[] = [];
+    f.ports.scheduler.after(10, () => { try { f.advance(100); } catch (e) { errs.push((e as Error).name); } });
+    f.ports.scheduler.after(20, () => { try { f.restart(0); } catch (e) { errs.push((e as Error).name); } });
+    f.advance(30);
+    expect(errs).toEqual(['RangeError', 'RangeError']);
+    expect([f.ports.clock.wall(), f.ports.clock.mono()]).toEqual([FAKE_T0 + 30, 30]);
+    f.advance(5); expect(f.ports.clock.mono()).toBe(35);
+  });
   it('a call scheduled by a firing call fires in the same advance when it falls due', () => {
     const f = fakeTime(); const at: number[] = [];
     f.ports.scheduler.after(10, () => { f.ports.scheduler.after(5, () => at.push(f.ports.clock.mono())); });

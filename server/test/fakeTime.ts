@@ -19,7 +19,7 @@ export interface FakeTime {
    *  Fires nothing. */
   stepWall(deltaMs: number): void;
   /** A process restart after a gap (finite and >= 0, else RangeError): drops every pending call, moves the wall by
-   *  `gapMs`, and starts mono at 0. */
+   *  `gapMs`, and starts mono at 0. `advance` and `restart` throw RangeError when a scheduled call calls them. */
   restart(gapMs: number): void;
   /** Calls scheduled and neither fired nor cancelled. */
   pending(): number;
@@ -72,13 +72,22 @@ export function fakeTime(opts: { wallMs?: number; monoMs?: number; seed?: number
   };
   const toHex = (bs: readonly number[]): string => bs.map((b) => b.toString(16).padStart(2, '0')).join('');
 
+  let firing = false;
   const fire = (p: Pending): void => {
+    firing = true;
     try {
       const out = p.fn();
       if (out instanceof Promise) out.catch((err: unknown) => { warnings.push(failureLine(err)); });
     } catch (err) {
       warnings.push(failureLine(err));
+    } finally {
+      firing = false;
     }
+  };
+  /** `advance` and `restart` move both clocks to a target they computed before firing anything, so a firing call that
+   *  re-enters one of them would see its own move undone (mono set back, a wall gap counted twice). Refused instead. */
+  const notWhileFiring = (what: string): void => {
+    if (firing) throw new RangeError(`fakeTime.${what}: called from a scheduled call; schedule the step instead`);
   };
 
   const clock: Clock = { wall: () => wall, mono: () => mono };
@@ -105,6 +114,7 @@ export function fakeTime(opts: { wallMs?: number; monoMs?: number; seed?: number
     ports: { clock, scheduler, entropy },
     warnings,
     advance(ms: number): void {
+      notWhileFiring('advance');
       checkStep('advance', ms, false);
       const target = mono + ms;
       for (;;) {
@@ -124,6 +134,7 @@ export function fakeTime(opts: { wallMs?: number; monoMs?: number; seed?: number
     },
     stepWall(deltaMs: number): void { checkStep('stepWall', deltaMs, true); wall += deltaMs; },
     restart(gapMs: number): void {
+      notWhileFiring('restart');
       checkStep('restart', gapMs, false);
       for (const p of queue) p.live = false;
       queue = [];

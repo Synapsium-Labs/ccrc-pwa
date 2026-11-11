@@ -1,12 +1,14 @@
 // The ambient time-and-chance census (Overlord spec §11.5): every read of a clock, a timer or chance that does not come
 // through the clock kernel's ports (`server/src/time/ports.ts`). `single-definition/time-ports.test.ts` holds the new
 // Overlord and continuity modules to zero; today's code is outside that scope and is not rewritten.
-import { identifierReferences } from './parse.js';
+import { identifierReferences, parseSource } from './parse.js';
 
 export interface AmbientUse { line: number; what: string }
 
-const NAMES: ReadonlySet<string> = new Set(['Date', 'performance', 'process', 'Math', 'setTimeout', 'setInterval',
+const NAMES: ReadonlySet<string> = new Set(['Date', 'performance', 'process', 'Math', 'AbortSignal', 'setTimeout', 'setInterval',
   'randomUUID', 'randomBytes', 'randomInt', 'randomFill', 'randomFillSync', 'getRandomValues']);
+
+const TIMER_MODULES = /^(?:node:)?timers(?:\/promises)?$/;
 
 /** What a reference to `Date` is, from its parent's text, or null when it reads no clock. */
 function dateUse(context: string): string | null {
@@ -23,7 +25,8 @@ function dateUse(context: string): string | null {
 /** Every ambient read of time or chance in `text`: `Date.now` (called or passed), `new Date()` and `Date()` with no
  *  argument, any `performance` reference, `process.hrtime` and `process.uptime`, `setTimeout` and `setInterval` (any
  *  reference, an import from `node:timers` or `node:timers/promises` included), `Math.random`, and any reference to
- *  `randomUUID`, `randomBytes`, `randomInt`, `randomFill`, `randomFillSync` or `getRandomValues`. Not ambient:
+ *  `randomUUID`, `randomBytes`, `randomInt`, `randomFill`, `randomFillSync` or `getRandomValues`, plus
+ *  `AbortSignal.timeout` and any value import of `node:timers` or `node:timers/promises` by its specifier. Not ambient:
  *  `new Date(x)`, `Date.parse`, `Date.UTC`, `Date` as a type, and `setImmediate` (a yield, not a timer). */
 export function ambientUses(fileName: string, text: string): AmbientUse[] {
   const refs = identifierReferences(text, fileName, NAMES);
@@ -37,11 +40,20 @@ export function ambientUses(fileName: string, text: string): AmbientUse[] {
     if (name === 'Date') what = dateUse(r.context);
     else if (name === 'process') what = /^process\s*\.\s*(hrtime|uptime)\b/.exec(r.context)?.[0].replace(/\s+/g, '') ?? null;
     else if (name === 'Math') what = /^Math\s*\.\s*random\b/.test(r.context) ? 'Math.random' : null;
+    else if (name === 'AbortSignal') what = /^AbortSignal\s*\.\s*timeout\b/.test(r.context) ? 'AbortSignal.timeout' : null;
     else what = name;
     if (what !== null) out.push({ line: r.line, what });
   }
-  return out;
+  // The timers modules by their specifier: `scheduler.wait` from node:timers/promises shares its name with the port,
+  // so no name list can catch it.
+  for (const e of parseSource(text, fileName).imports) {
+    if (!e.typeOnly && TIMER_MODULES.test(e.specifier)) out.push({ line: e.line, what: e.specifier });
+  }
+  return out.sort((a, b) => a.line - b.line);
 }
 
-/** SQL that reads the clock or chance. */
-export const SQL_CLOCK = /\bCURRENT_(?:TIMESTAMP|DATE|TIME)\b|'now'|\bunixepoch\s*\(\s*\)|\brandom\s*\(\s*\)|\brandomblob\s*\(/i;
+/** SQL that reads the clock or chance. SQLite's date functions read the clock when given no time value
+ *  (`datetime()`, `date()`, `time()`, `julianday()`, `unixepoch()`, and `strftime` with a format alone). */
+export const SQL_CLOCK = new RegExp(String.raw`\bCURRENT_(?:TIMESTAMP|DATE|TIME)\b|'now'`
+  + String.raw`|\b(?:date|time|datetime|julianday|unixepoch)\s*\(\s*\)|\bstrftime\s*\(\s*'[^']*'\s*\)`
+  + String.raw`|\brandom\s*\(\s*\)|\brandomblob\s*\(`, 'i');

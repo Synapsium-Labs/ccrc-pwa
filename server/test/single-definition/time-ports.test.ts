@@ -70,6 +70,9 @@ describe('time and chance come through the ports in new Overlord and continuity 
     ['randomBytes(8)', 'randomBytes'], ['randomInt(8)', 'randomInt'], ['crypto.getRandomValues(a)', 'getRandomValues'],
     ["import { setTimeout as wait } from 'node:timers/promises';", 'setTimeout'],
     ["import { setTimeout as wait } from 'node:timers/promises';\nawait wait(5);", 'setTimeout'],
+    ["import { scheduler } from 'node:timers/promises';", 'node:timers/promises'],
+    ["import * as timers from 'node:timers';", 'node:timers'],
+    ['await fetch(u, { signal: AbortSignal.timeout(5000) });', 'AbortSignal.timeout'],
   ];
   const GREEN = ['new Date(ms).toISOString()', 'Date.parse(s)', 'Date.UTC(2026, 0, 1)', 'let d: Date | null = null;',
     'clock.wall()', 'scheduler.after(5, f)', 'entropy.uuid()', 'setImmediate(f)', 'if (x instanceof Date) f(x);'];
@@ -119,9 +122,12 @@ describe('time and chance come through the ports in new Overlord and continuity 
 
 describe('SQL never reads the clock or chance (spec §11.5)', () => {
   it.each(["UPDATE t SET at = CURRENT_TIMESTAMP WHERE id = ?", "SELECT strftime('%s','now') FROM t",
-    'SELECT unixepoch() FROM t', 'SELECT id FROM t ORDER BY random()', 'INSERT INTO t (k) VALUES (randomblob(16))'])(
+    'SELECT unixepoch() FROM t', 'SELECT id FROM t ORDER BY random()', 'INSERT INTO t (k) VALUES (randomblob(16))',
+    'INSERT INTO t (at) VALUES (datetime())', "SELECT strftime('%s') FROM t", 'SELECT date() FROM t',
+    'SELECT time( ) FROM t', 'SELECT julianday() FROM t'])(
     'CONTROL: %s reads one', (sql) => expect(SQL_CLOCK.test(sql)).toBe(true));
-  it.each(['UPDATE t SET at = ? WHERE id = ?', 'SELECT now_ms FROM t'])('CONTROL: %s reads none',
+  it.each(['UPDATE t SET at = ? WHERE id = ?', 'SELECT now_ms FROM t', 'SELECT datetime(at, \'unixepoch\') FROM t',
+    "SELECT strftime('%s', at) FROM t", 'SELECT date(at) FROM t'])('CONTROL: %s reads none',
     (sql) => expect(SQL_CLOCK.test(sql)).toBe(false));
   it('no statement in server/src', () => {
     const hits = walkSrc({ roots: ['server/src'], min: 150 })
