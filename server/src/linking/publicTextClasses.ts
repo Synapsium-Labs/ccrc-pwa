@@ -54,17 +54,26 @@ export const EXAMPLE_SESSION_ID = 'session_01EXAMPLEEXAMPLEEXAMPLE00';
  *  matches them at all — pinned in `passes` below. */
 const DUCKDNS_PLACEHOLDERS = new Set(['mybox', 'otherbox', 'fixture', 'subdomain', 'www']);
 
-/** The private tracker keys whose ticket ids this public tree may not carry
- *  (D-5878, CLAUDE.md's "This repository is public" rule): a reader cannot
- *  open a private ticket, so its id is a dead pointer that also maps the
- *  private workspace. The tracker syncs each ticket to a GitHub issue, and the
- *  tree refers to ccrc work by that `#n`. A NAMED list, one key per entry, and
- *  deliberately not the general `[A-Z]{2,10}-[0-9]+` shape: measured on
- *  2026-10-19 that shape matched 2822 tokens in 409 tracked files that are no
- *  tracker's (UTF-8, SHA-256, AGPL-3, ARCH-21, OA-2, D-numbers' cousins), so it
- *  could only ship behind an allowlist, which this suite refuses. A key joins
- *  here once the tree measures zero ids under it. */
-export const PRIVATE_TRACKER_KEYS: readonly string[] = ['CCRCP'];
+/** The name of the tracker class, which `trackerIdClass` builds for a given key list. */
+export const TRACKER_CLASS_NAME = 'private tracker id';
+
+/** The tracker class over `keys`: a ticket id under any key, case-insensitively (the tracker's suggested branch names
+ *  spell the id in lowercase, and a branch name pasted into a doc points at the same ticket), or a link into a
+ *  tracker's workspace. The bare key, a D-number, an ARCH-NN audit id and a GitHub `#n` stay legal. The keys are the
+ *  CALLER's: this tree's own private keys (D-5878) live in `topology-clean.test.ts`, which builds its class with them,
+ *  and the runtime list below passes none, because one operator's private key is no rule for another installer's plan
+ *  text (the Linear hierarchy plan's "reusable by any installer" constraint, D-8181). At runtime a project's own team
+ *  key is the tracker id `publicTextVerdict` refuses (`trackerIdsIn`). A named list, never the general
+ *  `[A-Z]{2,10}-[0-9]+` shape: measured on 2026-10-19 that shape matched 2822 tokens in 409 tracked files that are no
+ *  tracker's (UTF-8, SHA-256, AGPL-3, ARCH-21, OA-2, D-numbers' cousins). */
+export function trackerIdClass(keys: readonly string[]): PublicTextClass {
+  const link = '\\blinear\\.app/[A-Za-z0-9._-]+';
+  return {
+    name: TRACKER_CLASS_NAME,
+    pattern: new RegExp(keys.length === 0 ? link : `\\b(?:${keys.join('|')})-[0-9]+\\b|${link}`, 'gi'),
+    why: 'a private tracker ticket id or link is a pointer no reader of this public tree can open — refer to ccrc work by its GitHub #n, which the tracker syncs',
+  };
+}
 
 /** The classes, in the ratchet's order. Later classes APPEND: the table is the whole registration surface. */
 export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[] = [
@@ -192,15 +201,6 @@ export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[] = [
     why: 'the operator rule of 2026-10-12: no other project, lane, host, person, ticket or commercial matter in this ' +
       'public tree; speak in project-<x>, claude-<x>, the fleet box, <projects-root>',
   },
-  {
-    name: 'private tracker id',
-    // D-5878. A ticket id under any PRIVATE_TRACKER_KEYS key, or a link into
-    // the tracker's workspace. Case-insensitive: the tracker's suggested
-    // branch names spell the id in lowercase, and a branch name pasted into a
-    // doc points at the same ticket. The bare key, a D-number, an ARCH-NN
-    // audit id and a GitHub `#n` stay legal, pinned in `passes`.
-    pattern: new RegExp(
-      `\\b(?:${PRIVATE_TRACKER_KEYS.join('|')})-[0-9]+\\b|\\blinear\\.app/[A-Za-z0-9._-]+`, 'gi'),
-    why: 'a private tracker ticket id or link is a pointer no reader of this public tree can open — refer to ccrc work by its GitHub #n, which the tracker syncs',
-  },
+  // D-5878, built with no key here: see `trackerIdClass`.
+  trackerIdClass([]),
 ];

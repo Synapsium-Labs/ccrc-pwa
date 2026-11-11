@@ -11,6 +11,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { planStorePort, type PlanStorePort } from '../src/coord/planStore.js';
 import { registerPlanRoutes, type PlanRouteOpts } from '../src/coord/planRoutes.js';
 import { publicTextVerdict } from '../src/linking/policy.js';
+import * as publicTextClasses from '../src/linking/publicTextClasses.js';
 import { PUBLIC_TEXT_CLASSES } from '../src/linking/publicTextClasses.js';
 import { CANARY } from './private-names.mjs';
 import type { GateDecision } from '../src/auth/gate.js';
@@ -54,6 +55,16 @@ describe('publicTextVerdict', () => {
   it('reads a phrase of the hashed class across a line break', () => {
     // the pair path is the class's own: a one-line text has none, so only a text with a break exercises it
     expect(publicTextVerdict(`before\n${CANARY}\nafter`, null, 'public').ok).toBe(false);
+  });
+
+  it('the runtime check carries no installer\'s own tracker key: a project\'s team key is the only tracker id it refuses', () => {
+    // this tree's private key, assembled so the topology walk does not read it here
+    const key = ['CC', 'RCP'].join('');
+    expect(Object.keys(publicTextClasses)).not.toContain('PRIVATE_TRACKER_KEYS');
+    expect(publicTextVerdict(`see ${key}-12`, null, 'public')).toEqual({ ok: true });
+    expect(publicTextVerdict(`see ${key}-12`, key, 'public')).toMatchObject({ ok: false, class: 'tracker id' });
+    // a link into a tracker's workspace is still refused, whoever's it is
+    expect(publicTextVerdict(`see ${['linear.app', 'some-workspace'].join('/')}`, null, 'public')).toMatchObject({ ok: false, class: 'private tracker id' });
   });
 
   it('publicTextClasses.ts holds no catches list', () => {

@@ -53,8 +53,21 @@ import {
   CANARY, EXEMPTIONS, MODES, PRIVATE_NAMES, entriesOf, entryKey, entryOf, hitsIn, maskText, pairHits,
 } from './private-names.mjs';
 import {
-  EXAMPLE_SESSION_ID, PRIVATE_TRACKER_KEYS, PUBLIC_TEXT_CLASSES, type PublicTextClass,
+  EXAMPLE_SESSION_ID, PUBLIC_TEXT_CLASSES, TRACKER_CLASS_NAME, trackerIdClass, type PublicTextClass,
 } from '../src/linking/publicTextClasses.js';
+
+/** The private tracker keys whose ticket ids this public tree may not carry
+ *  (D-5878, CLAUDE.md's "This repository is public" rule): a reader cannot
+ *  open a private ticket, so its id is a dead pointer that also maps the
+ *  private workspace. The tracker syncs each ticket to a GitHub issue, and the
+ *  tree refers to ccrc work by that `#n`. A key joins here once the tree
+ *  measures zero ids under it. THIS TREE's keys, so they stay in this suite:
+ *  the runtime class list builds the tracker class with none (D-8181), and the
+ *  suite swaps in the class built with these. */
+const PRIVATE_TRACKER_KEYS: readonly string[] = ['CCRCP'];
+/** The classes the walk applies: the runtime list, with the tracker class built over this tree's keys. */
+const TREE_CLASSES: readonly PublicTextClass[] = PUBLIC_TEXT_CLASSES.map((cls) =>
+  cls.name === TRACKER_CLASS_NAME ? trackerIdClass(PRIVATE_TRACKER_KEYS) : cls);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
@@ -392,7 +405,7 @@ const FIXTURES: Record<string, { catches: string[]; passes: string[] }> = {
   },
 };
 
-const FORBIDDEN: ForbiddenClass[] = PUBLIC_TEXT_CLASSES.map((cls) => {
+const FORBIDDEN: ForbiddenClass[] = TREE_CLASSES.map((cls) => {
   const fixtures = FIXTURES[cls.name];
   if (!fixtures) throw new Error(`class ${cls.name} has no fixtures`);
   return { ...cls, ...fixtures };
