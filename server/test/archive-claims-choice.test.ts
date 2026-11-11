@@ -300,6 +300,39 @@ describe('stop — the same question', () => {
     expect(b.ccd()).toEqual([['stop', COORDINATOR]]);
   });
 
+  // D-8199 review: the stop is the escape hatch the sheet offers after the archive door refused on a store it could not
+  // read, so the stop never fails shut on it — it has nothing it can move, so it stops, moving nothing, and says so.
+  it.each([
+    ['a plain stop', undefined],
+    ['a stop with a choice', { runs: 'release' }],
+  ])('%s over a store that cannot be read stops, moves nothing and says the claims went unread', async (_why, body) => {
+    const b = await box();
+    seed(b.home, COORDINATOR);
+    const [r1] = coordinates(b.coord, 1);
+    const real = b.coord.bindingsOf.bind(b.coord);
+    b.coord.bindingsOf = (sid) => ({ ...real(sid),
+      claimant: () => ({ ok: false, kind: 'run-unreadable', detail: 'runs.wave' }) });
+    const res = await stop(b.app, COORDINATOR, body);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, claimsUnreadable: 'runs.wave' });
+    expect(claimantOf(b.coord, r1!)).toBe(COORDINATOR);
+    expect(events(b.coord, r1!)).toEqual([]);
+    expect(b.ccd()).toEqual([['stop', COORDINATOR]]);
+  });
+
+  it('the archive door still refuses fail-shut over the same store (it would end or move what it cannot read)', async () => {
+    const b = await box();
+    seed(b.home, COORDINATOR);
+    coordinates(b.coord, 1);
+    const real = b.coord.bindingsOf.bind(b.coord);
+    b.coord.bindingsOf = (sid) => ({ ...real(sid),
+      claimant: () => ({ ok: false, kind: 'run-unreadable', detail: 'runs.wave' }) });
+    const res = await archive(b.app, COORDINATOR);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'coordinator-has-open-runs', runs: [], detail: 'runs.wave' });
+    expect(b.ccd()).toEqual([]);
+  });
+
   it('a malformed choice is 400, nothing stopped', async () => {
     const b = await box();
     seed(b.home, COORDINATOR);

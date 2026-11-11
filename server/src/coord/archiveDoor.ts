@@ -390,18 +390,21 @@ async function moveOrRefuse(
 
 /**
  * The STOP door's claims step (D-8199): `POST /api/sessions/:id/stop` asks the archive door's question of a session that
- * claims open runs — the same refusal (`coordinator-has-open-runs`, naming them; `runs: []` with the store's detail when
- * it could not be read, fail-shut) and the same move — before its stop. A `restart` stop keeps the session id, so it asks
- * nothing and moves nothing; no coordination store, nothing to ask either. Runs on the coordination serialiser.
+ * claims open runs — the same refusal (`coordinator-has-open-runs`, naming them) and the same move — before its stop. A
+ * `restart` stop keeps the session id, so it asks nothing and moves nothing; no coordination store, nothing to ask either.
+ * Runs on the coordination serialiser.
+ *
+ * NEVER FAIL-SHUT, unlike the archive door: the stop is the escape hatch — "Stop only" is what the sheet offers after the
+ * archive door refused on a store it could not read — so a live session is never left without a way to put it down. A
+ * store this box cannot read (or whose read throws) has nothing it can move: the stop goes through, moving nothing,
+ * whatever choice was given, and its answer says the claims went unread (`claimsUnreadable`, the store's detail).
  */
 export async function decideStopClaims(
   port: ClaimsCoordPort | null, id: string, flags: StopFlags,
-): Promise<{ ok: true; moved: ClaimsMoved | null } | Refused> {
+): Promise<{ ok: true; moved: ClaimsMoved | null; claimsUnreadable?: string } | Refused> {
   if (port === null || flags.restart) return { ok: true, moved: null };
   const coordinates = measured(() => port.bindingsOf(id).claimant());
-  if (!coordinates.ok) {
-    return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
-  }
+  if (!coordinates.ok) return { ok: true, moved: null, claimsUnreadable: coordinates.detail };
   const claimed = coordinates.siblings;
   if (claimed.length > 0 && flags.claims === undefined) {
     return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });

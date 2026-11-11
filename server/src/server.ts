@@ -3625,7 +3625,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const { ok: _ok, error, ...extra } = claims.reply.body as { ok: false; error: RouteRefusal } & Record<string, unknown>;
       return refuseRoute(reply, error, extra);
     }
-    const movedSpread = claims.moved !== null ? { moved: claims.moved } : {};
+    // `claimsUnreadable`: the store could not be read, so nothing was moved and the stop goes through regardless — the
+    // escape hatch never fails shut (`decideStopClaims`).
+    const movedSpread = { ...(claims.moved !== null ? { moved: claims.moved } : {}),
+      ...('claimsUnreadable' in claims && claims.claimsUnreadable !== undefined ? { claimsUnreadable: claims.claimsUnreadable } : {}) };
     // The argv is `stopArgvFor`'s (above), shared with the archive door: `--surface` and the two id shapes are argued
     // there.
     // A stop that failed after the claims moved says so (`moved`), as the archive door's answers do.

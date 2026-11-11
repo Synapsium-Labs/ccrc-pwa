@@ -2,7 +2,7 @@
 // refusals, the one act it takes, and how ccd's answer reaches the wire.
 import { describe, it, expect } from 'vitest';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, frameRowVerdict, refusedAtStop, stopVerdict, worktreeOf,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, decideStopClaims, frameRowVerdict, refusedAtStop, stopVerdict, worktreeOf,
   type ArchiveCoordPort, type ArchiveMeasure, type StopReadings,
 } from '../src/coord/archiveDoor.js';
 import type { CloseOutcome } from '../src/coord/close.js';
@@ -48,6 +48,36 @@ const port = (o: { worker?: OpenSiblingsResult; claimed?: OpenSiblingsResult;
   };
   return { p, seen };
 };
+
+// D-8199 review: the stop is the escape hatch — "Stop only" is what the sheet offers after the archive door refused on a
+// store it could not read — so the stop's claims step never fails shut. A store it cannot read has nothing it can move:
+// the stop goes through, moving nothing, and says the claims went unread (`claimsUnreadable`, the store's detail).
+describe('decideStopClaims — an unreadable store never blocks the stop', () => {
+  const movesNothing = (p: ArchiveCoordPort, seen: string[]) => ({
+    bindingsOf: p.bindingsOf,
+    moveClaims: async () => { seen.push('move'); return { ok: true as const, moved: [] }; },
+  });
+
+  it('a plain stop goes through, nothing moved, the store\'s detail carried', async () => {
+    const { p, seen } = port({ claimed: UNREADABLE });
+    expect(await decideStopClaims(movesNothing(p, seen), 'demo-c', { restart: false }))
+      .toEqual({ ok: true, moved: null, claimsUnreadable: 'runs.wave' });
+    expect(seen).toEqual(['claimant:demo-c']);
+  });
+
+  it('a store read that THROWS is the same unreadable store: through, never a rejection', async () => {
+    const { p, seen } = port({ throws: { claimed: true } });
+    expect(await decideStopClaims(movesNothing(p, seen), 'demo-c', { restart: false }))
+      .toEqual({ ok: true, moved: null, claimsUnreadable: 'database is not open' });
+  });
+
+  it('a choice given over an unreadable store moves nothing (it has nothing to move) and the stop still goes through', async () => {
+    const { p, seen } = port({ claimed: UNREADABLE });
+    expect(await decideStopClaims(movesNothing(p, seen), 'demo-c', { restart: false, claims: { kind: 'release' } }))
+      .toEqual({ ok: true, moved: null, claimsUnreadable: 'runs.wave' });
+    expect(seen).not.toContain('move');
+  });
+});
 
 describe('archiveFlags', () => {
   it('reads an absent body as no consent at all', () => {

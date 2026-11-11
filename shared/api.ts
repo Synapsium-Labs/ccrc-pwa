@@ -11118,7 +11118,9 @@ export const REVIEW_DONE_SUBJECT = 'review-done';
  *   - `sessionBusy` — a turn MEASURED in progress: the server's fail-closed read (`stopVerdict`) or the frame's row
  *     (`archiveInterrupts`), or ccd after that read (a race). `{interrupt:true}` stops the session first; the turn is lost.
  *   - `coordinatorHasOpenRuns` — this session is the CLAIMANT of a non-terminal run. `{programme:'end'}` ends the
- *     programme first; the 409 names the runs, or carries `runs: []` when the store could not be read (fail-shut).
+ *     programme first, and a claims choice (`ClaimsChoiceBody`, D-8199) releases or hands over its runs instead; the 409
+ *     names the runs, or carries `runs: []` when the store could not be read (fail-shut — the archive door's only: the
+ *     stop door goes through over an unreadable store, `StopAnswer.claimsUnreadable`).
  *   - `programmePartlyEnded` — `{programme:'end'}` could not end every run. Nothing was stopped or archived.
  *   - `claimsNotMoved` — D-8199: `{runs:'release'}` or `{runs:'handover', heir}` (`ClaimsChoiceBody`) could not move every
  *     claimed run; `moved` and `notMoved` name them and `refusal` says why. Nothing was stopped or archived.
@@ -11197,6 +11199,16 @@ export type ClaimsMoveRefusalWord = (typeof CLAIMS_MOVE_REFUSALS)[keyof typeof C
 const CLAIMS_MOVE_REFUSAL_WORDS: readonly string[] = Object.values(CLAIMS_MOVE_REFUSALS);
 export function isClaimsMoveRefusal(v: unknown): v is ClaimsMoveRefusalWord {
   return typeof v === 'string' && CLAIMS_MOVE_REFUSAL_WORDS.includes(v);
+}
+
+/** `POST /api/sessions/:id/stop`'s 2xx answer (D-8199). `moved`: the claims a `ClaimsChoiceBody` moved before the stop.
+ *  `claimsUnreadable`: the coordination store could not be read (its detail), so nothing was moved and the stop went
+ *  through regardless — the stop is the escape hatch and never fails shut on the store. A plain stop with readable
+ *  claims answers `{ ok: true }` as ever. */
+export interface StopAnswer {
+  readonly ok: true;
+  readonly moved?: ClaimsMoved;
+  readonly claimsUnreadable?: string;
 }
 
 /** The claims a door moved (D-8199), on its answer: `to` is the heir, or `null` for a release. */
