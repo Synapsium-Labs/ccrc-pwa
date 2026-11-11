@@ -48,7 +48,8 @@ describe('the migration', () => {
     // A database at the previous version migrates through the real opener.
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
-    expect(objectNames(db).filter((n) => !had.includes(n)).sort()).toEqual([
+    // The later entries replay too: migration 56 (D-8274) adds `lane_arm_settings` and its primary-key index, nothing of this one's.
+    expect(objectNames(db).filter((n) => !had.includes(n) && !n.includes('lane_arm_settings')).sort()).toEqual([
       'coordinator_calls', 'coordinator_calls_by_program', 'coordinator_calls_by_run', 'coordinator_calls_live_blocks',
     ]);
     const cols = (db.prepare('PRAGMA table_info(coordinator_calls)').all() as unknown as { name: string }[]).map((c) => c.name);
