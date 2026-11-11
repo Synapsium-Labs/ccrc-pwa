@@ -26,6 +26,8 @@ const SHARED_PREFIX_BOUND_MS = 500;
 const GH_QUOTES_BOUND_MS = 1500;
 // Task C22 (review 1769 F1): measured against round 2's net in c22.md.
 const GH_FLAG_RUN_BOUND_MS = 1500;
+// Task C23 fix round 1 (review 1795 F5): measured against a quadratic mutant in c23.md.
+const GH_COMMIT_CANDIDATES_BOUND_MS = 1500;
 
 const HOME: ChatRefContext = {
   repo: 'org-a/project-a', project: 'project-a', branch: null, knownRuns: new Set(), knownItems: new Set(), runsElsewhere: false,
@@ -790,8 +792,9 @@ describe('Task C22: the gh net in linear time, and its last gaps fail toward tex
       ['gh api -Hx:y repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
       ['gh api -q.title repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
       ['gh api -iXGET repos/owner-b/repo-b/pulls/12 and #12', [['#12', b(12)]]],
-      // A commit path names its repository and no number: the bare commit is text.
-      ['gh api -XGET repos/owner-b/repo-b/commits/1234567abc and 1234567abc', [['1234567abc', null]]],
+      // A commit path names its sha in its repository (Task C23 fix round 1, review 1795 F2): the bare commit opens it.
+      ['gh api -XGET repos/owner-b/repo-b/commits/1234567abc and 1234567abc',
+        [['1234567abc', 'https://github.com/owner-b/repo-b/commit/1234567abc']]],
       // Controls: the spaced spellings, as before.
       ['gh api -X PATCH repos/owner-b/repo-b/issues/12 and #12', [['#12', b(12)]]],
       ['gh api --method PATCH repos/owner-b/repo-b/issues/12 and #12', [['#12', b(12)]]],
@@ -982,6 +985,8 @@ describe('Task C23: a command claims its repository flags only where it gives a 
       // The void command's number is unknown even where the command after it gives a number of its own.
       second('gh pr view 12 --title GH pr view 13 -R owner-b/repo-b'),
       second('gh pr view 12 --title GH'),
+      // A cut command with no flag at all gives its number to no repository: home on main, text now (c23.md).
+      ['gh pr view 12 --title gh\n#12', [['#12', null]]],
       // A flag read before the cut does not save the number; an api command cut after its path gives the path's number to no
       // repository too.
       ['gh pr view 12 -R owner-b/repo-b --title GH and #12', [['#12', null]]],
@@ -1023,6 +1028,71 @@ describe('Task C23: a command claims its repository flags only where it gives a 
       [`${commitB}; gh pr list; cp -R owner-c/repo-c /x; 1234567abc and owner-b/repo-b#12`,
         [['1234567abc', null], ['owner-b/repo-b#12', b(12)]]],
     ]);
+  });
+
+  it('review 1795 F1, C2, C3: a continuation is read as the shell reads it', () => {
+    const lf = (t: string): string => t;
+    const crlf = (t: string): string => t.replaceAll('\\\n', '\\\r\n');
+    for (const nl of [lf, crlf]) {
+      rows([
+        // F1: glued inside a word, it joins the two halves (the shell deletes the pair); it never closes the word.
+        [nl('gh pr view 12 -R owner-b/repo\\\n-b and #12'), [['#12', b(12)]]],
+        [nl('gh pr view 12 -R org-a/project-a\\\nx; see https://github.com/owner-c/repo-c/pull/13 and #12'),
+          [['#12', issue('org-a/project-ax', 12)]]],
+        [nl('gh pr view 12 --repo=o/r.\\\n12 and #12'), [['#12', issue('o/r.12', 12)]]],
+        [nl("gh pr view 12 -R 'owner-b/repo'\\\n-b and #12"), [['#12', b(12)]]],
+        // The joined value names #12 in owner-b, a second source in owner-c: text.
+        [nl('gh pr view 12 -R owner-b/repo\\\n-b; owner-c/repo-c#12 and #12'), [['owner-c/repo-c#12', c(12)], ['#12', null]]],
+        // C3: a continuation inside a flag's spelling joins it too.
+        [nl('gh pr view 12 -\\\nR owner-b/repo-b and #12'), [['#12', b(12)]]],
+        [nl('gh pr view 12 --re\\\npo owner-b/repo-b and #12'), [['#12', b(12)]]],
+        // An odd run is a continuation: two of its backslashes are one escaped backslash, and the third joins.
+        [nl('gh pr view 12 -R owner-b/repo\\\\\\\n-b and #12'), [['#12', null]]],
+      ]);
+    }
+    rows([
+      // C2: an even run is escaped backslashes, so the line break ends the command, as on main.
+      ['gh pr list -R owner-b/repo-b --title x\\\\\n12\n#12', [['#12', null]]],
+      ['gh pr view 12 --body foo\\\\\n-R owner-b/repo-b and #12', [['#12', null]]],
+      ['gh pr view 12 -R owner-b/repo-b --title x\\\\\n#12', [['#12', b(12)]]],
+      // The next line's flag is no word of the command the line break ended.
+      ['gh pr view 12 --title x\\\\\n -R owner-b/repo-b\n#12', [['#12', null]]],
+      ['gh pr view 12 --title x\\\\\r\n -R owner-b/repo-b\r\n#12', [['#12', null]]],
+    ]);
+  });
+
+  it('review 1795 F2: a gh api commits path names its sha in its repository, as a pulls path names a number', () => {
+    rows([
+      ['gh api repos/owner-b/repo-b/commits/1234567abc; https://github.com/owner-c/repo-c/commit/1234567abc and 1234567abc',
+        [['1234567abc', null]]],
+      ['gh api repos/owner-b/repo-b/commits/1234567abc and 1234567abc', [['1234567abc', `${commitB}`]]],
+      ['gh api /repos/owner-b/repo-b/commits/1234567ABC and 1234567a',
+        [['1234567a', 'https://github.com/owner-b/repo-b/commit/1234567a']]],
+      // A lost or cut command gives its sha to no repository.
+      ["gh api repos/owner-b/repo-b/commits/1234567abc --jq 'x and 1234567abc", [['1234567abc', null]]],
+      ['gh api repos/owner-b/repo-b/commits/1234567abc --jq GH and 1234567abc', [['1234567abc', null]]],
+      // A longer path is no commit address; a sha the boundary does not end is none.
+      ['gh api repos/owner-b/repo-b/commits/1234567abc/comments; https://github.com/owner-c/repo-c/commit/1234567abc and 1234567abc',
+        [['1234567abc', 'https://github.com/owner-c/repo-c/commit/1234567abc']]],
+      // Recorded (api-path-claim-unchanged): a numberless pulls path stays its command's, so the address decides.
+      ["gh api repos/owner-b/repo-b/pulls --jq '.[] | select(.number==12)'; https://github.com/owner-c/repo-c/pull/12 and #12",
+        [['#12', c(12)]]],
+    ]);
+  });
+
+  it('review 1795 F5: the commit-candidate loop stays linear over many commit addresses', () => {
+    const head = 'gh pr list; cp -R owner-b/repo-b /x; cp -R owner-c/repo-c /y; ';
+    const parts: string[] = [];
+    for (let i = 0, size = head.length; size < 1 << 20; i += 1) {
+      const part = `https://github.com/owner-d/repo-d/commit/a${i.toString(16).padStart(9, '0')} `;
+      parts.push(part);
+      size += part.length;
+    }
+    const text = head + parts.join('');
+    const t = performance.now();
+    const said = messageRepos(text);
+    expect(performance.now() - t).toBeLessThan(GH_COMMIT_CANDIDATES_BOUND_MS);
+    expect(said.commits.sorted.length).toBe(parts.length * 3);
   });
 
   it('L2-2: a value the net cuts at the next flag names an unknown repository, never home', () => {

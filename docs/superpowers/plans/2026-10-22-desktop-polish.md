@@ -3340,7 +3340,7 @@ R15 gains one sentence for each changed rule, and nothing else in the spec chang
 **Acceptance.** Every review 1769 shape the brief names is a row; the budget pins hold with recorded margins; the mutation
 count is recorded in `c22.md`. **Rollback.** A plain revert.
 
-### Task C23: the gh reader claims a lost flag only where its command gives a number (D-8279) — now
+### Task C23: the gh reader claims a repository flag only where its command gives a number (D-8279) — now
 
 **Why.** Review 1778, the review of Task C22, carried four findings and two pre-existing holes: a command with no number of
 its own still claimed its repository flags, so a second source for the number won (A1, and main's `-s -R` and P2 shapes); a
@@ -3365,7 +3365,14 @@ formed a phantom command (A2); one command with many flag words threw `RangeErro
 
 R15 gains one sentence for each changed rule (A1, P1, A2, L3-5, L2-2), and nothing else in the spec changes.
 
-- **D-8279** - `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Departures are named by slug in `c23.md`.
+**Fix round 1 (review 1795).** A continuation is read as the shell reads it: glued inside a word it joins the two halves, and
+only an odd run of backslashes before a line break is one, since each pair is an escaped backslash (F1, C2; a continuation
+inside a flag's spelling then reads as the flag, C3). A `gh api` path `repos/o/r/commits/<sha>` names that commit in that
+repository, as a `pulls/<n>` path names a number (F2). A budget pin covers the commit-candidate loop (F5). The fuzz oracle is
+the shell's joining reading, and its generator and seeds are in `c23.md`. R15 gains one sentence for the join and one for the
+commits path. `gh` followed by a continuation is never a command (F3, recorded).
+
+- **D-8279** - `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Fix round 1 (review 1795): a continuation joins a word it is glued inside and needs an odd backslash run (F1, C2, C3), and a `gh api` commits path names its commit (F2). Departures are named by slug in `c23.md`.
 
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.

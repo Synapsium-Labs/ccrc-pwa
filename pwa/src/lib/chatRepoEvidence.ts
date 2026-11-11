@@ -130,8 +130,12 @@ const PAGE = new RegExp(
 const API = new RegExp(`${HOST_START}api\\.github\\.com/repos/(${SEG})/(${SEG})(?:/(?:pulls|issues)/(\\d+))?`, 'gi');
 /** The raw-file and archive hosts: they name a repository and no number. */
 const RAW = new RegExp(`${HOST_START}(?:raw\\.githubusercontent|codeload\\.github)\\.com/(${SEG})/(${SEG})`, 'gi');
-/** The path of `gh api`, with or without its leading slash, and its pulls and issues, ending at the word's end, `/`, `?` or `#`. */
-const GH_API_PATH = new RegExp(`^/?repos/(${SEG})/(${SEG})(?:/(?:pulls|issues)/(\\d+)(?=$|[/?#]))?`);
+/** The path of `gh api`, with or without its leading slash, and its pulls and issues, ending at the word's end, `/`, `?` or `#`;
+ *  or its commit, `commits/<sha>`, ending at the word's end, `?` or `#` (Task C23 fix round 1, review 1795 F2: the way a pull
+ *  page and a commit page are both addresses). */
+const GH_API_PATH = new RegExp(
+  `^/?repos/(${SEG})/(${SEG})(?:/(?:(?:pulls|issues)/(\\d+)(?=$|[/?#])|commits/([0-9a-fA-F]{7,40})(?=$|[?#])))?`,
+);
 /** A `gh api` path word anywhere in a message, for the net (Task C22, review 1769 F2): `repos/o/r`, with or without its leading
  *  slash, where a word starts (no letter, digit, `_`, `.`, `/` or `-` before it, so `api.github.com/repos/…` and
  *  `src/repos/…` are not one). */
@@ -179,12 +183,18 @@ interface Span {
   readonly end: number;
 }
 
-/** The length of the line continuation at `at` (a backslash, then a line break or a CRLF), or 0 where none stands there: inside
- *  a `gh` command it is whitespace, so the command goes on on the next line (Task C23, review 1778 P1). */
+/** The length of the line continuation at `at` (a backslash, then a line break or a CRLF), or 0 where none stands there: the
+ *  shell deletes it, so inside a `gh` command the command goes on on the next line (Task C23, review 1778 P1), and a word it is
+ *  glued inside goes on too, its two halves joined (fix round 1, review 1795 F1 and C3). Only an unescaped backslash starts
+ *  one: the run of backslashes ending at `at` must be odd, since each pair is one escaped backslash (review 1795 C2). The run
+ *  is counted only where a line break follows, so each run is counted once. */
 function continuation(text: string, at: number): number {
   if (text.charAt(at) !== '\\') return 0;
-  if (text.charAt(at + 1) === '\n') return 2;
-  return text.charAt(at + 1) === '\r' && text.charAt(at + 2) === '\n' ? 3 : 0;
+  const length = text.charAt(at + 1) === '\n' ? 2 : text.charAt(at + 1) === '\r' && text.charAt(at + 2) === '\n' ? 3 : 0;
+  if (length === 0) return 0;
+  let k = at;
+  while (k > 0 && text.charAt(k - 1) === '\\') k -= 1;
+  return (at - k) % 2 === 0 ? length : 0;
 }
 
 /** Whether the character at `at` ends a `gh` command, outside quotes (review 1760 F1): a backtick, a line break, `;`, `&`, `|`, or
@@ -253,8 +263,8 @@ const HASH_NUMBER = /#(\d+)(?!\w)/y;
  *  begins inside the command's own words: the command is then `voided`, decided by `ghCommand` from the words before that
  *  quote, and ends just past it, so a later command is still read (review 1762 F3); a prose apostrophe past the command
  *  touches nothing it read (review 1766 F1). Where a `pr` or `issue` command ends at a `#n` word standing where its number
- *  stands, `hashed` is that number (review 1768 G3). A line continuation is whitespace (`continuation`, Task C23, review 1778
- *  P1). Where an unquoted `gh` word stands where a flag's value is expected, the command ends there as anywhere, and is `cut`:
+ *  stands, `hashed` is that number (review 1768 G3). A line continuation is deleted, as the shell deletes it (`continuation`,
+ *  Task C23, review 1778 P1 and review 1795 F1): whitespace between words, a join inside one. Where an unquoted `gh` word stands where a flag's value is expected, the command ends there as anywhere, and is `cut`:
  *  `ghCommand` gives its number to no repository (Task C23, review 1778 A2). One forward
  *  scan: a quote's search reads up to the next quote of its kind, which a closed quote consumes, and a void one is never
  *  reached again, so each stretch is read about once however many quotes the message holds. */
@@ -310,10 +320,14 @@ function ghWords(
   for (; i < text.length; i += 1) {
     const c = text.charAt(i);
     if (endsCommand(text, i)) break;
+    // Deleted, as the shell deletes it: between words it is whitespace, inside one it joins the halves.
     const joined = continuation(text, i);
-    if (joined > 0 || /\s/.test(c)) {
+    if (joined > 0) {
+      i += joined - 1;
+      continue;
+    }
+    if (/\s/.test(c)) {
       if (close()) return { words, end: start, voided: false, cut, hashed: null };
-      if (joined > 0) i += joined - 1;
       continue;
     }
     if (!reading) {
@@ -361,27 +375,30 @@ const LOST: SaidRepo = unknown('gh:lost');
 const REPO_FLAG_WORD = /^(?:--repo(?:=|$)|-[A-Za-z]*?R)/;
 
 /** What one `gh` command says: the repository of its LAST `--repo`, `--repo=` or `-R` flag (as `gh` takes it), or of its `gh api`
- *  path, and the number that repository is evidence for: a `gh pr|issue <verb> <n>` command's own number, or the API path's.
+ *  path, and the number that repository is evidence for: a `gh pr|issue <verb> <n>` command's own number, or the API path's; or
+ *  the commit, `sha` in lower case, its API path names (Task C23 fix round 1, review 1795 F2).
  *  `lost` (review 1768 G1 and G4): the command holds a repository flag it cannot read (a value word spelled as one, which
  *  `gh` takes as that value; a run such as `-sR` or a glued `-Rowner/repo`; a `-R` with no value after it), or it is
  *  `voided` and its words name a repository: its number then belongs to a repository the chat cannot tell, so a bare name
  *  is text even where another command or address names that number elsewhere. `repo` is null where no flag was read: the
  *  net names what the flag says. A voided command naming none is decided as if absent (review 1766 F1); a `cut` one (`ghWords`)
  *  gives its number to an unknown repository whether or not it names one (Task C23, review 1778 A2). `claims` are the words
- *  the net counts as this command's: none where it gives no number, so each of its repository flags, read or lost, is a
- *  candidate for every number the message gives a repository (Task C23, review 1778 A1 and P2). */
+ *  the net counts as this command's: none of its repository flags where it gives no number, so each of them, read or lost, is
+ *  a candidate for every number the message gives a repository (Task C23, review 1778 A1 and P2); an `api` path its command
+ *  read stays its command's, with or without a number (`api-path-claim-unchanged`). */
 function ghCommand(
   words: readonly Word[],
   voided: boolean,
   cut: boolean,
-): { repo: SaidRepo | null; number: string | null; lost: boolean; claims: Span[] } | null {
+): { repo: SaidRepo | null; number: string | null; sha: string | null; lost: boolean; claims: Span[] } | null {
   const [head, verbOrPath, third] = words.filter((w) => w.role === 'positional');
   const numbered = (head?.text === 'pr' || head?.text === 'issue') && third !== undefined && /^#?\d+$/.test(third.text);
   const number = numbered ? third.text.replace('#', '') : null;
   if (head?.text === 'api' && verbOrPath !== undefined) {
     const m = GH_API_PATH.exec(verbOrPath.text);
     if (m !== null) {
-      return { repo: said(`${m[1]!}/${m[2]!}`), number: m[3] ?? null, lost: voided || cut, claims: [verbOrPath] };
+      const sha = m[4] === undefined ? null : m[4].toLowerCase();
+      return { repo: said(`${m[1]!}/${m[2]!}`), number: m[3] ?? null, sha, lost: voided || cut, claims: [verbOrPath] };
     }
   }
   let flag: string | null = null;
@@ -412,7 +429,8 @@ function ghCommand(
     claims.push(w);
   });
   if (flag === null && !lost && !cut) return null;
-  return { repo: flag === null ? null : flagRepo(flag), number, lost: lost || voided || cut, claims: number === null ? [] : claims };
+  const repo = flag === null ? null : flagRepo(flag);
+  return { repo, number, sha: null, lost: lost || voided || cut, claims: number === null ? [] : claims };
 }
 
 /** A repository flag's spelling where a word starts (no letter, digit, `_` or `-` before it): `--repo`, or a run of short
@@ -507,6 +525,15 @@ export function messageRepos(text: string): MessageRepos {
     if (!at.has(r.key)) at.set(r.key, r);
     numbers.set(id, at);
   };
+  /** A commit address: SHA `sha`, in lower case, in repository `r`, each pair once. */
+  const atCommit = (sha: string, r: SaidRepo): void => {
+    const at = exact.get(sha) ?? new Map<string, SaidRepo>();
+    if (!at.has(r.key)) {
+      at.set(r.key, r);
+      addresses.push({ repo: r, sha });
+    }
+    exact.set(sha, at);
+  };
   /** The repository an address names, or null when the name boundary does not start its host (`修复见github.com/…`,
    *  `_github.com/…`): that address names an unknown repository and is evidence for nothing (review 1760 F5). */
   const addressed = (m: RegExpMatchArray, owner: string, repo: string): SaidRepo | null => {
@@ -522,15 +549,7 @@ export function messageRepos(text: string): MessageRepos {
     // A number or a SHA is evidence only where the name boundary ends it (`pull/12x` is not #12).
     if (wordAfter(text, m.index + m[0].length)) continue;
     if (m[3] !== undefined) atNumber(m[3], r);
-    if (m[4] !== undefined) {
-      const sha = m[4].toLowerCase();
-      const at = exact.get(sha) ?? new Map<string, SaidRepo>();
-      if (!at.has(r.key)) {
-        at.set(r.key, r);
-        addresses.push({ repo: r, sha });
-      }
-      exact.set(sha, at);
-    }
+    if (m[4] !== undefined) atCommit(m[4].toLowerCase(), r);
   }
   for (const m of text.matchAll(API)) {
     const r = addressed(m, m[1]!, m[2]!);
@@ -564,7 +583,9 @@ export function messageRepos(text: string): MessageRepos {
     const command = ghCommand(read.words, read.voided, read.cut);
     if (command !== null) {
       if (command.repo !== null) named.add(command.repo.key);
-      if (command.number !== null) atNumber(command.number, command.lost || command.repo === null ? LOST : command.repo);
+      const owner = command.lost || command.repo === null ? LOST : command.repo;
+      if (command.number !== null) atNumber(command.number, owner);
+      if (command.sha !== null) atCommit(command.sha, owner);
       // One push per claim, never a spread: one command may hold more words than a call takes arguments (review 1778 L2-1).
       for (const span of command.claims) claims.push(span);
     }
@@ -593,13 +614,8 @@ export function messageRepos(text: string): MessageRepos {
     const extra: SaidRepo[] = [];
     for (const r of unclaimed.values()) if (extra.push(r) === 2) break;
     for (const at of numbers.values()) for (const r of extra) if (!at.has(r.key)) at.set(r.key, r);
-    for (const [sha, at] of exact) {
-      for (const r of extra) {
-        if (at.has(r.key)) continue;
-        at.set(r.key, r);
-        addresses.push({ repo: r, sha });
-      }
-    }
+    // Each SHA is a key already, so the writer adds no key to the map this walks.
+    for (const sha of exact.keys()) for (const r of extra) atCommit(sha, r);
   }
   return { named, numbers, commits: commitIndex(exact, addresses) };
 }
