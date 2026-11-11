@@ -50,8 +50,9 @@ export const LINEAR_IDENTITY_QUERY_KEYS = ['byId', 'byUuid'] as const;
 
 // ── the grammars and bounds (spec §5.1, §5.3, §5.4) ──
 
-/** An issue identifier (`AAA-12`): a team key, a hyphen and the issue's number. The team key is bounded as the
- *  journal bounds it (`journal.ts`), so every identifier this table accepts is one the journal can record. */
+/** An issue identifier (`AAA-12`): a team key, a hyphen and the issue's number. THE ONE GRAMMAR: the journal
+ *  (`journal.ts`) and the hierarchy rows (`hierarchyOps.ts`) read it, so every identifier this table accepts is one the
+ *  journal can record. */
 export const LINEAR_IDENTIFIER_SHAPE = /^[A-Za-z][A-Za-z0-9_]{0,15}-[0-9]{1,9}$/;
 export const isLinearIdentifier = (v: unknown): v is string => typeof v === 'string' && LINEAR_IDENTIFIER_SHAPE.test(v);
 
@@ -94,6 +95,10 @@ export const LINEAR_WEB_ORIGIN = 'https://linear.app';
  *  create or an update sends, after the `linear-egress` pass. It names no session, account, box, workspace or team. */
 export const LINEAR_PROVENANCE_LINE = '— written by a ccrc fleet session';
 
+/** THE CCRC PROVENANCE LINE (D-8180): appended by `withCcrcProvenance` (`hierarchyOps.ts`) to a text ccrc's own plan
+ *  sync writes (an initiative, project, milestone or issue description), where no fleet session wrote it. */
+export const LINEAR_CCRC_PROVENANCE_LINE = '— kept by ccrc from its plan';
+
 /** Which strip each shaped string takes (spec §6.5): `line` for every one-line string, `multiline` for the two
  *  markdown fields only. A column of the shaper's table; `linear-ops.test.ts` pins it. */
 export const LINEAR_STRIPS = Object.freeze({
@@ -114,6 +119,63 @@ const SEARCH_FIELDS = 'id identifier title priority createdAt updatedAt team { k
 const PAGE_INFO = 'pageInfo { hasNextPage endCursor }';
 /** What a resolve selects of an issue (§4.5, R9): its id, its current identifier and its current team. */
 const RESOLVED_FIELDS = 'id identifier team { id key }';
+
+// ── the hierarchy documents (D-8180; design 2026-11-10 §5, §8.1) ──
+
+/** What each hierarchy answer selects; `hierarchyOps.ts`'s shapers read exactly these fields. */
+const INITIATIVE_FIELDS = 'id name description status updatedAt projects(first: 50) { nodes { id } }';
+const PROJECT_FIELDS = 'id name description updatedAt status { id type } teams(first: 20) { nodes { key } } '
+  + 'initiatives(first: 10) { nodes { id } } projectMilestones(first: 50) { nodes { id name description targetDate sortOrder updatedAt creator { id } } }';
+const MILESTONE_FIELDS = 'id name description targetDate sortOrder updatedAt project { id } creator { id }';
+const NAMED_FIELDS = 'id name createdAt creator { id }';
+const HIERARCHY_ISSUE_FIELDS = 'id identifier title description updatedAt team { key } state { type } project { id } '
+  + `projectMilestone { id } parent { id } labels(first: ${LINEAR_ISSUE_LABELS_MAX}) { nodes { id } }`;
+const HIERARCHY_PAGE = 'first: 100, after: $after';
+
+/**
+ * EVERY HIERARCHY DOCUMENT (D-8180), written here and nowhere else (`single-definition/linear-ops.test.ts`). No
+ * document deletes or archives an object: `initiativeToProjectDelete` removes a link between two objects and nothing
+ * else (design §8.1). Spread into {@link LINEAR_DOCUMENTS}. A constructed fixture stands behind each until FX2 records it.
+ */
+export const LINEAR_HIERARCHY_DOCUMENTS = Object.freeze({
+  initiativeById: `query InitiativeById($id: String!) { initiative(id: $id) { ${INITIATIVE_FIELDS} } }`,
+  projectById: `query ProjectById($id: String!) { project(id: $id) { ${PROJECT_FIELDS} } }`,
+  projectStatuses: 'query ProjectStatuses { projectStatuses(first: 50) { nodes { id name type } } }',
+  initiativesProbe: 'query InitiativesProbe { initiatives(first: 1) { nodes { id } } }',
+  initiativesByName: 'query InitiativesByName($name: String!) { '
+    + `initiatives(filter: { name: { eq: $name } }, first: 10) { nodes { ${NAMED_FIELDS} } } }`,
+  projectsByName: 'query ProjectsByName($name: String!) { '
+    + `projects(filter: { name: { eq: $name } }, first: 10) { nodes { ${NAMED_FIELDS} teams(first: 20) { nodes { key } } } } }`,
+  changedInitiatives: 'query ChangedInitiatives($since: DateTimeOrDuration!, $after: String) { '
+    + `initiatives(filter: { updatedAt: { gt: $since } }, ${HIERARCHY_PAGE}) { nodes { ${INITIATIVE_FIELDS} } ${PAGE_INFO} } }`,
+  changedProjects: 'query ChangedProjects($since: DateTimeOrDuration!, $after: String) { '
+    + `projects(filter: { updatedAt: { gt: $since } }, ${HIERARCHY_PAGE}) { nodes { ${PROJECT_FIELDS} } ${PAGE_INFO} } }`,
+  changedMilestones: 'query ChangedMilestones($since: DateTimeOrDuration!, $after: String) { '
+    + `projectMilestones(filter: { updatedAt: { gt: $since } }, ${HIERARCHY_PAGE}) { nodes { ${MILESTONE_FIELDS} } ${PAGE_INFO} } }`,
+  changedIssues: 'query ChangedIssues($since: DateTimeOrDuration!, $teams: [String!]!, $after: String) { '
+    + 'issues(filter: { updatedAt: { gt: $since }, team: { key: { in: $teams } } }, '
+    + `${HIERARCHY_PAGE}) { nodes { ${HIERARCHY_ISSUE_FIELDS} } ${PAGE_INFO} } }`,
+  teamOpenIssues: 'query TeamOpenIssues($team: String!, $after: String) { '
+    + 'issues(filter: { team: { key: { eq: $team } }, state: { type: { nin: ["completed", "canceled"] } } }, '
+    + `${HIERARCHY_PAGE}) { nodes { ${HIERARCHY_ISSUE_FIELDS} } ${PAGE_INFO} } }`,
+  issueOwned: `query IssueOwned($id: String!) { issue(id: $id) { ${HIERARCHY_ISSUE_FIELDS} } }`,
+  initiativeCreate: 'mutation InitiativeCreate($input: InitiativeCreateInput!) { '
+    + 'initiativeCreate(input: $input) { success initiative { id } } }',
+  initiativeUpdate: 'mutation InitiativeUpdate($id: String!, $input: InitiativeUpdateInput!) { '
+    + 'initiativeUpdate(id: $id, input: $input) { success initiative { id } } }',
+  initiativeToProjectCreate: 'mutation InitiativeToProjectCreate($input: InitiativeToProjectCreateInput!) { '
+    + 'initiativeToProjectCreate(input: $input) { success initiativeToProject { id } } }',
+  initiativeToProjectDelete: 'mutation InitiativeToProjectDelete($id: String!) { initiativeToProjectDelete(id: $id) { success } }',
+  projectCreate: 'mutation ProjectCreate($input: ProjectCreateInput!) { projectCreate(input: $input) { success project { id } } }',
+  projectUpdate: 'mutation ProjectUpdate($id: String!, $input: ProjectUpdateInput!) { '
+    + 'projectUpdate(id: $id, input: $input) { success project { id } } }',
+  projectMilestoneCreate: 'mutation ProjectMilestoneCreate($input: ProjectMilestoneCreateInput!) { '
+    + 'projectMilestoneCreate(input: $input) { success projectMilestone { id } } }',
+  projectMilestoneUpdate: 'mutation ProjectMilestoneUpdate($id: String!, $input: ProjectMilestoneUpdateInput!) { '
+    + 'projectMilestoneUpdate(id: $id, input: $input) { success projectMilestone { id } } }',
+  issueRelationCreate: 'mutation IssueRelationCreate($input: IssueRelationCreateInput!) { '
+    + 'issueRelationCreate(input: $input) { success issueRelation { id } } }',
+} as const);
 
 /**
  * EVERY DOCUMENT THE KEY CAN RUN, each a constant written here. The census (`linear-ops.test.ts`) holds that every
@@ -151,6 +213,7 @@ export const LINEAR_DOCUMENTS = Object.freeze({
     + `projects(first: ${LINEAR_DIRECTORY_PAGE_SIZE}, after: $after) { nodes { id name } ${PAGE_INFO} } }`,
   directoryUsers: 'query DirectoryUsers($after: String) { viewer { id } '
     + `users(first: ${LINEAR_DIRECTORY_PAGE_SIZE}, after: $after) { nodes { id name displayName active } ${PAGE_INFO} } }`,
+  ...LINEAR_HIERARCHY_DOCUMENTS,
 } as const);
 
 /** The four directory collections, in the order the refresher reads them, each with its page document. */
@@ -473,6 +536,24 @@ export interface LinearDirectoryEntries {
   labels: readonly { id: string; name: string; teamKey: string | null }[];
   projects: readonly { id: string; name: string }[];
   users: readonly { id: string; name: string; displayName: string | null }[];
+  /** The workspace's project statuses (D-8180). Empty until wave 3 reads them: no refresher cycle sends the document yet. */
+  projectStatuses: readonly { id: string; name: string; type: string }[];
+  /** Whether the initiatives capability answered (D-8180). `unknown` until wave 3 runs the probe. */
+  initiatives: 'on' | 'off' | 'unknown';
+}
+
+/**
+ * The first status of `type`, never found by name (D-8180): a project's from the project statuses, an issue's from the
+ * workflow states of `teamKey` (any team's when `teamKey` is null). Null when no status has that type.
+ */
+export function statusOfType(
+  entries: LinearDirectoryEntries, kind: 'project' | 'issue', type: string, teamKey: string | null,
+): { id: string } | null {
+  if (entries === null || entries === undefined) return null;
+  const hit = kind === 'project'
+    ? entries.projectStatuses.find((s) => s.type === type)
+    : entries.states.find((s) => s.type === type && (teamKey === null || same(s.teamKey, teamKey)));
+  return hit === undefined ? null : { id: hit.id };
 }
 
 export type LinearNameKind = 'state' | 'label' | 'project' | 'user';
@@ -674,7 +755,10 @@ export function linearOutbound(input: LinearOpInput): { input: LinearOpInput; ma
 // ── the shapers (spec §5.4, §6.5) ──
 
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
-const STATE_TYPE = /^[a-z_]{1,32}$/;
+/** A workflow state's or a project status's `type` (`unstarted`, `started`, `completed`, …): THE ONE GRAMMAR every
+ *  reader of a status type takes, the session shapers, the directory pages and the hierarchy rows (`hierarchyOps.ts`). */
+export const LINEAR_STATE_TYPE_SHAPE = /^[a-z_]{1,32}$/;
+export const isLinearStateType = (v: unknown): v is string => typeof v === 'string' && LINEAR_STATE_TYPE_SHAPE.test(v);
 type Malformed = 'malformed';
 const MALFORMED: Malformed = 'malformed';
 
@@ -708,7 +792,7 @@ function shapeIssue(v: unknown, ctx: LinearShapeContext, withDescription: boolea
   if (!isPlainObject(st)) return MALFORMED;
   const stateName = cleanName(st['name']);
   const stateType = typeof st['type'] === 'string' ? strip('type', st['type']) : '';
-  if (stateName === null || !STATE_TYPE.test(stateType)) return MALFORMED;
+  if (stateName === null || !isLinearStateType(stateType)) return MALFORMED;
   const priority = v['priority'];
   if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < 0 || priority > LINEAR_PRIORITY_MAX) return MALFORMED;
   const createdAt = v['createdAt'];
@@ -812,7 +896,7 @@ const shapeState = (n: unknown): Record<string, unknown> | Malformed => {
   if (b === MALFORMED || !isPlainObject(n)) return MALFORMED;
   const type = typeof n['type'] === 'string' ? strip('type', n['type']) : '';
   const team = teamKeyOf(n['team']);
-  if (!STATE_TYPE.test(type) || team === MALFORMED || team === null) return MALFORMED;
+  if (!isLinearStateType(type) || team === MALFORMED || team === null) return MALFORMED;
   return { id: b.id, name: b.name, type, team };
 };
 const shapeLabel = (n: unknown): Record<string, unknown> | Malformed => {
@@ -1327,4 +1411,27 @@ export function readLinearDirectoryPage(kind: LinearDirectoryCollection, body: u
     out.viewerId = viewer['id'];
   }
   return out;
+}
+
+/**
+ * One page of project statuses, read (D-8180). The document is `LINEAR_HIERARCHY_DOCUMENTS.projectStatuses`, not in the
+ * refresher's collection order until wave 3: one page of at most 50, no cursor. `malformed` for a page out of its
+ * grammar; the word for an answer with `errors`.
+ */
+export function readLinearProjectStatusesPage(
+  body: unknown,
+): { ok: true; statuses: LinearDirectoryEntries['projectStatuses'][number][] } | { ok: false; word: LinearAnswerRefusalWord } {
+  const data = dataOf(body);
+  if (isWord(data)) return { ok: false, ...data };
+  const conn = data['projectStatuses'];
+  if (!isPlainObject(conn) || !Array.isArray(conn['nodes']) || conn['nodes'].length > 50) return { ok: false, word: 'malformed' };
+  const statuses: LinearDirectoryEntries['projectStatuses'][number][] = [];
+  for (const n of conn['nodes']) {
+    const b = idName(n);
+    if (b === MALFORMED || !isPlainObject(n)) return { ok: false, word: 'malformed' };
+    const type = n['type'];
+    if (!isLinearStateType(type)) return { ok: false, word: 'malformed' };
+    statuses.push({ id: b.id, name: b.name, type });
+  }
+  return { ok: true, statuses };
 }

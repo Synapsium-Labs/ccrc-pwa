@@ -10,24 +10,33 @@
  * A policy may refuse by actor, for example to stop one runaway session, but no allow rule may depend on `actor`:
  * any session can present any registered id. #279's authorizer client inherits this rule.
  */
+import type { LinearCcrcJournalOp } from './hierarchyOps.js';
+
+/** ccrc's own passes (D-8180), THE ONE LIST: the type below is derived from it and `ccrcActor` (`journal.ts`) mints
+ *  an actor for each member and for nothing else. Attribution only, as the session pair is. */
+export const LINEAR_CCRC_PASSES = ['plan-sync', 'drift-restore', 'migration', 'put-back'] as const;
+/** Which of ccrc's own passes a write belongs to. */
+export type CcrcPass = (typeof LINEAR_CCRC_PASSES)[number];
 
 /** What a write asks. Every resource value is the resolved one: `teamKey` and `issue` are the team and the current
  *  identifier the resolve found (spec §4.5), never the reference's prefix, and `parentTeamKey` the resolved parent's
  *  team when the write names a parent. */
 export interface LinearWriteAsk {
-  actor: { kind: 'session'; id: string; uuid: string };
+  actor: { kind: 'session'; id: string; uuid: string } | { kind: 'ccrc'; pass: CcrcPass };
   verb: 'operate';
   /** The matched route pattern. */
   route: string;
   resource: {
     workspaceId: string;
-    /** The resolved current team (spec §4.5), never the reference's prefix. */
-    teamKey: string;
+    /** The resolved current team (spec §4.5), never the reference's prefix; null for an initiative (no team). */
+    teamKey: string | null;
     /** The resolved current identifier; null on a create. */
     issue: string | null;
     /** The resolved parent's team when `parent` is set, else null. */
     parentTeamKey: string | null;
-    op: 'create' | 'update' | 'comment' | 'link';
+    op: 'create' | 'update' | 'comment' | 'link' | LinearCcrcJournalOp;
+    /** The hierarchy object a ccrc write targets; absent on a session write. */
+    object?: { kind: 'initiative' | 'project' | 'milestone' | 'issue'; id: string | null };
   };
 }
 

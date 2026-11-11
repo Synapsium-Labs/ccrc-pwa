@@ -1,15 +1,20 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { isLinearTeamKey, isLinearUuid } from '../../../shared/linear.js';
 import { ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import { isMintedActor, type AccountActor } from '../accounts/audit.js';
-import type { LinearPolicyRefusal } from './policy.js';
+import { LINEAR_CCRC_JOURNAL_OPS } from './hierarchyOps.js';
+import { isLinearIdentifier } from './ops.js';
+import { LINEAR_CCRC_PASSES, type CcrcPass, type LinearPolicyRefusal } from './policy.js';
 import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
 
 /**
  * THE LINEAR WRITE JOURNAL (#1444, spec §7, D-7671): the `linear_events` table in coord.db (`coord/schema.ts`,
  * migration 36) and its ONE writer, modelled on the account audit (`accounts/audit.ts`).
  *
- * A row is one Linear write a session sent through the server (`create`, `update`, `comment`) or one Settings act on
- * a workspace key (`key-add`, `key-replace`, `key-remove`, `key-check`). It is inserted `pending` before the write or
+ * A row is one Linear write a session sent through the server (`create`, `update`, `comment`, `link`), one write
+ * ccrc's own plan sync, drift pass or migration sent (`runCcrcOp`, D-8180: a hierarchy op of
+ * `LINEAR_CCRC_JOURNAL_OPS`, or a session-grammar write under a ccrc actor), or one Settings act on a workspace key
+ * (`key-add`, `key-replace`, `key-remove`, `key-check`). It is inserted `pending` before the write or
  * the act touches Linear or a file ({@link LinearJournal.pending}), and its outcome replaces `pending` when the route
  * answers ({@link LinearJournal.settle}). A server that dies in between leaves `pending`, which reads as "outcome
  * unknown", the truth. A refused insert is the caller's cue to refuse the write (`journal-unavailable`): "every
@@ -17,13 +22,16 @@ import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
  *
  * NO FREE TEXT. Every value is checked here at run time, as well as by the types, against its grammar: `op`,
  * `outcome` and `code` are closed words; `sessionId` and `sessionUuid` SAFE_RE; `workspaceId` a slot id (a
- * lowercase UUID); `teamKey` a team key; `target` an issue identifier; `result` the created issue's identifier or
- * the created comment's UUID; `fields` names from the operation's closed list; `masked` a count; `decisionId`
- * SAFE_RE; `actor` minted by `actorOf` only. So no title, body, name, key, key tail or digest can be written: no
- * field takes free text.
+ * lowercase UUID); `teamKey` a team key; `target` an issue identifier, or on a ccrc write the hierarchy object's
+ * UUID; `result` the created issue's identifier, the created comment's or attachment's UUID, or on a ccrc hierarchy op
+ * the created object's UUID; `fields` names from the operation's closed list; `masked` a count; `decisionId` SAFE_RE;
+ * `actor` minted by `actorOf` (the account gate's) or by {@link ccrcActor} only. So no title, body, name, key, key
+ * tail or digest can be written: no field takes free text.
  *
- * WHO. A session write carries the attributed pair (`sessionId`, `sessionUuid`) and no actor; a key act carries the
- * account gate's actor and no pair. Both are attribution, never a grant (spec §8).
+ * WHO. A session write carries the attributed pair (`sessionId`, `sessionUuid`) and no actor; a ccrc write carries a
+ * minted ccrc actor (`ccrc:<pass>`) and no pair; a key act carries the account gate's actor and no pair, never a ccrc
+ * actor. All three are attribution, never a grant (spec §8). An update, comment or link, and a hierarchy update, link
+ * or unlink, names its target; a create names none.
  *
  * Rows are kept {@link LINEAR_JOURNAL_RETENTION_DAYS} days ({@link LinearJournal.sweep}, on `index.ts`'s daily beat
  * beside the account audit's). Reads are not journaled. v1 ships no screen; the box run reads it with `sqlite3`.
@@ -33,9 +41,11 @@ import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
  */
 
 /** Every op a row records: the three session writes, then the four Settings key acts. */
-export const LINEAR_JOURNAL_OPS = ['create', 'update', 'comment', 'link', 'key-add', 'key-replace', 'key-remove', 'key-check'] as const;
+export const LINEAR_JOURNAL_OPS = [
+  'create', 'update', 'comment', 'link', ...LINEAR_CCRC_JOURNAL_OPS, 'key-add', 'key-replace', 'key-remove', 'key-check',
+] as const;
 export type LinearJournalOp = (typeof LINEAR_JOURNAL_OPS)[number];
-export type LinearWriteOp = Extract<LinearJournalOp, 'create' | 'update' | 'comment' | 'link'>;
+export type LinearWriteOp = Exclude<LinearJournalOp, 'key-add' | 'key-replace' | 'key-remove' | 'key-check'>;
 
 /** `pending` until the route answers; then exactly one of the others. */
 export const LINEAR_JOURNAL_OUTCOMES = ['pending', 'ok', 'refused', 'denied', 'failed', 'unknown'] as const;
@@ -45,11 +55,37 @@ export type LinearSettledOutcome = Exclude<LinearJournalOutcome, 'pending'>;
 /** Each write op's closed list of field names (spec §5.3's bodies, less `requestId`, which changes nothing). A row's
  *  `fields` is the changed names, comma-separated, in this list's order. A key act changes no field. */
 export const LINEAR_JOURNAL_FIELDS: Readonly<Record<LinearWriteOp, readonly string[]>> = {
-  create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent'],
-  update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent'],
+  // `milestone` and `team` are written by ccrc only (the sync, the migration, put back): the session body shaper has
+  // no `projectMilestoneId` and no `teamId` on update, so a session can send neither.
+  create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent', 'milestone'],
+  update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent', 'milestone', 'team'],
   comment: ['body'],
   link: ['url', 'title'],
+  'initiative-create': ['name', 'description', 'status'],
+  'initiative-update': ['name', 'description', 'status'],
+  'initiative-link': ['project'],
+  'initiative-unlink': ['project'],
+  'project-create': ['name', 'description', 'status', 'teams', 'initiative'],
+  'project-update': ['name', 'description', 'status', 'teams', 'initiative'],
+  'milestone-create': ['name', 'description', 'targetDate', 'project'],
+  'milestone-update': ['name', 'description', 'targetDate', 'project'],
+  'relation-create': ['type', 'related'],
 };
+
+/** A ccrc pass's actor: minted by {@link ccrcActor} only, as the account audit's actor is by `actorOf`. Its text is
+ *  `ccrc:<pass>`; it is attribution, never a grant. */
+export interface CcrcActor { readonly pass: CcrcPass; toString(): string }
+const CCRC_PASSES: ReadonlySet<string> = new Set(LINEAR_CCRC_PASSES);
+const MINTED_CCRC = new WeakSet<CcrcActor>();
+export function ccrcActor(pass: CcrcPass): CcrcActor {
+  if (!CCRC_PASSES.has(pass)) throw new Error('not a ccrc pass');
+  const text = `ccrc:${pass}`;
+  const a: CcrcActor = Object.freeze({ pass, toString: () => text });
+  MINTED_CCRC.add(a);
+  return a;
+}
+export const isCcrcActor = (a: unknown): a is CcrcActor =>
+  typeof a === 'object' && a !== null && MINTED_CCRC.has(a as CcrcActor);
 
 export const LINEAR_JOURNAL_RETENTION_DAYS = 365;
 /** The most items one `viaFleet` read takes: a page of any list the proxy answers is well under it. */
@@ -61,8 +97,8 @@ export interface LinearPendingInput {
   /** The attributed pair on a session write; null on a key act. */
   sessionId: string | null;
   sessionUuid: string | null;
-  /** The account gate's actor on a key act; null on a session write. */
-  actor: AccountActor | null;
+  /** The account gate's actor on a key act, a minted ccrc actor on a ccrc write; null on a session write. */
+  actor: AccountActor | CcrcActor | null;
   /** The slot the write routed to, or null when none was chosen (a key add before its check has learned it). */
   workspaceId: string | null;
   /** The team the resolve found (spec §4.5), never the reference's prefix; null on a key act. */
@@ -85,23 +121,25 @@ export type LinearJournalSettle = { ok: true } | { ok: false; why: LinearJournal
 export type LinearJournalCode = RouteRefusal | LinearPolicyRefusal;
 
 const OPS: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OPS);
-const WRITE_OPS: ReadonlySet<string> = new Set(['create', 'update', 'comment', 'link']);
+const WRITE_OPS: ReadonlySet<string> = new Set(['create', 'update', 'comment', 'link', ...LINEAR_CCRC_JOURNAL_OPS]);
+const CCRC_OPS: ReadonlySet<string> = new Set(LINEAR_CCRC_JOURNAL_OPS);
+/** The writes that act on an object that already exists, so name it: a create names none (the object is not made yet),
+ *  and neither does a relation create (its two issues ride in `fields`). */
+const TARGETED_OPS: ReadonlySet<string> = new Set<LinearWriteOp>([
+  'update', 'comment', 'link', 'initiative-update', 'project-update', 'milestone-update', 'initiative-link', 'initiative-unlink',
+]);
 const SETTLED: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OUTCOMES.filter((o) => o !== 'pending'));
 const CODES: ReadonlySet<string> = new Set<string>([...ROUTE_REFUSALS, ...LINEAR_POLICY_REFUSALS]);
 /** The client's SAFE_RE (`ccd/ccrc-api`), bounded as the mail path bounds a session id. */
 const SAFE_RE = /^[A-Za-z0-9_-]{1,128}$/;
-/** A Linear id: a slot's workspace id, a created comment's id. Lowercase, as Linear sends it. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** A team key, compared uppercased. */
-const TEAM_KEY_RE = /^[A-Z][A-Z0-9_]{0,15}$/;
-/** An issue identifier: a team key, a hyphen and the issue's number (spec §5.1's grammar, the key bounded). */
-const IDENTIFIER_RE = /^[A-Za-z][A-Za-z0-9_]{0,15}-[0-9]{1,9}$/;
 const DAY_MS = 86_400_000;
 
 const isSafe = (v: unknown): v is string => typeof v === 'string' && SAFE_RE.test(v);
-const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
-const isTeamKey = (v: unknown): v is string => typeof v === 'string' && TEAM_KEY_RE.test(v.toUpperCase());
-const isIdentifier = (v: unknown): v is string => typeof v === 'string' && IDENTIFIER_RE.test(v);
+// The shared grammars, never a copy (D-8180): a Linear id (a slot's workspace id, a created object's id; lowercase, as
+// Linear sends it), a team key (compared uppercased) and an issue identifier (a team key, a hyphen and the number).
+const isUuid = isLinearUuid;
+const isTeamKey = isLinearTeamKey;
+const isIdentifier = isLinearIdentifier;
 
 /** The stored `fields` text, or null for a list that breaks the op's closed list (an unknown name, a repeat). */
 function fieldsText(op: LinearJournalOp, fields: unknown): string | null | 'refused' {
@@ -120,24 +158,28 @@ function fieldsText(op: LinearJournalOp, fields: unknown): string | null | 'refu
 function pendingRefusal(e: LinearPendingInput): LinearJournalRefusal | null {
   if (typeof e.op !== 'string' || !OPS.has(e.op)) return 'op';
   const write = WRITE_OPS.has(e.op);
-  if (write ? !(isSafe(e.sessionId) && isSafe(e.sessionUuid)) : (e.sessionId !== null || e.sessionUuid !== null)) return 'session';
-  if (write ? e.actor !== null : !isMintedActor(e.actor)) return 'actor';
+  // A ccrc write (a hierarchy op, or a session-grammar WRITE under a ccrc actor) carries no session pair and a minted
+  // ccrc actor. A key act is never one: it keeps the account gate's actor, whatever actor it is handed.
+  const ccrc = CCRC_OPS.has(e.op) || (write && isCcrcActor(e.actor));
+  if (ccrc ? (e.sessionId !== null || e.sessionUuid !== null)
+    : write ? !(isSafe(e.sessionId) && isSafe(e.sessionUuid)) : (e.sessionId !== null || e.sessionUuid !== null)) return 'session';
+  if (ccrc ? !isCcrcActor(e.actor) : write ? e.actor !== null : !isMintedActor(e.actor)) return 'actor';
   if (e.workspaceId !== null && !isUuid(e.workspaceId)) return 'workspace';
   if (write ? (e.teamKey !== null && !isTeamKey(e.teamKey)) : e.teamKey !== null) return 'team';
-  if (e.target !== null && !isIdentifier(e.target)) return 'target';
-  if ((e.op === 'update' || e.op === 'comment' || e.op === 'link') && e.target === null) return 'target';
+  if (e.target !== null && !(isIdentifier(e.target) || (ccrc && isUuid(e.target)))) return 'target';
+  if (TARGETED_OPS.has(e.op) && e.target === null) return 'target';
   if (!write && e.target !== null) return 'target';
   if (fieldsText(e.op, e.fields) === 'refused') return 'fields';
   return null;
 }
 
 /** The first rule a settle of a known outcome breaks against the row's op, or `null`. `result` rides only an `ok` create (an
- *  identifier) or an `ok` comment (a UUID); `code` only a row that did not end `ok`. */
+ *  identifier), an `ok` hierarchy op (a UUID or an identifier) or an `ok` comment (a UUID); `code` only a row that did not end `ok`. */
 function settleRefusal(op: string, outcome: LinearSettledOutcome, code: unknown, result: unknown, masked: unknown,
   decisionId: unknown): LinearJournalRefusal | null {
   if (code !== undefined && (typeof code !== 'string' || !CODES.has(code) || outcome === 'ok')) return 'code';
   if (result !== null && result !== undefined) {
-    const fits = outcome === 'ok' && ((op === 'create' && isIdentifier(result)) || ((op === 'comment' || op === 'link') && isUuid(result)));
+    const fits = outcome === 'ok' && ((CCRC_OPS.has(op) && (isUuid(result) || isIdentifier(result))) || (op === 'create' && isIdentifier(result)) || ((op === 'comment' || op === 'link') && isUuid(result)));
     if (!fits) return 'result';
   }
   if (masked !== null && masked !== undefined && !(Number.isSafeInteger(masked) && (masked as number) >= 0)) return 'masked';

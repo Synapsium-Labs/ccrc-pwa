@@ -20,8 +20,9 @@ import { actorOf } from '../src/accounts/audit.js';
 import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import {
-  LINEAR_JOURNAL_FIELDS, LINEAR_JOURNAL_RETENTION_DAYS, LinearJournal, type LinearPendingInput,
+  LINEAR_JOURNAL_FIELDS, LINEAR_JOURNAL_RETENTION_DAYS, LinearJournal, ccrcActor, type LinearPendingInput,
 } from '../src/linear/journal.js';
+import { LINEAR_CCRC_PASSES } from '../src/linear/policy.js';
 import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { mkTmp } from './tmpHelpers.js';
 import { IDS, WS as WS_FIX, proxyRig, seedLegacy, seedSlot, type ProxyRig } from './linearProxyRig.js';
@@ -240,10 +241,19 @@ describe('LinearJournal: no free text reaches a row (#1444, spec §7)', () => {
     warn.mockRestore();
     // Each op's list, and the stored text is the list's own order, whatever order the caller gave.
     expect(LINEAR_JOURNAL_FIELDS).toEqual({
-      create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent'],
-      update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent'],
+      create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent', 'milestone'],
+      update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent', 'milestone', 'team'],
       comment: ['body'],
       link: ['url', 'title'],
+      'initiative-create': ['name', 'description', 'status'],
+      'initiative-update': ['name', 'description', 'status'],
+      'initiative-link': ['project'],
+      'initiative-unlink': ['project'],
+      'project-create': ['name', 'description', 'status', 'teams', 'initiative'],
+      'project-update': ['name', 'description', 'status', 'teams', 'initiative'],
+      'milestone-create': ['name', 'description', 'targetDate', 'project'],
+      'milestone-update': ['name', 'description', 'targetDate', 'project'],
+      'relation-create': ['type', 'related'],
     });
     expect(journal.pending(write({ fields: ['project', 'title', 'state'] }))).toMatchObject({ ok: true });
     expect(rowsOf(db).map((r) => r['fields'])).toEqual(['title,state,project']);
@@ -525,5 +535,79 @@ describe('every Settings act on a slot key writes its row with the gate\'s actor
       .map((c) => c.args.map((a) => a.text).join(', '));
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatch(/\bjournal: deps\.linearJournal \?\? null\b/);
+  });
+});
+
+describe('LinearJournal: the ccrc actor (D-8180)', () => {
+  const UUID_A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const UUID_B = 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const row = (over: Partial<LinearPendingInput> = {}): LinearPendingInput => ({
+    op: 'project-create', sessionId: null, sessionUuid: null, actor: ccrcActor('plan-sync'), workspaceId: WS,
+    teamKey: 'AAA', target: null, fields: ['name', 'description'], ...over,
+  });
+
+  it('a ccrc write row records actor ccrc:<pass> and no session pair', () => {
+    const { db, journal } = linearServicesFake({ clock: () => NOW });
+    expect(journal.pending(row()).ok).toBe(true);
+    expect(db.prepare('SELECT actor, sessionId FROM linear_events').get()).toEqual({ actor: 'ccrc:plan-sync', sessionId: null });
+  });
+  it('an unminted object shaped like a ccrc actor is refused (actor)', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const warn = quiet();
+    expect(journal.pending(row({ actor: { toString: () => 'ccrc:plan-sync' } as never }))).toEqual({ ok: false, why: 'actor' });
+    warn.mockRestore();
+  });
+  it('a session pair on a ccrc op is refused (session)', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const warn = quiet();
+    expect(journal.pending(row({ sessionId: 'lane-a', sessionUuid: 'uuid-a' }))).toEqual({ ok: false, why: 'session' });
+    warn.mockRestore();
+  });
+  it('a UUID target and a UUID result settle on a hierarchy op', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const w = journal.pending(row({ op: 'project-update', target: UUID_A, fields: ['name'] }));
+    if (!w.ok) throw new Error('pending refused');
+    expect(journal.settle(w.id, 'ok', undefined, UUID_B)).toEqual({ ok: true });
+  });
+  it('a field outside the op list is refused (fields)', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const warn = quiet();
+    expect(journal.pending(row({ fields: ['title'] }))).toEqual({ ok: false, why: 'fields' });
+    warn.mockRestore();
+  });
+  it('a ccrc issue update moving team, project and milestone journals ok', () => {
+    const { db, journal } = linearServicesFake({ clock: () => NOW });
+    expect(journal.pending(row({ op: 'update', target: 'KEY-123', fields: ['team', 'project', 'milestone'] })).ok).toBe(true);
+    expect(db.prepare('SELECT fields FROM linear_events').get()).toEqual({ fields: 'project,milestone,team' });
+  });
+  it('a hierarchy op may carry no team (an initiative), and each op row keeps its closed list', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    expect(journal.pending(row({ op: 'initiative-create', teamKey: null, fields: ['name', 'status'] })).ok).toBe(true);
+    expect(journal.pending(row({ op: 'relation-create', fields: ['type', 'related'] })).ok).toBe(true);
+  });
+  it('a key act under a ccrc actor is refused (actor): a key act keeps the account gate\'s actor', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const warn = quiet();
+    for (const op of ['key-add', 'key-replace', 'key-remove', 'key-check'] as const) {
+      expect(journal.pending(row({ op, teamKey: null, target: null, fields: [] })), op).toEqual({ ok: false, why: 'actor' });
+    }
+    warn.mockRestore();
+  });
+  it('a hierarchy update, link or unlink names its target: one with none is refused (target)', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const warn = quiet();
+    const named = { 'initiative-update': ['name'], 'project-update': ['name'], 'milestone-update': ['name'],
+      'initiative-link': ['project'], 'initiative-unlink': ['project'] } as const;
+    for (const [op, fields] of Object.entries(named)) {
+      expect(journal.pending(row({ op: op as LinearPendingInput['op'], target: null, fields })), op).toEqual({ ok: false, why: 'target' });
+      expect(journal.pending(row({ op: op as LinearPendingInput['op'], target: UUID_A, fields })).ok, op).toBe(true);
+    }
+    // A create names none: the object does not exist yet.
+    expect(journal.pending(row({ op: 'project-create', target: null })).ok).toBe(true);
+    warn.mockRestore();
+  });
+  it('the passes are one list: every pass mints its actor, and nothing else does', () => {
+    for (const pass of LINEAR_CCRC_PASSES) expect(String(ccrcActor(pass))).toBe(`ccrc:${pass}`);
+    expect(() => ccrcActor('no-such-pass' as never)).toThrow();
   });
 });
