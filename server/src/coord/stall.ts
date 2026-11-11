@@ -6,7 +6,7 @@ import { stallWatchSays } from '../sessionReading.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
- * this file `./db.js` and `node:sqlite`. Its permitted value imports are L0, `shared/api.ts`, and `stallWatchSays` from `../sessionReading.js` (L1, which imports only L0).
+ * this file `./db.js` and `node:sqlite`. Its permitted value imports are L0, `shared/api.ts`, `stallWatchSays` from `../sessionReading.js` and `sessionRoleOf` from `../roleOf.js` (both L1, which import only L0).
  *
  * Spelled ONCE here: the subject prefixes, and the observation-detail heads that `stallDetail` writes and
  * `parseStallDetail` reads back. `single-definition.test.ts` reds on a second quoted copy anywhere in the four
