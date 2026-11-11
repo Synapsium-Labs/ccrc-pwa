@@ -437,8 +437,8 @@ const executable = (src: string): string[] =>
   src.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l));
 
 /** A tmux COMMAND on the line — `tmux <verb>`, never `type -t tmux`; since D-8270 every fleet call is spelled through
- *  the socket lookup, `_tmx <verb>` or, behind a wrapper that execs its argv, `"${TMX[@]}" <verb>`. */
-const TMUX_CALL = /(?:^|[\s;|&(!{`])(?:tmux|_tmx|"\$\{TMX\[@\]\}")\s+[a-z][a-z-]*/;
+ *  the socket lookup, `_tmx <verb>` or, in a capture or behind a wrapper that execs its argv, `"${_TMX_ARGV[@]}" <verb>`. */
+const TMUX_CALL = /(?:^|[\s;|&(!{`])(?:tmux|_tmx|"\$\{_TMX_ARGV\[@\]\}")\s+[a-z][a-z-]*/;
 /** The `-t` argument, as bash would group it: `"$( … )"` with its inner
  *  quotes, any other double- or single-quoted word, or a bare word. */
 const T_ARG = /\s-t\s+("\$\([^()]*\)"|"[^"]*"|'[^']*'|[^\s;|&)]+)/g;

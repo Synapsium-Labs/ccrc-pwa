@@ -94,12 +94,16 @@ case "${OSTYPE:-}" in
 esac
 
 # >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
-# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call goes through `_tmx`, or, where a
-# wrapper execs the argv (a timeout, a scope, `exec`), through the TMX `_tmx_argv` leaves, so moving the fleet to
-# another server is a change of setting. The setting is the first line of ~/.ccrc/tmux-socket: absent or empty is
-# tmux's default server and adds no flag; a socket name puts `-L <name>` first; anything else asks no tmux at all and
-# answers why with rc 1, never the "can't find session" that reads as gone. A file, not a variable: every process on
-# the box reads one answer, and no caller redirects a door with its environment. Twin: shared/tmux-target.ts.
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
+# `_TMX_ARGV` holds, so moving the fleet to another server is a change of setting. The setting is the first line of
+# ~/.ccrc/tmux-socket: absent or empty is tmux's default server and adds no flag; a socket name puts `-L <name>` first;
+# anything else asks no tmux at all and answers why with rc 1, never the "can't find session" that reads as gone. A
+# file, not a variable: every process on the box reads one answer, and no caller redirects a door with its environment.
+# Twin: shared/tmux-target.ts.
+# READ ONCE PER PROCESS, AT LOAD, WITH BUILTINS ONLY: the supervise tick's fork budget (tick-diet spec §9) is exactly
+# main's. A statement calls `_tmx …`. A capture `$( … )`, a pipeline stage, or a wrapper that execs its argv
+# (`_plat_timeout`, `timeout`, `exec`) spreads `"${_TMX_ARGV[@]}" …` itself: bash runs a lone command there without a
+# second fork, and a function in its place costs that fork on every call.
 _tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
   local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
   TMX_SOCK=""; TMX_WHY=""
@@ -110,11 +114,12 @@ _tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server);
   TMX_SOCK="$s"
 }
 # shellcheck disable=SC2120  # the home is optional: every caller today asks for the running user's own (D-8270)
-_tmx_argv() {   # [home] -> TMX, the argv every fleet tmux call starts with
-  if _tmx_sock "$@"; then TMX=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
-  else TMX=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+_tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
+  if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
 }
-_tmx() { local TMX TMX_SOCK TMX_WHY; _tmx_argv; "${TMX[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server
+_tmx_argv
+_tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
 # <<< D-8270 tmux socket lookup
 
 # GNU `mv -fT`: rename, and REFUSE when the destination is a directory.
@@ -3122,9 +3127,9 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   # stubbed substrate needs no deadline, it cannot wedge.
   local out rc
   if declare -F tmux >/dev/null; then
-    out=$(_tmx has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
+    out=$("${_TMX_ARGV[@]}" has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
   else
-    local TMX; _tmx_argv; out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${TMX[@]}" has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
+    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
   fi
   if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; return 0; fi
   # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
@@ -4308,12 +4313,12 @@ _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($R
   local id="$1" why="${PROBE_DETAIL:-tmux gave no reason}" f="$REG/$1.substrate"
   [[ -e "$f" ]] && return 0
   local client server
-  client=$(_tmx -V 2>&1 || true)
+  client=$("${_TMX_ARGV[@]}" -V 2>&1 || true)
   # Same function-vs-binary split as _session_probe, same reason: `timeout` execs.
   if [[ $(type -t tmux) == function ]]; then
-    server=$(_tmx display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+    server=$("${_TMX_ARGV[@]}" display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   else
-    local TMX; _tmx_argv; server=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${TMX[@]}" display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+    server=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   fi
   # Through `_reg_set` (wave 2), so the marker cannot be read half-written like
   # any other field. FIRST-WRITE-WINS is untouched: the `[[ -e "$f" ]]` guard
@@ -4727,8 +4732,10 @@ _lc_obs() {   # populate _LC_OBS once per process. Prints NOTHING. Always 0.
     # stub left `_lc_obs` unreturned past an outer `timeout -s KILL 3`, i.e.
     # SIGKILLed rather than answering — which breaks "never gate the act it
     # observes" the moment wave 3/4 wires this into the hot path.
-    local TMX; _tmx_argv; panes=$(_plat_timeout "$_LC_OBS_TMUX_DEADLINE_S" bash -c "$(declare -f tmux 2>/dev/null)
-$(printf '%q ' "${TMX[@]}")list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
+    # The lookup's argv rides into the child as quoted words, built by `printf -v`: no subshell (D-8270).
+    local tmxq; printf -v tmxq '%q ' "${_TMX_ARGV[@]}"
+    panes=$(_plat_timeout "$_LC_OBS_TMUX_DEADLINE_S" bash -c "$(declare -f tmux 2>/dev/null)
+${tmxq}list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
     rc=$?
     # rc 124 is `timeout`'s own SIGTERM; 137 is what a caller sees if an OUTER
     # kill reached this whole invocation before `timeout` itself could report
@@ -5390,7 +5397,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
     gone)    echo idle; return 0 ;;   # no pane at all: nothing is running
     unknown) return 1 ;;              # could not ask — say so, do not guess
   esac
-  pid=$(_tmx list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  pid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   # D-2379: the one unguarded reader of this path family — `_sync_uuid`
   # (`-f`), `_auto_swap_check` (`-f`) and `_auto_compact_check` (a three-rung
@@ -19293,7 +19300,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # following of any worker: the window holds the conversation again.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
-  pid=$(_tmx list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  pid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   if [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]]; then
     sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
@@ -20460,7 +20467,7 @@ _pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READE
   # review — naming the function instead of a distance is what keeps this claim
   # from rotting the same way again.)
   local rows w
-  rows=$(_tmx list-panes -t "$(_tmux_t "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
+  rows=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
   w=$(awk '$1 == 1 { print $2; exit }' <<<"$rows")
   # Regex before the arithmetic test: `$w` is bytes off tmux's stdout.
   [[ "$w" =~ ^[0-9]+$ ]] || return 1
@@ -20549,11 +20556,11 @@ _pane_type_ready() {   # id site [append] -> 0 ccd may type into the pane now | 
   t=$(_tmux_t "$id")
   if [[ "$kind" != append ]] && ! _pane_measurable "$id"; then
     why=narrow; rc=2; detail="the pane is under ${READER_MIN_COLS} columns or tmux would not measure it"
-  elif ! mode=$(_tmx display-message -p -t "$t" '#{pane_in_mode}' 2>/dev/null); then
+  elif ! mode=$("${_TMX_ARGV[@]}" display-message -p -t "$t" '#{pane_in_mode}' 2>/dev/null); then
     why=copy-mode; detail="tmux would not say whether the pane is in a mode"
   elif [[ "$mode" == 1 ]]; then
     why=copy-mode; detail="the pane is in a tmux mode (copy-mode: a person is scrolling it)"
-  elif [[ "$kind" != append && "$(_pane_box_read "$(_tmx capture-pane -t "$t" -p -e 2>/dev/null)")" == draft ]]; then
+  elif [[ "$kind" != append && "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")" == draft ]]; then
     why=draft; detail="the input box holds a half-typed draft"
   fi
   if [[ -z "$why" ]]; then
@@ -20709,7 +20716,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # the transcript, and the dialog holds nothing a person typed. A draft inside a
   # bordered box still stands down. Left over: text typed before the dialog
   # opened may sit hidden under it, and the swap does not carry it.
-  box=$(_pane_box_read "$(_tmx capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")
+  box=$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")
   [[ "$box" == draft ]] && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
   HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
@@ -20743,7 +20750,7 @@ _pane_limit_capture_to() {   # var id tail -> var = the whole visible pane iff t
   # (`_pane_limit_banner`); the broad `_pane_hard_blocked` stays on the tail.
   local _id="$2" _tail="$3" _full
   if [[ "$_tail" == *"Enter to confirm · Esc to cancel"* || "$_tail" == *"What do you want to do?"* ]]; then
-    _full=$(_tmx capture-pane -t "$(_tmux_t "$_id")" -p 2>/dev/null)
+    _full=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$_id")" -p 2>/dev/null)
     if _pane_limit_menu "$_full"; then printf -v "$1" '%s' "$_full"; return 0; fi
   fi
   printf -v "$1" '%s' "$_tail"
@@ -20772,7 +20779,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   local id="$1" t pane now last box why
   t=$(_tmux_t "$id")
   _pane_measurable "$id" || { _pane_narrow_note "$id" stale; return 0; }   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
-  pane=$(_tmx capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   _pane_limit_stale "$pane" || return 0
   echo "$pane" | grep -q "esc to interrupt" && return 0
@@ -20781,7 +20788,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
   _reg_set "$id" stalepress "$now"
   # An Enter on an open dialog picks its highlighted row (D-8116): no box refuses too.
-  box=$(_pane_box_read "$(_tmx capture-pane -t "$t" -p -e 2>/dev/null)")
+  box=$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")
   if [[ "$box" != empty ]]; then
     why="the input box is not empty"; [[ "$box" == absent ]] && why="no input box is on screen (a dialog is open)"
     echo "$(date '+%F %T') stale-skip $id: usage limit has reset but $why [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
@@ -21462,7 +21469,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     [[ "$STANDDOWN_EV" == transcript ]] && _standdown_note "$id" swapblocked transcript ""
     return 0
   fi
-  pane=$(_tmx capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
   # THE VERDICT BEFORE THE BLANK-PANE RETURN (D-2363): a blank capture used to
   # return here, ahead of any classifier, and a limited session with a blank
   # pane was never rescued. `_session_hard_blocked` reads the transcript for
@@ -21773,7 +21780,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # slots order the arrivals. A slot that cannot be written fails OPEN.
   if ! _swap_stagger_off && _affinity_cur_serves "$id" "$wrapper" "$aff_verb" "$hard_blocked"; then
     # No box on screen (a dialog is open) stands the move down too (D-8116).
-    case "$(_pane_box_read "$(_tmx capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")" in
+    case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")" in
       draft) _standdown_note "$id" draft; return 0 ;;
       absent) _standdown_note "$id" no-box; return 0 ;;
     esac
@@ -21803,14 +21810,14 @@ _swap_idle_gate() {   # id [pane [wrapper [now]]] -> rc 0 iff the session is at 
   # top already ran before it captured the pane it passes in; the act's capture
   # here gets its own, so an unmeasurable pane re-queues rather than reads idle.
   if [[ $# -ge 2 ]]; then pane="$2"
-  else _pane_measurable "$id" || return 1; pane=$(_tmx capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); fi
+  else _pane_measurable "$id" || return 1; pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); fi
   if [[ $# -ge 3 ]]; then wrapper="$3"; else _reg_read_to wrapper "$id" wrapper || return 1; fi
   [[ -n "$wrapper" ]] || return 1
   if [[ $# -ge 4 ]]; then now="$4"; else _now_s_to now; fi
   echo "$pane" | grep -q "esc to interrupt" && return 1    # mid-turn: wait for the gap
   echo "$pane" | grep -q "❯" || return 1                    # not at a prompt yet
   local spid sf st sua
-  spid=$(_tmx list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  spid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
   # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
@@ -22506,7 +22513,7 @@ _pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 w
   # `ccd-auto-compact.test.ts` pins the 8-ROW window against exactly that regression.
   local id="$1" prc pane
   KS_PANE=""; KS_WHY=""; KS_DETAIL=""
-  pane=$(_tmx capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); prc=$?
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); prc=$?
   # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$prc" == 0 ]] || { KS_WHY=pane-unreadable; KS_DETAIL="tmux capture-pane rc=$prc"; return 1; }
   # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
@@ -22546,7 +22553,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
   echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
-  spid=$(_tmx list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  spid=$("${_TMX_ARGV[@]}" list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
   # this function put `${st:-unreadable}` in the DETAIL and left one `not-idle` slug for both,
   # which is the same collapse one seam over — the detail is floored out of swap.log after the
@@ -22611,7 +22618,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # when it was handed a plain capture.
   # No box on screen means a dialog took its place: a keystroke would answer it (D-8116).
   t=$(_tmux_t "$id")
-  case "$(_pane_box_read "$(_tmx capture-pane -t "$t" -p -e 2>/dev/null)")" in
+  case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")" in
     draft) KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1 ;;
     absent) KS_WHY=no-box; KS_DETAIL="no input box on screen, a dialog is open${ctxnote:+, $ctxnote}"; return 1 ;;
   esac
@@ -23176,7 +23183,7 @@ _route_effort_ack_wait() {   # tmuxname level -> 0 iff the pane acknowledges THI
   local t="$1" level="$2" shown i pane
   shown=$(_route_effort_shown "$level")
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
-    pane=$(_tmx capture-pane -t "$t" -p 2>/dev/null)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)
     if _pane_prompt_box_showing "$pane" \
       && [[ "$(_pane_effort_ack "$pane")" == "Set effort level to $level (this session only)"* ]] \
       && [[ "$(_pane_statusline_seg "$pane" "🤖")" == *" · $shown" ]]; then
@@ -23245,7 +23252,7 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
     # Opus 5 raises the same `Change effort level?` confirmation here as on the
     # slider below (`1. Yes, switch to xhigh`, measured 2026-09-23); unanswered,
     # no ack ever came and every retry ended in Escape.
-    if _pane_effort_switch_dialog "$(_tmx capture-pane -t "$t" -p 2>/dev/null)"; then
+    if _pane_effort_switch_dialog "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)"; then
       _tmx send-keys -t "$t" Enter; sleep 1
     fi
     _route_effort_ack_wait "$t" ultracode && return 0
@@ -23269,7 +23276,7 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
   # gets a second dialog — `Change effort level? … 1. Yes, switch to <level>` —
   # because the cached prefix has to be re-read; on Fable 5.1 the same two-turn
   # history showed none (measured, D-2808). Confirm it if it is there.
-  if _pane_effort_switch_dialog "$(_tmx capture-pane -t "$t" -p 2>/dev/null)"; then
+  if _pane_effort_switch_dialog "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)"; then
     _tmx send-keys -t "$t" Enter; sleep 1
   fi
   _route_effort_ack_wait "$t" "$level" && return 0
@@ -23503,7 +23510,7 @@ _route_model_ack_wait() {   # id subject-ERE -> 0 iff the pane's LATEST model ou
   local id="$1" subj="$2" t i st answered=0
   t=$(_tmux_t "$id")
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
-    st=$(_pane_model_state "$(_tmx capture-pane -t "$t" -p 2>/dev/null)")
+    st=$(_pane_model_state "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)")
     case "$st" in
       "ack "*)
         printf '%s\n' "${st#ack }" | grep -qE "^Set model to ($subj) for this session only\$" && return 0 ;;
@@ -23530,7 +23537,7 @@ _route_model_close() {   # id — `_route_escape`, and ONE more only while the p
   local t st
   _route_escape "$1"
   t=$(_tmux_t "$1")
-  st=$(_pane_model_state "$(_tmx capture-pane -t "$t" -p 2>/dev/null)")
+  st=$(_pane_model_state "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)")
   [[ "$st" == picker || "$st" == dialog* ]] && _route_escape "$1"
   return 0
 }
@@ -23576,10 +23583,10 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   t=$(_tmux_t "$id")
   _pane_type_ready "$id" route || return 3   # D-8271: the one typing check; rc 3 is "nothing typed", never an attempt
   _typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7); after the check, so a refusal journals nothing
-  base=$(_pane_model_picker "$(_tmx capture-pane -t "$t" -p 2>/dev/null)")
+  base=$(_pane_model_picker "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)")
   _tmx send-keys -t "$t" -l "/model"; sleep 1; _tmx send-keys -t "$t" Enter; sleep 1
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
-    pane=$(_tmx capture-pane -t "$t" -p 2>/dev/null)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)
     picker=$(_pane_model_picker "$pane")
     [[ -n "$picker" && "$picker" != "$base" ]] && break
     picker=""
@@ -24789,7 +24796,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] [id] — clear startup gat
     # dotted id the strip gives the sanitised id, which `_tmux` maps to the same
     # name, so the target `_pane_measurable` builds is the same session (wave 9 M8).
     [[ "$i" == 1 ]] && ! _pane_measurable "${1#cc-}" && return 6
-    pane=$(_tmx capture-pane -t "$t" -p 2>/dev/null)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null)
     # THE EXTERNAL-IMPORT GATE, AND IT IS ASKED ABOVE THE READY MARKERS (D-3107).
     # Every other gate below is a full-screen startup dialog that hides the
     # footer, so the marker check cannot reach them; this one is raised while
@@ -25193,7 +25200,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # this name that has not collected yet). A session that does not exist is a
     # worse outcome than one in the wrong cgroup, so fall through and create it
     # bare — the same trade the old `||` made.
-    local TMX; _tmx_argv; "${scope[@]}" "${TMX[@]}" new-session "$@" || _tmx new-session "$@"
+    "${scope[@]}" "${_TMX_ARGV[@]}" new-session "$@" || _tmx new-session "$@"
     rc=$?
   else
     # No scope wanted (server appeared under the lock) or none available. ONE
@@ -25268,7 +25275,7 @@ PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT="" PANE_SCOPE_WEDGED=""
 _pane_scope_tmux() {   # tmux args… — one tmux call, bounded the `_end_cause` way (SUBSTRATE_PROBE_DEADLINE_S), because a wedged server must not hold a stop. rc of the call, 124 past the deadline.
   # `_plat_timeout` runs a program, so a tmux that is a shell function (a test's) is called as one.
   if declare -F tmux >/dev/null; then _tmx "$@"
-  else local TMX; _tmx_argv; _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${TMX[@]}" "$@"
+  else _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" "$@"
   fi
 }
 _pane_scope_of() {   # id — the session's live pane: PANE_SCOPE_PID, its cgroup PANE_SCOPE_CG and its unit PANE_SCOPE_UNIT (all empty when none), and PANE_SCOPE_WEDGED (1 when tmux did not answer in time). Always rc 0.
@@ -25438,7 +25445,7 @@ _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server 
   if declare -F tmux >/dev/null; then
     _tmx list-sessions >/dev/null 2>&1 || lsrc=$?
   else
-    local TMX; _tmx_argv; _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${TMX[@]}" list-sessions >/dev/null 2>&1 || lsrc=$?
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" list-sessions >/dev/null 2>&1 || lsrc=$?
   fi
   if (( lsrc == 124 )); then printf 'unknown'; return 0; fi
   if (( lsrc != 0 )); then printf 'tmux-server'; return 0; fi
@@ -27022,7 +27029,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
     _transcript_stalled_pair "$f"; rc=$?
     [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
-    pane=$(_tmx capture-pane -t "$t" -p 2>/dev/null | tail -8)
+    pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null | tail -8)
     echo "$pane" | grep -q "esc to interrupt" && return 0
     sleep 1
   done
@@ -27031,7 +27038,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # in that gap. Typing into a turn that started here would be exactly the
   # spurious keystroke the header comment promises never happens (D-2263).
   _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
-  pane=$(_tmx capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p 2>/dev/null | tail -8)
   echo "$pane" | grep -q "esc to interrupt" && return 0
   # A FRESH MEASURE, NOT A REDUNDANT ONE, and this is the site where that is true:
   # REDRIVE_WAIT_S seconds of real `sleep 1`s sit between the top-of-function guard and
@@ -27049,7 +27056,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane went under ${READER_MIN_COLS} columns during the redrive wait (§6.3)" >> "$REG/swap.log"; return 0; }
   _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
-  case "$(_pane_box_read "$(_tmx capture-pane -t "$t" -p -e 2>/dev/null)")" in   # D-8116: no box refuses too
+  case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$t" -p -e 2>/dev/null)")" in   # D-8116: no box refuses too
     draft) echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0 ;;
     absent) echo "$(date '+%F %T') redrive-skip $id: no input box on screen (a dialog is open)" >> "$REG/swap.log"; return 0 ;;
   esac
@@ -30738,7 +30745,7 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # 12 survive — while un-stranding a hard-blocked row and stranding a healthy
   # one, with every case green.
   local pane blocked=""
-  pane=$(_tmx capture-pane -t "$(_tmux_t "$1")" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$1")" -p 2>/dev/null | tail -8)
   # AN UNMEASURABLE PANE WITH NO TRANSCRIPT VERDICT CLEARS NOTHING (#69 review,
   # S2, amended by D-2363). An empty capture is normally a pane nobody could
   # read; only `_session_hard_blocked`'s transcript fallback may make a positive
@@ -30911,7 +30918,7 @@ _standdown_probe() {
 # from a note that is about to be written, so at most once per episode.
 _standdown_outside_tail() {
   local id="$1" tail="$2" full rows
-  full=$(_tmx capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null)
+  full=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null)
   if [[ -z "$tail" ]]; then
     mapfile -t rows <<<"$full"
     (( ${#rows[@]} > 8 )) && rows=("${rows[@]: -8}")
@@ -31045,7 +31052,7 @@ _swap_rescue_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelle
   # unmeasurable pane proceeds, as it always did. Still blocked, it proceeds
   # unless the transcript shows output since the decision.
   local id="$1" w="$2" pane word=""
-  pane=$(_tmx capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+  pane=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
   if ! _session_hard_blocked "$id" "$pane"; then
     case "${HARD_BLOCK_NO:-}" in
       negative|carried-in)
@@ -31242,7 +31249,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # reaches the operator through swapblocked + notify.sh, never through this return code,
   # which nothing is waiting for by then. --force rides along or the detached retry would
   # silently drop the operator's decision.
-  if [[ -n "${TMUX:-}" && "$(_tmx display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
+  if [[ -n "${TMUX:-}" && "$("${_TMX_ARGV[@]}" display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
     # THE systemd-run's OWN EXIT STATUS IS THE ONLY EVIDENCE THIS ARM EVER GETS,
     # and it used to be discarded: measured, `systemd-run` returning 1 printed
     # the confident `detached: …` line below, returned 0, and recorded NOTHING —
@@ -31531,7 +31538,7 @@ cmd_swap_self() {   # target — run from INSIDE a cc session (terminal, web, or
   # just tell Claude "run ~/.local/bin/ccd swap-self <wrapper>"). Swaps the calling session.
   local target="${1:?usage: ccd swap-self <target-wrapper>}"
   [[ -n "${TMUX:-}" ]] || die "swap-self only works from inside a cc tmux session"
-  local id; id=$(_tmx display-message -p '#S' 2>/dev/null); id="${id#cc-}"
+  local id; id=$("${_TMX_ARGV[@]}" display-message -p '#S' 2>/dev/null); id="${id#cc-}"
   [[ -f "$REG/$id.uuid" ]] || die "current tmux session '$id' is not ccd-managed"
   cmd_swap --interrupt "$id" "$target"   # a session asking for its own move is busy by definition (D-5240)
 }
@@ -32009,7 +32016,7 @@ _watchdog_sign_to() {   # var id -> var = pane|banner|menu|transcript|account, o
   HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
   _pane_measurable "$id" || narrow=1   # a narrow pane's text is never read, as `_session_hard_blocked` keeps it
   if [[ -z "$narrow" ]]; then
-    tail=$(_tmx capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
+    tail=$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
     if _pane_hard_blocked "$tail" && ! _pane_carried_in "$id" pane "$tail"; then s=pane
     else
       _pane_limit_capture_to cap "$id" "$tail"
@@ -32464,7 +32471,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # NOBODY ATTACHED: a terminal attach, `cc`, or the PWA drawer's `tmux attach`
   # pty. The one hold the server cannot see; an unreadable answer refuses.
   local att=""
-  att=$(_tmx display-message -p -t "$(_tmux_t "$id")" '#{session_attached}' 2>/dev/null) || att=""
+  att=$("${_TMX_ARGV[@]}" display-message -p -t "$(_tmux_t "$id")" '#{session_attached}' 2>/dev/null) || att=""
   [[ "$att" =~ ^[0-9]+$ ]] || _hib_refuse attached "tmux did not say whether a terminal is attached"
   [[ "$att" == 0 ]] || _hib_refuse attached "$att terminal(s) attached to the pane"
   # The idle age, for the marker and the log: the latest main event the marker records.
@@ -32947,7 +32954,7 @@ cmd_attach() {   # create-on-demand, then exec tmux attach
   local id; id=$(_id "$wrapper" "$project")
   [[ -f "$REG/$id.uuid" ]] || cmd_start "$wrapper" "$project" >/dev/null || die "start failed"
   _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
-  local TMX; _tmx_argv; exec "${TMX[@]}" attach -t "$(_tmux_t "$id")"
+  exec "${_TMX_ARGV[@]}" attach -t "$(_tmux_t "$id")"
 }
 
 cmd_menu() {   # interactive picker → attach. The universal entry point for any SSH/terminal app:
@@ -32967,7 +32974,7 @@ cmd_menu() {   # interactive picker → attach. The universal entry point for an
   [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#ids[@]} )) || { echo "invalid choice"; return 1; }
   id="${ids[$((choice - 1))]}"
   _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
-  local TMX; _tmx_argv; exec "${TMX[@]}" attach -t "$(_tmux_t "$id")"
+  exec "${_TMX_ARGV[@]}" attach -t "$(_tmux_t "$id")"
 }
 
 # <dir> <src> — destination for a filed clip. Split out of cmd_clip so it can be
@@ -32989,7 +32996,7 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
   local png="${1:?usage: ccd clip <png-path> [id]}" id="${2:-}"
   [[ -f "$png" ]] || die "no such image: $png"
   if [[ -z "$id" ]]; then
-    id=$(_tmx list-clients -F '#{client_activity} #{client_session}' 2>/dev/null \
+    id=$("${_TMX_ARGV[@]}" list-clients -F '#{client_activity} #{client_session}' 2>/dev/null \
            | sort -rn | awk 'NR==1{print $2}' | sed 's/^cc-//')
     [[ -n "$id" ]] || die "no attached cc session (attach with 'cc <wrapper> <project>', or pass an id)"
   fi
@@ -35407,7 +35414,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   fi
   if [[ -n $_WS_STALE_WORD && "${_WS_LADDER_BIND[0]-}" == mode=reclaim ]]; then   # the stale arm's rung after rung 4 (DR-26)
     _session_probe "$id" anchored; pane_at=''
-    [[ $PROBE_VERDICT != live ]] || pane_at=$(_tmx display-message -p -t "$(_tmux_t "$id")" '#{window_activity}' 2>/dev/null)
+    [[ $PROBE_VERDICT != live ]] || pane_at=$("${_TMX_ARGV[@]}" display-message -p -t "$(_tmux_t "$id")" '#{window_activity}' 2>/dev/null)
     _ws_reclaim_stale_idle "$id" "$(_transcript_path "$id")" "$PROBE_VERDICT" "$pane_at" || return 1
   fi
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); regbranch=$(_reg_get "$id" branch)
@@ -35447,7 +35454,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     case "$PROBE_VERDICT" in
       gone) : ;;
       live)
-        clients=$(_tmx list-clients -t "$(_tmux_t "$id")" -F '#{client_tty}' 2>/dev/null) \
+        clients=$("${_TMX_ARGV[@]}" list-clients -t "$(_tmux_t "$id")" -F '#{client_tty}' 2>/dev/null) \
           || { _ws_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
         [[ -z "$clients" ]] \
           || { _ws_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
@@ -39366,7 +39373,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   if [[ $(type -t tmux) == function ]]; then
     _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
   else
-    local TMX; _tmx_argv; _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${TMX[@]}" kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" "${_TMX_ARGV[@]}" kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
   fi
   # RE-MEASURED, because `_ws_unsupervise` answers 0 whatever systemd did: a
   # failed `_svc_disable_now` is a stderr warning and nothing more. A unit that

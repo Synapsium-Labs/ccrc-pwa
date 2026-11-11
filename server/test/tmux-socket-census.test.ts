@@ -103,14 +103,30 @@ describe('D-8270 — no raw tmux call in bash: every one goes through the lookup
       'ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh', 'ccd/statusline-command.sh',
       'ccd/ccd-telemetry-keepalive', 'ccd/ccd-scope-sweep', 'ccd/ccrc-api', 'ccd/lib/disk-retention.sh',
     ]));
-    // MEASURED when the lookup landed: ccd/ccd's tmux calls, every one now `_tmx …` (97) or, behind a wrapper that
-    // execs its argv, `"${TMX[@]}" …` (9, `exec` and `_plat_timeout`). A floor, not an equality: an empty scan would
-    // pass every assertion below. The spread is inside double quotes, so it is counted on the comment-free source.
+    // MEASURED when the lookup went fork-free: ccd/ccd's 106 tmux calls, every one now `_tmx …` as a statement (59)
+    // or `"${_TMX_ARGV[@]}" …` in a capture, a pipeline or behind a wrapper that execs its argv (47, and `_tmx`'s own
+    // body). A floor, not an equality: an empty scan would pass every assertion below. The spread is inside double
+    // quotes, so it is counted on the comment-free source.
     const src = read('ccd/ccd');
     const direct = (bashCode(src).match(/(?:^|[^A-Za-z0-9_])_tmx[ \t]/gm) ?? []).length;
-    const spread = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').match(/"\$\{TMX\[@\]\}"/g)?.length ?? 0;
-    expect(direct).toBeGreaterThanOrEqual(95);
-    expect(spread).toBeGreaterThanOrEqual(9);
+    const spread = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').match(/"\$\{_TMX_ARGV\[@\]\}"/g)?.length ?? 0;
+    expect(direct).toBeGreaterThanOrEqual(57);
+    expect(spread).toBeGreaterThanOrEqual(46);
+  });
+
+  it('no capture or pipeline stage calls `_tmx`: there it spreads `"${_TMX_ARGV[@]}"`, the supervise tick\'s fork budget', () => {
+    // bash execs a lone command in `$( … )`, `<( … )` or a pipeline stage without a second fork; the function in its
+    // place costs that fork on every call, which `ccd-tick-budget.test.ts` measured (+5 forks a tick on idle-home).
+    const CAPTURE = /[$<]\(\s*_tmx[ \t]/;
+    const PIPED = /(?:^|[^A-Za-z0-9_])_tmx[ \t][^\n]*?[^|]\|(?!\|)/;
+    const bad = BASH_FILES.flatMap((f) => {
+      const b = lookupBlock(read(f));
+      return bashCode(read(f)).split('\n').flatMap((l, i) =>
+        ((b !== null && i + 1 >= b.first && i + 1 <= b.last) || !(CAPTURE.test(l) || PIPED.test(l)) ? [] : [`${f}:${i + 1}`]));
+    });
+    expect(bad).toEqual([]);
+    expect(CAPTURE.test('x=$(_tmx list-panes -t "$t")') && PIPED.test('_tmx capture-pane -p | tail -8')).toBe(true);
+    expect(PIPED.test('_tmx kill-session -t "$t" 2>/dev/null || true')).toBe(false);
   });
 
   it('outside the lookup block, every raw `tmux` is a named exception', () => {
@@ -142,7 +158,12 @@ describe('D-8270 — the lookup is one block, the same bytes in every script tha
   });
 
   it('each file that calls the lookup carries the same block, or is sourced by one that does', () => {
-    const callers = BASH_FILES.filter((f) => /(?:^|[^A-Za-z0-9_])_tmx(?:_argv|_sock)?\b/m.test(bashCode(read(f))));
+    // A caller names a lookup function in code, or spreads its argv (inside double quotes, so read on the
+    // comment-free source: the doctor's checks only ever spread it).
+    const spreads = (src: string): boolean =>
+      src.split('\n').some((l) => !/^\s*#/.test(l) && l.includes('"${_TMX_ARGV[@]}"'));
+    const callers = BASH_FILES.filter((f) =>
+      /(?:^|[^A-Za-z0-9_])_tmx(?:_argv|_sock)?\b/m.test(bashCode(read(f))) || spreads(read(f)));
     expect(callers.length).toBeGreaterThanOrEqual(8);
     for (const f of callers) {
       const host = SOURCED_BY[f] ?? f;
@@ -158,7 +179,7 @@ describe('D-8270 — the lookup is one block, the same bytes in every script tha
       src.split('\n').forEach((l, i) => {
         if (b !== null && i + 1 >= b.first && i + 1 <= b.last) return;
         expect(l, `${f}:${i + 1}`).not.toMatch(/^\s*_tmx(?:_argv|_sock)?\s*\(\)/);
-        expect(l, `${f}:${i + 1}`).not.toMatch(/(?:^|[\s;(])TMX=\(/);
+        expect(l, `${f}:${i + 1}`).not.toMatch(/(?:^|[\s;(])_TMX_ARGV=\(/);
       });
     }
   });
@@ -210,7 +231,7 @@ describe('D-8270 — the census refuses a raw call (fixtures)', () => {
       '  tmux "$@"',
       '  /usr/bin/tmux list-sessions',
       '  _tmx kill-session -t "$t"',
-      '  _tmx_argv; _plat_timeout 2 "${TMX[@]}" has-session -t "$t"',
+      '  _plat_timeout 2 "${_TMX_ARGV[@]}" has-session -t "$t"',
       '  command -v tmux >/dev/null; type -t tmux; declare -F tmux >/dev/null',
       '  echo "tmux has-session failed"   # tmux list-panes in a comment',
       "  echo 'tmux kill-server'",
@@ -256,7 +277,7 @@ describe('D-8270 — changing the setting moves every call; without it nothing c
    *  verbs and helpers. `|| true`: the harness's tmux refuses (rc 97), which is the point — it records and fails. */
   const SNIPPET = [
     '_tmx list-sessions',
-    '_tmx_argv; _plat_timeout 2 "${TMX[@]}" has-session -t "$(_tmux_t demo)"',
+    '_plat_timeout 2 "${_TMX_ARGV[@]}" has-session -t "$(_tmux_t demo)"',
     '_session_probe demo',
     '_pane_born demo',
     '_pane_scope_tmux list-panes -a -F x',

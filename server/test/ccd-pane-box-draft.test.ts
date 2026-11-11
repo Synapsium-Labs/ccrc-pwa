@@ -197,7 +197,7 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
     // site resolves its own tmux target (`-t "$(_tmux "$id")"`), so a nested
     // `)"` sits mid-call, ahead of the real close — a class excluding `)`
     // truncates there and silently drops the trailing ` -e` from the match.
-    const calls = src.match(/_pane_box_read "\$\(_tmx capture-pane.*\)"/g) ?? [];   // `_tmx`: the socket lookup (D-8270)
+    const calls = src.match(/_pane_box_read "\$\("\$\{_TMX_ARGV\[@\]\}" capture-pane.*\)"/g) ?? [];   // the socket lookup's argv (D-8270)
     // Six sites: `_idle_for_keystroke` (the compactor's and the route applier's
     // gate), `_redrive_after_spawn`, `_session_hard_blocked`,
     // `_auto_stale_check`, `_auto_swap_check`'s draft stand-down (D-6181), and

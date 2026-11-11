@@ -45,9 +45,15 @@ a hunt through the call sites. Behaviour with the default setting is unchanged: 
   exec and drawer tests pin theirs. Then `tmuxCommand` / `tmuxRoute` / `readTmuxSocketSetting` in
   `shared/tmux-target.ts`, routed in `realRunner`, `attachPty`, the agent's exec (after the whitelist) and
   `spawnFleetPty`.
-- [x] T2. The bash lookup block in `ccd/ccd`; every ccd/ccd call routed (`_tmx …`, or `_tmx_argv` then `"${TMX[@]}"`
-  where a wrapper execs the argv); `_am_who` builds its socket path from `_tmx_sock "$AM_HOME"`. Suites that pinned a
-  call's spelling in the source follow it; the calls tmux receives are unchanged.
+- [x] T2. The bash lookup block in `ccd/ccd`; every ccd/ccd call routed (`_tmx …` as a statement, or
+  `"${_TMX_ARGV[@]}" …` in a capture, a pipeline stage or where a wrapper execs the argv); `_am_who` builds its socket
+  path from `_tmx_sock "$AM_HOME"`. Suites that pinned a call's spelling in the source follow it; the calls tmux
+  receives are unchanged.
+- [x] T2b. Fork-free on the hot path: the block reads the setting ONCE per process, at load, into `_TMX_ARGV`, with
+  builtins only, and no capture or pipeline stage calls the `_tmx` function (it would cost a fork per call: +5 a
+  tick on `idle-home`). `ccd-tick-budget.test.ts`'s TICK_BUDGET is main's, unchanged. The three functions are
+  C10 Session host rows in `ccd/contexts.tsv` (the host's one tmux lookup, the file-split plan's Task 7 table), and
+  the 26 calls into them from C1 to C4 are lines in `ccd/contexts-edges.tsv`.
 - [x] T3. The block copied into `ccrc`, the session hook, the status line, the keepalive, the scope sweep and
   `ccrc-api`, and their calls routed; `tmux-socket-census.test.ts`, with fixtures that add a raw call and a run that
   moves every call by changing the setting.
