@@ -246,6 +246,8 @@ export const TREE_FILES = [
   'ccd/compact-card.mjs',
   // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
   'ccd/lib/transcript.jq',
+  // The roster card's one builder (D4, R-5a, D-8201); `_inst_files` places it beside the reader above.
+  'ccd/lib/roster-card.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
   // The settings reader the ccd-* sweeps source (wave 29): `_inst_bins` places it under ~/.local/libexec/ccrc on every

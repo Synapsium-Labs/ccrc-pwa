@@ -78,8 +78,8 @@ export const MAIL_GATE_STRICT_MARKER = 'mail-gate-strict';
 export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';
 /** `$REG/mail-gate-busy-shadow`: the mail gate's first hand-armed step. */
 export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';
-/** `$REG/coordinator-roster-card-live`: arms the session hook's roster card (durability D4, #757). Unarmed, the card goes
- *  to a shadow log only. No writer in the tree. */
+/** `$REG/coordinator-roster-card-live`: arms the session hook's roster card (durability D4, #757) and its wake arm (R-5a,
+ *  D-8201). Unarmed, the card goes to a shadow log only. No writer in the tree. */
 export const COORDINATOR_ROSTER_CARD_LIVE_MARKER = 'coordinator-roster-card-live';
 /** `$REG/landing-disabled`: the PR-landing checks lane's kill switch; it wins over the live marker. */
 export const LANDING_DISABLED_MARKER = 'landing-disabled';
@@ -281,7 +281,7 @@ export const SWITCHES = {
   },
   [COORDINATOR_ROSTER_CARD_LIVE_MARKER]: {
     storage: { marker: COORDINATOR_ROSTER_CARD_LIVE_MARKER }, default: 'absent: shadow, the card goes to ~/.ccrc/roster-card-shadow.log', owner: 'C5',
-    meaning: 'A coordinator\'s first context after a compaction, resume or clear carries the open runs it claims.',
+    meaning: 'A coordinator\'s first context after a compaction, resume or clear, and its first wake after an idle compaction, carries the open runs it claims.',
     writer: 'hand-only',
   },
   [LANDING_DISABLED_MARKER]: {

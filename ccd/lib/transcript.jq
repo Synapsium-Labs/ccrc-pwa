@@ -5,7 +5,9 @@
 # slurped raw tail window names, or nothing), `last_turn_ts` (the newest real
 # turn's epoch seconds in a slurped raw window, or nothing) and
 # `limit_banner($mode; $since)` (whether the newest real row is a limit or auth
-# banner, as `_transcript_limit_banner` answers it). Everything else is a
+# banner, as `_transcript_limit_banner` answers it); and, for ccd/session-hook.sh's
+# roster-card wake arm (R-5a, D-8201), `idle_compaction_open` (whether the newest
+# compaction is an idle one with no turn since). Everything else is a
 # helper. A named jq argument (`--arg u`) is not visible inside a module, so
 # the uuid travels as a parameter.
 #
@@ -243,3 +245,46 @@ def limit_banner($mode; $since):
       | "0\n\($reset)\t\($kind)" + (if $mode == "dated" then "\t" + ($at | if . == null then "-" else tostring end) else "" end)
       end
     end;
+
+# THE ROSTER CARD'S WAKE (R-5a, D-8201): is the newest compaction in a slurped raw tail window an IDLE one with no
+# turn since? `true` or `false`. The box's spelling of `isIdleCompaction(t) && !t.turnAfter` over `readCompactionTail`
+# (`server/src/idlenudge.ts`, D-5373), the reading the server's idle-compaction nudge makes; the session hook's wake arm
+# reads it on the server's two wake prompts. Another process on another host, so two spellings, held equal by
+# `server/test/session-hook-roster-card.test.ts` over one table. Rows are read oldest first and sidechain rows are
+# skipped. A boundary (`system`/`compact_boundary`) with a uuid or a timestamp opens a compaction; one with neither
+# closes any. Idle: Claude Code's notice after it (an `informational` row whose trimmed text begins with one of
+# `idle_notice_prefixes`, `IDLE_COMPACT_NOTICE_PREFIXES` in shared/api.ts), or an `auto` trigger whose turn had
+# finished before it (an `end_turn` assistant row, then a `stop_hook_summary` or `turn_duration` row, with no prompt
+# after). A turn since: an assistant row, or a user row of tool results only, after it. A user prompt after it does NOT
+# count: the wake prompt itself may already be in the file when the hook reads it. jq 1.6 rule above: no `first` or
+# `any` around a `try`; each parse's `try` sits inside its own array constructor.
+def idle_notice_prefixes: ["Compacted while idle"];
+def idle_compaction_open:
+  [split("\n")[] | select(length > 0) | [turn_row] | .[] | select(type == "object" and .isSidechain != true)]
+  | reduce .[] as $r ({cur: null, e: false, s: false};
+      ($r.type) as $t
+      | ($r.message | if type == "object" then . else {} end) as $m
+      | if $t == "system" and $r.subtype == "compact_boundary" then
+          (($r.uuid | select(type == "string" and . != "")) // ($r.timestamp | select(type == "string")) // null) as $k
+          | if $k == null then .cur = null
+            else .cur = {trigger: ($r.compactMetadata | if type == "object" then .trigger else null end), notice: false,
+                         fin: (.e and .s), after: false} | .e = false | .s = false end
+        elif $t == "system" then
+          (if .cur != null and $r.subtype == "informational" and ($r.content | type) == "string"
+              and (($r.content | jstrim) as $x | [idle_notice_prefixes[] | select(. as $p | $x | startswith($p))] | length > 0)
+           then .cur.notice = true else . end)
+          | (if ($r.subtype | type) == "string" and ($r.subtype == "stop_hook_summary" or $r.subtype == "turn_duration") and .e
+             then .s = true else . end)
+        elif $t == "assistant" then
+          .e = ($m.stop_reason == "end_turn") | .s = false | (if .cur != null then .cur.after = true else . end)
+        elif $t == "user" then
+          if $r.isCompactSummary == true or $r.isMeta == true then .
+          else (if .cur != null and ($m.content | type) == "array" and ($m.content | length) > 0
+                   and ([$m.content[] | select(type == "object" and .type == "tool_result")] | length) == ($m.content | length)
+                then .cur.after = true else . end)
+               | .e = false | .s = false end
+        elif $t == "attachment" and ($r.attachment | type) == "object" and $r.attachment.type == "queued_command" then
+          .e = false | .s = false
+        else . end)
+  | .cur
+  | if . == null then false else (.notice or (.trigger == "auto" and .fin)) and (.after | not) end;
