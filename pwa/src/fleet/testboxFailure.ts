@@ -3,7 +3,8 @@
 // its `detail` when it sent one, else the client's one reading of the error (`apiErrorText`). Anything else (the fetch
 // rejected: a network drop, a TypeError) is no answer at all, so the line says so in the answer tone and never shows the
 // raw error's message.
-import { ApiError, apiErrorText } from '../lib/api';
+import { ApiError } from '../lib/apiError';
+import { apiErrorText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
 import type { ResultLineValue } from './settingsText';
 
