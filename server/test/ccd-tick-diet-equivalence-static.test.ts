@@ -7,8 +7,9 @@
 // fixture HOME, under `C` and under the UTF-8 locale the supervisors run under.
 //
 // SEVERAL FILES (D-6767). This file runs the locale-free parts (E0, E1, E2, E4 and the static censuses E8d, E8g and
-// E10d). The rows under `C` are `ccd-tick-diet-equivalence-limits`, `-registry` and `-route.test.ts` (the table is
-// `ccd-tick-diet-equivalenceFixture.ts`'s); `ccd-tick-diet-equivalence-utf8-limits`, `-utf8-registry` and `-utf8-route.test.ts` run the same rows under the UTF-8 locale. The
+// E10d). The rows under `C` are `ccd-tick-diet-equivalence-limits`, `-registry`, `-route` and `-route-2` to
+// `-route-4.test.ts` (the table is `ccd-tick-diet-equivalenceFixture.ts`'s); `ccd-tick-diet-equivalence-utf8-limits`,
+// `-utf8-registry`, `-utf8-route` and `-utf8-route-2` to `-utf8-route-4.test.ts` run the same rows under the UTF-8 locale. The
 // runner, the row builders and the per-locale blocks (E3, E5 to E10) live in `ccdTickDietRunner.ts`, whose
 // `registerLocaleRows` each of those files calls with its own entry of `LOCALES` and its own blocks. A full test name is unchanged by the split.
 //
@@ -38,7 +39,8 @@
 //    in `ccdTickDietRunner.ts`.)
 //  - E9, W3 Task 15's route rows (D-4963), per locale: every `ROUTE_ROWS` record through the route chain's printing
 //    forms, their `_to` forms and `_route_apply_pending`'s rc, each side asserting the quiet chain left the registry
-//    (`swap.log`, the floor markers) byte-unchanged; and the `_to` forms into the names their call sites pass. (E9's
+//    (`swap.log`, the floor markers) byte-unchanged; and the `_to` forms into the names their call sites pass. The
+//    chain records run in `ROUTE_CHAIN_SHARES` shares, E9 and the blocks E9-2 on, each its own file (D-6767). (E9's
 //    rows live in `ccdTickDietRunner.ts`.)
 //  - E10, W3 Task 16's rows (D-4963), per locale: every `HOME_ROWS` row through `$(_home_measured)` and
 //    `_home_measured_to`, the latter also into `home`; the printing form's one stated edge, its raw stdout on the
