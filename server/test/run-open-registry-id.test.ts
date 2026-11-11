@@ -20,6 +20,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
 import { recorder, seedRow, storedRun } from './idGateFixture.js';
 import { REFUSED_IDS } from './registryIdCases.js';
+import { legacyOpens } from './helpers/plan.js';
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'demo-coordinator';
@@ -51,7 +52,7 @@ const openApp = async (home: string, run: Runner) => {
       return localIO.readdir(p, timeoutMs, signal);
     },
   };
-  const app = await buildServer({ ...base, io, mailToken: TOKEN, coord });
+  const app = legacyOpens(await buildServer({ ...base, io, mailToken: TOKEN, coord }), coord.db);
   return { app, coord, listings: (): number => listings, resetListings: (): void => { listings = 0; } };
 };
 

@@ -13,6 +13,7 @@ import { routeNamesFable } from '../../shared/api.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -44,6 +45,7 @@ async function rig() {
   };
   seed(home, CLAIMED_BY);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  seedLegacyProgramme(coord.db, OPEN_BODY.program, OPEN_BODY.homeProject);
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, fleetState: FLEET });
   const box = { 'x-ccrc-mail-token': TOKEN };
