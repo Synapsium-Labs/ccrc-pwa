@@ -10,7 +10,7 @@ back as a brief for the next wave, never as code.
 
 | Canvas | Covers | Brief | Matched at |
 |---|---|---|---|
-| _(none yet)_ | | | |
+| Overlord Branding | The Overlord's name, wordmark and splash screen; the Orb and the Dark Lord, each in fourteen moods; the installed icons | `briefs/2026-11-11-overlord-brand.md` | `3a32d22` |
 
 ## Columns
 

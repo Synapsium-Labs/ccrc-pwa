@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img" aria-label="The Dark Lord thinking: both eyes looking up and to the side, with three dots ticking above"><style>.md-hop{animation:md-up2 1.2s steps(1) infinite}
+.md-shake{animation:md-up1 .3s steps(1) infinite}
+.md-sob{animation:md-up1 .6s steps(1) infinite}
+.md-breathe{animation:md-up1 4s steps(1) infinite}
+.md-z1{animation:md-z1 2.4s steps(1) infinite}
+.md-z2{animation:md-z2 2.4s steps(1) infinite}
+.md-tear{animation:md-tear 1.2s steps(6) infinite}
+.md-tremble{animation:md-tremble .16s steps(1) infinite}
+.md-dart1{animation:md-dart1 1.6s steps(1) infinite}
+@keyframes md-tremble{0%{transform:translateX(0)}50%{transform:translateX(1px)}}
+@keyframes md-dart1{0%{transform:translate(-1px,0)}25%{transform:translate(1px,0)}50%{transform:translate(-1px,0)}75%{transform:translate(0,0)}}
+@media (prefers-reduced-motion:reduce){.md-tremble,.md-dart1{animation:none}}
+.md-sq{transform-box:fill-box;transform-origin:bottom;animation:md-sq 4s steps(1) infinite}
+.md-dot{animation:md-dot 1.5s steps(1) infinite}
+.md-flash{animation:md-flash .8s steps(1) infinite}
+.md-sus1{animation:md-sus1 4s steps(1) infinite}
+.md-orbit1{animation:md-orbit1 .9s steps(1) infinite}
+.md-sway{animation:md-tremble 1s steps(1) infinite}
+@keyframes md-sq{0%{transform:scaleY(1)}95%{transform:scaleY(.34)}}
+@keyframes md-dot{0%{opacity:1}33%{opacity:.25}}
+@keyframes md-flash{0%{opacity:1}50%{opacity:.2}}
+@keyframes md-sus1{0%{transform:translate(-1px,0)}50%{transform:translate(1px,0)}}
+@keyframes md-orbit1{0%{transform:translate(-1px,0)}16.6%{transform:translate(0,0)}33.3%{transform:translate(1px,0)}50%{transform:translate(1px,1px)}66.6%{transform:translate(0,1px)}83.3%{transform:translate(-1px,1px)}}
+.md-ponder1{transform:translate(1px,0);animation:md-ponder1 4s steps(1) infinite}
+.md-swapa{animation:md-swapa 3s steps(1) infinite}
+.md-swapb{opacity:0;animation:md-swapb 3s steps(1) infinite}
+@keyframes md-ponder1{0%{transform:translate(1px,0)}45%{transform:translate(0,0)}50%{transform:translate(-1px,0)}95%{transform:translate(0,0)}}
+@keyframes md-swapa{0%{opacity:1}50%{opacity:0}}
+@keyframes md-swapb{0%{opacity:0}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.md-sq,.md-dot,.md-flash,.md-sus1,.md-orbit1,.md-sway,.md-ponder1,.md-swapa,.md-swapb{animation:none}}
+.dl-pl{opacity:0;animation:dl-pl 9s steps(1) infinite}
+.dl-pr{opacity:0;animation:dl-pr 9s steps(1) infinite}
+@keyframes md-up2{0%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes md-up1{0%{transform:translateY(0)}50%{transform:translateY(-1px)}}
+@keyframes md-z1{0%{opacity:1}66%{opacity:0}}
+@keyframes md-z2{0%{opacity:0}33%{opacity:1}}
+@keyframes md-tear{from{transform:translateY(0);opacity:1}to{transform:translateY(6px);opacity:0}}
+@keyframes dl-pl{0%{opacity:0}60%{opacity:1}75%{opacity:0}}
+@keyframes dl-pr{0%{opacity:0}75%{opacity:1}90%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.md-hop,.md-shake,.md-sob,.md-breathe,.md-z1,.md-z2,.md-tear,.dl-pl,.dl-pr{animation:none}}</style><path fill="#45D67E" d="M3 1h2v1h-2zM27 1h2v1h-2zM2 2h2v2h-2zM28 2h2v2h-2zM1 4h2v3h-2zM29 4h2v3h-2zM13 5h6v1h-6zM10 6h12v1h-12zM0 7h3v1h-3zM9 7h14v1h-14zM29 7h3v1h-3zM1 8h30v2h-30zM2 10h28v1h-28zM3 11h26v1h-26zM5 12h22v1h-22zM6 13h2v4h-2zM24 13h2v4h-2zM6 17h9v6h-9zM17 17h9v6h-9zM3 21h1v2h-1zM28 21h1v2h-1zM2 23h3v3h-3zM27 23h3v3h-3zM7 23h8v1h-8zM17 23h8v1h-8zM8 24h7v1h-7zM17 24h7v1h-7zM9 25h6v2h-6zM17 25h6v2h-6zM1 26h6v1h-6zM25 26h6v1h-6zM1 27h7v1h-7zM10 27h5v1h-5zM17 27h5v1h-5zM24 27h7v1h-7zM0 28h9v2h-9zM12 28h8v4h-8zM23 28h9v2h-9zM0 30h10v2h-10zM22 30h10v2h-10z"></path><path fill="#F2B84B" d="M3 1h2v1h-2zM27 1h2v1h-2zM2 2h2v2h-2zM28 2h2v2h-2zM15 2h2v2h-2zM14 4h4v2h-4zM7 10h18v1h-18zM6 11h20v1h-20z"></path><g class="md-ponder1"><path fill="#F2B84B" d="M9 13h4v3h-4zM19 13h4v3h-4z"></path></g><rect class="md-dot" x="19" y="0" width="2" height="2" fill="#ECF0EC"></rect><rect class="md-dot" x="22" y="0" width="2" height="2" fill="#ECF0EC" style="animation-delay: -1s"></rect><rect class="md-dot" x="25" y="0" width="2" height="2" fill="#ECF0EC" style="animation-delay: -0.5s"></rect></svg>
