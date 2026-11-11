@@ -532,6 +532,98 @@ long text.
 **Outcome (W0-27): no violation; the machines compose as specified** on the merged edition, within what the model
 covers. The deciders' anchors are a maintenance debt, not a contradiction.
 
+## Fleet reads, under consent (Task 8: W0-06, W0-09, W0-12, W0-19, W0-26), measured 2026-11-11
+
+W0b (run 1820) read the fleet box under setup line 4's consent, as narrowed by the operator's ruling that the subject
+runs on the fleet's own accounts (departure `w0b-on-the-fleets-own-accounts`, below). Every read is **box**: counts,
+percentiles and key names only. No session id, account name, project name or value left the box, and neither
+`.credentials.json` nor a whole `.claude.json` was opened. The accounts are named here by stand-ins, `acct-01` to
+`acct-15` for the 15 Anthropic-lane config directories in roster order and `acct-g1` and `acct-g2` for the two lanes of
+another provider; the mapping stayed in the conductor's scratch directory.
+
+**How far back the box remembers.** The plan asked for 30 days. The systemd user journal reaches back to 2026-10-27
+(its retention), so its reads cover **14 days** (the first `claude-session@` start in the window is 2026-10-28). ccd's
+lifecycle journal (`$REG/.lifecycle/journal-*.ndjson`) reaches back to 2026-11-02, so the roll read covers **9 days**.
+Each figure below names its window.
+
+**W0-26, restarts per session per hour (box, 14 days).** A scratch reader outside the tree, run under `python3 -I`,
+imported `deploy/measure-working-state.py`'s `journal` and `journal_facts` and counted `claude-session@<id>` starts
+(the `Started` job records, one per start: no start is counted twice). 2,979 starts over 681 sessions, in 2,751
+session-hours that had at least one start: **1 start in 2,528 of them, 2 in 218, 3 in 5; p50 1, p95 2, p99 2, max
+3.** Counted over every clock hour from each session's first start to its last (19,225 session-hours, the hours with
+no start counted as 0): p50 0, p95 1, p99 2. **Outcome: p99 ≤ 2, so readiness's `restarting` threshold of two in an
+hour stands.** Five session-hours in 14 days (about 0.2% of the hours with a start) reached three.
+
+**W0-26, the restart time (box).** `measure-working-state.py --section spawn --since 2026-10-12`: 48 restarts measured
+(the instrument reads each live session's newest turn marker, so one restart per session), unit start to the turn
+marker's `restartAt` **p50 0.9 s, p95 6.1 s, max 6.2 s**. **Outcome: `restarting`'s bound is taken from p95 6.1 s.**
+`--section deaths` over the same window counted 3 session ends (1.5 a day on the two days with one), none OOM-associated
+and no redrive. **The sweep after boot:** no lane computes the Overlord's readiness today (Task 1's read of
+`LANE_SCHEDULE`), so W1 names the lane whose cadence "one sweep" is.
+
+**W0-06, the roll's overhead today (box, 9 days).** The same reader took each `hibernate` act in ccd's lifecycle
+journal whose `dec.reason` is `roll` (114, all `done`, all from the `sweep:roll` actor) to the same session's next
+`claude-session@` start in the user journal: **all 114 matched, p50 0.4 s, p95 1.0 s, p99 1.3 s, max 1.9 s.** Add the
+unit start to the ready marker (p95 6.1 s, above) and W0a's fresh start under the rig (p95 0.26 s at every transcript
+size): **the roll plus a fresh start takes about 7.4 s at p95**, far under 60 s. **Outcome: the deadlines stand**
+(`clearing` 90 s, `carded` 45 s, the 360 s budget). Caveat: the roll's start-to-marker time is from the newest restart
+of each live session, not from each roll, and a real fresh start adds the tool servers and the account's network
+round trips the rig leaves out; both are seconds, not tens of seconds.
+
+**Step 1b, the lanes' builds (box).** `version_to` from each account config directory's `.last-update-result.json`:
+
+| Build | Anthropic-lane accounts |
+|---|---|
+| 2.1.322 (W0a's newest) | 8: `acct-01`, `acct-04`, `acct-05`, `acct-07`, `acct-09`, `acct-10`, `acct-11`, `acct-12` |
+| 2.1.321 | 1: `acct-14` |
+| 2.1.319 | 3: `acct-03`, `acct-13`, `acct-15` |
+| 2.1.318 | 2: `acct-06`, `acct-08` |
+| 2.1.316 | 1: `acct-02` |
+
+The other provider's two lanes have no update result (they run no Anthropic auto-update). **Seven Anthropic-lane
+accounts run a build between W0a's pair** (2.1.312 and 2.1.322) and not on it, so every rig row (W0-01 to W0-19) is
+unmeasured on their build; the rig's two builds behaved identically on every row, which bounds but does not prove the
+builds between. The subject's account is on 2.1.322, which the rig measured.
+
+**W0-09 and W0-19, the account config census (box).** Per account config directory, setup line 4's listing:
+
+| Kind | What the 17 directories hold |
+|---|---|
+| Project memory (`projects/*/memory/`, non-empty) | **every account: 8 to 14 non-empty project memory directories**; most are symbolic links shared across accounts (8 to 15 links per account), so one project's memory is the same directory under several accounts |
+| `skills/` | 6 to 9 entries on every account |
+| `plugins/` | 8 or 9 entries on every account, and `enabledPlugins` set in every account's settings |
+| User memory file (`CLAUDE.md`) | present on 7 accounts, as 3 distinct files (5 share one hash); absent on 10 |
+| Tool servers (`.claude.json` `mcpServers`) | one on 4 accounts, none on 13 |
+| `settings.json` key names | on all 17: `cleanupPeriodDays`, `effortLevel`, `enabledPlugins`, `env`, `hooks`, `model`, `permissions`, `skipDangerousModePermissionPrompt`, `statusLine`; on some: `modelSettings` (10), `tui` (6), `agentPushNotifEnabled` (6), `extraKnownMarketplaces` (5), `theme`, `spinnerTipsEnabled`, `alwaysThinkingEnabled` (2 each), and `switchModelsOnFlag`, `remoteControlAtStartup`, `inputNeededNotifEnabled`, `autoUpdatesChannel` (1 each) |
+
+**Outcomes.** W0-09: **the count is above zero on every account**, and no account's settings carry
+`autoMemoryEnabled`, so auto memory is on everywhere and a swap loads the target account's project memory, which is
+largely the same shared directory. That selects **an operator item at W1a** (the plan's branch), and H14's per-session
+switch (W0a measured `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` holds) is what keeps it out of the Overlord. W0-19: **every
+kind W0a's rig measured is present on the fleet** (a user memory file, skills, tool servers, settings with hooks), and
+plugins with `enabledPlugins` on every account, which the rig could not build. So the pinned sources are load-bearing
+on every account, and **mods are present on the fleet, so doctor's no-mods check is required before designation**
+(as the plan's branch says). Two key names bear on other rows: `model` and `effortLevel` are set in every account's
+settings (a typed `/model` or `/effort` writes them, W0a's W0-12 and D-8149), and `switchModelsOnFlag` is set on one
+account only, so Claude Code's own switch on a flagged request is at its default on the rest.
+
+**W0-12, real fallback notices in the history (box, counts only).** `ccrc history grep` is scoped to a session, a
+project or a workspace; there is no fleet-wide read verb, so this counts **this project's** history (936 session
+families). Claude Code's own notice texts were read from the 2.1.322 binary's strings: "…'s safeguards flagged this
+message" (the refusal notice) and "…'s safeguards stopped the response above" (the continue-once notice W0a saw). Hits
+by ISO week, role and provenance:
+
+| Text | Hits | By provenance |
+|---|---|---|
+| "safeguards flagged this message" | 88, weeks 39 to 46 (34 in week 44) | 82 tool output, 4 the model's own prose, 1 operator, 0 a Claude Code notice row |
+| "safeguards stopped the response above" | 71, weeks 39 to 46 | 68 tool output, 3 the model's own prose, 0 a Claude Code notice row |
+
+Every hit is the text quoted (in tool output, by a model, or by the operator); none is a row the history attributes to
+Claude Code itself, and the history keeps no provenance that would tell a real notice from a quote of one. **Outcome:
+the real notices are unmeasured from the history, so W0-12's conservative branch stands** (the statusline writer
+journals a model change too). A count of quotes is not a count of events, so no weekly rate of real notices is
+recorded.
+
 ## Rows waiting for W0b
 
 W0-20 (nudge-and-read against typed text), W0-21 (a swap with a stand-in renewal), W0-22 (a continuity record per
