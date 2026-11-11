@@ -1,6 +1,8 @@
-// A small in-tree mutation runner for deciders (Overlord W1a, D-8217). It copies mutation-run.py's contract
-// (ccd/coordinator-skill/references/mutation-run.py) into TypeScript: a mutant is `old` -> `new` on a module's source, `old`
-// must occur exactly once, a baseline copy must pass first, and a suite case that throws kills the mutant. Every copy is
+// A small in-tree mutation runner for deciders (Overlord W1a, D-8216; the every-run floors that use it are D-8217). It
+// follows mutation-run.py's contract (ccd/coordinator-skill/references/mutation-run.py): a mutant is `old` -> `new` on a
+// module's source, `old` must occur exactly once, a baseline copy must pass first, and a suite case that throws kills the
+// mutant. It differs in three ways: no coverage trace, no carry, and no per-mutant timeout. A timer that re-arms is
+// bounded (SimWorld's budget of scheduled calls), but a mutant that loops inside the decider itself is not. Every copy is
 // written under one mkTmp directory, never into server/src, and loaded with a dynamic import of a file name unique to it.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
