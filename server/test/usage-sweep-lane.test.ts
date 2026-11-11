@@ -76,8 +76,10 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     await watcher.tick();
 
     const usage = watcher.currentUsage().get('demo-usage-a');
+    // D-8267: `cacheExpiresAt` comes from the same sidecar read; this sidecar names none, so it reads null.
     expect(usage).toEqual({
-      ts: expect.any(Number), model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, cost: 1.25, stale: false,
+      ts: expect.any(Number), model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, cost: 1.25, cacheExpiresAt: null,
+      stale: false,
     });
   });
 

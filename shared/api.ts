@@ -4635,6 +4635,9 @@ export const IDLE_COMPACT_NUDGE_PROMPT =
 export const IDLE_COMPACT_ESTIMATE_MS = 55 * 60_000;
 /** What a prediction rests on: the prompt cache's recorded expiry, or the fixed estimate. */
 export type IdleCompactBasis = 'cache-expiry' | 'estimate';
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const IDLE_COMPACT_BASIS_MAP: Record<IdleCompactBasis, true> = { 'cache-expiry': true, estimate: true };
+export const IDLE_COMPACT_BASES: readonly IdleCompactBasis[] = Object.keys(IDLE_COMPACT_BASIS_MAP) as IdleCompactBasis[];
 export interface IdleCompactPrediction {
   /** Epoch ms. */
   readonly at: number;
