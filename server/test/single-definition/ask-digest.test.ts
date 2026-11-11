@@ -706,6 +706,36 @@ describe('the session role is enumerated and narrowed once in shared/api.ts, and
   });
 });
 
+// Overlord spec C49 (W1a roles plan, Task 5). The role vocabulary has one table and one reader: `FLEET_ROLES` and
+// `FleetRole` in shared/fleetRoles.ts, `roleOf` and `sessionRoleOfReading` in server/src/roleOf.ts. `FLEET_ROLE_NAMES`
+// is derived from the table, and the old two-word derivation of `SessionRole` is spelled nowhere. Code lines only.
+describe('one role vocabulary and one reader (Overlord spec C49)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  it('CONTROL: the patterns see a definition and pass over a comment', () => {
+    expect(/\bFLEET_ROLES\s*[:=]/.test('export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {')).toBe(true);
+    expect(/\bfunction\s+roleOf\b/.test('export function roleOf(f: RoleFacts): RoleReading {')).toBe(true);
+    expect(stallCodeText('// export function roleOf(f) {}\nconst x = 1;')).not.toMatch(/\bfunction\s+roleOf\b/);
+  });
+  it('FLEET_ROLES and FleetRole are defined in shared/fleetRoles.ts only', () => {
+    expect(holders(/\bFLEET_ROLES\s*[:=]/)).toEqual(['shared/fleetRoles.ts']);
+    expect(holders(/\btype\s+FleetRole\s*=/)).toEqual(['shared/fleetRoles.ts']);
+  });
+  it('FLEET_ROLE_NAMES is derived from the table, never hand-kept', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/fleetRoles.ts'), 'utf8');
+    expect(src).toMatch(/FLEET_ROLE_NAMES: readonly FleetRole\[\] =\s*\n?\s*Object\.keys\(FLEET_ROLES\)/);
+  });
+  it('roleOf and sessionRoleOfReading are defined in server/src/roleOf.ts only, and sessionRoleOf goes through roleOf', () => {
+    expect(holders(/\bfunction\s+roleOf\b|\broleOf\s*=/)).toEqual(['server/src/roleOf.ts']);
+    expect(holders(/\bfunction\s+sessionRoleOfReading\b|\bsessionRoleOfReading\s*=/)).toEqual(['server/src/roleOf.ts']);
+    // The file is found by its holder, not named by a literal path: a literal read of a server/src file is counted by ARCH-06's ratchet.
+    const [reader] = ALL.filter((f) => /\bfunction\s+roleOf\b/.test(stallCode(f)));
+    expect(stallCode(reader!)).toMatch(/\bsessionRoleOf\s*=[^;]*\broleOf\(/);
+  });
+  it('the old two-word derivation is spelled nowhere', () => {
+    expect(holders(/kind\s*===\s*'none'\s*\?\s*'coordinator'/)).toEqual([]);
+  });
+});
+
 
 // D-5298 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 11b; spec §6.4). APPENDED. The
 // switch-over floor `RUNS_ATTRIBUTION_SINCE` (the first release tag carrying Task 11a's client) is defined once, in
