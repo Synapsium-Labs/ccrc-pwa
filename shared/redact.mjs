@@ -25,6 +25,18 @@
 //     `json-pair`, `yaml-secret`, `secret-word` and the program-scoped rules: those were built for command lines, and
 //     over a ticket they would mask a commit SHA, a UUID or a dated spec path, or read prose as argv. Every mask is
 //     `[REDACTED]`, and it takes the caller's `shapes` as `egress` does.
+//   - `history-base` and `history-v2` (C1l PR 2; the history coordinator's ack, which names R11): ccrc history's layer 2,
+//     the context rules `ccd/history/lib.mjs`'s redaction doors read. They are not text steps: a history rule is an id,
+//     the slot of the rule set it fills and a pattern built in two forms, `field` (the field pass) and `final` (the
+//     second belt's structure-safe form, D-4613), and `historyRules(profile)` builds a profile into the frozen
+//     `{ field, final }` rule set lib reads; `redact` refuses a history profile. `history-base` is the rev 3.6 rules
+//     (BELT_VERSION 1), R11's base, which every door reads first; `history-v2` is the widened rules, which every door reads
+//     over the base's output (lib's `composeDoor`). The two list the same rules but one: the named value, whose field form
+//     is v1's class in the base (`history-named-value-v1`) and the widened class in v2 (`history-named-value`, D-5745).
+//     Both are built from one template, the history rows below, which lib held as `contextRules` before the move; lib
+//     builds `BASE_RULES` and `CONTEXT_RULES` as one line each over these profiles and keeps no copy. A history rule's
+//     bytes are part of every stored index text: changing one is a `BELT_VERSION` bump and a reindex, the history
+//     programme's, never a change made here alone.
 //
 // The URL-userinfo rule differs between the two (the egress rule masks to the LAST `@` before the host, because a
 // password may hold an `@`; the docs rule stops at the FIRST), so it is two rules with two ids and no profile shares
@@ -261,6 +273,65 @@ const DOCS_ROWS = {
   'docs-authorization': [String.raw`(?<![^\n])[^\n]*Authorization:[^\n]*`, 'Authorization: ***'],
 };
 
+// ---- the history rows -------------------------------------------------------------------------------------------
+
+/** The line ends a quoted value never crosses: CR, LF, U+2028 and U+2029, the last two built from their code points. */
+const QUOTED_LINE_ENDS = String.raw`\r\n` + String.fromCharCode(0x2028, 0x2029);
+/** D-5745 (history-redact-value-class-widened; closes D-5021's residual): the named rule's value in the FIELD form, read
+ *  whole. v1's class `[^\s"'`,;&]` ended a value at `&`, `;`, `,` and either quote, so `password=abc&def`,
+ *  `password="abc&def"` and `PASSWORD='a b c'` printed their tails. Three alternatives, group 1 the opening quote:
+ *  - after `"` or `'` (the lookbehind reads group 1), the value runs to the same closing quote on the same line, which
+ *    the backreference `\1` consumes; an empty quoted value matches and every caller reads it as no value;
+ *  - unquoted, a value still ends at whitespace and the backtick. `&` ends it only before `NAME=` (a 256-character NAME,
+ *    the head's own bound), and `,` `;` `"` `'` end it only before whitespace, a closer (`,` `;` `)` `}` `]`) or the end
+ *    of the text, so `url?a=1&password=x&b=2`, `password=x; path=/` and `{"cmd":"password=x"}` keep their structure.
+ *  An unclosed quote fails the quoted reading, and group 1 then backs off to empty, so the quote is read as the
+ *  value's first character. Linear: each alternative's classes are disjoint, the lookaheads are bounded or one
+ *  character, and a failed quoted reading costs its own line once. The final form keeps v1's class (D-4613's structure
+ *  safety is unchanged). This is the prototype scope b2-redaction measured (R1). Every door reads it only over its rev
+ *  3.6 door's output (R11, lib's composeDoor), so it never prints a value that door masks. */
+const NAMED_VALUE_FIELD_SRC = String.raw`(["']?)((?<=")[^"${QUOTED_LINE_ENDS}]*|(?<=')[^'${QUOTED_LINE_ENDS}]*|(?:[^\s"'` + '`'
+  + String.raw`,;&]|[,;"'](?![\s,;)}\]]|$)|&(?![A-Za-z_][A-Za-z0-9_.-]{0,255}=))+)\1`;
+/** v1's named value class (rev 3.6): group 1 the opening quote or empty, group 2 the value. The final form also stops at a
+ *  backslash, `<` and `>`. The base reads it in both forms, and the widened rules in their final form. */
+const namedValueV1 = (final) => new RegExp(String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'y');
+/** What a header value's class stops at in the final form. */
+const headerStop = (final) => (final ? String.raw`\\<>&` : '');
+
+/** The history rows (lib's `contextRules` template, moved here whole; C1l PR 2): each id names the slot of the rule set it
+ *  fills and builds its pattern for one form. Layer 2's rules (the context layer), one definition each, built twice:
+ *  `field` is the field pass, `final` the second belt's structure-safe form, D-4613
+ *  (history-final-belt-layer2-structure-safe) (section 8.3, whole-branch review: the final pass runs over a serialised
+ *  `--json` envelope and over the human page's frame). In the final form no value class consumes a backslash (a JSON
+ *  escape is never split, so an escaped quote ends a value instead of being left bare), a line break (`\n`, `\r`: a value
+ *  never crosses a line), `<` or `>` (nor a frame tag) or `&`; the JSON-form rule's value has no escape alternative, so an
+ *  escaped quote ends it. The final form is the PER-SEGMENT primitive of the structure-aware belt (lib's redactFinalText,
+ *  redactFinalJson): it is never run over serialised structure, so it needs no rule about a closing quote or a closer
+ *  (round 2's `]` and `}` exclusion was that, and it made the form non-idempotent on the field pass's own marks:
+ *  `TOKEN=[redacted]` read as `[redacted` and was masked again). The field form of `history-v2` is the rev 3.6 field
+ *  form, byte for byte, except the named rule's value (D-5745); `history-base` is the rev 3.6 rules in both forms. */
+const HISTORY_ROWS = {
+  'history-json': ['json', (final) => new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g')],
+  // D-4614 (history-context-rule-rescans-after-a-plain-name): the named rule is TWO patterns lib scans by hand
+  // (namedSpans). The head finds `NAME=` or `NAME: ` and the optional quote; the value (sticky) takes the value from
+  // there. The value is read only for a secret NAME, so a plain name never consumes its value and the scan resumes right
+  // after the separator: a context key inside it is seen, and a run of `a=a=a=` stays linear.
+  'history-named-head': ['namedHead', () => new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)`, 'g')],
+  // The NAME a value ends in (namedSpans' tail head): `NAME=` or `NAME:` at the end of a slice of at most 258 characters.
+  'history-named-tail': ['namedTail', () => new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$`)],
+  // D-5745 (history-redact-value-class-widened): the value of the named rule. A caller's span is group 2's own, never the
+  // whole match (the widened field form consumes a closing quote). The final form keeps v1's class; the field form reads a
+  // value whole.
+  'history-named-value': ['namedValue', (final) => (final ? namedValueV1(true) : new RegExp(NAMED_VALUE_FIELD_SRC, 'y'))],
+  // The rev 3.6 named value (R11's base): v1's class in both forms.
+  'history-named-value-v1': ['namedValue', (final) => namedValueV1(final)],
+  'history-bearer': ['bearer', (final) => new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${headerStop(final)}]+)`, 'gi')],
+  'history-mail-token': ['mailToken', (final) => new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${headerStop(final)}]+)`, 'gi')],
+  'history-bearer-sticky': ['bearerSticky', (final) => new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${headerStop(final)}]+)`, 'iy')],
+  'history-mail-token-sticky': ['mailTokenSticky', (final) => new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${headerStop(final)}]+)`, 'iy')],
+  'history-query': ['query', (final) => new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi')],
+};
+
 // ---- the rule table ---------------------------------------------------------------------------------------------
 
 /** A rule of one pattern and one replacement (a string, or a function of the match). */
@@ -281,6 +352,11 @@ const docsRule = (id) => {
       return (typeof group1 === 'string' ? group1 : '') + suffix;
     }, tally),
   };
+};
+/** A history row: the slot it fills and its pattern for one form (`historyRules` reads them; it has no text step). */
+const historyRule = (id) => {
+  const [slot, form] = HISTORY_ROWS[id];
+  return { id, slot, form };
 };
 /** The two shape rules (in the egress and linear-egress profiles) take their source from the caller's `shapes`. */
 const needShape = (shapes, id) => {
@@ -337,6 +413,7 @@ const RULES = Object.freeze([
     }).join('/')),
   },
   ...Object.keys(DOCS_ROWS).map(docsRule),
+  ...Object.keys(HISTORY_ROWS).map(historyRule),
 ]);
 
 /** Every rule id, in table order. */
@@ -356,6 +433,14 @@ export const PROFILES = Object.freeze({
   'linear-egress': Object.freeze([
     'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
   ]),
+  'history-base': Object.freeze([
+    'history-json', 'history-named-head', 'history-named-tail', 'history-named-value-v1', 'history-bearer',
+    'history-mail-token', 'history-bearer-sticky', 'history-mail-token-sticky', 'history-query',
+  ]),
+  'history-v2': Object.freeze([
+    'history-json', 'history-named-head', 'history-named-tail', 'history-named-value', 'history-bearer',
+    'history-mail-token', 'history-bearer-sticky', 'history-mail-token-sticky', 'history-query',
+  ]),
 });
 
 const BY_ID = new Map(RULES.map((r) => [r.id, r]));
@@ -363,10 +448,13 @@ const compiled = new Map();
 
 /** The profiles that read the caller's two credential shapes. */
 const SHAPED = new Set(['egress', 'linear-egress']);
+/** The history profiles: rule sets `historyRules` builds, never text steps. */
+const HISTORY = new Set(['history-base', 'history-v2']);
 
 /** The steps of `profile`, built once per profile and pair of caller shapes. */
 function stepsOf(profile, shapes) {
   if (!Object.hasOwn(PROFILES, profile)) throw new Error(`redact: unknown profile ${String(profile)}`);
+  if (HISTORY.has(profile)) throw new Error(`redact: ${profile} is a history rule set, not text steps; build it with historyRules`);
   const ids = PROFILES[profile];
   const key = SHAPED.has(profile)
     ? `${profile}\0${needShape(shapes, 'genericSk')}\0${needShape(shapes, 'jwt')}`
@@ -393,6 +481,23 @@ export function redactCount(profile, text, shapes) {
  *  profile. */
 export function redact(profile, text, shapes) {
   return redactCount(profile, text, shapes).text;
+}
+
+/** The rule set a history profile names, as `ccd/history/lib.mjs` reads it: `{ field, final }`, each form a frozen object
+ *  of `final` and one pattern per slot, in the profile's order. Every call builds fresh expressions, so no two callers
+ *  share a global or sticky expression's `lastIndex`; lib calls it once per profile, at load. */
+export function historyRules(profile) {
+  if (!HISTORY.has(profile)) throw new Error(`redact: ${String(profile)} is not a history profile`);
+  const build = (final) => {
+    const set = { final };
+    for (const id of PROFILES[profile]) {
+      const { slot, form } = BY_ID.get(id);
+      if (Object.hasOwn(set, slot)) throw new Error(`redact: ${profile} fills ${slot} twice`);
+      set[slot] = form(final);
+    }
+    return Object.freeze(set);
+  };
+  return Object.freeze({ field: build(false), final: build(true) });
 }
 
 /** The docs profile's rows as `[pattern, suffix]`, in profile order: what `DOCS_REDACT_RULES` is. */

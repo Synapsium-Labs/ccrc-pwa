@@ -2565,17 +2565,46 @@ export const MIGRATIONS: readonly string[] = [
   INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('roster-card', 'shadow', 0);
   `,
   // ── 57: user_version 56 -> 57 ─────────────────────────────────────────────
+  // D-8166 (test box connect spec §2.10, plan TC12): `testbox_events`, the session-only ledger of every act the test box
+  // card runs. Its ONE writer is `TestboxAudit.write` (`server/src/testboxAudit.ts`), which refuses any act, outcome or code
+  // outside the closed vocabularies (`shared/testbox-admin.ts`, `shared/refusal.ts`), a fingerprint off the host key form
+  // and a fleet identity off the node-id grammar before the INSERT, so no column can carry an address, a path, a secret or
+  // free text. `at` is epoch ms; `actor` is `<device label> <8 hex of idHash>`, never an IP (`accounts/audit.ts#actorOf`);
+  // `actId` is a long act's 32-hex id and UNIQUE, so the lane that writes the act's end row (plan TC13) cannot write it twice
+  // across a restart; `code`, `fingerprint` and `fleetIdentity` are NULL when the row has none. Rows older than 365 days are
+  // swept (`TestboxAudit.sweep`), which the index on `at` serves.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 57` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before
+  // merge (it must print 56 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE testbox_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            INTEGER NOT NULL,
+    actor         TEXT    NOT NULL,
+    act           TEXT    NOT NULL,
+    actId         TEXT    UNIQUE,
+    outcome       TEXT    NOT NULL CHECK (outcome IN ('ok', 'refused', 'failed', 'unknown')),
+    code          TEXT,
+    fingerprint   TEXT,
+    fleetIdentity TEXT
+  );
+  CREATE INDEX testbox_events_by_at ON testbox_events(at);
+  `,
+  // ── 58: user_version 57 -> 58 ─────────────────────────────────────────────
   // The case lane's table (Overlord spec §10.5, W1a): `practice_cases`, one row per case a trigger signature has earned
   // (`shared/practice-triggers.ts#signatureText`). `state` is `open` and nothing else in W1a (a later review moves it);
   // `mode` is the lane's mode word (`shadow`: recorded, no review offered); `cause` is a `CaseCause`; `programmes` and
   // `evidence` are JSON arrays (programme slugs, run_events ids), ascending. Its one writer is `openPracticeCase` in
   // `practiceCasesStore.ts`, a compare-and-set on the signature's newest `openedAt`.
   //
-  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 57` takes rule 3
+  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 58` takes rule 3
   // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
   // This build's writer names its columns, so a later build that adds a column to `practice_cases` must make it nullable
   // or give it a DEFAULT, or this build's writer fails after a rollback.
-  // RE-MEASURE the slot before the PR and before merge (it must print 56 before this entry is counted):
+  // RE-MEASURE the slot before the PR and before merge (it must print 57 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

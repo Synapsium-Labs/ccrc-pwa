@@ -12,7 +12,8 @@ import path from 'node:path';
 import type { TestboxHostTools, TestboxOpReply } from '../../shared/agent-protocol.js';
 import { TESTBOX_REMOTE_LIVE_MARKER } from '../../shared/switches.js';
 import { TESTBOX_PROTO, TESTBOX_STATE_MAP, type StatusAnswer, type TestboxState } from '../../shared/testbox.js';
-import { runsCounts, runsLogDates, testboxBlock, testboxSwitch, type TestboxAnswer } from '../src/testbox.js';
+import type { TestboxAdminStatus } from '../../shared/testbox-admin.js';
+import { adminOfBlock, adminOfStatus, NOT_CONNECTED_ADMIN, runsCounts, runsLogDates, testboxBlock, testboxSwitch, type TestboxAnswer } from '../src/testbox.js';
 import { TESTBOX_POLL_DEFAULT_MS, TestboxLane } from '../src/testboxLane.js';
 import { localIOFor, type FleetIO, type MeasuredTestbox } from '../src/io.js';
 import { loadConfig } from '../src/config.js';
@@ -83,6 +84,40 @@ describe('testboxBlock: the state and the switch are two fields (D-7444)', () =>
     const b = testboxBlock({ answer: status({ tools: { ...TOOLS, chrome: '131.0.6778.86' } }), listing: [], logs: ['', ''], now: NOW });
     expect(b.cells.filter((c) => c.differs).map((c) => c.tool)).toEqual(['chrome']);
     expect(b.cells.map((c) => c.tool)).toEqual(['node', 'npm', 'tmux', 'git', 'python3', 'chrome', 'release']);
+  });
+});
+
+describe('testboxBlock: the connect surface rides the block as one optional field (D-8166)', () => {
+  const answer = status({});
+  const fp = `SHA256:${'A'.repeat(43)}`;
+  const admin: TestboxAdminStatus = {
+    v: 1, connected: true, addressSet: true, login: 'root', fingerprint: fp, hostKey: 'changed', boxFileSha256: 'a'.repeat(64), act: null,
+    boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null,
+  };
+
+  it('a status adds admin and moves nothing else', () => {
+    const plain = testboxBlock({ answer, listing: [], logs: ['', ''], now: NOW });
+    const withAdmin = testboxBlock({ answer, listing: [], logs: ['', ''], now: NOW, admin });
+    expect('admin' in plain).toBe(false);
+    expect(withAdmin.admin).toEqual({ connected: true, hostKey: 'changed', act: null, parity: 'none' });
+    const { admin: _a, ...rest } = withAdmin;
+    expect(rest).toEqual(plain);
+  });
+
+  it('a lane that got no status leaves admin out, and a block with none reads as not connected', () => {
+    const b = testboxBlock({ answer, listing: [], logs: ['', ''], now: NOW, admin: null });
+    expect('admin' in b).toBe(false);
+    expect(adminOfBlock(b)).toBe(NOT_CONNECTED_ADMIN);
+    expect(adminOfStatus({ ...admin, connected: false, hostKey: 'none' })).toMatchObject({ connected: false, hostKey: 'none' });
+  });
+
+  it('a passing record that still matches the pin and the box file reads pass, and stale once the status carries the stale mark', () => {
+    const rec: NonNullable<TestboxAdminStatus['parity']> = {
+      v: 1, result: 'pass', prs: [], fixtures: [], release: 'v0.0.900', toolsKey: 'k', fingerprint: fp, boxFileSha256: 'a'.repeat(64), at: 1,
+    };
+    expect(adminOfStatus({ ...admin, parity: rec }).parity).toBe('pass');
+    expect(adminOfStatus({ ...admin, parity: rec, parityStale: false }).parity).toBe('pass');
+    expect(adminOfStatus({ ...admin, parity: rec, parityStale: true }).parity).toBe('stale');
   });
 });
 

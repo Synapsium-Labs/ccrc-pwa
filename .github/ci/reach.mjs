@@ -78,7 +78,8 @@ export const FOREIGN = {
  * resolves under a foreign prefix without an entry here.
  */
 export const READS = {
-  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
+  // ccd/testbox-knobs too (D-8166): pwa/test/testbox-admin-words.test.ts pins the card's knob words to the knobs file.
+  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/', 'ccd/testbox-knobs'],
   browser: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
 };
 

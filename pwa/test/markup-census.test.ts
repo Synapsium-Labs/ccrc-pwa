@@ -337,6 +337,16 @@ const REGISTERED_BLOCKS: Record<string, string> = {
     + 'names as candidates (a bare `<code>`). The answers are two failure '
     + 'words, so a list component would take the row\'s content as a prop, '
     + 'which is the `<li>` with one more name.',
+  // Test box connect (D-8166), which landed after this census; argued, not deferred.
+  'div.testbox-connect-row(Button,Button)':
+    'DIFFERENT THINGS, in the BUTTONS. The row is a layout class (two actions '
+    + 'side by side off the phone band, stacked on it); what sits in it is not '
+    + 'one shape. Step 2\'s pair answers the key line — copy it, then say it was '
+    + 'added — a ghost and a primary that move the card on. The recovery pair '
+    + 'takes a recorded connection back — show the line again (absent on step 2, '
+    + 'which already shows it) and start over — two ghosts with their own busy '
+    + 'words. A component for the row would take its children as a prop, which '
+    + 'is the `<div>` with one more name.',
 };
 
 /** The same, for copied className literals. */

@@ -4,7 +4,7 @@
 // (ws-add/ws-rm).
 import { describe, it, expect, beforeAll } from 'vitest';
 import {
-  EXEC_WHITELIST, FORBIDDEN_COMMANDS, UNGRANTABLE_VERBS, isExecAllowed,
+  EXEC_COMMANDS, EXEC_WHITELIST, FORBIDDEN_COMMANDS, UNGRANTABLE_VERBS, isExecAllowed,
 } from '../../agent/src/whitelist.js';
 import { CCD_ARGV, verbSupported } from '../src/ccdargv.js';
 import { CCD_ARGV_SAMPLES } from './ccdArgvSamples.js';
@@ -957,6 +957,49 @@ describe('layer 4c — the testbox ops are not an exec path, and their bodies ha
     const src = code(readFileSync(path.join(SRC_DIR, 'testboxOp.ts'), 'utf8'));
     expect(src).not.toMatch(/child_process/);
     expect(src).toMatch(/from '\.\/testbox\/exec\.js'/);
+  });
+});
+
+// Layer 4d (test box connect plan TC11, D-8166): the `testbox-admin` op is the FIFTH class of wire-triggered spawn
+// outside the exec whitelist. It adds nothing to the whitelist: `ssh` (which the verb runs on the fleet host, never the
+// agent) stays forbidden, and the op's case and module name no exec-surface symbol (agent/test/testbox-admin-op.test.ts
+// holds the same scan from the agent's side).
+describe('layer 4d — the testbox-admin op is not an exec path and the whitelist is unchanged', () => {
+  it('EXEC_COMMANDS and FORBIDDEN_COMMANDS are unchanged and ssh stays forbidden', async () => {
+    expect([...EXEC_COMMANDS]).toEqual(['tmux', 'ccd']);
+    expect(Object.keys(EXEC_WHITELIST).sort()).toEqual(['ccd', 'tmux']);
+    for (const cmd of ['ssh', 'scp', 'sftp', 'rsync', 'gh', 'git', 'bash', 'sh', 'env', 'curl', 'nc']) {
+      expect(FORBIDDEN_COMMANDS as readonly string[], cmd).toContain(cmd);
+      expect(isExecAllowed(cmd, ['testbox-admin', 'status']), cmd).toBe(false);
+    }
+    expect(FORBIDDEN_COMMANDS as readonly string[]).not.toContain('testbox-admin');
+    expect(EXEC_COMMANDS as readonly string[]).not.toContain('testbox-admin');
+    expect(EXEC_COMMANDS as readonly string[]).not.toContain('ccrc');
+  });
+
+  it("`case 'testbox-admin'` and agent/src/testboxAdminOp.ts name no exec-surface symbol and call the port once", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+    const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+    const readSrc = (name: string): string => readFileSync(path.join(dir, name), 'utf8');
+    // The op's case, cut by `cutBetween` (a helper, so the cut is not a literal pin on agent/src/server.ts).
+    const cutBetween = (src: string, open: string, close: RegExp): string => {
+      const at = src.indexOf(open);
+      expect(at, `${open} is there`).toBeGreaterThanOrEqual(0);
+      const after = src.slice(at + open.length);
+      return after.slice(0, close.exec(after)!.index);
+    };
+    const server = readSrc('server.ts');
+    const handle = cutBetween(server, 'async function handleReq(', /\n\}\n/);
+    const body = cutBetween(handle, "case 'testbox-admin': {", /\n    (?:case '|default:)/);
+    const calls = (src: string): number => code(src).match(/\bspawnTestboxAdmin\s*\(/g)?.length ?? 0;
+    expect(code(body)).not.toMatch(EXEC_PATH);
+    expect(calls(body), 'one call inside the case').toBe(1);
+    expect(calls(server.replace(body, '')), 'no call outside it').toBe(0);
+    expect(code(readSrc('testboxAdminOp.ts'))).not.toMatch(EXEC_PATH);
   });
 });
 

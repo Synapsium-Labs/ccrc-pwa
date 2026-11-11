@@ -18,7 +18,7 @@ a shell on the fleet host". They are not advice.
 
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.
 2. Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).
-3. Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
+3. Ack before you act: `mail inbox`, run bare (no pipe, no redirect, no `head` or `tail`), acks what it printed; by hand, key the ack on the DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
 4. A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. The one draft case you can cause is a draft typed over a stash you already hold yourself, which makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.
 5. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
 6. Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.
@@ -184,8 +184,7 @@ hundreds of mutants or a slow suite, runs in a child workspace, not in a coordin
 
 ## How to call the API
 
-Your mail surface is `POST /api/mail` to send, and `GET /api/mail` /
-`GET /api/mail/:id` / `POST /api/mail/:id/ack` to read and acknowledge.
+Your mail surface is `POST /api/mail` to send, and the inbox (below) to read.
 Build 9 adds the peer surface clause 11 names — claims, peers, lifecycle —
 whose long form and worked calls live in
 `../ccrc-coordinator/references/peer-protocol.md`, installed beside the two
@@ -244,11 +243,11 @@ an explicit path and not by name.
   `wave-done` is a `status` mail whose subject is that same string, exactly
   (below).
 
-**Reading mail is three calls, not one.** What lands in your pane is a one-line
-nudge, never the message: list with `GET /api/mail?to=<your id>`, then per row
-use its `deliveryId` — NOT the row's own `id`, which is a different sequence —
-as `:id` for `GET /api/mail/:id` (the body) and `POST /api/mail/:id/ack`
-(body `{"fromId":…,"fromUuid":…}`). Ack before you act on it (clause 3).
+**Reading mail is one call:** `~/.local/bin/ccrc-api mail inbox`, run bare (no
+pipe, no redirect, no `head` or `tail`); piped, it acks nothing. Its footer lists
+what it acked, for `mail fetch <delivery>` if the text did not reach you. If the
+server lacks it: `mail list --to <your id>`, then `mail fetch` and `mail ack` on
+each row's `deliveryId`, NOT its `id`.
 
 ## Reporting a wave-done
 

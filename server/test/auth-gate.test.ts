@@ -99,7 +99,7 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TWELVE files register routes since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
+/** THIRTEEN files register routes since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
  *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
  *  thirteen box-token routes since `link`, D-8141); SEVEN since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
@@ -124,6 +124,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('linear/proxyRoutes.ts'),
   ...scanRoutes('readerLab/routes.ts'),
   ...scanRoutes('linking/routes.ts'),
+  ...scanRoutes('testboxAdmin.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -236,7 +237,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found all ten files, and EXACTLY the route count the surface has', () => {
+  it('found all thirteen files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
@@ -598,7 +599,11 @@ describe('the scanner is looking at something', () => {
     // 201 -> 202, the gated count 124 -> 125, the exempt-HTTP count stays 76.
     // 207 since `GET`/`POST /api/coord/lane-arm` (D-8274, Settings › Automation › Shadow lanes), session-gated and NOT EXEMPT, no box
     // token: the HTTP half 202 -> 204, the gated count 125 -> 127, the exempt-HTTP count stays 76.
-    expect(ROUTES.length).toBe(207);
+    // 209 since `GET /api/testbox/admin` and `POST /api/testbox/admin/:sub` (D-8166, plan TC12), in `testboxAdmin.ts`: session-only and
+    // NOT EXEMPT, no box token; each takes the account gate on the `testbox-admin-v1` cap, the POST with a step-up on four subs: the HTTP
+    // half 204 -> 206, the gated count 127 -> 129, the exempt-HTTP count stays 76.
+    expect(ROUTES.length).toBe(209);
+    expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -770,7 +775,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 207 scanned + the static wildcard when the bundle is built.
+    // 209 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1468,7 +1473,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 204 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 206 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1532,7 +1537,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 204 HTTP routes, not the 76 exempt.
+          //    is not itself flag-aware — the assertion that covers all 206 HTTP routes, not the 76 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

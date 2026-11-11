@@ -174,6 +174,9 @@ describe('the closed route table', () => {
     [['mail', 'send'], 'POST', '/api/mail'],
     [['mail', 'fetch', '7'], 'GET', '/api/mail/7'],
     [['mail', 'ack', '7'], 'POST', '/api/mail/7/ack'],
+    // The inbox read (D-6780): the pane's pair in the query, so it runs in a pane. The fixture's `{"ok":true}` is not an
+    // inbox answer, so the run reads once and acks nothing (`ccrc-api-inbox.test.ts` drives the acks).
+    [['mail', 'inbox'], 'GET', '/api/mail/inbox'],
     [['peers', 'list'], 'GET', '/api/peers'],
     [['lifecycle', 'list'], 'GET', '/api/lifecycle'],
     [['claims', 'list'], 'GET', '/api/claims'],
@@ -245,7 +248,7 @@ describe('the closed route table', () => {
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
       || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'runs' && args[1] === 'review-rounds')
-      || args[0] === 'calls';
+      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox');
     if (paned) plantPane('demo-ws');
     await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -289,7 +292,8 @@ describe('the closed route table', () => {
     // Sixty-two since `linking.show` (D-8147).
     // Sixty-three since `goals.show` (autonomy-default wave A2, D-8126).
     // Sixty-four since `calls.record` (autonomy-default wave A3, D-8126).
-    expect(keys).toHaveLength(64);
+    // Sixty-five since `mail.inbox` (mail inbox, D-6780).
+    expect(keys).toHaveLength(65);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -303,7 +307,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -458,7 +462,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
       ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'end-request', '12'], ['runs', 'signals', '12'],
       ['runs', 'route', '12'], ['runs', 'review-rounds', '12', '--json', '-'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
-      ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
+      ['mail', 'ack', '7'], ['mail', 'inbox'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
       ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'],
       ['landing', 'entries', '--json', '-'], ['landing', 'order', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],

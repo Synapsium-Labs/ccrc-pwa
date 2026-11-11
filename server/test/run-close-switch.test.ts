@@ -88,9 +88,9 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 57 (practice_cases, Overlord W1a), 56 (lane_arm_settings, D-8274) and 55
-    // (coordinator_calls, D-8126) as well as 54, so the reopen replays all four.
-    fresh.exec('DROP TABLE practice_cases; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
+    // Back to version 53: undo migrations 58 (practice_cases, Overlord W1a), 57 (testbox_events, D-8166), 56
+    // (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well as 54, so the reopen replays all five.
+    fresh.exec('DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
     fresh.close();
     const coord = new CoordStore(openCoordDb(file));
     expect(coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'on', claimantCrashed: 'off', claimantGone: 'shadow', updatedAt: 9 });

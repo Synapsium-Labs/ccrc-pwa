@@ -5,6 +5,8 @@
 #
 #   bash <staging>/deploy/testbox/install.sh --release <tag> --node <version> --repos <row file> [--repos <row file>]... \
 #        --distro <ID>-<VERSION_ID> --push-key <public key file>
+#   bash <tools>/release/installed/deploy/testbox/install.sh --reapply [--repos <row file>]...
+#   bash <tools>/release/installed/deploy/testbox/install.sh --unpair
 #
 # A row file is one repository row (shared/testbox.ts#parseRepoRow's JSON), named `<name>.json` for its row's name; it
 # is installed as `CCRC_TESTBOX_REPOS/<name>.json`, the table the service and the push user's forced command read.
@@ -23,8 +25,11 @@
 #      version is --release; --node is a version; an installed release naming another tag refuses (later releases come
 #      only through the tool sync); CCRC_TESTBOX_ROOT, _REPOS and _TOOLS_DIR are absolute (the root installer has no
 #      reader's home to resolve `~/` against, D-7568); the listen address and the registry proxy are IP literals (the
-#      firewall and IPAddressAllow= take addresses); every egress name is a row of spec §2.0's table; the row file and
-#      the push key read; CCRC_TESTBOX_ROOT's filesystem is XFS with reflink=1; the distribution release is --distro's.
+#      firewall and IPAddressAllow= take addresses); CCRC_TESTBOX_ROOT, _REPOS, _TOOLS_DIR and each mirrorPath's parent are
+#      below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox, never a system directory; the
+#      service token is the service user's (`~/` or /var/lib/<service user>/); no user is root, named twice or a run user's, and a user
+#      that exists is one this installer made (its account comment is `ccrc test box`, D-8166); every egress name is a
+#      row of spec §2.0's table; the row file and the push key read; CCRC_TESTBOX_ROOT's filesystem is XFS with reflink=1; the distribution release is --distro's.
 #   2. the first release: <staging> copied to <tools>/release/<tag>, root's, no group or other write, and
 #      <tools>/release/installed linked to it in one rename; refused when any path of that tree is then not root's or is
 #      writable by group or other.
@@ -44,9 +49,21 @@
 #      file, the running tailnet client's, resolver's and time client's cgroups added to its sets, the address sets
 #      asked for), then the service and the egress timer enabled and started, and the installed marker
 #      (<etc>/installed: the tag and the box file's sha256) written.
-# A re-run with the installed marker present changes nothing when the box file's sha256 and the tag are the marker's;
-# otherwise it runs phase 5 again, reloads the firewall and the system manager, restarts the service, refreshes the
+# A re-run with the installed marker present changes nothing when the box file's sha256 and the tag are the marker's and the
+# push user holds the key named by --push-key; otherwise it runs phase 5 again, reloads the firewall and the system manager, restarts the service, refreshes the
 # egress sets and records the new tag and sha256.
+#
+# Two more modes run from the installed tree (<tools>/release/installed) and from nowhere else (D-8166):
+#   --reapply  applies a changed box file, or new repository rows (--repos), at the installed tag: phase 1's value
+#              refusals, then phases 5 and 6 (phases 2 to 4 are the first install's and are skipped). The tag is the
+#              tree's build.json version; the installed marker may name an older tag (tool sync switches the installed
+#              tree and never rewrites the marker: apply-release), and the marker then records the tree's tag. The
+#              repository rows are the installed ones unless --repos names others; the push user's key is the one
+#              installed. With the tag, the box file and the rows unchanged it changes nothing, unless --force: that
+#              runs phases 5 and 6 anyway (repair rewrites units, drop-ins, rule, firewall file and key, and restarts).
+#   --unpair   stops and disables the test service and the egress timer, empties the push user's authorized_keys and
+#              removes the service token file. It leaves CCRC_TESTBOX_ROOT, the mirrors and the installed tree (the box
+#              is rebuilt, never reused: no wipe) and the installed marker.
 #
 # Every system call goes through one seam, TB_SYS (empty on a box: the command runs as it is), so the tests run this
 # into a fixture root as a non-root user. The files a system reads (units, drop-ins, the rule, the firewall file) are
@@ -66,12 +83,25 @@ _sys() { if [ -n "${TB_SYS:-}" ]; then "$TB_SYS" "$@"; else "$@"; fi; }
 _tbi_sha256() { local l; l=$(_plat_sha256 "$1") || return 1; printf '%s\n' "${l%% *}"; }   # ccd/ccrc's wrapper
 _tbi_git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY GIT_CONFIG_NOSYSTEM=1 git "$@"; }
 
+dir() { _sys install -d -m "$1" -o "$2" -g "$3" "$4" || fail "cannot make $4"; }
+put() { _sys install -m "$1" -o root -g root "$2" "$3" || fail "cannot write $3"; }
+
 # ── the arguments ────────────────────────────────────────────────────────
-usage() { printf 'usage: install.sh --release <tag> --node <version> --repos <row file>... --distro <ID>-<VERSION_ID> --push-key <file>\n' >&2; exit 2; }
+usage() {
+  printf 'usage: install.sh --release <tag> --node <version> --repos <row file>... --distro <ID>-<VERSION_ID> --push-key <file>\n' >&2
+  printf '       <tools>/release/installed/deploy/testbox/install.sh --reapply [--force] [--repos <row file>]...\n' >&2
+  printf '       <tools>/release/installed/deploy/testbox/install.sh --unpair\n' >&2
+  exit 2
+}
+MODE=install
+FORCE=0
 A_REL='' A_NODE='' A_DISTRO='' A_KEY=''
 A_REPOS=()
 while (($#)); do
   case $1 in
+    --reapply) [ "$MODE" = install ] || usage; MODE=reapply; shift ;;
+    --force) FORCE=1; shift ;;
+    --unpair) [ "$MODE" = install ] || usage; MODE=unpair; shift ;;
     --release) (($# >= 2)) || usage; A_REL=$2; shift 2 ;;
     --node) (($# >= 2)) || usage; A_NODE=$2; shift 2 ;;
     --repos) (($# >= 2)) || usage; A_REPOS+=("$2"); shift 2 ;;
@@ -80,19 +110,28 @@ while (($#)); do
     *) usage ;;
   esac
 done
-[ -n "$A_REL" ] && [ -n "$A_NODE" ] && [ "${#A_REPOS[@]}" -gt 0 ] && [ -n "$A_DISTRO" ] && [ -n "$A_KEY" ] || usage
+case $MODE in
+  install) [ -n "$A_REL" ] && [ -n "$A_NODE" ] && [ "${#A_REPOS[@]}" -gt 0 ] && [ -n "$A_DISTRO" ] && [ -n "$A_KEY" ] || usage ;;
+  reapply) [ -z "$A_REL$A_NODE$A_DISTRO$A_KEY" ] || usage ;;
+  unpair) [ -z "$A_REL$A_NODE$A_DISTRO$A_KEY" ] && [ "${#A_REPOS[@]}" -eq 0 ] || usage ;;
+esac
+[ "$FORCE" = 0 ] || [ "$MODE" = reapply ] || usage
 
 TBI_HERE=${BASH_SOURCE[0]}
 [[ $TBI_HERE == */* ]] || TBI_HERE=./$TBI_HERE
 TBI_HERE=$(cd "${TBI_HERE%/*}" && pwd) || refuse "cannot find the installer's directory"
 STAGING=${TBI_HERE%/deploy/testbox}
 [ "$STAGING" != "$TBI_HERE" ] || refuse "not run from a release tree's deploy/testbox: $TBI_HERE"
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/ccrc-testbox-install.XXXXXX") || fail "no temporary directory"
+trap 'rm -rf -- "$WORK"' EXIT
 
 # ── phase 1: the refusals ────────────────────────────────────────────────
 while IFS= read -r v; do case $v in CCRC_TESTBOX_*) unset "$v" ;; esac; done < <(compgen -e)
 # shellcheck source=/dev/null  # the staging tree's own ccd/testbox-knobs
 . "$STAGING/ccd/testbox-knobs" || refuse "cannot load $STAGING/ccd/testbox-knobs"
 BOXFILE=$(_tb_box_env_file)
+SYSROOT=${BOXFILE%/etc/*}
+ETC=${BOXFILE%/*}
 _tb_box_file_ok "$BOXFILE" || refuse "the box file: $TB_BOX_WHY"
 PROG=$TBI_PROG _tb_load box || refuse "the box file's settings cannot be read"
 if [ "${#TBK_WARN[@]}" -gt 0 ]; then
@@ -101,21 +140,56 @@ if [ "${#TBK_WARN[@]}" -gt 0 ]; then
 fi
 k() { printf '%s' "${TBK[$1]}"; }
 
+if [ "$MODE" != unpair ]; then
 # The staging tree's own per-file digests, through ccd/ccrc's platform wrapper (the check `_upd_fetch` makes after its
 # extraction): the first release is trusted on its transport checksum and this (D-7424).
 ( cd "$STAGING" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"
-[[ $A_REL =~ $TBI_RE_TAG ]] || refuse "--release $A_REL is not a release tag"
+[ "$MODE" = reapply ] || [[ $A_REL =~ $TBI_RE_TAG ]] || refuse "--release $A_REL is not a release tag"
 bj=$(cat -- "$STAGING/build.json" 2>/dev/null) || refuse "the staging tree has no build.json"
 [[ $bj =~ \"version\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] || refuse "build.json names no version"
-[ "${BASH_REMATCH[1]}" = "$A_REL" ] || refuse "build.json's version ${BASH_REMATCH[1]} is not --release $A_REL"
-[[ $A_NODE =~ $TBI_RE_NODE ]] || refuse "--node $A_NODE is not a version"
+if [ "$MODE" = reapply ]; then
+  A_REL=${BASH_REMATCH[1]}   # the installed tree's own tag
+  [[ $A_REL =~ $TBI_RE_TAG ]] || refuse "build.json's version $A_REL is not a release tag"
+else
+  [ "${BASH_REMATCH[1]}" = "$A_REL" ] || refuse "build.json's version ${BASH_REMATCH[1]} is not --release $A_REL"
+  [[ $A_NODE =~ $TBI_RE_NODE ]] || refuse "--node $A_NODE is not a version"
+fi
+
+fi
 
 for key in CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_TOOLS_DIR; do
   case $(k "$key") in /*) ;; *) refuse "$key=$(k "$key") is not an absolute path (the installer has no reader's home)" ;; esac
 done
+# The paths made root's and the users named come from a file the card can change with no step-up: a path below a system
+# directory, a token path that is not the service user's, and the same user twice are refused before anything is written
+# (D-8166; ccd/testbox-knobs's `_tb_box_policy`).
+_tb_box_policy "$SYSROOT" || refuse "$TB_POLICY_WHY"
 ROOT=$(k CCRC_TESTBOX_ROOT) REPOS=$(k CCRC_TESTBOX_REPOS) TOOLS=$(k CCRC_TESTBOX_TOOLS_DIR)
 SVC=$(k CCRC_TESTBOX_SERVICE_USER) PUSH=$(k CCRC_TESTBOX_PUSH_USER) PREFIX=$(k CCRC_TESTBOX_RUN_USER_PREFIX) RUNS=$(k CCRC_TESTBOX_RUNS)
 TREE=$TOOLS/release/installed
+
+# --reapply and --unpair run from the installed tree and from nowhere else: a copy would be applied from a tree the
+# units do not name, and the first install's tree copy would land on itself.
+if [ "$MODE" != install ]; then
+  here=$(cd -- "$STAGING" 2>/dev/null && pwd -P) || here=''
+  there=$(cd -- "$TREE" 2>/dev/null && pwd -P) || there=''
+  [ -n "$there" ] && [ "$here" = "$there" ] || refuse "--$MODE runs only from the installed tree $TREE, not $STAGING"
+fi
+if [ "$MODE" = unpair ]; then
+  say "unpairing: the service, the egress timer, the push key and the service token"
+  _sys systemctl disable --now ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot stop and disable the test service"
+  : > "$WORK/empty"
+  dir 0755 root root "$SYSROOT/var/lib/$PUSH/.ssh"
+  put 0644 "$WORK/empty" "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys"
+  # The service reads its token from a path of the service user's home when the setting is `~/`-relative.
+  tok=$(k CCRC_TESTBOX_SERVICE_TOKEN_FILE)
+  # shellcheck disable=SC2088  # the setting's literal `~/` prefix, not a shell tilde
+  case $tok in '~/'*) tok=$SYSROOT/var/lib/$SVC/${tok#'~/'} ;; esac
+  [ -n "$tok" ] || fail "CCRC_TESTBOX_SERVICE_TOKEN_FILE is empty"
+  rm -f -- "$tok" || fail "cannot remove $tok"
+  say "unpaired; the run root, the mirrors and the installed release are left as they are"
+  exit 0
+fi
 
 inst=$(readlink -- "$TOOLS/release/installed" 2>/dev/null) || inst=''
 [ -z "$inst" ] || [ "${inst##*/}" = "$A_REL" ] || refuse "$TOOLS/release/installed names ${inst##*/}, not $A_REL: later releases come only through the tool sync"
@@ -150,8 +224,6 @@ _tb_release_base || refuse "the release base: $TB_BOX_WHY"
 # KNOB is the value `_tb_release_base` has just read from the box file in file mode (D-7457).
 h=$(host_of "$KNOB") || refuse "CCRC_RELEASE_BASE_URL names no host"
 EGRESS+=("release"$'\t'"$h")
-SYSROOT=${BOXFILE%/etc/*}
-ETC=${BOXFILE%/*}
 if [ -n "$(k CCRC_TESTBOX_OS_MIRROR)" ]; then
   h=$(host_of "$(k CCRC_TESTBOX_OS_MIRROR)") || refuse "CCRC_TESTBOX_OS_MIRROR names no host"
   EGRESS+=("osmirror"$'\t'"$h")
@@ -176,6 +248,11 @@ row_field() {   # <json> <field> -> the one string member of that name (push-com
   [[ $rest =~ ^[[:space:]]*:[[:space:]]*\"([^\"\\]*)\" ]] || return 1
   printf '%s' "${BASH_REMATCH[1]}"
 }
+if [ "$MODE" = reapply ] && [ "${#A_REPOS[@]}" -eq 0 ]; then
+  # No --repos: the rows already installed.
+  for f in "$REPOS"/*.json; do [ -e "$f" ] && A_REPOS+=("$f"); done
+  [ "${#A_REPOS[@]}" -gt 0 ] || refuse "no repository row is installed under $REPOS"
+fi
 for f in "${A_REPOS[@]}"; do
   [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || refuse "--repos $f is not a readable regular file"
   n=${f##*/}; n=${n%.json}
@@ -183,14 +260,34 @@ for f in "${A_REPOS[@]}"; do
   t=$(cat -- "$f") || refuse "cannot read $f"
   [[ $t == *\"name\"*:*\""$n"\"* ]] || refuse "repository row $f does not name $n"
   m=$(row_field "$t" mirrorPath) && [[ $m == /* && "/$m/" != */../* && "/$m/" != */./* ]] || refuse "repository row $n has no one absolute mirrorPath"
+  _tb_path_ok "$(dirname -- "$m")" "$SYSROOT" || refuse "repository row $n has a mirrorPath that is not below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox (its parent directory is made root's)"
   u=$(row_field "$t" fetchUrl) && [[ $u =~ ^(https|ssh):// ]] || refuse "repository row $n has no one https or ssh fetchUrl"
   case " ${ROW_NAMES[*]} " in *" $n "*) refuse "repository row $n is named twice" ;; esac
   ROW_NAMES+=("$n"); ROW_MIRRORS+=("$m"); ROW_URLS+=("$u"); ROW_FILES+=("$f")
 done
-PUSH_LINE=$(head -n 1 -- "$A_KEY" 2>/dev/null) || PUSH_LINE=''
-[[ $PUSH_LINE =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa)[[:space:]]+([A-Za-z0-9+/]+=*)([[:space:]].*)?$ ]] \
-  || refuse "--push-key $A_KEY holds no public key line"
+if [ "$MODE" = reapply ]; then
+  # The key installed: the line after the forced command (the one `authorized_keys` line phase 5 writes).
+  PUSH_LINE=$(head -n 1 -- "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys" 2>/dev/null) || PUSH_LINE=''
+  [[ $PUSH_LINE =~ ^restrict,command=\"[^\"]*\"[[:space:]]+(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa)[[:space:]]+([A-Za-z0-9+/]+=*)([[:space:]].*)?$ ]] \
+    || refuse "the push user holds no installed key (the box is unpaired)"
+else
+  PUSH_LINE=$(head -n 1 -- "$A_KEY" 2>/dev/null) || PUSH_LINE=''
+  [[ $PUSH_LINE =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa)[[:space:]]+([A-Za-z0-9+/]+=*)([[:space:]].*)?$ ]] \
+    || refuse "--push-key $A_KEY holds no public key line"
+fi
 PUSH_KEY="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+
+# A user name the box file names is an account this installer made, or none yet: a name that is already an account of
+# something else (root, a person, another service) is refused, because the name is written into the polkit rule, the box
+# file's group, the token's owner and the run users' units. The installer marks the accounts it makes with TBI_USER_MARK.
+TBI_USER_MARK='ccrc test box'
+have_user() { _sys getent passwd "$1" >/dev/null 2>&1; }
+have_group() { _sys getent group "$1" >/dev/null 2>&1; }
+for u in "$SVC" "$PUSH" "${PREFIX}install" $(for ((i = 1; i <= RUNS; i++)); do printf '%s%s ' "$PREFIX" "$i"; done); do
+  entry=$(_sys getent passwd "$u" 2>/dev/null) || continue
+  IFS=: read -r _ _ _ _ gecos _ <<<"$entry"
+  [ "$gecos" = "$TBI_USER_MARK" ] || refuse "the user $u already exists and this installer did not make it; name an account of the test box's own in the box file"
+done
 
 # The run root's filesystem: XFS with reflink=1 (spec §2.2 "XFS, settled").
 p=$ROOT; while [ ! -e "$p" ] && [ "$p" != / ]; do p=$(dirname -- "$p"); done
@@ -203,23 +300,39 @@ os_id='' os_ver=''
 while IFS= read -r l; do
   case $l in ID=*) os_id=${l#ID=}; os_id=${os_id//\"/} ;; VERSION_ID=*) os_ver=${l#VERSION_ID=}; os_ver=${os_ver//\"/} ;; esac
 done < "$osr" 2>/dev/null
-[ "$os_id-$os_ver" = "$A_DISTRO" ] || refuse "the box runs ${os_id:-?}-${os_ver:-?}, not --distro $A_DISTRO"
+[ "$MODE" = reapply ] || [ "$os_id-$os_ver" = "$A_DISTRO" ] || refuse "the box runs ${os_id:-?}-${os_ver:-?}, not --distro $A_DISTRO"
 
 BOX_SHA=$(_tbi_sha256 "$BOXFILE") || refuse "cannot hash $BOXFILE"
 MARK_TAG='' MARK_SHA=''
 if [ -f "$ETC/installed" ]; then
   while IFS=$'\t' read -r a b; do case $a in release) MARK_TAG=$b ;; box-sha256) MARK_SHA=$b ;; esac; done < "$ETC/installed"
 fi
-if [ -n "$MARK_TAG" ] && [ "$MARK_TAG" = "$A_REL" ] && [ "$MARK_SHA" = "$BOX_SHA" ]; then
+same_rows=1
+if [ "$MODE" = reapply ]; then
+  # Tool sync switches the installed link to a new tag and never rewrites the marker, so after a sync the marker may
+  # name an older tag than the tree: that is the apply-release case, and phases 5 and 6 below record the tree's tag
+  # (D-8166). Only a box with no marker (never installed) is refused.
+  [ -n "$MARK_TAG" ] || refuse "the box has no installed marker (run the first install, not --reapply)"
+  for i in "${!ROW_NAMES[@]}"; do
+    [ "${ROW_FILES[$i]}" -ef "$REPOS/${ROW_NAMES[$i]}.json" ] || cmp -s -- "${ROW_FILES[$i]}" "$REPOS/${ROW_NAMES[$i]}.json" || same_rows=0
+  done
+fi
+# A first-install run is also asked to install a key: with the marker, the tag and the box file all the same, the box is current only
+# when the key it holds IS that key. An unpaired box keeps its marker (--unpair never removes it) and holds no key, so a re-pair with
+# the same tag and a byte-identical box file would otherwise read "nothing to do" and leave the new key out (every push refused) and the
+# service and the egress timer disabled.
+same_key=1
+if [ "$MODE" = install ]; then
+  inst_line=$(head -n 1 -- "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys" 2>/dev/null) || inst_line=''
+  [[ $inst_line =~ ^restrict,command=\"[^\"]*\"[[:space:]]+(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa)[[:space:]]+([A-Za-z0-9+/]+=*)([[:space:]].*)?$ ]] \
+    && [ "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}" = "$PUSH_KEY" ] || same_key=0
+fi
+if [ "$FORCE" = 0 ] && [ -n "$MARK_TAG" ] && [ "$MARK_TAG" = "$A_REL" ] && [ "$MARK_SHA" = "$BOX_SHA" ] && [ "$same_rows" = 1 ] && [ "$same_key" = 1 ]; then
   say "$A_REL is installed and the box file is unchanged; nothing to do"
   exit 0
 fi
 
 # ── phase 2: the first release (D-7424) ──────────────────────────────────
-dir() { _sys install -d -m "$1" -o "$2" -g "$3" "$4" || fail "cannot make $4"; }
-put() { _sys install -m "$1" -o root -g root "$2" "$3" || fail "cannot write $3"; }
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/ccrc-testbox-install.XXXXXX") || fail "no temporary directory"
-trap 'rm -rf -- "$WORK"' EXIT
 if [ -z "$MARK_TAG" ]; then
   say "phase 2: the release $A_REL"
   dir 0755 root root "$TOOLS"
@@ -270,11 +383,9 @@ fi
 
 # ── phase 5: users, directories, rows, mirrors, units, rule, firewall file ─
 say "phase 5: users, directories, units, the rule and the firewall file"
-have_user() { _sys getent passwd "$1" >/dev/null 2>&1; }
-have_group() { _sys getent group "$1" >/dev/null 2>&1; }
 user() {   # <name> <home> <shell> [--create-home]
   have_user "$1" && return 0
-  _sys useradd --system --user-group --home-dir "$2" --shell "$3" ${4:+"$4"} "$1" || fail "cannot add the user $1"
+  _sys useradd --system --user-group --comment "$TBI_USER_MARK" --home-dir "$2" --shell "$3" ${4:+"$4"} "$1" || fail "cannot add the user $1"
 }
 have_group "$TBI_GIT_GROUP" || _sys groupadd --system "$TBI_GIT_GROUP" || fail "cannot add the group $TBI_GIT_GROUP"
 user "$SVC" "$SYSROOT/var/lib/$SVC" /usr/sbin/nologin --create-home
@@ -308,7 +419,7 @@ put 0644 "$WORK/authorized_keys" "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys"
 # TB3's hook) are root's.
 dir 0755 root root "$REPOS"
 for i in "${!ROW_NAMES[@]}"; do
-  put 0644 "${ROW_FILES[$i]}" "$REPOS/${ROW_NAMES[$i]}.json"
+  [ "${ROW_FILES[$i]}" -ef "$REPOS/${ROW_NAMES[$i]}.json" ] || put 0644 "${ROW_FILES[$i]}" "$REPOS/${ROW_NAMES[$i]}.json"
   m=${ROW_MIRRORS[$i]}
   dir 0755 root root "$(dirname -- "$m")"
   if [ ! -d "$m" ]; then _tbi_git init -q --bare --shared=0664 "$m" >/dev/null || fail "cannot make the mirror $m"; fi
@@ -388,7 +499,10 @@ _sys systemctl enable --now nftables.service || fail "cannot start nftables.serv
 if [ -z "$MARK_TAG" ]; then
   _sys systemctl enable --now ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot start the test service"
 else
+  # Enabled again here: a box that was unpaired (`--unpair` disables both) and paired anew keeps its marker, and must start at boot.
+  _sys systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot enable the test service"
   _sys systemctl restart ccrc-testbox.service || fail "cannot restart the test service"
+  _sys systemctl start ccrc-testbox-egress.timer || fail "cannot start the egress timer"
 fi
 _sys systemctl start ccrc-testbox-egress.service || say "the egress sets were not all filled; ccrc-testbox-egress.timer tries again"
 printf 'release\t%s\nbox-sha256\t%s\n' "$A_REL" "$BOX_SHA" > "$WORK/installed"

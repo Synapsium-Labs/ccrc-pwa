@@ -5,11 +5,37 @@ One part of the wave lifecycle. `wave-lifecycle.md` lists every part.
 ## 3 — Read mail
 
 What lands in your session is NOT the message — it is a tiny one-line nudge
-("`ccrc-mail: you have new mail. List (GET /api/mail?to=<you>); per row use
-its deliveryId, NOT id…`") that points at it. The nudge is the same 24-char
-text every time and carries no delivery id itself: one nudge means "you have
-outstanding mail", not "here is one message" — always re-list rather than
-assuming the nudge names exactly one row.
+that points at it. The nudge opens with the same 24 characters every time and
+carries no delivery id itself: one nudge means "you have outstanding mail",
+not "here is one message". Whichever form it takes, read your mail one way:
+
+```bash
+"$HOME/.local/bin/ccrc-api" mail inbox
+```
+
+Run `mail inbox` bare, by that full path: no pipe, no redirect, no `head` or
+`tail`. It prints every delivery you can still ack, oldest first, each in the
+envelope shape of `references/mail-envelope.md` under its `delivery:` id and
+with no `ack:` lines, then acks each entry right after printing it, through
+the ack route below with your own pane's `fromId` and `fromUuid`. What it
+printed is acked, so act on it. Its stdout is plain text, not JSON. A piped or
+`/dev/null` run prints everything and acks nothing, and says so on its first
+and last lines. A redirect to a file still acks what it wrote, so do not read
+your mail into a file. After each entry it says `inbox: acked delivery <n>`, or
+why it did not ack (`was already acked`; `was closed before this ack`, nothing
+owed; `is NOT acked`, shown again next time); its footer lists every delivery
+it acked, for `ccrc-api mail fetch <delivery>` if their text did not reach you,
+and says when more remain (run it again) or when abandoned deliveries are not
+shown (`mail list --to <your id>` lists them). It reads the server's
+`GET /api/mail/inbox?fromId=<your id>&fromUuid=<your uuid>`, which writes
+nothing: every ack is the client's, one per printed entry.
+
+The nudge's older form names the list ("`ccrc-mail: you have new mail. List
+(GET /api/mail?to=<you>); per row use its deliveryId, NOT id…`"); read with the
+inbox all the same. **The fallback** is the three steps below: `mail list`,
+then `mail fetch` and `mail ack` per row. Use them when the client answers
+`the server did not serve the inbox` (the server predates it), and to read one
+delivery again.
 
 0. **List**: `GET /api/mail?to=<your session id>`. This returns only
    OUTSTANDING mail — `queued`/`delivered` (unacked), plus a delivery the lane
@@ -54,11 +80,9 @@ For each outstanding row, with `:id` below filled in from its `deliveryId`
    indefinitely.
 3. Then act.
 
-The server also answers `GET /api/mail/inbox?fromId=<your id>&fromUuid=<your uuid>`:
-every delivery you can still ack, oldest first, each rendered and masked under its
-delivery id, in pages of at most 20 KiB (`remaining` counts what the page left out).
-It writes nothing and acks nothing. Until your `ccrc-api` carries `mail inbox`, steps
-1 and 2 above stay the way to read and act.
+The inbox route answers in pages of at most 20 KiB of rendered, masked text
+(`remaining` counts what a page left out, and the client says to run it again),
+and a fetched envelope keeps its `ack:` lines for the fallback above.
 
 **Sending mail of your own** — a rejection (§4), a question, a status
 update — is `POST /api/mail`, body:

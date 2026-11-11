@@ -1,7 +1,7 @@
 // The tick diet's differential runner, shared by the files that run its per-locale rows (#387, tick-diet spec §9).
 //
 // `ccd-tick-diet-equivalence-static.test.ts` runs the locale-free parts (E0, E1, E2, E4 and the static censuses E8d,
-// E8g and E10d), `-rows` and `-route` the rows under `C` (D-6767), and `ccd-tick-diet-equivalence-utf8-<part>.test.ts` the
+// E8g and E10d), `-limits`, `-registry` and the `-route` parts the rows under `C` (D-6767), and `ccd-tick-diet-equivalence-utf8-<part>.test.ts` the
 // same rows under the UTF-8 locale. Those files call `registerLocaleRows`, at the end of this file, with their own
 // entry of `LOCALES`. Everything above it is the harness's body, moved here whole from the one file that held it: the
 // vendored-name tables the rows read, the function reader, the runner (`runBatch`, `PRELUDE`, `runScript`), the locale
@@ -1151,6 +1151,28 @@ const RT_NAMED_IDS = [
   'class=haiku,effort=valid',
 ];
 
+/** How many blocks E9's chain records run in, `E9` (share 1) and `E9-2` on, each its own file per locale (D-6767). The
+ *  580 `ROUTE_ROWS` records through `rtChain` were nearly all of E9's one batch, about 600 s on a CI runner, so the
+ *  `-route` file passed the testmap trace job's 1560 s per-file deadline only below a 2.6x slowdown, and one block's
+ *  one `beforeAll` is as small as a split by `describe` gets. A record's share is a function of the record alone, so
+ *  every share's batch, the checks over it and the full names of the rows are what they were in the one batch. */
+export const ROUTE_CHAIN_SHARES = 4;
+/** The chain records E9a's non-vacuity pins read (`leg(…)`), kept in E9's own share, whose batch they read. */
+const RT_PINNED: ReadonlySet<string> = new Set([
+  'class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=absent',
+  'class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=both',
+  'class=valid,degraded=valid,effort=valid,inert=effort,routeapplied=class-only',
+  'class=haiku,effort=valid',
+  'class=absent,degraded=absent,effort=absent,inert=absent,routeapplied=absent',
+]);
+/** The share (1 to `ROUTE_CHAIN_SHARES`) the chain record `id`, at index `i` of `ROUTE_ROWS`, runs in: share 1 for a
+ *  pinned record, else by its index, so neighbouring records (one field's cases) spread over every share. */
+const routeChainShare = (id: string, i: number): number => (RT_PINNED.has(id) ? 1 : (i % ROUTE_CHAIN_SHARES) + 1);
+/** The ids of the chain records share `share` runs: `ccd-tick-diet-partsPin.test.ts` pins that the shares are every
+ *  `ROUTE_ROWS` record once. */
+export const routeChainIds = (share: number): string[] =>
+  ROUTE_ROWS.filter((r, i) => routeChainShare(r.id, i) === share).map((r) => r.id);
+
 /** Every W3 Task 15 row (plan Task 15 Step 1, tick-diet spec §6.4):
  *  - `chain`: each `ROUTE_ROWS` record (every combination of the five fields' cases, plus haiku with each effort)
  *    through `rtChain`, against the legacy;
@@ -1158,14 +1180,15 @@ const RT_NAMED_IDS = [
  *    `_route_wanted_to`'s `deg` and `ine`, `_route_effort_for_to`'s `e`, `_route_wanted_to`'s `eff`,
  *    `_route_pending_word_to`'s `want` and `ap`, `_route_apply_pending`'s `w`), one call per row, so the out-var and
  *    the caller frame are compared for exactly that call. Each starts from the frame's `__S`, so a form that does not
- *    empty its out-var first leaks it on every record whose answer is empty. */
-function w3RouteRows(): { chain: Row[]; named: Row[] } {
-  const chain = ROUTE_ROWS.map((r): Row => ({
+ *    empty its out-var first leaks it on every record whose answer is empty.
+ *  `share` picks the chain records (`routeChainShare`) of one E9 block; the named rows are E9b's, in share 1 only. */
+function w3RouteRows(share: number): { chain: Row[]; named: Row[] } {
+  const chain = ROUTE_ROWS.filter((r, i) => routeChainShare(r.id, i) === share).map((r): Row => ({
     id: `route chain: ${r.id}`, setup: plantRoute(r), needs: RT_NEEDS,
     sides: [{ label: 'legacy', body: RT_LEGACY }, { label: 'live', body: RT_LIVE }],
   }));
   const named: Row[] = [];
-  for (const id of RT_NAMED_IDS) {
+  for (const id of share === 1 ? RT_NAMED_IDS : []) {
     const setup = plantRoute(routeRow(id));
     const one = (to: string, legacy: string, args: readonly string[], ov: string): void => {
       const rest = args.slice(1).map((a) => ` ${a}`).join('');
@@ -1185,6 +1208,44 @@ function w3RouteRows(): { chain: Row[]; named: Row[] } {
   return { chain, named };
 }
 
+
+/** One of E9's chain shares past its own (`share` 2 on), inside its block: the share's records in one batch, E9x and
+ *  E9a over it, each as E9's (D-6767). */
+function routeChainShareRows(locale: string | null, share: number): void {
+  const rows = w3RouteRows(share);
+  let h: CcdHarness;
+  let batch: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness(`ccrc-diet-e9-${share}-`);
+    if (locale !== null) batch = runBatch(h, rows.chain, locale, scaledSeconds(900));
+  }, scaled(1_000_000));
+  afterAll(() => h.cleanup());
+  const got = (ctx: { skip: (note?: string) => never }): Batch => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return batch!;
+  };
+
+  it('E9x the batch ran every row to the end, inside its deadline', (ctx) => {
+    const b = got(ctx);
+    expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+    expect(b.status).toBe(0);
+  });
+
+  it('E9a every route record: the chain\'s printing forms, their `_to` forms and `_route_apply_pending`\'s rc answer as the legacy did, and the quiet chain writes nothing (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.chain) {
+      const res = b.results.get(row.id)!;
+      expectEquivalent(row, res, locale!);
+      for (const [k, s] of res.entries()) {
+        expect(s.note, `${row.id} [${row.sides[k]!.label}]: the quiet chain moved the registry (swap.log, a floor marker or a field)`)
+          .toBe('unchanged');
+      }
+    }
+  });
+}
 
 // ── E10: W3 Task 16's rows — `_home_measured_to` and `_authdead`'s builtin read (D-4963) ───────────────────────────
 
@@ -1265,10 +1326,10 @@ export function rawHomeMeasuredCalls(src: string): string[] {
 
 // ── the per-locale rows ────────────────────────────────────────────────────────────────────────────────────────
 
-/** Registers the seven per-locale blocks (E3, E5 to E10) for ONE entry of `LOCALES`. Each keeps its
+/** Registers the ten per-locale blocks (E3, E5 to E10, and E9's chain shares E9-2 to E9-4) for ONE entry of `LOCALES`. Each keeps its
  *  `describe.each(…)` form, called on a one-element array, so a full test name is the one it was when a single file
  *  ran both locales (`… under 'C' (…)` and `… under 'the UTF-8 locale' (…)`).
- *  `ccd-tick-diet-equivalence-limits`, `-registry` and `-route.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
+ *  `ccd-tick-diet-equivalence-limits`, `-registry`, `-route` and `-route-2` to `-route-4.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
  *  the blocks to register (`'E3'`, `'E5'`, …); a file that runs a share of a locale's rows passes its share, so the blocks
  *  split across files by `describe` with every title unchanged (D-6767). Omitted, every block is registered. */
 export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readonly string[]): void {
@@ -1646,7 +1707,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
   });
 
   rowsBlock('E9')('E9 W3 Task 15 under $name: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
-    const rows = w3RouteRows();
+    const rows = w3RouteRows(1);
     let h: CcdHarness;
     let batch: Batch | null = null;
     beforeAll(() => {
@@ -1701,6 +1762,13 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
       expect(val('_route_pending_word_to w: class=valid,degraded=valid,effort=auto,inert=effort,routeapplied=class-only')).toBe('class=sonnet');
     });
   });
+
+  // The rest of E9's chain records, one share a block (D-6767, `ROUTE_CHAIN_SHARES`): E9x and E9a over the share's own
+  // batch, the same checks under the same titles. The non-vacuity pins and E9b stay in E9, whose share holds every
+  // record they read.
+  rowsBlock('E9-2')('E9 W3 Task 15 under $name, chain share 2: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => routeChainShareRows(locale, 2));
+  rowsBlock('E9-3')('E9 W3 Task 15 under $name, chain share 3: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => routeChainShareRows(locale, 3));
+  rowsBlock('E9-4')('E9 W3 Task 15 under $name, chain share 4: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => routeChainShareRows(locale, 4));
 
   rowsBlock('E10')('E10 W3 Task 16 under $name: `_home_measured_to` and `_authdead`\'s builtin read (tick-diet spec §6.4, D-4963)', ({ locale }) => {
     const rows = w3HomeRows();

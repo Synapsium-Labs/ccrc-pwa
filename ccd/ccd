@@ -9288,6 +9288,10 @@ EOF
   # `account-openrouter-v2` (N4; accounts plan Task A26): `ccrc account add --provider openrouter` and `credential` on
   # such a lane validate the key first, and `add` takes `--placement` and suggests the models.
   echo account-openrouter-v2
+  # `testbox-admin-v1` (D-8166; test box connect plan TC12): THIS copy of ccd carries the `ccrc testbox-admin` verb the console's
+  # test box card runs (`GET /api/testbox/admin` and `POST /api/testbox/admin/:sub`). It gates a SERVER DECISION, whether to
+  # offer the card's acts at all, so those routes answer `501 unsupported` against a box that has not taken this deploy.
+  echo testbox-admin-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
@@ -32779,6 +32783,28 @@ cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower th
   fi
 }
 
+_testbox_parity_armable() {   # rc 0 only when the parity record passes and still matches the pin and the box file
+  # (D-8166; spec 2026-11-10 §2.8, T9). The record is `~/.ccrc/testbox-parity.json` (`ccrc testbox-admin parity` writes
+  # it); the pin's fingerprint, the box file's digest and the stale mark are the keys `fingerprint`, `box_sha256` and
+  # `parity_stale` of the verb's state file `~/.ccrc/testbox-admin.state` (its last such line wins, as the verb reads it).
+  # `parityArmable` (shared/testbox-admin.ts) is this rule for the server; testbox-remote-gate.test.ts holds them equal.
+  # Any missing or unreadable file, or a record that is not the expected shape, is "not armable".
+  local dir="$HOME/.ccrc" rec st line k v sfp="" ssha="" stale="" want
+  rec="$dir/testbox-parity.json"; st="$dir/testbox-admin.state"
+  [[ -f $rec && ! -L $rec && -f $st && ! -L $st ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  want="$(jq -r 'select(type == "object" and .v == 1 and .result == "pass" and .parityStale != true
+      and (.fingerprint | type == "string") and (.boxFileSha256 | type == "string"))
+    | "\(.fingerprint) \(.boxFileSha256)"' "$rec" 2>/dev/null)" || return 1
+  [[ -n $want ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in fingerprint) sfp="$v" ;; box_sha256) ssha="$v" ;; parity_stale) stale="$v" ;; esac
+  done < "$st"
+  [[ -z $stale && -n $sfp && -n $ssha ]] || return 1
+  [[ $want == "$sfp $ssha" ]]
+}
+
 cmd_testbox_remote() {   # ccd testbox-remote --state on|off — raise or lower the test box's remote switch
   # (test box plan TB9, D-7411; spec 2026-10-28 §2.7). While `$REG/testbox-remote-live` exists, a `ccrc test` run
   # goes to the test box when spec §2.4's checks pass; absent, every run is local, today's `ccrc test`. This verb is
@@ -32794,6 +32820,7 @@ cmd_testbox_remote() {   # ccd testbox-remote --state on|off — raise or lower 
   [[ -d "$REG" ]] || die "no registry at $REG"
   marker="$REG/testbox-remote-live"
   if [[ $state == on ]]; then
+    _testbox_parity_armable || die "parity-required: run parity on the Test box card first — remote runs are NOT on"   # D-8166: off is never gated
     tmp="$REG/.testbox-remote-live.$$.tmp"
     { : > "$tmp" && _plat_mv_notdir "$tmp" "$marker"; } \
       || { rm -f -- "$tmp"; die "could not raise the test box switch — remote runs are NOT on"; }

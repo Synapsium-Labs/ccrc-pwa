@@ -17,7 +17,7 @@ These ten clauses are the boundary between "a wave reviewer" and "an agent
 with a shell on the fleet host and someone else's branch". They are not advice.
 
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.
-2. Ack before you act, keyed on the row's DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.
+2. Ack before you act (`mail inbox`, run bare: no pipe, no redirect, no `head` or `tail`, acks what it printed), keyed on the DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.
 3. Measure the reviewed tip ONCE, before you read a line: `reviewedTip` is the 40-hex sha of the worker branch the brief names, read from this repository's own ref (`git rev-parse refs/heads/ws/<worker-slug>`). Every finding cites that sha. If the ref moves while you read, say so in the report and stop — a report about two tips is a report about neither. In a project your brief names as opted in to the radar's lineage, a move whose only new commit is a clean merge of the radar base on top of the tip you read is not a move: keep reading at that tip.
 4. Read in YOUR OWN worktree only: `git checkout --detach <reviewedTip>` here, and never `checkout` the worker's branch, never commit, amend, rebase, cherry-pick, reset or push it, never open a PR on it, and never `git worktree add` or `remove` anything. This workspace's own branch (`ws/<slug>`) stays where dispatch left it; you land nothing on it.
 5. Run the SDD shape the brief names and nothing lighter: the review lenses over the wave's whole diff against the plan file the brief names (that plan's text governs over your recollection of the spec), then the whole-branch pass, then the suites the plan says to run, in this worktree, at `reviewedTip`.
@@ -70,7 +70,7 @@ Identity is attribution, not authentication. Ask the pane, through the client:
 
 ```bash
 REG="$HOME/.cc-sessions"
-API="$HOME/.local/bin/ccrc-api"          # ~/.local/bin is NOT on this unit's PATH
+API="$HOME/.local/bin/ccrc-api"  # ~/.local/bin is NOT on this unit's PATH
 who=$("$API" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
 id=${who#*\"id\":\"};     id=${id%%\"*}
 uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}
@@ -94,11 +94,11 @@ through. Both install beside this file.
 ## Reading
 
 ```bash
-WT=$(git rev-parse --show-toplevel)                       # THIS worktree — you READ here
-tip=$(git rev-parse "refs/heads/ws/<worker-slug>")        # clause 3, ONCE
-git checkout --detach "$tip"                               # clause 4
+WT=$(git rev-parse --show-toplevel)  # THIS worktree — you READ here
+tip=$(git rev-parse "refs/heads/ws/<worker-slug>")  # clause 3, ONCE
+git checkout --detach "$tip"  # clause 4
 base=$(git merge-base origin/main "$tip")
-git diff --stat "$base" "$tip"                             # the wave's whole diff
+git diff --stat "$base" "$tip"  # the wave's whole diff
 ```
 
 Then the lenses the brief names, each over the whole diff, then the
@@ -135,13 +135,13 @@ lens", if that is what you measured.
 ## Reporting review-done
 
 ```bash
-CLIPS="$HOME/.cc-clips/$id"                                 # clause 7: NOT $WT
+CLIPS="$HOME/.cc-clips/$id"  # clause 7: NOT $WT
 report="$CLIPS/review-<review run id>-${tip:0:8}.md"
 mkdir -p "$(dirname "$report")"
 cat > "$report.tmp" <<'MD'
 …the report…
 MD
-mv "$report.tmp" "$report"                                 # clause 7: atomic
+mv "$report.tmp" "$report"  # clause 7: atomic
 
 "$API" mail send --json - <<JSON
 {"fromId":"$id","fromUuid":"$uuid","toId":"coordinator","runId":<review run id>,

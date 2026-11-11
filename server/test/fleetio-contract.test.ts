@@ -39,6 +39,8 @@ describe('FleetIO — every member states its failure contract (D-5969)', () => 
       'backupMeasured',
       // The test box's two agent ops (test box plan TB9, D-7411): the measured status and the tools sync.
       'testboxMeasured', 'testboxToolsSync',
+      // The test box connect op (plan TC12, D-8166).
+      'testboxAdmin',
     ]);
   });
 
