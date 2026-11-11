@@ -28,7 +28,7 @@ import { cardFacts, sessionFacts } from './sessionFacts';
 import { sameLineProps } from './lineProps';
 import { actionDoor } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
-import { fleetClaudeLatest } from '../../../shared/claudeVersion';
+import { fleetClaudeLatest, laneClaudeLatest } from '../../../shared/claudeVersion';
 import './fleet.css';
 
 
@@ -81,6 +81,7 @@ function SessionLineView({
   now,
   delegated,
   claudeLatest,
+  claudeLaneLatest,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
@@ -129,6 +130,9 @@ function SessionLineView({
   /** D-8276: the fleet's newest Claude Code build, for a test or a caller that already holds it; absent, the row reads it
    *  from the fleet store (`fleetClaudeLatest` over every row the console holds). */
   claudeLatest?: string | null;
+  /** D-8276: the newest build on this session's lane (what a restart reaches), as `claudeLatest`; absent, read from the
+   *  fleet store (`laneClaudeLatest`). */
+  claudeLaneLatest?: string | null;
 }): ReactNode {
   // D-5545: every fact this row shows is decided by `sessionFacts`, the model the session header reads too —
   // so the card is a glance (the name, the state word, ONE context fact, at most ONE marker and the
@@ -140,10 +144,12 @@ function SessionLineView({
   const busy = session.status === 'busy';
   const tick = useNow(30_000, busy && now === undefined);
   const storeLatest = useFleetStore((st) => fleetClaudeLatest(st.sessions));
+  const storeLaneLatest = useFleetStore((st) => laneClaudeLatest(st.sessions, session.wrapper));
   const facts = sessionFacts({
     session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
     workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null, ...(delegated === undefined ? {} : { delegated }),
     claudeLatest: claudeLatest === undefined ? storeLatest : claudeLatest,
+    claudeLaneLatest: claudeLaneLatest === undefined ? storeLaneLatest : claudeLaneLatest,
   });
   const glance = cardFacts(facts);
   const label = glance.name.text;

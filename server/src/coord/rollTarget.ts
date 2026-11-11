@@ -2,16 +2,20 @@
  * THE AUTOMATIC ROLL (D-7443, D-7452, D-7454; D-8276): L1, pure.
  *
  * WHO (D-8276, the operator's ruling of 2026-11-10, reversing the 2026-10-29 rule "never auto-roll any
- * non-coordinators"): every idle session rolls onto the newest release and Claude Code build as soon as it can, under
+ * non-coordinators"): every idle session rolls onto the newest release, and the newest Claude Code build a restart
+ * reaches, as soon as it can, under
  * the setting's default `all`. The setting keeps `coordinators` (the 2026-10-29 rule: an idle coordinator only) and
  * `off` as choices, and a session's own `.no-roll` marker opts it out under every value.
  *
  * BEHIND (D-7454; D-8276): a session is behind when its Claude Code process started before the node's current ccrc
  * install completed (the live file's `startedAt`, `sessions/<pid>.json`, against the modification time of
- * `~/.ccrc/installed`, the completed-install record `ccrc install` writes as its last step), OR when it runs an older
- * Claude Code build than the newest any awake session on the fleet runs (`claudeBuildOf`, `shared/claudeVersion.ts`:
- * every pane launches the one installed binary, so that build is what a restart reaches). A session already rolled for
- * that newest build (`rolledFor`) is not rolled for it again: its restart did not reach it, so another would not either.
+ * `~/.ccrc/installed`, the completed-install record `ccrc install` writes as its last step), OR when a restart would
+ * move it onto a newer Claude Code build: its build is older than the fleet's newest AND older than the newest an awake
+ * session on its own lane runs (`claudeBuildOf`'s `reach`, `shared/claudeVersion.ts`). The fleet's newest alone is not
+ * enough: the launcher picks the lane's own recorded build before the highest installed one, so a restart keeps a
+ * session on its lane's build (binary-lifecycle spec §2.2, "installed is not running"), and a roll of a session whose
+ * lane runs nothing newer would spend a restart (and its memory, spec §2.3) to reach nothing. A session already rolled
+ * for its lane's reach (`rolledFor`) is not rolled for it again: its restart did not reach it, so another would not.
  *
  * IDLE is hibernation's gate (`hibernateVerdict`, the one ladder `decideSleep` runs), with its quiet window set to the
  * roll's 90 minutes (binary-lifecycle spec §7.2, its U2) and its claims holds passed (`ROLL_IDLE_GATE`, D-7562: an
@@ -114,10 +118,11 @@ export interface AutoRollInput {
   /** When this session's Claude Code process started (epoch ms); null when it could not be read. Read with the live
    *  state, so it is not looked at while `sleep.live` is unread. */
   readonly startedAt: number | null;
-  /** D-8276: this session's Claude Code build against the newest the fleet runs (`claudeBuildOf`). */
+  /** D-8276: this session's Claude Code build against the fleet's newest, with the build a restart on its lane reaches
+   *  (`claudeBuildOf`). Only a `reach` puts it behind on the build. */
   readonly build: ClaudeBuildFact;
-  /** D-8276: the newest build this session was last rolled for, by this server; null when none. A build-behind session
-   *  already rolled for the same newest build is not behind on the build (the restart did not reach it). */
+  /** D-8276: the reach this session was last rolled for, by this server process; null when none. A session already
+   *  rolled for the same reach is not behind on the build (the restart did not reach it). */
   readonly rolledFor: string | null;
   /** `$REG/<id>.no-roll` and `$REG/<id>.no-hibernate`. Only `.no-roll` opts out of the roll (D-7458): the act,
    *  `ccd hibernate --roll`, refuses `.no-roll` and not `.no-hibernate`. `.no-hibernate` says only that hibernation
@@ -147,7 +152,7 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.release === null) return { act: 'skip', reason: 'release-unmeasured' };
   if (i.sleep.live.kind === 'unread') return { act: 'measure' };
   if (i.startedAt === null) return { act: 'skip', reason: 'start-unmeasured' };
-  const buildBehind = i.build.kind === 'behind' && i.rolledFor !== i.build.latest;
+  const buildBehind = i.build.kind === 'behind' && i.build.reach !== null && i.rolledFor !== i.build.reach;
   if (i.startedAt >= i.release && !buildBehind) return { act: 'current' };
   if (i.optedOut.roll) return { act: 'skip', reason: 'no-roll' };
   const sleep = { ...i.sleep, optedOut: false };

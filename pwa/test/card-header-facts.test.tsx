@@ -107,7 +107,7 @@ const CASES: Record<string, FactInput> = {
   },
   // D-8276: an older Claude Code build than the fleet's newest: the quietest marker, and the header names the pair.
   'a session behind the fleet\'s newest Claude Code build': {
-    session: s({ workspace: 'quiet-fen', version: '2.1.296' }), now: NOW, claudeLatest: '2.1.302',
+    session: s({ workspace: 'quiet-fen', version: '2.1.296' }), now: NOW, claudeLatest: '2.1.302', claudeLaneLatest: '2.1.302',
   },
   'an unreachable pane with every other marker too': {
     session: s({ substrate: { at: NOW - 60_000, text: 'tmux socket gone' }, limits: { five: 99, seven: null },
@@ -264,7 +264,7 @@ describe('the rendered card is a glance, and the rendered header holds all of it
         const { container: card } = render(
           <SessionLine session={input.session} onOpen={() => {}} onActions={() => {}} now={input.now}
             childRun={input.childRun} workingOn={input.workingOn ?? null} coordinator={input.coordinator ?? null}
-            claudeLatest={input.claudeLatest ?? null} />,
+            claudeLatest={input.claudeLatest ?? null} claudeLaneLatest={input.claudeLaneLatest ?? null} />,
         );
         const meta = card.querySelector('.sess-meta')!;
         // The glance: a status, at most one context, at most one marker — nothing else on the meta line.

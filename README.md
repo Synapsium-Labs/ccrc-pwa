@@ -5476,12 +5476,15 @@ for `VIEWER_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat 
 as viewed.
 
 **The automatic roll (D-7452 to D-7454; D-8276).** An idle session is restarted onto the node's current ccrc
-release and the newest Claude Code build, its conversation resumed, so a new release, new skill text or a new build
-reaches it. Since the operator's ruling of 2026-11-10 (D-8276, reversing the 2026-10-29 coordinators-only rule) that
+release and the newest Claude Code build its lane reaches, its conversation resumed, so a new release, new skill text
+or a new build reaches it. Since the operator's ruling of 2026-11-10 (D-8276, reversing the 2026-10-29 coordinators-only rule) that
 is every idle session, whatever its role. It is **behind** when its Claude Code process started (the live file's
-`startedAt`) before the node's current install completed (`~/.ccrc/installed`'s modification time), or when it runs
-an older Claude Code build than the newest any awake session on the fleet runs (`claudeBuildOf`,
-`shared/claudeVersion.ts`; a session already rolled for that build is not rolled for it again). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
+`startedAt`) before the node's current install completed (`~/.ccrc/installed`'s modification time), or when a restart
+would move it onto a newer Claude Code build: it runs an older build than the fleet's newest AND than the newest an
+awake session on its own lane runs (`claudeBuildOf`'s `reach`, `shared/claudeVersion.ts`). A restart does not reach
+the fleet's newest build: the launcher picks the lane's own recorded build first (binary-lifecycle spec §2.2), so a
+session whose lane runs nothing newer is never rolled for the build, and a session already rolled for its lane's
+reach is not rolled for it again (in this server process). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
 `server/src/coord/rollTarget.ts`). It is skipped, by name, when hibernation is armed and will take it within 30 minutes
 (the wake brings the release), when its live status moved in the last 10 minutes (`compacting`), or when it carries
 `$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). Under the
@@ -5497,9 +5500,10 @@ could not be written again) exits 5 (`roll-wake-unrestored`) and journals `not r
 call cut short, never answered or with an unmeasured ending journals `outcome unknown` and names the session to check. Every skip is a `ccrc-server:
 roll-skip <id>: <reason>` line. **Settings › Automation › Roll idle sessions** (`GET`/`POST /api/coord/roll-idle`, one
 `roll_settings` row) is `Every idle session` (`all`, the default; the migration's seed, never written by an operator,
-reads as it), `Coordinators only` or `Off`, and the card counts the sessions behind the fleet's newest build. Each
-fleet card wears a quiet `cc .296 behind` marker while its session is behind, and the session header names every
-measured build. `$REG/hibernate-disabled` stops it too. `ccrc update`'s supervisor sweep is unchanged: it
+reads as it), `Coordinators only` or `Off`, and the card counts the sessions behind the fleet's newest build,
+separating the ones a roll can move from the ones their lane holds. Each fleet card wears a quiet `cc .296 behind`
+marker while its session is behind (its title says whether a roll reaches a newer build), and the session header
+names every measured build. `$REG/hibernate-disabled` stops it too. `ccrc update`'s supervisor sweep is unchanged: it
 restarts supervisors, never Claude Code.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's

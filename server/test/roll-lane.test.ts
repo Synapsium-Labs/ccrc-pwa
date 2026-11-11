@@ -789,6 +789,31 @@ describe('rollPass: behind on the Claude Code build (D-8276)', () => {
     expect(await buildPass(f, newer, [], m), 'a newer build asks again').toEqual([{ id: COORD2, kind: 'rolled', idleMs: 2 * HOUR }]);
   });
 
+  it('two lanes: a session behind only the OTHER lane\'s build is not rolled (a restart keeps it on its lane\'s build)', async () => {
+    // Binary-lifecycle spec §2.2: the launcher picks the lane's own recorded build before the highest installed one,
+    // so a restart reaches the newest build an awake session on the same lane runs, not the fleet's newest.
+    const f = fresh();
+    const m = mem();
+    const rows = [row(COORD, { wrapper: 'lane-a', version: '2.1.302' }), row(COORD2, { wrapper: 'lane-b', version: '2.1.296' })];
+    expect(await buildPass(f, rows, [], m)).toEqual([]);
+    expect(f.calls).toEqual([]);
+    expect(m.builtFor.size).toBe(0);
+  });
+
+  it('two lanes: a session behind its own lane\'s newest build is rolled, and remembered for that build', async () => {
+    const f = fresh();
+    const m = mem();
+    const rows = [
+      row(COORD, { wrapper: 'lane-a', version: '2.1.302' }),
+      row(COORD2, { wrapper: 'lane-b', version: '2.1.296' }),
+      row(CHILD, { wrapper: 'lane-b', version: '2.1.300', role: 'child', child: { kind: 'child', runId: 3 } }),
+    ];
+    expect(await buildPass(f, rows, [], m)).toEqual([{ id: COORD2, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD2, '--surface', 'agent', '--actor', 'sweep:roll']]);
+    expect(m.builtFor.get(COORD2), 'the build its lane reaches, not the fleet\'s newest').toBe('2.1.300');
+    expect(f.lines.join('\n')).toMatch(new RegExp(`rolled ${COORD2} onto the current release \\(its lane's newest Claude Code build is 2\\.1\\.300\\)`));
+  });
+
   it('the memory of a roll is forgotten with its row', async () => {
     const f = fresh();
     const m = mem();

@@ -100,7 +100,8 @@ export type FactKey =
   | 'ask-state' | 'delegated' | 'build' | MarkerKey;
 
 /** The attention markers, in their FIXED priority: the card shows the first one present. `behind` (D-8276: an older
- *  Claude Code build than the fleet's newest) is the quietest, last: the roll takes the session once it is idle. */
+ *  Claude Code build than the fleet's newest) is the quietest, last: a tracking fact, which a roll fixes only where the
+ *  session's own lane runs a newer build. */
 export const MARKER_ORDER = [
   'unreachable', 'coordinator-gone', 'spawn', 'needs-you', 'with-coordinator', 'lifecycle', 'stranded',
   'swap-blocked', 'stalled', 'limit', 'ctx', 'coordinator-hibernated', 'restarted', 'unreadable', 'off-pool', 'behind',
@@ -137,6 +138,9 @@ export interface FactInput {
   /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest` over the fleet store's
    *  rows). Absent or `null` = unknown, and nothing is said to be behind. */
   readonly claudeLatest?: string | null;
+  /** D-8276: the newest build an awake session on THIS session's lane runs (`laneClaudeLatest`): what a restart reaches.
+   *  Absent or `null` = unknown, and the words promise no roll. */
+  readonly claudeLaneLatest?: string | null;
 }
 
 /** Everything the session's rows render, decided once. The cells read these values;
@@ -250,7 +254,7 @@ export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
-    coordinatorTitle = null, delegated = null, claudeLatest = null,
+    coordinatorTitle = null, delegated = null, claudeLatest = null, claudeLaneLatest = null,
   } = input;
   const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
@@ -356,7 +360,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
     // D-7781: no dead shortcut. A dead worker's entries stay one tap from its row.
     delegated: delegatedChip(delegated ?? []),
-    build: claudeBuildOf(session, claudeLatest),
+    build: claudeBuildOf(session, claudeLatest, claudeLaneLatest),
   };
 }
 

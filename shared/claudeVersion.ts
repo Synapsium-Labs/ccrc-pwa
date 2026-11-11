@@ -58,7 +58,7 @@ export const CLAUDE_ROLL_MODE_DEFAULT: ClaudeRollMode = 'manual';
 
 /** Which sessions an AUTOMATIC roll may take: the Settings › Automation row "Roll idle sessions" (D-7443; D-7453; D-8276).
  *  `all`, the default since the operator's ruling of 2026-11-10 (D-8276, reversing the 2026-10-29 rule), rolls every
- *  idle session onto the current release and the newest Claude Code build; `coordinators` keeps the 2026-10-29 rule as
+ *  idle session onto the current release and the newest Claude Code build its lane reaches (`laneClaudeLatest`); `coordinators` keeps the 2026-10-29 rule as
  *  a choice (an idle coordinator only; every other session picks the release up when it next starts for another
  *  reason); `off` rolls nothing. A session's own `.no-roll` marker opts it out under every value. A manual restart
  *  never reads this. */
@@ -70,58 +70,81 @@ export function isClaudeRollTargets(v: unknown): v is ClaudeRollTargets {
   return typeof v === 'string' && (CLAUDE_ROLL_TARGETS as readonly string[]).includes(v);
 }
 
-// ─── the fleet's expected build, and each session's place against it (D-8276) ───
+// ─── the fleet's newest build, what a restart reaches, and each session's place against both (D-8276) ───
 //
-// Every pane on a node launches the one installed binary, so a session that starts now runs the newest build the
-// node has; the newest build any AWAKE session reports is therefore the build a restart reaches, measured, with no
-// node file (spec §6.2's `~/.ccrc/claude.json` has no writer yet). A session on an older build is `behind`, and the
-// automatic roll takes it once it is idle. Asleep rows (hibernated) wake on the current build, so they neither set the
-// newest build nor count as behind; archived rows run nothing. One reading, here, for the roll lane
-// (`server/src/rollLane.ts`) and the console (`pwa/src/fleet/sessionFacts.ts`, Settings › Automation).
+// Installed is not running (binary-lifecycle spec §2.2, measured): the launcher picks a lane's OWN recorded build
+// (its updater's `version_to`) before the highest installed one, so a restart or a hibernate-then-wake keeps a session
+// on its lane's build until that lane's updater writes a newer one. Seven sessions sat on one stuck lane's build there.
+// So two readings, both measured from the running sessions (spec §6.2's node file `~/.ccrc/claude.json` has no writer
+// yet, and nothing in ccrc pins a build):
+//   - `fleetClaudeLatest`: the newest build any AWAKE session on the fleet runs. The console tracks every session
+//     against it (the card's `behind` marker, the Settings count).
+//   - `laneClaudeLatest`: the newest build an awake session on the SAME lane (`wrapper`) runs. That build is on disk
+//     and is what the lane's launcher picks, so it is what a restart of a session on that lane reaches: its `reach`.
+//     The automatic roll acts only on a reach newer than the session's build; a session behind the fleet's newest whose
+//     lane runs nothing newer is behind with no reach, and no restart is spent on it.
+// Asleep rows (hibernated) neither set a newest build nor count as behind; archived rows run nothing. One reading,
+// here, for the roll lane (`server/src/rollLane.ts`) and the console (`pwa/src/fleet/sessionFacts.ts`, Settings ›
+// Automation).
 
 /** A fleet row as the build reading needs it (`FleetSession`'s own fields). `hibernatedAt` absent (an older peer)
- *  reads as awake. */
+ *  reads as awake. `wrapper` is the session's lane. */
 export interface ClaudeBuildRow {
   readonly version: string | null;
+  readonly wrapper: string;
   readonly archivedAt: number | null;
   readonly hibernatedAt?: number | null;
 }
 
 /** One session's build against the fleet's newest. `unmeasured`: no well-formed build (no live file, an older peer,
- *  an archived row); `asleep`: hibernated, it wakes on the current build. */
+ *  an archived row); `asleep`: hibernated. `behind` carries `reach`: the newer build a restart on its lane reaches
+ *  (`laneClaudeLatest`), or null when its lane runs nothing newer than it, so a restart would keep it where it is. */
 export type ClaudeBuildFact =
   | { readonly kind: 'unmeasured' }
   | { readonly kind: 'asleep' }
   | { readonly kind: 'current'; readonly build: string }
-  | { readonly kind: 'behind'; readonly build: string; readonly latest: string };
+  | { readonly kind: 'behind'; readonly build: string; readonly latest: string; readonly reach: string | null };
 
 const buildAwake = (r: ClaudeBuildRow): boolean => r.archivedAt === null && (r.hibernatedAt ?? null) === null;
 
-/** The newest well-formed build any awake session runs; null when none is measured. */
-export function fleetClaudeLatest(rows: readonly ClaudeBuildRow[]): string | null {
+function newestOf(rows: readonly ClaudeBuildRow[], keep: (r: ClaudeBuildRow) => boolean): string | null {
   let latest: string | null = null;
   for (const r of rows) {
-    if (!buildAwake(r) || !isClaudeVersion(r.version)) continue;
+    if (!buildAwake(r) || !keep(r) || !isClaudeVersion(r.version)) continue;
     if (latest === null || compareClaudeVersions(r.version, latest) > 0) latest = r.version;
   }
   return latest;
 }
 
-/** Where one session stands against `latest` (`fleetClaudeLatest` over the same fleet). */
-export function claudeBuildOf(row: ClaudeBuildRow, latest: string | null): ClaudeBuildFact {
+/** The newest well-formed build any awake session runs; null when none is measured. What the console tracks against. */
+export function fleetClaudeLatest(rows: readonly ClaudeBuildRow[]): string | null {
+  return newestOf(rows, () => true);
+}
+
+/** The newest well-formed build an awake session on `wrapper`'s lane runs: what a restart on that lane reaches. */
+export function laneClaudeLatest(rows: readonly ClaudeBuildRow[], wrapper: string): string | null {
+  return newestOf(rows, (r) => r.wrapper === wrapper);
+}
+
+/** Where one session stands against `latest` (`fleetClaudeLatest`), with `laneLatest` (`laneClaudeLatest` for its
+ *  lane, over the same fleet) deciding whether a restart can move it. */
+export function claudeBuildOf(row: ClaudeBuildRow, latest: string | null, laneLatest: string | null): ClaudeBuildFact {
   if (row.archivedAt !== null) return { kind: 'unmeasured' };
   if ((row.hibernatedAt ?? null) !== null) return { kind: 'asleep' };
   if (!isClaudeVersion(row.version)) return { kind: 'unmeasured' };
   if (latest !== null && isClaudeVersion(latest) && compareClaudeVersions(row.version, latest) < 0) {
-    return { kind: 'behind', build: row.version, latest };
+    const reach = laneLatest !== null && isClaudeVersion(laneLatest) && compareClaudeVersions(row.version, laneLatest) < 0 ? laneLatest : null;
+    return { kind: 'behind', build: row.version, latest, reach };
   }
   return { kind: 'current', build: row.version };
 }
 
-/** The fleet's newest build and how many sessions stand where against it. */
+/** The fleet's newest build and how many sessions stand where against it. `reachable`: of those `behind`, how many a
+ *  restart can move (their lane runs a newer build); the rest stay until their lane's own updater moves them. */
 export interface ClaudeBuildCounts {
   readonly latest: string | null;
   readonly behind: number;
+  readonly reachable: number;
   readonly current: number;
   readonly unmeasured: number;
   readonly asleep: number;
@@ -129,8 +152,17 @@ export interface ClaudeBuildCounts {
 
 export function claudeBuildCounts(rows: readonly ClaudeBuildRow[]): ClaudeBuildCounts {
   const latest = fleetClaudeLatest(rows);
-  const n = { behind: 0, current: 0, unmeasured: 0, asleep: 0 };
-  for (const r of rows) n[claudeBuildOf(r, latest).kind]++;
+  const lanes = new Map<string, string | null>();
+  const laneOf = (w: string): string | null => {
+    if (!lanes.has(w)) lanes.set(w, laneClaudeLatest(rows, w));
+    return lanes.get(w) ?? null;
+  };
+  const n = { behind: 0, reachable: 0, current: 0, unmeasured: 0, asleep: 0 };
+  for (const r of rows) {
+    const b = claudeBuildOf(r, latest, laneOf(r.wrapper));
+    n[b.kind]++;
+    if (b.kind === 'behind' && b.reach !== null) n.reachable++;
+  }
   return { latest, ...n };
 }
 

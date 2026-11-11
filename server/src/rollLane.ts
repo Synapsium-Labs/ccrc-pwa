@@ -11,11 +11,11 @@ import {
 import { AFTER_UNMEASURED, idleHoursBindings, laneVerb, sleepPass, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
 import { readSwitches } from '../../shared/switches.js';
 import type { FleetSession } from '../../shared/api.js';
-import { claudeBuildOf, fleetClaudeLatest, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
+import { claudeBuildOf, fleetClaudeLatest, laneClaudeLatest, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
 
 /**
  * THE AUTOMATIC ROLL (D-7452; D-8276, the operator's ruling of 2026-11-10: every idle session, not only coordinators,
- * and behind on the Claude Code build as well as on the release): L4, one row of the sleep
+ * and behind on the Claude Code build a restart on its lane reaches as well as on the release): L4, one row of the sleep
  * executor (`sleepLane.ts`'s `sleepPass` and `sleepAct`, the fleet's ONE `ccd hibernate` act site), whose `then: 'wake'`
  * follows the sleep with the wake. `autoRollVerdict` (`coord/rollTarget.ts`, L1) decides.
  *
@@ -99,8 +99,11 @@ export interface RollSweepMemory {
   readonly lastWhat: Map<string, string>;
   /** D-7552: rows held off, and until when (the executor's `hold-off` map). */
   readonly heldUntil: Map<string, number>;
-  /** D-8276: the fleet's newest Claude Code build when each id was last rolled, so a session whose restart did not reach
-   *  that build is not rolled for it again (`AutoRollInput.rolledFor`). Pruned with the ids the pass no longer sees. */
+  /** D-8276: the build each id's lane reached (`laneClaudeLatest`) when it was last rolled, so a session whose restart
+   *  did not reach that build is not rolled for it again (`AutoRollInput.rolledFor`). Pruned with the ids the pass no
+   *  longer sees. Held in this process only: a server restart forgets it. That costs at most one more roll per server
+   *  start, and only for a session whose restart missed a build its own lane already runs (a lane record that moved
+   *  back, say): a roll that reaches its lane's build leaves the session with no reach, so nothing asks again. */
   readonly builtFor: Map<string, string>;
 }
 
@@ -142,9 +145,11 @@ interface Pass {
   readonly targets: ClaudeRollTargets | null;
   readonly release: number | null;
   readonly hibernation: { readonly armed: boolean; readonly afterMs: number };
-  /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest`), and the build each id
-   *  was last rolled for (`RollSweepMemory.builtFor`). */
+  /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest`), the newest on each
+   *  lane, which is what a restart there reaches (`laneClaudeLatest`, keyed by `wrapper`), and the reach each id was last
+   *  rolled for (`RollSweepMemory.builtFor`). */
   readonly latest: string | null;
+  readonly lanes: ReadonlyMap<string, string | null>;
   readonly builtFor: ReadonlyMap<string, string>;
 }
 
@@ -162,7 +167,7 @@ function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetS
   live: HibernateLive, startedAt: number | null, now: number): RollAnswer {
   return answerOf(autoRollVerdict({
     targets: p.targets, role: row.role, release: p.release, startedAt,
-    build: claudeBuildOf(row, p.latest), rolledFor: p.builtFor.get(row.id) ?? null,
+    build: claudeBuildOf(row, p.latest, p.lanes.get(row.wrapper) ?? null), rolledFor: p.builtFor.get(row.id) ?? null,
     optedOut: { roll: names.includes(`${row.id}.${NO_ROLL_SUFFIX}`), hibernate: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`) },
     hibernation: p.hibernation, statusUpdatedAt: row.statusUpdatedAt,
     sleep: { row, optedOut: false, store, viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: now - deps.startedAt, live },
@@ -285,7 +290,9 @@ export async function rollPass(
     return [];
   }
   const latest = fleetClaudeLatest(sessions);
-  const pass: Pass = { targets, release, hibernation: { armed, afterMs }, latest, builtFor: mem.builtFor };
+  const lanes = new Map<string, string | null>();
+  for (const s of sessions) if (!lanes.has(s.wrapper)) lanes.set(s.wrapper, laneClaudeLatest(sessions, s.wrapper));
+  const pass: Pass = { targets, release, hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor };
   mem.lastAt.delete('*');
   const actArmed = deps.act !== null && deps.act.serial !== null && laneVerb(ROLL_LANE.then, deps.act.fleetState);
   const out = (await sleepPass(ROLL_LANE, { ...deps, pass }, mem, sessions, records, names))
@@ -302,11 +309,13 @@ export async function rollPass(
     done.add(o.id);
     if (o.kind === 'rolled') {
       mem.lastAt.delete(o.id);
-      if (latest !== null) mem.builtFor.set(o.id, latest);
+      const rolled = sessions.find((s) => s.id === o.id);
+      const reach = rolled === undefined ? null : lanes.get(rolled.wrapper) ?? null;
+      if (reach !== null) mem.builtFor.set(o.id, reach);
       const after = o.after === undefined ? ''
         : UNREAD_AFTER.has(o.after) ? `; once ccd answered, whether it was still a roll target could not be read again (${o.after})`
           : `; by the time ccd answered it was no longer a roll target (${o.after})`;
-      deps.log(`ccrc-server: rolled ${o.id} onto the current release${latest === null ? '' : ` (the fleet's newest Claude Code build is ${latest})`} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
+      deps.log(`ccrc-server: rolled ${o.id} onto the current release${reach === null ? '' : ` (its lane's newest Claude Code build is ${reach})`} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
     } else if (o.kind === 'skipped') {
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
     } else if (o.kind === 'failed') {

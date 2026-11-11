@@ -56,7 +56,7 @@ import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
 import { answerControlLabel, askSource } from '../session/askLive';
 import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
-import { fleetClaudeLatest } from '../../../shared/claudeVersion';
+import { fleetClaudeLatest, laneClaudeLatest } from '../../../shared/claudeVersion';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
  *  screen pads its shell by this much so the composer stays above the
@@ -224,8 +224,10 @@ export function SessionScreen({
   const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
   // Delegation visibility (spec §5): the header lists every entry this session started, whatever its placement.
   const delegation = useFleet((s) => s.delegation);
-  // D-8276: the fleet's newest Claude Code build, so the header names this session's build against it.
+  // D-8276: the fleet's newest Claude Code build, so the header names this session's build against it, and the newest
+  // on its own lane, which is what a restart reaches.
   const claudeLatest = useFleet((s) => fleetClaudeLatest(s.sessions));
+  const claudeLaneLatest = useFleet((s) => (live === null ? null : laneClaudeLatest(s.sessions, live.wrapper)));
 
   const kbInset = useKeyboardInsets();
   const { busy: restarting, ensure: ensureNow } = useEnsure();
@@ -351,6 +353,7 @@ export function SessionScreen({
     coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
     delegated: delegation === null ? null : activitiesStartedBy(live.id, readDelegation(delegation)),
     claudeLatest,
+    claudeLaneLatest,
   });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'

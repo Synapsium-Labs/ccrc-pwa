@@ -173,11 +173,22 @@ describe('behind on release (D-7454)', () => {
 
 describe('behind on the Claude Code build (D-8276)', () => {
   const after = INSTALLED + MIN;
-  const behind = { kind: 'behind', build: '2.1.296', latest: '2.1.302' } as const;
+  const behind = { kind: 'behind', build: '2.1.296', latest: '2.1.302', reach: '2.1.302' } as const;
 
-  it('a pane on the current release but an older build than the newest the fleet runs is rolled', () => {
+  it('a pane on the current release but an older build than its lane reaches is rolled', () => {
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, role: 'child', build: behind })).act, 'whatever its role').toBe('roll');
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: { ...behind, reach: '2.1.300' } })).act, 'its lane reaches only .300')
+      .toBe('roll');
+  });
+
+  it('a pane behind the fleet\'s newest that a restart cannot move (its lane runs nothing newer) is not rolled for it', () => {
+    // Binary-lifecycle spec §2.2: the launcher picks the lane's own recorded build first, so a restart keeps the pane
+    // on it until that lane's updater writes a newer one. Restarting it would cost memory and reach nothing.
+    const held = { ...behind, reach: null };
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: held }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, role: 'child', build: held }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { build: held })).act, 'behind on release, it still rolls for the release').toBe('roll');
   });
 
   it('a pane on the newest build, an unmeasured build or an asleep row is current when the release is', () => {
@@ -186,9 +197,11 @@ describe('behind on the Claude Code build (D-8276)', () => {
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: { kind: 'asleep' } }))).toEqual({ act: 'current' });
   });
 
-  it('a session already rolled for this newest build is not rolled for it again (its restart did not reach it)', () => {
+  it('a session already rolled for the build its lane reaches is not rolled for it again (its restart did not reach it)', () => {
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, rolledFor: '2.1.302' }))).toEqual({ act: 'current' });
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, rolledFor: '2.1.300' })).act, 'a newer build asks again').toBe('roll');
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: { ...behind, reach: '2.1.300' }, rolledFor: '2.1.300' })),
+      'the guard keys on the lane\'s reach, not the fleet\'s newest').toEqual({ act: 'current' });
     expect(autoRollVerdict(input(2 * HOUR, { build: behind, rolledFor: '2.1.302' })).act, 'the release still rolls it').toBe('roll');
   });
 

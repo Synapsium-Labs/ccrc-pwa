@@ -2349,7 +2349,7 @@ export class FleetWatcher {
   /**
    * THE AUTOMATIC ROLL (D-7452; D-8276): every `rollIdle` beat (hibernation's clock), on THIS tick's
    * rows and listing, `rollPass` rolls at most one idle session (every role under the default, D-8276) whose pane started
-   * before the node's current ccrc install or runs an older Claude Code build than the fleet's newest, by `ccd hibernate` then `ccd ensure` on the coordination serialiser and the session's queue. The setting is
+   * before the node's current ccrc install or could reach a newer Claude Code build on its own lane, by `ccd hibernate` then `ccd ensure` on the coordination serialiser and the session's queue. The setting is
    * the Settings row (`CoordStore.rollSettings`, D-7453); without a store it reads as unreadable and nothing is rolled.
    * The install time is `~/.ccrc/installed`'s modification time on the fleet node (`deps.io`, the fleet box's io in
    * remote mode, under the same `ccrcDir` the inventory reads). Never awaited by the tick.
