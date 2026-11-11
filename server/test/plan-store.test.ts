@@ -61,7 +61,10 @@ describe('migration 59', () => {
     raw.close();
     const stepped = openCoordDb(p);
     expect((stepped.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
-    expect(COORD_SCHEMA_VERSION).toBe(PLAN_SLOT);
+    // Slot 59 is the plan model's, and later migrations (60, claude_builds, D-8289) may follow it: the opener runs them too.
+    expect(MIGRATIONS[PLAN_SLOT - 1]).toMatch(/CREATE TABLE plan_epics\b/);
+    expect(MIGRATIONS.slice(0, PLAN_SLOT - 1).some((m) => /CREATE TABLE plan_epics\b/.test(m))).toBe(false);
+    expect(COORD_SCHEMA_VERSION).toBeGreaterThanOrEqual(PLAN_SLOT);
     // The pre-existing programme is legacy; an older build's INSERT/SELECT lists (which name no new column) still run.
     expect(stepped.prepare("SELECT planRequired FROM programs WHERE slug = 'old'").get()).toEqual({ planRequired: 0 });
     stepped.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('older-build', 'X', 1, 'active')").run();
