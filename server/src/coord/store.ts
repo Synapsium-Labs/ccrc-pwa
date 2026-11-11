@@ -12,6 +12,8 @@ import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../share
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
 import type { CallRow, NewCall } from './coordCalls.js';
+import * as planStore from './planStore.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
@@ -2905,6 +2907,7 @@ export class CoordStore {
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, now, from, to, causedBy, detail ?? null);
     this.settleEndRequests(runId, from, to, causedBy, detail, now);
+    planStore.onRunAdvancedInTx(this.db, runId, from, to, now);   // D-8181: the run's ticket and epic follow it, in this transaction
     return { ok: true as const, from, to };
   }
 
@@ -5336,8 +5339,9 @@ export class CoordStore {
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {
-    const rows = this.db.prepare('SELECT slug, title, state FROM programs ORDER BY slug')
-      .all() as { slug: string; title: string; state: string }[];
+    // D-8181: the reserved `linear-sync` row (migration 58) is the sync's own item home, not a programme anyone runs.
+    const rows = this.db.prepare('SELECT slug, title, state FROM programs WHERE slug <> ? ORDER BY slug')
+      .all(LINEAR_SYNC_PROGRAMME) as { slug: string; title: string; state: string }[];
     // D-8: read through the guard, never a cast — the same rule `run()` below
     // holds for `RunState`.
     return rows.map((r) => ({ slug: r.slug, title: r.title, state: isProgramState(r.state) ? r.state : 'unknown' }));
@@ -7750,7 +7754,8 @@ export class CoordStore {
     return tx(this.db, () => {
       const now = Date.now();
       this.db.prepare(
-        'INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?) ' +
+        // D-8181: a rebuilt programme is a legacy one, so it opens runs with no plan (`planRequired` 0).
+        'INSERT INTO programs (slug, title, createdAt, state, planRequired) VALUES (?, ?, ?, ?, 0) ' +
         'ON CONFLICT(slug) DO NOTHING',
       ).run(input.ledger.slug, input.ledger.title, now, 'active');
 

@@ -2622,6 +2622,57 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX practice_cases_by_signature ON practice_cases(signature, openedAt);
   `,
+  // ── 59: user_version 58 -> 59 ─────────────────────────────────────────────
+  // The plan model (Linear hierarchy design 2026-11-10 §4.2, D-8181): a programme's epics, checkpoints and tickets
+  // (`plan_epics`, `plan_checkpoints`, `plan_tickets`), the one table that binds each of them to a Linear object
+  // (`linear_bindings`, never deleted from), the sync's due queue (`plan_sync_due`, keyed by a programme slug or
+  // `upkeep:<project>`), `runs.ticketId`, the per-project hierarchy settings on `project_linking`, and the programme's plan
+  // columns. `planRequired = 0` marks every programme that existed before this build (it opens runs as today until its team
+  // migrates, §4.3); a programme created later takes the default 1. The reserved `linear-sync` row (§7.6) is inserted
+  // `paused`, never `active`, so `soleActiveCoordinator()`'s "exactly one active programme" guard is unchanged.
+  // `droppedWhy` is a drop's reason; `putBackAt` is set only by the migration's put-back; `failedAt`, `failedWord` and
+  // `failedInputs` let the sync return a `failed` binding to `pending`.
+  //
+  // NEW TABLES AND NULLABLE-OR-DEFAULTED COLUMNS ONLY: an older build opening a file at `user_version 59` takes rule 3 (it
+  // warns, reads as-is and migrates nothing); its `SELECT`s name their own columns and never name these, and its
+  // `INSERT INTO programs` / `project_linking` / `runs` lists name theirs, so every added column takes its default. The
+  // plan's own number for this entry was 57; slots 55 to 58 went first (coordinator_calls, lane_arm_settings,
+  // testbox_events, practice_cases), so it is 59. RE-MEASURE the slot before the PR and before merge (it must print 58
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plan_epics (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT, project TEXT NOT NULL, waves TEXT NOT NULL,
+    key TEXT NOT NULL, ordinal INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, state TEXT NOT NULL,
+    droppedWhy TEXT, putBackAt INTEGER, openedAt INTEGER, doneAt INTEGER, UNIQUE (program, key));
+  CREATE UNIQUE INDEX plan_epics_upkeep ON plan_epics(project) WHERE program IS NULL;
+  CREATE TABLE plan_checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, epicId INTEGER NOT NULL REFERENCES plan_epics(id),
+    key TEXT NOT NULL, ordinal INTEGER NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, proves TEXT NOT NULL,
+    state TEXT NOT NULL, droppedWhy TEXT, putBackAt INTEGER, metAt INTEGER, evidence TEXT, itemId INTEGER,
+    UNIQUE (epicId, key));
+  CREATE TABLE plan_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT, project TEXT NOT NULL,
+    epicId INTEGER NOT NULL REFERENCES plan_epics(id), checkpointId INTEGER REFERENCES plan_checkpoints(id), key TEXT NOT NULL,
+    kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, state TEXT NOT NULL, runId INTEGER,
+    droppedWhy TEXT, putBackAt INTEGER, UNIQUE (program, key));
+  CREATE UNIQUE INDEX plan_tickets_upkeep ON plan_tickets(epicId, key) WHERE program IS NULL;
+  ALTER TABLE runs ADD COLUMN ticketId INTEGER;
+  CREATE TABLE linear_bindings (id INTEGER PRIMARY KEY AUTOINCREMENT, localKind TEXT NOT NULL, localId INTEGER NOT NULL,
+    workspaceId TEXT NOT NULL, teamKey TEXT, linearId TEXT, identifier TEXT, fingerprint TEXT, syncedAt INTEGER,
+    state TEXT NOT NULL, failedAt INTEGER, failedWord TEXT, failedInputs TEXT, driftCount INTEGER NOT NULL DEFAULT 0,
+    driftSince INTEGER, heldItemId INTEGER, UNIQUE (localKind, localId, workspaceId));
+  CREATE TABLE plan_sync_due (program TEXT PRIMARY KEY, dueAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
+  ALTER TABLE project_linking ADD COLUMN initiatives TEXT NOT NULL DEFAULT 'on';
+  ALTER TABLE project_linking ADD COLUMN linearOwner TEXT;
+  ALTER TABLE project_linking ADD COLUMN ownsTeam INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE programs ADD COLUMN planBy TEXT;
+  ALTER TABLE programs ADD COLUMN planAt INTEGER;
+  ALTER TABLE programs ADD COLUMN planRequired INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE programs ADD COLUMN planEnd TEXT;
+  ALTER TABLE programs ADD COLUMN planEndWhy TEXT;
+  ALTER TABLE programs ADD COLUMN planEndAt INTEGER;
+  UPDATE programs SET planRequired = 0;
+  INSERT OR IGNORE INTO programs (slug, title, createdAt, state, planRequired) VALUES ('linear-sync', 'Linear sync', 0, 'paused', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

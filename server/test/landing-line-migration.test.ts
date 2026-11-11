@@ -108,7 +108,7 @@ describe('the landing line’s tables are one new entry that seeds nothing (land
       const db = openCoordDb(p);
       expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/reading it as-is and migrating nothing/);
       expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION + 1 });
-      expect(db.prepare('SELECT slug, state FROM programs').all()).toEqual([{ slug: 'p', state: 'active' }]);
+      expect(db.prepare('SELECT slug, state FROM programs WHERE slug <> \'linear-sync\'').all()).toEqual([{ slug: 'p', state: 'active' }]);
       db.close();
     } finally {
       warn.mockRestore();

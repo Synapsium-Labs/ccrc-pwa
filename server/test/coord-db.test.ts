@@ -57,7 +57,7 @@ describe('openCoordDb', () => {
     // warning is the ONLY observable difference — pin it, not just the data.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);
-    expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
+    expect((b.prepare('SELECT count(*) AS c FROM programs WHERE slug <> \'linear-sync\'').get() as { c: number }).c).toBe(1);
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
     b.close();
@@ -161,7 +161,7 @@ describe('openCoordDb', () => {
     // here would catch it.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);                       // no throw
-    expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
+    expect((b.prepare('SELECT count(*) AS c FROM programs WHERE slug <> \'linear-sync\'').get() as { c: number }).c).toBe(1);
     expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION + 7);              // never written DOWN
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -267,9 +267,9 @@ describe('openCoordDb', () => {
       db.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('b','B',1,'active')").run();
       throw new Error('nope');
     })).toThrow('nope');
-    const slugs = (db.prepare('SELECT slug FROM programs ORDER BY slug').all() as { slug: string }[])
+    const slugs = (db.prepare("SELECT slug FROM programs WHERE slug <> 'linear-sync' ORDER BY slug").all() as { slug: string }[])
       .map((r) => r.slug);
-    expect(slugs).toEqual(['a']);
+    expect(slugs).toEqual(['a']);   // D-8181: the reserved `linear-sync` row (migration 55) is left out of every count here
     db.close();
   });
 });
@@ -712,9 +712,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[54] (coordinator_calls, D-8126)
     // and MIGRATIONS[55] (lane_arm_settings, D-8274)
     // and MIGRATIONS[56] (testbox_events, the test box ledger, D-8166)
-    // and MIGRATIONS[57] (practice_cases, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(58);
-    expect(MIGRATIONS.length).toBe(58);
+    // and MIGRATIONS[57] (practice_cases, Overlord W1a)
+    // and MIGRATIONS[58] (the plan tables, bindings, runs.ticketId and the hierarchy settings, D-8181).
+    expect(COORD_SCHEMA_VERSION).toBe(59);
+    expect(MIGRATIONS.length).toBe(59);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -798,8 +799,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[54] (coordinator_calls, D-8126)
     // and MIGRATIONS[55] (lane_arm_settings, D-8274)
     // and MIGRATIONS[56] (testbox_events, D-8166)
-    // and MIGRATIONS[57] (practice_cases, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(58);
+    // and MIGRATIONS[57] (practice_cases, Overlord W1a)
+    // and MIGRATIONS[58] (the plan model, D-8181); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(59);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
