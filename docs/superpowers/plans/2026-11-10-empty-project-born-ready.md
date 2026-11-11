@@ -11,8 +11,9 @@ refused with `no origin/HEAD`. This change makes `--empty` produce a project tha
 ## What changes
 
 - **ccd, `cmd_project_add --empty`.** It now makes, or adopts, a local bare origin at `<origins>/<name>.git`, seeds it
-  with one commit on `main` (the empty tree, author `ccd` with an empty address, no hook, no signing), and clones the
-  project from it. The clone sets `origin`, `origin/HEAD` and `main`'s upstream as a GitHub clone does, so the project
+  with one commit on `main` (the empty tree, no hook, no signing), and clones the project from it. The commit goes
+  through ccd's one commit writer, `_ws_reclaim_commit_tree`, with its fixed identity; the pinned caller list in
+  `ccd-child-reclaim-pin.test.ts` grows by this one caller. The clone sets `origin`, `origin/HEAD` and `main`'s upstream as a GitHub clone does, so the project
   takes a workspace at once.
 - **Where the origins go.** By default this is `$REG/origins`, under ccd's own data directory. The first line of
   `~/.ccrc/project-origins` can name another absolute path. The operator owns that file and nothing writes it. If the

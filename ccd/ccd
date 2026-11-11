@@ -10604,14 +10604,15 @@ _project_origin_ours() {   # path name -> 0 when the bare origin at path is ccd'
 }
 
 # SEED: one commit with the EMPTY TREE on `main`, made only when the origin has no `main` yet, and written with
-# `update-ref`'s empty old value, so a `main` that appeared meanwhile is never moved. Its author is `ccd` with an empty
-# address: the tool that made it, never an invented person. No index, no work tree, no hook, no signing.
+# `update-ref`'s empty old value, so a `main` that appeared meanwhile is never moved. It is written by ccd's ONE commit
+# writer, `_ws_reclaim_commit_tree`, so it carries ccd's one fixed identity (never an invented person) and no second
+# writer exists to drift; its caller list is pinned (`ccd-child-reclaim-pin.test.ts`). No index, no work tree, no hook,
+# no signing.
 _project_origin_seed() {   # bare-path -> 0 when the origin has a main
   local tree c
   git --git-dir="$1" rev-parse --verify --quiet refs/heads/main >/dev/null && return 0
   tree=$(git --git-dir="$1" hash-object -t tree -w --stdin </dev/null) || return 1
-  c=$(GIT_AUTHOR_NAME=ccd GIT_AUTHOR_EMAIL='' GIT_COMMITTER_NAME=ccd GIT_COMMITTER_EMAIL='' \
-      git --git-dir="$1" commit-tree --no-gpg-sign -m 'Initial empty commit (ccd project-add --empty)' "$tree") || return 1
+  c=$(_ws_reclaim_commit_tree "$1" -m 'Initial empty commit (ccd project-add --empty)' "$tree") || return 1
   git --git-dir="$1" update-ref -m 'ccd project-add --empty' refs/heads/main "$c" '' 2>/dev/null \
     || git --git-dir="$1" rev-parse --verify --quiet refs/heads/main >/dev/null || return 1
   git --git-dir="$1" symbolic-ref HEAD refs/heads/main
@@ -36347,7 +36348,9 @@ _ws_reclaim_commit_tree() {   # dir args... -> the new commit's id on stdout, an
   #                                are git's own for writing a commit object (parents, message, tree)
   # THE ONE COMMIT WRITER, and the ONE IDENTITY, of the RECLAIM region: the WIP
   # commit (`_ws_wip_commit`) and the reflog keep (`_ws_reclaim_keep_reflogs`)
-  # both write through here, so no second identity exists to drift. It is FIXED,
+  # both write through here, so no second identity exists to drift; outside the
+  # region, an empty project's root commit (`_project_origin_seed`, D-8193: the
+  # empty tree, no work tree content) is the one other caller. It is FIXED,
   # in both channels. `-c user.*` names it to git's config; the GIT_*
   # environment is what outranks config, so a caller that happened to export
   # GIT_AUTHOR_NAME cannot put its own name on a commit it did not write. The
