@@ -66,8 +66,9 @@ import {
   type PathKindResult,
   type StatResult,
 } from './fileops.js';
-import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
+import { fleetTmuxSocket, isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
+import { tmuxRoute } from '../../shared/tmux-target.js';
 import { makeTokenSyncSpawn, tokenSyncAnswer, tokenSyncEnv, type TokenSyncSpawn } from './tokensync.js';
 import {
   accountSpawnBounds, buildAccountArgv, decodeAccountStdin, makeAccountOpSpawn, readFleetIdentity, type AccountOpSpawn,
@@ -480,7 +481,10 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     }
     case 'exec': {
       if (!isExecAllowed(req.cmd, req.args)) { send(ws, fail(req.id, 'forbidden')); return; }
-      const result = await runExec(resolveSpawnCmd(req.cmd, ctx.cfg.home), req.args, clampTimeout(req.timeoutMs));
+      // D-8270: AFTER the whitelist, which judged the argv the server sent: a tmux call is routed to the socket the
+      // home's setting names (`-L` ahead of it, or a refusal when the setting names none), and `ccd` passes untouched.
+      const routed = tmuxRoute(req.cmd, req.args, () => fleetTmuxSocket(ctx.cfg.home));
+      const result = await runExec(resolveSpawnCmd(routed.file, ctx.cfg.home), [...routed.args], clampTimeout(req.timeoutMs));
       send(ws, ok(req.id, result));
       return;
     }

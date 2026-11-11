@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
 import type { RunningAgent } from '../src/server.js';
 import type { PtyProcess, PtySpawn } from '../src/pty.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
@@ -210,5 +212,28 @@ describe('spawnFleetPty — the remote drawer attaches EXACTLY one session (D-35
     expect(call[0]).toBe('tmux');
     expect(call[1]).toEqual(['attach', '-t', '=cc-demo:']);
     expect(call[2]).toMatchObject({ cols: 120, rows: 40 });
+  });
+});
+
+describe('D-8270 — spawnFleetPty attaches on the socket the setting of the HOME ccd reads names', () => {
+  it('unchanged without a setting; `-L <name>` ahead of the attach once the setting names one', async () => {
+    const { spawnFleetPty } = await import('../src/pty.js');
+    const saved = process.env.HOME;
+    const home = mkTmp('ccrc-agent-pty-sock-');
+    try {
+      ptySpawn.mockClear();
+      process.env.HOME = home;
+      spawnFleetPty('demo', 120, 40);
+      mkdirSync(path.join(home, '.ccrc'));
+      writeFileSync(path.join(home, '.ccrc', 'tmux-socket'), 'fleet-a\n');
+      spawnFleetPty('demo', 120, 40);
+      const calls = ptySpawn.mock.calls as unknown as [string, string[]][];
+      expect(calls.map((c) => [c[0], c[1]])).toEqual([
+        ['tmux', ['attach', '-t', '=cc-demo:']],
+        ['tmux', ['-L', 'fleet-a', 'attach', '-t', '=cc-demo:']],
+      ]);
+    } finally {
+      process.env.HOME = saved;
+    }
   });
 });

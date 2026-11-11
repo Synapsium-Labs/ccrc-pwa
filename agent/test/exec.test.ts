@@ -128,6 +128,36 @@ describe('ccrc-agent exec whitelist', () => {
     }
   });
 
+  it('D-8270: a whitelisted tmux call runs on the socket the home\'s setting names, and is unchanged without one', async () => {
+    fixture = makeFixture();
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    const bin = makeStubBinary('tmux', 'echo "$*"');
+    const origPath = process.env.PATH;
+    process.env.PATH = `${path.dirname(bin)}${path.delimiter}${origPath ?? ''}`;
+    try {
+      // No setting: the argv the whitelist admitted is the argv tmux gets.
+      const plain = await client.req<ExecRes>(1, { op: 'exec', cmd: 'tmux', args: ['has-session', '-t', '=cc-demo:'] });
+      expect(plain).toMatchObject({ ok: true, code: 0, stdout: 'has-session -t =cc-demo:\n' });
+      // The setting names a socket: the same request moves to it. The whitelist still judged the unprefixed argv.
+      mkdirSync(path.join(fixture.home, '.ccrc'), { recursive: true });
+      writeFileSync(path.join(fixture.home, '.ccrc', 'tmux-socket'), 'fleet-a\n');
+      const moved = await client.req<ExecRes>(2, { op: 'exec', cmd: 'tmux', args: ['has-session', '-t', '=cc-demo:'] });
+      expect(moved).toMatchObject({ ok: true, code: 0, stdout: '-L fleet-a has-session -t =cc-demo:\n' });
+      // A setting that names no socket: tmux is not asked, and the answer is not a death.
+      writeFileSync(path.join(fixture.home, '.ccrc', 'tmux-socket'), '../elsewhere\n');
+      const refused = await client.req<ExecRes>(3, { op: 'exec', cmd: 'tmux', args: ['has-session', '-t', '=cc-demo:'] });
+      expect(refused).toMatchObject({ ok: true, code: 1, stdout: '' });
+      expect(refused.stderr).toMatch(/^ccrc: tmux was not asked: /);
+      // `ccd` is never routed: the setting is not tmux's business there.
+      const ccd = await client.req<ExecRes>(4, { op: 'exec', cmd: 'ccd', args: ['ls'] });
+      expect(ccd.stderr ?? '').not.toContain('tmux was not asked');
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+
   it('says ran:false, additively, when the exec never started (a spawn error), and nothing else about ran otherwise (D-6840)', async () => {
     fixture = makeFixture();
     agent = await boot(fixture);
