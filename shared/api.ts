@@ -984,6 +984,11 @@ export interface SessionUsage {
   readonly effort: string | null;
   readonly ctxPct: number | null;
   readonly cost: number | null;
+  /** D-8267: when the main conversation's cached prompt prefix leaves its TTL, in epoch SECONDS (the sidecar's unit):
+   *  Claude Code's documented statusline field `prompt_cache.expires_at` (v2.1.251 and later), null when the last
+   *  response reported no cache tokens or the payload had no `prompt_cache`. `predictIdleCompactAt` reads it. Optional
+   *  because an older server omits it; this server always writes it. */
+  readonly cacheExpiresAt?: number | null;
   readonly stale: boolean;
 }
 
@@ -3299,7 +3304,7 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
   return {
     ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
     effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
-    stale: optBool(u, 'stale', false),
+    cacheExpiresAt: optNum(u, 'cacheExpiresAt'), stale: optBool(u, 'stale', false),
   };
 }
 
@@ -4625,6 +4630,34 @@ export const IDLE_COMPACT_NOTICE_PREFIXES = [
  *  operator answers in one line and stops. */
 export const IDLE_COMPACT_NUDGE_PROMPT =
   "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop.";
+/** D-8267 (the operator's ruling of 2026-11-11): the fixed estimate of when Claude Code's idle compaction runs, kept as the fallback:
+ *  about 55 minutes after the turn ended (`end_turn`, Stop fired), the D-5371 measurement (110 of 111). */
+export const IDLE_COMPACT_ESTIMATE_MS = 55 * 60_000;
+/** What a prediction rests on: the prompt cache's recorded expiry, or the fixed estimate. */
+export type IdleCompactBasis = 'cache-expiry' | 'estimate';
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const IDLE_COMPACT_BASIS_MAP: Record<IdleCompactBasis, true> = { 'cache-expiry': true, estimate: true };
+export const IDLE_COMPACT_BASES: readonly IdleCompactBasis[] = Object.keys(IDLE_COMPACT_BASIS_MAP) as IdleCompactBasis[];
+export interface IdleCompactPrediction {
+  /** Epoch ms. */
+  readonly at: number;
+  readonly basis: IdleCompactBasis;
+}
+/** D-8267 (the operator's ruling of 2026-11-11): when Claude Code's idle compaction is predicted to run on this row. Idle compaction
+ *  stays on (D-8173); this only says when. Pure. A row with no ended turn (`done` or `idle`) has no idle compaction
+ *  coming and reads null. Otherwise the prompt cache's expiry the statusline recorded (`SessionUsage.cacheExpiresAt`)
+ *  when present, however stale the reading (it is an absolute time); with none, the fixed estimate from when the row
+ *  entered its bucket (`bucketSince`: the turn's end for `done`, the live file's move to idle for `idle`); with neither,
+ *  null. `usage` goes through `?.` because a cast `fleet` frame from an older server can lack the field. */
+export function predictIdleCompactAt(
+  s: Pick<FleetSession, 'bucket' | 'bucketSince' | 'usage'>,
+): IdleCompactPrediction | null {
+  if (s.bucket !== 'done' && s.bucket !== 'idle') return null;
+  const expiresS = s.usage?.cacheExpiresAt;
+  if (typeof expiresS === 'number' && Number.isFinite(expiresS)) return { at: expiresS * 1000, basis: 'cache-expiry' };
+  if (s.bucketSince === null) return null;
+  return { at: s.bucketSince + IDLE_COMPACT_ESTIMATE_MS, basis: 'estimate' };
+}
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';

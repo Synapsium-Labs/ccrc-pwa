@@ -826,7 +826,10 @@ describe('reviveFleetSession carries usage (routing slice 0)', () => {
     delete base['usage'];
     expect(reviveFleetSession(base)?.usage).toBeNull();
     const usage = { ts: 1, model: 'claude-sonnet-5', class: 'sonnet', effort: 'medium', ctxPct: null, cost: 0, stale: true };
-    expect(reviveFleetSession({ ...base, usage })?.usage).toEqual(usage);
+    expect(reviveFleetSession({ ...base, usage })?.usage).toEqual({ ...usage, cacheExpiresAt: null });
+    // D-8267: the prompt cache's expiry revives when present; a non-number refuses like every other number field.
+    expect(reviveFleetSession({ ...base, usage: { ...usage, cacheExpiresAt: 1_800_003_600 } })?.usage?.cacheExpiresAt).toBe(1_800_003_600);
+    expect(reviveFleetSession({ ...base, usage: { ...usage, cacheExpiresAt: 'x' } })).toBeNull();
     expect(reviveFleetSession({ ...base, usage: { ...usage, ts: 'x' } })).toBeNull();      // MalformedSnapshot: no clock
     expect(reviveFleetSession({ ...base, usage: { ...usage, class: 7 } })).toBeNull();     // MalformedSnapshot: not a string
   });

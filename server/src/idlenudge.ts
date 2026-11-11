@@ -6,7 +6,10 @@ import { IDLE_NUDGE_DISABLED_MARKER } from '../../shared/switches.js';
  *
  * Claude Code's idle ("sleep") compaction runs about 55 minutes after a turn
  * ENDED, before the prompt cache expires, and starts no turn (110 of 111
- * measured post-compaction "stalls", 2026-10-17). The operator ruled "Nudge if
+ * measured post-compaction "stalls", 2026-10-17). When it will run is predicted
+ * by `predictIdleCompactAt` (shared/api.ts, D-8267): the prompt cache's expiry
+ * the statusline records, else that fixed estimate. This lane reacts to the
+ * compaction once it happened and reads no prediction. The operator ruled "Nudge if
  * work is open": type one "continue" prompt after an idle compaction when the
  * session's task list is fresh and has open items. This module decides
  * whether one compaction earns that prompt; `watch.ts`'s `sweepIdleCompactNudge`

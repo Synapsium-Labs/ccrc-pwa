@@ -50,6 +50,8 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
     // A cold-row candidate carries a hook-state file (the first stopped row) and a usage sidecar (the second), so a
     // later step that mishandles a cold row's hook state or usage changes a pinned output. Planted with fixed
     // values: the sidecar's `ts` is old on purpose, so its `stale` flag does not depend on the wall clock.
+    // The sidecar has no `cacheExpiresAt` (a hook older than D-8267), so the pinned row reads it null: the field
+    // rides the same sidecar read, and the tick's read count is unchanged.
     const stoppedHookAt = Date.now();
     writeFileSync(path.join(reg, `${STOPPED[0]}.hookstate.json`), JSON.stringify({
       v: 1, state: 'idle', event: 'Stop', sessionId: `uuid-${STOPPED[0]}`, pid: 4100,
@@ -474,6 +476,7 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "ultracode": false,
           "unmeasured": [],
           "usage": {
+            "cacheExpiresAt": null,
             "class": "opus",
             "cost": 1.25,
             "ctxPct": 12,
