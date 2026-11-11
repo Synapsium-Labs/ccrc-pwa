@@ -2163,6 +2163,32 @@ describe('fleet store', () => {
           { listed: false, enforcement: 'unknown', accountPools: true },
         ]) expectPriorWireToSurvive(pools);
       });
+
+      // D-8283: the reason rides beside accountPools and gets the same envelope gate.
+      it('carries every valid accountPoolsReason straight through, and an absent one stays absent', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        for (const accountPoolsReason of ['ccd-predates', 'no-pool-sync']) {
+          const pools = { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason };
+          lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+          expect(store.getState().pools).toEqual(pools);
+        }
+        const bare = { listed: false, enforcement: 'unknown', accountPools: 'unavailable' };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools: bare }));
+        const got = store.getState().pools;
+        expect(got).toEqual(bare);
+        expect(got !== null && Object.hasOwn(got, 'accountPoolsReason')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed accountPoolsReason', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: 'nope' },
+          { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: null },
+          { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: 3 },
+        ]) expectPriorWireToSurvive(pools);
+      });
     });
 
     it('keeps the exact prior policy across a genuine disconnect and fresh-socket reconnect', () => {

@@ -202,6 +202,44 @@ describe('AccountPoolSheet', () => {
     );
   });
 
+  it('blames an older ccd only when that is the measured reason', () => {
+    render(
+      <AccountPoolSheet
+        account="acct-a"
+        roster={rosterWith('acct-a', null)}
+        unenforced
+        unenforcedReason="ccd-predates"
+        open
+        onClose={() => {}}
+        onSet={vi.fn()}
+      />,
+    );
+    const notice = screen.getByTestId('account-pool-unenforced-notice');
+    expect(notice).toHaveTextContent(/predates account pools/);
+    expect(notice).toHaveTextContent(/nothing on the fleet enforces it yet/);
+  });
+
+  // D-8283: the single-box install. ccd is current and still applies the roster's declared pool, so the notice says
+  // the tag is not applied on this install, names the missing timer, and never says ccd is old.
+  it('on a single-box install, says the tag is not applied here and why', () => {
+    render(
+      <AccountPoolSheet
+        account="acct-a"
+        roster={rosterWith('acct-a', null)}
+        unenforced
+        unenforcedReason="no-pool-sync"
+        open
+        onClose={() => {}}
+        onSet={vi.fn()}
+      />,
+    );
+    const notice = screen.getByTestId('account-pool-unenforced-notice');
+    expect(notice).toHaveTextContent(/not applied on this install/i);
+    expect(notice).toHaveTextContent(/pool-sync timer/);
+    expect(notice).toHaveTextContent(/pool the roster declares/);
+    expect(notice).not.toHaveTextContent(/predates/);
+  });
+
   it.each([undefined, false] as const)('says nothing when unenforced is %s — no evidence, no claim', (unenforced) => {
     render(
       <AccountPoolSheet

@@ -2700,8 +2700,9 @@ single-box default, or any macOS box — has none of this: with no projection on
 disk it reads the declared tag, as before, so there a central tag is the
 server's refusal and forecast while ccd's own placement still follows
 `accounts.json`. The PWA says so: `ccd caps` prints `pool-sync-absent` there,
-and the account pool chip dims and the editor warns that nothing enforces the
-tag. The server never nudges; convergence is the timer's pull
+and the account pool chip dims with "not applied on this install — no pool-sync
+timer", and the editor says ccd places by the roster's declared pool while the
+server's forecast and swap check use the tag (D-8283). The server never nudges; convergence is the timer's pull
 alone, so a central change reaches the fleet within about a minute. On a fleet
 box running the timer, the fleet header shows `epoch N / observed M` (or
 `observed never synced`) while the fleet's projection lags the server's epoch;

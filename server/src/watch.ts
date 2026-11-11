@@ -15,7 +15,7 @@ import { carriedUsage, changedRows, usageReadIds, listingNotice, planTick, rejec
 import { readLimits } from './limits.js';
 import { mapBounded } from './bounded.js';
 import {
-  accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
+  accountPoolsEnforcement, accountPoolsUnavailableReason, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
 import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
@@ -3176,6 +3176,7 @@ export class FleetWatcher {
       readPoolEpoch(this.deps.coord),
       observedEpoch,
       accountPoolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null),
+      accountPoolsUnavailableReason(this.deps.fleetState?.ccdVerbs ?? null), // D-8283
     );
     const json = JSON.stringify(wire);
     if (json === this.lastPoolsJson) return;

@@ -20,7 +20,9 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import type { AccountUsage, RosterWire } from '../../shared/api';
 import type { AccountPoolWire } from '../../shared/poolrule';
 import { accountPoolState } from '../src/lib/accounts';
-import { ACCOUNT_POOL_UNAVAILABLE_TEXT, AccountsScreen } from '../src/screens/AccountsScreen';
+import {
+  ACCOUNT_POOL_NO_SYNC_TEXT, ACCOUNT_POOL_UNAPPLIED_TEXT, ACCOUNT_POOL_UNAVAILABLE_TEXT, AccountsScreen,
+} from '../src/screens/AccountsScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { navigate } from '../src/lib/router';
@@ -190,7 +192,9 @@ describe('AccountsScreen — the account pool chip', () => {
   describe('dims on accountPools:unavailable — the fleet-level `pools` frame, item 3', () => {
     it('carries data-dim and the disclosure text once the fleet MEASURES accountPools:unavailable', async () => {
       stubAccounts(rosterWith('acct-a', 'pool-roster'), [acct({})]);
-      act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable' } }));
+      act(() => useFleetStore.setState({
+        pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: 'ccd-predates' },
+      }));
       render(<AccountsScreen />);
       const chip = await screen.findByTestId('acct-pool-chip-acct-a');
       expect(chip).toHaveAttribute('data-dim', 'true');
@@ -201,6 +205,31 @@ describe('AccountsScreen — the account pool chip', () => {
       // any fleet node reads it yet.
       expect(chip.tagName).toBe('BUTTON');
       expect(chip).not.toBeDisabled();
+    });
+
+    // D-8283: the single-box install. Its ccd is current, so the chip must not blame ccd's age: it says the tag is not
+    // applied on this install and why.
+    it('names the missing pool-sync timer, never an older ccd, on a single-box install', async () => {
+      stubAccounts(rosterWith('acct-a', 'pool-roster'), [acct({})]);
+      act(() => useFleetStore.setState({
+        pools: { listed: false, enforcement: 'enforced', accountPools: 'unavailable', accountPoolsReason: 'no-pool-sync' },
+      }));
+      render(<AccountsScreen />);
+      const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+      expect(chip).toHaveAttribute('data-dim', 'true');
+      expect(chip).toHaveAttribute('title', ACCOUNT_POOL_NO_SYNC_TEXT);
+      expect(chip.getAttribute('aria-label')).toContain(ACCOUNT_POOL_NO_SYNC_TEXT);
+      expect(chip.getAttribute('aria-label')).not.toContain('predates');
+      expect(chip.tagName).toBe('BUTTON');
+    });
+
+    it('names no cause when the server sends unavailable without a reason (an older server)', async () => {
+      stubAccounts(rosterWith('acct-a', 'pool-roster'), [acct({})]);
+      act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable' } }));
+      render(<AccountsScreen />);
+      const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+      expect(chip).toHaveAttribute('data-dim', 'true');
+      expect(chip).toHaveAttribute('title', ACCOUNT_POOL_UNAPPLIED_TEXT);
     });
 
     it('does NOT dim on accountPools:enforced', async () => {

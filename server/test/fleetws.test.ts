@@ -1549,11 +1549,44 @@ describe('fleet REST + WS', () => {
         const watcher = mkWatcher(deps, bus);
         app = await buildServer(deps, bus, watcher);
         const res = await app.inject({ method: 'GET', url: '/api/fleet' });
-        const body = res.json() as { pools: { accountPools?: string } };
+        const body = res.json() as { pools: { accountPools?: string; accountPoolsReason?: string } };
         expect(body.pools.accountPools).toBe('unavailable');
+        // D-8283: the single-box install shape names the missing timer, not an older ccd, on both call sites.
+        expect(body.pools.accountPoolsReason).toBe('no-pool-sync');
 
         await watcher.tick();
         expect(watcher.currentPools()?.accountPools).toBe('unavailable');
+        expect(watcher.currentPools()?.accountPoolsReason).toBe('no-pool-sync');
+      });
+
+      // D-8283: the fleet install shape carries no reason, and a ccd with no account side names its age.
+      it('carries no reason when enforced, and ccd-predates for a ccd with no account-pools token, on both call sites', async () => {
+        const fleetDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = mkWatcher(fleetDeps, bus);
+        app = await buildServer(fleetDeps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: Record<string, unknown> };
+        expect(Object.hasOwn(body.pools, 'accountPoolsReason')).toBe(false);
+        await watcher.tick();
+        expect(Object.hasOwn(watcher.currentPools() ?? {}, 'accountPoolsReason')).toBe(false);
+        await app.close();
+        app = undefined;
+
+        const oldDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: ['swap'], rosterFp: null, build: null },
+        };
+        const bus2 = new Bus();
+        const watcher2 = mkWatcher(oldDeps, bus2);
+        app = await buildServer(oldDeps, bus2, watcher2);
+        const res2 = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect((res2.json() as { pools: { accountPoolsReason?: string } }).pools.accountPoolsReason).toBe('ccd-predates');
+        await watcher2.tick();
+        expect(watcher2.currentPools()?.accountPoolsReason).toBe('ccd-predates');
       });
 
       it('is absent-reads-unknown when there is no ccdVerbs evidence at all', async () => {
