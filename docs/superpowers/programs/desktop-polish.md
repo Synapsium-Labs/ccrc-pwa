@@ -3449,6 +3449,73 @@ Four tasks: S1 (D-7987), S2 (D-7988), C1 (D-7989) and C2 (D-7990). Snapshots and
 - 2026-11-10: #2535 dequeued a second time (11:35:51, failed_checks): merge_group run 42805912574's browser (pwa) 1/2 cancelled at its 20-minute job limit with its tests passing; the same cancellation hit groups for #2549 and #2551. Measured over a day of green queue runs: both browser shards 14-19 min against the 20-min limit (the job comment's D-7746 estimate was about 9). The first group's (42798959448) red was delegation-adopt-card's self-check row (finding 3), unrelated. Re-enqueued #2535 at f61fa5b36 (position 2). ci.yml is held by claim 3880 (history W4-1, run 1745); mailed its coordinator (17184) proposing Task C19 (browser-pwa matrix 2 -> 3 shards, limit unchanged) and asking about overlap before any dispatch.
 - 2026-11-10: the other programme holding ci.yml (claim 3880) consented in writing to Task C19 editing the `browser-pwa` job block only, with whichever PR lands first going first; its worker edits only the node-floor job's test list. D-8167 issued by the allocator for Task C19. Run 1746 opened (wave 113) and dispatched, route opus/high, subagent sonnet, workflow off, compact 40; the brief carries the task until this ledger PR merges.
 - 2026-11-10: this ledger PR is opened: every receipt since #2532, and Task C19 in the plan.
+- 2026-11-10T11:47Z: ledger PR #2552 opened (receipts since #2532, Task C19, D-8167).
+- 2026-11-10: C19 step 0 (17187) accepted: 82 browser files, 5,788 s of file time; three shards with FILE_MS refreshed simulate at about 645 s of Test each (about 12 min a job, 8 under the limit); ask-inline 573 s fits; matrix 1..3, limit stays 20, ci-pipeline pins 3 red first.
+- 2026-11-10T11:50Z: C19 PR #2553 opened at f6fd4b7ac (full-ci), claim 3882 for the non-ci.yml paths; ci-pipeline pins total 3 red first; browser-leg partitions 1-4 over the refreshed FILE_MS; deviation-refs red only on D-8167 until #2552 lands.
+- 2026-11-10: #2552 green (docs only); enqueued with --match-head-commit 7b5d7aa3f.
+- 2026-11-10: #2535 (C18, D-8150) MERGED as 8053b788b at f61fa5b36; the C18 worker told (17191); run 1734 closed final; C19's run 1746 holds the programme open.
+- 2026-11-10: #2552 (ledger, Task C19, D-8167) MERGED as fb106808a; the C19 worker told.
+- 2026-11-10: C19 ruling (17194 replaces 17192/17193): after the current PR run records the shard times, merge origin/main (fb106808a) into the workspace branch once so deviation-refs clears; push once; wave-done on that tip.
+- 2026-11-10: C19 first PR run 42810729272: browser shards green, Test 745/652/571 s (jobs 13.0/11.4/10.0 min, 27/27/28 files); only red deviation-refs (pre-#2552). Main merged once (fb106808a), pushed 19093bc2e; second run in progress.
+- 2026-11-10: C19 wave-done 17197 at 19093bc2e re-measured: head equals the claim, MERGEABLE, required checks green (run 42813732466), 0 code-scanning alerts, merge-tree clean, one ci.yml hunk inside the browser-pwa block. Measured three-shard times: run 42810729272 Test 745/652/571 s (jobs 13.0/11.4/10.0 min); run 42813732466 Test 726/713/732 s (jobs 12.6/12.5/12.8 min); before, two shards 1,082/982 s (18.6/16.9 min). Run 1746 to awaiting-review; review run 1747 opened and dispatched (round 1 of 3).
+- 2026-11-10: review 1747 of C19 at 19093bc2e: four minors (c19.md shard/baseline wording, two stale PR-body lines, a slowFirst comment), none needing a ruling; two candidates killed at refutation; workflow gate, balance, table and pin all verified. Ruling: LAND; F1-F4 carried; browser-suite growth carried as a watch (7-minute margin, about 1-2 weeks at the measured growth). Review run 1747 closed.
+- 2026-11-10: #2553 re-measured at 19093bc2e (mergeable, merge-tree clean, body scanned clean); run 1746 to merging; enqueued with --match-head-commit at position 1.
+- 2026-11-10: #2553 (C19, D-8167) MERGED as f476fe42a at 19093bc2e; run 1748 opened (wave 114, Task C20, the carried sweep, planned) before the close; the C19 worker told (17201); run 1746 closed final.
+- 2026-11-10 ~16:55Z: operator report (screenshot): chat linked a coordinator's bare `#666` to its HOME repository though the message named another repository's PR 666. Defect in Task L (D-8062, `refHref` resolves pr/commit marks against the home repo unconditionally). Coordinator's ruling, in order: (1) qualified `owner/repo#n` links there; (2) a bare `#n`/commit links to the one repository the same message names for that n/sha; (3) else text when the message names another repository or the session claims an open run whose project's repository is not home (unnamed counts as not home); (4) else home, as before. D-8172 issued; Task C21 run 1755 (wave 115) opened dispatched (opus/high/sonnet/off/40). Run 1748 (C20, the carried sweep) stays planned behind it.
+- 2026-11-10: C21 wave-done 17238 @2732643de, PR #2564 (18 files +662/-64; required checks green; first local pwa run red then fixed, 18/18 mutants killed; browser 81/82 locally, ask-inline OOM under the 6G slice cap, green alone). Re-measured: branch tip = PR head = claim, merge-tree clean. Run 1755 advanced to awaiting-review; review run 1758 (round 1 of 3) opened dispatched (sonnet/high/sonnet/on/40), with the known cost (a path-like `src/thing#12` links as a qualified PR) put to the reviewer to weigh.
+- 2026-11-10: review 1758 (round 1 of 3) of C21 @2732643de: nine findings, no blocker. Suites green (pwa 291, server guards 1370, tsc rc 0); the reviewer's own mutants were 7 killed, 3 survived. Review run closed with {reviewedTip, report}. RULED FIX (mail 17251):
+  - F1: an unreadable GitHub address counts as an unknown repository, so the bare `#n` stays text.
+  - F2: SSH, api, raw and codeload addresses and `gh --repo`/`-R` name a repository.
+  - F3: option (b), exceptions for an extension, digits or one character, and an uppercase pair, and R15 states the residual honestly.
+  - F4: one trailing-dot trim.
+  - F5: a linear trim plus a budget pin.
+  - F6: one shared boundary.
+  - F7: recorded only.
+  - F8: amend spec §4.1/§4.2/Figure 3/Agreed in this PR.
+  - F9: three pins and the dead code.
+  Run 1755 back to working.
+- 2026-11-10: C21 fix-round-1 wave-done 17262 @b531ff57e (9 files +400/-98 over 2732643de; required green; 38/38 chosen mutants killed). Re-measured: tip = PR head = claim, merge-tree clean. Run 1755 to awaiting-review; review run 1760 (round 2 of 3) dispatched.
+- 2026-11-10: review 1760 (round 2 of 3) of C21 @b531ff57e: round-1 F1-F9 fixed; 12 new findings, no blocker. Reviewer's mutants: 15 of 16 killed. Closed. RULED FIX (fix round 2):
+  - F1: the gh command boundary, quoted flags, last flag wins.
+  - F2 (a): a name the exceptions refuse is an unknown repository.
+  - F3: widen FILE_EXTENSIONS, and the wording says "listed" and states the prose-pair residual.
+  - F4: underscore emphasis agrees.
+  - F5: a letter before a schemeless host is an unknown repository.
+  - F6, partly: pathless gh api and GH_REPO are read; the rest is listed as not read.
+  - F7 to F12: fixed.
+  Run 1755 back to working. Round 3 is the last review.
+- 2026-11-10: C21 fix-round-2 wave-done 17308 @1dc3b4e1d (9 files +531/-123; required green; 60 of 60 live mutants killed; departures: positional bound, quoted exact flag, abc1234/x#5 now text, remark gets the message source). Re-measured: tip = PR head = claim, merge clean. Run 1755 to awaiting-review; review run 1762 (round 3 of 3, LAST) dispatched.
+- 2026-11-10: review 1762 (round 3 of 3, LAST) of C21 @1dc3b4e1d: round-2 F1-F12 fixed; 10 findings, all grade (b), "safe to land as it stands"; reviewer's 20 mutants: 15 killed, 1 equivalent, 4 gaps (F10). Closed. RULED LAND with F1-F10 carried to C20's sweep (carried-findings.md); F6: the shell reading of an exact quoted flag stands, R15 to be amended. #2564 body scanned clean, merge-tree clean; run 1755 to merging; enqueued with --match-head-commit 1dc3b4e1d.
+- 2026-11-10: #2564 (C21) MERGED as 45015062b at 1dc3b4e1d (proved by gh pr view). The worker was mailed MERGED (17317), then run 1755 was closed final ({ok, released, childReclaim queued}). Run 1748 (C20) remains the open holder. Claims 3886/3887/3893 released; the live claims now are 3888, 3889 (Docs reader coordinator) and 3892 (not ours).
+- 2026-11-10: C20 (the carried sweep) briefed and dispatched on run 1748 (opus/high/sonnet/off/40), D-8187 issued.
+  - Scope: review 1762 F1-F10 (chat evidence corners; F6 ruled to the shell reading); review 1740 F1, F2, F4, F5, F6 (tests and comments; F9 record only); c18.md F3/F7/F8; c19.md F1; slowFirst.ts F4.
+  - Out of scope: Docs head items (1723 N5, 1725 F4) and the browser-growth watch.
+  - Report copies for the worker are in the coordinator's clips folder.
+- 2026-11-10: C20 wave-done 17339 @8132294ba, PR #2598 (17 files +521/-57; required checks green; 27 of 28 mutants killed, 1 equivalent). Six departures by slug in c20.md. Re-measured: tip = PR head = claim, merge clean. Run 1748 moved to awaiting-review; review run 1766 (round 1 of 3) dispatched.
+- 2026-11-10: review 1766 (round 1 of 3) of C20 @8132294ba: every carried item done as ruled; 10 findings, three grade (a) caused by my own rulings as written. Closed. RULED FIX (17343):
+  - F1: a quote voids a command only inside its own words.
+  - F2: FLIP the gh flag direction. Every flag takes a value except a once-defined boolean list; GH_VALUE_FLAGS is removed.
+  - F3: a `.Upper` flag value is an unknown repository, never cut.
+  - F4: per-line source comparison.
+  - F5: table rows.
+  - F6: record nits.
+  - F7: a `#`-word ends the command.
+  - F9: a value is never a flag.
+  - F8 and F10: record only.
+  Run 1748 back to working. Lesson: a list-of-exceptions rule must fail toward text when the list is incomplete.
+- 2026-11-10: C20 fix-round-1 wave-done 17349 @92fa03161 (8 files +327/-124; required checks green; 26 of 27 mutants killed, 1 equivalent; GH_BOOLEAN_FLAGS from gh 2.103.3 help). Re-measured: tip = PR head = claim, merge clean. Run 1748 to awaiting-review; review run 1768 (round 2 of 3) dispatched.
+- 2026-11-10: review 1768 (round 2 of 3) of C20 @92fa03161: round-1 F1-F10 all done as ruled; 8 findings. G1-G4 share one cause: a -R the parser loses names nothing, so the bare #n opens home. Closed. RULED FIX with a safety net: in a gh message, every -R/--repo/--repo=/-xR owner/repo token names that repository (rule 3a), wherever it stands, so a parser corner yields text, never home. Also per-group boolean sets (G1/G2), G7 pins, G8 record fixes; G5 recorded; G6 covered by the net. Run 1748 back to working; round 3 is the last review.
+- 2026-11-10: C20 fix-round-2 wave-done 17385 @440de281b (6 files +471/-88; required checks green; 42 of 44 mutants killed, 2 equivalent; departure lost-command-number). Re-measured: tip = PR head = claim, merge clean. Run 1748 to awaiting-review; review run 1769 (round 3 of 3, LAST) dispatched.
+- 2026-11-11: review 1769 (round 3 of 3, LAST) of C20 @440de281b: 10 findings, none blocking; graded safe to land. Reviewer's mutants 14 of 14 killed. The net cannot create a wrong non-home link (fuzz of about 75k marks). Closed.
+  - RULED LAND. F1 (a quadratic scan on hostile spaceless -R= runs, a regression from round 2), F2, F3, F4, F8 and F9 go to C22.
+  - F5 (the three lost-command-number arms) stands. F6 and F7 are recorded.
+  - PR body scanned clean, merge-tree clean. Run 1748 to merging; enqueued with --match-head-commit 440de281b.
+  - C22 opened as run 1771 (wave 116), D-8196 issued, brief ready; to dispatch after #2598 merges.
+- 2026-11-11: #2598 (C20) MERGED as a1932c4a7 at 440de281b (proved by gh pr view). Worker mailed MERGED, then run 1748 closed final. C22 (run 1771, D-8196) dispatched (opus/high/sonnet/off/40).
+- 2026-11-11: C22 wave-done 17412 @915c654ea, PR #2615 (7 files +480/-55; required checks green; 28/28 mutants killed; F1 1 MiB 72-103 ms vs round 2 OOM). Readings to weigh: unclaimed-joins-evidenced-numbers, path-word-unclaimed-too, lost-command-flags-are-claimed, and CJK-before-gh stays home. Re-measured: tip = PR head = claim, merge clean. Run 1771 to awaiting-review; review run 1778 (round 1 of 3) dispatched.
+- 2026-11-11: review 1778 (round 1 of 3) of C22 @915c654ea: no (a) finding; safe to land; reviewer's mutants 14 of 14 killed. Closed. RULED LAND; A1, A2, L2-1, L3-1, L3-5 and the minors are carried to C23. unclaimed-joins-evidenced-numbers confirmed; CJK-before-gh stays home. PR body clean, merge-tree clean. Run 1771 to merging; enqueued --match-head-commit 915c654ea. Holder run for C23 (wave 117) opened.
+- 2026-11-11: #2615 (C22) MERGED as 60a046689 at 915c654ea (proved). Worker mailed MERGED, and run 1771 closed final. Run 1779 (C23, planned) holds the programme.
+- 2026-11-11: this ledger PR is opened: every receipt since #2552 (C19's landing, Task C21 from the operator's report, C20 and C22).
 
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
