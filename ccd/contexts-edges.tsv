@@ -69,6 +69,9 @@ _pane_carried_in -> _limit_dated
 _pane_for_keystroke -> _tmux_t
 _pane_limit_capture_to -> _tmux_t
 _pane_measurable -> _tmux_t
+_pane_type_ready -> _reg_get
+_pane_type_ready -> _reg_set
+_pane_type_ready -> _tmux_t
 _panescope_record -> _reg_set
 _pool_sync_installed -> _svc_plist
 _pr_bind_facts -> _reg_get

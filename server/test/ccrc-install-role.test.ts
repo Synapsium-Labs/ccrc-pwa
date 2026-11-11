@@ -6,6 +6,7 @@ import * as pty from 'node-pty';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync, readdirSync, symlinkSync, lstatSync, readlinkSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { describeLinux, itLinux } from './platformFixtures.js';
@@ -30,7 +31,7 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
   // Every case reads this one home, so it is made in a beforeAll, before the first case's mark:
   // removeTmpFixturesEachTest leaves it to the end-of-file sweep. The install itself still starts lazily, in a case.
   let fleetHome = '';
-  beforeAll(() => { fleetHome = freshBox('ccrc-install-role-fleet-'); }, 60_000);
+  beforeAll(() => { fleetHome = freshBox('ccrc-install-role-fleet-'); }, scaled(60_000));
   const fleet = (): Promise<{ home: string; r: Result }> => (fleetRun ??= (async () => {
     const home = fleetHome;
     const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);
@@ -590,7 +591,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     // AN EXPLICIT BOUND, as the floor case below: two whole install spines. 6.8 s in a full-suite
     // queue shard; 33 s in a PR shard that ran it beside the session-hook and typecheck suites,
     // twice in a row — past the 20 s Linux default though nothing here was wrong.
-  }, 60_000);
+  }, scaled(60_000));
 
   it('node-id: a file that is not a uuid is refused, never overwritten — it identifies this node to the console', () => {
     const home = freshBox('ccrc-install-nodeid-bad-');
@@ -732,7 +733,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(c.stdout).toMatch(/^install: floor: not raised — this stamp carries no version/m);
     // AN EXPLICIT BOUND (final review F4): three whole install spines. Measured alone (one file, `-t`):
     // 8.2 s at load average 12 (2026-09-28), 10.1 s at load 30 (the final review) — half the 20 s default.
-  }, 60_000);
+  }, scaled(60_000));
 
   it('_ver_newer agrees with sort -V on a fixture list, and the v is stripped nowhere else', () => {
     const src = read(join(REPO, 'ccd', 'ccrc'));
@@ -774,7 +775,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     gitInit(treeRoot(verified));
     expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
     expect(runInstall(verified, ['version']).stdout).toMatch(/^install: complete \(unsigned — placed without a verified provenance bundle/m);
-  }, 60_000);
+  }, scaled(60_000));
 
   it('ccrc version: the incomplete arm carries no provenance suffix — the record names a different, stale install (D-3136 minor 5)', () => {
     const home = freshBox('ccrc-install-version-incomplete-');

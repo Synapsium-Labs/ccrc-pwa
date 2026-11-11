@@ -1166,7 +1166,10 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     // `deployments: write` added here would stay green against a bare
     // substring pin.
     expect(stableJob('promote')).toMatch(/^    permissions:\n      contents: write(?!\n      [a-z-]+:)$/m);
-    expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests):/);
+    // The one exception: `full` passes build-pwa's own `attestations: read` to the called ci.yml (a called job asking for
+    // more than its caller grants fails the whole run before it starts). Read only, in `full` only.
+    expect(src.replace(stableJob('full'), '')).not.toMatch(/(id-token|attestations|packages|pull-requests):/);
+    expect(src).not.toMatch(/(id-token|packages|pull-requests):|attestations: (?!read$)/m);
     // design 2026-09-23 §8 (final review FR-1): the gate checks out the
     // module that judges the evidence (`contents: read`) and READS the
     // commit's workflow runs and their jobs (`actions: read`) — nothing
@@ -1177,7 +1180,7 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     // and nowhere else in this file; `checks:` nowhere — nothing reads
     // check runs any more.
     expect(stableJob('gate')).toMatch(/^    permissions:\n      contents: read\n      actions: read(?!\n      [a-z-]+:)$/m);
-    expect(stableJob('full')).toMatch(/^    permissions:\n      contents: read\n      actions: read(?!\n      [a-z-]+:)$/m);
+    expect(stableJob('full')).toMatch(/^    permissions:\n      contents: read\n      actions: read\n      attestations: read(?!\n      [a-z-]+:)$/m);
     expect(src.replace(stableJob('full'), '').replace(stableJob('gate'), ''), 'actions: outside gate and full').not.toMatch(/actions:/);
     expect(src, 'nothing reads check runs any more').not.toMatch(/checks:/);
     expect(src.match(/: write$/gm), 'one write grant in the whole file — promote\'s').toHaveLength(1);
@@ -1192,7 +1195,9 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(src).toMatch(/^          fetch-depth: 0$/m);
     expect(src).toMatch(/^        run: bash deploy\/release-stable\.sh$/m);
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
-    expect(src).not.toMatch(/npm ci|npm run|build-release\.sh|release-main\.sh|gh release|setup-node|attest/);
+    // `full`'s one read grant for the called ci.yml is no attest step (pinned in the permissions case above).
+    expect(src.match(/^      attestations: read$/gm), 'one attestations line, the called run\'s read grant').toHaveLength(1);
+    expect(src.replace(/^      attestations: read\n/m, '')).not.toMatch(/npm ci|npm run|build-release\.sh|release-main\.sh|gh release|setup-node|attest/);
     expect(stableJob('promote')).toMatch(/^    timeout-minutes: 10$/m);
   });
 

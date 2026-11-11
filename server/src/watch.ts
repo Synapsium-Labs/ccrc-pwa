@@ -1325,7 +1325,7 @@ export class FleetWatcher {
    *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   /** The automatic coordinator roll's journal throttle (D-7452). Its clock and single flight are the `rollIdle` row. */
-  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map() };
+  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -2382,9 +2382,9 @@ export class FleetWatcher {
   }
 
   /**
-   * THE AUTOMATIC COORDINATOR ROLL, RELEASE HALF (D-7452): every `rollIdle` beat (hibernation's clock), on THIS tick's
-   * rows and listing, `rollPass` rolls at most one idle coordinator whose pane started before the node's current ccrc
-   * install, by `ccd hibernate` then `ccd ensure` on the coordination serialiser and the session's queue. The setting is
+   * THE AUTOMATIC ROLL (D-7452; D-8276): every `rollIdle` beat (hibernation's clock), on THIS tick's
+   * rows and listing, `rollPass` rolls at most one idle session (every role under the default, D-8276) whose pane started
+   * before the node's current ccrc install or could reach a newer Claude Code build on its own lane, by `ccd hibernate` then `ccd ensure` on the coordination serialiser and the session's queue. The setting is
    * the Settings row (`CoordStore.rollSettings`, D-7453); without a store it reads as unreadable and nothing is rolled.
    * The install time is `~/.ccrc/installed`'s modification time on the fleet node (`deps.io`, the fleet box's io in
    * remote mode, under the same `ccrcDir` the inventory reads). Never awaited by the tick.

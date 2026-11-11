@@ -47,6 +47,8 @@ import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './unmeasuredWords';
 import { delegatedChip, type DelegatedSummary } from './delegationWords';
+import { claudeBuildOf, type ClaudeBuildFact } from '../../../shared/claudeVersion';
+import { behindFact, buildText } from './buildWords';
 
 /** Routing policy calls a window critical above this. */
 export const CRITICAL = 75;
@@ -95,12 +97,14 @@ export type FactKey =
   | 'name' | 'status' | 'role' | 'working-on'
   | 'programme' | 'coordinator' | 'run' | 'child-marker' | 'hold'
   | 'pr' | 'branch' | 'tasks' | 'subagents' | 'graph' | 'cleanup' | 'lane'
-  | 'ask-state' | 'delegated' | MarkerKey;
+  | 'ask-state' | 'delegated' | 'build' | MarkerKey;
 
-/** The attention markers, in their FIXED priority: the card shows the first one present. */
+/** The attention markers, in their FIXED priority: the card shows the first one present. `behind` (D-8276: an older
+ *  Claude Code build than the fleet's newest) is the quietest, last: a tracking fact, which a roll fixes only where the
+ *  session's own lane runs a newer build. */
 export const MARKER_ORDER = [
   'unreachable', 'coordinator-gone', 'spawn', 'needs-you', 'with-coordinator', 'lifecycle', 'stranded',
-  'swap-blocked', 'stalled', 'limit', 'ctx', 'coordinator-hibernated', 'restarted', 'unreadable', 'off-pool',
+  'swap-blocked', 'stalled', 'limit', 'ctx', 'coordinator-hibernated', 'restarted', 'unreadable', 'off-pool', 'behind',
 ] as const;
 export type MarkerKey = typeof MARKER_ORDER[number];
 
@@ -131,6 +135,12 @@ export interface FactInput {
   readonly coordinatorTitle?: string | null;
   /** The delegation entries this session started: on the card, the ones `nestFleet` attached to its row; in the header, every one (`activitiesStartedBy`). Absent or `null` = none known. */
   readonly delegated?: readonly DelegationActivityWire[] | null;
+  /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest` over the fleet store's
+   *  rows). Absent or `null` = unknown, and nothing is said to be behind. */
+  readonly claudeLatest?: string | null;
+  /** D-8276: the newest build an awake session on THIS session's lane runs (`laneClaudeLatest`): what a restart reaches.
+   *  Absent or `null` = unknown, and the words promise no roll. */
+  readonly claudeLaneLatest?: string | null;
 }
 
 /** Everything the session's rows render, decided once. The cells read these values;
@@ -179,6 +189,8 @@ export interface SessionFactSet {
   /** The session's recorded delegation entries as one chip and the header's list (`delegatedChip`): every entry it is
    *  handed, of every liveness, on a live row and a dead one alike (D-7781); `null` when handed none. */
   readonly delegated: DelegatedSummary | null;
+  /** D-8276: the session's Claude Code build against the fleet's newest (`claudeBuildOf`). */
+  readonly build: ClaudeBuildFact;
 }
 
 function askWords(ask: { state: string; parentId: string; answeredBy: string | null }):
@@ -242,7 +254,7 @@ export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
-    coordinatorTitle = null, delegated = null,
+    coordinatorTitle = null, delegated = null, claudeLatest = null, claudeLaneLatest = null,
   } = input;
   const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
@@ -348,6 +360,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
     // D-7781: no dead shortcut. A dead worker's entries stay one tap from its row.
     delegated: delegatedChip(delegated ?? []),
+    build: claudeBuildOf(session, claudeLatest, claudeLaneLatest),
   };
 }
 
@@ -380,6 +393,10 @@ export function markers(f: SessionFactSet): Fact[] {
     add('unreadable', 'unreadable', 'unreadable', unmeasuredTitle(f.unmeasured));
   }
   if (f.offPool !== null) add('off-pool', 'off-pool', 'off-pool', f.offPool);
+  if (f.build.kind === 'behind') {
+    const b = behindFact(f.build);
+    add('behind', b.text, b.short, b.title);
+  }
   return out.sort((a, b) => MARKER_ORDER.indexOf(a.key as MarkerKey) - MARKER_ORDER.indexOf(b.key as MarkerKey));
 }
 
@@ -465,6 +482,8 @@ export function headerFacts(f: SessionFactSet): Fact[] {
     out.push({ key: 'graph', text: `graph ${f.graph.reads}${f.graph.gated === null ? '' : ` · gated ${f.graph.gated}`}` });
   }
   for (const c of f.cleanup) out.push({ key: 'cleanup', text: c });
+  // D-8276: the build of a session on the newest one; a session behind says its build in the `behind` marker below.
+  if (f.build.kind === 'current') out.push({ key: 'build', text: buildText(f.build.build) });
   for (const m of markers(f)) out.push({ key: m.key, text: m.text, ...(m.title === undefined ? {} : { title: m.title }) });
   return out;
 }

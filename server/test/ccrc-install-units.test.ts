@@ -7,6 +7,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 import { installFixtureTree, installVersionedTree } from './installTreeFixture.js';
 import { BOX_SETTINGS_TIMER_S } from '../../shared/api.js';
@@ -35,7 +36,7 @@ describe('ccrc install: the one-time migration and its crash recovery (W6 Task 3
   const waitUntil = (cond: () => boolean, what: string): void => {
     const t0 = Date.now();
     while (!cond()) {
-      if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+      if (Date.now() - t0 > scaled(10_000)) throw new Error(`timed out waiting for ${what}`);
       spawnSync('sleep', ['0.05']);
     }
   };
@@ -1323,7 +1324,7 @@ describeDarwin('ccrc install --role fleet: the agent job, and the one this box m
   // Every case reads this one home, so it is made in a beforeAll, before the first case's mark:
   // removeTmpFixturesEachTest leaves it to the end-of-file sweep.
   let launchdHome = '';
-  beforeAll(() => { launchdHome = freshBox('ccrc-install-fleet-launchd-'); }, 60_000);
+  beforeAll(() => { launchdHome = freshBox('ccrc-install-fleet-launchd-'); }, scaled(60_000));
   const box = (): Promise<{ home: string; r: Result }> => (once ??= (async () => {
     const home = launchdHome;
     const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);

@@ -2,5 +2,6 @@
 // defined here: the rule table, the profiles, `redact` and `redactCount` live in the `.mjs`, whose types are
 // `redact.d.mts`.
 export {
-  EGRESS_MASK, PROFILES, RULE_IDS, docsRuleRows, redact, redactCount, type RedactCount, type RedactProfile, type RedactShapes,
+  EGRESS_MASK, PROFILES, RULE_IDS, docsRuleRows, historyRules, redact, redactCount, type HistoryProfile, type HistoryRuleForm,
+  type HistoryRuleSet, type RedactCount, type RedactProfile, type RedactShapes,
 } from './redact.mjs';

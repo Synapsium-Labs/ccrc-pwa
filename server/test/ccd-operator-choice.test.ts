@@ -127,8 +127,10 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
 
   it('route --apply journals the class it types and the effort, and nothing for auto', () => {
     seed(); record({ class: 'sonnet', effort: 'high' });
-    const TYPERS = `_route_type_model() { echo "type-model $2" >> "$HOME/ccd-calls"; return 0; };
-      _route_type_effort() { echo "type-effort $2" >> "$HOME/ccd-calls"; return 0; };`;
+    // The typers journal their own keystroke once the typing check passed (D-8271), so a stand-in journals as the
+    // real one does; `ccd-typing-check.test.ts` holds the real typers to it and to journalling nothing on a refusal.
+    const TYPERS = `_route_type_model() { _typed_note "$1" model "$2"; echo "type-model $2" >> "$HOME/ccd-calls"; return 0; };
+      _route_type_effort() { _typed_note "$1" effort "$2"; echo "type-effort $2" >> "$HOME/ccd-calls"; return 0; };`;
     h.sh(`${TYPERS} _route_apply_now ${ID}`);
     expect(typedRows().map((r) => r.replace(/^\d{10} /, ''))).toEqual(['model sonnet', 'effort high']);
     h.sh(`rm -f "$REG/${ID}.typed" "$REG/${ID}.routeapplied"; _reg_set ${ID} effort auto; ${TYPERS} _route_apply_now ${ID}`);
@@ -320,7 +322,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
 
   it('the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator\'s own', () => {
     seed(); record({ class: 'fable', degraded: 'opus' }); const t = now() - 600;
-    h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);   // journals `model opus` now: the degraded class
+    h.sh(`_route_type_model() { _typed_note "$1" model "$2"; return 0; }; _route_apply_now ${ID}`);   // journals `model opus` now: the degraded class (the typer journals, D-8271)
     writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(now() + 5, 'model'), ack(now() + 5, MODEL_ACK('Opus 5.5'))]);
     keep();
     expect(h.reg(ID, 'class')).toBe('sonnet');
@@ -546,7 +548,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
 
   it('a route --apply /model is not promoted — not even a degraded class typed over the operator\'s fable, in either acknowledgement shape', () => {
     seed(); record({ class: 'fable', degraded: 'opus' });
-    h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);
+    h.sh(`_route_type_model() { _typed_note "$1" model "$2"; return 0; }; _route_apply_now ${ID}`);   // the typer journals (D-8271)
     const t = now() + 5;
     writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5'))]);
     keep();
