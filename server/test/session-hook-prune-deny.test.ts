@@ -18,6 +18,8 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
+import { scaled } from './timeScale.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIX = path.resolve(__dirname, 'fixtures/prune-deny');
@@ -186,6 +188,50 @@ describe('this PR\'s own body is not refused by the prune row', () => {
   }
 });
 
+// D-8334: the cost cases below measure work, never wall time. On a loaded merge-queue shard the wall time of one jq
+// run swung by seconds (a small run relatively quick, a large one relatively slow) and a doubling ratio read 4.18x
+// against a 4.04x bound while the current program was faster than the original at both sizes. A process queued for a
+// CPU accrues no CPU time, so the CPU the run itself spent (user plus system, as bash's `times` reports it for the
+// children it waited on) is one invocation's cost with the queueing taken out. It is still one invocation, jq's
+// startup included, so the FD8 ruling's shape and its bounds are unchanged: only what is read off the clock is.
+type CpuRun = { status: number | null; stdout: string; stderr: string; cpuMs: number };
+/** `argv` run once under bash, `input` on its stdin: its status, its own output, and the CPU time it spent. */
+const childCpu = (argv: readonly string[], input: string, timeoutMs = scaled(120_000)): CpuRun => {
+  // `times`' second line is the waited children's user and system time; it goes to stderr, after the run's own.
+  // In a process group of its own (#896), so a timeout takes the jq it waits on with it.
+  const r = spawnSyncGroup('bash', ['-c', '"$@"; s=$?; times >&2; exit $s', 'bash', ...argv],
+    { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' } });
+  const lines = (r.stderr ?? '').replace(/\n$/, '').split('\n');
+  const m = /^(\d+)m(\d+(?:\.\d+)?)s (\d+)m(\d+(?:\.\d+)?)s$/.exec(lines.at(-1) ?? '');
+  expect(m, `bash's times line, after ${JSON.stringify(r.stderr)}${r.error === undefined ? '' : `: ${String(r.error)}`}`).not.toBeNull();
+  const [, um, us, sm, ss] = m as RegExpExecArray;
+  const cpuMs = Math.round((Number(um) * 60 + Number(us) + Number(sm) * 60 + Number(ss)) * 1000);
+  const own = lines.slice(0, -2).join('\n');
+  return { status: r.status, stdout: r.stdout ?? '', stderr: own === '' ? '' : `${own}\n`, cpuMs };
+};
+
+describe('the cost measure is the work a run did, not the time it waited (D-8334)', () => {
+  it('a run that waits half a second reads near zero, while its wall time holds the wait', () => {
+    const t0 = process.hrtime.bigint();
+    const r = childCpu(['sleep', '0.5'], '');
+    const wallMs = Number(process.hrtime.bigint() - t0) / 1e6;
+    expect(r.status, r.stderr).toBe(0);
+    expect(wallMs).toBeGreaterThanOrEqual(500);
+    expect(r.cpuMs, `cpu ${r.cpuMs} ms against wall ${wallMs} ms`).toBeLessThan(100);
+  });
+
+  it('a run that computes reads its compute, and passes its output and status through untouched', () => {
+    const r = childCpu(['jq', '-n', 'reduce range(3000000) as $i (0; .+1)'], '');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('3000000');
+    expect(r.stderr).toBe('');
+    expect(r.cpuMs).toBeGreaterThan(20);
+    const bad = childCpu(['jq', '-n', 'error("x")'], '');
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toContain('x');
+  });
+});
+
 // Review 1493, FD8/R3/R4: compare the actual original program, not a synthetic reference or the presence of pmatch.
 // The original is VENDORED, byte for byte, in `fixtures/prune-deny/forbidden-jq-33e521e07.jq`: it is the
 // APPROVAL_FORBIDDEN_JQ of the hook as it stood before this deny, extracted with `extract` below. It was first read by
@@ -194,10 +240,10 @@ describe('this PR\'s own body is not refused by the prune row', () => {
 // a branch-only sha from a test: vendor the baseline with a pinned hash. The sha256 is pinned in one constant, so an
 // edit of the fixture reds, and a missing or unreadable fixture reds as a failing case, never a skip.
 // No hook is executed here: both embedded jq programs receive JSON text. Each mode, shape and size is a single
-// invocation (startup included), using the faster of two interleaved measurements. The coordinator's FD8 ruling accepts
-// fixed jq startup cost but pins both historical cost and doubling-size scaling; it does not permit an amortized stream
-// comparison. The CI follow-up uses 32/64 KB only for quotes/deny, whose inherited normalization otherwise outlives its
-// case.
+// invocation (startup included), using the faster of two interleaved measurements of the CPU it spent (D-8334, above).
+// The coordinator's FD8 ruling accepts fixed jq startup cost but pins both historical cost and doubling-size scaling;
+// it does not permit an amortized stream comparison. The CI follow-up uses 32/64 KB only for quotes/deny, whose
+// inherited normalization otherwise outlives its case.
 describe('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
   const extract = (src: string): string => (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(src) ?? [])[1] ?? '';
   const prog = extract(fs.readFileSync(HOOK, 'utf8'));
@@ -215,12 +261,10 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
       const command = `git worktree list --porcelain; echo prune ${quoted ? `"${dense}"` : dense}`;
       const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
-      const t0 = process.hrtime.bigint();
-      const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', mode, p],
-        { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: 120_000 });
+      const r = childCpu(['jq', '-r', '--arg', 'q', "'", '--arg', 'mode', mode, p], input);
       expect(r.status, r.stderr).toBe(0);
       expect(r.stdout.trim()).toBe('');
-      return Number(process.hrtime.bigint() - t0) / 1e6;
+      return r.cpuMs;
     };
     for (const mode of ['deny', 'class']) {
       it(`${name}: ${mode} stays within the startup-adjusted 33e521e07 bound at 64 KB`, () => {
@@ -230,9 +274,9 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
         const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(prog, mode, 64)]);
         const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
         const currentMs = Math.min(...pairs.map((p) => p[1] as number));
-        expect(currentMs, `${name}/${mode}: current ${currentMs} ms, original ${referenceMs} ms`)
+        expect(currentMs, `${name}/${mode}: current ${currentMs} cpu ms, original ${referenceMs} cpu ms`)
           .toBeLessThanOrEqual(Math.max(1.5 * referenceMs, referenceMs + 25));
-      }, 300_000);
+      }, scaled(300_000));
       const smallKb = name === 'quotes' && mode === 'deny' ? 32 : 64;
       const largeKb = smallKb * 2;
       it(`${name}: ${mode} linearity from ${smallKb} to ${largeKb} KB stays within the inherited-cost bound`, () => {
@@ -248,10 +292,10 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
         // below it; otherwise allow the original ratio plus the explicitly accepted 0.5 measurement margin.
         const bound = referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5;
         const currentRatio = largeMs / smallMs;
-        const measured = `${name}/${mode}: original ${referenceRatio}x, current ${currentRatio}x, bound ${bound}x; ms ${minima.join(', ')}`;
+        const measured = `${name}/${mode}: original ${referenceRatio}x, current ${currentRatio}x, bound ${bound}x; cpu ms ${minima.join(', ')}`;
         console.info(measured);
         expect(currentRatio, measured).toBeLessThanOrEqual(bound);
-      }, smallKb === 32 ? 600_000 : 300_000);
+      }, scaled(smallKb === 32 ? 600_000 : 300_000));
     }
   }
 });
