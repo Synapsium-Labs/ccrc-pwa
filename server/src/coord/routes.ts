@@ -70,6 +70,8 @@ import {
 } from './stallsettings.js';
 import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
+import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
+import { LANE_ARM_FEED_TITLE, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
 import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
 import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
@@ -2821,6 +2823,42 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, ...after });
   });
 
+  /** `GET`/`POST /api/coord/lane-arm` (D-8274; spec 2026-10-28 R-6): Settings › Automation › Shadow lanes, the one switch of
+   *  each lane that ships in shadow. One path for both verbs, the dispatch-abandon door's shape: session-gated when
+   *  `CCRC_AUTH` is armed, open dark, no box token (no machine lane calls it, and no skill names it). The view is L1's
+   *  (`laneArm.ts`): a lane is live on an exact `live` only. The POST takes `{lane, choice, confirm?}` and nothing else, and
+   *  answers in the collector door's order: a bad body first; Live with no signed-in operator is 403 `sign-in-unarmed`
+   *  (dark included), before any read; an unreadable row is 503 `state-unreadable`; Live whose key is missing or stale is
+   *  409 `confirm-required` with the facts the server read and the key that binds them; then the one write, a record-only
+   *  feed row naming the actor on a change, and the rows read after it. */
+  app.get('/api/coord/lane-arm', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((lane) => coord.laneArmSetting(lane)) });
+  });
+
+  app.post('/api/coord/lane-arm', async (req, reply) => {
+    const parsed = decideLaneArmBody(req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: parsed.detail });
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const { lane } = parsed.request;
+    const before = laneArmRowViewOf(lane, coord.laneArmSetting(lane));
+    const signedIn = deps.cfg.authEnabled && sessionAuth(req).reason === 'session';
+    const decided = decideLaneArmPost({ request: parsed.request, row: before, signedIn });
+    if (decided.kind === 'sign-in-unarmed') return refuseRoute(reply, 'sign-in-unarmed');
+    if (decided.kind === 'unreadable') return refuseRoute(reply, 'state-unreadable', { detail: decided.detail });
+    if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
+    const after = laneArmRowViewOf(lane, coord.setLaneArm(decided.lane, decided.choice, Date.now()));
+    const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+    const change = laneArmChangeLine(before, after, actor);
+    if (change !== null && deps.notifyLog) {
+      notice({ kind: 'coord', sessionId: '', title: LANE_ARM_FEED_TITLE.changed, body: change, runId: null },
+        'record-only', { degraded: 'shadow lane switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((l) => coord.laneArmSetting(l)) });
+  });
+
   /** `GET`/`POST /api/coord/run-close` (D-8077; spec 2026-11-04 §12.3, A15; the runs rebuild, Task 26): the operator's three-state
    *  control (off, shadow, on) over each run-close lane group, the Advanced rows' one source. The GET answers each group's state
    *  word, its would-close list from the lane's last reading, and its closes and refusals of the last 7 days (`runCloseViewOf`,
@@ -3156,7 +3194,13 @@ export function registerCoordRoutes(
       return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
     }
     const summaries: RunSummary[] = read.runs.map(toRunSummary);
-    return { runs: stampVerdicts(composeChildReclaim(stampLastMoves(summaries))) };
+    // D-8274 (R-6): the roster card's switch rides this reply, the one the session hook already makes (`RUNS_ROSTER_CARD_FIELD`).
+    // Left out when the row cannot be read, which the hook reads as shadow.
+    const rosterCard = rosterCardFieldOf(deps.coord.laneArmSetting(ROSTER_CARD_LANE));
+    return {
+      runs: stampVerdicts(composeChildReclaim(stampLastMoves(summaries))),
+      ...(rosterCard === null ? {} : { [RUNS_ROSTER_CARD_FIELD]: rosterCard }),
+    };
   });
 
   /** D-8071 (spec 2026-11-04 §11.4): `GET /api/runs/find`, the lookup and the close-order list in one slim read.

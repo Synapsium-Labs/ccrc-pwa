@@ -54,6 +54,7 @@ import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
 import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
+import { isLaneArmImport, isLaneArmLane } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -1110,8 +1111,13 @@ describe('the rejection table is total, in both directions', () => {
         // THE CLAIMS MOVE (D-8199): `coord/reclaim.ts`'s `moveClaims` names a refused move's own kinds as literals
         // (`'heir-not-live'`). A kind rides the `claims-not-moved` refusal's `refusal` evidence, never a `refused` or
         // `reject.code`. Admitted through `shared/api.ts`'s exported guard, derived from `CLAIMS_MOVE_REFUSALS`, never NOT_CODES.
-        || isClaimsMoveRefusal(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, wake-gate word or claims-move word`).toBe(true);
+        || isClaimsMoveRefusal(tok)
+        // THE SHADOW LANES CARD (D-8274; spec 2026-10-28 R-6): `coord/laneArm.ts` names how a marker import went
+        // (`'stood-kept'`) and `coord/schema.ts` seeds a lane's row by its name (`'roster-card'`). A word is a stored column
+        // or a row key, never a `refused` or `reject.code`. Admitted through L0's guards, derived from `LANE_ARM_IMPORTS` and
+        // `LANE_ARM_LANES`, never NOT_CODES.
+        || isLaneArmImport(tok) || isLaneArmLane(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word or claims-move word`).toBe(true);
     }
   });
 });

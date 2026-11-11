@@ -2540,6 +2540,30 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX coordinator_calls_by_run ON coordinator_calls(runId);
   CREATE INDEX coordinator_calls_live_blocks ON coordinator_calls(madeBy, class, wokenAt, expiresAt);
   `,
+  // ── 56: user_version 55 -> 56 ─────────────────────────────────────────────
+  // D-8274 (worktree economy spec 2026-10-28 R-6): `lane_arm_settings`, Settings › Automation › Shadow lanes. ONE ROW PER
+  // LANE, keyed by its `LaneArmLane` name, seeded `shadow` at updatedAt 0 (the seed is what "never written" means to the
+  // marker import). `choice` carries NO CHECK, `collect_lane_settings.choice`'s reason: a token a newer build writes reads
+  // here as `unknown`, which arms nothing. Its writers are all in `CoordStore`: `setLaneArm`, called only by
+  // `POST /api/coord/lane-arm`, writes `choice` and `updatedAt`; `importLaneArmMarker`, called only by the watcher's
+  // one-time import, writes `importedAt` and `imported` (and `choice` once, for a never-written row whose marker stood).
+  // Its readers go through `CoordStore.laneArmSetting`. A later lane joins with a migration that inserts its seed row.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 56` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the
+  // PR and before merge (it must print 55 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE lane_arm_settings (
+    lane       TEXT PRIMARY KEY,
+    choice     TEXT NOT NULL,
+    updatedAt  INTEGER NOT NULL,
+    importedAt INTEGER,
+    imported   TEXT
+  );
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('roster-card', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
