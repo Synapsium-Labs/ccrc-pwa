@@ -58,9 +58,9 @@ _inst_validate_knob() {
 }
 
 # ── The URL redactor — a COPY of `_upd_redact` (ccd/ccrc), held equal by OUTPUT,
-# not by text, under an install.sh-local name. It masks a URL's userinfo and the
-# home directory; it does NOT mask a query or a fragment (accepted: the
-# operator's ruling, shared with the updater). Why the text differs: this file
+# not by text, under an install.sh-local name. It masks a URL's userinfo, a
+# scheme URL's query and fragment (D-8342: what follows the '?' or '#' reads
+# `[withheld]`) and the home directory. Why the text differs: this file
 # runs `--release` BEFORE its bash version refusal, so the copy can run on
 # macOS /bin/bash 3.2, where (as in every bash up to 4.2) a quoted replacement
 # string inside "${s/pat/rep}" keeps its quotes and would print `https"://"h/r`;
@@ -86,6 +86,9 @@ _inst_redact() {
     local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
     while [[ "$s" =~ $bre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
   fi
+  local qre='(^|[^A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:(\\?/)+[^?#[:space:]"<>`]*)([?#])[^[:space:]"<>`]*' qout=""
+  while [[ "$s" =~ $qre ]]; do m="${BASH_REMATCH[0]}"; qout+="${s%%"$m"*}${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[4]}[withheld]"; s="${s#*"$m"}"; done
+  s="$qout$s"
   local home="${HOME:-}"
   home="${home%/}"
   if [ -n "$home" ]; then
@@ -160,8 +163,8 @@ if [ "$RELEASE_MODE" = true ]; then
     || { echo "install.sh: curl is not installed — install curl, then re-run" >&2; exit 1; }
   BASE="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
   # The release paths are appended to the base, so a query or a fragment swallows
-  # them, and `_inst_redact` would print it whole. The sentence names the variable
-  # and never the value: a query can carry a token.
+  # them (the updater's `_upd_base_ok` refuses the same base, D-8342). The sentence
+  # names the variable and never the value: a query can carry a token.
   case "$BASE" in
     *'?'*|*'#'*)
       echo "install.sh: CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it — refusing" >&2
@@ -203,6 +206,9 @@ if [ "$RELEASE_MODE" = true ]; then
   # below printed it whole; with globbing off curl refuses it before a byte is
   # sent, and a tarball name is never globbed (the updater's D-6748).
   echo "install.sh: fetching $URL_SAFE/SHA256SUMS …"
+  # The updater's sentence at its own fetch (D-8342): `--max-filesize` caps the file only on curl 8.4.0 or later (a body of
+  # unknown length passes it below that), so below 8.4.0 the `read` of SHA256SUMS's first line is linear in what curl wrote
+  # within its total bound, before the name's 128-byte rule.
   curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_SUMS_MAX_TIME" --max-filesize "$CCRC_RELEASE_SUMS_MAX_FILESIZE" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \

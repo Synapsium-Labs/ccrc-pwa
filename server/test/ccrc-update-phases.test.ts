@@ -839,12 +839,11 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
     };
-    // No userinfo: byte for byte, including a query-string '@' past the
-    // authority (the comment above `_upd_redact`'s own strip states this).
+    // No userinfo: byte for byte. A query-string '@' past the authority is no userinfo (the comment above `_upd_redact`'s
+    // own strip states this); the query itself goes since D-8342, its '?' kept.
     const plain = 'https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS';
     expect(call(plain)).toBe(plain);
-    const withQueryAt = 'https://example.com/path?email=a@example.com&x=1';
-    expect(call(withQueryAt)).toBe(withQueryAt);
+    expect(call('https://example.com/path?email=a@example.com&x=1')).toBe('https://example.com/path?[withheld]');
     // Userinfo stripped, host and path untouched.
     expect(call('http://user:s3cretTOKEN@127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS'))
       .toBe('http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS');
@@ -859,7 +858,39 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     // Fix round 4, F1: a scheme followed by one slash or by three (curl authenticates with both) loses its userinfo, its
     // slashes kept as written.
     expect(call('fetching http:/u:s3cretTOKEN@h/r and https:///u:s3cretTOKEN@h/r')).toBe('fetching http:/h/r and https:///h/r');
-    for (const kept of ['curl: (6) user@host', 'mail a@example.com today', 'https://h/r?email=a@example.com/y', '@scope/pkg']) {
+    for (const kept of ['curl: (6) user@host', 'mail a@example.com today', '@scope/pkg']) {
+      expect(call(kept), kept).toBe(kept);
+    }
+    expect(call('https://h/r?email=a@example.com/y')).toBe('https://h/r?[withheld]');
+  });
+
+  // D-8342: a URL's query and fragment can carry a token, so a scheme URL keeps its '?' or '#' and loses what follows, to
+  // the token's end (whitespace, '"', '<', '>' or a backtick). A query and a fragment after it go as one. A second pass
+  // changes nothing (a die's sentence is redacted again by `_upd_phase`). Text that is no scheme URL keeps its '?' and '#'.
+  it('_upd_redact: a scheme URL\'s query and fragment are withheld, its "?" or "#" kept, and a second pass changes nothing (D-8342)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
+    const call = (text: string): string => {
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+        { env: { HOME: '/home/u' }, encoding: 'utf8' });
+      expect(p.status, p.stderr).toBe(0);
+      return p.stdout;
+    };
+    const rows: Array<[string, string]> = [
+      ['fetching http://127.0.0.1:1/rel?x=1/latest/download/SHA256SUMS …', 'fetching http://127.0.0.1:1/rel?[withheld] …'],
+      ['fetching http://127.0.0.1:1/rel#f/latest/download/SHA256SUMS …', 'fetching http://127.0.0.1:1/rel#[withheld] …'],
+      ['https://u:s3cret@h/r?token=s3cret#frag-s3cret', 'https://h/r?[withheld]'],
+      ['"https://h/r?token=s3cret" and <https://h#s3cret> and `https://h/?s3cret`', '"https://h/r?[withheld]" and <https://h#[withheld]> and `https://h/?[withheld]`'],
+      ['CCRC_RELEASE_BASE_URL=https://h/r?token=s3cret refused', 'CCRC_RELEASE_BASE_URL=https://h/r?[withheld] refused'],
+      ['https://h/x?proxy=user:s3cret@host', 'https://h/x?[withheld]'],
+      ['https:\\/\\/h\\/r?token=s3cret', 'https:\\/\\/h\\/r?[withheld]'],
+    ];
+    for (const [input, want] of rows) {
+      expect(call(input), input).toBe(want);
+      expect(call(want), `a second pass over ${want}`).toBe(want);
+    }
+    for (const kept of ['is there a release? #2 of 3', 'urn:isbn:1?x=1', 'h/r?x=1', 'v1.2#3 ok?']) {
       expect(call(kept), kept).toBe(kept);
     }
   });
@@ -899,10 +930,11 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(callWithHome('(cd /home/u)', '/home/u')).toBe('(cd ~)');
     expect(callWithHome('/home/u', '/home/u')).toBe('~');
     // N2: an authority with no '/' before the credential — a query string
-    // ('?') or a fragment ('#') ending it instead — is left unchanged,
-    // never collapsed into `scheme://host`.
-    expect(callWithHome('https://h?a@b', '')).toBe('https://h?a@b');
-    expect(callWithHome('https://h#a@b', '')).toBe('https://h#a@b');
+    // ('?') or a fragment ('#') ending it instead — is never collapsed into
+    // `scheme://host`: its host stays, and since D-8342 its query or
+    // fragment is withheld after the '?' or '#'.
+    expect(callWithHome('https://h?a@b', '')).toBe('https://h?[withheld]');
+    expect(callWithHome('https://h#a@b', '')).toBe('https://h#[withheld]');
   });
 
   // W6 Task 8A, review 167's F5 (cosmetic): the boundary BEFORE HOME. The
@@ -1001,6 +1033,38 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(r.status, `${verb} must actually have refused`).not.toBe(0);
     }
   });
+
+  // D-8342: the release paths are appended to the base (`/download/<tag>/…`, `/latest/download/…`), so a base holding a '?'
+  // or a '#' would build a URL no release host serves. `_upd_resolve` (update) and `_upd_asset_listed` (rollback's
+  // pre-check, its first fetch) refuse it by name before any curl runs, and the refusal names the variable, never the
+  // value. The curl here logs every call, so "nothing fetched" is measured, not assumed.
+  for (const tail of ['?x=1', '#f'] as const) {
+    it(`a CCRC_RELEASE_BASE_URL holding ${tail[0]} (${tail}) is refused by name before anything is fetched, its query or fragment printed nowhere — update and rollback (D-8342)`, () => {
+      for (const verb of ['update', 'rollback'] as const) {
+        const home = mkTmp(`ccrc-base-query-${verb}-`);
+        mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+        writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\necho "$*" >> "$HOME/curl-calls"\nexit 99\n', { mode: 0o755 });
+        const env = {
+          ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
+          CCRC_RELEASE_BASE_URL: `http://127.0.0.1:1/rel${tail}`,
+        };
+        assertNoRealTool(env, home);
+        const args = verb === 'update' ? ['update', '--to', 'v0.0.1'] : ['rollback', '--to', 'v0.0.1', '--from', 'pwa'];
+        const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...args], { env, encoding: 'utf8' });
+        expect(r.status, `${verb}: ${r.stderr}`).toBe(1);
+        const why = 'CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it';
+        expect(r.stderr.split('\n'), `${verb} stderr`)
+          .toContain(`ccrc: ${verb === 'rollback' ? 'rollback: ' : ''}${why} — nothing on this box was changed`);
+        expect(existsSync(join(home, 'curl-calls')), `${verb} ran curl`).toBe(false);
+        expect(r.stdout, `${verb} stdout`).not.toContain('fetching');
+        const json = join(home, '.ccrc', 'update.json');
+        const raw = existsSync(json) ? readFileSync(json, 'utf8') : '';
+        for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]] as const) {
+          expect(text, `${verb} ${where} carries the base's ${tail}`).not.toContain(tail);
+        }
+      }
+    });
+  }
 
   // D-6748 (fix round 1, F7): a base in ccrc.env with NO scheme (`user:pass@host/r`, which curl takes as http) is masked by
   // `_upd_redact` as the scheme form is, on each of the three ways it would leave the box: the fetching line, the die line and

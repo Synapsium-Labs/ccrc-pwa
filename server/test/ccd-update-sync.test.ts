@@ -381,11 +381,12 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     // _upd_redact strips every @-ended run in a scheme authority, even if curl refuses that base.
     expect(call('https://u:p@x@host', '/fixture-home')).toBe('https://host');
     expect(call('u:p@x@host/path', '/fixture-home')).toBe('host/path');
-    // A slash, query or fragment ends the authority; later @ text stays whole.
-    for (const url of ['https://host/path@x', 'https://host?a@b', 'https://host#a@b']) {
-      expect(call(url, '/fixture-home')).toBe(url);
-    }
-    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?a@b#c@d');
+    // A slash, query or fragment ends the authority; later @ text is no userinfo. A path's stays whole; a query or a fragment
+    // is withheld after its '?' or '#' (D-8342), the host kept.
+    expect(call('https://host/path@x', '/fixture-home')).toBe('https://host/path@x');
+    expect(call('https://host?a@b', '/fixture-home')).toBe('https://host?[withheld]');
+    expect(call('https://host#a@b', '/fixture-home')).toBe('https://host#[withheld]');
+    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?[withheld]');
     const ccrcSrc = readFileSync(CCRC, 'utf8');
     const LL = REGIONS.find((r) => r.name === 'log-line')!;
     expect(checkRegion(LL, src, ccrcSrc)).toBe('current');
