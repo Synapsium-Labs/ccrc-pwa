@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FLEET_ROLES, FLEET_ROLE_NAMES, type FleetRoleRow } from '../../shared/fleetRoles.js';
+import { FLEET_ROLES, FLEET_ROLE_NAMES, isFleetRole, type FleetRoleRow } from '../../shared/fleetRoles.js';
 
 describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
   it("names the seven roles in Table 3.3.9a's order", () => {
@@ -22,5 +22,9 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
     // @ts-expect-error a row with no sessionRole is not a FleetRoleRow
     const partial: FleetRoleRow = { longLived: false, launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null };
     expect(partial.longLived).toBe(false);
+  });
+  it('isFleetRole accepts exactly the table keys', () => {
+    for (const r of FLEET_ROLE_NAMES) expect(isFleetRole(r)).toBe(true);
+    for (const v of ['child', '', 'Overlord', '__proto__', 'toString', null, undefined, 7, {}]) expect(isFleetRole(v)).toBe(false);
   });
 });
