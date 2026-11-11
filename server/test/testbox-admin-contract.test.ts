@@ -2,7 +2,7 @@
 // `ccrc testbox-admin` verb, `shared/testbox-admin.ts`. The sub table and its step-up marks; the argv builder's refusals
 // (a field the sub does not take, a leading dash, a `..` segment, a C0 byte or DEL), one `--name=value` word a value, no
 // bare flag, no `--force`, no `--replace`; the L0 copy of `_tb_shape` held equal to the bash function on one corpus; the
-// 44 keys and their classes read from `ccd/testbox-knobs`; the repository row as base64url JSON; the status reader that
+// 47 keys and their classes read from `ccd/testbox-knobs`; the repository row as base64url JSON; the status reader that
 // names no address; the parity gate; and one plain sentence per code.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -318,18 +318,18 @@ describe('the keys and their shapes', () => {
     return [...KNOBS_TEXT.slice(start, end).matchAll(/_ccrc_knob (CCRC_TESTBOX_[A-Z0-9_]+) /g)].map((m) => m[1]!);
   };
 
-  it('the shape table names exactly the 44 keys and each class _tb_shape_class names', () => {
+  it('the shape table names exactly the 47 keys (D-8290 adds the live probes\' three) and each class _tb_shape_class names', () => {
     const bash = bashClasses();
-    expect(Object.keys(bash)).toHaveLength(44);
+    expect(Object.keys(bash)).toHaveLength(47);
     expect(Object.keys(TESTBOX_SHAPE_CLASS).sort()).toEqual(Object.keys(bash).sort());
     expect({ ...TESTBOX_SHAPE_CLASS }).toEqual(bash);
     expect([...TESTBOX_HOST_KEYS, ...TESTBOX_BOX_KEYS].sort()).toEqual(Object.keys(bash).sort());
   });
-  it('the host keys are the 16 and the box keys the 28 of the two tables, in order', () => {
+  it('the host keys are the 16 and the box keys the 31 of the two tables, in order', () => {
     expect([...TESTBOX_HOST_KEYS]).toEqual(tableKeys('_tb_host_table'));
     expect([...TESTBOX_BOX_KEYS]).toEqual(tableKeys('_tb_box_table'));
     expect(TESTBOX_HOST_KEYS).toHaveLength(16);
-    expect(TESTBOX_BOX_KEYS).toHaveLength(28);
+    expect(TESTBOX_BOX_KEYS).toHaveLength(31);
   });
   it('the shape sentences are _tb_shape_says, class for class', () => {
     const body = KNOBS_TEXT.slice(KNOBS_TEXT.indexOf('_tb_shape_says() {'), KNOBS_TEXT.indexOf('# ── the defaults table'));

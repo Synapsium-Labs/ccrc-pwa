@@ -10593,6 +10593,10 @@ export const BOX_SETTING_TABLE = {
   CCRC_TESTBOX_LISTEN: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_SERVICE_TOKEN_FILE: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_UNIT_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  // D-8290: the live probes' three box keys.
+  CCRC_TESTBOX_PROBE_CONFIG_DIR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_PROBE_SOCKET: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_PROBES_PER_DAY: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_DEFAULT: { cls: 'value', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_SERVERS: { cls: 'is-set', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },

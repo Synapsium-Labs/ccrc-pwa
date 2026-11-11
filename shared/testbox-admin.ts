@@ -17,7 +17,7 @@ import { parseRepoRow, type Read, type TestboxRepoRow } from './testbox.js';
 import { utf8Bytes, utf8Decode, utf8Encode } from './utf8.js';
 
 // ---------------------------------------------------------------------------------------------------------------
-// The keys: 16 on the fleet host, 28 on the box (spec M7), each with its shape class.
+// The keys: 16 on the fleet host, 31 on the box (spec M7, and D-8290's three live probe keys), each with its shape class.
 // ---------------------------------------------------------------------------------------------------------------
 
 /** The sixteen fleet-host test box keys, in `_tb_host_table`'s order (`ccd/testbox-knobs`). */
@@ -29,7 +29,7 @@ export const TESTBOX_HOST_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_TIMES',
 ]);
 
-/** The twenty-eight test box keys, in `_tb_box_table`'s order. */
+/** The thirty-one test box keys, in `_tb_box_table`'s order (D-8290 adds the last three, the live probes'). */
 export const TESTBOX_BOX_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_RUNS', 'CCRC_TESTBOX_WORKERS', 'CCRC_TESTBOX_RUN_TMPDIR', 'CCRC_TESTBOX_RUN_MEMORY_MAX',
   'CCRC_TESTBOX_RUN_SWAP_MAX', 'CCRC_TESTBOX_RUN_CPU_QUOTA', 'CCRC_TESTBOX_ROOT', 'CCRC_TESTBOX_REPOS',
@@ -38,6 +38,7 @@ export const TESTBOX_BOX_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_PUSH_USER', 'CCRC_TESTBOX_ENV_FORWARD', 'CCRC_TESTBOX_RUN_USER_PREFIX', 'CCRC_TESTBOX_REGISTRY_PROXY',
   'CCRC_TESTBOX_REGISTRY_UPSTREAM', 'CCRC_TESTBOX_TMPFS', 'CCRC_TESTBOX_LOG_TAIL', 'CCRC_TESTBOX_SESSION_RUNS',
   'CCRC_TESTBOX_SERVICE_USER', 'CCRC_TESTBOX_LISTEN', 'CCRC_TESTBOX_SERVICE_TOKEN_FILE', 'CCRC_TESTBOX_UNIT_MAX',
+  'CCRC_TESTBOX_PROBE_CONFIG_DIR', 'CCRC_TESTBOX_PROBE_SOCKET', 'CCRC_TESTBOX_PROBES_PER_DAY',
 ]);
 
 /** The four pairing keys: written only by Connect, Replace and Disconnect (spec §2.6, M7). */
@@ -66,17 +67,18 @@ export const TESTBOX_PAIRED_BOX_KEYS: readonly string[] = Object.freeze([
 /** A key's shape class: `_tb_shape_class` in `ccd/testbox-knobs`, key for key. */
 export type TestboxShapeClass =
   | 'url' | 'path' | 'size' | 'duration' | 'durations' | 'lostrun' | 'fallback' | 'onoff' | 'percent' | 'count'
-  | 'hostport' | 'globs' | 'hosts' | 'envnames' | 'user';
+  | 'hostport' | 'globs' | 'hosts' | 'envnames' | 'user' | 'socket';
 export const TESTBOX_SHAPE_CLASS_MAP: Record<TestboxShapeClass, true> = {
   url: true, path: true, size: true, duration: true, durations: true, lostrun: true, fallback: true, onoff: true,
-  percent: true, count: true, hostport: true, globs: true, hosts: true, envnames: true, user: true,
+  percent: true, count: true, hostport: true, globs: true, hosts: true, envnames: true, user: true, socket: true,
 };
 
-/** Key to class, for all 44 keys. */
+/** Key to class, for all 47 keys. */
 export const TESTBOX_SHAPE_CLASS: Readonly<Record<string, TestboxShapeClass>> = Object.freeze({
   CCRC_TESTBOX_URL: 'url', CCRC_TESTBOX_GIT_URL_BASE: 'url', CCRC_TESTBOX_OS_MIRROR: 'url', CCRC_TESTBOX_REGISTRY_UPSTREAM: 'url',
   CCRC_TESTBOX_TOKEN_FILE: 'path', CCRC_TESTBOX_GIT_KEY: 'path', CCRC_TESTBOX_TIMES: 'path', CCRC_TESTBOX_RUN_TMPDIR: 'path',
   CCRC_TESTBOX_ROOT: 'path', CCRC_TESTBOX_REPOS: 'path', CCRC_TESTBOX_TOOLS_DIR: 'path', CCRC_TESTBOX_SERVICE_TOKEN_FILE: 'path',
+  CCRC_TESTBOX_PROBE_CONFIG_DIR: 'path',
   CCRC_TESTBOX_UNTRACKED_FILE_MAX: 'size', CCRC_TESTBOX_SNAPSHOT_MAX: 'size', CCRC_TESTBOX_RUN_MEMORY_MAX: 'size',
   CCRC_TESTBOX_RUN_SWAP_MAX: 'size', CCRC_TESTBOX_REPORT_MAX: 'size',
   CCRC_TESTBOX_STATUS_DEADLINE: 'duration', CCRC_TESTBOX_RECONNECT_DEADLINE: 'duration', CCRC_TESTBOX_QUEUE_WAIT: 'duration',
@@ -86,10 +88,11 @@ export const TESTBOX_SHAPE_CLASS: Readonly<Record<string, TestboxShapeClass>> = 
   CCRC_TESTBOX_LOST_RUN: 'lostrun', CCRC_TESTBOX_FALLBACK_INSTALL: 'fallback', CCRC_TESTBOX_TMPFS: 'onoff',
   CCRC_TESTBOX_RUN_CPU_QUOTA: 'percent',
   CCRC_TESTBOX_QUEUE_LIMIT: 'count', CCRC_TESTBOX_RUNS: 'count', CCRC_TESTBOX_WORKERS: 'count', CCRC_TESTBOX_LOG_TAIL: 'count',
-  CCRC_TESTBOX_SESSION_RUNS: 'count',
+  CCRC_TESTBOX_SESSION_RUNS: 'count', CCRC_TESTBOX_PROBES_PER_DAY: 'count',
   CCRC_TESTBOX_REGISTRY_PROXY: 'hostport', CCRC_TESTBOX_LISTEN: 'hostport',
   CCRC_TESTBOX_DENY_GLOBS: 'globs', CCRC_TESTBOX_EGRESS_ALLOW: 'hosts', CCRC_TESTBOX_ENV_FORWARD: 'envnames',
   CCRC_TESTBOX_PUSH_USER: 'user', CCRC_TESTBOX_SERVICE_USER: 'user', CCRC_TESTBOX_RUN_USER_PREFIX: 'user',
+  CCRC_TESTBOX_PROBE_SOCKET: 'socket',
 });
 
 /** Each class in words: `_tb_shape_says`, the sentence the shape check refuses with. */
@@ -109,6 +112,7 @@ export const TESTBOX_SHAPE_SENTENCE: Readonly<Record<TestboxShapeClass, string>>
   hosts: 'a list of host names',
   envnames: 'a list of environment variable names',
   user: 'a user name (lower-case letters, digits, _ and -)',
+  socket: 'a tmux socket name (lower-case letters, digits, _ and -)',
 });
 
 // The patterns are `_tb_shape`'s, spelled for JS. A class's check is the class's alone; an empty value fits none (the
@@ -150,6 +154,7 @@ function fitsClass(cls: TestboxShapeClass, v: string): boolean {
     case 'hosts': return everyWord(v, (w) => HOSTNAME_WORD_RE.test(w));
     case 'envnames': return everyWord(v, (w) => ENV_NAME_WORD_RE.test(w));
     case 'user': return USER_WORD_RE.test(v);
+    case 'socket': return USER_WORD_RE.test(v);
   }
 }
 
@@ -815,7 +820,7 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
     if (login !== null && login !== 'root' && login !== 'sudo') refuse('login', 'not root, sudo or null');
     let rows: BoxSettingRow[] | null = null;
     if (o['boxSettings'] !== null) {
-      if (!Array.isArray(o['boxSettings']) || o['boxSettings'].length > TESTBOX_BOX_KEYS.length) refuse('boxSettings', 'not a list of at most 28');
+      if (!Array.isArray(o['boxSettings']) || o['boxSettings'].length > TESTBOX_BOX_KEYS.length) refuse('boxSettings', `not a list of at most ${TESTBOX_BOX_KEYS.length}`);
       rows = (o['boxSettings'] as unknown[]).map((r, i) => settingRow(r, `boxSettings[${i}]`));
       const seen = new Set(rows.map((r) => r.key as string));
       if (seen.size !== rows.length) refuse('boxSettings', 'a key twice');

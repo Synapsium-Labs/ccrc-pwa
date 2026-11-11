@@ -179,6 +179,8 @@
 .testbox-cells { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; }
 .testbox-cells > div { display: grid; min-width: 0; }
 .testbox-cell-value { margin: 0; overflow-wrap: anywhere; font-family: var(--family-mono); font-size: var(--fs-meta); }
+/* The live probes line (D-8290): a probe name may be 64 characters with no hyphen, so it wraps anywhere. */
+.testbox-probes { min-width: 0; overflow-wrap: anywhere; }
 .testbox-tables { display: grid; gap: var(--pad-card); min-width: 0; }
 .testbox-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-meta); }
 .testbox-table caption { text-align: start; padding-bottom: calc(var(--pad-card) / 4); }

@@ -20,11 +20,16 @@
 // above the card while no box is connected or parity has not passed, and draws the switch's On disabled, with the sentence
 // that says why, until the record passes: the server refuses `{on: true}` the same way (`parity-required`), and turning the
 // switch OFF is never gated. A block without `admin` is an older server and is drawn as it always was.
+//
+// LIVE PROBES (D-8290). A status answer that carries the probe block draws one line under the cells, at every width: the
+// day's count against the budget, the running probe and the waiting ones, or why the box takes no probe. A box without
+// the block (an older one, or one that names no probe config directory) draws no line.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, RadioFieldset, Section, Skeleton, elapsedWords, useDesk, useMediaQuery, useNow } from '@ccrc/ui';
 import {
-  TESTBOX_FALLBACK, TESTBOX_TOOLS, versionCellsDiffer, type StatusAnswer, type TestboxTool, type TestboxToolVersions,
+  PROBE_REFUSAL_SENTENCE, TESTBOX_FALLBACK, TESTBOX_TOOLS, versionCellsDiffer, type StatusAnswer, type TestboxProbes, type TestboxTool,
+  type TestboxToolVersions,
 } from '../../../shared/testbox';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import { isRecord } from '../lib/wire';
@@ -67,6 +72,9 @@ export const TESTBOX_TEXT = {
   runsLabel: 'Runs',
   queueLabel: 'Queue',
   queue: (n: number) => `${n} waiting`,
+  probes: (p: TestboxProbes) => (p.refusal !== null
+    ? `Live probes off: ${PROBE_REFUSAL_SENTENCE[p.refusal]}.`
+    : `Live probes: ${p.used} of ${p.perDay} today${p.running === null ? '' : `, running ${p.running}`}, ${p.waiting.length} waiting${p.waiting.length === 0 ? '' : ` (${p.waiting.join(', ')})`}`),
   fallbacksLabel: 'Fallbacks, 24 h',
   details: 'Versions, counts and installs',
   more: 'Counts and installs',
@@ -302,6 +310,7 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
           ))}
         </dl>
       )}
+      {box?.probes !== undefined && <p className="settings-note testbox-probes" data-testbox="probes">{T.probes(box.probes)}</p>}
       {band === 'phone' ? (
         <TestboxFold summary={T.details}>{versions}{rest}{pristine}</TestboxFold>
       ) : (

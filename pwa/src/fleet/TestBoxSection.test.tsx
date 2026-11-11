@@ -257,6 +257,27 @@ describe('the switch', () => {
   });
 });
 
+describe('the live probes line (D-8290)', () => {
+  const PROBES = { enabled: true, refusal: null, running: 'probe-one', waiting: ['probe-two', 'probe-three'], day: '2026-10-30', used: 3, perDay: 10 } as const;
+  it.each(['phone', 'laptop', 'wide'] as const)('%s: the day\'s count against the budget, the running probe and the waiting ones', (band) => {
+    atBand(band);
+    render(<TestBoxSection poll={poll(block({ box: { ...STATUS, probes: PROBES } }))} />);
+    const line = q('[data-testbox="probes"]')!;
+    expect(line.textContent).toBe(T.probes(PROBES));
+    expect(line.textContent).toBe('Live probes: 3 of 10 today, running probe-one, 2 waiting (probe-two, probe-three)');
+  });
+  it('a box that takes no probes says why, in the refusal\'s own sentence', () => {
+    atBand('laptop');
+    render(<TestBoxSection poll={poll(block({ box: { ...STATUS, probes: { ...PROBES, enabled: false, refusal: 'no-runner', running: null, waiting: [], used: 0 } } }))} />);
+    expect(q('[data-testbox="probes"]')!.textContent).toBe('Live probes off: no probe runner is installed on the test box.');
+  });
+  it('a box without the block (an older box, or one that names no probe config directory) draws no line', () => {
+    atBand('laptop');
+    render(<TestBoxSection poll={poll(STATES.ok)} />);
+    expect(q('[data-testbox="probes"]')).toBeNull();
+  });
+});
+
 describe('the counts, the installs and the failed keys', () => {
   it('runs in progress of the limit and the queue depth', () => {
     atBand('laptop');

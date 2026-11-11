@@ -199,9 +199,10 @@ export function stepOf(status: TestboxAdminStatus | null, seen: TestboxStepSeen 
 // Step 4's settings.
 // ---------------------------------------------------------------------------------------------------------------
 
-export type BoxSettingFamily = 'runs' | 'storage' | 'network' | 'accounts';
+export type BoxSettingFamily = 'runs' | 'storage' | 'network' | 'accounts' | 'probes';
 
-/** The folded families, in the order the form draws them. Every one of the 28 box keys is in exactly one. */
+/** The folded families, in the order the form draws them. Every one of the 31 box keys is in exactly one (D-8290 adds the live
+ *  probes' family: the scratch account's config directory, its tmux socket and the day's budget, which the harness programme sets). */
 export const BOX_SETTING_FAMILIES: readonly { readonly id: BoxSettingFamily; readonly title: string; readonly keys: readonly string[] }[] = Object.freeze([
   {
     id: 'runs', title: 'Runs',
@@ -222,6 +223,10 @@ export const BOX_SETTING_FAMILIES: readonly { readonly id: BoxSettingFamily; rea
     id: 'accounts', title: 'Users and files',
     keys: Object.freeze(['CCRC_TESTBOX_PUSH_USER', 'CCRC_TESTBOX_ENV_FORWARD', 'CCRC_TESTBOX_RUN_USER_PREFIX', 'CCRC_TESTBOX_SERVICE_USER',
       'CCRC_TESTBOX_SERVICE_TOKEN_FILE']),
+  },
+  {
+    id: 'probes', title: 'Live probes',
+    keys: Object.freeze(['CCRC_TESTBOX_PROBE_CONFIG_DIR', 'CCRC_TESTBOX_PROBE_SOCKET', 'CCRC_TESTBOX_PROBES_PER_DAY']),
   },
 ]);
 
@@ -277,6 +282,7 @@ export const BOX_SETTING_DEFAULTS: Readonly<Record<string, string>> = Object.fre
   CCRC_TESTBOX_REGISTRY_PROXY: '127.0.0.2:4873', CCRC_TESTBOX_REGISTRY_UPSTREAM: 'https://registry.npmjs.org',
   CCRC_TESTBOX_TMPFS: 'off', CCRC_TESTBOX_LOG_TAIL: '40', CCRC_TESTBOX_SESSION_RUNS: '1', CCRC_TESTBOX_SERVICE_USER: 'ccrc-tb-svc',
   CCRC_TESTBOX_LISTEN: '', CCRC_TESTBOX_SERVICE_TOKEN_FILE: '~/.ccrc/testbox-service.token', CCRC_TESTBOX_UNIT_MAX: '1h',
+  CCRC_TESTBOX_PROBE_CONFIG_DIR: '', CCRC_TESTBOX_PROBE_SOCKET: 'ccrc-probe', CCRC_TESTBOX_PROBES_PER_DAY: '10',
 });
 
 /** The two paths the installer refuses with `~/` (root has no reader's home), and the absolute paths the form starts them from. */
