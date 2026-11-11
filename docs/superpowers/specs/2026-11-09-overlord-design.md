@@ -621,7 +621,7 @@ flowchart TD
 `carded`, so a new generation starts from the server's rows and proves it remembers before it acts. Table 3.3.11a gives
 each state's deadline, and Table 3.3.11b each trigger.*
 
-**As measured (W0a, 2026-11-11).** The Claude Code facts above hold on 2.1.312 and 2.1.322, with these additions: the hook cap is counted per hook command and in characters; a fork reports its own SessionStart source, `fork`; `/clear` mints a new session id and a compaction keeps it; a background reader started before `/clear` survives it and reports into the new conversation; crons survive a `/clear`, and durable ones a fresh start; and an automatic compaction under the rig fired PreCompact `auto` and sent no summarising request, with no SessionStart `compact` after it (a rig result; a real one is unmeasured). Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+**As measured (W0a, 2026-11-11).** The Claude Code facts above hold on 2.1.312 and 2.1.322, with these additions: the hook cap is counted per hook command and in characters; a fork reports its own SessionStart source, `fork`; `/clear` mints a new session id and a manual compaction keeps it (a real automatic one is unmeasured); a background reader started before `/clear` survives it and reports into the new conversation; crons survive a `/clear`, and durable ones a fresh start; and an automatic compaction under the rig fired PreCompact `auto` and sent no summarising request, with no SessionStart `compact` after it (a rig result; a real one is unmeasured). Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 #### 3.3.1 Generations, not one immortal conversation
 
@@ -723,7 +723,7 @@ on hook context.
   a cheap re-anchor at the end of the context. It reads a cache the door process keeps (one writer, a lease, "unknown"
   when stale), and makes no network call, because a hook that times out loses its output.
 
-**As measured (W0a, 2026-11-11).** W0-01 to W0-04, on both builds: the text of one hook command arrives whole up to 10,000 characters (the tail canary in the next request), so the anchor slot of 1,500 stands; each start's context reaches the next request for every source (`startup`, `resume`, `clear`, `compact`, `fork`; a fresh start reports `startup`); the workspace memory file is in the requests after `/clear` and after `/compact`, so C38 stands; and a UserPromptSubmit context of 600 characters arrives with every prompt, while a hook past its timeout drops its output. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+**As measured (W0a, 2026-11-11).** W0-01 to W0-04, on both builds: the text of one hook command arrives whole up to 10,000 characters (the tail canary in the next request), so the anchor slot of 1,500 stands; each start's context reaches the next request for `startup`, `compact` and `fork` (a fresh start reports `startup`), while for `clear` and `resume` only the hook's payload is measured (the delegation corpus, to 2.1.319), not the request after it; the workspace memory file is in the requests after `/clear` and after `/compact`, so C38 stands; and a UserPromptSubmit context of 600 characters arrives with every prompt, while a hook past its timeout drops its output. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 #### 3.3.4 Compaction: a bounded fallback, never the plan
 
@@ -748,7 +748,7 @@ This subsection says how compaction becomes a counted fallback inside one genera
   start sends the session back to its card (§3.3.3). The probes follow (C41).
 - **Two compactions in one generation** make a renewal due (soft).
 
-**As measured (W0a, 2026-11-11).** W0-13 and W0-14, on both builds: a PreCompact refusal of `trigger: auto` is honoured and the turn runs on uncompacted to its reply, asked again once at each turn's start, so the arm refuses once and lets the next through; at the window's end (emulated) the session was not stuck, and a manual `/compact` passed. The auto-compact window is set per session by `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Idle compaction never fired in 65 idle minutes under the rig, with the switch on or off, so the idle switch is unproven and the 45-minute idle trigger stays load-bearing. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+**As measured (W0a, 2026-11-11).** W0-13 and W0-14, on both builds: a PreCompact refusal of `trigger: auto` is honoured and the turn runs on uncompacted to its reply, asked again once at each turn's start, so the arm refuses once and lets the next through; at the window's end (emulated) the session was not stuck, and a manual `/compact` passed. The auto-compact window is set per session by `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Idle compaction never fired in 65 idle minutes under the rig, with the switch on or off, on a 1,000,000-token window 15% full (a fuller window was not tried), so the idle switch is unproven and the 45-minute idle trigger stays load-bearing. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 #### 3.3.5 Canaries, probes and the outside audit
 
@@ -877,7 +877,7 @@ needs.
   - **Fable billed to usage credits is unservable for the Overlord,** because that is spend (O2). The model fallback
     owns that rule (§3.4). Compaction settings are in §3.3.4.
 
-**As measured (W0a, 2026-11-11).** W0-09 and W0-10, on both builds: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` at launch keeps every project-memory file out of the requests, before and after a swap, so H14's "off for every role" is a launch column; `CLAUDE_CODE_FORK_SUBAGENT=0` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` change the `Agent` tool (no fork mode, `run_in_background` back) and hold. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+**As measured (W0a, 2026-11-11).** W0-09 and W0-10, on both builds: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` at launch keeps every project-memory file out of the requests, before and after a swap, so H14's "off for every role" is a launch column; `CLAUDE_CODE_FORK_SUBAGENT=0` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`, set together in one run, change the `Agent` tool (no fork mode, `run_in_background` back) and hold; which switch moved which part, agent view's own effect and the agent-teams switch are unmeasured. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 #### 3.3.8 Swaps, rolls, sleep and restarts
 
@@ -1215,7 +1215,7 @@ starting values (Table 11.5b).*
   invariants bind this machine directly. A write is accepted only from the current term, generation and key (I5).
   After a crash at any step, the next card lists every unsettled message and open hold (I8).
 
-**As measured (W0a, 2026-11-11).** W0-05, W0-06 (the rig half), W0-07 and W0-08: a compaction keeps the session id and `/clear` mints one; a fresh start reaches its ready prompt in about 0.26 s at p95 whatever the transcript, a resume in under 2 s at 5 MB, so the deadlines stand unless the fleet's roll overhead (W0b) passes 59 s at p95; no run on this server ever took the typed `/clear` path (0 of 541 resumed), so H13 selects "fresh start only" until it is measured; and a reader in flight survives `/clear` and reports into the new conversation, so the drain wait and the fence are load-bearing. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+**As measured (W0a, 2026-11-11).** W0-05, W0-06 (the rig half), W0-07 and W0-08: a manual compaction keeps the session id (a real automatic one is unmeasured) and `/clear` mints one; a fresh start reaches its ready prompt in about 0.26 s at p95 whatever the transcript, a resume in under 2 s at 5 MB, so the deadlines stand unless the fleet's roll overhead (W0b) passes 59 s at p95; the typed `/clear` path is unmeasured (none of the 541 runs in the store's window, its active runs and newest 500 closed, resumed), so H13 selects "fresh start only" until it is measured; and a reader in flight survives `/clear` and reports into the new conversation, so the drain wait and the fence are load-bearing. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ### 3.4 Its model and its accounts
 
@@ -1521,7 +1521,7 @@ except a load, which is the share C57 defines.*
 
 *Table 3.4b. What moves the Overlord's model or account, who decides, and when. The retention table is in §6.7.*
 
-**As measured (W0a, 2026-11-11).** W0-11, W0-12 and the read half of W0-25: `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` holds every subagent on Sonnet against a per-call `opus`, while the plain env and an `--agents` definition do not; under FORCE the PreToolUse payload carries no `model`, so ccrc's D-6798 arm must not apply to such a session. A typed `/model` fires `PreModelSwitch` and `PostModelSwitch` with `from_model` and `to_model`; Claude Code's own switch on a flagged request was not reproduced by the rig's emulation (it continued once on the same model), so the statusline journals model changes too. Today's pick breaks ties by roster order (pinned in `projected-home.test.ts`), which C56's listed order extends. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+**As measured (W0a, 2026-11-11).** W0-11, W0-12 and W0-25 (from the tree): `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` holds every subagent on Sonnet against a per-call `opus`, while the plain env and an `--agents` definition do not; under FORCE the PreToolUse payload carries no `model`, even for a call that named one, and with ccrc's hook loaded its D-6798 arm refused all four Agent calls. A typed `/model` fires `PreModelSwitch` and `PostModelSwitch` with `from_model` and `to_model`; Claude Code's own switch on a flagged request was not reproduced by the rig's emulation (it continued once on the same model; the emulated refusal lacked the documented `stop_details` object, which may be why), so the statusline journals model changes too. Today's pick breaks ties by roster order (pinned in `projected-home.test.ts`), which C56's listed order extends. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ### 3.5 Brain work, never execution (R12)
 
@@ -1753,7 +1753,7 @@ authority or a switch. The act key file, W0's fallback only, holds a credential 
     bypassed. Its transcripts need not persist: `ccrc history` is the lasting copy, and every generation starts from
     the card.
 
-**As measured (W0a, 2026-11-11).** W0-15 to W0-19, on both builds: under the `overlord` profile (pinned sources, the profile in `--settings`, `--strict-mcp-config` with a door stub, `--tools Agent,Skill`, readers in `--agents`, bypass mode) the main thread is offered only `Agent`, `Skill` and the door tools; ccrc's hook fires from the profile file; the anchor, the project skill and the permission mode hold; every door call is served with no prompt; the deny rule fires in the main thread and in the reader; the launch nonce reaches the door process; and each PreToolUse in a reader carries `agent_type`. So the door process stands and the fallback is not selected. Pinned sources load nothing from the account config (memory file, skill, agent, tool server, settings), ccrc's own hook included, so the profile carries the hook. A fresh account config shows the bypass acceptance dialog first. Plugins are unmeasured. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+**As measured (W0a, 2026-11-11).** W0-15 to W0-19, on both builds: under the `overlord` profile (pinned sources, the profile in `--settings`, `--strict-mcp-config` with a door stub, `--tools Agent,Skill`, readers in `--agents`, bypass mode) the main thread is offered only `Agent`, `Skill` and the door tools; ccrc's hook fires from the profile file; the anchor, the project skill and the permission mode hold; every door call is served with no prompt; a `Bash` call is refused in the main thread and in the reader (the deny rules and `--tools` were set together, so which removed it is not attributed); the launch nonce reaches the door process; and each PreToolUse in a reader carries `agent_type`. So the door process stands and the fallback is not selected. Pinned sources load nothing from the account config (memory file, skill, agent, tool server, settings), ccrc's own hook included, so the profile carries the hook. A fresh account config shows the bypass acceptance dialog first. Plugins are unmeasured. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ### 3.7 Three kinds of decision
 
