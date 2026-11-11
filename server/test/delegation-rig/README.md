@@ -23,11 +23,12 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   they may carry a permission bypass (D-8203). `check-scenario` refuses a bypass spelled anywhere in a scenario (a
   flag, a `--settings` value, a file the scenario writes: any string or key once JSON escapes are decoded, again inside
   every string that is itself JSON, to `BYPASS_JSON_DEPTH` levels, and each of those strings and the raw text with
-  `\xHH`, `\uHHHH` and `\UHHHHHHHH` escapes decoded, a backslash-newline continuation and its leading whitespace
-  joined, every other backslash removed and the letters lower-cased, which reads YAML frontmatter and a settings file
-  that is not strict JSON too) unless the file itself sits in this directory's own `scenarios-overlord/` (by its
-  physical path, so a directory merely called that does not count), and a test holds the delegation corpus
-  bypass-free. A scan that cannot run refuses. `recapture.sh` and `rig.sh all` never run
+  `\xHH`, `\uHHHH` and `\UHHHHHHHH` escapes decoded, a backslash before any line terminator (LF, CRLF, CR, U+2028,
+  U+2029) joined with the next line's leading whitespace, every other backslash removed and the letters lower-cased,
+  which reads YAML frontmatter and a settings file that is not strict JSON too) unless the file itself sits in this
+  directory's own `scenarios-overlord/` (by its physical path, so a directory merely called that does not count), and a
+  test holds the delegation corpus bypass-free. A scan that cannot run refuses, and so does a file that is not exactly
+  one JSON document (every check reads the last of several, the run all of them). `recapture.sh` and `rig.sh all` never run
   them; each is run by hand, one at a time, with `rig.sh run <version> <file> <out-dir>`, and nothing from a run is
   committed: the results note holds the facts. **Run the set again whenever the fleet's model class advances, and on a
   new Claude Code build before a W1 piece relies on a row it measured** (spec 2026-11-09 §3.3: "W0 and the probes
@@ -67,7 +68,14 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   or `acceptEdits`, `--allowedTools` and a hook that allows every tool are not bypasses by that definition, and the
   check passes them; the delegation corpus grants its tools through `permissions.allow`. The `Claude Code` alternative
   in the `mainMarker` above would also match a subagent prompt that opens "You are Claude Code", so the split rests on
-  Claude Code's `cc_is_subagent=true` stamp, which the mock reads first.
+  Claude Code's `cc_is_subagent=true` stamp, which the mock reads first. Smaller limits of the check and its rows: the
+  raw text is read for two spellings, `bypasspermissions` and `dangerously-skip-permissions`, not the whole pattern the strings
+  are read for, so an underscore spelling a later duplicate key hides from the parse passes (the parse keeps the last
+  key, so the hidden value never reaches a launch); the `--import` marker row asserts its marker fits in 200
+  characters, so under a temp directory long enough to break that it fails on its premise, never passes; and the depth
+  row holds `BYPASS_JSON_DEPTH` at two or more, with no row telling three levels from four or a fifth passing. node,
+  compiling the marker, inherits the caller's environment, `NODE_OPTIONS` included: that is the operator's environment,
+  which a scenario cannot set, not scenario data.
 - `recapture.sh` — the corpus's one re-capture script: the steps below, in order (spec §8.2).
 - `sanitize.mjs` — raw run bundles → `server/test/fixtures/delegation/<version>/<scenario>.json`, fail-closed on any
   residue of a real path, user or host.

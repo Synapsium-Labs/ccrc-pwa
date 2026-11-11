@@ -138,6 +138,8 @@ rig_path() {
 check_scenario() {
   local f=${1-} step verb n k
   [[ -f $f ]] || return 1
+  # Exactly one JSON document: each jq read below answers for the LAST document of a file, and load_launch reads them all.
+  jq -e -s 'length == 1' "$f" >/dev/null 2>&1 || return 1
   jq -e '(.steps | type) == "array" and (.entries | type) == "array"' "$f" >/dev/null 2>&1 || return 1
   while IFS= read -r step; do
     verb=$(jq -r 'keys_unsorted[0]' <<<"$step")
@@ -174,10 +176,10 @@ check_scenario() {
 # ccrc's granted launch and stays bypass-free. The spelling is looked for in every string and key once JSON escapes are
 # decoded, again in every string that is itself JSON (Claude Code parses a --settings or --agents value and a settings
 # file), to BYPASS_JSON_DEPTH levels, and in each of those strings and the raw text normalised: \xHH, \uHHHH and
-# \UHHHHHHHH escapes decoded, each backslash-newline continuation and its leading whitespace joined, every other
-# backslash removed and the letters lower-cased (YAML frontmatter, a settings file that is not strict JSON, a script a
-# shell unescapes by backslash). The env names are a deny-list, not an allow-list: launch.settings.env may set any other
-# name (README.md, "known limits").
+# \UHHHHHHHH escapes decoded, a backslash before any line terminator (LF, CRLF, CR, U+2028, U+2029) joined with the next
+# line's leading whitespace, every other backslash removed and the letters lower-cased (YAML frontmatter, a settings file
+# that is not strict JSON, a script a shell unescapes by backslash). The env names are a deny-list, not an allow-list:
+# launch.settings.env may set any other name (README.md, "known limits").
 RESERVED_ENV_RE='^(PATH|HOME|TMPDIR|CLAUDE_CONFIG_DIR|ANTHROPIC_.*)$'
 BYPASS_RE='bypass[-_ ]?permissions|dangerously[-_ ]?skip[-_ ]?permissions'
 BYPASS_JSON_DEPTH=4
@@ -225,7 +227,7 @@ check_launch() {
   scan=0
   jq -e --arg re "$BYPASS_RE" --argjson depth "$BYPASS_JSON_DEPTH" --rawfile raw "$f" '
     def hexval: ascii_downcase | explode | reduce .[] as $c (0; . * 16 + (if $c >= 97 then $c - 87 else $c - 48 end));
-    def norm: gsub("\\\\\\r?\\n[ \\t]*"; "")
+    def norm: gsub("\\\\(\r\n|[\r\n\u2028\u2029])[ \t]*"; "")
       | gsub("\\\\x(?<h>[0-9A-Fa-f]{2})"; [.h | hexval] | implode)
       | gsub("\\\\u(?<h>[0-9A-Fa-f]{4})"; [.h | hexval] | implode)
       | gsub("\\\\U(?<h>[0-9A-Fa-f]{8})"; [.h | hexval] | implode)

@@ -274,6 +274,37 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(run(path.join(d, 'rig.sh'))).toBe(2);
   }, 60_000);
 
+  // A backslash before ANY line terminator continues the line: JSON5's strings are JavaScript's, which join a lone CR,
+  // U+2028 and U+2029 as well as LF and CRLF (review 1790 F2).
+  it.each([
+    ['a lone CR', '\r'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ])('a settings file whose mode continues past a backslash and %s is refused outside the rig\'s own scenarios-overlord (F2)', (_w, brk) => {
+    const text = `{permissions: {defaultMode: "bypass\\${brk}Permissions"}}`;
+    expect(() => JSON.parse(text), 'the premise: no strict JSON reader decodes it').toThrow();
+    const f = scen('scenarios', 'brk', [{ waitReady: 60 }], { launch: { files: [{ in: 'cfg', path: 'settings.json', text }] } });
+    hiddenFromTheOldScan(f);
+    expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  // Every jq read of a scenario answers for its LAST JSON document, while load_launch reads them all, so a scenario file
+  // is exactly one document or it is refused (review 1790 F1).
+  it('a scenario file of two JSON documents is refused: the first one\'s reserved env name and bypass would reach the run unchecked (F1)', () => {
+    const d = path.join(mkTmp('ccrc-dlg-w0-'), 'scenarios');
+    fs.mkdirSync(d, { recursive: true });
+    const file = (name: string, docs: object[]): string => {
+      const f = path.join(d, name);
+      fs.writeFileSync(f, docs.map((x) => JSON.stringify(x)).join('\n') + '\n');
+      return f;
+    };
+    const first = { steps: [{ waitReady: 60 }], entries: [], launch: { env: { HOME: '/x' },
+      files: [{ in: 'repo', path: '.claude/agents/r.md', text: frontmatter('"bypass\\\n  Permissions"') }] } };
+    const last = { steps: [{ waitReady: 60 }], entries: [], settleS: '' };
+    expect(rigsh(['check-scenario', file('first.json', [first])]).status, 'the premise: the first alone is refused').toBe(2);
+    expect(rigsh(['check-scenario', file('two.json', [first, last])]).status).toBe(2);
+  }, 60_000);
+
   it('the force-hook arm differs from its control only by FORCE and a paneSnap, and pins no setting source, so ccrc\'s hook is loaded (M6)', () => {
     const read = (n: string): Record<string, any> => JSON.parse(fs.readFileSync(path.join(RIG, 'scenarios-overlord', `${n}.json`), 'utf8'));
     const hook = read('ov-subagent-model-force-hook');
