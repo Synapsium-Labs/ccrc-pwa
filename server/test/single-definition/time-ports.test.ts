@@ -41,6 +41,10 @@ describe('the time ports (Overlord spec §11.5, §3.6 H2): one definition, in th
     expect(holders).toEqual(['server/src/time/rules.ts']);
   });
 
+  it('rules.ts is L1 by its facts: pure, with no import and no timer', () => {
+    expect(serverRing('server/src/time/rules.ts').ring).toBe('L1');
+  });
+
   it('system.ts is L3, and its chance comes from node:crypto alone', () => {
     expect(serverRing('server/src/time/system.ts').ring).toBe('L3');
     const p = parsedFile('server/src/time/system.ts');
@@ -73,14 +77,26 @@ describe('time and chance come through the ports in new Overlord and continuity 
     ["import { scheduler } from 'node:timers/promises';", 'node:timers/promises'],
     ["import * as timers from 'node:timers';", 'node:timers'],
     ['await fetch(u, { signal: AbortSignal.timeout(5000) });', 'AbortSignal.timeout'],
+    ['globalThis.process.hrtime()', 'process.hrtime'], ['process?.uptime()', 'process.uptime'],
+    ['globalThis?.process?.hrtime.bigint()', 'process.hrtime'], ['globalThis.Math.random()', 'Math.random'],
+    ['Math?.random()', 'Math.random'], ['globalThis.AbortSignal.timeout(5)', 'AbortSignal.timeout'],
+    ['AbortSignal?.timeout(5)', 'AbortSignal.timeout'],
+    ["import { hrtime } from 'node:process';", 'node:process'], ["import * as p from 'node:process';", 'node:process'],
+    ["import proc from 'node:process';", 'node:process'],
   ];
   const GREEN = ['new Date(ms).toISOString()', 'Date.parse(s)', 'Date.UTC(2026, 0, 1)', 'let d: Date | null = null;',
-    'clock.wall()', 'scheduler.after(5, f)', 'entropy.uuid()', 'setImmediate(f)', 'if (x instanceof Date) f(x);'];
+    'clock.wall()', 'scheduler.after(5, f)', 'entropy.uuid()', 'setImmediate(f)', 'if (x instanceof Date) f(x);',
+    "import process from 'node:process';\nconst home = process.env.HOME;", "import type { hrtime } from 'node:process';",
+    'const o = { random: 1, timeout: 2 }; o.random;'];
 
   it.each(RED)('CONTROL: %s is ambient (%s)', (code, what) => {
     expect(ambientUses('fixture.ts', code).map((u) => u.what)).toContain(what);
   });
   it.each(GREEN)('CONTROL: %s is not ambient', (code) => { expect(ambientUses('fixture.ts', code)).toEqual([]); });
+  it('CONTROL: a call through an aliased timer import is reported by the name the import brings in', () => {
+    expect(ambientUses('fixture.ts', "import { setTimeout as wait } from 'node:timers/promises';\nawait wait(5);")
+      .filter((u) => u.line === 2)).toEqual([{ line: 2, what: 'setTimeout' }]);
+  });
 
   it('CONTROL: the scope', () => {
     for (const f of ['server/src/time/rules.ts', 'server/src/overlord/doors.ts', 'server/src/continuity/lane.ts',
@@ -124,10 +140,12 @@ describe('SQL never reads the clock or chance (spec §11.5)', () => {
   it.each(["UPDATE t SET at = CURRENT_TIMESTAMP WHERE id = ?", "SELECT strftime('%s','now') FROM t",
     'SELECT unixepoch() FROM t', 'SELECT id FROM t ORDER BY random()', 'INSERT INTO t (k) VALUES (randomblob(16))',
     'INSERT INTO t (at) VALUES (datetime())', "SELECT strftime('%s') FROM t", 'SELECT date() FROM t',
-    'SELECT time( ) FROM t', 'SELECT julianday() FROM t'])(
+    'SELECT time( ) FROM t', 'SELECT julianday() FROM t', "SELECT unixepoch('subsec') FROM t",
+    "SELECT datetime( 'subsecond' ) FROM t", "SELECT strftime('%s','subsec') FROM t"])(
     'CONTROL: %s reads one', (sql) => expect(SQL_CLOCK.test(sql)).toBe(true));
   it.each(['UPDATE t SET at = ? WHERE id = ?', 'SELECT now_ms FROM t', 'SELECT datetime(at, \'unixepoch\') FROM t',
-    "SELECT strftime('%s', at) FROM t", 'SELECT date(at) FROM t'])('CONTROL: %s reads none',
+    "SELECT strftime('%s', at) FROM t", 'SELECT date(at) FROM t', "SELECT unixepoch(at, 'subsec') FROM t",
+    "SELECT strftime('%s', at, 'subsec') FROM t"])('CONTROL: %s reads none',
     (sql) => expect(SQL_CLOCK.test(sql)).toBe(false));
   it('no statement in server/src', () => {
     const hits = walkSrc({ roots: ['server/src'], min: 150 })

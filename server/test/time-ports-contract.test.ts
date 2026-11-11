@@ -83,6 +83,12 @@ describe('the fake alone', () => {
     expect(fakeTime({ seed: 1 }).ports.entropy.uuid()).toBe('f3ea87a0-c949-4300-abc4-0687fd2726fb');
     expect(fakeTime({ seed: 2 }).ports.entropy.below(2 ** 32)).toBe(3153583793);
   });
+  it('a refused draw consumes nothing: after a refused below(0), seed 1 still draws its first golden value', () => {
+    const e = fakeTime({ seed: 1 }).ports.entropy;
+    expect(() => e.below(0)).toThrow(RangeError);
+    expect(() => e.hex(15)).toThrow(RangeError);
+    expect(e.below(2 ** 32)).toBe(2693262067);
+  });
   it('stepWall moves the wall alone and fires nothing', () => {
     const f = fakeTime(); let n = 0;
     f.ports.scheduler.after(10, () => { n++; });
