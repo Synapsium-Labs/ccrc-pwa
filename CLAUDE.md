@@ -572,7 +572,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
-  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
   the operator and closing its item, the decline mailing the asker), `PUT /api/items/:id/secret` (plan PL6), and

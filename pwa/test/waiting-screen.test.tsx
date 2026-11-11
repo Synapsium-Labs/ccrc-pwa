@@ -657,6 +657,9 @@ describe('item numbers and the 48-hour Recently cleared trail (D-8194)', () => {
     const more = within(trail).getByRole('button', { name: 'Show all 7' });
     expect(more.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(more);
+    // The whole window, grouped by programme with each group collapsed (D-8194): one programme here, opened to its seven.
+    expect(within(trail).queryAllByRole('listitem')).toEqual([]);
+    fireEvent.click(within(trail).getByRole('button', { name: /^prog-a/ }));
     expect(titles()).toEqual([1, 2, 3, 4, 5, 6, 7].map((h) => `Cleared ${h}h ago`));
     const fewer = within(trail).getByRole('button', { name: 'Show fewer' });
     expect(fewer.getAttribute('aria-expanded')).toBe('true');
@@ -669,5 +672,78 @@ describe('item numbers and the 48-hour Recently cleared trail (D-8194)', () => {
     const trail = screen.getByRole('region', { name: 'Recently cleared' });
     expect(within(trail).getAllByRole('listitem')).toHaveLength(5);
     expect(within(trail).queryByRole('button')).toBeNull();
+  });
+});
+
+// D-8194: the expanded Recently cleared list is grouped by programme, each heading its programme's name in its hue, every group
+// collapsed by default and nothing remembered across visits; and an item's card links the items its text names.
+describe('the grouped Recently cleared list and item references on a card (D-8194)', () => {
+  const HOUR = 60 * MIN;
+  const RUNS = [runRow({ id: 1, program: 'prog-a', programTitle: 'Programme A' }), runRow({ id: 2, program: 'prog-b', programTitle: 'Programme B' })];
+  const done = (id: number, program: string, hours: number) =>
+    itemView({ id, program, state: 'done', title: `Cleared ${id}`, closedAt: NOW - hours * HOUR, history: [{ at: NOW - hours * HOUR, act: 'confirm', note: null }] });
+  // prog-b holds the newest; seven in all, so Show all is drawn.
+  const CLEARED = [done(1, 'prog-a', 2), done(2, 'prog-b', 1), done(3, 'prog-a', 3), done(4, 'prog-b', 4), done(5, 'prog-a', 5),
+    done(6, 'prog-a', 6), done(7, 'prog-b', 7)];
+  const trail = (): HTMLElement => screen.getByRole('region', { name: 'Recently cleared' });
+  const shownTitles = (): string[] => within(trail()).queryAllByRole('listitem').map((li) => li.querySelector('s')?.textContent ?? '');
+  const heads = (): HTMLElement[] => within(trail()).queryAllByRole('button').filter((b) => b.hasAttribute('data-program'));
+
+  it('Show all draws one heading per programme, newest programme first, in its hue, every group collapsed', () => {
+    open({ runs: RUNS, view: waitingView({ cleared: CLEARED }) });
+    expect(heads()).toEqual([]);
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    const hues = fleetHues(RUNS);
+    expect(heads().map((h) => [h.getAttribute('data-program'), h.closest('[data-hue]')?.getAttribute('data-hue'), h.getAttribute('aria-expanded')]))
+      .toEqual([['prog-b', hues.get('prog-b'), 'false'], ['prog-a', hues.get('prog-a'), 'false']]);
+    expect(heads().map((h) => h.textContent)).toEqual(['Programme B 3 cleared', 'Programme A 4 cleared']);
+    expect(shownTitles()).toEqual([]);
+  });
+
+  it('a heading opens its programme\'s rows, newest first, without naming the programme on each row; it folds them again', () => {
+    open({ runs: RUNS, view: waitingView({ cleared: CLEARED }) });
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    const b = heads()[0]!;
+    fireEvent.click(b);
+    expect(b.getAttribute('aria-expanded')).toBe('true');
+    expect(shownTitles()).toEqual(['Cleared 2', 'Cleared 4', 'Cleared 7']);
+    for (const li of within(trail()).getAllByRole('listitem')) expect(li.textContent).not.toContain('Programme B');
+    fireEvent.click(b);
+    expect(shownTitles()).toEqual([]);
+  });
+
+  it('Show fewer, and a new visit, start collapsed again: nothing is remembered', () => {
+    const first = render(<WaitingScreen view={waitingView({ cleared: CLEARED })} sessions={[]} runs={RUNS} now={NOW} onOpenItem={vi.fn()} onOpenSession={vi.fn()} />);
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    fireEvent.click(heads()[1]!);
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show fewer' }));
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    expect(heads().map((h) => h.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+    first.unmount();
+    open({ runs: RUNS, view: waitingView({ cleared: CLEARED }) });
+    expect(within(trail()).getByRole('button', { name: 'Show all 7' }).getAttribute('aria-expanded')).toBe('false');
+    expect(heads()).toEqual([]);
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it('the list filtered to one programme shows all of its share as one plain list: there is nothing to group', () => {
+    const mine = [1, 2, 3, 4, 5, 6].map((h) => done(h, 'prog-a', h));
+    open({ runs: RUNS, programme: 'prog-a', view: waitingView({ items: [itemView({ id: 50, program: 'prog-a' })], cleared: mine }) });
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 6' }));
+    expect(heads()).toEqual([]);
+    expect(shownTitles()).toHaveLength(6);
+  });
+
+  it('a card links the items its text names, beside the row and never inside its button; a number that is no item stays text', () => {
+    const itemHref = (id: number): string | null => (id === 12 || id === 13 ? `/waiting/${id}` : null);
+    open({ itemHref, view: waitingView({ items: [
+      itemView({ id: 5, title: 'Unblock item 12', why: 'Items 13 and 99 wait on it.' }),
+      itemView({ id: 6, title: 'Nothing named', why: 'Item 99 only.' }),
+    ] }) });
+    const li = document.querySelector<HTMLElement>('li:has([data-item="5"])')!;
+    const links = within(li).getAllByRole('link');
+    expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([['item 12', '/waiting/12'], ['item 13', '/waiting/13']]);
+    for (const a of links) expect(a.closest('button')).toBeNull();
+    expect(within(document.querySelector<HTMLElement>('li:has([data-item="6"])')!).queryByRole('link')).toBeNull();
   });
 });

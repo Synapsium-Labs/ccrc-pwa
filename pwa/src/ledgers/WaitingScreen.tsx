@@ -6,14 +6,14 @@
 // shell passes what opening an item or a session does, so this file imports no route (ring L4, no decisions: every
 // grouping, count and label is `ledgerWords.ts`'s).
 import { useState, type ReactNode } from 'react';
-import { BareRow, Button } from '@ccrc/ui';
+import { BareRow, Button, TextLink } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
-  CLEARED_HEADING, CLEARED_SHOWN, SHOW_FEWER_WORD, clearedTrail, itemNumber, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
+  CLEARED_HEADING, CLEARED_SHOWN, MENTIONS_WORD, SHOW_FEWER_WORD, clearedCountWord, clearedGroups, clearedTrail, itemNumber, itemRefWord, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, REVIEW_CAP_WORD, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups,
   openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
@@ -21,7 +21,8 @@ import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
 import { RowMain, RowMeta } from './rowParts';
 import { ItemControls, LiftCapControl, carriesControls, useItemActs, type ItemActs } from './ItemActs';
-import { programmeSpecHref } from './ledgerLinks';
+import { itemRefIds, programmeSpecHref } from './ledgerLinks';
+import { inAppClick } from '../fleet/settingsText';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -53,6 +54,34 @@ export interface WaitingScreenProps {
   /** Opens an item, naming the list it is opened from (plan PL9): the item's previous and next follow that list. */
   readonly onOpenItem: (id: number, list: ItemList) => void;
   readonly onOpenSession: (id: string) => void;
+  /** The page of an item a card's text names ("item 12"), or null for a number that is no item (D-8194). Absent, a card links
+   *  nothing. The route decides; this file names no route. */
+  readonly itemHref?: ItemHref;
+}
+
+/** An item reference's page, or null (D-8194). */
+type ItemHref = (id: number) => string | null;
+
+/** The items a card's text names that are items, other than the card's own, each linked once, in the order first named
+ *  (D-8194). The card is one button and a link cannot sit inside a button, so the links sit on a line of their own under it,
+ *  in the row's own list item. Nothing is drawn when the text names no item. */
+function Mentions({ item, note, itemHref }: { item: ItemView; note: string | null; itemHref: ItemHref | null }): ReactNode {
+  if (itemHref === null) return null;
+  const refs = itemRefIds([item.title, item.why, ...(note === null ? [] : [note])])
+    .filter((id) => id !== item.id)
+    .flatMap((id) => { const href = itemHref(id); return href === null ? [] : [{ id, href }]; });
+  if (refs.length === 0) return null;
+  return (
+    <p className="wl-refs">
+      {`${MENTIONS_WORD} `}
+      {refs.map((r, i) => (
+        <span key={r.id}>
+          {i > 0 && ', '}
+          <TextLink href={r.href} onClick={inAppClick(r.href)}>{itemRefWord(r.id)}</TextLink>
+        </span>
+      ))}
+    </p>
+  );
 }
 
 /** The rail's key for the group of sessions that are in no programme (a programme slug can never be this). */
@@ -63,8 +92,8 @@ const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 /** What the list draws of the controls an item or a cap carries: the sheets' openers, the runs they name, and whether they act. */
 interface RowActs { readonly acts: ItemActs; readonly runs: readonly RunSummary[] | null; readonly enabled: boolean }
 
-function ItemRow({ item, now, onOpen, current, rowActs }: {
-  item: ItemView; now: number; onOpen: (id: number) => void; current: boolean; rowActs: RowActs | null;
+function ItemRow({ item, now, onOpen, current, rowActs, itemHref }: {
+  item: ItemView; now: number; onOpen: (id: number) => void; current: boolean; rowActs: RowActs | null; itemHref: ItemHref | null;
 }): ReactNode {
   const note = cameBackNote(item);
   const back = cameBack(item);
@@ -87,6 +116,7 @@ function ItemRow({ item, now, onOpen, current, rowActs }: {
         <RowMeta pills={itemPills(item)} when={meta} />
       </BareRow>
       {rowActs !== null && <ItemControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} />}
+      <Mentions item={item} note={back ? note : null} itemHref={itemHref} />
     </li>
   );
 }
@@ -123,14 +153,14 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
 
 /** One programme's rows: its items, its sessions' questions and its sessions stopped on a usage limit, as the list draws them, and as the list beside an open item
  *  draws them, with that item marked current (plan PL9). */
-export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null, rowActs = null }: {
+export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null, rowActs = null, itemHref = null }: {
   rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
-  rowActs?: RowActs | null;
+  rowActs?: RowActs | null; itemHref?: ItemHref | null;
 }): ReactNode {
   return (
     <ul className="wl-items">
       {rows.map((row) => {
-        if (row.kind === 'item') return <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} current={row.item.id === currentId} rowActs={rowActs} />;
+        if (row.kind === 'item') return <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} current={row.item.id === currentId} rowActs={rowActs} itemHref={itemHref} />;
         // A usage-limit row carries its own two controls (D-8123); tapping the row itself opens nothing.
         if (row.kind === 'limit') return <LimitWaitRow key={`l${row.limit.sessionId}`} limit={row.limit} now={now} />;
         if (row.kind === 'cap') return <CapRow key={`c${row.run.id}`} run={row.run} rowActs={rowActs} />;
@@ -143,10 +173,10 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
-  rowActs?: RowActs | null;
+  rowActs?: RowActs | null; itemHref?: ItemHref | null;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -163,39 +193,79 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
         {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
         <SpecLink href={specHref} programme={title} className="wl-gspec" />
       </div>
-      <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} />
+      <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} itemHref={itemHref} />
     </section>
   );
 }
 
+/** One struck-through row of the Recently cleared trail: its title, its number, where (beside a row of the list that holds several
+ *  programmes, and not under a programme's own heading), and when. */
+function ClearedRow({ item, where, now }: { item: ItemView; where?: ((item: ItemView) => string) | undefined; now: number }): ReactNode {
+  const tail = [itemNumber(item), where?.(item), item.closedAt === null ? undefined : `confirmed ${ageWords(item.closedAt, now)}`]
+    .filter((t) => t !== undefined);
+  return (
+    <li className="wl-cleared-row">
+      <span aria-hidden="true">✓ </span><s>{item.title}</s>
+      {` · ${tail.join(' · ')}`}
+    </li>
+  );
+}
+
+/** How the whole trail is grouped by programme (D-8194): each programme's name and hue, as the list's groups draw them. */
+interface ClearedGrouping { readonly title: (program: string) => string; readonly hue: (program: string) => string | null }
+
 /** "Recently cleared": what the coordinator confirmed in the last 48 hours (`CLEARED_WINDOW_MS`, D-8194), newest first, each struck
- *  through with its number and when. The newest `CLEARED_SHOWN` show; Show all reveals the rest of the window and Show fewer
- *  folds it back. `where` names the programme beside a row where the list holds several; the list filtered to one programme
- *  leaves it out. Nothing is drawn for none. */
-export function ClearedTrail({ items, where, now }: {
-  items: readonly ItemView[]; where?: (item: ItemView) => string; now: number;
+ *  through with its number and when. The newest `CLEARED_SHOWN` show; Show all reveals the whole window and Show fewer folds it
+ *  back. `where` names the programme beside a row where the list holds several; the list filtered to one programme leaves it out.
+ *  Nothing is drawn for none.
+ *
+ *  THE WHOLE WINDOW IS GROUPED BY PROGRAMME where the list holds several (`grouping`, D-8194): a heading per programme in the
+ *  order of its newest clear, its name beside its hue's swatch and its count, each COLLAPSED until its heading is pressed. Which
+ *  groups are open lives in this component's state alone: Show fewer forgets it, and so does leaving the page (nothing is kept
+ *  in storage). The list filtered to one programme has one group, so it draws its share as one plain list. */
+export function ClearedTrail({ items, where, now, grouping }: {
+  items: readonly ItemView[]; where?: (item: ItemView) => string; now: number; grouping?: ClearedGrouping;
 }): ReactNode {
   const [all, setAll] = useState(false);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const trail = clearedTrail(items, now);
   if (trail.length === 0) return null;
   const more = trail.length > CLEARED_SHOWN;
-  const shown = all || !more ? trail : trail.slice(0, CLEARED_SHOWN);
+  const whole = all || !more;
+  const grouped = all && more && grouping !== undefined;
+  const flip = (program: string): void => setOpen((was) => {
+    const next = new Set(was);
+    if (!next.delete(program)) next.add(program);
+    return next;
+  });
   return (
     <section className="wl-cleared" aria-label={CLEARED_HEADING}>
       <h3 className="wl-cleared-title">{CLEARED_HEADING}</h3>
-      <ul>
-        {shown.map((c) => {
-          const tail = [itemNumber(c), where?.(c), c.closedAt === null ? undefined : `confirmed ${ageWords(c.closedAt, now)}`].filter((t) => t !== undefined);
-          return (
-            <li key={c.id} className="wl-cleared-row">
-              <span aria-hidden="true">✓ </span><s>{c.title}</s>
-              {` · ${tail.join(' · ')}`}
-            </li>
-          );
-        })}
-      </ul>
+      {grouped
+        ? (
+          <div className="wl-cgroups">
+            {clearedGroups(trail).map((g) => {
+              const shown = open.has(g.program);
+              const listId = `wl-cg-${g.program}`;
+              return (
+                <div key={g.program} className="wl-cgroup" data-hue={grouping.hue(g.program) ?? 'none'}>
+                  <BareRow className="wl-cg-head" data-program={g.program} aria-expanded={shown} aria-controls={listId}
+                           onClick={() => flip(g.program)}>
+                    <span className="wl-swatch" aria-hidden="true" />
+                    <span className="wl-cg-name">{grouping.title(g.program)}</span>{' '}
+                    <span className="wl-cg-n">{clearedCountWord(g.items.length)}</span>
+                    <span className="wl-cg-chev" aria-hidden="true" />
+                  </BareRow>
+                  {shown && <ul id={listId}>{g.items.map((c) => <ClearedRow key={c.id} item={c} now={now} />)}</ul>}
+                </div>
+              );
+            })}
+          </div>
+        )
+        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={c.id} item={c} where={where} now={now} />)}</ul>}
       {more && (
-        <Button variant="ghost" size="fit" className="wl-cleared-more" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+        <Button variant="ghost" size="fit" className="wl-cleared-more" aria-expanded={all}
+                onClick={() => { setAll((v) => !v); setOpen(new Set()); }}>
           {all ? SHOW_FEWER_WORD : showAllWord(trail.length)}
         </Button>
       )}
@@ -277,7 +347,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                 {shown.map((g) => (
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
-                             hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs}
+                             hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs} itemHref={props.itemHref ?? null}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
               </div>
@@ -288,7 +358,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
           programme holds that programme's, without naming it on every row, and the sessions in no programme have none. */}
       {list.programme !== null
         ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} />
-        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />}
+        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)}
+                        grouping={{ title: (p) => programmeTitle(p, heardRuns), hue: (p) => hues.get(p) ?? null }} />}
       {sheets}
     </div>
   );

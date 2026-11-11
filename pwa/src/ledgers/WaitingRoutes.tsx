@@ -21,10 +21,16 @@
 // with a line saying they are not current; an item drawn from the copy has its acts disabled. `savedCopy.ts` decides which
 // to draw; a box with no coordination database says so first, as before. The copy never reaches `waiting`, so the item's
 // step strip and the column beside it (`useGroups`) read the live list only: on a copy the strip has the way back alone.
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+//
+// AN ITEM BY ITS NUMBER (D-8194). An item the live list does not hold (it left the 48-hour Recently cleared window, or closed
+// otherwise) is read by its id (`useItemRead`, `GET /api/items/:id`) and opens from that read, read-only once closed; the page
+// says it is gone only while nothing was read. "item N" in an item's text links to that item's page where it is one: a number
+// the list holds at once, any other once the server has said so (`useItemHref`); the screens are handed the answer as a prop.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
+import type { ItemView as ItemWire, WaitingView } from '../../../shared/ledgers';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle } from '../fleet/runWords';
 import { api } from '../lib/api';
@@ -35,7 +41,8 @@ import { FleetBanners } from '../screens/FleetScreen';
 import { useFrameSet } from '../skins/frame';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ItemView } from './ItemView';
-import { homeProjectOf, programmeSpecHref } from './ledgerLinks';
+import { homeProjectOf, itemRefIds, programmeSpecHref } from './ledgerLinks';
+import { useItemRead, useItemRefs } from './itemReads';
 import {
   BESIDE_LABEL, BETWEEN_ITEMS_LABEL, FROM_QUERY, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
   NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, SAVED_ROWS_WORD, backLabel, fromWord, groupByProgramme, itemPath, itemPlace, limitRows,
@@ -66,6 +73,19 @@ export function backWay(named: ItemList, settled: ItemList, runs: readonly RunSu
   return goals !== null && programmeIsOpenable(goals)
     ? { to: programmePath(goals), name: programmeTitle(goals, runs ?? []) }
     : { to: listPath(settled), name: WAITING_TITLE };
+}
+
+/** The words of an item that may name other items (D-8194): what, why, the steps and the history's notes. */
+const itemTexts = (item: ItemWire): string[] =>
+  [item.title, item.why, ...item.how, ...item.history.flatMap((h) => (h.note === null ? [] : [h.note]))];
+
+/** The page of an item that `texts` name, or null for a number that is no item, or for `self` (D-8194): a number the list holds
+ *  is an item at once, any other once the server has said so (`useItemRefs`). The list's ids are kept while the list is the
+ *  same value, so a failed read is not asked again on every render. */
+function useItemHref(texts: readonly string[], list: WaitingView | null, self: number | null): (id: number) => string | null {
+  const heard = useMemo(() => new Set(list === null ? [] : [...list.items, ...list.cleared].map((i) => i.id)), [list]);
+  const isItem = useItemRefs(itemRefIds(texts).filter((id) => id !== self), heard);
+  return (id) => (id !== self && isItem(id) ? itemPath(id) : null);
 }
 
 /** The rows and runs this page has heard, or `null` for each it has not: see the file's header. */
@@ -108,9 +128,11 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
   const source = unavailable === null ? listSource({ view, sessions }, saved, deviceRows) : null;
   const drawn = source !== null && source.kind !== 'none' && source.kind !== 'live' ? source : null;
   const notCurrent = drawn === null ? {} : { notCurrent: drawn.kind === 'saved-list' ? savedListWords(drawn.savedAt, now) : SAVED_ROWS_WORD };
+  const listed = drawn?.view ?? view;
+  const itemHref = useItemHref(listed === null ? [] : listed.items.flatMap(itemTexts), listed, null);
   return (
-    <WaitingScreen view={drawn?.view ?? view} sessions={drawn?.sessions ?? sessions} runs={runs} now={now} unavailable={unavailable}
-                   programme={programme} {...notCurrent}
+    <WaitingScreen view={listed} sessions={drawn?.sessions ?? sessions} runs={runs} now={now} unavailable={unavailable}
+                   programme={programme} {...notCurrent} itemHref={itemHref}
                    onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
                    onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
   );
@@ -296,6 +318,7 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
   const id = Number(param);
   const valid = param !== null && Number.isSafeInteger(id);
   const shown = useShownList(valid ? visitOf(id, named) : null);
+  const itemHref = useItemHref(view === null ? [] : view.items.flatMap(itemTexts), view, null);
   if (groups === null || !valid) return fleet;
   const list = shown ?? itemPlace(id, named, groups)?.list ?? settled;
   const drawnGroups = listGroups(list, groups);
@@ -308,7 +331,7 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
         {drawnGroups.map((g) => (
           <ListGroup key={g.program ?? ''} group={g} runs={runs} now={now} currentId={id}
                      hue={g.program === null ? null : hues.get(g.program) ?? null}
-                     rowActs={{ acts, runs, enabled: actsEnabled }}
+                     rowActs={{ acts, runs, enabled: actsEnabled }} itemHref={itemHref}
                      onOpenItem={(next) => navigate(itemPath(next, list))} onOpenSession={(sid) => navigate(sessionPath(sid))} />
         ))}
       </aside>
@@ -333,7 +356,11 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   // The list the item is read from: the live one, else the device's copy unless this box has said it has no list (Figure 8).
   const source = unavailable === null ? itemSource(view, saved) : itemSource(view, null);
   const drawnList = source.kind === 'none' ? null : source.view;
-  const item = id === null || drawnList === null ? null : drawnList.items.find((i) => i.id === id) ?? drawnList.cleared.find((i) => i.id === id) ?? null;
+  const listed = id === null || drawnList === null ? null : drawnList.items.find((i) => i.id === id) ?? drawnList.cleared.find((i) => i.id === id) ?? null;
+  // The live list heard and not holding it: read it by its id (D-8194), so an item past the trail's window still opens.
+  const fetched = useItemRead(id, id !== null && view !== null && listed === null);
+  const item = listed ?? fetched;
+  const itemHref = useItemHref(item === null ? [] : itemTexts(item), drawnList, id);
   const now = Date.now();
   const back = place?.list ?? list;
   const way = backWay(named, back, runs);
@@ -356,7 +383,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   } else {
     body = (
       <ItemView key={item.id} item={item} now={now} programmeLive={programmeIsLive(item.program, runs)} current={actsOpen(source)}
-                runs={runs} sessions={sessions}
+                runs={runs} sessions={sessions} itemHref={itemHref}
                 onActed={() => { void refetchWaiting(store); navigate(way.to); }}
                 programme={{
                   name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null,

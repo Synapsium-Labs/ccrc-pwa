@@ -141,6 +141,13 @@
 }
 .wl-capitem { cursor: default; }
 .wl-item .wl-why[data-lines='true'] { white-space: pre-line; }
+/* D-8194: the items a card's text names, linked on a line of their own under the card (a link cannot sit inside the card's
+   button), the full width of its list item under the controls too. Meta size; the links are the design system's. */
+.wl .wl-refs { grid-column: 1 / -1; margin: 0; padding: 0 var(--sp-2); font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wl-li > .wl-refs { margin-top: var(--sp-1); }
+@media (pointer: coarse) {
+  .wl .wl-refs a { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+}
 
 .wl-cleared { display: grid; gap: var(--sp-1); border-top: 1px dashed var(--edge-strong); padding-top: var(--sp-2); }
 .wl .wl-cleared-title { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); margin: 0; }
@@ -148,6 +155,28 @@
 .wl .wl-cleared-row { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wl .wl-cleared-row s { color: var(--ink-secondary); }
 .wl-cleared .wl-cleared-more { justify-self: start; }
+/* D-8194: the whole trail, by programme. A heading per programme, its swatch in the programme's hue (the list groups' rule: the
+   hue paints the non-text swatch, the name stays in ink), its name, its count and a chevron that turns when the group is open.
+   A row of its own at the tap floor (`BareRow`), every group collapsed until pressed. */
+.wl-cgroups { display: grid; gap: var(--sp-1); min-width: 0; }
+.wl-cgroup { display: grid; gap: var(--sp-1); min-width: 0; --pg: var(--edge-strong); }
+.wl-cgroup[data-hue='cyan'] { --pg: var(--prog-cyan); }
+.wl-cgroup[data-hue='violet'] { --pg: var(--prog-violet); }
+.wl-cgroup[data-hue='magenta'] { --pg: var(--prog-magenta); }
+.wl-cgroup[data-hue='blue'] { --pg: var(--prog-blue); }
+.wl-cgroup .wl-cg-head {
+  display: flex; align-items: center; gap: var(--sp-2); min-width: 0; padding: var(--sp-1) var(--sp-2);
+  border-left: 4px solid var(--pg); border-radius: var(--r-sm); font: inherit; font-size: var(--fs-meta);
+}
+.wl .wl-cg-name { min-width: 0; font-weight: var(--weight-medium); color: var(--ink-primary); overflow-wrap: anywhere; }
+.wl .wl-cg-n { margin-left: auto; flex: none; font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.wl-cgroup .wl-cg-chev {
+  flex: none; width: 6px; height: 6px; border-right: 1.5px solid var(--ink-secondary); border-bottom: 1.5px solid var(--ink-secondary);
+  transform: rotate(-45deg); transition: transform var(--dur-fast) var(--curve-swift);
+}
+.wl-cgroup .wl-cg-head[aria-expanded='true'] .wl-cg-chev { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .wl-cgroup .wl-cg-chev { transition: none; } }
+.wl-cgroup ul { padding-left: calc(var(--sp-2) + 4px); }
 
 /* The item view. */
 .wi-band {
@@ -198,6 +227,8 @@
 }
 .wi-act .wi-status { padding: var(--sp-2); border-radius: var(--r-md); background: var(--accent-tint); color: var(--status-busy-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
 .wi-act .wi-status[data-stale='true'] { background: var(--status-dead-tint-solid); color: var(--status-dead-text); }
+/* D-8194: a closed item opened by its number says it is closed, in the page's own ink: a fact, not a state to act on. */
+.wi-act .wi-status[data-closed] { background: var(--bg-raised); color: var(--ink-primary); }
 .wi-act .wi-refusal { padding: var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
 .wi-card .wi-hint { margin: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wi-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }

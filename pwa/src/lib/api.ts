@@ -1007,10 +1007,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
-    /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last seven days, and
+    /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
     waiting: () => getJson<{ readonly ok: true; readonly waiting: WaitingView }>('/api/waiting'),
+    /** `GET /api/items/:id` (D-8194): one item by its id, whatever its state and however long ago it closed, so an item
+     *  opened by its number after it left the Recently cleared window still opens, read-only. `unknown-item` (404) for a number
+     *  no item has, or one the operator was never shown. Session-gated when armed. */
+    item: (id: number) => getJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}`),
     /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
      *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
      *  `ApiError` like every non-2xx, and the item is unchanged. */
