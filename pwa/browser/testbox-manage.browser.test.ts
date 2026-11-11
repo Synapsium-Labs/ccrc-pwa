@@ -254,7 +254,7 @@ describe.each(SKINS)('the connected test box card in %s', (skin) => {
           await card.locator('[data-testbox="settings"]').waitFor();
           const two = await read('settings, folded');
           await shot('2');
-          expect(two.families.total, 'the box families, the fleet host\'s and the pairing keys').toBe(6);
+          expect(two.families.total, 'the box families (D-8290 adds the live probes\'), the fleet host\'s and the pairing keys').toBe(7);
           expect(two.families.open, 'every family is folded').toBe(0);
           if (width < 900) {
             for (const s of two.families.summaries) expect(s.height, `${width}px: a family's summary is at least --tap-min tall`).toBeGreaterThanOrEqual(two.tapMin - 0.5);

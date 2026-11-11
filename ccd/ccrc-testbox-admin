@@ -69,7 +69,8 @@ TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refuse
 # The long subs whose parent asks them for a precheck before it detaches (`settings-box` only with --when-idle).
 TBA_PRECHECK_SUBS=(connect settings-box repair apply-release parity)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
-# The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the twenty-eight box keys.
+# The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the thirty-one box keys (D-8290
+# adds the three live probe keys).
 TBA_FLEET_KEYS=(CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE
   CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT
   CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES)
@@ -79,7 +80,8 @@ TBA_BOX_KEYS=(CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCR
   CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER
   CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM
   CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN
-  CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX)
+  CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX CCRC_TESTBOX_PROBE_CONFIG_DIR CCRC_TESTBOX_PROBE_SOCKET
+  CCRC_TESTBOX_PROBES_PER_DAY)
 
 _tba_in() {   # <word> <list word>... -> 0 iff the word is in the list
   local w="$1" x
@@ -1555,7 +1557,7 @@ _tba_cx_unstage() { if [ -n "${CX_STG-}" ]; then _tba_cx_out rm -rf -- "$CX_STG"
 
 # ── read: the box's own settings, through the box's own reader ─────────────────────────────────────────────────────────
 # `ccrc test --testbox-knobs box` is run from the installed tree's path (root on the box never depends on a PATH), with
-# stderr folded in: its warnings say which setting the reader refused. Each of the 28 rows keeps the box-settings display
+# stderr folded in: its warnings say which setting the reader refused. Each of the 31 rows keeps the box-settings display
 # classes: a path, an address or a list shows as set, never as its text. The snapshot is a display and nothing reads it
 # as an authority. rc 0 with the file written, or rc 1 with TBA_CODE and the old snapshot left as it was.
 # The release tag the box's installed marker names, kept in the state file for the status (`installedTag`): the tag the

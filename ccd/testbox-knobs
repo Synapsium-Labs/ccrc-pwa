@@ -88,7 +88,7 @@ _tb_shape_class() {   # <KEY> -> its class; nothing for a key this file does not
   case "$1" in
     CCRC_TESTBOX_URL|CCRC_TESTBOX_GIT_URL_BASE|CCRC_TESTBOX_OS_MIRROR|CCRC_TESTBOX_REGISTRY_UPSTREAM) echo url ;;
     CCRC_TESTBOX_TOKEN_FILE|CCRC_TESTBOX_GIT_KEY|CCRC_TESTBOX_TIMES|CCRC_TESTBOX_RUN_TMPDIR|CCRC_TESTBOX_ROOT) echo path ;;
-    CCRC_TESTBOX_REPOS|CCRC_TESTBOX_TOOLS_DIR|CCRC_TESTBOX_SERVICE_TOKEN_FILE) echo path ;;
+    CCRC_TESTBOX_REPOS|CCRC_TESTBOX_TOOLS_DIR|CCRC_TESTBOX_SERVICE_TOKEN_FILE|CCRC_TESTBOX_PROBE_CONFIG_DIR) echo path ;;
     CCRC_TESTBOX_UNTRACKED_FILE_MAX|CCRC_TESTBOX_SNAPSHOT_MAX|CCRC_TESTBOX_RUN_MEMORY_MAX|CCRC_TESTBOX_RUN_SWAP_MAX) echo size ;;
     CCRC_TESTBOX_REPORT_MAX) echo size ;;
     CCRC_TESTBOX_STATUS_DEADLINE|CCRC_TESTBOX_RECONNECT_DEADLINE|CCRC_TESTBOX_QUEUE_WAIT|CCRC_TESTBOX_BUDGET) echo duration ;;
@@ -99,11 +99,13 @@ _tb_shape_class() {   # <KEY> -> its class; nothing for a key this file does not
     CCRC_TESTBOX_TMPFS) echo onoff ;;
     CCRC_TESTBOX_RUN_CPU_QUOTA) echo percent ;;
     CCRC_TESTBOX_QUEUE_LIMIT|CCRC_TESTBOX_RUNS|CCRC_TESTBOX_WORKERS|CCRC_TESTBOX_LOG_TAIL|CCRC_TESTBOX_SESSION_RUNS) echo count ;;
+    CCRC_TESTBOX_PROBES_PER_DAY) echo count ;;
     CCRC_TESTBOX_REGISTRY_PROXY|CCRC_TESTBOX_LISTEN) echo hostport ;;
     CCRC_TESTBOX_DENY_GLOBS) echo globs ;;
     CCRC_TESTBOX_EGRESS_ALLOW) echo hosts ;;
     CCRC_TESTBOX_ENV_FORWARD) echo envnames ;;
     CCRC_TESTBOX_PUSH_USER|CCRC_TESTBOX_SERVICE_USER|CCRC_TESTBOX_RUN_USER_PREFIX) echo user ;;
+    CCRC_TESTBOX_PROBE_SOCKET) echo socket ;;
   esac
 }
 # Patterns, not literals: a duration and a size are a whole number, 1 or more, with no leading zero (bash's arithmetic
@@ -132,6 +134,7 @@ _tb_shape() {   # <KEY> <value> -> 0 when the value is the key's shape
     envnames) [ -n "${v//[[:space:]]/}" ] || return 1
       for w in $v; do [[ "$w" =~ ^[A-Z_][A-Z0-9_]*$ ]] || return 1; done ;;
     user) [[ "$v" =~ ^[a-z_][a-z0-9_-]*$ ]] ;;
+    socket) [[ "$v" =~ ^[a-z_][a-z0-9_-]*$ ]] ;;
     *) return 1 ;;
   esac
 }
@@ -152,6 +155,7 @@ _tb_shape_says() {   # <KEY> -> the shape, in words, for the warning
     hosts) echo "a list of host names" ;;
     envnames) echo "a list of environment variable names" ;;
     user) echo "a user name (lower-case letters, digits, _ and -)" ;;
+    socket) echo "a tmux socket name (lower-case letters, digits, _ and -)" ;;
     *) echo "a test box setting" ;;
   esac
 }
@@ -223,7 +227,7 @@ _tb_box_policy() {
   return 0
 }
 
-# ── the defaults table (spec §4, plus D-7420, D-7421, D-7426, D-7501) ────
+# ── the defaults table (spec §4, plus D-7420, D-7421, D-7426, D-7501, D-8290) ────
 # Each line reads one key through ccrc's one reader in `file` mode and hands the answer to `_tb_got`. The defaults are
 # spelled once, here. `~/` is the reading user's home (the fleet user's on the fleet host, the service user's on the
 # box), resolved by the reader of the value; ccrc.env expands nothing. Empty (`''`) is "unset": no test box URL, no
@@ -279,6 +283,10 @@ _tb_box_table() {
   _ccrc_knob CCRC_TESTBOX_LISTEN '' file; _tb_got CCRC_TESTBOX_LISTEN '' $?
   _ccrc_knob CCRC_TESTBOX_SERVICE_TOKEN_FILE '~/.ccrc/testbox-service.token' file; _tb_got CCRC_TESTBOX_SERVICE_TOKEN_FILE '~/.ccrc/testbox-service.token' $?
   _ccrc_knob CCRC_TESTBOX_UNIT_MAX 1h file; _tb_got CCRC_TESTBOX_UNIT_MAX 1h $?
+  # D-8290: the live probes. No config directory by default: the box runs no probe until the scratch account's is named.
+  _ccrc_knob CCRC_TESTBOX_PROBE_CONFIG_DIR '' file; _tb_got CCRC_TESTBOX_PROBE_CONFIG_DIR '' $?
+  _ccrc_knob CCRC_TESTBOX_PROBE_SOCKET ccrc-probe file; _tb_got CCRC_TESTBOX_PROBE_SOCKET ccrc-probe $?
+  _ccrc_knob CCRC_TESTBOX_PROBES_PER_DAY 10 file; _tb_got CCRC_TESTBOX_PROBES_PER_DAY 10 $?
 }
 
 # ── the validated load ───────────────────────────────────────────────────

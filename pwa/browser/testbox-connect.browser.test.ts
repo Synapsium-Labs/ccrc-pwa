@@ -308,11 +308,11 @@ describe.each(SKINS)('Connect a test box in %s', (skin) => {
           await flow.getByRole('button', { name: T.added }).click();
           await flow.getByRole('button', { name: T.probe }).click();
 
-          // Step 4: four folded families, a two-column form beyond a phone.
+          // Step 4: five folded families (D-8290 adds the live probes'), a two-column form beyond a phone.
           await flow.getByText(T.settingsIntro).waitFor();
           const four = await read('step 4');
           await shot('4');
-          expect(four.families).toBe(4);
+          expect(four.families).toBe(5);
           // Two columns at the laptop band, one at the phone and the wide band (the wide band's panel shares the narrow settings card).
           const columns = bandOf(width) === 'laptop' ? 2 : 1;
           expect(new Set(four.fields.map((f) => Math.round(f.left))).size, `the form is ${columns} column(s) at ${width}px`).toBe(columns);
