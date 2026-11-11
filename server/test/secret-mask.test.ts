@@ -54,6 +54,7 @@ import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 import { isDeepStrictEqual } from 'node:util';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
 import type { ChatEvent } from '../../shared/api.js';
+import { fakeTime } from './fakeTime.js';
 
 // ── assembled credentials ──────────────────────────────────────────────────
 const fill = (n: number, salt: string, alphabet = 'base64url'): string => {
@@ -151,7 +152,7 @@ const backlogFrame = async (transcript: string, masker?: SecretMasker): Promise<
   const run: Runner = async (_c, args) => (args[0] === 'list-panes'
     ? { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
   const cfg = loadConfig({ CCRC_HOME: home });
-  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker };
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, masker };
   const app = await buildServer(deps, new Bus());
   try {
     const port = await listen(app);
@@ -200,7 +201,7 @@ describe('the session socket carries only the mask (D-5513)', () => {
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
     const send = (stream as unknown as { send(m: SessionStreamMsg): void }).send;
     const ask = { type: 'ask', ask: { questions: [{ question: `use ${OAT}?`, header: 'Key', multiSelect: false, options: [{ label: ORKEY }] }] } };
@@ -219,7 +220,7 @@ describe('the session socket carries only the mask (D-5513)', () => {
     const coord = new CoordStore(openCoordDb(path.join(fhome, '.ccrc', 'coord.db')));
     coord.recordFeedEvent('e1', { seq: 1, at: 1, kind: 'mail', sessionId: ID, title: `key ${OAT}`, body: `or ${ORKEY}`, runId: null });
     const fcfg = loadConfig({ CCRC_HOME: fhome });
-    const app = await buildServer({ cfg: fcfg, runCcd: ccdRunner(run, fcfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord }, new Bus());
+    const app = await buildServer({ cfg: fcfg, runCcd: ccdRunner(run, fcfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord }, new Bus());
     try {
       const res = await app.inject({ method: 'GET', url: '/api/feed' });
       expect(res.statusCode).toBe(200);
@@ -375,7 +376,7 @@ describe('the drawer stream (D-5513)', () => {
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), spawnPty }, new Bus());
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, spawnPty }, new Bus());
     const port = await listen(app);
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/${ID}?cols=80&rows=24`);
     const frames: string[] = [];
@@ -435,7 +436,7 @@ describe('every other egress of session-derived text (D-5513)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify-log.json'));
     await notifyLog.load();
-    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       coord, mailToken: TOKEN, notifyLog }, new Bus());
     const H = { 'x-ccrc-mail-token': TOKEN };
     const clean = (body: string): void => {
@@ -846,7 +847,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
-    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
     clean((await app.inject({ method: 'GET', url: '/api/fleet' })).body);
     const port = await listen(app);
@@ -932,7 +933,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
-    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       coord, masker: maskerWith({ secrets: [key] }).m }, new Bus());
     const at = { program: 'p', title: 'T', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'coordinator' };
     const work = coord.openRun(at) as { id: number };
@@ -960,7 +961,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
-    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       coord, masker: maskerWith({ secrets: [inSummary, inFinding] }).m }, new Bus());
     const at = { program: 'p', title: 'T', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'coordinator' };
     const work = coord.openRun(at) as { id: number };
@@ -1550,7 +1551,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker }, new Bus());
+    return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, masker }, new Bus());
   };
 
   it('every write route\'s answer reaches its reader masked: a 409 prompt answer whose draft holds a key, and any other write answer', async () => {
@@ -1719,7 +1720,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker, ...extra }, new Bus());
+    return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, masker, ...extra }, new Bus());
   };
   const clean = (body: string, ...secrets: string[]): void => {
     expect(body).toContain(SECRET_MASK);
@@ -1835,7 +1836,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
-    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
     const want = fleetRow();
     const check = (s: FleetSession): void => {
@@ -1870,7 +1871,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
-    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker: m }, bus);
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, masker: m }, bus);
     const port = await listen(app);
     const N = 4;
     const frames: string[][] = Array.from({ length: N }, () => []);

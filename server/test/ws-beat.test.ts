@@ -22,6 +22,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-f';
 const UUID_A = 'a'.repeat(36);
@@ -53,7 +54,7 @@ const mkDeps = (home: string, io: FleetIO): Deps => {
     return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
-  return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+  return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
 };
 
 /** Every frame the socket receives, parsed, in arrival order. */
