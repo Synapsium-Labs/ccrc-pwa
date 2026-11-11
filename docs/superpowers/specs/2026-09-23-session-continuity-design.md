@@ -372,6 +372,19 @@ operator ruling (D-8102). The graceful stop ships with stage 3. The spike's meas
 with its results note. The rule as first written made native handoff primary only if it fired with both gates set, the next
 wake adopted across the account change, and no second restart authority engaged (or one could be switched off).
 
+**As measured (wave 5, 2026-11-10).** After one `ccd swap --interrupt` of a session with four interrupted workflows
+(Claude Code 2.1.319, then 2.1.322, both on the lent account; every matrix call on 2.1.314), `Workflow({scriptPath,
+resumeFromRunId})` was refused (`scriptPath must be a script path this tool returned, or a file you can already
+read …`) for the old root's returned path and for the same path under the current root, the carry's hard link. A
+working-directory copy and the whole script inline as `script` were accepted, and each run completed, with finished
+agents from cache and the interrupted one re-run from its start. `/add-dir` was not run, because the operator declined
+it. On disk, root paths after a swap were refused 17 of 17 from 2026-10-22, and mostly accepted until 2026-10-21.
+Nothing redrove the idle session for 15.5 minutes after the swap. No resume prompt reached it: its tail was not an
+interrupted turn, so Claude Code submitted none, and ccd's redrive stood down. Six notifications covering seven
+stopped tasks started no turn, and the stall watch's orphaned-task mail woke it. No five-hour arm ran: the lent
+account's plan has no five-hour window (item 145). §5.4 rule 2's and §11 item 3's longer bound stays open. The results
+note is `docs/superpowers/plans/2026-11-07-session-continuity-wave5-spike-results.md`.
+
 ### 5.3 Stage 3 — recovery at every restart (ccd, hook, prompt)
 
 **The graceful stop.** Every ccd stop that will be followed by a resume sends `SIGTERM` to the Claude Code process
