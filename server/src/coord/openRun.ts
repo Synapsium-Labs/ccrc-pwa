@@ -1,5 +1,8 @@
 import { isPositiveDecimalSafeInteger, isRegistryId, shapeProgramSlug } from '../../../shared/api.js';
 import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js';
+import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../../shared/plan.js';
+import { epicForWave } from './planPolicy.js';
+import type { OpenRunTicket } from './planStore.js';
 
 /**
  * `POST /api/runs`' synchronous preconditions, decided (D-5384, audit ticket
@@ -80,6 +83,16 @@ export interface OpenRunFacts {
   readonly claimantProject: (claimant: string) => Promise<ClaimantProjectRead>;
   /** D-5298: what the registry says the named `sessionId` is. */
   readonly sessionMark: (sessionId: string) => Promise<SessionMarkRead>;
+  /** D-8181: the programme's plan facts, read lazily by `planGate` only. `required` is the row's `planRequired`, and
+   *  true for a slug with no row (a new programme that skipped `plan put`); `ended` is `planEnd IS NOT NULL`; `ticket`
+   *  finds a ticket of this programme by key (an Upkeep ticket belongs to no programme, so it is never found). */
+  readonly plan: (slug: string) => OpenRunPlanFacts;
+}
+
+export interface OpenRunPlanFacts {
+  required: boolean; ended: boolean;
+  epics: readonly { id: number; waves: readonly number[]; state: EpicState }[];
+  ticket(key: string): { id: number; epicId: number; project: string; state: TicketState; runId: number | null } | null;
 }
 
 /** The attribution refusals, each a `RouteRefusal` word the claim lanes
@@ -186,7 +199,8 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
 /** The run refusals this decider answers in `refused` (a `RunRefuseCode`
  *  body key, with `by`), as opposed to the `error` words. */
 export type OpenRunConflictCode = Extract<RunRefuseCode,
-  'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'attribution-required' | 'not-a-child'>;
+  'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'attribution-required' | 'not-a-child'
+  | 'reserved-programme' | 'plan-closed' | 'plan-missing' | 'wave-epic-mismatch' | 'ticket-unavailable'>;
 
 /** One refusal, carrying the gate that answered it (for the order table; the
  *  route does not send it) and exactly the body fields the inline sends wrote:
@@ -210,6 +224,9 @@ export interface OpenRunPlan {
   /** The claimant's measured registry project — the `claimantProject` gate's
    *  read, handed to `openRun`'s `coordProject` stamp so it is read once. */
   coordProject: string;
+  /** D-8181: the ticket the run attaches to in the same transaction that inserts it; null for a review run and for a
+   *  programme that declares no plan and does not require one. */
+  ticket: OpenRunTicket | null;
 }
 
 export type OpenRunVerdict =
@@ -227,6 +244,7 @@ interface Ctx {
   unattributed?: boolean;
   coordProject?: string;
   mark?: SessionMarkRead;
+  ticket?: OpenRunTicket | null;
 }
 
 type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal; detail: string }
@@ -267,6 +285,15 @@ const GATES = [
       !(b.programmeTitle === undefined || (typeof b.programmeTitle === 'string' && b.programmeTitle.trim() !== '')))
       ? { error: 'bad-request' } : undefined;
   }],
+  // D-8181 (design 2026-11-10 §4.4): the reserved `linear-sync` slug is never a run's programme. Body-only, so it asks
+  // nothing of the store; the slug is shaped here the way `program` shapes it below (a bad slug is that gate's refusal).
+  ['reservedProgramme', (c) => {
+    const s = shapeProgramSlug(c.b.program as string);
+    return s.ok && s.slug === LINEAR_SYNC_PROGRAMME ? { refused: 'reserved-programme' } : undefined;
+  }],
+  // D-8181: an optional `ticket` is the key of a ticket of the programme's plan: a non-blank string when sent.
+  ['ticketShape', (c) => (c.b.ticket === undefined || (typeof c.b.ticket === 'string' && c.b.ticket.trim() !== ''))
+    ? undefined : bad('ticket must be the key of a ticket of the programme')],
   // Path identity (spec §2.3). Every id this route stores can later reach an
   // id-taking argv: `wsHold`, then dispatch, close and the routing door. So
   // each is asked the ONE predicate here, AS GIVEN: `openRun` stores the
@@ -357,6 +384,35 @@ const GATES = [
     c.verdict = v;
     if (v.kind === 'mismatch') return { refused: 'home-mismatch', by: v.by };
     if (v.kind === 'required') return bad('homeProject is required');
+    return undefined;
+  }],
+  // D-8181 (design 2026-11-10 §4.4): what the programme's plan says about this open. A work run only: a review run attaches
+  // nothing. After the home verdict (a programme with no row is read as one that requires a plan, so it is the home and the
+  // plan's own refusals that name a new programme's missing pieces), and before the registry reads. The refusals run in
+  // the order the design lists them: a closed plan, then no plan, then the wave's epic, then the ticket.
+  ['planGate', (c) => {
+    if (isReview(c)) { c.ticket = null; return undefined; }
+    const slug = c.slug!, wave = c.b.wave as number, project = c.b.project as string;
+    const p = c.f.plan(slug);
+    if (p.ended) return { refused: 'plan-closed' };
+    const live = p.epics.filter((e) => e.state !== 'dropped');
+    if (live.length === 0) {
+      if (p.required) return { refused: 'plan-missing' };
+      c.ticket = null;
+      return undefined;
+    }
+    const epicId = epicForWave(p.epics, wave);
+    if (epicId === null) return { refused: 'wave-epic-mismatch' };
+    if (typeof c.b.ticket !== 'string') {
+      c.ticket = { kind: 'new', epicId, project, title: c.b.title as string };
+      return undefined;
+    }
+    const t = p.ticket(c.b.ticket);
+    if (t === null || t.state === 'done' || t.state === 'dropped' || t.state === 'started' || t.runId !== null) {
+      return { refused: 'ticket-unavailable' };
+    }
+    if (t.epicId !== epicId) return { refused: 'wave-epic-mismatch' };
+    c.ticket = { kind: 'existing', id: t.id, epicId, reproject: t.project === project ? null : project };
     return undefined;
   }],
   // §12: a dispatched worker may not coordinate. EVERY open claimant is read
@@ -457,6 +513,7 @@ export async function openRunPreconditions(f: OpenRunFacts): Promise<OpenRunVerd
       ...(typeof b.sessionId === 'string' ? { sessionId: b.sessionId } : {}),
       ...(typeof b.programmeTitle === 'string' ? { programmeTitle: b.programmeTitle } : {}),
       unattributed: c.unattributed === true, coordProject: c.coordProject!,
+      ticket: c.ticket ?? null,
     },
   };
 }

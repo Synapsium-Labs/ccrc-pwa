@@ -982,12 +982,7 @@ describe('the coordinator skill: linkage', () => {
       expect(allSkillText, `${code} is a real MailRejectCode but is named nowhere in the skill`)
         .toContain(code);
     }
-    // D-8181: the plan's five run refusals are declared by Task 2.1; `references/plan.md` (which names them) ships with the
-    // plan routes, and that commit deletes this exemption.
-    const PLAN_WORDS_UNTIL_PLAN_MD: ReadonlySet<string> =
-      new Set(['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']);
     for (const code of RUN_REFUSE_CODES) {
-      if (PLAN_WORDS_UNTIL_PLAN_MD.has(code)) continue;
       expect(allSkillText, `${code} is a real RunRefuseCode but is named nowhere in the skill`)
         .toContain(code);
     }
@@ -4527,6 +4522,30 @@ describe('the skills teach end-request as asking', () => {
     for (const span of spans) {
       expect(span).toContain('end-request');
       expect(span, 'the request is taught as asking, never as the act').not.toMatch(/abandon/i);
+    }
+  });
+});
+
+describe('the plan reference (D-8181)', () => {
+  const plan = (): string => refs('plan.md');
+
+  it('ships with the plan-missing refusal, and api.md points at it', () => {
+    expect(REFERENCE_NAMES).toContain('plan.md');
+    expect(refs('api.md')).toContain('references/plan.md');
+  });
+
+  it('names every wave-2 plan verb as a ccrc-api command, never as a raw route, and the body\'s `home`', () => {
+    for (const verb of ['put', 'show', 'met', 'ticket-add', 'ticket-move', 'epic-drop', 'close']) {
+      expect(plan(), `plan.md does not run \`ccrc-api plan ${verb}\``).toContain(`"$API" plan ${verb}`);
+    }
+    expect(plan()).toContain('"home"');
+    expect(plan(), 'plan.md names a raw /api/ path').not.toMatch(/\/api\//);
+  });
+
+  it('names the five run refusals the plan adds, each with its recovery', () => {
+    for (const code of ['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']) {
+      expect(plan(), `plan.md does not name ${code}`).toContain(`\`${code}\``);
+      expect(refs('api.md'), `api.md does not name ${code}`).toContain(`\`${code}\``);
     }
   });
 });

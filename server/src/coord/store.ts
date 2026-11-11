@@ -289,6 +289,7 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
   | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds'; by: string }
+  | { refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable'; by?: undefined }
   | HoldReasonRefusal;
 
 /** A fresh run's exact id is known only after its INSERT. Throwing this private
@@ -298,6 +299,12 @@ class OpenRunHoldRefused extends Error {
   constructor(readonly refusal: HoldReasonRefusal) {
     super(refusal.detail);
   }
+}
+
+/** D-8181: thrown inside `openRun`'s transaction when the plan facts re-checked at the insert no longer hold, so the run
+ *  insert rolls back with the programme row and the typed refusal is answered (the `OpenRunHoldRefused` idiom). */
+class OpenRunPlanRefused extends Error {
+  constructor(readonly refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable') { super(refused); }
 }
 
 export type AdvanceResult =
@@ -1923,6 +1930,9 @@ export class CoordStore {
      *  carry the client that sends it, so it was accepted unattributed and is
      *  journaled here (migration 22). Absent is `false`. */
     unattributed?: boolean;
+    /** D-8181: the plan ticket this work run attaches to, in the same transaction that inserts it (`attachTicketInTx`
+     *  re-checks the plan facts). Absent: a review run, or a programme with no plan that does not require one. */
+    ticket?: planStore.OpenRunTicket | null;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -1980,6 +1990,11 @@ export class CoordStore {
                 detail: 'reused run id is not a positive safe integer',
               };
           if (!hold.ok) return hold;
+          // D-8181: a retried open attaches only when the run has no ticket yet, so it never makes a second one.
+          if (input.ticket != null) {
+            const attached = planStore.attachTicketInTx(this.db, id, input.ticket, Date.now());
+            if (!attached.ok) return { refused: attached.refused };
+          }
           return {
             id,
             program: input.program,
@@ -2033,6 +2048,10 @@ export class CoordStore {
               detail: 'generated run id is not a positive safe integer',
             };
         if (!hold.ok) throw new OpenRunHoldRefused(hold);
+        if (input.ticket != null) {
+          const attached = planStore.attachTicketInTx(this.db, id, input.ticket, now);
+          if (!attached.ok) throw new OpenRunPlanRefused(attached.refused);
+        }
         return {
           id,
           program: input.program,
@@ -2042,6 +2061,7 @@ export class CoordStore {
       });
     } catch (err) {
       if (err instanceof OpenRunHoldRefused) return err.refusal;
+      if (err instanceof OpenRunPlanRefused) return { refused: err.refused };
       throw err;
     }
   }
