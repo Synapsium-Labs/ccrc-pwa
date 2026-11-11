@@ -52,7 +52,9 @@ file keeps only each model's latest entry, so it shows the last set of each wind
 or after the flip is flagged (`hiddenEarlierSets`), because an earlier set of it in the baseline is invisible. An
 event in (baseline-since, flip) cuts the baseline: the COMPARABLE baseline is [the last such event, flip), and a
 transcript file that began before the cut (its first call is earlier) is left out of it and counted apart
-(`beganBeforeCut`), because a changed window applies to the sessions started after it. An event in the watch is
+(`beganBeforeCut`): its context grew under the window before the change, and whether a running session takes a new
+window at once is not something a transcript says (the Stage 2 runbook, step 5), so a file that spans the change is
+read on neither side of it. An event in the watch is
 printed as a warning and cuts nothing. An absent model file is no event; one that is unreadable, not JSON or of
 another version or shape, an entry with no readable stamp or of another shape, and a class history at its cap
 (HISTORY_CAP entries, recordMove drops older ones) whose oldest entry is after baseline-since each leave the cut
@@ -706,7 +708,7 @@ def scan(home, dirs, lane_dir, windows):
     `dirs`. The lane's are the files under `lane_dir`; the box's are all of them. A boundary, and an API error row,
     belongs to the model that answered last before it on its own thread of its own file. When an event cut the
     baseline, a file that began before the cut (its first call, on either thread, is earlier) is not in the
-    comparable window: a changed window applies to the sessions started after it (the Stage 2 runbook, step 5)."""
+    comparable window: its context grew under the window before the change, so it is read on neither side of it."""
     cut = windows["comparable"][0] if windows["comparable"][0] > windows["baseline"][0] else None
     box = Tally(windows, cut)
     lane = Tally(windows, cut) if lane_dir is not None else None

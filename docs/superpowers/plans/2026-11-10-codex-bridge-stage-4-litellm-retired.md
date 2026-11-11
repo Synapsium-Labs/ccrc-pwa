@@ -154,9 +154,10 @@ python3 -I deploy/measure-codex-watch.py --lane <id> --flip <UTC stamp> [--basel
      and the reading fails only when the watch's boundaries exceed that expectation and the one-sided Poisson test
      gives p < 0.05. A session that began before the cut is left out of the comparable baseline. A model counts only
      when its own comparable baseline holds 5 sessions and 20 boundaries. It reads `unmeasured` when the compaction
-     point moved more than 10% or is missing on either side, when the comparable baseline holds fewer than 5 sessions
-     or 20 boundaries, when any watch boundary falls on a model with no such baseline, and when a model file cannot
-     be read or may have lost an entry. The box scope, a paired reading and the version mix are context.
+     point moved more than 10%, is missing on either side or rests on fewer than 20 baseline values, when the comparable
+     baseline holds fewer than 5 sessions or 20 boundaries, when any watch boundary falls on a model with no such
+     baseline, and when a model file cannot be read or may have lost an entry. The box scope, a paired reading and
+     the version mix are context.
   4. The credential, in the auth library's own vocabulary. It fails when the library's `bars` refuses the status,
      when the code is in `NEEDS_SIGNIN_CODES` or `CONFIG_ERROR_CODES`, with no credential, with an expired token, or
      when the last refresh is older than half the token's life plus 900 s. Any other code is context.
