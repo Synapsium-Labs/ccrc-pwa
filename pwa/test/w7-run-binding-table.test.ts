@@ -186,7 +186,7 @@ function archiveAsks(sc: Scenario, sessionId: string): number {
   const session = sc.sessions.find((s) => s.id === sessionId) ?? null;
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
   render(createElement(ArchiveSheet, { session, open: true, onClose: () => {}, fleet: makeStore(sc) }));
-  const m = /It has (\d+) open runs?\. End its programme too\?/.exec(document.body.textContent ?? '');
+  const m = /It coordinates (\d+) open runs?\. What happens to them\?/.exec(document.body.textContent ?? '');
   cleanup();
   vi.unstubAllGlobals();
   return m === null ? 0 : Number(m[1]);

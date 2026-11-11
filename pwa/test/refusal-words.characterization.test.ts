@@ -729,6 +729,7 @@ describe('the PWA refusal copy, pinned (ARCH-13b)', () => {
     }).toMatchInlineSnapshot(`
       {
         "ARCHIVE_REFUSAL_TEXT": {
+          "claims-not-moved": "Its runs could not be moved. Nothing was stopped or archived.",
           "coordinator-has-open-runs": "It coordinates open runs.",
           "manifest-unbuildable": "It cannot be described truthfully for the archive record. Nothing was touched.",
           "programme-partly-ended": "The programme was only partly ended. Nothing was stopped or archived.",
