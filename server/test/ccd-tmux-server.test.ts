@@ -284,7 +284,7 @@ describe('_spawn_start routes its session creation through the placement wrapper
     // path took it, which is the original flaw re-entering by the side door.
     const body = h.sh('type _spawn_start');
     expect(body, 'a bare `tmux new-session` in _spawn_start places the server in the caller\'s cgroup — use _tmux_new_session')
-      .not.toMatch(/(^|[^_\w])tmux new-session/);
+      .not.toMatch(/(^|[^_\w])(?:tmux|_tmx) new-session|"\$\{_TMX_ARGV\[@\]\}" new-session/);   // through the socket lookup too (D-8270)
   });
 });
 
