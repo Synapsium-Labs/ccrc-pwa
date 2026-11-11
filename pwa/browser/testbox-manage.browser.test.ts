@@ -22,6 +22,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { TESTBOX_PROTO, type StatusAnswer } from '../../shared/testbox';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { TESTBOX_MANAGE_TEXT } from '../src/fleet/testboxAdminWords';
+import { TESTBOX_ADMIN_CODE_SENTENCE } from '../../shared/testbox-admin';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
 
@@ -224,10 +225,11 @@ describe.each(SKINS)('the connected test box card in %s', (skin) => {
             return m;
           };
 
-          // The connected card: five controls (Apply release is drawn: the running release is not the marker's), the last act one line.
+          // The connected card: seven controls (Apply release is drawn: the running release is not the marker's; D-8337 adds Rotate key and
+          // Revoke key), the last act one line.
           const one = await read('connected');
           await shot('1');
-          expect(one.buttons.map((b) => b.name), `${width}px: the controls`).toEqual([T.settings, T.repair, T.replace, T.disconnect, T.applyRelease]);
+          expect(one.buttons.map((b) => b.name), `${width}px: the controls`).toEqual([T.settings, T.repair, T.rotateKey, T.replace, T.disconnect, T.revokeKey, T.applyRelease]);
           expect(one.lastAct, `${width}px: the last act is drawn`).not.toBeNull();
           if (width < 900) {
             const main = one.main!;
@@ -380,6 +382,107 @@ describe.each(SKINS)('the connected card\'s blocked access form in %s', (skin) =
           expect(form.button.height, `${width}px: the button is at least --tap-min tall`).toBeGreaterThanOrEqual(form.tapMin - 0.5);
           if (width < 900) expect(Math.abs((form.button.right - form.button.left) - (form.root.right - form.root.left)), `${width}px: the button is full width`).toBeLessThanOrEqual(1);
           expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 120_000);
+    }
+  }
+});
+
+/** The access key's Rotate and Revoke (D-8337): each opens the one confirm sheet, whose Confirm and Cancel stay reachable (360 by 667 on
+ *  a phone); a Revoke whose box was not reached leaves the section's notice with the key's public words, which wrap inside the card,
+ *  and its two buttons, full width one per row on a phone and side by side from the laptop band. */
+const KEY_WORDS = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA${'K'.repeat(44)} ccrc-testbox-admin`;
+describe.each(SKINS)('the access key\'s Rotate and Revoke in %s', (skin) => {
+  for (const theme of THEMES) {
+    for (const width of WIDTHS) {
+      it(`${theme}, ${width}px: both sheets fit, and the notice of a line to remove by hand wraps and reads`, async () => {
+        const { ctx, page, errors } = await open(skin, theme, width);
+        try {
+          page.setDefaultTimeout(10_000);
+          await ctx.route('**/api/testbox/admin/key-revoke', (r) => r.fulfill({
+            status: 409, contentType: 'application/json',
+            body: JSON.stringify({ ok: false, error: 'testbox-admin-refused', code: 'revoked-box-skipped', line: KEY_WORDS }),
+          }));
+          if (width < 900) await page.setViewportSize({ width, height: 667 });
+          await page.goto(server!.origin + '/settings/automation');
+          const section = page.getByRole('region', { name: TITLE });
+          const card = section.locator('[data-testbox="manage"]');
+          await card.locator('[data-testbox="manage-controls"]').waitFor({ timeout: 20_000 });
+          for (const id of ['rotate-key', 'revoke-key']) {
+            await card.locator(`[data-testbox="${id}"]`).click();
+            const sheet = page.locator('[role="dialog"]');
+            await sheet.waitFor();
+            await page.waitForTimeout(500); // the sheet's rise settles
+            const m = await sheet.evaluate((el) => {
+              const r = (e: Element | null): { top: number; bottom: number; left: number; right: number } | null => {
+                if (e === null) return null;
+                const b = e.getBoundingClientRect();
+                return { top: b.top, bottom: b.bottom, left: b.left, right: b.right };
+              };
+              return { confirm: r(el.querySelector('[data-testbox="sheet-confirm"]')), cancel: r(el.querySelector('[data-testbox="sheet-cancel"]')),
+                h: window.innerHeight, w: window.innerWidth, scroll: el.scrollWidth - el.clientWidth };
+            });
+            for (const b of [m.confirm, m.cancel]) {
+              expect(b, `${width}px ${id}: a sheet button is drawn`).not.toBeNull();
+              expect(b!.top, `${width}px ${id}: a sheet button is inside the viewport (top)`).toBeGreaterThanOrEqual(0);
+              expect(b!.bottom, `${width}px ${id}: a sheet button is inside the viewport (bottom)`).toBeLessThanOrEqual(m.h);
+              expect(b!.left).toBeGreaterThanOrEqual(0);
+              expect(b!.right).toBeLessThanOrEqual(m.w);
+            }
+            expect(m.scroll, `${width}px ${id}: the sheet does not scroll sideways`).toBeLessThanOrEqual(0);
+            if (id === 'rotate-key') await page.locator('[data-testbox="sheet-cancel"]').click();
+          }
+          // Revoke's Confirm: the route asks no step-up here (the fixture answers), and the refusal names a line to remove by hand.
+          await page.locator('[data-testbox="sheet-confirm"]').click();
+          const notice = section.locator('[data-testbox="key-notice"]');
+          await notice.waitFor();
+          await page.waitForTimeout(350);
+          const n = await notice.evaluate((el) => {
+            const box = (e: Element): { left: number; right: number; top: number; bottom: number; width: number; height: number } => {
+              const r = e.getBoundingClientRect();
+              return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+            };
+            const lum = (s: string): number => {
+              const v = (s.match(/[\d.]+/g) ?? []).map(Number).map((x) => (s.startsWith('color(') ? x * 255 : x));
+              const ch = (c: number): number => { const k = c / 255; return k <= 0.03928 ? k / 12.92 : ((k + 0.055) / 1.055) ** 2.4; };
+              return 0.2126 * ch(v[0]!) + 0.7152 * ch(v[1]!) + 0.0722 * ch(v[2]!);
+            };
+            const ratio = (e: Element): number => {
+              let bg = getComputedStyle(e).backgroundColor;
+              for (let p: Element | null = e; p !== null && /rgba\(.*,\s*0\)$|transparent/.test(bg); p = p.parentElement) bg = getComputedStyle(p).backgroundColor;
+              const [a, b] = [lum(getComputedStyle(e).color), lum(bg)].sort((x, y) => y - x);
+              return (a! + 0.05) / (b! + 0.05);
+            };
+            const line = el.querySelector('[data-testbox="key-notice-line"]')!;
+            return {
+              root: box(el), line: box(line), lineScroll: line.scrollWidth - line.clientWidth, text: line.textContent,
+              buttons: [...el.querySelectorAll('button')].map(box),
+              tapMin: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min')),
+              page: document.documentElement.scrollWidth - document.documentElement.clientWidth, viewport: window.innerWidth,
+              ink: [...el.querySelectorAll('p, code, button')].map((e) => ({ text: (e.textContent ?? '').slice(0, 30), ratio: ratio(e) })),
+              said: el.textContent,
+            };
+          });
+          expect(n.said, `${width}px: the notice's sentence`).toContain(TESTBOX_ADMIN_CODE_SENTENCE['revoked-box-skipped']);
+          expect(n.text).toBe(KEY_WORDS);
+          expect(n.lineScroll, `${width}px: the key words wrap inside the line`).toBeLessThanOrEqual(0);
+          expect(n.line.right, `${width}px: the key words end inside the notice`).toBeLessThanOrEqual(n.root.right + 0.5);
+          expect(n.root.right, `${width}px: the notice ends inside the viewport`).toBeLessThanOrEqual(n.viewport);
+          expect(n.page, `${width}px: the page scrolls sideways`).toBeLessThanOrEqual(0);
+          expect(n.buttons, 'Copy and Done').toHaveLength(2);
+          for (const b of n.buttons) expect(b.height, `${width}px: a notice button is at least --tap-min tall`).toBeGreaterThanOrEqual(n.tapMin - 0.5);
+          if (width < 900) {
+            for (const b of n.buttons) expect(Math.abs(b.width - n.root.width), `${width}px: a notice button is full width`).toBeLessThanOrEqual(1);
+            expect(n.buttons[1]!.top, `${width}px: Done is on its own row`).toBeGreaterThanOrEqual(n.buttons[0]!.bottom - 0.5);
+          } else {
+            expect(Math.abs(n.buttons[1]!.top - n.buttons[0]!.top), `${width}px: Copy and Done share a row`).toBeLessThanOrEqual(1);
+          }
+          expect(n.ink.filter((i) => i.ratio < 4.5), `${width}px: notice text under 4.5:1`).toEqual([]);
+          const shots = process.env.CCRC_SHOTS;
+          if (shots) await section.screenshot({ path: path.join(shots, `testbox-key-notice-${skin}-${theme}-${width}.png`) });
+          expect(errors.filter((e) => !/409/.test(e)), 'console errors other than the fixture\'s refusal').toEqual([]);
         } finally {
           await ctx.close();
         }
