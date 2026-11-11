@@ -234,8 +234,9 @@ and the class of act that opened the livelock window.
   before the merge's second and said an add could not be the final queue act of a landed PR; one of 22 queue
   merges measured on 2026-10-21 recorded it one second after (D-6216). The clause earlier in this bullet said a
   removal alone cannot tell a merged PR the queue landed after a re-enqueue from one merged by hand after a
-  dequeue; it is restated, since once the removal is recorded its reason, not the act's kind, tells them apart. In
-  the second before it is recorded the PR reads MERGED with the add still its last act, and the MERGED-plus-add arm
+  dequeue; it is restated, since once the removal is recorded its reason, not the act's kind, tells them apart. When
+  the removal is recorded after the merge, in the second before it is recorded the PR reads MERGED with the add still
+  its last act (amended 2026-11-11, wave 5h, D-8312: true for a removal recorded after the merge only), and the MERGED-plus-add arm
   answers `landed`, so for that second the act's kind decides.)
 - A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
   `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
@@ -382,7 +383,11 @@ nothing to judge it by. A lost database loses both together, and a snapshot rest
 
 **Entries and pins.** An entry is created on `advance → merging`, pinned to the verdict's `measured.branchTip` —
 the actual PR head, which after stage 4 may be a base-only merge — with `handoffCommit` kept as its own column.
-`--match-head-commit` and the landed check both read `pinnedSha`. `POST /api/landing/entries` covers a PR with
+`--match-head-commit` reads `pinnedSha`. The landed check reads the PR by number: a PR GitHub reads MERGED, or
+CLOSED with its train's proof, is `landed` whatever its head, and a head other than `pinnedSha` is kept in the entry's
+`detail`; a PR GitHub reads CLOSED with no train claim, or answers that no pull request has the number, is `closed`, a
+terminal state that leaves the line and that a verified pin re-pins (amended 2026-11-11, wave 5h: D-8296, D-8297,
+D-8299). `POST /api/landing/entries` covers a PR with
 no run. Order defaults to first-green; `POST /api/landing/order` sets `after` edges. Dispatch gains optional
 `intents[]` answering 409 `intent-held` (28 PRs in 120 days were closed unmerged because a sibling landed the
 same change first).
@@ -397,11 +402,16 @@ the spec does not claim it.
 `gh pr view <n> --json state,mergedAt,mergeCommit,headRefOid` under its own timeout, answering
 `open | merged | closed | unmeasured`, with no workspace binding. It rides the existing `['pr-state','--project']`
 prefix grant, gets its own `CcdArgv` brand, and the pr-state header's gh-call budget counts one call per open
-landing entry per sweep. A reader walks entries with it, separate from `sweepMerged`'s per-workspace loop, so
-no-run entries and hand merges are seen. The coordinator's own merge step also reports the result.
+landing entry per sweep, at most `LANDED_READS_PER_SWEEP` (ten) a sweep across every project, oldest first. A reader
+walks entries with it, separate from `sweepMerged`'s per-workspace loop, so no-run entries and hand merges are seen.
+The work run's `done` close, which re-measures the PR through `ccd pr-state --session`, marks the entry `landed` when
+GitHub reads the PR MERGED; a merge train's landing is left to the landed reader, which carries the train facts; no
+route reports a merge. `GET /api/landing` answers the entries still in the line, and `?pr=<n>` one PR's entry in any
+state. (Amended 2026-11-11, wave 5h: the cap D-8295, the close D-8294 and D-8306, the read D-8300.)
 (Amended 2026-10-30, wave 5c: five words, `absent` for GitHub's definite answer only (D-7593); the line echoes
 `baseRefName`, `isCrossRepository` and the train flags, `mergeCommit` flattened to its oid (D-7594); the gh fields
-also include `labels`, so the form is one `gh pr view` unless a CLOSED PR carries the train label; a train claim adds the
+also include `labels`, so the form makes at most one `gh pr view` of its own, and more only when a CLOSED PR carries the train label
+(amended 2026-11-11, wave 5h, D-8312: an upper bound, not a count); a train claim adds the
 train record's own `gh` reads (measured: a second `gh pr view` of the PR, for its comments, and one of the train PR;
 also a search when no named train proves the claim), and the form keeps the proofs it makes, as `pr-state --session` does (D-7595); a train claim
 the proof refused or could not read is `unmeasured` (D-7596); gated by the `pr-state-pr-v1` capability.)
@@ -760,7 +770,7 @@ required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
 | `ccd/ccd-land-probe`, `deploy/systemd/ccd-land-probe.{service,timer}` | the radar and the `$REG/landing/<p>/enabled` marker; install spine, uninstall, doctor |
 | `ccd/ccrc` | `ccrc restamp` |
 | `server/src/coord/fingerprint.ts`, `shared/api.ts` | opted-in lineage path, `lineage-unmeasured`, `measured.via` |
-| `server/src/coord/{schema,store,routes,landing}.ts`, `server/src/watch.ts` | landing tables, routes (doors in `routes.ts`), mail, inversion event, PR-keyed landed reader |
+| `server/src/coord/{schema,store,routes,landing}.ts`, `server/src/watch.ts` | landing tables, routes (doors in `routes.ts`), mail, inversion event; wave 5h builds the PR-keyed landed reader in `server/src/coord/landed.ts` (L1) and `landedLane.ts` (L4), its land arm in `store.ts`, the close's mark in `close.ts`, the train facts in `prstate.ts`, the sweep's ending in `lifecycle.ts`, and the read's `pr` key in `ccd/ccrc-api` (amended 2026-11-11) |
 | `server/test/coord-pause-route.test.ts`, `box-token-census.test.ts`, `landing-subtractive.test.ts` (new) | the new doors in both directions |
 | `agent/src/whitelist.ts`, `server/src/ccdargv.ts` | no grant for `land-candidate`; the `pr-state --project --pr` form rides the existing prefix grant with its own `CcdArgv` brand |
 | `pwa/src` | predicted-conflict chip; the line on the project card; pause and withdraw |

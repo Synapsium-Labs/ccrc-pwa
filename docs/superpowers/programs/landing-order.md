@@ -37,7 +37,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
 | 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09); land-synced at `211fdff14` after #2248, MERGED 2026-11-04 10:17 UTC (`6da86bb8`), run 1312 closed (Decisions, 2026-11-04 10:36) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); approved as written (item 74), the plan merged (#2408 `67db632c`) and run 1427 dispatched 2026-11-07 (Decisions, 2026-11-07 23:08); wave-done verified at `e8c92d065`, review 1654, fix round 1; its wave-done verified at `f9b65a028`, accepted by review 1660, departures D-8117 to D-8119; MERGED 2026-11-08 02:23 UTC (#2453 `12ce1ba7`), run 1427 closed (Decisions, 2026-11-08 02:25) |
-| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25) |
+| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25); planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314; Decisions, 2026-11-11 16:15), awaiting the operator's approval |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
 | 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
@@ -2126,6 +2126,58 @@ carries it (spec §5.1, amended 2026-09-24).
     - Claim 3773 ended with the run.
     - Run 1645 lands second, so it merges `main` once and recounts. Its coordinator was told at 02:25 UTC.
   - **Next.** 5h, run 1661, is to plan.
+- **2026-11-11 16:15 — wave 5h planned (D-8294 to D-8314); the silent merge notices are measured; the plan goes to the
+  operator for approval as written.**
+  - **The operator asked** whether further work could proceed. It could: nothing held 5h but its own gate, that it
+    be planned only once the cause of the silent merge notices is measured (Carried constraints, from wave 5d's
+    landing).
+  - **The cause, measured read-only** (workflow `wf_5def9d89-223`: two Opus readers, then two Sonnet refuters on the
+    cause). There are two mechanisms, and the first is the common one:
+    - **A close-before-sweep race.** The notice lanes read the PR sweep's cached phase every 120 s. The `merged:#N`
+      mail needs an open run at `merging`, and the `merged` feed record an unarchived workspace. A coordinator proves
+      its merge and closes the run 20 to 150 s after it, so the close often comes first, and both lanes then skip in
+      silence. A refuter joined every ccrc `ws/*` PR merged from 2026-10-28 to 11-11 to its run and found about 45
+      with no `merged:` mail, most in stretches where the sweep was healthy. Every announced landing it found had
+      its mail before its close.
+    - **A failing project sweep.** When `ccd pr-state --project` fails, every workspace of the project reads
+      `unknown` for up to 900 s at a time. The server's journal shows the ccrc sweep failing from 2026-11-02 13:42
+      to 11-05 07:51 UTC, with one short recovery, which covers #2029, whose run stayed open 2.5 h after its merge.
+      The ccd-level reason is not measured, because the log keeps only the first line of ccd's error output.
+  - **The live line.** It holds 99 entries, every one `pinned` and every PR already merged; its head is #2061, which
+    merged on 2026-11-01. Nothing writes `landed` yet, so 5i must not make the order binding before 5h.
+  - **The plan** is `docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`. This coordinator's
+    design calls, each a numbered entry there:
+    - `landed` has one writer, the line's store function, with two callers: a landed reader that asks GitHub about
+      each entry still in the line, apart from `sweepMerged`, and the work run's `done` close, which already
+      re-measures the PR (D-8294). So `landed` never rests on a notice;
+    - the 99-entry backlog is landed by the reader, at most ten calls a sweep, oldest first, with no hand database
+      edit (D-8295);
+    - a PR closed without merging, or that GitHub says does not exist, gets a new terminal state, `closed`; a
+      verified pin re-pins it (D-8296, D-8297);
+    - a merged PR whose head moved is still `landed`, with the head kept; a train landing keeps its train number and
+      merge commit (D-8299);
+    - `GET /api/landing` answers the entries still in the line, and `?pr=<n>` one PR's entry in any state; the
+      coordinator skill reads its own entry by PR (D-8300, D-8301);
+    - a standing `missing-field` is re-read hourly (D-8303); the reader refuses an open or closed line that carries
+      merge facts, and reads reason words through a closed list (D-8304, D-8305);
+    - no route reports a merge: the close is that report (D-8306);
+    - the reader or the close writes the `merged` feed record when none exists, so the race no longer leaves the feed
+      silent; the `merged:#N` mail is left as it is (D-8307);
+    - a failed project sweep logs how ccd ended and its last error line (D-8308);
+    - review 1660's A1 and A2, and wave 5c's carried text and reader items, are taken (D-8311 to D-8313); the
+      stage-5 leftovers are answered or named (D-8314).
+  - **Drafting and review** (workflow `wf_1399fcad-f11`). An Opus drafter wrote the plan against `main`; three Opus
+    lenses read it (correctness against `main`, spec and ledger fidelity, fail-closed and the repository's rules), and
+    an Opus reviser re-checked each finding and applied it. They found 8 important and 23 minor findings; every one
+    was applied but one part of one. The drafter's six notes, where a call rested on a code fact it found false or
+    incomplete, are at the plan's top, and this coordinator accepted each. Two of them: `CcdResult` carries no exit
+    status, so the plan adds one optional field; and the store's all-projects scan stays for ids and identity, behind
+    a characterization test, while the whole-row read is scoped to the project.
+  - **The spec.** §5.5's sentences on the landed check, the reader's budget, the merge report and the read, wave 5c's
+    "one `gh pr view`", §5.2's restatement, and §6's surfaces row are amended on this plan's PR, each dated and
+    naming its entry.
+  - **Numbers.** D-8294 to D-8314 are defined in the plan. One more number was issued with the block and is unused.
+  - **Next.** The operator approves the plan as written, as an item. Then the plan lands and run 1661 is dispatched.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2742,8 +2794,10 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   is `docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`. Deploy: ccrc's updater carries the
   server and the skill text. A server older than 5g ignores `intents` and its `200` names none, which a coordinator
   reads as no hold taken (D-8086). Stage 5's §10 count is read by hand two weeks after the rollout (D-8088).
-- **5h is next.** Its run, 1661, is open at `planned`. Its plan is still to be written, against `main` at `12ce1ba7`
-  or later. The plan takes the items carried to 5h, review 1660's A1 and A2 among them, and first measures why some
-  merge notices stay silent.
+- **5h is next.** Its run, 1661, is open at `planned`. Its plan is written
+  (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314) and awaits the
+  operator's approval as written. The silent merge notices are measured: a close-before-sweep race, and a failing
+  project sweep (Decisions, 2026-11-11 16:15). The plan takes the items carried to 5h, review 1660's A1 and A2
+  among them.
 - **5h to 5k follow in order**, each planned against `main` as it then stands. The fleet box runs 5c, which 5h reads
   (v0.0.926, measured 2026-11-03; Decisions, 2026-11-03 06:27).
