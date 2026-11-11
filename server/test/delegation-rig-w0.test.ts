@@ -196,6 +196,13 @@ describe('the rig\'s W0 stubs (W0 Task 3)', () => {
     expect(JSON.parse(fs.readFileSync(log, 'utf8').trim())).toMatchObject({ event: 'SessionStart', source: 'clear' });
   }, 60_000);
 
+  it('emit-context --tag-source puts the payload\'s source inside both canaries, so each start is told apart in a request', () => {
+    const t = JSON.parse(run('emit-context.mjs', ['--event', 'SessionStart', '--chars', '200', '--tag-source'], '{"source":"compact"}'))
+      .hookSpecificOutput.additionalContext as string;
+    expect(t.length).toBe(200);
+    expect(t.startsWith('W0-HEAD-200-compact-') && t.endsWith('-compact-W0-TAIL-200')).toBe(true);
+  }, 60_000);
+
   it('precompact-refuse blocks auto and passes manual', () => {
     expect(runRc('precompact-refuse.mjs', '{"trigger":"auto"}')).toBe(2);
     expect(runRc('precompact-refuse.mjs', '{"trigger":"manual"}')).toBe(0);

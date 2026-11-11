@@ -134,3 +134,56 @@ coordinators renew by a fresh start too, until a measurement exists.
 - **The subagent model has a force variant**, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, which the documentation says beats
   a per-call `model`.
 - **The cron tools are session-scoped**, restored on `--resume`; none is durable across the process.
+
+## The anchor and its carriers (Task 4: W0-01 to W0-04), measured 2026-11-11
+
+Every run below applied its launch: the emitter's log has a line for each start, and the first main request after it
+carries the emitter's head canary. Requests were read from the mock's dumps (`reqs/`). One rig fact first: 2.1.322's
+system prompt no longer opens with the mock's default main-thread marker ("You are an interactive agent"), so the mock
+files its main requests as subagent requests unless `MOCK_MAIN_MARKER` names both prompt shapes. Every W0 run set it
+(`You are (an interactive agent|an agent working with the user|Claude Code)`); the delegation corpus matches on
+`tools` and is not affected.
+
+**W0-01, the hook's cap (rig, 2.1.312 and 2.1.322, identical).** A SessionStart emitter of N characters, the next main
+request read for both canaries:
+
+| Scenario | Text | Head canary | Tail canary | Spilled |
+|---|---|---|---|---|
+| `ov-hook-cap-9951` | 9,951 ASCII | yes | yes | no |
+| `ov-hook-cap-10000` | 10,000 ASCII | yes | yes | no |
+| `ov-hook-cap-10001` | 10,001 ASCII | yes | **no** | yes: a `<persisted-output>` block, "Output too large", the saved file's path, and a "Preview (first …)" of exactly 2,000 characters |
+| `ov-hook-cap-12000` | 12,000 ASCII | yes | no | yes, the same 2,000-character preview |
+| `ov-hook-cap-wide-6000` | 6,000 two-byte characters (about 12,000 bytes) | yes | yes | no |
+| `ov-hook-cap-pair` | two commands of 6,000 each on one event (12,000 in all) | both | both | no |
+
+**Answer:** whole up to and including 10,000 JavaScript characters; counted in characters, not bytes; counted per hook
+command, not per event. **Outcome: the slot stands** (`ANCHOR_CARD_MAX_CHARS` = 1,500 and the pinned sum of 9,951 fit
+one command under the cap). Because the cap is per command, a second SessionStart hook does not eat into ccrc's
+budget; the per-command cap is what W1a pins. Only the tail canary proves delivery: the head survives in the preview.
+
+**W0-02, the start sources (rig, both builds, identical).** `ov-sources`, an emitter of 200 characters tagging its
+text with the payload's `source`:
+
+| Start | `source` the hook saw | Its context in the next main request |
+|---|---|---|
+| launch | `startup` | yes |
+| `/compact` | `compact` | yes, in the first request after the compaction (beside the "This session is being continued" summary) |
+| `relaunch {"mode":"fresh"}` (no `--resume`) | `startup` | yes |
+| `relaunch {"mode":"fork"}` (`--resume <sid> --fork-session`) | **`fork`** | yes, after the resumed history (which still carries the earlier start's text) |
+
+With the corpus's `clear` and `resume` (Task 1), every documented source is measured. **Outcome: a fork reports a
+word of its own, `fork`, so the refusal line keys on it** (not on the transcript's continued-in pointer), and no
+source drops its context, so the card needs no nudge for any source. A fresh start reports `startup`: the anchor
+cannot tell a fresh renewal from a first launch by `source` alone, so the generation is minted by the server's own
+record of the renewal, as §3.3.11 already has it.
+
+**W0-03, the workspace memory file (rig, both builds, identical).** `ov-carriers`: a `CLAUDE.md` holding
+`W0-CONST-CANARY` in the fixture repo. The canary is in the first main request, in the first request after `/clear`,
+in both compaction requests, and in the first request after `/compact`. **Outcome: present after both, as designed**
+(C38 stands).
+
+**W0-04, the per-prompt hook (rig, both builds, identical).** In `ov-carriers` a UserPromptSubmit emitter of 600
+characters arrived whole (both canaries) with each of the three prompts, including the one after `/clear` and the one
+after `/compact`. A second UserPromptSubmit hook with `timeout: 3` that sleeps 8 s before emitting never logged a
+line, and no text of it reached any request; the prompt went ahead after the timeout. **Outcome: delivered, and the
+late one drops its output, as designed** (the per-prompt delta stays in W1a).
