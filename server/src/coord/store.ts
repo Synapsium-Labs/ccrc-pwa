@@ -6141,22 +6141,28 @@ export class CoordStore {
     }
   }
 
-  /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
+  /** The notice-count read (§11), which also serves the case lane (D-8230: one window read, no second): every
+   *  `run_events` row at or after `since`, each naming its event id and run id, unordered (the counts are order-free,
    *  and an `ORDER BY id` would invite a rowid scan on a database that never sees ANALYZE). It plans a SEARCH on
    *  `run_events_by_at`, which `stall-settings-store.test.ts` pins. It spells no detail head: L1's
-   *  `stallNoticeCounts` classifies (`mail-stuck-decided-in-l1`'s discipline). `at` is CAST and proven (D-2545's
-   *  idiom), ALL-OR-FAILURE, the detail naming the column and no value; `detail` is CAST so a hand-edited non-text
+   *  `stallNoticeCounts` classifies (`mail-stuck-decided-in-l1`'s discipline). `id`, `runId` and `at` are CAST and proven
+   *  (D-2545's idiom), ALL-OR-FAILURE, the detail naming the column and no value; `detail` is CAST so a hand-edited non-text
    *  value arrives as its text, which no stall detail matches. A thrown statement is `{ ok: false }`, never a throw. */
   stallObservationsSince(since: number): StallObservationsRead {
     try {
       const rows = this.db.prepare(
-        'SELECT CAST(at AS TEXT) AS atText, CAST(detail AS TEXT) AS detail FROM run_events WHERE at >= ?',
-      ).all(since) as unknown as { atText: string; detail: string | null }[];
+        'SELECT CAST(id AS TEXT) AS idText, CAST(runId AS TEXT) AS runIdText, CAST(at AS TEXT) AS atText, '
+        + 'CAST(detail AS TEXT) AS detail FROM run_events WHERE at >= ?',
+      ).all(since) as unknown as { idText: string; runIdText: string; atText: string; detail: string | null }[];
       const out: StallObservationRow[] = [];
       for (const r of rows) {
+        const id = persistedInt(r.idText, 'run_events id');
+        if (!id.ok) return { ok: false, detail: id.detail };
+        const runId = persistedInt(r.runIdText, 'run_events runId');
+        if (!runId.ok) return { ok: false, detail: runId.detail };
         const at = persistedInt(r.atText, 'run_events at');
         if (!at.ok) return { ok: false, detail: at.detail };
-        out.push({ at: at.value, detail: r.detail });
+        out.push({ eventId: id.value, runId: runId.value, at: at.value, detail: r.detail });
       }
       return { ok: true, rows: out };
     } catch (err) {
