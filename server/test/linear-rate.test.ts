@@ -525,7 +525,7 @@ describe('the proxy spends the slot\'s proxy lane, keyed by the attributed sessi
     expect(proxy.calls).toHaveLength(LINEAR_SESSION_BUDGET.callsPerMinute + 1);
   });
 
-  it('ids of ninety neighbours give at most the slot\'s 1,700 proxy calls an hour; a title lookup and a refresh still run', async () => {
+  it('ids of ninety neighbours give at most the slot\'s 1,400 proxy calls an hour; a title lookup and a refresh still run', async () => {
     const clock = { now: T0 };
     proxy = await proxyRig({ via: 'direct', clock: () => clock.now });
     await seedSlot(proxy.ccrcDir, 'a');

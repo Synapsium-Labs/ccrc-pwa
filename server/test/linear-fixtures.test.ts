@@ -1,8 +1,9 @@
 // The recorded Linear fixtures (#1444, D-7684's FX act, D-7743; spec 2026-10-31 §4.1, §6.7).
 //
 // `fixtures/linear/` holds one file per answer the FX capture recorded from Linear on 2026-11-02, scrubbed to the
-// fixture vocabulary (README.md there says what was replaced and what was kept), plus TWO constructed answers, the
-// rate-limited one and the link mutation's (D-8141), whose file names say so. This file holds three things of them:
+// fixture vocabulary (README.md there says what was replaced and what was kept), plus the constructed answers, whose
+// file names say so: the rate-limited one, the link mutation's (D-8141), and the hierarchy documents' 21 and the
+// project-status directory page (D-8180), each awaiting its recording. This file holds three things of them:
 //
 //   1. EVERY FILE PARSES, and is one record of the capture's shape: the request it sent and the answer it got, the
 //      raw body equal to the parsed one, the request body equal to the document and variables it names.
@@ -42,9 +43,9 @@ const HIERARCHY_FILE: Readonly<Record<keyof typeof LINEAR_HIERARCHY_DOCUMENTS, s
 const HIERARCHY_CONSTRUCTED = Object.values(HIERARCHY_FILE).sort().map((n) => `${n}-constructed.json`);
 
 describe('every fixture parses, one capture record each', () => {
-  it('holds the recorded set and the two constructed answers', () => {
+  it('holds the recorded set and the constructed answers', () => {
     // 31 recorded answers (the capture's cleanup and cleanup-verify calls are not kept), the constructed 429, the
-    // constructed link mutation (D-8141) the 21 constructed hierarchy answers and the constructed project-status page (D-8180).
+    // constructed link mutation (D-8141), the 21 constructed hierarchy answers and the constructed project-status page (D-8180).
     expect(FILES).toHaveLength(55);
     expect(FILES.filter((f) => f.includes('constructed'))).toEqual(
       ['directory-project-statuses-page-1-constructed.json', 'error-429-ratelimited-constructed.json',
@@ -75,10 +76,13 @@ describe('every merged document has a fixture, byte for byte', () => {
   /** THE ONE EXCEPTION to "recorded before it lands" (D-8141): the link mutation was written when no session may call
    *  Linear, so its fixture is constructed from the schema. Remove this row when `mutation-attachment-link-url.json` is
    *  recorded; the test below it fails the day both exist, so the exception cannot outlive the recording. */
-  const AWAITING_RECAPTURE: Readonly<Record<string, string>> = {
-    link: 'mutation-attachment-link-url-constructed.json',
+  const AWAITING_RECAPTURE: Readonly<Record<string, readonly string[]>> = {
+    link: ['mutation-attachment-link-url-constructed.json'],
     // The hierarchy documents (D-8180): constructed until FX2 records them. Each row leaves when its recording lands.
-    ...Object.fromEntries(Object.entries(HIERARCHY_FILE).map(([k, n]) => [k, `${n}-constructed.json`])),
+    ...Object.fromEntries(Object.entries(HIERARCHY_FILE).map(([k, n]) => [k, [`${n}-constructed.json`]])),
+    // The project statuses document has a second constructed answer, the directory's page (Task 1.4): it leaves with
+    // the row, so FX2's recording retires both files.
+    projectStatuses: [`${HIERARCHY_FILE.projectStatuses}-constructed.json`, 'directory-project-statuses-page-1-constructed.json'],
   };
   const constructedFor = (doc: string): string[] =>
     [...RECORDS.entries()].filter(([f, r]) => r.document === doc && f.includes('constructed')).map(([f]) => f);
@@ -86,7 +90,15 @@ describe('every merged document has a fixture, byte for byte', () => {
   it.each(Object.entries(LINEAR_DOCUMENTS))('LINEAR_DOCUMENTS.%s', (name, doc) => {
     const waiting = AWAITING_RECAPTURE[name];
     if (waiting === undefined) expect(recorded(doc)).not.toEqual([]);
-    else expect(constructedFor(doc)).toContain(waiting);
+    else expect(constructedFor(doc).sort()).toEqual([...waiting].sort());
+  });
+
+  it('every constructed answer to a merged document is named by its recapture row, so a recording retires it', () => {
+    // The 429 is the one constructed answer to no LINEAR_DOCUMENTS entry: it constructs an error, not a document.
+    const named = new Set(Object.values(AWAITING_RECAPTURE).flat());
+    const documents = new Set<string>(Object.values(LINEAR_DOCUMENTS));
+    const loose = [...RECORDS.entries()].filter(([f, r]) => f.includes('constructed') && documents.has(r.document) && !named.has(f));
+    expect(loose.map(([f]) => f)).toEqual([]);
   });
 
   it('the recapture exception holds only while the document has no recording', () => {
