@@ -41,9 +41,10 @@ const pwaRoot = path.resolve(here, '..', '..', 'pwa');
 const req = createRequire(import.meta.url);
 const TSC = path.resolve(path.dirname(req.resolve('typescript')), '..', 'bin', 'tsc');
 
-// pwa pins `typescript ~6.0.2`; server/agent pin `^7.0.2` — different majors,
-// not just different patch levels (measured: 6.0.3 vs 7.0.2 installed today).
-// `cwd` alone does NOT make `TSC` above check pwa under pwa's own compiler:
+// pwa pins `typescript ~7.0.2` (D-8288; 6.0.3 until then); server/agent pin
+// `^7.0.2` — the same major today, but each package's own pin, so they can part
+// again on any bump. `cwd` alone does NOT make `TSC` above check pwa under pwa's
+// own compiler:
 // TS 7's `tsc` entrypoint is a thin shim that shells out to a native binary
 // resolved via `@typescript/typescript-<platform>`, and that resolution is
 // anchored to `getExePath.js`'s OWN location inside `typescript/lib/`, not to
@@ -53,7 +54,8 @@ const TSC = path.resolve(path.dirname(req.resolve('typescript')), '..', 'bin', '
 // `npm run build` and CI's `Typecheck` step never run. `PWA_TSC` resolves
 // `typescript` from pwa's own package.json instead, so the binary that
 // actually runs is the one under `pwa/node_modules` (verified: `--version`
-// there reports 6.0.3, matching pwa's pin).
+// there reports pwa's installed version, matching pwa's pin; the case below
+// checks it).
 const pwaReq = createRequire(pathToFileURL(path.join(pwaRoot, 'package.json')).href);
 const PWA_TSC = path.resolve(path.dirname(pwaReq.resolve('typescript')), '..', 'bin', 'tsc');
 
