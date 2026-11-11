@@ -92,6 +92,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'a review run names the coordinator of the run it reviews: one run row\'s claimant against the request\'s, no session is asked about' },
   { file: 'server/src/coord/openRun.ts', text: 'x !== c.b.claimedBy',
     why: 'drops the opener itself from claimantsOfSession\'s answer (a self-claimed run is admitted, D-3012): the binding is decided in claimantsOf' },
+  { file: 'server/src/coord/planRunFacts.ts', text: 'r.run.claimedBy === claimedBy',
+    why: 'the claimant of the ONE run that holds a ticket against the claimant of this open request (D-8181): a retried open of the same claimant sees its own planned run\'s ticket as free; no session is asked which run is its' },
   { file: 'server/src/coord/dispatchDecide.ts', text: 'r.id === f.sessionId',
     why: 'a lookup of a REGISTRY record by its id, to measure the wrapper and identity of the session: no run is read' },
   { file: 'server/src/coord/landingWrites.ts', text: 'c.claimedBy === command.setBy',

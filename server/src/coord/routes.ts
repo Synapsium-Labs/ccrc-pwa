@@ -142,6 +142,8 @@ import {
 } from '../../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
+import { planStorePort } from './planStore.js';
+import { planFactsOf } from './planRunFacts.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -1540,6 +1542,8 @@ export function registerCoordRoutes(
         return r.content === '' ? { kind: 'none' } : { kind: 'measured', project: r.content };
       },
       sessionMark: (s) => sessionMarkOf(s),
+      // D-8181: the plan facts (`planGate`), read through the plan port, or over the coord handle where a build has none.
+      plan: (slug) => planFactsOf(deps.plan ?? planStorePort(coord.db), coord, slug, String(body.claimedBy)),
     });
     if (!pre.ok) return sendOpenRunRefusal(reply, pre.refusal);
     const { open, home: homeVerdict } = pre;
@@ -1581,7 +1585,7 @@ export function registerCoordRoutes(
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
       ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
-      coordProject, unattributed: open.unattributed });
+      coordProject, unattributed: open.unattributed, ticket: open.ticket });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,

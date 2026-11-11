@@ -337,7 +337,7 @@ describe('Linear team key and the template PR (D-8147)', () => {
 
   it('a clone with a team key saves it after the add', async () => {
     const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({
-      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false },
     });
     const p = props();
     mount(p);
@@ -363,7 +363,7 @@ describe('Linear team key and the template PR (D-8147)', () => {
 
   it('a failed template act shows the fixed sentence, never the box\'s stderr', async () => {
     vi.spyOn(api, 'saveLinking').mockResolvedValue({
-      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false },
     });
     vi.spyOn(api, 'openTemplatePr').mockRejectedValue(new ApiError(502, { ok: false, error: 'template-failed', stderr: 'pr-template: push failed for ccrc/linking-template' }));
     mount(props());
@@ -378,7 +378,7 @@ describe('Linear team key and the template PR (D-8147)', () => {
 
   it('the template box runs the template act after the add and reports it in the toast', async () => {
     vi.spyOn(api, 'saveLinking').mockResolvedValue({
-      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false },
     });
     const open = vi.spyOn(api, 'openTemplatePr').mockResolvedValue({ ok: true, url: 'https://github.com/example/repo/pull/3' });
     mount(props());
@@ -394,7 +394,7 @@ describe('Linear team key and the template PR (D-8147)', () => {
 
   it('a repository not read yet says when to open the template from Settings', async () => {
     vi.spyOn(api, 'saveLinking').mockResolvedValue({
-      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown' },
+      ok: true, linking: { teamKey: 'KEY', override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false },
     });
     vi.spyOn(api, 'openTemplatePr').mockRejectedValue(new ApiError(409, { ok: false, error: 'repo-unmeasured' }));
     mount(props());

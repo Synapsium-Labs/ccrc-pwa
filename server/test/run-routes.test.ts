@@ -187,7 +187,7 @@ const openApp = async (
   const dbPath = path.join(home, '.ccrc', 'coord.db');
   const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const base = testDeps(home, run);
-  const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
+  const app = legacyOpens(await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } }), coord.db);
   return { app, coord };
 };
 
@@ -353,7 +353,8 @@ describe('POST /api/runs', () => {
     expect(res.json()).toEqual({
       ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS, detail,
     });
-    expect(w.coord.programs()).toEqual([]);
+    // Only the legacy programme the open's incidental seed made (D-8181): the refused open added no run.
+    expect(w.coord.programs().map((p) => p.slug)).toEqual(['build4']);
     expect(okRuns(w.coord.runs({ includeClosed: true }))).toEqual([]);
     expect(calls).toEqual([]);
   });
@@ -372,7 +373,8 @@ describe('POST /api/runs', () => {
       error: 'hold-invalid',
       detail: 'generated run id is not a positive safe integer',
     });
-    expect(w.coord.programs()).toEqual([]);
+    // Only the legacy programme the open's incidental seed made (D-8181): the refused open added no run.
+    expect(w.coord.programs().map((p) => p.slug)).toEqual(['unsafe-id']);
     expect(okRuns(w.coord.runs({ includeClosed: true }))).toEqual([]);
     expect(calls).toEqual([]);
   });
@@ -4702,6 +4704,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
 import { landingLineAct, landingVerdict, renderDequeueBrief, renderMergedBrief, landingAsk } from '../src/coord/landing.js';
 import type { PrLandingLine } from '../src/prstate.js';
 import { DONE_REFUSAL_CODES } from '../../shared/api.js';
+import { legacyOpens } from './helpers/plan.js';
 
 describe('an opted-in project: the lineage through the run routes (landing order wave 4)', () => {
   let app: FastifyInstance | undefined;

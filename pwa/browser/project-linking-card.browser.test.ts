@@ -29,7 +29,7 @@ const NOW = Date.now();
 const LONG_NAME = 'a-project-with-a-deliberately-long-name-that-has-to-wrap-on-a-phone-screen';
 
 const wire = (over: Partial<ProjectLinkingWire>): ProjectLinkingWire => ({
-  teamKey: 'KEY', override: null, mode: 'private',
+  teamKey: 'KEY', override: null, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false,
   measured: { state: 'measured', visibility: 'private', slug: 'owner/repo', template: 'absent', at: NOW - 3 * 3_600_000 },
   ...over,
 });

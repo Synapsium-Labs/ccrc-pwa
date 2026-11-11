@@ -68,7 +68,7 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
     const db = openCoordDb(plantedBefore('ccrc-mig-ledgers-open-'));
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
     expect(db.prepare('SELECT claimedBy, state FROM runs').all()).toEqual([{ claimedBy: 'lane-a', state: 'working' }]);
-    expect(db.prepare('SELECT slug, title FROM programs').all()).toEqual([{ slug: 'prog-a', title: 'Prog a' }]);
+    expect(db.prepare('SELECT slug, title FROM programs WHERE slug <> \'linear-sync\'').all()).toEqual([{ slug: 'prog-a', title: 'Prog a' }]);
     db.close();
   });
 
@@ -94,7 +94,8 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
       ['pr', 'INTEGER', 0, null, 0], ['mergedAt', 'INTEGER', 0, null, 0]]);
     const programs = colsOf(db, 'programs');
     // The definition of done is a later entry's column (D-8126; its own pin is the describe below).
-    expect(programs.slice(-4)).toEqual([
+    // The plan model's six columns come after it (D-8181, migration 59; its own pin is plan-store.test.ts).
+    expect(programs.slice(-10, -6)).toEqual([
       ['specPath', 'TEXT', 0, null, 0], ['inShort', 'TEXT', 0, null, 0], ['inShortAt', 'INTEGER', 0, null, 0],
       ['doneWhen', 'TEXT', 0, null, 0]]);
     db.close();
@@ -130,7 +131,7 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
       const db = openCoordDb(p);
       expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/reading it as-is and migrating nothing/);
       expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION + 1 });
-      expect(db.prepare('SELECT slug, state FROM programs').all()).toEqual([{ slug: 'prog-a', state: 'active' }]);
+      expect(db.prepare('SELECT slug, state FROM programs WHERE slug <> \'linear-sync\'').all()).toEqual([{ slug: 'prog-a', state: 'active' }]);
       db.close();
     } finally {
       warn.mockRestore();
@@ -173,7 +174,7 @@ describe('programs.doneWhen is one nullable column and nothing else (D-8126)', (
     alone.close();
     const db = openCoordDb(p);
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
-    expect(db.prepare('SELECT slug, title FROM programs').all()).toEqual([{ slug: 'prog-a', title: 'Prog A' }]);
+    expect(db.prepare('SELECT slug, title FROM programs WHERE slug <> \'linear-sync\'').all()).toEqual([{ slug: 'prog-a', title: 'Prog A' }]);
     db.close();
   });
 });

@@ -103,7 +103,7 @@ export function capReaderDefinitions(root: string = REPO): CapReaderDefinitionSi
 export interface CapReaderCallSite extends CensusSite { readonly guarded: boolean }
 
 /** Every call of `_api_server_cap` in `ccd/ccrc-api` outside the generated regions (comment lines skipped, a definition
- *  line not a call), each `guarded` when the same line names `$claimant` BEFORE the call, or tests `"$key" == 'goals.show'` or `'calls.record'` (D-8126) (the claimant-row test; it
+ *  line not a call), each `guarded` when the same line names `$claimant` BEFORE the call, or tests `"$key" == 'goals.show'` or `'calls.record'` (D-8126) or `"$key" == plan.*` (the plan door, D-8181) (the claimant-row test; it
  *  was `$family`, the row's fifth field, from Q3j until Q3l removed that field, D-7324). At Q3h's base: 0; 0 at Q3i,
  *  exactly 1 guarded and 0 unguarded at Q3j, and still at Q3l. This census, not a runtime probe, is the proof that no other row reads
  *  the cap file (D-7339). */
@@ -118,8 +118,9 @@ export function capReaderCalls(root: string = REPO): CapReaderCallSite[] {
     if (/^\s*#/.test(text) || inside(spans, start)) return;
     const call = /\b_api_server_cap\b(?!\s*\(\))/.exec(text);
     if (call === null) return;
-    // The claimant test, or the goals read's or the call record's row test (D-8126): either must come on the line BEFORE the call.
-    const guard = /\$\{?claimant\b|"\$key" == '(?:goals\.show|calls\.record)'/.exec(text);
+    // The claimant test, or the goals read's or the call record's row test (D-8126), or the plan rows' family test (D-8181): either
+    // must come on the line BEFORE the call.
+    const guard = /\$\{?claimant\b|"\$key" == (?:'(?:goals\.show|calls\.record)'|plan\.\*)/.exec(text);
     out.push({ file: CLIENT, line: i + 1, text, guarded: guard !== null && guard.index < call.index });
   });
   return out;

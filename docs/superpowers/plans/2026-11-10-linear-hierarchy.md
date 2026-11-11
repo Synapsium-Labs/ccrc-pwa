@@ -109,6 +109,14 @@ number from `POST /api/ledger/deviations`.
       open issues unmappable. Presence plays no part in the migration's rules.
     - **The migration creates the structure it declares,** as move rows with `before` null, so *Put back* cancels it
       from the move record alone.
+  - **Further departures, from wave 2's build:**
+    - **An epic is done only with something finished in it.** `epicIsDone` adds to §4.1's rule (no checkpoint `open`,
+      no ticket `open` or `started`) that at least one checkpoint is `met` or one ticket `done`. An epic declared empty
+      would otherwise close the moment it is put, and an epic with everything dropped is dropped, not finished.
+    - **A `done` epic still takes a run and is reopened by it.** `epicAdmitsRun` admits every epic but a dropped one,
+      so a later run in a wave a `done` epic lists (a retry, or a wave after its checkpoints were met) opens, and
+      `attachTicketInTx` sets the epic back to `active` once every refusal is behind it. The design names no state a
+      settled epic returns to.
 - **D-8180 (2026-11-10)** — linear-hierarchy-w1-proxy: wave 1, the proxy additions: the hierarchy documents and the
   ccrc operation rows, the ccrc actor in the write policy and the journal, the `sync` and `migration` rate lanes, the
   directory's status types and `statusOfType` (unsent until wave 3), and the server-internal caller `runCcrcOp`.

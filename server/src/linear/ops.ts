@@ -728,6 +728,9 @@ export function withLinearProvenance(text: string): string {
   return text === '' ? LINEAR_PROVENANCE_LINE : `${text}\n\n${LINEAR_PROVENANCE_LINE}`;
 }
 
+/** One text through the `linear-egress` profile, for a writer that stores text a later sync sends to Linear (the plan routes, D-8181). */
+export const linearEgressText = (text: string): string => redactShapedCount('linear-egress', text).text;
+
 /**
  * The text a call sends to Linear, made ready to leave the fleet (§5.3, §5.4): every outbound field (`search.text`,
  * a title, a description, a comment body) through the `linear-egress` profile (`coord/redact.ts`, which reads the

@@ -12,6 +12,8 @@ import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../share
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
 import type { CallRow, NewCall } from './coordCalls.js';
+import * as planStore from './planStore.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
@@ -287,6 +289,7 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
   | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds'; by: string }
+  | { refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable'; by?: undefined }
   | HoldReasonRefusal;
 
 /** A fresh run's exact id is known only after its INSERT. Throwing this private
@@ -296,6 +299,12 @@ class OpenRunHoldRefused extends Error {
   constructor(readonly refusal: HoldReasonRefusal) {
     super(refusal.detail);
   }
+}
+
+/** D-8181: thrown inside `openRun`'s transaction when the plan facts re-checked at the insert no longer hold, so the run
+ *  insert rolls back with the programme row and the typed refusal is answered (the `OpenRunHoldRefused` idiom). */
+class OpenRunPlanRefused extends Error {
+  constructor(readonly refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable') { super(refused); }
 }
 
 export type AdvanceResult =
@@ -1921,6 +1930,9 @@ export class CoordStore {
      *  carry the client that sends it, so it was accepted unattributed and is
      *  journaled here (migration 22). Absent is `false`. */
     unattributed?: boolean;
+    /** D-8181: the plan ticket this work run attaches to, in the same transaction that inserts it (`attachTicketInTx`
+     *  re-checks the plan facts). Absent: a review run, or a programme with no plan that does not require one. */
+    ticket?: planStore.OpenRunTicket | null;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -1978,6 +1990,11 @@ export class CoordStore {
                 detail: 'reused run id is not a positive safe integer',
               };
           if (!hold.ok) return hold;
+          // D-8181: a retried open attaches only when the run has no ticket yet, so it never makes a second one.
+          if (input.ticket != null) {
+            const attached = planStore.attachTicketInTx(this.db, id, input.ticket, Date.now());
+            if (!attached.ok) return { refused: attached.refused };
+          }
           return {
             id,
             program: input.program,
@@ -2031,6 +2048,10 @@ export class CoordStore {
               detail: 'generated run id is not a positive safe integer',
             };
         if (!hold.ok) throw new OpenRunHoldRefused(hold);
+        if (input.ticket != null) {
+          const attached = planStore.attachTicketInTx(this.db, id, input.ticket, now);
+          if (!attached.ok) throw new OpenRunPlanRefused(attached.refused);
+        }
         return {
           id,
           program: input.program,
@@ -2040,6 +2061,7 @@ export class CoordStore {
       });
     } catch (err) {
       if (err instanceof OpenRunHoldRefused) return err.refusal;
+      if (err instanceof OpenRunPlanRefused) return { refused: err.refused };
       throw err;
     }
   }
@@ -2905,6 +2927,7 @@ export class CoordStore {
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, now, from, to, causedBy, detail ?? null);
     this.settleEndRequests(runId, from, to, causedBy, detail, now);
+    planStore.onRunAdvancedInTx(this.db, runId, from, to, now);   // D-8181: the run's ticket and epic follow it, in this transaction
     return { ok: true as const, from, to };
   }
 
@@ -5336,8 +5359,9 @@ export class CoordStore {
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {
-    const rows = this.db.prepare('SELECT slug, title, state FROM programs ORDER BY slug')
-      .all() as { slug: string; title: string; state: string }[];
+    // D-8181: the reserved `linear-sync` row (migration 59) is the sync's own item home, not a programme anyone runs.
+    const rows = this.db.prepare('SELECT slug, title, state FROM programs WHERE slug <> ? ORDER BY slug')
+      .all(LINEAR_SYNC_PROGRAMME) as { slug: string; title: string; state: string }[];
     // D-8: read through the guard, never a cast — the same rule `run()` below
     // holds for `RunState`.
     return rows.map((r) => ({ slug: r.slug, title: r.title, state: isProgramState(r.state) ? r.state : 'unknown' }));
@@ -7750,7 +7774,8 @@ export class CoordStore {
     return tx(this.db, () => {
       const now = Date.now();
       this.db.prepare(
-        'INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?) ' +
+        // D-8181: a rebuilt programme is a legacy one, so it opens runs with no plan (`planRequired` 0).
+        'INSERT INTO programs (slug, title, createdAt, state, planRequired) VALUES (?, ?, ?, ?, 0) ' +
         'ON CONFLICT(slug) DO NOTHING',
       ).run(input.ledger.slug, input.ledger.title, now, 'active');
 
