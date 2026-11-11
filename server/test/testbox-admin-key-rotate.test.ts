@@ -27,6 +27,7 @@ const BOXFAKE = join(REPO, 'server', 'test', 'fixtures', 'testbox-admin-akbox.sh
 const SCANFAKE = join(REPO, 'server', 'test', 'fixtures', 'testbox-admin-ssh.sh');
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 const HAS_KEYGEN = spawnSync('bash', ['-c', 'command -v ssh-keygen'], { encoding: 'utf8' }).status === 0;
+const HAS_FLOCK = spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0;
 const ADDR = '10.0.0.9';
 const SRC_ADDR = '192.0.2.5';
 const SRC = '. "$1" || exit 90; shift; CCD_OS=linux; ';
@@ -385,5 +386,19 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin key-revoke (D-8337)', () => {
     expect(existsSync(g.key)).toBe(true);
     expect(calls(g)).toEqual([]);
     expect(readFileSync(g.state, 'utf8')).toContain(`address=${ADDR}`);
+  });
+});
+
+describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK)('key-rotate and key-revoke wait for no act (D-8337)', () => {
+  it('each is busy while a long act holds the lock, and touches neither the key nor the box', () => {
+    for (const sub of ['key-rotate', 'key-revoke']) {
+      const h = fixture();
+      connected(h);
+      const before = readFileSync(h.key);
+      const r = sh(h, SRC + `exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; _tba_main ${sub} --from pwa`, [VERB]);
+      expect(json(r), sub).toEqual({ ok: false, code: 'busy' });
+      expect(readFileSync(h.key).equals(before), sub).toBe(true);
+      expect(calls(h), sub).toEqual([]);
+    }
   });
 });
