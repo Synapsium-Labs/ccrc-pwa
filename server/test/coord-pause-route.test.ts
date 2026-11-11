@@ -300,8 +300,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/roll-idle',
     // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).
     '/api/testbox/switch',
-    // D-8289: the operator's Capture again on a failed Claude Code build: it moves the trusted set's queue, so no machine lane
-    // and no session may call it: session-gated, no box token.
+    // D-8289: Capture again on a failed Claude Code build, an act for the operator alone: it moves the queue of the trusted set, so
+    // no machine lane calls it: session-gated, no box token.
     '/api/testbox/builds/capture',
     // D-7902: Settings › Automation › Stop leftovers, the reclaim-pause argument: the operator arms it, no machine lane.
     '/api/coord/pane-scope-stop',
