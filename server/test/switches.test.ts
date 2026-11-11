@@ -23,8 +23,9 @@ import { isMarkerState } from '../../shared/api.js';
 import { sqlStatementsIn, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import {
   ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
-  DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
+  DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, STALL_WATCH_DISABLED_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
+import { STALL_MARKERS, stallArmingOf } from '../src/coord/stall.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
  *  private constant on the base, so it has no export to read; the switchboard rows below hold it. */
@@ -85,9 +86,11 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(TESTBOX_REMOTE_LIVE_MARKER).toBe('testbox-remote-live');
     // D-7902: the deliberate stop's pane-scope stop switch, written by a ccd verb behind a route, read by ccd's own act.
     expect(PANE_SCOPE_STOP_LIVE_MARKER).toBe('pane-scope-stop-live');
+    // D-8339: the stall watch's kill switch, a hand-touched row with no writer in the tree; the Stall watch card names it.
+    expect(STALL_WATCH_DISABLED_MARKER).toBe('stall-watch-disabled');
     // Delegation PR7 (W5-X1): the adoption marker; since PR8b (D-8112) written by a ccd verb behind a route, read by the lane.
     expect(DELEGATION_ADOPT_MARKER).toBe('delegation-adopt');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER].sort());
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, STALL_WATCH_DISABLED_MARKER].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
@@ -198,8 +201,24 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 42 rows: 35 markers and 7 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([42, 35, 7]);
+  it('the table has 43 rows: 36 markers and 7 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078; stall-watch-disabled, D-8339)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([43, 36, 7]);
+  });
+
+  it('D-8339: stall-watch-disabled is C5\'s, hand-only, absent means the watch runs, and the stall lane reads the same constant', () => {
+    const row = SWITCHES[STALL_WATCH_DISABLED_MARKER];
+    expect(row.storage).toEqual({ marker: 'stall-watch-disabled' });
+    expect(row.owner).toBe('C5');
+    expect(row.writer).toBe('hand-only');
+    expect(row.default).toMatch(/^absent: /);
+    expect(row.meaning).toMatch(/stall watch/);
+    // The lane's own marker list holds the row's name, and its arming reads the row's constant.
+    expect(STALL_MARKERS).toContain(STALL_WATCH_DISABLED_MARKER);
+    expect(stallArmingOf([STALL_WATCH_DISABLED_MARKER]).disabled).toBe(true);
+    expect(stallArmingOf([]).disabled).toBe(false);
+    expect(readSwitches([STALL_WATCH_DISABLED_MARKER])[STALL_WATCH_DISABLED_MARKER]).toBe('set');
+    expect(readSwitches([])[STALL_WATCH_DISABLED_MARKER]).toBe('clear');
+    expect(readSwitches(null)[STALL_WATCH_DISABLED_MARKER]).toBe('unmeasurable');
   });
 
   it('D-8077: runs-expire-never-started is C5\'s, absent means shadow, and nothing in the tree writes it', () => {
