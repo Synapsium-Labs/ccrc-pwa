@@ -44,9 +44,10 @@ const STATUS: StatusAnswer = {
   ],
   failedKeys: [{ repository: 'project-a', package: 'agent', key: 'dddddddddddddddddddd', exit: 1, attempts: 3, nextAttempt: '2026-10-30T13:00:00Z' }],
   heldRunUsers: [], repositories: [{ name: 'project-a', mirrorPath: '/srv/mirrors/project-a.git' }],
-  // D-8290: long probe names, so the line has to wrap at phone width.
+  // D-8290: long probe names, so the line has to wrap at phone width. The running one is 64 characters with no hyphen
+  // (the longest name the status reader accepts), so it offers the browser no break point and has to wrap anywhere.
   probes: {
-    enabled: true, refusal: null, running: 'harness-session-continuity-resume-after-swap',
+    enabled: true, refusal: null, running: 'harness_session_continuity_resume_after_swap_with_a_long_tail_xx',
     waiting: ['harness-permission-prompt-routing-child', 'harness-rate-limit-menu-never-typed-into'], day: '2026-10-30', used: 4, perDay: 10,
   },
 };

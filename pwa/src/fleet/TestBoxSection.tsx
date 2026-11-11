@@ -310,7 +310,7 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
           ))}
         </dl>
       )}
-      {box?.probes !== undefined && <p className="settings-note" data-testbox="probes">{T.probes(box.probes)}</p>}
+      {box?.probes !== undefined && <p className="settings-note testbox-probes" data-testbox="probes">{T.probes(box.probes)}</p>}
       {band === 'phone' ? (
         <TestboxFold summary={T.details}>{versions}{rest}{pristine}</TestboxFold>
       ) : (
