@@ -25,6 +25,8 @@ import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkingAll, linkingOf, recordReading, setLinking } from './linkingStore.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
+import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
+import type { CaseDue } from './practiceCases.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
@@ -5185,6 +5187,11 @@ export class CoordStore {
   reviewRounds(workRunId: number): number {
     return this.reviewCapStates([workRunId]).get(workRunId)?.rounds ?? 0;
   }
+
+  /** Overlord §10.5: each case signature's newest openedAt (`practiceCasesStore.ts`). */
+  practiceCaseNewest(): PracticeCaseNewestRead { return practiceCaseNewest(this.db); }
+  /** Overlord §10.5: the table's one writer, a compare-and-set open (`practiceCasesStore.ts`). */
+  openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {

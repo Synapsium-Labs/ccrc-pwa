@@ -709,9 +709,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[51] (project_linking, D-8147)
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
     // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
-    // and MIGRATIONS[54] (coordinator_calls, D-8126).
-    expect(COORD_SCHEMA_VERSION).toBe(55);
-    expect(MIGRATIONS.length).toBe(55);
+    // and MIGRATIONS[54] (coordinator_calls, D-8126)
+    // and MIGRATIONS[55] (practice_cases, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(56);
+    expect(MIGRATIONS.length).toBe(56);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -792,8 +793,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[51] (project_linking, D-8147)
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
     // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
-    // and MIGRATIONS[54] (coordinator_calls, D-8126); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(55);
+    // and MIGRATIONS[54] (coordinator_calls, D-8126)
+    // and MIGRATIONS[55] (practice_cases, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(56);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -831,6 +833,44 @@ describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: practice_cases, the case lane\'s table (Overlord §10.5)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE practice_cases')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  const ENTRY = /^CREATE TABLE practice_cases \([^;]*\);\s*CREATE INDEX practice_cases_by_signature ON practice_cases\(signature, openedAt\);$/;
+  it('a NEW TABLE and an INDEX, nothing on an existing table: ten columns, the id its key', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(56);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('practice_cases')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['signature', 'TEXT', 1, 0], ['state', 'TEXT', 1, 0], ['mode', 'TEXT', 1, 0],
+      ['cause', 'TEXT', 1, 0], ['occurrences', 'INTEGER', 1, 0], ['programmes', 'TEXT', 1, 0], ['evidence', 'TEXT', 1, 0],
+      ['windowFrom', 'INTEGER', 1, 0], ['openedAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and one index and alters nothing')
+      .toMatch(ENTRY);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(56);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM practice_cases').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
     db.close();
   });
