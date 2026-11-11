@@ -41,6 +41,13 @@ export function caseWindowFrom(now: number): number {
   return now - CASE_WINDOW_MS;
 }
 
+/** Where the lane starts reading observation rows: two windows back, so that every episode's earliest row is in the
+ *  decider's input. `casesDue` takes an episode's time from its earliest row it is given, and still counts only the
+ *  episodes whose earliest row is at or after `caseWindowFrom(now)`. */
+export function caseReadFrom(now: number): number {
+  return caseWindowFrom(now) - CASE_WINDOW_MS;
+}
+
 /** The runs of the rows this build can read, each once, ascending. */
 export function caseRunIds(rows: readonly CaseObservationRow[]): number[] {
   const ids = new Set<number>();

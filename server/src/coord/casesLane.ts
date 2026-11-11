@@ -2,19 +2,20 @@
 // It reads the observation window, the newest case of each signature and the programme of each run, asks the decider
 // what is due and records each case through the store's compare-and-set. It sends no mail, no push and no feed row.
 import type { WatcherCoordPort } from './ports.js';
-import { caseRunIds, caseWindowFrom, casesDue } from './practiceCases.js';
+import { caseReadFrom, caseRunIds, casesDue } from './practiceCases.js';
 
 /** The four store members the pass reaches, declared by this consumer, so a test can hand a small fake. */
 export type CasesCoord = Pick<WatcherCoordPort, 'stallObservationsSince' | 'practiceCaseNewest' | 'run' | 'openPracticeCase'>;
 export interface CasesPassDeps { readonly coord: CasesCoord; readonly now: () => number }
 export interface CasesPassResult { readonly opened: number; readonly superseded: number; readonly unread: 'observations' | 'cases' | null }
 
-/** One pass. A failed read is answered in `unread` and warned (`ccrc-server: cases: <which> read failed: <detail>`),
+/** One pass. It reads the observation rows from `caseReadFrom(now)`, two windows back, so a consumed episode whose first
+ *  rung has slid out of the window is never revived by a later rung. A failed read is answered in `unread` and warned (`ccrc-server: cases: <which> read failed: <detail>`),
  *  and the next pass tries again. A thrown write rejects the pass, and the lane row's warnKey reports it. */
 export async function casesPass(deps: CasesPassDeps): Promise<CasesPassResult> {
   const { coord } = deps;
   const now = deps.now();
-  const obs = coord.stallObservationsSince(caseWindowFrom(now));
+  const obs = coord.stallObservationsSince(caseReadFrom(now));
   if (!obs.ok) {
     console.warn(`ccrc-server: cases: observations read failed: ${obs.detail}`);
     return { opened: 0, superseded: 0, unread: 'observations' };

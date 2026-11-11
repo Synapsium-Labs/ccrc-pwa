@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CASE_CAUSES, CASE_MIN_OCCURRENCES, CASE_MIN_PROGRAMMES, CASE_MODE, CASE_WINDOW_MS, caseRunIds, caseWindowFrom, casesDue,
+  CASE_CAUSES, CASE_MIN_OCCURRENCES, CASE_MIN_PROGRAMMES, CASE_MODE, CASE_WINDOW_MS, caseReadFrom, caseRunIds, caseWindowFrom, casesDue,
 } from '../src/coord/practiceCases.js';
 import type { CaseDue, CaseObservationRow, CasesInput } from '../src/coord/practiceCases.js';
 import { stallDetail } from '../src/coord/stall.js';
@@ -167,5 +167,15 @@ describe('the whole domain', () => {
       const extra: CaseObservationRow = { eventId: 999, runId: 1, at: NOW, detail: 'stall:new-arm:1:5' };
       expect(casesDue({ ...input, rows: [...input.rows, extra] })).toEqual(casesDue(input));
     }
+  });
+});
+
+describe('caseReadFrom', () => {
+  it('reads two windows back, so every episode keeps its earliest row in the decider input', () => {
+    expect(caseReadFrom(NOW)).toBe(NOW - 2 * CASE_WINDOW_MS);
+  });
+  it('an episode with rung 1 at FROM - 1 and rung 2 at FROM + 1 is not counted: its time is FROM - 1', () => {
+    const rows = [row(11, 1, FROM - 1, 'dead', 5, 1), row(12, 1, FROM + 1, 'dead', 5, 2), row(13, 2, FROM + 5, 'dead'), row(14, 3, FROM + 6, 'dead')];
+    expect(casesDue({ rows, programOf: progs([1, 2, 3], 'prog-a'), newestCaseAt: new Map(), now: NOW })).toEqual([]);
   });
 });

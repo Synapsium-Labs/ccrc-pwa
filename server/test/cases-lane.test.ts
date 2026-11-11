@@ -73,6 +73,22 @@ describe('the case lane pass', () => {
   });
 });
 
+describe('the read window', () => {
+  it('an episode whose first rung slides out of the window is not counted again after its case', async () => {
+    const s = store();
+    const runId = open(s, 'prog-a', ++wave);
+    const ins = (at: number, rung: 1 | 2): void => {
+      s.db.prepare("INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, 'working', 'working', 'operator', ?)")
+        .run(runId, at, stallDetail('live', 'quiet', rung, 0));
+    };
+    ins(T - H, 1); ins(T + H, 2);
+    episode(s, T - 3 * H); episode(s, T - 2 * H);
+    expect((await casesPass({ coord: s, now: () => T })).opened).toBe(1);
+    episode(s, T + 14 * 86_400_000 - H, 'prog-b');
+    expect(await casesPass({ coord: s, now: () => T - H + 14 * 86_400_000 + 60_000 })).toEqual({ opened: 0, superseded: 0, unread: null });
+  });
+});
+
 describe('a failing store', () => {
   const seed = (): CoordStore => {
     const s = store();
