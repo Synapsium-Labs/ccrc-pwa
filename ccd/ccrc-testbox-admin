@@ -102,15 +102,16 @@ _tba_phases() {   # <sub> -> its phases in order, one per line; nothing for a su
 }
 
 # The sub table: one row per field, `flag grammar required repeatable`. Nothing for a sub that takes no field; rc 1 for
-# a word that is no sub.
+# a word that is no sub. `required` is 1, 0, or `+`: one of the sub's `+` fields must be given (D-8336: a settings call changes a
+# value, resets one to its default, or both).
 _tba_fields() {   # <sub>
   case "${1-}" in
     status|read|probe|preflight|cancel|repair|apply-release) ;;
     key) printf '%s\n' '--address address 1 0' '--port port 0 0' '--login user 0 0' '--source address 0 0' ;;
     pin) printf '%s\n' '--fingerprint fingerprint 1 0' ;;
     connect) printf '%s\n' '--set setting-box 1 1' '--repo repo 1 1' ;;
-    settings-fleet) printf '%s\n' '--set setting-fleet 1 1' ;;
-    settings-box) printf '%s\n' '--set setting-box 1 1' '--when-idle true 0 0' ;;
+    settings-fleet) printf '%s\n' '--set setting-fleet + 1' '--unset unset-fleet + 1' ;;
+    settings-box) printf '%s\n' '--set setting-box + 1' '--unset unset-box + 1' '--when-idle true 0 0' ;;
     parity) printf '%s\n' '--pr pr 0 1' ;;
     disconnect) printf '%s\n' '--replace true 0 0' ;;
     *) return 1 ;;
@@ -257,14 +258,24 @@ _tba_parse() {
         _tba_word_ok "$v" && _tb_shape "$k" "$v" || { TBA_BAD="$name"; return 1; }
         [ -z "${keys[set:$k]:-}" ] || { TBA_BAD="$name"; return 1; }
         keys[set:$k]=1 ;;
+      unset-fleet|unset-box)
+        # D-8336: Reset to default names a key the settings map could name (no pairing setting on the box), each once, never
+        # one this call also sets.
+        if [ "$gram" = unset-fleet ]; then _tba_in "$val" "${TBA_FLEET_KEYS[@]}" || { TBA_BAD="$name"; return 1; }
+        else { _tba_in "$val" "${TBA_BOX_KEYS[@]}" && ! _tba_in "$val" "${TBA_BOX_PAIRING_LOCKED[@]}"; } || { TBA_BAD="$name"; return 1; }; fi
+        [ -z "${keys[set:$val]:-}" ] || { TBA_BAD="$name"; return 1; }
+        keys[set:$val]=1 ;;
       *) TBA_BAD="$name"; return 1 ;;
     esac
     TBA_WORDS+=("$w")
   done
+  local any_need=0 any_got=0
   while read -r flag gram req rep; do
     [ -n "$flag" ] || continue
     [ "$req" != 1 ] || [ "${cnt[$flag]:-0}" -ge 1 ] || { TBA_BAD="$flag"; return 1; }
+    [ "$req" != + ] || { any_need=1; any_got=$(( any_got + ${cnt[$flag]:-0} )); }
   done <<<"$rows"
+  [ "$any_need" = 0 ] || [ "$any_got" -ge 1 ] || { TBA_BAD="$(printf '%s\n' "$rows" | awk '$3 == "+" { print $1; exit }')"; return 1; }
   return 0
 }
 
@@ -1129,7 +1140,8 @@ _tba_ccrc_env_names() {
     _ccrc_knob "$1" '' file || exit 0
     [ "$KNOB_FROM" = file ] || [ "$KNOB_FROM" = empty ] )
 }
-# `_tba_overlay_put KEY=VALUE...` — set the keys in the overlay, keeping every other line, by a temp and a rename at 0600.
+# `_tba_overlay_put KEY=VALUE|KEY...` — set the keys in the overlay, keeping every other line, by a temp and a rename at 0600. A bare
+# KEY (Reset to default, D-8336) only takes the key's line out, so the reader answers its default.
 _tba_overlay_put() {
   local kv line k tmp keep=() drop=" "
   for kv in "$@"; do drop="$drop${kv%%=*} "; done
@@ -1145,17 +1157,19 @@ _tba_overlay_put() {
   _tmp_guard "$tmp"
   ( umask 077
     { for line in ${keep[@]+"${keep[@]}"}; do printf '%s\n' "$line"; done
-      for kv in "$@"; do printf '%s\n' "$kv"; done; } >"$tmp" ) 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+      for kv in "$@"; do [[ "$kv" != *=* ]] || printf '%s\n' "$kv"; done; } >"$tmp" ) 2>/dev/null || { rm -f -- "$tmp"; return 1; }
   chmod 600 "$tmp" 2>/dev/null && mv -f -- "$tmp" "$CCRC_TESTBOX_OVERLAY_FILE" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
 }
 
-# `_tba_cx_args <word>...` -> CX_SET (key to value), CX_ORDER, CX_REPOS (base64url rows), CX_NAMES; rc 1 on a repeated row name.
+# `_tba_cx_args <word>...` -> CX_SET (key to value), CX_ORDER, CX_UNSET (the keys a Reset to default takes out, D-8336),
+# CX_REPOS (base64url rows), CX_NAMES; rc 1 on a repeated row name.
 _tba_cx_args() {
-  declare -gA CX_SET=(); CX_ORDER=(); CX_REPOS=(); CX_NAMES=()
+  declare -gA CX_SET=(); CX_ORDER=(); CX_UNSET=(); CX_REPOS=(); CX_NAMES=()
   local w k nm n mp
   for w in "$@"; do
     case "$w" in
       --set=*) w="${w#--set=}"; k="${w%%=*}"; CX_SET[$k]="${w#*=}"; CX_ORDER+=("$k") ;;
+      --unset=*) CX_UNSET+=("${w#--unset=}") ;;
       --repo=*)
         w="${w#--repo=}"
         nm="$(_tba_row_name "$w")" || return 1
@@ -1635,13 +1649,18 @@ _tba_run_read() {
 # old overlay back. The answer is what the reader says now (a path, an address or a list as set or not set), never the text sent.
 _tba_run_settings-fleet() {
   local w kv k v bak="" had=0 rc=0 first=1 out="" row
-  local -a pairs=() fkeys=() named=() bad=()
+  local -a pairs=() fkeys=() named=() bad=() resets=()
   for w in "$@"; do
     case "$w" in
       --set=*)
         kv="${w#--set=}"; k="${kv%%=*}"; v="${kv#*=}"
         { _tba_in "$k" "${TBA_FLEET_KEYS[@]}" && _tb_shape "$k" "$v"; } || { _tba_refuse box-value-refused "$k"; return 0; }
         fkeys+=("$k"); pairs+=("$kv") ;;
+      --unset=*)
+        # Reset to default (D-8336): the key's line leaves the overlay, and the reader answers the key's own default.
+        k="${w#--unset=}"
+        _tba_in "$k" "${TBA_FLEET_KEYS[@]}" || { _tba_refuse box-value-refused "$k"; return 0; }
+        fkeys+=("$k"); pairs+=("$k"); resets+=("$k") ;;
     esac
   done
   [ "${#fkeys[@]}" -gt 0 ] || { _tba_refuse box-value-refused; return 0; }
@@ -1657,7 +1676,10 @@ _tba_run_settings-fleet() {
     echo "$PROG: cannot write the overlay" >&2; return 1
   fi
   for k in "${fkeys[@]}"; do
-    if _ccrc_knob "$k" '' file && [ "$KNOB_FROM" = file ] && _tb_shape "$k" "$KNOB"; then :; else bad+=("$k"); fi
+    # A reset key must no longer be read from a file; a set key must be read from one, in its shape.
+    if _tba_in "$k" ${resets[@]+"${resets[@]}"}; then
+      if _ccrc_knob "$k" '' file && [ "$KNOB_FROM" != file ]; then :; else bad+=("$k"); fi
+    elif _ccrc_knob "$k" '' file && [ "$KNOB_FROM" = file ] && _tb_shape "$k" "$KNOB"; then :; else bad+=("$k"); fi
   done
   if [ "${#bad[@]}" -gt 0 ]; then
     if [ "$had" = 1 ]; then mv -f -- "$bak" "$CCRC_TESTBOX_OVERLAY_FILE" 2>/dev/null || rc=1; else rm -f -- "$bak" "$CCRC_TESTBOX_OVERLAY_FILE"; fi
@@ -1704,6 +1726,10 @@ _tba_runs_busy() {
   case "$st" in down|unreachable|off) return 1 ;; esac
   return 0
 }
+# `_tba_box_default <KEY>` -> the box key's declared default, as `_tb_box_table` declares it (whatever file the box mode reads).
+_tba_box_default() {
+  ( _tb_load box >/dev/null 2>&1 || :; printf '%s' "${TBK_DEF[$1]-}" )
+}
 # What may stop a settings-box before it starts: TBA_CODE. The card sends only the keys the operator changed, and the whole
 # file is the box's current one with those keys put in (`_tba_cx_merge`, read on the box when the act runs), so here only
 # the sent keys are held: each is its shape (the parse), a path below a base and a user that is not root.
@@ -1712,22 +1738,32 @@ _tba_sb_precheck() {
   _tba_ra_precheck || return 1
   CX_MIN_REPOS=0
   _tba_cx_args "$@" || { TBA_CODE=box-value-refused; return 1; }
-  for k in "${CX_ORDER[@]}"; do
+  for k in ${CX_ORDER[@]+"${CX_ORDER[@]}"}; do
     _tba_in "$k" "${TBA_BOX_PAIRING_LOCKED[@]}" && { TBA_CODE=box-value-refused; TBA_CODE_KEYS="$k"; return 1; }
     _tb_key_policy "$k" "${CX_SET[$k]}" || { TBA_CODE=box-value-refused; TBA_CODE_KEYS="$k"; return 1; }
+  done
+  # A reset key (D-8336) takes its declared default, held to the same policy as a sent value: the root and the repository
+  # directory default to `~/` paths the installer refuses as root's (it has no reader's home), so those have no reset.
+  for k in ${CX_UNSET[@]+"${CX_UNSET[@]}"}; do
+    _tba_in "$k" "${TBA_BOX_PAIRING_LOCKED[@]}" && { TBA_CODE=box-value-refused; TBA_CODE_KEYS="$k"; return 1; }
+    _tb_key_policy "$k" "$(_tba_box_default "$k")" || { TBA_CODE=box-value-refused; TBA_CODE_KEYS="$k"; return 1; }
   done
   CX_BOXENV="$(umask 077 && mktemp "${TMPDIR:-/tmp}/ccrc-tba-box.XXXXXXXX")" || { TBA_CODE=box-value-refused; return 1; }
   _tmp_guard "$CX_BOXENV"
 }
 # `_tba_cx_merge <the box file's current text>` — CX_BOXENV becomes that text with each sent key put in: a key already there is
-# replaced where it stands (a repeat of it dropped), a new one is appended; every other line stays as it was. CX_NEWV holds
-# the merged file's values by key. rc 1 when the text is at the read's cap (it may be cut) or CX_BOXENV cannot be written.
+# replaced where it stands (a repeat of it dropped), a new one is appended; a reset key's lines are taken out (D-8336), so the
+# box's reader answers its default; every other line stays as it was. CX_NEWV holds the merged file's values by key. rc 1 when
+# the text is at the read's cap (it may be cut) or CX_BOXENV cannot be written.
 _tba_cx_merge() {
-  local line k seen=" " out=()
+  local line k seen=" " out=() drop=" "
   declare -gA CX_NEWV=()
   [ "${#1}" -lt 65000 ] || return 1
+  for k in ${CX_UNSET[@]+"${CX_UNSET[@]}"}; do drop="$drop$k "; done
   while IFS= read -r line || [ -n "$line" ]; do
-    if [[ "$line" =~ ^(CCRC_TESTBOX_[A-Z0-9_]+)= ]] && [ -n "${CX_SET[${BASH_REMATCH[1]}]+x}" ]; then
+    if [[ "$line" =~ ^(CCRC_TESTBOX_[A-Z0-9_]+)= ]] && [[ "$drop" == *" ${BASH_REMATCH[1]} "* ]]; then
+      continue
+    elif [[ "$line" =~ ^(CCRC_TESTBOX_[A-Z0-9_]+)= ]] && [ -n "${CX_SET[${BASH_REMATCH[1]}]+x}" ]; then
       k="${BASH_REMATCH[1]}"
       [[ "$seen" == *" $k "* ]] || { out+=("$k=${CX_SET[$k]}"); seen="$seen$k "; }
     else
@@ -1735,7 +1771,7 @@ _tba_cx_merge() {
       [[ "$line" =~ ^(CCRC_TESTBOX_[A-Z0-9_]+)=(.*)$ ]] && CX_NEWV[${BASH_REMATCH[1]}]="${BASH_REMATCH[2]}"
     fi
   done <<<"$1"
-  for k in "${CX_ORDER[@]}"; do
+  for k in ${CX_ORDER[@]+"${CX_ORDER[@]}"}; do
     [[ "$seen" == *" $k "* ]] || { out+=("$k=${CX_SET[$k]}"); seen="$seen$k "; }
     CX_NEWV[$k]="${CX_SET[$k]}"
   done

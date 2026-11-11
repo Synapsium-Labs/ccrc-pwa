@@ -5,7 +5,10 @@
 //   * phone (360, 390): one column; the controls full width, one per row, every one at least `--tap-min` tall; the last act one
 //     line; the settings families folded; the confirm sheet keeps Confirm and Cancel reachable at 360 by 667;
 //   * laptop (1280, 1470): the controls at the end of the state line, the settings a two-column form, the last act under the state;
-//   * wide (1920): the settings' two groups side by side and the ledger's last ten acts beside the state.
+//   * wide (1920): the settings' two groups side by side and the ledger's last ten acts beside the state;
+//   * every band: a row a settings file sets carries Reset to default (D-8336) under its input, full width and at least
+//     `--tap-min` tall on a phone, its own width at the field's start from the laptop band, and its one-tap confirm keeps Confirm
+//     and Cancel reachable.
 // At every width nothing in the card or on the page overflows sideways, and every enabled text clears 4.5:1 on the ground it is
 // drawn on.
 //
@@ -106,6 +109,7 @@ interface Measured {
   families: { open: number; total: number; summaries: Box[] };
   fieldColumns: number;
   inputs: Box[];
+  resets: { key: string; button: Box; input: Box }[];
   overflowing: string[];
   contrast: { text: string; ratio: number }[];
 }
@@ -164,6 +168,10 @@ const measure = (el: Element): Measured => {
     },
     fieldColumns: new Set(opened.map((i) => Math.round(i.getBoundingClientRect().left))).size,
     inputs: opened.map(box),
+    resets: [...el.querySelectorAll<HTMLElement>('.testbox-settings [data-testbox="reset-default"]')].filter(shown).map((b) => {
+      const field = b.closest('[data-setting]')!;
+      return { key: field.getAttribute('data-setting') ?? '', button: box(b), input: box(field.querySelector('input')!) };
+    }),
     overflowing: [...el.querySelectorAll('*')]
       // A text field scrolls its own long value inside itself, as every input does; that is not the layout overflowing.
       .filter((e) => !(e instanceof HTMLInputElement) && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflowX !== 'visible')
@@ -276,33 +284,58 @@ describe.each(SKINS)('the connected test box card in %s', (skin) => {
             expect(Math.abs(three.groups[1]!.box.top - three.groups[0]!.box.top), 'side by side share a top').toBeLessThanOrEqual(1);
           }
 
-          // The confirm sheet: what is removed, Confirm and Cancel always reachable (360 by 667 on a phone).
-          if (width < 900) await page.setViewportSize({ width, height: 667 });
-          await card.locator('[data-testbox="disconnect"]').click();
-          const sheet = page.locator('[role="dialog"]');
-          await sheet.waitFor();
-          await page.waitForTimeout(500); // the sheet's rise settles
-          const sheetM = await sheet.evaluate((el) => {
-            const r = (e: Element | null): { top: number; bottom: number; left: number; right: number } | null => {
-              if (e === null) return null;
-              const b = e.getBoundingClientRect();
-              return { top: b.top, bottom: b.bottom, left: b.left, right: b.right };
-            };
-            return {
-              confirm: r(el.querySelector('[data-testbox="sheet-confirm"]')), cancel: r(el.querySelector('[data-testbox="sheet-cancel"]')),
-              h: window.innerHeight, w: window.innerWidth, scroll: el.scrollWidth - el.clientWidth,
-            };
-          });
-          await shot('4');
-          expect(sheetM.confirm, `${width}px: Confirm is in the sheet`).not.toBeNull();
-          expect(sheetM.cancel, `${width}px: Cancel is in the sheet`).not.toBeNull();
-          for (const b of [sheetM.confirm!, sheetM.cancel!]) {
-            expect(b.top, `${width}px: a sheet button is inside the viewport (top)`).toBeGreaterThanOrEqual(0);
-            expect(b.bottom, `${width}px: a sheet button is inside the viewport (bottom, ${sheetM.h} tall)`).toBeLessThanOrEqual(sheetM.h);
-            expect(b.left).toBeGreaterThanOrEqual(0);
-            expect(b.right).toBeLessThanOrEqual(sheetM.w);
+          // Reset to default (D-8336): on the two rows the box file sets, under the input; full width on a phone, its own width at
+          // the field's start from the laptop band; at least --tap-min tall at every band.
+          expect(three.resets.map((r) => r.key).sort(), `${width}px: Reset on the rows a file sets, and no other`).toEqual(['CCRC_TESTBOX_RUN_MEMORY_MAX', 'CCRC_TESTBOX_WORKERS']);
+          for (const r of three.resets) {
+            expect(r.button.height, `${width}px: ${r.key}'s Reset is at least --tap-min tall`).toBeGreaterThanOrEqual(three.tapMin - 0.5);
+            expect(r.button.top, `${width}px: ${r.key}'s Reset is under its input`).toBeGreaterThanOrEqual(r.input.bottom - 0.5);
+            expect(Math.abs(r.button.left - r.input.left), `${width}px: ${r.key}'s Reset starts where its input does`).toBeLessThanOrEqual(1);
+            if (width < 900) expect(Math.abs(r.button.width - r.input.width), `${width}px: ${r.key}'s Reset is full width`).toBeLessThanOrEqual(1);
+            else expect(r.button.width, `${width}px: ${r.key}'s Reset is its own width`).toBeLessThan(r.input.width);
           }
-          expect(sheetM.scroll, `${width}px: the sheet does not scroll sideways`).toBeLessThanOrEqual(0);
+
+          // Each confirm sheet: Confirm and Cancel always reachable (360 by 667 on a phone).
+          if (width < 900) await page.setViewportSize({ width, height: 667 });
+          const sheet = page.locator('[role="dialog"]');
+          const sheetOf = async (n: string): Promise<void> => {
+            await sheet.waitFor();
+            await page.waitForTimeout(500); // the sheet's rise settles
+            const sheetM = await sheet.evaluate((el) => {
+              const r = (e: Element | null): { top: number; bottom: number; left: number; right: number } | null => {
+                if (e === null) return null;
+                const b = e.getBoundingClientRect();
+                return { top: b.top, bottom: b.bottom, left: b.left, right: b.right };
+              };
+              return {
+                confirm: r(el.querySelector('[data-testbox="sheet-confirm"]')), cancel: r(el.querySelector('[data-testbox="sheet-cancel"]')),
+                h: window.innerHeight, w: window.innerWidth, scroll: el.scrollWidth - el.clientWidth,
+              };
+            });
+            await shot(n);
+            expect(sheetM.confirm, `${width}px, ${n}: Confirm is in the sheet`).not.toBeNull();
+            expect(sheetM.cancel, `${width}px, ${n}: Cancel is in the sheet`).not.toBeNull();
+            for (const b of [sheetM.confirm!, sheetM.cancel!]) {
+              expect(b.top, `${width}px, ${n}: a sheet button is inside the viewport (top)`).toBeGreaterThanOrEqual(0);
+              expect(b.bottom, `${width}px, ${n}: a sheet button is inside the viewport (bottom, ${sheetM.h} tall)`).toBeLessThanOrEqual(sheetM.h);
+              expect(b.left).toBeGreaterThanOrEqual(0);
+              expect(b.right).toBeLessThanOrEqual(sheetM.w);
+            }
+            expect(sheetM.scroll, `${width}px, ${n}: the sheet does not scroll sideways`).toBeLessThanOrEqual(0);
+          };
+          // Reset's one tap opens its confirm, which names the setting; Cancel closes it and sends nothing.
+          let posted = 0;
+          page.on('request', (q) => { if (q.method() === 'POST' && q.url().includes('/api/testbox/admin/')) posted += 1; });
+          await card.locator('[data-setting="CCRC_TESTBOX_WORKERS"] [data-testbox="reset-default"]').click();
+          await sheetOf('reset');
+          expect(await sheet.textContent(), `${width}px: the reset sheet names the setting`).toContain(T.resetWhat('CCRC_TESTBOX_WORKERS'));
+          expect(await sheet.locator('[data-testbox="sheet-confirm"]').textContent()).toBe(T.resetToDefault);
+          await sheet.locator('[data-testbox="sheet-cancel"]').click();
+          await sheet.waitFor({ state: 'hidden' });
+          expect(posted, `${width}px: Cancel sent nothing`).toBe(0);
+          // The disconnect sheet: what is removed.
+          await card.locator('[data-testbox="disconnect"]').click();
+          await sheetOf('4');
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

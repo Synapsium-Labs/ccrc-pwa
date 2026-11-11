@@ -324,6 +324,160 @@ describe('Settings', () => {
   });
 });
 
+describe('Reset to default (D-8336)', () => {
+  const resetOf = (key: string): HTMLElement | null => q(`[data-setting="${key}"] [data-testbox="reset-default"]`);
+  const confirmButton = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-testbox="sheet-confirm"]')!;
+  const FLEET_FILE_ROWS: BoxSettingRow[] = [...FLEET_ROWS, { key: 'CCRC_TESTBOX_DENY_GLOBS', state: 'ok', from: 'file' }];
+
+  it('shows on a row a settings file sets, and on no default, pairing, unmeasured or ccrc.env row', async () => {
+    fakeFleet();
+    await mount({ fleetRows: FLEET_FILE_ROWS });
+    await openSettings();
+    for (const key of ['CCRC_TESTBOX_WORKERS', 'CCRC_TESTBOX_RUN_MEMORY_MAX', 'CCRC_TESTBOX_BUDGET', 'CCRC_TESTBOX_DENY_GLOBS']) {
+      expect(resetOf(key), key).not.toBeNull();
+      expect(resetOf(key)!.textContent, key).toBe(T.resetToDefault);
+    }
+    // a default row has nothing to reset; a pairing row is Replace's; an unmeasured row is unknown
+    for (const key of ['CCRC_TESTBOX_RUNS', 'CCRC_TESTBOX_OS_MIRROR', 'CCRC_TESTBOX_QUEUE_LIMIT', 'CCRC_TESTBOX_LISTEN', 'CCRC_TESTBOX_ROOT']) {
+      expect(resetOf(key), key).toBeNull();
+    }
+  });
+
+  it('the root and the repository directory have no reset: their declared defaults are paths the installer refuses', async () => {
+    fakeFleet(connected({ boxSettings: [...BOX_ROWS, { key: 'CCRC_TESTBOX_ROOT', state: 'ok', from: 'file' }, { key: 'CCRC_TESTBOX_REPOS', state: 'ok', from: 'file' },
+      { key: 'CCRC_TESTBOX_TOOLS_DIR', state: 'ok', from: 'file' }] }));
+    await mount();
+    await openSettings();
+    expect(resetOf('CCRC_TESTBOX_ROOT')).toBeNull();
+    expect(resetOf('CCRC_TESTBOX_REPOS')).toBeNull();
+    expect(resetOf('CCRC_TESTBOX_TOOLS_DIR')).not.toBeNull();
+  });
+
+  it('one tap opens the confirm, Cancel sends nothing, and Confirm sends the key alone as the unset list to settings-box', async () => {
+    const f = fakeFleet();
+    f.box.on['settings-box'] = () => {
+      f.box.status = connected({ boxSettings: BOX_ROWS.map((r) => (r.key === 'CCRC_TESTBOX_WORKERS' ? { ...r, from: 'default' } as BoxSettingRow : r)), boxSettingsAt: 2 });
+      return { result: { act: 'a'.repeat(32) } };
+    };
+    await mount();
+    await openSettings();
+    await press(resetOf('CCRC_TESTBOX_WORKERS'));
+    expect(f.posts()).toHaveLength(0);
+    const text = sheet().textContent!;
+    expect(text).toContain(T.resetWhat('CCRC_TESTBOX_WORKERS'));
+    expect(text).toContain(T.resetBox);
+    // a run-shaping key says parity runs again
+    expect(text).toContain(T.parityAgain);
+    await press(document.querySelector<HTMLElement>('[data-testbox="sheet-cancel"]'));
+    expect(f.posts()).toHaveLength(0);
+    await press(resetOf('CCRC_TESTBOX_WORKERS'));
+    expect(confirmButton().textContent).toBe(T.resetToDefault);
+    await press(confirmButton());
+    expect(f.posts('settings-box')).toHaveLength(1);
+    expect(f.posts('settings-box')[0]!.body).toEqual({ fields: { unset: ['CCRC_TESTBOX_WORKERS'] } });
+    expect(f.posts('settings-fleet')).toHaveLength(0);
+    // the sheet closes, the card says the change is being applied, and the row reads what the box answered: its default
+    expect(document.querySelector('[data-testbox="sheet"]')).toBeNull();
+    expect(screen.getByText(T.applying)).toBeInTheDocument();
+    expect(q('[data-setting="CCRC_TESTBOX_WORKERS"] [data-testbox="setting-now"]')!.textContent).toBe(`2 (${T.shownDefault})`);
+    expect(resetOf('CCRC_TESTBOX_WORKERS')).toBeNull();
+  });
+
+  it('a key that shapes no run says nothing of parity; a typed edit of the key is dropped by its reset', async () => {
+    const f = fakeFleet();
+    f.box.on['settings-box'] = () => ({ result: { act: 'a'.repeat(32) } });
+    await mount({ fleetRows: FLEET_FILE_ROWS });
+    await openSettings();
+    typeIn(setting('CCRC_TESTBOX_BUDGET'), '45m');
+    await press(resetOf('CCRC_TESTBOX_BUDGET'));
+    expect(sheet().textContent).not.toContain(T.parityAgain);
+    expect(sheet().textContent).toContain(T.resetFleet);
+    await press(confirmButton());
+    expect(f.posts('settings-fleet')[0]!.body).toEqual({ fields: { unset: ['CCRC_TESTBOX_BUDGET'] } });
+    expect(setting('CCRC_TESTBOX_BUDGET').value).toBe('30m');
+    expect(q('[data-testbox="settings-save"]')).toBeDisabled();
+  });
+
+  it('a fleet reset goes to settings-fleet alone and asks the page to re-read its nodes', async () => {
+    const f = fakeFleet();
+    const onFleetChanged = vi.fn();
+    await mount({ fleetRows: FLEET_FILE_ROWS, onFleetChanged });
+    await openSettings();
+    await press(resetOf('CCRC_TESTBOX_BUDGET'));
+    await press(confirmButton());
+    expect(f.posts('settings-fleet')).toHaveLength(1);
+    expect(f.posts('settings-box')).toHaveLength(0);
+    expect(onFleetChanged).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(T.resetDone)).toBeInTheDocument();
+  });
+
+  it('a key ccrc.env sets has no reset: the refusal draws the row read-only, its Reset goes and the confirm is held', async () => {
+    const f = fakeFleet();
+    f.box.on['settings-fleet'] = () => ({ refuse: refused(409, 'testbox-admin-refused', { code: 'key-in-ccrc-env', keys: ['CCRC_TESTBOX_BUDGET'] }) });
+    await mount({ fleetRows: FLEET_FILE_ROWS });
+    await openSettings();
+    await press(resetOf('CCRC_TESTBOX_BUDGET'));
+    await press(confirmButton());
+    expect(sheet().textContent).toContain(TESTBOX_ADMIN_CODE_SENTENCE['key-in-ccrc-env']);
+    expect(confirmButton()).toBeDisabled();
+    await press(document.querySelector<HTMLElement>('[data-testbox="sheet-cancel"]'));
+    expect(setting('CCRC_TESTBOX_BUDGET')).toBeDisabled();
+    expect(resetOf('CCRC_TESTBOX_BUDGET')).toBeNull();
+    expect(f.posts('settings-fleet')).toHaveLength(1);
+  });
+
+  it('resetting the deny list asks for the step-up in the sheet, as changing it does', async () => {
+    const f = fakeFleet();
+    let first = true;
+    f.box.on['settings-fleet'] = () => (first ? (first = false, { refuse: refused(403, 'step-up-required') }) : undefined);
+    await mount({ fleetRows: FLEET_FILE_ROWS });
+    await openSettings();
+    await press(resetOf('CCRC_TESTBOX_DENY_GLOBS'));
+    await press(confirmButton());
+    expect(f.posts('settings-fleet')[0]!.body).toEqual({ fields: { unset: ['CCRC_TESTBOX_DENY_GLOBS'] } });
+    expect(document.querySelector('[data-step-up]')).not.toBeNull();
+    expect(confirmButton()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'a passphrase' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm with passphrase' }));
+    await settle();
+    await press(confirmButton());
+    expect(f.posts('settings-fleet')).toHaveLength(2);
+    expect(document.querySelector('[data-testbox="sheet"]')).toBeNull();
+  });
+
+  it('with runs in progress a box reset is applied when idle, and a runs-in-progress refusal offers it too', async () => {
+    const f = fakeFleet();
+    f.box.on['settings-box'] = () => ({ result: { act: 'a'.repeat(32) } });
+    await mount({ runsInProgress: 1 });
+    await openSettings();
+    await press(resetOf('CCRC_TESTBOX_RUN_MEMORY_MAX'));
+    expect(sheet().textContent).toContain(T.runsNote);
+    expect(confirmButton().textContent).toBe(T.applyWhenIdle);
+    await press(confirmButton());
+    expect(f.posts('settings-box')[0]!.body).toEqual({ fields: { unset: ['CCRC_TESTBOX_RUN_MEMORY_MAX'], whenIdle: true } });
+    cleanup();
+    const g = fakeFleet();
+    g.box.on['settings-box'] = () => ({ refuse: refused(409, 'testbox-admin-refused', { code: 'runs-in-progress' }) });
+    await mount();
+    await openSettings();
+    await press(resetOf('CCRC_TESTBOX_RUN_MEMORY_MAX'));
+    expect(confirmButton().textContent).toBe(T.resetToDefault);
+    await press(confirmButton());
+    expect(sheet().textContent).toContain(TESTBOX_ADMIN_CODE_SENTENCE['runs-in-progress']);
+    expect(confirmButton().textContent).toBe(T.applyWhenIdle);
+    g.box.on['settings-box'] = () => ({ result: { act: 'a'.repeat(32) } });
+    await press(confirmButton());
+    expect(g.posts('settings-box')[1]!.body).toEqual({ fields: { unset: ['CCRC_TESTBOX_RUN_MEMORY_MAX'], whenIdle: true } });
+  });
+
+  it('every Reset is held while an act runs', async () => {
+    fakeFleet(connected({ act: actState({ sub: 'repair' }) }));
+    await mount();
+    await openSettings();
+    expect(resetOf('CCRC_TESTBOX_WORKERS')).toBeDisabled();
+  });
+});
+
 describe('Repair and Apply release to box', () => {
   it('Repair sends one repair and shows its phases from the status', async () => {
     const f = fakeFleet();

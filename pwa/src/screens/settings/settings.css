@@ -272,6 +272,9 @@
 .testbox-manage[data-band='wide'] .testbox-manage-grid { grid-template-columns: minmax(0, 2.4fr) minmax(12rem, 1fr); align-items: start; column-gap: var(--pad-card); }
 .testbox-settings[data-band='laptop'] .testbox-form { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--pad-card); }
 .testbox-settings[data-band='wide'] .testbox-settings-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; column-gap: var(--pad-card); }
+/* A row's Reset to default (D-8336): full width under its input on a phone (the Button's own `full`), its own width at the start of
+   the field from the laptop band. */
+.testbox-settings:not([data-band='phone']) .testbox-reset { justify-self: start; }
 
 /* Security › Linear (#1444, spec §10.3's table). Layout only, but for the team chip, which sets its ink and its ground
    together. The band is the card's `data-band` (`LinearSection`'s one read of the desk and wide queries), so each band's

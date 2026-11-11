@@ -82,7 +82,7 @@ describe('the sub table', () => {
     expect(testboxAdminNeedsStepUp('settings-box', { settings: { CCRC_TESTBOX_DENY_GLOBS: '*.pem' } })).toBe(false);
   });
   it('settings-box takes no repository row: only a step-up Connect may put a command head on the fleet host\'s record', () => {
-    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-box'].fields).sort()).toEqual(['settings', 'whenIdle']);
+    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-box'].fields).sort()).toEqual(['settings', 'unset', 'whenIdle']);   // D-8336 adds the unset list
     refused('settings-box', { settings: { CCRC_TESTBOX_WORKERS: '2' }, repos: [ROW] });
     expect(build('connect', { settings: { CCRC_TESTBOX_WORKERS: '2' }, repos: [ROW] }).ok).toBe(true);
   });
@@ -301,6 +301,63 @@ describe('the argv builder', () => {
     expect(readTestboxRepoArg('a').ok).toBe(false);
     expect(readTestboxRepoArg(b64('not json')).ok).toBe(false);
     expect(readTestboxRepoArg(Buffer.from([0xff, 0xfe, 0x41]).toString('base64url')).ok).toBe(false);
+  });
+});
+
+describe('Reset to default: the settings subs take an unset list (D-8336)', () => {
+  it('settings-fleet and settings-box take settings, an unset list or both, and at least one of the two', () => {
+    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-fleet'].fields)).toEqual(['settings', 'unset']);
+    expect(Object.keys(TESTBOX_ADMIN_SUBS['settings-box'].fields)).toEqual(['settings', 'unset', 'whenIdle']);
+    for (const s of ['settings-fleet', 'settings-box'] as const) {
+      const fs = TESTBOX_ADMIN_SUBS[s].fields;
+      expect(fs['settings']!.required || fs['unset']!.required, s).toBe(false);
+      expect(fs['settings']!.anyOf && fs['unset']!.anyOf, s).toBe(true);
+      refused(s, {});
+      refused(s, { whenIdle: true });
+    }
+    // every other field of every sub is in no such group, and connect still requires its settings
+    for (const s of SUBS) {
+      for (const [name, fd] of Object.entries(TESTBOX_ADMIN_SUBS[s].fields)) {
+        if (s.startsWith('settings-') && (name === 'settings' || name === 'unset')) continue;
+        expect(fd.anyOf, `${s}.${name}`).toBe(false);
+      }
+    }
+    expect(TESTBOX_ADMIN_SUBS.connect.fields['settings']!.required).toBe(true);
+    refused('connect', { unset: ['CCRC_TESTBOX_WORKERS'], repos: [ROW] });
+  });
+  it('an unset list writes one --unset=KEY word per key, in the table\'s order, and rides beside settings', () => {
+    let r = build('settings-fleet', { unset: ['CCRC_TESTBOX_POLL', 'CCRC_TESTBOX_BUDGET'] });
+    expect(r.ok && r.argv).toEqual(['testbox-admin', 'settings-fleet', '--unset=CCRC_TESTBOX_BUDGET', '--unset=CCRC_TESTBOX_POLL']);
+    r = build('settings-box', { settings: { CCRC_TESTBOX_RUNS: '3' }, unset: ['CCRC_TESTBOX_OS_MIRROR'], whenIdle: true });
+    expect(r.ok && r.argv).toEqual(['testbox-admin', 'settings-box', '--set=CCRC_TESTBOX_RUNS=3', '--unset=CCRC_TESTBOX_OS_MIRROR', '--when-idle=true']);
+    // a key whose default is empty, which no --set word can carry, resets by the unset list
+    for (const k of ['CCRC_TESTBOX_OS_MIRROR', 'CCRC_TESTBOX_PROBE_CONFIG_DIR']) {
+      refused('settings-box', { settings: { [k]: '' } });
+      expect(build('settings-box', { unset: [k] }).ok, k).toBe(true);
+    }
+  });
+  it('the unset list is policed as the settings map is: the sub\'s own keys only, no pairing key, each once, never also set', () => {
+    for (const k of TESTBOX_FLEET_EDITABLE) expect(build('settings-fleet', { unset: [k] }).ok, k).toBe(true);
+    for (const k of TESTBOX_PAIRING_KEYS) refused('settings-fleet', { unset: [k] });
+    refused('settings-fleet', { unset: ['CCRC_TESTBOX_WORKERS'] });                        // a box key
+    for (const k of TESTBOX_BOX_KEYS.filter((x) => !TESTBOX_PAIRED_BOX_KEYS.includes(x))) expect(build('settings-box', { unset: [k] }).ok, k).toBe(true);
+    for (const k of TESTBOX_PAIRED_BOX_KEYS) refused('settings-box', { unset: [k] });
+    refused('settings-box', { unset: ['CCRC_TESTBOX_POLL'] });                             // a fleet key
+    for (const bad of [[], 'CCRC_TESTBOX_WORKERS', { CCRC_TESTBOX_WORKERS: true }, [1], [null], ['ccrc_testbox_workers'], ['CCRC_PORT'],
+      ['--force'], ['CCRC_TESTBOX_WORKERS', 'CCRC_TESTBOX_WORKERS'], ['__proto__']]) {
+      refused('settings-box', { unset: bad });
+    }
+    refused('settings-box', { settings: { CCRC_TESTBOX_WORKERS: '3' }, unset: ['CCRC_TESTBOX_WORKERS'] });
+    refused('settings-fleet', { settings: { CCRC_TESTBOX_POLL: '1m' }, unset: ['CCRC_TESTBOX_POLL'] });
+  });
+  it('resetting the deny list needs the step-up as changing it does; any other reset needs a session only', () => {
+    expect(testboxAdminNeedsStepUp('settings-fleet', { unset: ['CCRC_TESTBOX_DENY_GLOBS'] })).toBe(true);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { unset: ['CCRC_TESTBOX_POLL', 'CCRC_TESTBOX_DENY_GLOBS'] })).toBe(true);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { settings: { CCRC_TESTBOX_POLL: '1m' }, unset: ['CCRC_TESTBOX_DENY_GLOBS'] })).toBe(true);
+    expect(testboxAdminNeedsStepUp('settings-fleet', { unset: ['CCRC_TESTBOX_POLL'] })).toBe(false);
+    for (const bad of [{ unset: 'CCRC_TESTBOX_DENY_GLOBS' }, { unset: null }, { unset: { CCRC_TESTBOX_DENY_GLOBS: true } }]) {
+      expect(testboxAdminNeedsStepUp('settings-fleet', bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 });
 

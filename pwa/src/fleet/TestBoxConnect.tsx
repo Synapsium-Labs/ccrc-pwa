@@ -577,8 +577,10 @@ export function StateLine({ band, text, children }: { band: Band; text: string; 
   );
 }
 
-export function Field({ label, value, onChange, error, placeholder, now, disabled, footnote, setting }: {
+export function Field({ label, value, onChange, error, placeholder, now, disabled, footnote, setting, action }: {
   label: string; value: string; onChange: (v: string) => void; error: string | null; placeholder?: string;
+  /** A control of the row's own under its input (the connected card's Reset to default, D-8336). */
+  action?: ReactNode;
   /** What the setting reads now, beside its name (the connected card's settings). */
   now?: string;
   disabled?: boolean;
@@ -596,6 +598,7 @@ export function Field({ label, value, onChange, error, placeholder, now, disable
       <TextInput id={id} value={value} placeholder={placeholder} autoComplete="off" spellCheck={false} disabled={disabled}
         aria-invalid={error === null ? undefined : true} aria-describedby={error === null ? undefined : errId}
         onChange={(e) => onChange(e.target.value)} />
+      {action}
       {footnote !== undefined && footnote !== null && <p className="settings-note" data-testbox="ccrc-env-note">{footnote}</p>}
       {error !== null && <p id={errId} className={SETTINGS_AMBER_NOTE} role="status">{error}</p>}
     </div>
