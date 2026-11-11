@@ -263,6 +263,59 @@ describe('plan tickets and epics', () => {
       expect([started.statusCode, errorOf(started)]).toEqual([409, 'plan-runs-open']);
       expect(plan.planOf('prog-a').epics[0]!.state).toBe('planned');
     });
+
+    /** The final review's probe: e1 spans waves 1 and 2 with an unmet checkpoint, and its wave-1 run went dispatched, closing,
+     *  done. The run's ticket is `done` with its runId still set and the epic stays `active`: nothing holds the ticket now. */
+    const finishedWaveOne = async (): Promise<void> => {
+      await put({ home: 'project-a', epics: [epic('e1', [1, 2], { tickets: [{ key: 't1', kind: 'work', title: 't' }] }), epic('e2', [3])] });
+      const runId = hold();
+      for (const to of ['dispatched', 'closing', 'done'] as const) expect(coord.advance(runId, to, 'test').ok, to).toBe(true);
+      const e1 = plan.planOf('prog-a').epics[0]!;
+      expect([e1.state, e1.checkpoints[0]!.state, e1.tickets[0]!.state, e1.tickets[0]!.runId]).toEqual(['active', 'open', 'done', runId]);
+    };
+
+    it('a ticket whose run has finished is not held: ticket-move answers plan-bad-body (a done ticket), not plan-runs-open', async () => {
+      await finishedWaveOne();
+      const moved = await send('/api/programmes/prog-a/plan/tickets/move', { ticket: 't1', epic: 'e2' });
+      expect([moved.statusCode, errorOf(moved)]).toEqual([400, 'plan-bad-body']);
+      const dropped = await send('/api/programmes/prog-a/plan/tickets/move', { ticket: 't1', drop: { why: 'cut' } });
+      expect([dropped.statusCode, errorOf(dropped)]).toEqual([400, 'plan-bad-body']);
+    });
+
+    it('an epic whose only run has finished drops by epic-drop', async () => {
+      await finishedWaveOne();
+      const res = await send('/api/programmes/prog-a/plan/epics/drop', { epic: 'e1', why: 'cut' });
+      expect(res.statusCode).toBe(200);
+      expect(view(res).epics[0]!.state).toBe('dropped');
+    });
+
+    it('a put naming droppedWhy on an epic whose finished run left its ticket done drops it', async () => {
+      await finishedWaveOne();
+      const res = await put({ home: 'project-a', epics: [epic('e1', [1, 2], { droppedWhy: 'cut' }), epic('e2', [3])] });
+      expect(res.statusCode).toBe(200);
+      expect(view(res).epics[0]!.state).toBe('dropped');
+    });
+
+    it('a put naming droppedWhy refuses an epic whose ticket a planned run holds, or a started one, plan-runs-open, and drops nothing', async () => {
+      await put(TWO);
+      const runId = hold();
+      const dropPut = { home: 'project-a', epics: [epic('e1', [1], { droppedWhy: 'cut' }), epic('e2', [2])] };
+      const held = await put(dropPut);
+      expect([held.statusCode, errorOf(held)]).toEqual([409, 'plan-runs-open']);
+      expect(coord.advance(runId, 'dispatched', 'test').ok).toBe(true);
+      expect(plan.planOf('prog-a').epics[0]!.tickets[0]!.state).toBe('started');
+      const started = await put(dropPut);
+      expect([started.statusCode, errorOf(started)]).toEqual([409, 'plan-runs-open']);
+      expect(plan.planOf('prog-a').epics[0]!.state).not.toBe('dropped');
+    });
+
+    it('a put naming droppedWhy drops the epic with its open checkpoints and tickets, as epic-drop does', async () => {
+      await put(TWO);
+      const res = await put({ home: 'project-a', epics: [epic('e1', [1], { droppedWhy: 'cut' }), epic('e2', [2])] });
+      expect(res.statusCode).toBe(200);
+      const e1 = view(res).epics[0]!;
+      expect([e1.state, e1.checkpoints[0]!.state, e1.tickets[0]!.state]).toEqual(['dropped', 'dropped', 'dropped']);
+    });
   });
 
   it('text that leaves for Linear is masked where it is stored', async () => {

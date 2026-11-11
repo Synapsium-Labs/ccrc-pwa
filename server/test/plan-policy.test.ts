@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   diffPlan, epicForWave, epicIsDone, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
+  ticketIsHeld,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
@@ -137,6 +138,24 @@ describe('states', () => {
     expect(programmeEnd({ ...base, epics: [] })).toBeNull();
     expect(programmeEnd({ ...base, epics: [{ state: 'done' }], openTickets: 1 })).toBeNull();
     expect(programmeEnd({ ...base, planEnd: 'abandoned' })).toBe('abandoned');
+  });
+  it('ticketIsHeld: started, or open with a run (a planned run); a done ticket keeps its runId and is not held', () => {
+    expect(ticketIsHeld({ state: 'started', runId: 1 })).toBe(true);
+    expect(ticketIsHeld({ state: 'open', runId: 1 })).toBe(true);
+    expect(ticketIsHeld({ state: 'open', runId: null })).toBe(false);
+    expect(ticketIsHeld({ state: 'done', runId: 1 })).toBe(false);
+    expect(ticketIsHeld({ state: 'dropped', runId: 1 })).toBe(false);
+  });
+  it('diffPlan: a droppedWhy on an epic a run holds a ticket of is plan-runs-open; otherwise its open checkpoints and tickets drop with it', () => {
+    const cps = [{ id: 7, state: 'open' }, { id: 8, state: 'met' }];
+    const held = stored(storedEpic('e1', { checkpoints: cps, tickets: [{ id: 5, key: 't1', state: 'open', runId: 3 }] }));
+    const r = diffPlan(held, put(epic(1, { key: 'e1', droppedWhy: 'cut' })), ctx());
+    expect(r.ok ? null : r.word).toBe('plan-runs-open');
+    const free = stored(storedEpic('e1', { checkpoints: cps, tickets: [{ id: 5, key: 't1', state: 'open', runId: null }, { id: 6, key: 't2', state: 'done', runId: 2 }] }));
+    const d = diffPlan(free, put(epic(1, { key: 'e1', droppedWhy: 'cut' })), ctx());
+    if (!d.ok) throw new Error(d.word);
+    expect([d.changes.epics.drop, d.changes.checkpoints.drop, d.changes.tickets.drop])
+      .toEqual([[{ id: 1, why: 'cut' }], [{ id: 7, why: 'cut' }], [{ id: 5, why: 'cut' }]]);
   });
   it('epicForWave finds the live epic that lists the wave', () => {
     const es = [{ id: 1, waves: [1, 2], state: 'dropped' as const }, { id: 2, waves: [2, 3], state: 'active' as const }];

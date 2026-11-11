@@ -276,7 +276,8 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
     }
     if (e.droppedWhy !== undefined) {
       if (was === undefined) return refuse('plan-bad-body', `epic ${e.key} is new and cannot carry droppedWhy`);
-      changes.epics.drop.push({ id: was.id, why: e.droppedWhy });
+      const held = dropEpicInto(changes, was, e.droppedWhy);
+      if (held !== null) return held;
       continue;
     }
     if (was === undefined) {
@@ -357,7 +358,24 @@ export const epicAdmitsRun = (state: EpicState): boolean => state !== 'dropped';
 /** THE one definition of a ticket a run holds: `started`, or `open` with a `runId` (a `planned` run attaches its ticket at
  *  `runs open` and starts it only at dispatch). `runs open` refuses it `ticket-unavailable`; `plan ticket-move` and
  *  `plan epic-drop` refuse it `plan-runs-open`, so a planned run never dispatches into a moved or dropped ticket. */
-export const ticketIsHeld = (t: { state: TicketState; runId: number | null }): boolean => t.state === 'started' || t.runId !== null;
+export const ticketIsHeld = (t: { state: TicketState; runId: number | null }): boolean =>
+  t.state === 'started' || (t.state === 'open' && t.runId !== null);
+
+/** THE one epic drop, `plan epic-drop`'s and a put's `droppedWhy`: refused `plan-runs-open` while a run holds one of the
+ *  epic's tickets (`ticketIsHeld`), so neither door drops an epic a planned run would dispatch into; otherwise the epic, its
+ *  open checkpoints and its open tickets drop under the one reason, into `changes`. A `done` ticket keeps its runId and is
+ *  not held: its run has ended. */
+export function dropEpicInto(
+  changes: PlanChanges,
+  epic: { id: number; key: string; checkpoints: readonly { id: number; state: CheckpointState }[]; tickets: readonly { id: number; state: TicketState; runId: number | null }[] },
+  why: string,
+): Refused | null {
+  if (epic.tickets.some(ticketIsHeld)) return refuse('plan-runs-open', `a run of this programme holds a ticket of epic ${epic.key}`);
+  changes.epics.drop.push({ id: epic.id, why });
+  for (const c of epic.checkpoints) if (c.state === 'open') changes.checkpoints.drop.push({ id: c.id, why });
+  for (const t of epic.tickets) if (t.state === 'open') changes.tickets.drop.push({ id: t.id, why });
+  return null;
+}
 
 /** The epic a wave's runs belong to: the first epic, in the order given, that lists the wave and is not dropped. */
 export function epicForWave(epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number): number | null {

@@ -24,7 +24,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { BindingRow, PlanStorePort, StoredPlan } from './planStore.js';
 import {
   diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPut, parsePlanTicketAdd, parsePlanTicketMove,
-  planCallerVerdict, ticketIsHeld,
+  dropEpicInto, planCallerVerdict, ticketIsHeld,
 } from './planPolicy.js';
 import { NO_PLAN_CHANGES } from './planStore.js';
 
@@ -367,12 +367,9 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (epic.state !== 'dropped') {
       const epicUnfit = textRefusal(coord, [[epic.project, parsed.drop.why]]);
       if (epicUnfit !== null) return epicUnfit;
-      if (epic.tickets.some(ticketIsHeld)) return { refuse: 'plan-runs-open', detail: 'a run of this programme holds a ticket of this epic' };
-      const why = mask(parsed.drop.why);
       const changes = NO_PLAN_CHANGES();
-      changes.epics.drop.push({ id: epic.id, why });
-      for (const c of epic.checkpoints) if (c.state === 'open') changes.checkpoints.drop.push({ id: c.id, why });
-      for (const t of epic.tickets) if (t.state === 'open') changes.tickets.drop.push({ id: t.id, why });
+      const held = dropEpicInto(changes, epic, mask(parsed.drop.why));
+      if (held !== null) return { refuse: held.word, detail: held.detail };
       plan.applyPlanChanges(slug, changes, caller, opts.now(), null);
     }
     return { ok: true, plan: viewOf(plan, coord, slug) };

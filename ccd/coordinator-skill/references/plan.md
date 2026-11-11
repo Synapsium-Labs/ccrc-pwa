@@ -21,7 +21,8 @@ An older programme, one that existed before the plan model, opens as it always d
 ## plan put
 
 Declares or revises the whole plan as one body keyed by `key`. A new programme needs `home` (its home project) and may
-carry a `title`. A key that disappears from the body is never deleted; an epic you cut is named again with `droppedWhy`.
+carry a `title`. A key that disappears from the body is never deleted; an epic you cut is named again with `droppedWhy`,
+and it drops as `plan epic-drop` drops it: with its open checkpoints and tickets, refused while a run holds a ticket.
 
 ```bash
 "$API" plan put <slug> --json - <<JSON
@@ -36,7 +37,7 @@ JSON
 that is how ccrc names the ticket of a run opened with none. Refusals: `not-plan-owner` (only the
 programme's coordinator declares it), `plan-bad-body`, `plan-too-large` (at most 24 epics, 16 checkpoints in an epic and
 200 tickets in a body), `waves-not-contiguous`, `wave-overlap`, `dropped-needs-reason`, `ticket-workspace-mismatch`,
-`linear-text-public` and `plan-closed`.
+`plan-runs-open` (a `droppedWhy` on an epic a run holds a ticket of), `linear-text-public` and `plan-closed`.
 
 ## plan show
 
@@ -99,8 +100,8 @@ dispatched) is refused `plan-runs-open`.
 JSON
 ```
 
-Refusals: `not-plan-owner`, `unknown-epic`, `dropped-needs-reason`, `plan-runs-open`, `linear-text-public` and
-`plan-closed`.
+Refusals: `not-plan-owner`, `unknown-epic`, `plan-bad-body`, `dropped-needs-reason`, `plan-runs-open`,
+`linear-text-public` and `plan-closed`.
 
 ## plan close
 
