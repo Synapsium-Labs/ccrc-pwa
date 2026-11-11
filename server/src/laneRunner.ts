@@ -87,13 +87,14 @@ export class LaneRunner {
     return this.start(name, fn, false);
   }
 
-  /** The beat of a lane that is synchronous and whose caller may hand in the clock reading (`sweepDigest(now)`, the
-   *  claim pair, the daily prune): when the cadence has elapsed at `now` (default: the row's clock), stamps at `now` and
-   *  runs `fn` to its end, returning true; else false. A throw leaves the slot spent and reaches the caller. */
-  runSync(name: string, fn: () => void, now?: number): boolean {
+  /** The beat of a lane that is synchronous (the digest's beat, the claim pair, the daily prune): when the cadence has
+   *  elapsed on the row's own clock, stamps that reading and runs `fn` to its end, returning true; else false. A throw
+   *  leaves the slot spent and reaches the caller. No caller hands in a reading: lane timing is the row's clock only
+   *  (D-8197). */
+  runSync(name: string, fn: () => void): boolean {
     const row = this.rowOf(name);
     const st = this.stateOf(name);
-    const at = now ?? this.at(row.clock);
+    const at = this.at(row.clock);
     if (!(at - st.stamp >= row.cadenceMs)) return false;
     st.stamp = at;
     fn();
