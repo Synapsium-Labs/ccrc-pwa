@@ -60,6 +60,8 @@ import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
 import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
 import type { DispatchAbandonRead } from './deadDispatch.js';
 import type { DispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
+import { decideLaneArmImport, type LaneArmRead } from './laneArm.js';
+import type { LaneArmChoice, LaneArmImport, LaneArmLane } from '../../../shared/lane-arm.js';
 import { isRunCloseGroup, runCloseChoiceOf, type RunCloseChoice, type RunCloseGroup } from '../../../shared/run-close.js';
 
 /** The `run_close_settings` column each group's choice lives in. */
@@ -5891,6 +5893,54 @@ export class CoordStore {
       'ON CONFLICT(id) DO UPDATE SET choice = excluded.choice, updatedAt = excluded.updatedAt',
     ).run(choice, at);
     return this.dispatchAbandonSetting();
+  }
+
+  // ── the Shadow lanes card's rows (D-8274; spec 2026-10-28 R-6) ────────────────────────────────────────────────
+  /** `lane_arm_settings` (migration 56), read: one lane's raw choice, write time and import columns, `absent` for a lost
+   *  row, or `unreadable` with the driver's detail. `dispatchAbandonSetting()`'s shape: never a throw. Nothing is decided
+   *  here: only an exact `live` arms a lane, and `laneArmRowViewOf` says so at the reader. */
+  laneArmSetting(lane: LaneArmLane): LaneArmRead {
+    try {
+      const r = this.db.prepare('SELECT choice, CAST(updatedAt AS TEXT) AS updatedText, CAST(importedAt AS TEXT) AS importedText, imported '
+        + 'FROM lane_arm_settings WHERE lane = ?')
+        .get(lane) as { choice: unknown; updatedText: unknown; importedText: unknown; imported: unknown } | undefined;
+      if (r === undefined) return { kind: 'absent' };
+      const num = (v: unknown): number | null => {
+        const n = typeof v === 'string' ? Number(v) : NaN;
+        return Number.isSafeInteger(n) ? n : null;
+      };
+      return { kind: 'row', choice: r.choice, updatedAt: num(r.updatedText), importedAt: num(r.importedText), imported: r.imported };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** A row's one choice writer, called only by `POST /api/coord/lane-arm`: an upsert of the lane's row, in one statement,
+   *  then the read back. The route has validated `lane` and `choice`. The import columns are left as they are. */
+  setLaneArm(lane: LaneArmLane, choice: LaneArmChoice, at: number): LaneArmRead {
+    this.db.prepare(
+      'INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES (?, ?, ?) '
+      + 'ON CONFLICT(lane) DO UPDATE SET choice = excluded.choice, updatedAt = excluded.updatedAt',
+    ).run(lane, choice, at);
+    return this.laneArmSetting(lane);
+  }
+
+  /** THE ONE-TIME IMPORT of a lane's retired marker (R-6), called only by the watcher with a registry listing it measured:
+   *  in one transaction, the row is read, `decideLaneArmImport` decides, and the import columns (and, for a never-written
+   *  row whose marker stood, the choice) are written. Answers what it recorded, or null when there was nothing to do (the
+   *  import already ran, or there is no row). A throw propagates; the watcher logs it and tries again on a later pass. */
+  importLaneArmMarker(lane: LaneArmLane, stood: boolean, at: number): LaneArmImport | null {
+    return tx(this.db, () => {
+      const decided = decideLaneArmImport(this.laneArmSetting(lane), stood);
+      if (decided === null) return null;
+      if (decided.setLive) {
+        this.db.prepare("UPDATE lane_arm_settings SET choice = 'live', updatedAt = ?, importedAt = ?, imported = ? WHERE lane = ?")
+          .run(at, at, decided.result, lane);
+      } else {
+        this.db.prepare('UPDATE lane_arm_settings SET importedAt = ?, imported = ? WHERE lane = ?').run(at, decided.result, lane);
+      }
+      return decided.result;
+    });
   }
 
   /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before

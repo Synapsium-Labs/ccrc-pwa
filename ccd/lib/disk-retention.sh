@@ -668,6 +668,7 @@ _ws_reclaim_hold_released() {   # id -> 0 when `--stale held` was given and the 
   [[ $_WS_STALE_WORD == held && "${_WS_LADDER_BIND[0]-}" != mode=expire && -f "$REG/$1.hold" && -r "$REG/$1.hold" ]] || return 1
   [[ "$(_plat_sha256 < "$REG/$1.hold" 2>/dev/null | cut -d' ' -f1)" == "$_WS_STALE_DIGEST" ]]
 }
+# shellcheck disable=SC2178  # seen is a local string here; the arrays named seen are other functions' locals (shellcheck does not scope names by function)
 _ws_reclaim_stale_idle() {   # id transcript probe-verdict pane-activity -> 0 (the token bound to the idle instant), or REAP_VERDICT=not-idle|unmeasured
   # The ladder asks tmux and `_transcript_path` (it already holds the probe and the pane's name) and hands the answers
   # here; this decides. The newest of the transcript, `.lastend`, `.spawn`, `.woke`, `.supervised` and a live pane's
@@ -765,6 +766,7 @@ _ws_loose_unmeasured_doc() {   # why -> the census' unmeasured answer, exit 1 (t
   printf '{"mode":"collect-census","truncated":false,"max":%s,"unmeasured":%s,"counts":{},"entries":[]}\n' "$WS_LOOSE_CENSUS_MAX" "$(_json_str "$1")"
   echo "ccd: ws-audit --collect-census measured nothing: $1 — retry" >&2; return 1
 }
+# shellcheck disable=SC2178  # seen is a local string here; the arrays named seen are other functions' locals (shellcheck does not scope names by function)
 _ws_loose_census_records() {   # -> _WS_CREC_JSON (the records' rows) and _WS_CREC_BAD (unread ones, and any past the bound).
   #                                A killed verb's entry sits in the quarantine, which the listing does not walk: only its record names it
   local LC_ALL=C f n hex line seen=0
@@ -1483,11 +1485,13 @@ _ws_shed_failed() {   # word detail -> the post-start failure, journaled and pri
   printf '{"failed":%s,"session":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$id")" "$(_json_str "$2")"
   return 1
 }
+# shellcheck disable=SC2128  # scan is _ws_shed_run's local string (its timeout), read here through bash's dynamic scope; the array named scan is _ws_orphan_census's local (shellcheck does not scope names by function)
 _ws_shed_git_state() {   # workdir -> the digest of `git status` (tracked changes and untracked files git does not ignore); rc 1 unread
   local out
   out=$(_plat_timeout "$scan" git -C "$1" status --porcelain=v1 -z --untracked-files=all 2>/dev/null | _plat_sha256 | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
     && [[ $out =~ ^[0-9a-f]{64}$ ]] && printf '%s' "$out"
 }
+# shellcheck disable=SC2128  # scan is _ws_shed_run's local string (its timeout), read here through bash's dynamic scope; the array named scan is _ws_orphan_census's local (shellcheck does not scope names by function)
 _ws_shed_listing() {   # workdir -> git's own NUL-separated list of ignored, untracked paths, a whole ignored directory collapsed
   _plat_timeout "$scan" git -C "$1" ls-files -z --others --ignored --exclude-standard --directory
 }
@@ -1495,13 +1499,16 @@ _ws_shed_tracked() {   # workdir rel... -> the NUL-separated tracked paths at or
   local w="$1"; shift
   _plat_timeout "$WS_SHED_QUICK_S" git -C "$w" --literal-pathspecs ls-files -z -- "$@"
 }
+# shellcheck disable=SC2128  # scan is _ws_shed_run's local string (its timeout), read here through bash's dynamic scope; the array named scan is _ws_orphan_census's local (shellcheck does not scope names by function)
 _ws_shed_repos() {   # phys... -> every `.git` at any depth beneath them, one per line; rc non-zero when the walk did not finish
   _plat_timeout "$scan" find "$@" -xdev -name .git -prune -print
 }
+# shellcheck disable=SC2128  # scan is _ws_shed_run's local string (its timeout), read here through bash's dynamic scope; the array named scan is _ws_orphan_census's local (shellcheck does not scope names by function)
 _ws_shed_size() {   # phys... -> their disk use in KiB, one integer; rc non-zero when `du` did not finish
   _plat_timeout "$scan" du -sk -x -- "$@" | awk '{ s += $1 } END { print s + 0 }'; return "${PIPESTATUS[0]}"
 }
 _WS_SHED_HELD_WHY=''
+# shellcheck disable=SC2128,SC2178  # m is a local string here; the arrays named m are other functions' locals (shellcheck does not scope names by function)
 _ws_shed_spawn_held() {   # id -> rc 0 with _WS_SHED_HELD_WHY set when a wake must refuse: a real shed holds id's SHED lock
   #                          right now, or its marker stands and the lock it marked does not prove the shed over; rc 1
   #                          when it is free (no marker, and the lock file free or absent; or a marker whose lock still

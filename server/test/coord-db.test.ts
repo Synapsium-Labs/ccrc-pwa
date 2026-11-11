@@ -710,9 +710,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
     // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
     // and MIGRATIONS[54] (coordinator_calls, D-8126)
-    // and MIGRATIONS[55] (practice_cases, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(56);
-    expect(MIGRATIONS.length).toBe(56);
+    // and MIGRATIONS[55] (lane_arm_settings, D-8274)
+    // and MIGRATIONS[56] (practice_cases, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(57);
+    expect(MIGRATIONS.length).toBe(57);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -794,8 +795,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[52] (programs.doneWhen, D-8126)
     // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
     // and MIGRATIONS[54] (coordinator_calls, D-8126)
-    // and MIGRATIONS[55] (practice_cases, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(56);
+    // and MIGRATIONS[55] (lane_arm_settings, D-8274)
+    // and MIGRATIONS[56] (practice_cases, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(57);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -844,7 +846,7 @@ describe('coord.db: practice_cases, the case lane\'s table (Overlord §10.5)', (
   interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
   const ENTRY = /^CREATE TABLE practice_cases \([^;]*\);\s*CREATE INDEX practice_cases_by_signature ON practice_cases\(signature, openedAt\);$/;
   it('a NEW TABLE and an INDEX, nothing on an existing table: ten columns, the id its key', () => {
-    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(56);
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(57);
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('practice_cases')").all() as unknown as ColumnInfo[])
       .map((c) => [c.name, c.type, c.notnull, c.pk]);
@@ -857,7 +859,7 @@ describe('coord.db: practice_cases, the case lane\'s table (Overlord §10.5)', (
   });
 
   it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
-    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(56);
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(57);
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);

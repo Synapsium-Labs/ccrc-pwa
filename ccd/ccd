@@ -13340,6 +13340,7 @@ _ws_children() {   # main parentdir -> "resolvedpath\tbranch\theadoid" per child
 # `ls-files -u` sees. `rc 1` on ANY git read here means "could not tell", not
 # "idle" — the caller must refuse `tree-unreadable` rather than wave a child
 # through it never actually looked at.
+# shellcheck disable=SC2128,SC2178  # op is a local string here; the arrays named op are other functions' locals (shellcheck does not scope names by function)
 _ws_child_op() {   # childdir -> op name on stdout ('' = idle), rc 1 = unprobeable
   local d="$1" g p op=""
   for p in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge \
@@ -19097,6 +19098,7 @@ _ci_bgwait_owner_live() {   # bgwait-record -> 0 iff the supervisor that wrote i
   _ci_hold_live "$p" "$(_rw_field "$1" supst)" ""
 }
 
+# shellcheck disable=SC2128,SC2178  # w is a local string here; the arrays named w are other functions' locals (shellcheck does not scope names by function)
 _ci_bgwait_open() {   # id job hid wrapper -> record the wait ONCE: a supervisor restarted mid-wait keeps its onset
   local id="$1" job="$2" hid="$3" w="$4" rec now
   _ci_sup_me
@@ -22834,6 +22836,7 @@ _route_apply_pending() {   # id -> 0 iff the record asks for a class or effort `
   return 1
 }
 
+# shellcheck disable=SC2128,SC2178  # words is a local string here; the arrays named words are other functions' locals (shellcheck does not scope names by function)
 _route_apply_seed() {   # id [why] -> 0 iff it SEEDED `routeapplied` (the tick's caller then returns)
   # A RECORD THAT PREDATES THE APPLIER IS NOT AN UNAPPLIED RECORD (controller
   # ruling S4-R8). Every routing record on this fleet was applied by its last
@@ -25311,6 +25314,7 @@ _pane_scope_reap() {   # id pid cg — in its own unit: wait for the main proces
   fi
   return 0
 }
+# shellcheck disable=SC2128,SC2178  # scope is a local string here; the arrays named scope are other functions' locals (shellcheck does not scope names by function)
 _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
   # `oom` FIRST (D-5345): the pane scope's own journal naming an OOM kill in the 120 s
   # before now is the most specific answer, and it holds when the tmux server
@@ -37047,6 +37051,7 @@ _ws_reclaim_secrets_json() {   # -> RECLAIM_SECRETS as a JSON array of strings, 
   printf '%s]' "$out"
 }
 
+# shellcheck disable=SC2128,SC2178  # same and kept are local strings here; the arrays of those names are other functions' locals (shellcheck does not scope names by function)
 _ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclaim-only tombstone keys as a
   #                                JSON fragment ENDING IN A COMMA — `_ws_tombstone`'s optional third
   #                                argument. Reads the eval's RECLAIM_NESTED/RECLAIM_FOREIGN and the pin's
@@ -37402,6 +37407,7 @@ _ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie 
 }
 
 _WS_NREC_BRANCH=''
+# shellcheck disable=SC2178  # m is a local string here; the arrays named m are other functions' locals (shellcheck does not scope names by function)
 _ws_reclaim_nested_record() {   # main cpath -> rc 0 with _WS_NREC_BRANCH ('' = detached) when one of $main's
   #                                  worktree records names exactly cpath; 1 when none does; 2 when the list
   #                                  could not be READ
@@ -42502,6 +42508,7 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
   return "$rc"
 }
 
+# shellcheck disable=SC2128,SC2178  # recs is a local string here; the arrays named recs are other functions' locals (shellcheck does not scope names by function)
 _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line of a TERMINAL word; rc 1 on
   #                             `unmeasured`, else 0
   local id="$1" leaf="$HOME/.cc-tmp/$1" exists=false wit=null recs='[' r first=1 newest=null entries=null

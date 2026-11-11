@@ -2541,17 +2541,41 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX coordinator_calls_live_blocks ON coordinator_calls(madeBy, class, wokenAt, expiresAt);
   `,
   // ── 56: user_version 55 -> 56 ─────────────────────────────────────────────
+  // D-8274 (worktree economy spec 2026-10-28 R-6): `lane_arm_settings`, Settings › Automation › Shadow lanes. ONE ROW PER
+  // LANE, keyed by its `LaneArmLane` name, seeded `shadow` at updatedAt 0 (the seed is what "never written" means to the
+  // marker import). `choice` carries NO CHECK, `collect_lane_settings.choice`'s reason: a token a newer build writes reads
+  // here as `unknown`, which arms nothing. Its writers are all in `CoordStore`: `setLaneArm`, called only by
+  // `POST /api/coord/lane-arm`, writes `choice` and `updatedAt`; `importLaneArmMarker`, called only by the watcher's
+  // one-time import, writes `importedAt` and `imported` (and `choice` once, for a never-written row whose marker stood).
+  // Its readers go through `CoordStore.laneArmSetting`. A later lane joins with a migration that inserts its seed row.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 56` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the
+  // PR and before merge (it must print 55 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE lane_arm_settings (
+    lane       TEXT PRIMARY KEY,
+    choice     TEXT NOT NULL,
+    updatedAt  INTEGER NOT NULL,
+    importedAt INTEGER,
+    imported   TEXT
+  );
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('roster-card', 'shadow', 0);
+  `,
+  // ── 57: user_version 56 -> 57 ─────────────────────────────────────────────
   // The case lane's table (Overlord spec §10.5, W1a): `practice_cases`, one row per case a trigger signature has earned
   // (`shared/practice-triggers.ts#signatureText`). `state` is `open` and nothing else in W1a (a later review moves it);
   // `mode` is the lane's mode word (`shadow`: recorded, no review offered); `cause` is a `CaseCause`; `programmes` and
   // `evidence` are JSON arrays (programme slugs, run_events ids), ascending. Its one writer is `openPracticeCase` in
   // `practiceCasesStore.ts`, a compare-and-set on the signature's newest `openedAt`.
   //
-  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 56` takes rule 3
+  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 57` takes rule 3
   // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
   // This build's writer names its columns, so a later build that adds a column to `practice_cases` must make it nullable
   // or give it a DEFAULT, or this build's writer fails after a rollback.
-  // RE-MEASURE the slot before the PR and before merge (it must print 55 before this entry is counted):
+  // RE-MEASURE the slot before the PR and before merge (it must print 56 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

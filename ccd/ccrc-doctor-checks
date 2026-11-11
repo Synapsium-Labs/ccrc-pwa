@@ -3776,6 +3776,7 @@ _pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of hays
   done <<< "$hay"
   return 1
 }
+# shellcheck disable=SC2128,SC2178  # known is a local string here; the arrays named known are other functions' locals (shellcheck does not scope names by function)
 _check_pools() {
   # A server-role box hosts no sessions (D-3111): the installer converges
   # nothing per account there, so this check measures nothing there either —
@@ -4361,6 +4362,7 @@ _dr_continued_in() {   # file uuid -> 0 superseded (successor in _DR_CI_NEXT), 1
   return 0
 }
 
+# shellcheck disable=SC2128,SC2178  # stale is a local string here; the arrays named stale are other functions' locals (shellcheck does not scope names by function)
 _check_transcripts() {
   # MEASURED AND SKIPPED ARE COUNTED SEPARATELY (whole-branch review, F4), and
   # the verdict says both. The earlier shape counted a row into `$n` the
@@ -5378,6 +5380,7 @@ _check_graphify() {
 # `"_check_$name"` and counts verdict lines matching `"PASS $name: "`, so the
 # printed id and the table entry must be the same string, and bash permits a
 # hyphen in a function name defined this way.
+# shellcheck disable=SC2128,SC2178  # resolved is a local string here; the arrays named resolved are other functions' locals (shellcheck does not scope names by function)
 _check_graphify-path() {
   # The server-role SKIP, in `_check_graphify`'s own shape and for its own
   # reason: a server box runs no sessions that would type `graphify`.
@@ -6103,6 +6106,7 @@ _check_fleet() {
 # docserver ever does grow a `projects/` directory, treating it like any other
 # `.claude*` directory is the right answer — a silent blind spot for a name
 # this tool has no business knowing is worse than one more row in the census.
+# shellcheck disable=SC2128,SC2178  # unmeasured is a local string here; the arrays named unmeasured are other functions' locals (shellcheck does not scope names by function)
 _check_memory() {
   # A server-role box hosts no sessions (D-3111): the installer converges
   # nothing per account there, so this check measures nothing there either —
@@ -8787,6 +8791,7 @@ _check_model-default() {
 # and while the operator has PAUSED the sweep (`~/.cc-sessions/scope-sweep-paused`:
 # it then rewrites nothing, so its record ages by design — never a stopped timer).
 # CCRC_SCOPE_SWEEP_STATE is the test seam, CCRC_CADDY_SYSTEM_FILE's shape.
+# shellcheck disable=SC2128,SC2178  # bad is a local string here; the arrays named bad are other functions' locals (shellcheck does not scope names by function)
 _check_scope-sweep() {
   local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0 bad=0 ln=0 stale nc_dead=0 nc_live=0 nc_unknown=0 nb=0 bmode=shadow
   local -a found=() carry_detail=()
@@ -9882,6 +9887,7 @@ _bt_server_trace() {
   return 0
 }
 
+# shellcheck disable=SC2128,SC2178  # bad is a local string here; the arrays named bad are other functions' locals (shellcheck does not scope names by function)
 _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" ahead="" aheaddue=0 rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE="" BT_TRACE_DIR=""
   _bt_value_file "$tok"
@@ -9981,6 +9987,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   BT_PART+=("server: generation #$seq, $how, fleet confirmed$extra"); BT_CLASS+=(PASS); BT_FIX+=("")
 }
 
+# shellcheck disable=SC2128,SC2178  # bad is a local string here; the arrays named bad are other functions' locals (shellcheck does not scope names by function)
 _bt_fleet_arm() {   # <own-write: 0|1>
   local own="$1" ff gen rep="$HOME/.ccrc/token-sync.json" BT_FLEET_FILE BT_GEN_FILE
   _bt_fleet_paths; ff="$BT_FLEET_FILE"; gen="$BT_GEN_FILE"
@@ -10043,6 +10050,7 @@ _bt_fleet_arm() {   # <own-write: 0|1>
 # D-4399): present but not a readable regular file, or a line whose key is CCRC_AGENT_TOKEN
 # (optionally after `export `). rc 1 when absent, or readable with no such key (the README's single-box file). The
 # file carries the agent bearer: each line is matched by its key alone inside this process and cleared at once.
+# shellcheck disable=SC2128,SC2178  # p is a local string here; the arrays named p are other functions' locals (shellcheck does not scope names by function)
 _bt_agent_env_marks_fleet() {
   local p="$HOME/.ccrc/agent.env" line="" t="" hit=1
   if [ ! -e "$p" ] && [ ! -L "$p" ]; then return 1; fi
@@ -10145,6 +10153,7 @@ _check_box-token() {
 # doctor suite's PATH holds no system directory (`_check_docs`' note).
 CCRC_DOCS_PAGE_PREFIX='/docs'
 
+# shellcheck disable=SC2128,SC2178  # p and found are local strings here; the arrays of those names are other functions' locals (shellcheck does not scope names by function)
 _check_docs-sw() {
   # BYTE-WISE, whatever the caller's locale: under a UTF-8 one an invalid byte anywhere in the worker (a hand-edited
   # bundle's, a foreign tool's) makes `[[ $body =~ $re_open ]]` fail to match across it, and the check would say the
@@ -10241,6 +10250,7 @@ _check_docs-sw() {
 # box's own server process on a `both` node. A `server` node runs no hook; a
 # box with no recorded role arms no writer by configuration. Both SKIP.
 # Appended near the END of this file: lines above are cited by number elsewhere.
+# shellcheck disable=SC2128,SC2178  # words is a local string here; the arrays named words are other functions' locals (shellcheck does not scope names by function)
 _check_server-caps() {
   local LC_ALL=C
   local role="" f="$HOME/.ccrc/server-caps" writer remedy why="" lease=180 writer_unit=""
@@ -10957,6 +10967,7 @@ _dr_approval_role() {
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && r="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   printf '%s' "$r"
 }
+# shellcheck disable=SC2128,SC2178  # missing is a local string here; the arrays named missing are other functions' locals (shellcheck does not scope names by function)
 _check_approval-verifier-runnable() {
   local missing=""
   if [ "$(_dr_approval_role)" = server ]; then
@@ -11180,6 +11191,7 @@ _check_filevault() {
 # FAILs, because a mistyped answer must not read as stated. A stated provider image PASSes, naming what it holds:
 # keeping backups is a choice, and the remedy for a leaked or restored image is the compromise steps, not doctor.
 SNAPSHOT_POSTURE_WORDS="server-backups server-snapshots volume-snapshots"
+# shellcheck disable=SC2128,SC2178  # seen is a local string here; the arrays named seen are other functions' locals (shellcheck does not scope names by function)
 _check_snapshot-posture() {
   if [ "${CCD_OS:-linux}" = darwin ]; then
     _dr_skip snapshot-posture "provider-level snapshots are a Linux box's question; this box is darwin, whose backups secrets-backup-excluded measures"
@@ -11493,6 +11505,7 @@ _dr_tw_size() {
   else printf '%d B' "$1"; fi
 }
 
+# shellcheck disable=SC2128,SC2178  # pairs is a local string here, and seen and dirs are strings in this function's command-substitution subshell; the arrays of those names are other functions' locals (shellcheck does not scope names by function)
 _check_transcript_work() {
   local _srv_role="" sh="$HOME/.ccrc/accounts.sh" pairs="" a dir
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"

@@ -1,9 +1,12 @@
 // Coordinator durability D4 (#757; epic #752): a coordinator's picture of its workers lives only in its context, so a
 // compaction, a resume or a /clear loses it. The session hook's SessionStart arm re-injects a roster card: the open runs
 // THIS session claims, read from `GET /api/runs` through the closed client, capped at ROSTER_MAX characters. It ships
-// behind the hand-armed marker `coordinator-roster-card-live`: unarmed, it injects nothing and appends the card it would
-// have injected to `~/.ccrc/roster-card-shadow.log`, the record the operator reads before arming. A server that does not
-// answer, or answers something that is not a run list, costs the card and nothing else (fail open, no stale data).
+// behind its Shadow lanes row (D-8274; spec 2026-10-28 R-6): the hook arms it on an exact `rosterCard: "live"` in the same
+// `runs list` reply it reads the runs from, and on nothing else. Unarmed (`shadow`, the field absent from an older server, any
+// other value), it injects nothing and appends the card it would have injected to `~/.ccrc/roster-card-shadow.log`, the
+// record the operator reads before going live. The retired hand marker `coordinator-roster-card-live` is no longer read. A
+// server that does not answer, or answers something that is not a run list, costs the card and nothing else (fail open,
+// no stale data).
 //
 // Runs ccd/session-hook.sh for real inside a fixture HOME with a fake `ccrc-api`; no live box, no live server. The
 // harness is COPIED from session-hook-role-card.test.ts (a test file cannot import another).
@@ -12,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { RUNS_ROSTER_CARD_FIELD } from '../../shared/lane-arm.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -35,7 +39,11 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-const arm = (): void => { fs.writeFileSync(path.join(reg(), MARKER), ''); };
+/** The roster card's switch as the server's `runs list` reply carries it (`RUNS_ROSTER_CARD_FIELD`); undefined leaves the
+ *  field out, as an older server does. */
+let field: unknown;
+beforeEach(() => { field = 'shadow'; });
+const arm = (): void => { field = 'live'; };
 /** The fake closed client: `runs list` prints `body` and exits `code`; anything else is a failure. */
 const fakeApi = (body: string, code = 0): void => {
   fs.writeFileSync(path.join(home, 'runs.json'), body);
@@ -47,7 +55,7 @@ const run_ = (id: string, over: Record<string, unknown> = {}): { id: string; cla
   state: 'working', claimedBy: ID, openedAt: NOW - 3 * 3600_000, dispatchedAt: NOW - 3 * 3600_000, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0 }, ...over,
 }) as never;
-const list = (...runs: object[]): string => JSON.stringify({ runs });
+const list = (...runs: object[]): string => JSON.stringify(field === undefined ? { runs } : { runs, [RUNS_ROSTER_CARD_FIELD]: field });
 
 const payload = (source: string): object => ({
   session_id: SID, transcript_path: path.join(home, 'cfg', 'projects', '-work', `${SID}.jsonl`),
@@ -210,6 +218,24 @@ describe('D4: unarmed, the card is a shadow record only', () => {
     expect(log).toMatch(/#21 prog-a w1\/3 working/);
   });
 
+  it.each([
+    ['an older server, whose reply has no such field', undefined],
+    ['a value that is not exactly live', 'Live'],
+    ['a value of another type', true],
+  ])('%s: no card, the shadow record only', (_n, value) => {
+    field = value;
+    fakeApi(list(run_('', { id: 23 })));
+    expect(hook('compact')).not.toContain('ccrc-roster');
+    expect(fs.readFileSync(shadow(), 'utf8')).toMatch(/#23 prog-a w1\/3 working/);
+  });
+
+  it('the retired hand marker no longer arms the card: only the server\'s switch does', () => {
+    fs.writeFileSync(path.join(reg(), MARKER), '');
+    fakeApi(list(run_('', { id: 24 })));
+    expect(hook('compact')).not.toContain('ccrc-roster');
+    expect(fs.readFileSync(shadow(), 'utf8')).toMatch(/#24 prog-a w1\/3 working/);
+  });
+
   it('writes no record when there is nothing to inject', () => {
     fakeApi('', 3);
     hook('compact');
@@ -356,6 +382,30 @@ describe('R-5a: the wake arm, unarmed', () => {
     const log = fs.readFileSync(shadow(), 'utf8');
     expect(log).toMatch(new RegExp(`^\\d+ ${ID} wake$`, 'm'));
     expect(log).toMatch(/#51 prog-a w1\/3 working/);
+  });
+
+  // D-8274 (R-6): the wake arm reads the SAME switch as the SessionStart arm, the Shadow lanes row the `runs list` reply
+  // carries, through `_hook_roster_card`'s one read; the retired hand marker arms neither.
+  it('the server\'s "rosterCard":"live" arms the wake, and the retired hand marker does not', () => {
+    writeTranscript(IDLE);
+    fs.writeFileSync(path.join(reg(), MARKER), '');
+    fakeApi(list(run_('', { id: 52 })));
+    expect(wake(MAIL()), 'marker standing, switch shadow: no card').toBe('');
+    expect(fs.readFileSync(shadow(), 'utf8')).toMatch(/#52 prog-a w1\/3 working/);
+    arm();
+    fakeApi(list(run_('', { id: 52 })));
+    expect(wake(MAIL())).toMatch(/^ccrc-roster: 1 open run\(s\) you claim[\s\S]*#52 prog-a w1\/3 working/);
+  });
+
+  it.each([
+    ['an older server, whose reply has no such field', undefined],
+    ['a value that is not exactly live', 'Live'],
+  ])('%s: the wake carries no card, the shadow record only', (_n, value) => {
+    writeTranscript(IDLE);
+    field = value;
+    fakeApi(list(run_('', { id: 53 })));
+    expect(wake(MAIL())).toBe('');
+    expect(fs.readFileSync(shadow(), 'utf8')).toMatch(new RegExp(`^\\d+ ${ID} wake$`, 'm'));
   });
 });
 

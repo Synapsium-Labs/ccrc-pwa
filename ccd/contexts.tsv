@@ -1,7 +1,9 @@
 # ccd/contexts.tsv: every function ccd/ccd defines, mapped to ONE context of the 08-10 architecture spec
 # (C1 Fleet Registry & Accounts, C2 Fleet Mutation, C3 Session Conversation, C4 Workspace Lifecycle, C5 Coordination,
-# C6 Attention & Notification, C7 Update control plane, C8 Auth & box token, C9 Docs; K = kernels and platform, no
-# aggregate). D-6054 (ARCH-34, #536). Data only: no installer reads it, and ccd/ccd never sources it.
+# C6 Attention & Notification, C7 Update control plane, C8 Auth & box token, C9 Docs, C10 Session host; K = kernels
+# and platform, no aggregate). D-6054 (ARCH-34, #536). C10 is the session-host ruling Q13 (D-8272): hosting, observing
+# and driving sessions behind one SessionHost interface, home ccd/lib/sessionhost.sh (the file-split plan's Task 7);
+# it is ccd's alone, and the server declares its port at C3. Data only: no installer reads it, and ccd/ccd never sources it.
 # server/test/ccd-contexts.test.ts holds it: every definition has exactly one row, every row names a definition,
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)

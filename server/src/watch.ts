@@ -174,6 +174,8 @@ import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js'
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink, notifyPushOnly } from './notice.js';
+import { LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_MARKER, type LaneArmImport, type LaneArmLane } from '../../shared/lane-arm.js';
+import { laneArmImportLine } from './coord/laneArm.js';
 import { runDriftPass } from './coord/driftLane.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -2070,6 +2072,39 @@ export class FleetWatcher {
     return this.delegationClosing ??= Promise.all([closing, Promise.allSettled([...this.delegationSweeps])]).then(() => undefined);
   }
 
+  /** D-8274 (spec 2026-10-28 R-6): THE ONE-TIME IMPORT of each Shadow lanes row's retired marker, off the tick's own listing
+   *  (a measured one: an unlistable registry never reaches here). For each lane with a marker the import has not yet run
+   *  for, the store records it once (`CoordStore.importLaneArmMarker`): a standing marker sets a never-written row Live,
+   *  with a record-only feed row naming the file. From then on the marker is not read, and this pass asks the store
+   *  nothing for that lane (the latch below). A throw is logged once and retried on a later pass. */
+  importLaneArmMarkers(names: readonly string[], at: number): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    for (const lane of LANE_ARM_LANES) {
+      const marker = LANE_ARM_MARKER[lane];
+      if (marker === undefined || this.laneArmImported.has(lane)) continue;
+      let result: LaneArmImport | null;
+      try {
+        result = coord.importLaneArmMarker(lane, names.includes(marker), at);
+      } catch (err) {
+        if (!this.laneArmImportWarned.has(lane)) {
+          this.laneArmImportWarned.add(lane);
+          console.warn(`ccrc-server: lane-arm: the ${lane} marker import failed (${err instanceof Error ? err.message : String(err)}); retried next pass`);
+        }
+        continue;
+      }
+      this.laneArmImported.add(lane);
+      if (result === 'stood' || result === 'stood-kept') {
+        notify({ notifyLog: this.deps.notifyLog, coord },
+          { kind: 'coord', sessionId: '', runId: null, title: LANE_ARM_FEED_TITLE.imported, body: laneArmImportLine(lane, marker, result) },
+          'record-only', { degraded: 'shadow lane marker imported, feed archive degraded' });
+      }
+    }
+  }
+  /** The lanes whose import has run (or was found already run): never asked again in this process. */
+  private readonly laneArmImported = new Set<LaneArmLane>();
+  private readonly laneArmImportWarned = new Set<LaneArmLane>();
+
   /** Whether `tick()`'s registry read listed. The health reads it as of the request: an unreadable registry is an unmeasured basis. */
   noteDelegationRegistry(listed: boolean): void {
     this.delegationLane().noteRegistry(listed);
@@ -2619,6 +2654,7 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
+      this.importLaneArmMarkers(registryRead.names, listedAt);   // D-8274: once per lane, then never again
       const paneListing = await listingP;
       const notice = listingNotice(this.listingFailed, paneListing);
       this.listingFailed = notice.failed;
