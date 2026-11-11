@@ -25,6 +25,7 @@ import type { ProjectPlacement, ProjectPoolWire, ProjectRepoWire } from '../../s
 import { PR_REASONS } from '../../shared/api.js';
 import { repoCellFor } from '../src/prstate.js';
 import type { FleetWatcher } from '../src/watch.js';
+import { fakeTime } from './fakeTime.js';
 
 let home: string;
 let projectsRoot: string;
@@ -44,7 +45,7 @@ const dead: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' }
 const open = async (io: FleetIO = localIO, watcher?: FleetWatcher): Promise<FastifyInstance> => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });
   const a = await buildServer({
-    cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io, queue: new KeyedQueue(),
+    cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io, queue: new KeyedQueue(), time: fakeTime().ports,
   }, undefined, watcher);
   await a.ready();
   return a;
@@ -244,7 +245,7 @@ describe('GET /api/projects — pool and placement per row', () => {
     coord.accountPoolEdges = () => { throw new Error('simulated DatabaseSync failure'); };
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });
     app = await buildServer({
-      cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io: localIO, queue: new KeyedQueue(), coord,
+      cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord,
     });
     await app.ready();
     try {

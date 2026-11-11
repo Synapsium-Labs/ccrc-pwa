@@ -4,7 +4,7 @@
 // method switch sheet (A23) list them the same way, so the list and its restarts live here once.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, RESET_LIST } from '@ccrc/ui';
-import { isArchivedRow, type FleetSession } from '../../../shared/api';
+import { isArchivedRow, type FleetSession, type StopBody } from '../../../shared/api';
 import { RESTART, RESTARTED, RESTART_FAILED } from '../fleet/accountWords';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -19,7 +19,7 @@ export function restartableOn(sessions: readonly FleetSession[], id: string): st
 
 /** Each listed session's restart, and the act: stop, then ensure; a second tap while one runs, or after it is done,
  *  sends nothing. */
-export function useRestarts(stop: (sid: string) => Promise<unknown>, ensure: (sid: string) => Promise<void>, blocked: boolean): {
+export function useRestarts(stop: (sid: string, body?: StopBody) => Promise<unknown>, ensure: (sid: string) => Promise<void>, blocked: boolean): {
   readonly restarts: Readonly<Record<string, RestartState>>;
   readonly restart: (sid: string) => Promise<void>;
 } {
@@ -30,7 +30,8 @@ export function useRestarts(stop: (sid: string) => Promise<unknown>, ensure: (si
     if (blocked || restarts[sid] === 'busy' || restarts[sid] === 'done') return;
     setRestarts((r) => ({ ...r, [sid]: 'busy' }));
     try {
-      await stop(sid);
+      // D-8199: the stop half of a restart keeps the session id, so it says so and its claimed runs stay where they are.
+      await stop(sid, { restart: true });
       await ensure(sid);
       if (live.current) setRestarts((r) => ({ ...r, [sid]: 'done' }));
     } catch {

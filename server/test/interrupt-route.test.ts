@@ -27,6 +27,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import type { PushService } from '../src/push.js';
 import { guardRunner, seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'lane-a-project-a';
 const UUID = '00000000-0000-4000-8000-000000000001';
@@ -105,7 +106,7 @@ const box = async (b: Box) => {
   await notifyLog.load();
   const notify = vi.fn(async () => {});
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO, queue: new KeyedQueue(),
+    { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       notifyLog, push: { notify } as unknown as PushService },
     new Bus(), watcher);
   open.push(app);

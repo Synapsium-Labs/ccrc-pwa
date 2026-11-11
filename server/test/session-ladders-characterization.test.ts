@@ -36,6 +36,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { mkTmp } from './tmpHelpers.js';
+import { fakeTime } from './fakeTime.js';
 
 // Real time: `liveRowFor` assembles at the wall clock, so a heartbeat stamp must be fresh against it too.
 const NOW = Date.now();
@@ -172,7 +173,7 @@ const observe = async (r: Row): Promise<Observed> => {
   }
 
   const deps = { cfg: w.cfg, runCcd: ccdRunner(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }), w.cfg),
-    tmux: w.tmux, io: w.io, queue: new KeyedQueue() };
+    tmux: w.tmux, io: w.io, queue: new KeyedQueue(), time: fakeTime().ports };
   const stream = new SessionStream(deps, new Bus(), w.id, () => undefined);
   const res = await (stream as unknown as { resolve(): Promise<{ ok: boolean; reason?: string; data?: { status: string } }> }).resolve();
   const resolve = res.ok ? `ok:${res.data!.status}` : `no:${res.reason}`;

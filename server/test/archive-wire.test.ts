@@ -20,9 +20,9 @@ const row = (over: Partial<FleetSession>): FleetSession => ({ ...base, ...over }
 const STOP = { at: 1_790_000_000_000, surface: 'pwa' as const };
 
 describe('ARCHIVE_REFUSALS — the door vocabulary, declared once', () => {
-  it('holds the spec\'s four codes and the three the phone cannot fix, and nothing else', () => {
+  it('holds the spec\'s four codes, the three the phone cannot fix and D-8199\'s claims word, and nothing else', () => {
     expect([...ARCHIVE_REFUSAL_CODES].sort()).toEqual([
-      'coordinator-has-open-runs', 'manifest-unbuildable', 'programme-partly-ended', 'run-open',
+      'claims-not-moved', 'coordinator-has-open-runs', 'manifest-unbuildable', 'programme-partly-ended', 'run-open',
       'session-busy', 'status-unknown', 'worktree-gone',
     ]);
     expect(ARCHIVE_REFUSAL_CODES).toEqual(Object.values(ARCHIVE_REFUSALS));

@@ -257,7 +257,7 @@ describe('every re-auth ends the same way (spec §9)', () => {
     // The restart list: one tap, stop then ensure.
     fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
     await waitFor(() => expect(ensure).toHaveBeenCalledWith('lane-b:p-one'));
-    expect(b.client.stop).toHaveBeenCalledWith('lane-b:p-one');
+    expect(b.client.stop).toHaveBeenCalledWith('lane-b:p-one', { restart: true });
     // The revoke item for the replaced token, unticked by default.
     expect(screen.getByRole('checkbox', { name: 'I revoked the old token' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByTestId('revoke-record')).toHaveTextContent(revokeRecord(false, true));

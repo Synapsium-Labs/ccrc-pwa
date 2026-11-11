@@ -42,6 +42,7 @@ import { updateLauncherPath, updateSpawnArgv } from '../../shared/agent-protocol
 import type { CatalogueState, MoveRequestAnswer, RequestKind } from '../../shared/api.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const TOKEN = 'f'.repeat(64);
 /** Cheap-cost scrypt — `update-routes.test.ts`'s ARMED fixture. */
@@ -149,7 +150,7 @@ const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner; cat
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps: Deps = {
     cfg, runCcd: ccdRunner(failingRunner, cfg), tmux: new Tmux(failingRunner), io: localIO,
-    queue: new KeyedQueue(), mailToken: TOKEN, coord,
+    queue: new KeyedQueue(), time: fakeTime().ports, mailToken: TOKEN, coord,
     updateIntentLog: new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir)),
     // `Deps.updateRunner` is the two-template capability, never a raw Runner (Task 5,
     // D-3397): the recording Runner goes behind the same factory.

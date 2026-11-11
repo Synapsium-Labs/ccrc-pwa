@@ -11,11 +11,7 @@
 //     back to its caller.
 // It never awaits a lane its caller did not await: `run` returns the lane's own promise (or null when throttled).
 import { LANE_SCHEDULE, type LaneClock, type LaneRow } from './laneSchedule.js';
-
-export interface LaneClocks {
-  wall(): number;
-  mono(): number;
-}
+import type { Clock } from './time/ports.js';
 
 interface Flight { readonly token: symbol; readonly promise: Promise<unknown>; readonly startedAt: number }
 interface LaneSlot { stamp: number; flight: Flight | null; again: (() => void) | null }
@@ -25,7 +21,7 @@ export class LaneRunner {
   private readonly state = new Map<string, LaneSlot>();
 
   constructor(
-    private readonly clocks: LaneClocks,
+    private readonly clocks: Clock,
     rows: readonly LaneRow[] = LANE_SCHEDULE,
     private readonly warn: (message: string) => void = (m) => console.warn(m),
   ) {

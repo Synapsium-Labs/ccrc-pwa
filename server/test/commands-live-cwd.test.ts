@@ -9,6 +9,7 @@ import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 // D-7511 (ARCH-05): the command list's live-state read, pinned through the route before `sessionCommands` takes its
 // reader through a port. Which cwd the transcript ladder starts from is the one fact the live file decides here, so
@@ -81,7 +82,7 @@ const liveTmux: Runner = async (_cmd, args) => {
 async function skillsVia(fx: Fixture): Promise<{ skills: string[]; liveReads: number }> {
   const counted = countReadsOf(fx.liveFile);
   const cfg = loadConfig({ CCRC_HOME: fx.home });
-  const app = await buildServer({ cfg, runCcd: ccdRunner(liveTmux, cfg), tmux: new Tmux(liveTmux), io: counted.io, queue: new KeyedQueue() });
+  const app = await buildServer({ cfg, runCcd: ccdRunner(liveTmux, cfg), tmux: new Tmux(liveTmux), io: counted.io, queue: new KeyedQueue(), time: fakeTime().ports });
   try {
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/commands` });
     expect(res.statusCode).toBe(200);
