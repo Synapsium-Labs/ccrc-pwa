@@ -1151,7 +1151,7 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
     // ── Review 1822: the wide-label cell, a symbol whose graph label spans 165 distinct basenames, at this fixture's size ──
     // The graph holds only the 165 label nodes (a few tens of KB, so its parse is negligible); the store gets two refs on each of
     // the 165 files, removed after the cell (the shapes below run on the fixture as built). The select count is measured by
-    // wrapping the handle's `prepare` and counting the executions of the four candidate selects: no production seam.
+    // wrapping the handle's `prepare` and counting the executions of the candidate selects (the symbol select and D-8191's chunked label-file selects): no production seam.
     const os = await import('node:os');
     const msSince = (t0: bigint): number => Number(process.hrtime.bigint() - t0) / 1e6;
     const wideResults: Array<Record<string, unknown>> = [];
@@ -1173,8 +1173,9 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
       const executed: number[] = [];
       const ask = (rc: ReturnType<typeof contextOn>) => {
         let n = 0;
-        const sels = new Set<string>(Object.values(R.TOUCHED_SELECTS));
-        const counted = { prepare: (sql: string) => { const st = rc.db.prepare(sql); if (!sels.has(sql)) return st; return { all: (...a: unknown[]) => { n += 1; return (st.all as (...x: unknown[]) => unknown[])(...a); } }; }, exec: (sql: string) => rc.db.exec(sql) };
+        // a candidate select: the symbol select, a chunked label-file select, a per-basename file select
+        const isCandidate = (sql: string): boolean => /FROM node_refs/.test(sql) && /value LIKE \?/.test(sql);
+        const counted = { prepare: (sql: string) => { const st = rc.db.prepare(sql); if (!isCandidate(sql)) return st; return { all: (...a: unknown[]) => { n += 1; return (st.all as (...x: unknown[]) => unknown[])(...a); } }; }, exec: (sql: string) => rc.db.exec(sql) };
         const out = R.runTouched({ ...rc, db: counted }, { arg: QSYM, limit: 20, ordered: true });
         executed.push(n);
         return out;
@@ -1198,7 +1199,7 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
       const load1 = os.loadavg()[0]!;
       wideResults.push({
         cell: `symbol over ${SPAN165} basenames, ordered`, refs: wideRefs, graphBytes: wideBytes, graphNodes: SPAN165, total: first.total,
-        selectCounts: [...new Set(executed)], expectedSelects: SPAN165 + 1,
+        selectCounts: [...new Set(executed)], expectedSelects: 1 + Math.ceil(SPAN165 / 100),   // the symbol select and one select per chunk of at most 100 basenames (D-8191; the chunk size is not exported)
         cold: { p50: r2(pct(cold, 50)), p95: r2(pct(cold, 95)), max: r2(Math.max(...cold)) },
         warm: { p50: r2(pct(warm, 50)), p95: r2(pct(warm, 95)), max: r2(Math.max(...warm)) },
         loadBefore: r2(load0), loadAfter: r2(load1),
