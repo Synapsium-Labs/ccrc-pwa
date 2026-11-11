@@ -766,6 +766,23 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
   `Deps.time.clock.mono` both carry the monotonic clock until the first is folded into the second. This is not a
   "legitimately different" pair: it is one fact with two carriers, kept only because folding it rewrites the watcher's
   lane wiring and the 36 test files that set `monotonicMs` (33 call `withFakeClock`). See the fourth question below.
+- **D-8232, sql-clock-reads-argumentless-date-functions, tightening** — the plan pinned `SQL_CLOCK`, but the
+  whole-branch review measured on `node:sqlite` that `datetime()`, `date()`, `time()`, `julianday()` and
+  `strftime('<format>')` with no time value all answer the current time, and the pinned pattern let every one of them
+  through. `SQL_CLOCK` now also matches those functions called with no argument, `strftime` with a format alone, and
+  any of them given `'subsec'` or `'subsecond'` as the only time value (review 1780's F3).
+  Called with a time value (`datetime(at, 'unixepoch')`, `strftime('%s', at)`, `date(at)`) they still pass. Today's
+  count in `server/src` stays zero, so D-8224's repo-wide scope holds.
+- **D-8233, ambient-scan-sees-abort-timeouts-and-timer-modules, tightening** — `ambientUses` also reports
+  `AbortSignal.timeout(…)` (a timer, and the usual way to bound a `fetch`), and any value import of `node:timers` or
+  `node:timers/promises`, by its specifier. A name list cannot catch the second: `scheduler.wait` from
+  `node:timers/promises` shares its name with the `Scheduler` port. After review 1780 (F1), the `process`, `Math` and
+  `AbortSignal` arms also accept a `globalThis.` prefix and optional chaining, and a value import of `node:process` is
+  reported by its specifier. An alias of `process`, bracket access and destructuring are recorded gaps.
+- **D-8234, fake-refuses-re-entry, shape** — `fakeTime`'s `advance` and `restart` throw `RangeError` when a scheduled
+  call calls them. Without it, a firing call that re-entered them moved mono backwards, or counted a restart's wall gap
+  twice, and nothing reported it. The simulator piece models a restart as a step it takes between calls, never as a
+  call it schedules.
 
 **Settled by the spec's later edition, so no longer deviations:** the three ports are declared
 once in the clock kernel, K (§3.6 H2). The scan covers the new Overlord and continuity modules, and existing code is

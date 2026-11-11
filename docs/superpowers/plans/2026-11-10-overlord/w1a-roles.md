@@ -480,6 +480,16 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
   reason; they are not views of `roleOf`.
 - **D-8213, hook-role-card** — `ccd/session-hook.sh#_hook_role_card` keeps reading `.child` existence itself. It runs in
   another process and language and cannot call `roleOf`; the card door piece replaces it.
+- **D-8235, fleet-role-guard, shape** — `shared/fleetRoles.ts` also exports `isFleetRole`, the table's runtime guard.
+  It follows `isSessionRole`'s idiom and derives from `FLEET_ROLE_NAMES`. `server/test/rings/wire-totality.test.ts`
+  requires every exported literal union in `shared/*.ts` to have a sibling `Record<X, true>` map or an `is X` guard,
+  and `FLEET_ROLES` types its rows as `FleetRoleRow`, not `true`, so without the guard Task 2 turns that scan red. The
+  fifth open question's future wire field would add the same guard.
+- **D-8236, stall-import-pin, widening** — Task 4's move gives `server/src/coord/stall.ts` a value import of
+  `sessionRoleOf` from `../roleOf.js`. `server/test/stall-vocabulary.test.ts` admitted value imports only from
+  `shared/api.ts`, plus `stallWatchSays` from `../sessionReading.js`, so it went red. The pin now admits `sessionRoleOf`
+  from `../roleOf.js`, alone on one exact line, by the rule it applies to `stallWatchSays`: both are L1 files that
+  import only L0. The stall lane still cannot read the role table or call `roleOf` itself.
 
 **Settled by the spec's later edition, so no longer deviations:** the undecided answer and its two
 cases, and the `SessionRole` view as a column of `FLEET_ROLES` typed by the kernel's own `SessionRole` (§3.3.9). The
