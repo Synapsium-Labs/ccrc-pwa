@@ -26,5 +26,8 @@ because the ledger guard refuses an edit to it from a work branch.
 - **The stall vocabulary pin.** `stall.ts`'s value import from `shared/stall-watch.ts` is admitted by name and source on
   one exact line, as the role table's import is.
 - **One pull request.** Tasks 1 to 6 ship as one pull request, as the brief asked, not the plan's two.
+- **The coord ring's handle holders.** `practiceCasesStore.ts` names `DatabaseSync` by `import type`, as its siblings
+  do, so it joins `HANDLE_HOLDERS` in `server/test/single-definition/core-vocab.test.ts` beside `reviewCapStore.ts`.
+  The plan did not name that guard.
 - **The lane-schedule census.** `lane-schedule.test.ts`'s count of monotonic rows rose from 39 to 40 with the new row.
 - `MUTANT_SETS` is not on `main`; the simulator piece registers `practiceCases.ts`.
