@@ -26,6 +26,8 @@ import type { LandingJournalPort, LandingJournalSnapshot } from './landingJourna
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkingAll, linkingOf, recordReading, setLinking } from './linkingStore.js';
+import * as builds from './claudeBuildsStore.js';
+import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
@@ -5874,6 +5876,19 @@ export class CoordStore {
       return { before, after: this.rollSettings() };
     });
   }
+
+  // ── the trusted set of Claude Code builds (D-8289) ─────────────────────────
+
+  /** Every `claude_builds` row, newest build first (`coord/claudeBuildsStore.ts`). Throws when the table cannot be read. */
+  claudeBuilds(): ClaudeBuildRecord[] { return builds.claudeBuildRecords(this.db); }
+  /** One `queued` row per build that has none; answers the builds recorded. */
+  noteClaudeBuildsSeen(seen: readonly string[], now: number): string[] { return builds.noteClaudeBuildsSeen(this.db, seen, now); }
+  /** The queue tried a `queued` build: a job went out, or why none could. */
+  markClaudeBuildAttempt(build: string, now: number, tried: BuildCaptureTry): boolean { return builds.markClaudeBuildAttempt(this.db, build, now, tried); }
+  /** A capture's verdict, on a `queued` row only. */
+  recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
+  /** The operator's **Capture again** on a failed build. */
+  requeueClaudeBuild(build: string): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 

@@ -622,6 +622,14 @@ describe('the rejection table is total, in both directions', () => {
       // does not take. Neither is a mail or run refusal; the route that carries `not-big` words it as its own 409 `not-big`.
       'big-call',
       'not-big',
+      // D-8289 — the trusted-builds record (`coord/claudeBuildsStore.ts`): `unknown-build` and `not-failed` are
+      // `requeueClaudeBuild`'s answers for a build with no row and one whose capture has not failed. Neither is a mail or
+      // run refusal; the requeue route words them as its own 404 `not-found` and 409 `conflict`.
+      'unknown-build',
+      'not-failed',
+      // D-8289 — the same record's `notSent` words (migration 60's CHECK): why a capture try sent nothing. A row fact, not a refusal.
+      'no-test-box',
+      'no-runner',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       // D-2545 — the READ-FAILURE family, and the same family as

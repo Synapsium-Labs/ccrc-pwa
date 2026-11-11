@@ -80,15 +80,35 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'deny-not-engaged' });
   });
 
-  it('step 10: a liveVersionOf that answers null is version-unverified, unread; an unlisted one names itself', async () => {
+  it('step 10: a liveVersionOf that answers null is version-unverified, unread; an uncaptured build names itself (D-8289)', async () => {
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
     expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => null }), NOW)).toEqual<ApprovalRaiseVerdict>({
-      kind: 'version-unverified', detail: "this child's live Claude Code version (unread) is not one the rig verified",
+      kind: 'version-unverified', trust: 'unread', detail: "this child's live Claude Code build is not trusted: its Claude Code build could not be read",
     });
     expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.299' }), NOW)).toEqual<ApprovalRaiseVerdict>({
-      kind: 'version-unverified', detail: "this child's live Claude Code version (2.1.299) is not one the rig verified",
+      kind: 'version-unverified', trust: 'not-captured', detail: "this child's live Claude Code build is not trusted: build 2.1.299 has no capture yet",
     });
+  });
+
+  it('step 10 reads the record (D-8289): a queued or failed capture refuses with its reason; a passed one mints', async () => {
+    f = await standardFixture();
+    const q = createQuestions({ coord: f.coord });
+    f.coord.noteClaudeBuildsSeen(['2.1.320', '2.1.321', '2.1.322'], NOW);
+    f.coord.recordClaudeBuildVerdict({ build: '2.1.321', pass: false, cwd: false, output: 'replay: 1 failed' }, NOW);
+    f.coord.recordClaudeBuildVerdict({ build: '2.1.322', pass: true, cwd: true, output: 'replay: 40 passed' }, NOW);
+    expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.320' }), NOW)).toMatchObject({ kind: 'version-unverified', trust: 'capture-queued' });
+    expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.321' }), NOW)).toMatchObject({ kind: 'version-unverified', trust: 'capture-failed' });
+    expect((await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.322' }), NOW)).kind).toBe('minted');
+    expect(approvalCount(f.coord)).toBe(1);
+  });
+
+  it('step 10: a record that cannot be read refuses record-unreadable, never trusts', async () => {
+    f = await standardFixture();
+    const q = createQuestions({ coord: f.coord });
+    vi.spyOn(f.coord, 'claudeBuilds').mockImplementation(() => { throw new Error('database is locked'); });
+    expect(await q.raiseApproval(req(), raiseDeps(f), NOW)).toMatchObject({ kind: 'version-unverified', trust: 'record-unreadable' });
+    expect(approvalCount(f.coord)).toBe(0);
   });
 
   it('step 11: a digest that does not match is digest-mismatch, journaled once, with the version check first', async () => {

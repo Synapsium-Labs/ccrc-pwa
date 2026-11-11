@@ -810,7 +810,8 @@ describe('Build 7 nouns', () => {
     // The case lane's table (Overlord W1a, §10.5): `practiceCasesStore.ts` is the `practice_cases` SQL, in `reviewCapStore.ts`'s idiom.
     // D-8181: `planStore.ts` is the plan tables' SQL, in the same idiom: every function takes the handle; the plan routes,
     // the hierarchy routes and the sync take a `PlanStorePort` built once in `index.ts`.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts']);
+    // D-8289: `claudeBuildsStore.ts` is the trusted Claude Code builds' SQL, in `linkingStore.ts`'s idiom.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

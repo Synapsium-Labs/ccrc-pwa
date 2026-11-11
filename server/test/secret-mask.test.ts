@@ -1240,6 +1240,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
     '/api/testbox/admin': "the test box's connection state, pin fingerprint and act ledger: no address, no secret, no session text (D-8166)",
+    '/api/testbox/builds': "each Claude Code build's capture verdict, its times and counts and the test box's replay output: no session text (D-8289)",
     '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
     '/api/approvals/key': 'a public key',
     '/api/updates': 'release metadata',

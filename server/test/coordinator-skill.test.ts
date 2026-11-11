@@ -886,6 +886,11 @@ describe('the coordinator skill: linkage', () => {
       'GET /api/testbox',
       'POST /api/testbox/switch',
       'POST /api/testbox/tools-sync',
+      // THE TRUSTED BUILDS (D-8289): the same card's build list and the operator's Capture again, session-gated with no box
+      // token. The re-capture is the operator-dial shape once more: a coordinator told about it would be told how to move a
+      // failed build back toward the trusted set its own approvals read. The read is the first half of that invitation.
+      'GET /api/testbox/builds',
+      'POST /api/testbox/builds/capture',
       // THE PANE-SCOPE STOP'S SWITCH (D-7902) — the operator-dial shape once more: it arms a deliberate stop's stop of
       // the stopped session's pane scope. A coordinator told about it would be told how to arm or disarm the stop of
       // its own workers' leftovers. The forbid-mention case below forbids it.

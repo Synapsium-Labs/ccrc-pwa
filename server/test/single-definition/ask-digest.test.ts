@@ -1111,7 +1111,7 @@ describe('the approval wait\'s constants and canonical forms each have one home 
     expect(decl('approvalDigestBytes').test('const c = approvalDigestBytes(payload);')).toBe(false);
   });
   it('each is declared once, in shared/api.ts', () => {
-    for (const c of ['APPROVAL_HOOK_WAIT_S', 'APPROVAL_HOOK_VERSIONS', 'APPROVAL_CWD_TRUSTED', 'APPROVAL_HOOK_STOP_STATES',
+    for (const c of ['APPROVAL_HOOK_WAIT_S', 'APPROVAL_HOOK_STOP_STATES',
       'APPROVAL_SIGNING_PUB_FILE', 'APPROVAL_SIGNING_KEY_FILE', 'APPROVAL_REQUEST_MAX_BYTES', 'canonicalJson',
       'approvalDigestBytes', 'approvalRulingBytes']) {
       expect(holders(decl(c)), c).toEqual(['shared/api.ts']);

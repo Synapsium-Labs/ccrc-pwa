@@ -13051,15 +13051,9 @@ export const CHILD_SHELL_PATH = /^\/[A-Za-z0-9._/-]+$/;
  *  `session-hook-approval-wait.test.ts`. */
 export const APPROVAL_HOOK_WAIT_S = 540;
 
-/** The Claude Code versions on which a recorded rig capture proved spec §6.9's criteria as restated on 2026-10-18
- *  (D-5439, D-5440, D-5441): plan Task 13's Linux re-check record, read with its macOS record. 2.1.299 is out: it has
- *  no Linux capture (D-5481). The server mints an approval request only for a child whose live version is listed. */
-export const APPROVAL_HOOK_VERSIONS: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
-
-/** The versions on which the rig proved that a PermissionRequest's `cwd` equals the shell's working directory after a
- *  `cd` in an earlier Bash call, on the main thread and in a subagent (spec §6.9; Task 13's Linux re-check record, L6).
- *  A subset of `APPROVAL_HOOK_VERSIONS`, never wider: elsewhere the classifier is given `cwd = null`. */
-export const APPROVAL_CWD_TRUSTED: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+// D-8289: the builds an approval trusts are data, not a list here: `claude_builds` in coord.db (seeded with the 2026-10-18
+// rig record's 2.1.296 and 2.1.300 to 2.1.302, which this file listed until then), read through
+// `shared/claudeBuildTrust.ts#buildTrustOf`. A passed capture's `cwd` says whether the classifier is given the request's `cwd`.
 
 /** The pinned public key's file name under the fleet box's `~/.ccrc` (spec §6.4), and the server's private key's under
  *  the server box's: both carry `approval-signing`, the word the child's PreToolUse deny and the classifier's forbidden
@@ -13248,7 +13242,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
  *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
  *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
- *  `version-unverified`  the child's live Claude Code version is not in `APPROVAL_HOOK_VERSIONS`.
+ *  `version-unverified`  the child's live Claude Code build is not trusted (`buildTrustOf`, D-8289); `trust` says why.
  *  `approval-released`   the row was minted `released` (`releaseReason` in the body): the operator has it.
  *  `unknown-approval`    no such row, or (on the ruling route) another nonce: answered alike, so a nonce is not probed.
  *  `approval-unreadable` the row could not be read back.
