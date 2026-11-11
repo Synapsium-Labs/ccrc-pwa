@@ -1,10 +1,14 @@
 // D-8180 (Linear hierarchy plan, Task 1.1): the hierarchy documents and the ccrc operation rows. Inert until wave 3.
 // Every answer here is a constructed fixture (`fixtures/linear/*-constructed.json`); nothing reaches a network.
 import { describe, expect, it } from 'vitest';
-import { LINEAR_CCRC_PROVENANCE_LINE, LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS } from '../src/linear/ops.js';
+import {
+  LINEAR_CCRC_PROVENANCE_LINE, LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, isLinearIdentifier, readLinearProjectStatusesPage,
+} from '../src/linear/ops.js';
+import { isLinearTeamKey } from '../../shared/linear.js';
 import {
   LINEAR_CCRC_JOURNAL_OPS, LINEAR_CCRC_OPS, readInitiativesProbe, withCcrcProvenance, type CcrcOpName,
 } from '../src/linear/hierarchyOps.js';
+import { RATELIMITED_ERRORS } from './linearFetchFake.js';
 import { linearRecord } from './linearRecorded.js';
 
 /** Each row's fixture: a constructed hierarchy answer, or the recorded answer of the issue row it reuses. */
@@ -76,6 +80,42 @@ describe('the rows shape their answers', () => {
     expect(LINEAR_CCRC_OPS.projectById.shape(linearRecord('error-not-found').body)).toEqual({ ok: false, word: 'not-found' });
   });
 
+  it('an identifier and a team key are read by the shared grammars, an underscore included', () => {
+    // `isLinearIdentifier` (ops.ts) and `isLinearTeamKey` (shared/linear.ts) accept `AB_1`: so does every hierarchy shaper.
+    expect(isLinearTeamKey('AB_1')).toBe(true);
+    expect(isLinearIdentifier('AB_1-5')).toBe(true);
+    const issue = linearRecord(FIXTURE.issueOwned).body as { data: { issue: Record<string, unknown> } };
+    const owned = { data: { issue: { ...issue.data.issue, identifier: 'AB_1-5', team: { key: 'AB_1' } } } };
+    expect(LINEAR_CCRC_OPS.issueOwned.shape(owned)).toMatchObject({ ok: true, value: { issue: { identifier: 'AB_1-5', teamKey: 'AB_1' } } });
+    const project = linearRecord(FIXTURE.projectById).body as { data: { project: Record<string, unknown> } };
+    const inTeam = { data: { project: { ...project.data.project, teams: { nodes: [{ key: 'AB_1' }] } } } };
+    expect(LINEAR_CCRC_OPS.projectById.shape(inTeam)).toMatchObject({ ok: true, value: { project: { teamKeys: ['AB_1'] } } });
+    // And what the shared grammars refuse, the shapers refuse.
+    const bad = { data: { issue: { ...issue.data.issue, identifier: 'AAA_12' } } };
+    expect(LINEAR_CCRC_OPS.issueOwned.shape(bad)).toEqual({ ok: false, word: 'malformed' });
+  });
+
+  it('an issue write answer with no identifier, or one outside the grammar, is malformed', () => {
+    for (const op of ['issueCreate', 'issueUpdate'] as const) {
+      const body = linearRecord(FIXTURE[op]).body as { data: Record<string, { success: boolean; issue: Record<string, unknown> }> };
+      const key = Object.keys(body.data)[0]!;
+      const withIdent = (identifier: unknown) => ({ data: { [key]: { ...body.data[key], issue: { ...body.data[key]!.issue, identifier } } } });
+      const { identifier: _gone, ...noIdent } = body.data[key]!.issue;
+      expect(LINEAR_CCRC_OPS[op].shape({ data: { [key]: { ...body.data[key], issue: noIdent } } }), op).toEqual({ ok: false, word: 'malformed' });
+      for (const v of ['not an identifier', 'AAA-', '-12', 12, null]) {
+        expect(LINEAR_CCRC_OPS[op].shape(withIdent(v)), `${op} ${String(v)}`).toEqual({ ok: false, word: 'malformed' });
+      }
+    }
+  });
+
+  it('the two readers of the project statuses document take one status-type grammar', () => {
+    const page = (type: string) => ({ data: { projectStatuses: { nodes: [{ id: '00000000-0008-4000-8000-000000000003', name: 'A status', type }] } } });
+    for (const type of ['started', 'in_review', 'Started', '', 'a'.repeat(32), 'a'.repeat(33), 'in-review']) {
+      expect(LINEAR_CCRC_OPS.projectStatuses.shape(page(type)).ok, type).toBe(readLinearProjectStatusesPage(page(type)).ok);
+    }
+    expect(readLinearProjectStatusesPage(page('in_review')).ok).toBe(true);
+  });
+
   it('variables build only what the row names', () => {
     expect(LINEAR_CCRC_OPS.initiativeById.variables({ id: '00000000-0001-4000-8000-000000000001', extra: 'x' }))
       .toEqual({ id: '00000000-0001-4000-8000-000000000001' });
@@ -90,6 +130,16 @@ describe('the initiatives probe and the provenance line', () => {
   it('readInitiativesProbe: nodes → on, anything else → unknown', () => {
     expect(readInitiativesProbe({ data: { initiatives: { nodes: [] } } })).toBe('on');
     expect(readInitiativesProbe({ data: null, errors: [{ message: 'x', extensions: { code: 'SOMETHING_ELSE' } }] })).toBe('unknown');
+  });
+
+  it('the probe row ends an errors answer in its word, never a state', () => {
+    expect(LINEAR_CCRC_OPS.initiativesProbe.shape(RATELIMITED_ERRORS)).toEqual({ ok: false, word: 'rate-limited' });
+    const auth = { data: null, errors: [{ message: 'Authentication required', extensions: { code: 'AUTHENTICATION_ERROR' } }] };
+    expect(LINEAR_CCRC_OPS.initiativesProbe.shape(auth)).toMatchObject({ ok: false });
+    expect(LINEAR_CCRC_OPS.initiativesProbe.shape({ data: { initiatives: { nodes: [] } } }))
+      .toEqual({ ok: true, value: { state: 'on' }, created: null });
+    expect(LINEAR_CCRC_OPS.initiativesProbe.shape({ data: { initiatives: null } }))
+      .toEqual({ ok: true, value: { state: 'unknown' }, created: null });
   });
 
   it('the issue write rows answer the identifier beside the id', () => {

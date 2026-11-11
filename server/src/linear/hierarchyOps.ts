@@ -12,10 +12,11 @@
  *
  * NO ROW DELETES OR ARCHIVES AN OBJECT. `initiativeToProjectDelete` removes a link between two objects, nothing else.
  */
-import { isLinearUuid } from '../../../shared/linear.js';
+import { isLinearTeamKey, isLinearUuid } from '../../../shared/linear.js';
 import { cleanName, stripLine, stripMultiline } from '../../../shared/unprintable.js';
 import {
-  LINEAR_CCRC_PROVENANCE_LINE, LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, linearErrorOf, type LinearAnswerRefusalWord,
+  LINEAR_CCRC_PROVENANCE_LINE, LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, isLinearIdentifier, isLinearStateType, linearErrorOf,
+  type LinearAnswerRefusalWord,
 } from './ops.js';
 
 /** The journal operations the hierarchy rows write under: the one list the policy and the journal read (Task 1.2). */
@@ -62,9 +63,6 @@ type Read<T> = (v: unknown) => T | Bad;
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const STATE_TYPE = /^[a-z_]{1,32}$/;
-const IDENTIFIER = /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/;
-const TEAM_KEY = /^[A-Za-z][A-Za-z0-9]{0,15}$/;
 
 const uuid: Read<string> = (v) => (isLinearUuid(v) ? v : BAD);
 const time: Read<string> = (v) => (typeof v === 'string' && ISO_TIME.test(v) ? v : BAD);
@@ -74,9 +72,10 @@ const line: Read<string> = (v) => (typeof v === 'string' ? stripLine(v) : BAD);
 const lineOrNull: Read<string | null> = (v) => (v === null ? null : line(v));
 const markdown: Read<string> = (v) => (typeof v === 'string' ? stripMultiline(v) : BAD);
 const markdownOrNull: Read<string | null> = (v) => (v === null ? null : markdown(v));
-const stateType: Read<string> = (v) => (typeof v === 'string' && STATE_TYPE.test(v) ? v : BAD);
-const identifier: Read<string> = (v) => (typeof v === 'string' && IDENTIFIER.test(v) ? v : BAD);
-const teamKey: Read<string> = (v) => (typeof v === 'string' && TEAM_KEY.test(v) ? v : BAD);
+// The status-type, identifier and team-key grammars are the shared ones (`ops.ts`, `shared/linear.ts`): no second copy.
+const stateType: Read<string> = (v) => (isLinearStateType(v) ? v : BAD);
+const identifier: Read<string> = (v) => (isLinearIdentifier(v) ? v : BAD);
+const teamKey: Read<string> = (v) => (isLinearTeamKey(v) ? v : BAD);
 const sortOrder: Read<number> = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : BAD);
 
 /** The `field` of an object, read by `r`; a missing field is read as `undefined` and refused by every reader. */
@@ -205,12 +204,19 @@ const writeShape = (key: string, object: string | null, creates: boolean, withId
 };
 
 /** Whether the initiatives capability answered: `nodes` means on. The off answer is unrecorded until FX2 (design §15),
- *  so everything else is `unknown`, never `off`. */
+ *  so everything else is `unknown`, never `off`. The directory's reading; the probe ROW ends an `errors` answer in its
+ *  word first ({@link probeShape}), so a rate limit or a refusal reaches its caller. */
 export function readInitiativesProbe(body: unknown): 'on' | 'off' | 'unknown' {
   if (!isObj(body) || !isObj(body['data']) || linearErrorOf(body) !== null) return 'unknown';
   return Array.isArray((body['data']['initiatives'] as { nodes?: unknown } | null)?.nodes) ? 'on' : 'unknown';
 }
-const probeShape = (body: unknown): CcrcShaped => ({ ok: true, value: { state: readInitiativesProbe(body) }, created: null });
+/** The probe row: an `errors` answer (a rate limit, a refusal) is its word, as every other row's is, so `runCcrcOp`
+ *  closes the slot on `rate-limited`; any other answer is the state `readInitiativesProbe` reads. */
+const probeShape = (body: unknown): CcrcShaped => {
+  const err = linearErrorOf(body);
+  if (err !== null) return refused(err.word);
+  return { ok: true, value: { state: readInitiativesProbe(body) }, created: null };
+};
 
 const statusesShape = (body: unknown): CcrcShaped => {
   const data = dataOf(body);

@@ -754,7 +754,10 @@ export function linearOutbound(input: LinearOpInput): { input: LinearOpInput; ma
 // ── the shapers (spec §5.4, §6.5) ──
 
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
-const STATE_TYPE = /^[a-z_]{1,32}$/;
+/** A workflow state's or a project status's `type` (`unstarted`, `started`, `completed`, …): THE ONE GRAMMAR every
+ *  reader of a status type takes, the session shapers, the directory pages and the hierarchy rows (`hierarchyOps.ts`). */
+export const LINEAR_STATE_TYPE_SHAPE = /^[a-z_]{1,32}$/;
+export const isLinearStateType = (v: unknown): v is string => typeof v === 'string' && LINEAR_STATE_TYPE_SHAPE.test(v);
 type Malformed = 'malformed';
 const MALFORMED: Malformed = 'malformed';
 
@@ -788,7 +791,7 @@ function shapeIssue(v: unknown, ctx: LinearShapeContext, withDescription: boolea
   if (!isPlainObject(st)) return MALFORMED;
   const stateName = cleanName(st['name']);
   const stateType = typeof st['type'] === 'string' ? strip('type', st['type']) : '';
-  if (stateName === null || !STATE_TYPE.test(stateType)) return MALFORMED;
+  if (stateName === null || !isLinearStateType(stateType)) return MALFORMED;
   const priority = v['priority'];
   if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < 0 || priority > LINEAR_PRIORITY_MAX) return MALFORMED;
   const createdAt = v['createdAt'];
@@ -892,7 +895,7 @@ const shapeState = (n: unknown): Record<string, unknown> | Malformed => {
   if (b === MALFORMED || !isPlainObject(n)) return MALFORMED;
   const type = typeof n['type'] === 'string' ? strip('type', n['type']) : '';
   const team = teamKeyOf(n['team']);
-  if (!STATE_TYPE.test(type) || team === MALFORMED || team === null) return MALFORMED;
+  if (!isLinearStateType(type) || team === MALFORMED || team === null) return MALFORMED;
   return { id: b.id, name: b.name, type, team };
 };
 const shapeLabel = (n: unknown): Record<string, unknown> | Malformed => {
@@ -1426,7 +1429,7 @@ export function readLinearProjectStatusesPage(
     const b = idName(n);
     if (b === MALFORMED || !isPlainObject(n)) return { ok: false, word: 'malformed' };
     const type = n['type'];
-    if (typeof type !== 'string' || !/^[a-z]{1,32}$/.test(type)) return { ok: false, word: 'malformed' };
+    if (!isLinearStateType(type)) return { ok: false, word: 'malformed' };
     statuses.push({ id: b.id, name: b.name, type });
   }
   return { ok: true, statuses };
