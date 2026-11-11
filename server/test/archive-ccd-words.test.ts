@@ -68,6 +68,31 @@ describe('ccd\'s ws-archive refusals, read back as the door\'s words', () => {
     expect(ccdArchiveRefusal(refusal(`${ARCH} cmd_ws_archive --session demo-quiet-basin`))).toBe('manifest-unbuildable');
   });
 
+  // D-8335 (#2360): the console's path for a stopped workspace whose folder is empty, with no worktree record and no
+  // branch anywhere — the archive now succeeds, so the door reads no refusal; any file in the folder keeps the word.
+  describe('an unrecorded folder (D-8335)', () => {
+    const unrecorded = (): string => {
+      const wt = workspace();
+      const main = path.join(h.home, 'projects', 'demo');
+      h.git(main, 'worktree', 'remove', '--force', wt);
+      h.git(main, 'branch', '-D', 'ws/quiet-basin');
+      fs.mkdirSync(wt);
+      return wt;
+    };
+
+    it('empty, with no branch anywhere, archives — no refusal for the door to read', () => {
+      unrecorded();
+      expect(h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`)).toMatch(/^archived demo-quiet-basin/);
+      expect(h.reg('demo-quiet-basin', 'archived')).toMatch(/^\d+$/);
+    });
+
+    it('holding a file, it stays manifest-unbuildable', () => {
+      const wt = unrecorded();
+      fs.writeFileSync(path.join(wt, 'work.txt'), 'x\n');
+      expect(ccdArchiveRefusal(refusal(`${ARCH} cmd_ws_archive --session demo-quiet-basin`))).toBe('manifest-unbuildable');
+    });
+  });
+
   it('an EMPTY manifest is manifest-unbuildable', () => {
     workspace();
     expect(ccdArchiveRefusal(refusal(`${ARCH} _ws_archive_manifest() { :; }; cmd_ws_archive --session demo-quiet-basin`)))

@@ -10903,7 +10903,9 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # HEAD moved after this workspace was created.
   base=$(_reg_get "$id" base); [[ -n "$base" ]] || base="origin/HEAD"
   ahead=""
-  [[ -n "$base" ]] && ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""
+  # D-8335: a folder proven to hold nothing is not asked: git would answer from whatever repository encloses it.
+  if [[ "$manifest" == *',"unrecordedEmpty":true}' ]]; then ahead=0
+  elif [[ -n "$base" ]]; then ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""; fi
   # Reason and its git reads are both settled BEFORE the `archived` marker
   # goes down: a mid-window kill between the two used to leave the marker
   # written with no reason ever recorded, and the `already archived` early
@@ -10931,6 +10933,62 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
     empty)    note=" (no commits beyond base)" ;;
   esac
   echo "archived $id$note — worktree kept at $workdir, nothing deleted"
+}
+
+_WS_UNREC_WHY=''
+_ws_archive_unrecorded_empty() {   # main workdir branch -> rc 0 when the workspace is PROVEN to hold nothing (D-8335,
+  #                                   #2360); rc 1 (_WS_UNREC_WHY) when any condition fails or could not be read
+  # A STOPPED WORKSPACE WHOSE FOLDER STANDS EMPTY, which git keeps no record of
+  # and whose branch resolves nowhere, used to refuse "cannot describe … truthfully"
+  # with no way out from the console. All of these, each read fail-closed, because
+  # a false "nothing here" is the one answer that could lose work:
+  #   the folder is a plain directory, not a link and not a mount point (an
+  #     unmounted disk reads empty), and lists no entry at all;
+  #   git keeps no worktree record of it: `_ws_reclaim_record` answers "none"
+  #     from a list it READ, and `_ws_reclaim_no_record` finds no admin entry
+  #     naming `<workdir>/.git` that the list omitted;
+  #   the registry's branch is not in $main, no remote-tracking ref names it,
+  #     and every remote, asked live, answers "no such head" (`ls-remote` rc 2).
+  local main="$1" w="$2" branch="$3" n wd pd common rc r refs remotes RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0 _WS_REC_WHY='' _WS_NOREC_WHY=''
+  _WS_UNREC_WHY=''
+  [[ "$w" == /* && -d "$w" && ! -L "$w" ]] || { _WS_UNREC_WHY="$w is not a plain directory"; return 1; }
+  wd=$(_plat_devino "$w" 2>/dev/null) && pd=$(_plat_devino "${w%/*}/" 2>/dev/null) \
+    || { _WS_UNREC_WHY="the device of $w could not be read"; return 1; }
+  [[ "${wd%%:*}" == "${pd%%:*}" ]] || { _WS_UNREC_WHY="$w is a mount point"; return 1; }
+  n=$(find "$w" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) || { _WS_UNREC_WHY="the entries of $w could not be listed"; return 1; }
+  n=${n//[[:space:]]/}
+  [[ "$n" == 0 ]] || { _WS_UNREC_WHY="$w is not empty (${n} entries)"; return 1; }
+  _ws_reclaim_record "$main" "$w"; rc=$?
+  case "$rc" in
+    1) : ;;
+    0) _WS_UNREC_WHY="$main records a worktree at $w"; return 1 ;;
+    *) _WS_UNREC_WHY=$_WS_REC_WHY; return 1 ;;
+  esac
+  common=$(_ws_common_dir "$main") || { _WS_UNREC_WHY="could not resolve the repository of $main"; return 1; }
+  _ws_reclaim_no_record "$common" "$w" || { _WS_UNREC_WHY=$_WS_NOREC_WHY; return 1; }
+  git -C "$main" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    1) : ;;
+    0) _WS_UNREC_WHY="refs/heads/$branch still stands in $main"; return 1 ;;
+    *) _WS_UNREC_WHY="could not ask $main for refs/heads/$branch"; return 1 ;;
+  esac
+  refs=$(git -C "$main" for-each-ref --format='%(refname)' refs/remotes/ 2>/dev/null) \
+    || { _WS_UNREC_WHY="could not list the remote-tracking refs of $main"; return 1; }
+  while IFS= read -r r; do
+    [[ -n "$r" && "$r" == refs/remotes/*/"$branch" ]] || continue
+    _WS_UNREC_WHY="$r still stands in $main"; return 1
+  done <<< "$refs"
+  remotes=$(git -C "$main" remote 2>/dev/null) || { _WS_UNREC_WHY="could not list the remotes of $main"; return 1; }
+  while IFS= read -r r; do
+    [[ -n "$r" ]] || continue
+    rc=0; _plat_timeout 60 git -C "$main" ls-remote --exit-code --heads "$r" "refs/heads/$branch" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      2) : ;;
+      0) _WS_UNREC_WHY="refs/heads/$branch stands on the remote $r"; return 1 ;;
+      *) _WS_UNREC_WHY="could not ask the remote $r for refs/heads/$branch (git exited $rc)"; return 1 ;;
+    esac
+  done <<< "$remotes"
+  return 0
 }
 
 _ws_archive_manifest() {   # id -> one JSON object on stdout
@@ -10978,10 +11036,17 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # record AND the directory itself have both said $main, which is the pair
   # cmd_ws_rm requires before it touches anything (ccd:458-461). `registered` is
   # read from $? on its own line: `local x=$(...)` returns local's status.
-  local wthead registered wd_common main_common rc
+  local wthead registered wd_common main_common rc unrec=0
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
-  (( registered == 0 )) \
-    || { echo "manifest: $main has no worktree record for $workdir" >&2; return 1; }
+  # D-8335: one shape without a record is describable: a folder PROVEN empty whose branch resolves nowhere
+  # (`_ws_archive_unrecorded_empty`). It is recorded as such (`unrecordedEmpty`), and no read below asks git inside
+  # it, since git would answer there from whatever repository encloses the folder.
+  if (( registered != 0 )); then
+    _ws_archive_unrecorded_empty "$main" "$workdir" "$branch" \
+      || { echo "manifest: $main has no worktree record for $workdir, and it is not proven to hold nothing: $_WS_UNREC_WHY" >&2; return 1; }
+    unrec=1; wthead=''
+  fi
+  if (( ! unrec )); then
   # DRIFT IS A FIELD, NOT A REFUSAL. `_ws_wt_branch` follows a rename whether ccd
   # or the user did it (ccd:403-409), so `$wthead` is git's own answer for this
   # path and `$branch` is the registry's claim: recorded side by side as `branch`
@@ -11058,6 +11123,9 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # inside that function, where its own callers inherit it.
   ignored=$(_ws_ignored_digest "$workdir") \
     || { echo "manifest: could not read the ignored set at $workdir" >&2; return 1; }
+  else
+    tip=''; dirty=0; ignored=''   # D-8335: proven above: no ref, no entry, so nothing ignored or uncommitted
+  fi
   # $main answered rev-parse a moment ago — rc 0 or a clean "no such ref", both
   # of which are answers — so its stash list is readable; the count is the only
   # field whose repository has already been proven healthy.
@@ -11226,12 +11294,12 @@ sys.stdout.write(out)
   uuid=$(_reg_read "$id" uuid) && [[ -n "$uuid" ]] \
     || { echo "manifest: could not read the uuid of '$id'" >&2; return 1; }
   ! _ws_reclaim_resolve "$workdir" || [[ "$_WS_RESOLVE_BASIS" != complete || "$_WS_RESOLVED" == //* ]] || { wr=$_WS_RESOLVED; wdreal=$(_json_str "$wr"); }
-  gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && bl=$(cat -- "$gd/gitdir" 2>/dev/null) && [[ "$bl" == */.git ]] && { [[ "$bl" == /* ]] || bl="$gd/$bl"; } && _ws_reclaim_resolve "${bl%/.git}" && [[ -n "$wr" && "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$wr" ]] && adm=$(_json_str "${gd##*/}")
-  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s,"worktreeAdmin":%s}\n' \
-    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
+  (( ! unrec )) && gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && bl=$(cat -- "$gd/gitdir" 2>/dev/null) && [[ "$bl" == */.git ]] && { [[ "$bl" == /* ]] || bl="$gd/$bl"; } && _ws_reclaim_resolve "${bl%/.git}" && [[ -n "$wr" && "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$wr" ]] && adm=$(_json_str "${gd##*/}")
+  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s,"worktreeAdmin":%s%s}\n' \
+    "$(_json_str "$id")" "$(_json_str "$branch")" "$( (( unrec )) && echo null || _json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
-    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")" \
-    "$(_json_str "$workdir")" "$wdreal" "$(_json_str "$uuid")" "$adm"
+    "$dirty" "$( (( unrec )) && echo null || _json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")" \
+    "$(_json_str "$workdir")" "$wdreal" "$(_json_str "$uuid")" "$adm" "$( (( unrec )) && echo ',"unrecordedEmpty":true')"
 }
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely

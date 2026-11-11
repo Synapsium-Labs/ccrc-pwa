@@ -190,6 +190,7 @@ _project_origin_seed	C4
 _project_origin_make	C4
 cmd_project_add	C4
 cmd_ws_archive	C4
+_ws_archive_unrecorded_empty	C4
 _ws_archive_manifest	C4
 cmd_ws_restore	C4
 _attic_project	C4
