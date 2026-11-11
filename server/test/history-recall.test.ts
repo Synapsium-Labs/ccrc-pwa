@@ -3967,6 +3967,7 @@ describe.skipIf(process.platform === 'darwin')('DM44: the read verbs answer an o
     runExpand(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
     runTree(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
     runRegex(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
+    runTouched(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
   }
   const ID = 'claude-a-x17';
   let box: rH.HistoryBox;
@@ -4055,14 +4056,15 @@ describe.skipIf(process.platform === 'darwin')('DM44: the read verbs answer an o
     const grepArgs = { words: ['zqx17seam'], regex: null, role: null, tool: null, sinceMs: null, beforeMs: null,
       node: null, sort: 'recency', limit: 20, cursor: null, includeRecall: false, json: true };
     const regexArgs = { ...grepArgs, regex: 'zqx17seam', words: [] };
-    const calls: { verb: 'tree' | 'grep' | 'describe' | 'expand'; name: string; run: (rc: Ctx) => Result | Promise<Result> }[] = [
+    const calls: { verb: 'tree' | 'grep' | 'describe' | 'expand' | 'touched'; name: string; run: (rc: Ctx) => Result | Promise<Result> }[] = [
       { verb: 'tree', name: 'tree', run: (rc) => R.runTree(rc, { depth: 2, json: true }) },
       { verb: 'grep', name: 'grep', run: (rc) => R.runGrep(rc, grepArgs) },
       { verb: 'grep', name: 'grep (regex)', run: (rc) => R.runRegex(rc, regexArgs) },
       { verb: 'describe', name: 'describe', run: (rc) => R.runDescribe(rc, { target: leaf, full: false, cursor: null, json: true }) },
       { verb: 'expand', name: 'expand', run: (rc) => R.runExpand(rc, { target: leaf, around: null, before: 5, after: 5, cursor: null, json: true }) },
+      { verb: 'touched', name: 'touched', run: (rc) => R.runTouched(rc, { arg: 'ccd/seam.mjs', limit: 20 }) },
     ];
-    for (const V of ['tree', 'grep', 'describe', 'expand'] as const) {
+    for (const V of ['tree', 'grep', 'describe', 'expand', 'touched'] as const) {
       const vt = libRead.VERB_TABLES as Record<string, readonly string[]>;
       const rc = await contextFor(SEAM, { ...vt, [V]: [...vt[V]!, 'seam_table'] });
       try {

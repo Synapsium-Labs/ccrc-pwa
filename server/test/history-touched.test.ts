@@ -16,7 +16,7 @@ import { GRAPH_MAX_BYTES, loadGraph } from '../../ccd/compact-card.mjs';
 import * as storeLib from '../../ccd/history/store.mjs';
 import * as recallLib from '../../ccd/history/recall.mjs';
 import {
-  READ_VERBS, READ_OPTIONS, parseReadArgs,
+  READ_VERBS, READ_OPTIONS, VERB_TABLES, parseReadArgs,
   touchedQuery, likeEscape, splitStoredRef, normaliseRefPath, symbolMatches, matchRef, rankTouched, touchedRows,
   makePairIndex, TOUCHED_CANDIDATE_MAX, TOUCHED_LIMIT_DEFAULT, TOUCHED_DISCLOSURE, TOUCHED_CAPPED_NOTE, TOUCHED_ORDERED_CAP, TOUCHED_ORDERED_CAPPED_NOTE, TOUCHED_REFS_CUT_NOTE,
 } from '../../ccd/history/lib.mjs';
@@ -420,6 +420,40 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(headers(touched(['ccd/tc28.mjs']))).toEqual(['touched ccd/tc28.mjs (no graph)']);
   }, HEAVY);
 
+  // Review Focus 4 through the verb: `_` and `%` in a name match only themselves. The JS matcher would drop an `aXb` decoy that a bare
+  // `_` let into the select, so the escape shows only in what the select hands the cap: 10,001 newer decoys that an unescaped
+  // pattern admits fill the candidate cap and push the real, older node out (an exit 3 and a cap line), where an escaped pattern
+  // admits none of them and the real node is the one row. Each case names its own files and symbol, so no other case sees the decoys.
+  it('a file name holding _ matches only itself through the verb: 10,001 newer aXb decoys neither fill the cap nor push the real node out', () => {
+    plant('Lt26real', { latest: T0 + 500_000, refs: [['path', 'ccd/tc26_ab.mjs']] });
+    const decoys: Array<[string, string]> = [];
+    for (let i = 1; i <= 10_001; i += 1) decoys.push(['path', `ccd/tc26Xab.mjs:${i}`]);
+    plant('Lt26decoy', { latest: T0 + 900_000, refs: decoys });
+    const j = touchedJson(['ccd/tc26_ab.mjs']);
+    expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(j).map((i) => i['nodeId'])).toEqual(['Lt26real']);
+    expect(j.json, 'the decoys were never candidates, so nothing is capped').not.toHaveProperty('candidatesCapped');
+    const d = touchedJson(['ccd/tc26Xab.mjs']);
+    expect(d.json?.['total'], 'CONTROL: the decoy name finds the decoy node (the row is too big to print), so the decoys are in the store').toBe(1);
+  }, HEAVY);
+
+  it('a symbol holding _ matches only itself through the verb: 10,001 newer fooXbar decoys neither fill the cap nor push the real node out', () => {
+    plant('Lt27real', { latest: T0 + 500_000, refs: [['path:symbol', 'ccd/tc27.mjs:tc27foo_bar', 'model']] });
+    const decoys: Array<[string, string]> = [];
+    for (let i = 1; i <= 10_001; i += 1) decoys.push(['path:symbol', `ccd/tc27d${i}.mjs:tc27fooXbar`]);
+    plant('Lt27decoy', { latest: T0 + 900_000, refs: decoys });
+    const j = touchedJson(['tc27foo_bar']);
+    expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(j).map((i) => i['nodeId'])).toEqual(['Lt27real']);
+    expect(j.json).not.toHaveProperty('candidatesCapped');
+    expect(touchedJson(['tc27fooXbar']).json?.['total'], 'CONTROL: the decoy symbol finds the decoy refs, so they are in the store').toBeGreaterThan(1000);
+  }, HEAVY);
+
+  it('a query holding % is bad-args, exit 2', () => {
+    const r = touchedJson(['tc28a%b']);
+    expect([r.code, r.json?.['reason']]).toEqual([2, 'bad-args']);
+  }, HEAVY);
+
   it('TC8 scope: --project and --workspace together are refused, exit 2', () => {
     const r = touchedJson(['ccd/x.mjs', '--project', '--workspace']);
     expect([r.code, r.json?.['reason']]).toEqual([2, 'bad-args']);
@@ -486,6 +520,13 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(j.code, `${j.stderr}${j.stdout}`).toBe(0);
     expect(j.json).not.toHaveProperty('candidatesCapped');
   }, HEAVY);
+
+  it('VERB_TABLES.touched lists every table its path reads: the context, its own selects, and the as-of cut\'s lineage and descendants', () => {
+    expect([...VERB_TABLES.touched]).toEqual([
+      'meta', 'redact_hashes', 'sessions', 'epochs', 'transcripts', 'entries', 'ingest_files', 'derivation_state',
+      'nodes', 'node_refs', 'node_sources', 'node_children', 'memberships', 'boundaries',
+    ]);
+  });
 
   it('TC17 one verb list (A7): the read-verb whitelist is derived from one list and includes touched', () => {
     expect(READ_VERBS).toContain('touched');
