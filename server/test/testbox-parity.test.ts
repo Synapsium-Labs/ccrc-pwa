@@ -249,11 +249,13 @@ const EVIL_ROWS_OUT = ['project-a', 'project-b'].map((n) => `@@ ${n}.json\\n${JS
 /** The fleet host's own record of the rows it sent (`~/.ccrc/testbox-rows`: name, fetch URL, package, command head). */
 const FLEET_ROWS = ['project-a', 'project-b'].map((n) => `${n} https://testbox.invalid/${n}.git server ./node_modules/.bin/vitest\n`).join('');
 const BOXENV = '/etc/ccrc-testbox/ccrc.env';
+/** A regular expression matching `s` literally (every metacharacter, the backslash too, escaped). */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const RULES: string[][] = [
   ['build\\.json', '0', '{"version":"v1.2.3"}'],
   ['current', '0', 'node-20.1.0+chrome-130.0'],
   ['CCRC_TESTBOX_REPOS', '0', EVIL_ROWS_OUT],
-  [BOXENV.replace(/\./g, '\\.'), '0', ''],
+  [escapeRe(BOXENV), '0', ''],
 ];
 
 interface Home { home: string; env: NodeJS.ProcessEnv; log: string; toolLog: string; state: string; parity: string; calls: string }

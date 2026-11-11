@@ -19,9 +19,12 @@ let W: World;
 beforeAll(async () => { W = await makeWorld(); }, 180_000);
 afterAll(async () => { await W?.close(); });
 
-/** The settings phase's box-file write, with `content` on stdin. */
+/** The settings phase's box-file write, with `content` on stdin. The script is run from a file (its `$1` is the box
+ *  file, as under `sh -c … sh <path>`), so no shell command line is built from the text read. */
 function writeBoxFile(b: Box, content: string, shim: string): { rc: number; err: string } {
-  const r = spawnSync('sh', ['-c', SNIPPET!, 'sh', b.boxFile], { input: content, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH ?? ''}` } });
+  const script = path.join(shim, 'box-file-write.sh');
+  writeFileSync(script, `${SNIPPET!}\n`);
+  const r = spawnSync('sh', [script, b.boxFile], { input: content, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH ?? ''}` } });
   return { rc: r.status ?? -1, err: r.stderr };
 }
 /** chown does nothing, and install drops -o and -g, so the script runs as the test user. */

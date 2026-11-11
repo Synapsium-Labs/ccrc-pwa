@@ -42,6 +42,8 @@ const STG = '/tmp/ccrc-stg.AbC123';
 const TOOLS = '/opt/tools';
 const SHA = 'a1'.repeat(32);
 const BOXENV = '/etc/ccrc-testbox/ccrc.env';
+/** A regular expression matching `s` literally (every metacharacter, the backslash too, escaped). */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SRC = '. "$1" || exit 90; shift; REAL_OS=$CCD_OS; CCD_OS=linux; '
   + 'for f in _plat_mode _plat_sha256; do eval "$(declare -f $f | sed "1s/^$f/${f}_real/")"; eval "$f() { local CCD_OS=\\$REAL_OS; ${f}_real \\"\\$@\\"; }"; done; ';
 const b64url = (s: string): string => Buffer.from(s).toString('base64url');
@@ -65,13 +67,13 @@ const OLD_BOX = 'CCRC_TESTBOX_LISTEN=10.0.0.9:7443\\nCCRC_TESTBOX_ROOT=/srv/box\
 /** The rules of a box that answers every command of these acts: regex, exit code, stdout (printf %b). First match wins. */
 const PASSING_RULES: string[][] = [
   ['install\\.sh', '0', 'ccrc-testbox-install: applied\\n'],
-  [`^(sudo -n -- )?cat -- ${BOXENV.replace(/\./g, '\\.')}$`, '0', OLD_BOX],
-  [`sha256sum -- ${BOXENV.replace(/\./g, '\\.')}`, '0', `${SHA}  ${BOXENV}\\n`],
+  [`^(sudo -n -- )?cat -- ${escapeRe(BOXENV)}$`, '0', OLD_BOX],
+  [`sha256sum -- ${escapeRe(BOXENV)}`, '0', `${SHA}  ${BOXENV}\\n`],
   ['--testbox-knobs', '0', 'CCRC_TESTBOX_RUNS\\x1f2\\x1f2\\x1fdefault\\n'],
   ['^(sudo -n -- )?mktemp -d$', '0', `${STG}\\n`],
   ['^(sudo -n -- )?tar -xzf', '0', ''],
   ['sha256sum.*-c.*MANIFEST', '0', ''],
-  [BOXENV.replace(/\./g, '\\.'), '0', ''],
+  [escapeRe(BOXENV), '0', ''],
   ['rows', '0', ''],
   ['push\\.pub', '0', ''],
   ['readlink', '0', ''],
