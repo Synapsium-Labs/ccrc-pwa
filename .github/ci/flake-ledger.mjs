@@ -22,14 +22,14 @@
 // Run it (any machine with `gh` signed in; the token needs only read access to Actions):
 //
 //   node .github/ci/flake-ledger.mjs --repo OWNER/NAME [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--days N]
-//     [--event merge_group|pull_request]... [--exclude <job-name regex>]... [--no-logs] [--top N]
+//     [--event merge_group|pull_request]... [--exclude <job-name prefix>]... [--no-logs] [--top N]
 //     [--out ledger.jsonl] [--summary-out top.json]
 //
 // The repository defaults to `$GITHUB_REPOSITORY`; the window to the seven UTC days ending today (`--days N` sets its
 // length, `--until` its last day, `--since` its first). Rows go to stdout as JSON lines (or to `--out`); the top-N
 // summary by signature goes to stderr as text (and to `--summary-out` as JSON). Exit 0 on a finished pass, 1 when a
 // listing could not be read (a server error is asked again twice first), 2 on a usage error. A summary job that fails because a shard failed is its own row with
-// its own signature; `--exclude` drops such jobs by name (in ci.yml, `--exclude '^test \('` drops the `test (server)`
+// its own signature; `--exclude` drops jobs whose name starts with the given text (in ci.yml, `--exclude 'test ('` drops the `test (server)`
 // and `test (pwa)` verdicts and keeps the shards that failed under them).
 //
 // The merge-queue keeper can call it on its own schedule (say `--days 1 --out <its state dir>/flakes-<day>.jsonl`)
@@ -122,14 +122,14 @@ function byTime(a, b) {
 /**
  * Every failed execution paired with the first pass after it on the same (workflow, job, sha). Pure; the input order
  * does not matter. Pairs come back oldest failure first.
- * @param {Execution[]} executions @param {{ exclude?: RegExp[] }} [opt] @returns {Pair[]}
+ * @param {Execution[]} executions @param {{ exclude?: string[] }} [opt] @returns {Pair[]}
  */
 export function pairFlakes(executions, opt = {}) {
   const exclude = opt.exclude ?? [];
   /** @type {Map<string, Execution[]>} */
   const groups = new Map();
   for (const e of executions) {
-    if (exclude.some((re) => re.test(e.job))) continue;
+    if (exclude.some((prefix) => e.job.startsWith(prefix))) continue;
     if (!FAILED.has(e.conclusion) && e.conclusion !== PASSED) continue;
     const k = `${e.workflow}\0${e.job}\0${e.sha}`;
     groups.set(k, [...(groups.get(k) ?? []), e]);
@@ -268,7 +268,7 @@ export function daySlices(since, until) {
 
 /**
  * @param {string[]} argv @param {Date} now @param {Record<string, string | undefined>} env
- * @returns {{ repo: string, since: string, until: string, days: string[], events: string[], exclude: RegExp[],
+ * @returns {{ repo: string, since: string, until: string, days: string[], events: string[], exclude: string[],
  *   logs: boolean, top: number, out: string | null, summaryOut: string | null }}
  */
 export function parseArgs(argv, now, env) {
@@ -276,7 +276,7 @@ export function parseArgs(argv, now, env) {
   const one = {};
   /** @type {string[]} */
   const events = [];
-  /** @type {RegExp[]} */
+  /** @type {string[]} */
   const exclude = [];
   let logs = true;
   const VALUED = ['--repo', '--since', '--until', '--days', '--top', '--out', '--summary-out', '--event', '--exclude'];
@@ -290,7 +290,8 @@ export function parseArgs(argv, now, env) {
       if (!EVENTS.includes(v)) throw new UsageError(`--event must be one of ${EVENTS.join(', ')}, got ${JSON.stringify(v)}`);
       if (!events.includes(v)) events.push(v);
     } else if (a === '--exclude') {
-      try { exclude.push(new RegExp(v)); } catch { throw new UsageError(`--exclude ${JSON.stringify(v)} is not a regular expression`); }
+      // A plain prefix, never a pattern built from the command line (CodeQL js/regex-injection).
+      exclude.push(v);
     } else one[a] = v;
   }
   const positive = (/** @type {string} */ flag, /** @type {string} */ fallback) => {
@@ -337,7 +338,7 @@ async function signatureOf(io, failed, logs) {
 
 /**
  * The whole pass over a reader: list the window's runs, list jobs for the candidates, pair, and name each failure.
- * @param {Io} io @param {{ events: string[], days: string[], logs: boolean, exclude: RegExp[] }} opt
+ * @param {Io} io @param {{ events: string[], days: string[], logs: boolean, exclude: string[] }} opt
  * @returns {Promise<{ rows: LedgerRow[], warnings: string[] }>}
  */
 export async function runLedger(io, opt) {

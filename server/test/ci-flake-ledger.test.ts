@@ -151,9 +151,9 @@ describe('pairFlakes — every failed execution paired with the first pass after
     expect(pairFlakes(execs)).toEqual([]);
   });
 
-  it('drops a job whose name matches an exclude pattern', () => {
+  it('drops a job whose name starts with an exclude prefix', () => {
     const { runs, jobs } = fixture();
-    const pairs = pairFlakes(execsOf(runs, jobs), { exclude: [/^browser /] });
+    const pairs = pairFlakes(execsOf(runs, jobs), { exclude: ['browser '] });
     expect(pairs.map((p: { failed: { job: string } }) => p.failed.job)).toEqual(['server 1/4', 'pwa 2/3']);
   });
 });
@@ -274,7 +274,7 @@ describe('daySlices and parseArgs', () => {
   });
 
   it('takes the repository from GITHUB_REPOSITORY, and refuses an unknown flag or event', () => {
-    expect(parseArgs(['--days', '2', '--no-logs', '--top', '3', '--event', 'merge_group', '--exclude', '^test '], new Date('2026-11-11T08:00:00Z'), { GITHUB_REPOSITORY: 'o/x' }))
+    expect(parseArgs(['--days', '2', '--no-logs', '--top', '3', '--event', 'merge_group', '--exclude', 'test ('], new Date('2026-11-11T08:00:00Z'), { GITHUB_REPOSITORY: 'o/x' }))
       .toMatchObject({ repo: 'o/x', since: '2026-11-10', until: '2026-11-11', logs: false, top: 3, events: ['merge_group'] });
     expect(() => parseArgs(['--bogus'], new Date(), {})).toThrow(/unknown/);
     expect(() => parseArgs(['--event', 'push'], new Date(), {})).toThrow(/event/);
@@ -302,7 +302,7 @@ function fakeIo(over: { log?: Record<number, string | null>, annotations?: Recor
 }
 
 describe('runLedger — the whole pass over an injected reader', () => {
-  const opt = { events: ['merge_group', 'pull_request'], days: ['2026-11-10'], logs: true, exclude: [] as RegExp[] };
+  const opt = { events: ['merge_group', 'pull_request'], days: ['2026-11-10'], logs: true, exclude: [] as string[] };
 
   it('lists jobs only for candidate runs and reads signatures only for the failed side of a pair', async () => {
     const f = fakeIo();
