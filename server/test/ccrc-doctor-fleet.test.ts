@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, cpSync, openSync, writeSync, ftruncateSync, closeSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
@@ -508,7 +509,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(readFileSync(f, 'utf8')).toBe(shipped);
     r = runDoctor(home);
     expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear$/m);
-  }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
+  }, scaled(90_000));   // two doctor runs: a bounded but load-slow box is not a red
 
   it('a home whose ccrc-history lacks only its MIT sidecar is stale too: diff -r -q compares the whole tree', () => {
     const home = healthy('ccrc-doctor-skills-history-sidecar-');

@@ -580,6 +580,30 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     expect(comment).toContain('Six jobs ask for more than this');
   });
 
+  it("release-stable's call to ci.yml grants every permission a called job asks for (a job asking for more fails the run before it starts)", () => {
+    // GitHub checks every called job's permissions when the run starts, a skipped one's too, so a single job that
+    // asks for more than the caller grants makes the whole promotion a startup_failure, the gate included.
+    // Derived, not listed: every job of ci.yml and of the macos.yml it calls in turn.
+    const grantOf = (block: string): Map<string, string> => {
+      const m = /^ {4}permissions:\n((?: {6}[a-z-]+: (?:read|write|none)\n?)+)/m.exec(block);
+      return new Map([...(m?.[1] ?? '').matchAll(/^ {6}([a-z-]+): (read|write|none)$/gm)].map((x) => [x[1], x[2]]));
+    };
+    const asked = new Map<string, string>();
+    for (const yml of [read(CI), read(MACOS)]) {
+      for (const [, b] of jobs(yml)) {
+        for (const [k, v] of grantOf(b)) if (v !== 'none' && asked.get(k) !== 'write') asked.set(k, v);
+      }
+    }
+    expect(asked.get('contents'), 'the derivation found no job permissions (the guard would be vacuous)').toBe('read');
+    const full = jobs(read('.github/workflows/release-stable.yml')).get('full') ?? '';
+    expect(full, "release-stable's full job is gone").toContain('uses: ./.github/workflows/ci.yml');
+    const granted = grantOf(full);
+    for (const [k, v] of asked) {
+      const g = granted.get(k);
+      expect(g === 'write' || g === v, `release-stable's full call does not grant ${k}: ${v}`).toBe(true);
+    }
+  });
+
   it('probe-macos runs on a dispatch of macos.yml and the daily schedule only — never on a pull request or a push, and never gating a called or dispatched full run', () => {
     // macos.yml (operator rulings 2026-10-28 and 2026-11-02): a direct run (a dispatch), or a call that asks with `probe: true`.
     expect(jobKey(macJob('probe-macos'), 'if')).toBe("github.workflow == 'macos' || inputs.probe");

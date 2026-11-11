@@ -1,0 +1,221 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-door",
+  "covers": [
+    "W0-15",
+    "W0-16"
+  ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "launch": {
+    "args": [
+      "--setting-sources",
+      "project",
+      "--settings",
+      "@RIG_REPO@/.w0/profile.json",
+      "--strict-mcp-config",
+      "--mcp-config",
+      "@RIG_REPO@/.w0/door.json",
+      "--tools",
+      "Agent,Skill",
+      "--agents",
+      "{\"w0-reader\":{\"description\":\"W0 reader\",\"prompt\":\"You are a W0 reader.\",\"model\":\"sonnet\",\"tools\":[\"mcp__door__read\",\"mcp__door__act\",\"Bash\",\"Read\"]}}",
+      "--permission-mode",
+      "bypassPermissions"
+    ],
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "DOOR_LOG": "@RIG_ROOT@/logs/door.ndjson",
+      "DOOR_NONCE": "n-w0-door",
+      "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+      "CLAUDE_CODE_FORK_SUBAGENT": "0",
+      "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+    },
+    "files": [
+      {
+        "in": "repo",
+        "path": ".w0/profile.json",
+        "text": "{\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"PostCompact\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"PreCompact\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 1500 --tag-source --log-payload\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"SubagentStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"SubagentStop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}]},\"enableWorkflows\":false,\"autoMemoryEnabled\":false,\"idleCompaction\":false,\"crossSessionInbound\":\"refuse\",\"switchModelsOnFlag\":true,\"env\":{\"DISABLE_AUTOUPDATER\":\"1\"},\"permissions\":{\"defaultMode\":\"bypassPermissions\",\"deny\":[\"Bash\",\"Edit\",\"Write\",\"WebFetch\",\"WebSearch\",\"SendMessage\",\"ListAgents\",\"Workflow\"]}}"
+      },
+      {
+        "in": "repo",
+        "path": ".w0/door.json",
+        "text": "{\"mcpServers\":{\"door\":{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"@RIG_STUBS@/door-stub.mjs\"]}}}"
+      },
+      {
+        "in": "repo",
+        "path": ".claude/skills/w0-skill/SKILL.md",
+        "text": "---\nname: w0-skill\ndescription: W0-SKILL-CANARY, the one skill the profile names\n---\n\nW0 skill body.\n"
+      },
+      {
+        "in": "cfg",
+        "path": "skills/w0-user-skill/SKILL.md",
+        "text": "---\nname: w0-user-skill\ndescription: W0-USER-SKILL-CANARY, an account-level skill the profile must not load\n---\n\nW0 user skill body.\n"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "sleep": 8
+    },
+    {
+      "paneSnap": "bypass-dialog"
+    },
+    {
+      "keys": [
+        "Down"
+      ]
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitReady": 60
+    },
+    {
+      "paneSnap": "started"
+    },
+    {
+      "type": "w0 d1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "d1",
+        "d1-tools",
+        "reader",
+        "reader-done",
+        "d1-done"
+      ],
+      "timeoutS": 180
+    },
+    {
+      "sleep": 5
+    },
+    {
+      "paneSnap": "end"
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "d1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 d1$"
+      },
+      "blocks": [
+        {
+          "tool_use": {
+            "name": "mcp__door__card",
+            "input": {}
+          }
+        },
+        {
+          "tool_use": {
+            "name": "mcp__door__read",
+            "input": {}
+          }
+        }
+      ]
+    },
+    {
+      "label": "reader",
+      "match": {
+        "kind": "sub",
+        "lastUser": "w0 reader-door"
+      },
+      "blocks": [
+        {
+          "tool_use": {
+            "name": "mcp__door__read",
+            "input": {}
+          }
+        },
+        {
+          "tool_use": {
+            "name": "Bash",
+            "input": {
+              "command": "echo W0-READER-BASH"
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "name": "mcp__door__act",
+            "input": {}
+          }
+        }
+      ]
+    },
+    {
+      "label": "reader-done",
+      "match": {
+        "kind": "sub",
+        "hasToolResult": true
+      },
+      "text": "W0-READER-DONE"
+    },
+    {
+      "label": "d1-tools",
+      "match": {
+        "kind": "main",
+        "hasToolResult": true
+      },
+      "blocks": [
+        {
+          "tool_use": {
+            "nameAny": [
+              "Agent",
+              "Task"
+            ],
+            "input": {
+              "description": "w0 reader",
+              "prompt": "w0 reader-door",
+              "subagent_type": "w0-reader",
+              "model": "sonnet"
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "name": "Bash",
+            "input": {
+              "command": "echo W0-MAIN-BASH"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "d1-done",
+      "match": {
+        "kind": "main",
+        "hasToolResult": true
+      },
+      "text": "W0-D1-DONE"
+    }
+  ]
+}

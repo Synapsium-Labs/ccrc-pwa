@@ -20,6 +20,7 @@ import { makeCcdHarness, ghContainedEnv, CCD, BOUNDED, FIXTURE_MOUNTINFO, type C
 import { inheritedEnv } from './gitEnvStrip.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled, scaledSeconds } from './timeScale.js';
 import {
   AUTHDEAD_ROWS, HOME_ROWS,
   LIMIT_KEYS, LIMITS_IN_CAP_SIGPIPE, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, REGISTRY_ROWS, ROUTE_ROWS,
@@ -353,8 +354,9 @@ function plantShims(home: string): string {
 }
 
 let batchSeq = 0;
-/** Runs `rows` in one bounded bash under `locale`, and reads every side back. */
-export function runBatch(h: CcdHarness, rows: readonly Row[], locale: string, boundS = 120): Batch {
+/** Runs `rows` in one bounded bash under `locale`, and reads every side back. `boundS` is used as given; the default,
+ *  and every block's own bound below, is scaled for a slow environment (D-8277), where it is a hang guard only. */
+export function runBatch(h: CcdHarness, rows: readonly Row[], locale: string, boundS = scaledSeconds(120)): Batch {
   const ids = new Set<string>();
   for (const r of rows) { if (ids.has(r.id)) throw new Error(`duplicate row id ${r.id}`); ids.add(r.id); }
   const base = path.join(h.home, '.diet', `batch-${++batchSeq}`);
@@ -466,7 +468,7 @@ export const UTF8_LOCALE: string | null = (() => {
   const home = mkTmp('ccrc-diet-loc-');
   for (const loc of ['C.UTF-8', 'en_US.UTF-8']) {
     const r = spawnSync('bash', ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`], {
-      encoding: 'utf8', timeout: 15_000,
+      encoding: 'utf8', timeout: scaled(15_000),
       env: ghContainedEnv(home, { PATH: process.env['PATH'] ?? '', HOME: home, LC_ALL: loc }, { systemd: true, tmux: true }),
     });
     if (r.status === 0 && r.stdout === '1') return loc;
@@ -486,7 +488,7 @@ export function runScript(h: CcdHarness, script: string, env: NodeJS.ProcessEnv 
   const file = path.join(h.home, '.diet', `script-${++batchSeq}.bash`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, script);
-  const r = spawnSync('bash', ['-c', `${BOUNDED} 120 bash "$0"`, file], {
+  const r = spawnSync('bash', ['-c', `${BOUNDED} ${scaledSeconds(120)} bash "$0"`, file], {
     cwd: h.home, encoding: 'utf8', maxBuffer: 64 << 20,
     env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home, CCD_MOUNTINFO: path.join(h.home, FIXTURE_MOUNTINFO), ...env },
       { systemd: true, tmux: true }),
@@ -1280,7 +1282,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     beforeAll(() => {
       h = makeCcdHarness('ccrc-diet-e3-');
       if (locale !== null) batch = runBatch(h, [...rows.tmux, ...rows.cfg, ...rows.clock], locale);
-    }, 300_000);
+    }, scaled(300_000));
     afterAll(() => h.cleanup());
     /** The batch, or a skip on Darwin / a red on Linux when this half has no locale to run under. */
     const got = (ctx: { skip: (note?: string) => never }): Batch => {
@@ -1344,10 +1346,10 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     beforeAll(() => {
       h = makeCcdHarness('ccrc-diet-e5-');
       if (locale !== null) {
-        fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.domain, rows.sigpipe], locale, 300);
-        random = runBatch(h, rows.random, locale, 300);
+        fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.domain, rows.sigpipe], locale, scaledSeconds(300));
+        random = runBatch(h, rows.random, locale, scaledSeconds(300));
       }
-    }, 700_000);
+    }, scaled(700_000));
     afterAll(() => h.cleanup());
     const got = (ctx: { skip: (note?: string) => never }): { fixed: Batch; random: Batch } => {
       if (locale === null) {
@@ -1440,7 +1442,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     beforeAll(() => {
       h = makeCcdHarness('ccrc-diet-e6-');
       if (locale !== null) batch = runBatch(h, rows, locale);
-    }, 300_000);
+    }, scaled(300_000));
     afterAll(() => h.cleanup());
 
     const got = (ctx: { skip: (note?: string) => never }): Batch => {
@@ -1489,10 +1491,10 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     beforeAll(() => {
       h = makeCcdHarness('ccrc-diet-e7-');
       if (locale !== null) {
-        fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.rewrite, rows.control, ...rows.callers], locale, 600);
-        random = runBatch(h, rows.random, locale, 600);
+        fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.rewrite, rows.control, ...rows.callers], locale, scaledSeconds(600));
+        random = runBatch(h, rows.random, locale, scaledSeconds(600));
       }
-    }, 1_300_000);
+    }, scaled(1_300_000));
     afterAll(() => h.cleanup());
     const got = (ctx: { skip: (note?: string) => never }): { fixed: Batch; random: Batch } => {
       if (locale === null) {
@@ -1566,10 +1568,10 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     beforeAll(() => {
       h = makeCcdHarness('ccrc-diet-e8-');
       if (locale !== null) {
-        fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.vanish, ...rows.raw], locale, 600);
-        random = runBatch(h, rows.random, locale, 600);
+        fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.vanish, ...rows.raw], locale, scaledSeconds(600));
+        random = runBatch(h, rows.random, locale, scaledSeconds(600));
       }
-    }, 1_300_000);
+    }, scaled(1_300_000));
     afterAll(() => h.cleanup());
     const got = (ctx: { skip: (note?: string) => never }): { fixed: Batch; random: Batch } => {
       if (locale === null) {
@@ -1649,8 +1651,8 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     let batch: Batch | null = null;
     beforeAll(() => {
       h = makeCcdHarness('ccrc-diet-e9-');
-      if (locale !== null) batch = runBatch(h, [...rows.chain, ...rows.named], locale, 900);
-    }, 1_000_000);
+      if (locale !== null) batch = runBatch(h, [...rows.chain, ...rows.named], locale, scaledSeconds(900));
+    }, scaled(1_000_000));
     afterAll(() => h.cleanup());
     const got = (ctx: { skip: (note?: string) => never }): Batch => {
       if (locale === null) {
@@ -1706,8 +1708,8 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
     let batch: Batch | null = null;
     beforeAll(() => {
       h = makeCcdHarness('ccrc-diet-e10-');
-      if (locale !== null) batch = runBatch(h, [...rows.home, ...rows.named, ...rows.raw, ...rows.authdead], locale, 600);
-    }, 700_000);
+      if (locale !== null) batch = runBatch(h, [...rows.home, ...rows.named, ...rows.raw, ...rows.authdead], locale, scaledSeconds(600));
+    }, scaled(700_000));
     afterAll(() => h.cleanup());
     const got = (ctx: { skip: (note?: string) => never }): Batch => {
       if (locale === null) {

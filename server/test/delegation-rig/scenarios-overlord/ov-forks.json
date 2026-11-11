@@ -1,0 +1,105 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-forks",
+  "covers": [
+    "W0-10"
+  ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "CLAUDE_CODE_FORK_SUBAGENT": "0",
+      "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1"
+    },
+    "settings": {
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 f1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "f1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "relaunch": {
+        "mode": "fork"
+      }
+    },
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 f2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "f2"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "f1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 f1$"
+      },
+      "text": "W0-F1"
+    },
+    {
+      "label": "f2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 f2$"
+      },
+      "text": "W0-F2"
+    }
+  ]
+}

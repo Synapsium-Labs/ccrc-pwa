@@ -316,6 +316,7 @@ _avail	C1
 _swap_target	C1
 _pane_measurable	C3
 _pane_narrow_note	C1
+_pane_type_ready	C3
 _pane_auto_continue_armed	C3
 _pane_born	C3
 _session_hard_blocked	C1
