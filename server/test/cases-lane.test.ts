@@ -3,7 +3,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, type RunReadResult } from '../src/coord/store.js';
 import { casesPass, type CasesCoord } from '../src/coord/casesLane.js';
 import { stallDetail } from '../src/coord/stall.js';
 import { parsedFile } from './scan/symbols.js';
@@ -137,14 +137,28 @@ describe('a failing store', () => {
     expect(cases(s)).toEqual([]);
   });
 
-  it('(c) a run read that fails leaves its run out, so two of three count nothing', async () => {
+  it('(c) a run read that fails lowers the count, warns once and answers unread runs', async () => {
+    const s = store();
+    const ids = [episode(s, T - 4 * H), episode(s, T - 3 * H), episode(s, T - 2 * H), episode(s, T - H)];
+    expect(ids).toHaveLength(4);
+    const first = (s.db.prepare('SELECT MIN(runId) AS r FROM run_events').get() as { r: number }).r;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failed: RunReadResult = { ok: false, kind: 'run-unreadable', detail: 'x' };
+    const r = await casesPass({ coord: over(s, { run: (id) => (id === first ? failed : s.run(id)) }), now: () => T });
+    expect(r).toEqual({ opened: 1, superseded: 0, unread: 'runs' });
+    expect(cases(s)).toHaveLength(1);
+    expect(cases(s)[0]).toMatchObject({ cause: 'count' });
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([`ccrc-server: cases: runs read failed: 1 of 4 (run ${first}: x)`]);
+  });
+
+  it('(e) an absent run is left out without a warning', async () => {
     const s = seed();
     const first = (s.db.prepare('SELECT MIN(runId) AS r FROM run_events').get() as { r: number }).r;
-    const r = await casesPass({
-      coord: over(s, { run: (id) => (id === first ? { ok: false, kind: 'run-unreadable', detail: 'x' } as never : s.run(id)) }),
-      now: () => T,
-    });
-    expect(r.opened).toBe(0);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const absent: RunReadResult = { ok: true, run: null };
+    const r = await casesPass({ coord: over(s, { run: (id) => (id === first ? absent : s.run(id)) }), now: () => T });
+    expect(r).toEqual({ opened: 0, superseded: 0, unread: null });
+    expect(warn).not.toHaveBeenCalled();
     expect(cases(s)).toEqual([]);
   });
 
