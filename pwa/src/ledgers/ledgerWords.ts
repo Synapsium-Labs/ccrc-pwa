@@ -109,8 +109,12 @@ export interface LimitRow {
   readonly reset: number | null;
   /** The account the session is stopped on. */
   readonly account: string;
-  /** The operator chose "Wait until reset". */
+  /** A "Wait until reset" choice stands: the operator's (`waitingBy: 'operator'`) or ccrc's own (`'auto'`). */
   readonly waiting: boolean;
+  /** Who chose the wait, null when none stands. `'operator'`: the operator's tap, a pin that nothing moves before the reset.
+   *  `'auto'`: ccrc chose it because no account had room (D-8173 ruling (a)); not a pin, so ccrc still moves the session if
+   *  an account gets room, and the row keeps the wait control that makes it the operator's pin. */
+  readonly waitingBy: 'operator' | 'auto' | null;
   readonly session: FleetSession;
 }
 
@@ -124,7 +128,7 @@ export function limitRows(sessions: readonly FleetSession[], runs: readonly RunS
     if (w === null || w === undefined) continue;
     out.push({
       sessionId: s.id, program: sessionProgramme(s, runs), title: sessionLabel(s),
-      since: w.since, reset: w.reset, account: w.account, waiting: w.waiting, session: s,
+      since: w.since, reset: w.reset, account: w.account, waiting: w.waiting, waitingBy: w.waitingBy, session: s,
     });
   }
   return out.sort((a, b) => a.since - b.since || a.sessionId.localeCompare(b.sessionId));

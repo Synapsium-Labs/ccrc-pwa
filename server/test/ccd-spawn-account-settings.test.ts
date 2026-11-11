@@ -55,7 +55,7 @@ const composed = (line: string): string => {
 const spawnBoth = (id: string, pre = ''): { lines: string[]; err: string; code: number } => {
   h.sh(`rm -f "$HOME/ccd-calls" "$HOME/pane-up"`);
   // The ccd path and the snippet ride the environment, as the harness's own `sh` does (D-5259).
-  const r = spawnSync('bash', ['-c', 'a_src=$A_SRC a_snip=$A_SNIP; unset A_SRC A_SNIP; source "$a_src"; eval "$a_snip"'], {
+  const r = spawnSync('bash', ['-c', 'a_src=$A_SRC a_snip=$A_SNIP; unset A_SRC A_SNIP; source "$a_src"; FLEET_SPAWN_PINS=; eval "$a_snip"'], {
     env: ghContainedEnv(h.home, { ...h.env(), A_SRC: CCD, A_SNIP: `${RESUME_DIES} ${pre} _spawn_start ${id} resume` },
       { systemd: true, tmux: true, net: true }),
     cwd: h.home, encoding: 'utf8',

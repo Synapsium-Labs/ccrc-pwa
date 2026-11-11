@@ -54,7 +54,7 @@ const ccrcEnv = (text: string): void => {
 /** Both spawn lines of `_spawn_start <id> resume`, what it said on stderr and its rc. */
 const spawnBoth = (id: string, extra: NodeJS.ProcessEnv = BOX, src = CCD): { lines: string[]; err: string; code: number } => {
   h.sh(`rm -f "$HOME/ccd-calls" "$HOME/pane-up"`);
-  const r = spawnSync('bash', ['-c', 'a_src=$A_SRC a_snip=$A_SNIP; unset A_SRC A_SNIP; source "$a_src"; eval "$a_snip"'], {
+  const r = spawnSync('bash', ['-c', 'a_src=$A_SRC a_snip=$A_SNIP; unset A_SRC A_SNIP; source "$a_src"; FLEET_SPAWN_PINS=; eval "$a_snip"'], {
     env: ghContainedEnv(h.home, { ...h.env(extra), A_SRC: src, A_SNIP: `${RESUME_DIES} _spawn_start ${id} resume` },
       { systemd: true, tmux: true, net: true }),
     cwd: h.home, encoding: 'utf8',

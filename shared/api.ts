@@ -119,6 +119,15 @@ export function isSessionRole(v: unknown): v is SessionRole {
  *  badge although it was never given the card; both are as spec §8 asks. */
 export const sessionRoleOf = (child: ChildMark): SessionRole => (child.kind === 'none' ? 'coordinator' : 'child');
 
+/** `FleetSession.limitWait`'s value (D-8123; `waitingBy`, D-8173): see the field's own doc. */
+export interface LimitWait {
+  readonly since: number;
+  readonly reset: number | null;
+  readonly account: string;
+  readonly waiting: boolean;
+  readonly waitingBy: 'operator' | 'auto' | null;
+}
+
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
   /** The worktree slug when this session is a workspace; null for a project's
@@ -473,13 +482,17 @@ export interface FleetSession {
    *  source: the session shows a usage-limit sign and the watchdog found no account to move it to. `since` and `reset` are
    *  epoch MS (converted from the registry's seconds in `fleet.ts`, like `stranded.at`); `reset` is null when neither the
    *  transcript's banner nor the account's window states one. `account` is the wrapper at the limit. `waiting` is true once
-   *  the operator chose "Wait until reset" (`POST /api/sessions/:id/limit-wait`); the row then reads "Waiting until HH:MM"
-   *  and keeps "Swap to…". Null when no record stands (closed by a landing or by a pass with no sign) and for a record the
-   *  server could not read: an item with unknown fields would be a fabricated fact.
+   *  a "Wait until reset" choice stands, and `waitingBy` says whose (null when none does): `'operator'`, the operator's tap
+   *  (`POST /api/sessions/:id/limit-wait`), a pin that nothing moves before the reset, the row reading "Waiting until HH:MM";
+   *  `'auto'`, ccd's own choice where no account had room (D-8173 ruling (a)), which is not a pin, so the row says ccrc is
+   *  waiting and keeps the wait control that pins it. Both keep "Swap to…". Null when no record stands (closed by a landing
+   *  or by a pass with no sign) and for a record the server could not read: an item with unknown fields would be a
+   *  fabricated fact.
    *
    *  `reviveFleetSession`: absent → null (an older server's frame, or a snapshot from before the field), and a present value
-   *  this build cannot read → null, because it is a display line that gates nothing server-side. */
-  readonly limitWait: { readonly since: number; readonly reset: number | null; readonly account: string; readonly waiting: boolean } | null;
+   *  this build cannot read → null, because it is a display line that gates nothing server-side. An older server's value
+   *  without `waitingBy` revives as `'operator'` when waiting (the only chooser it knew) and null otherwise. */
+  readonly limitWait: LimitWait | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -2990,17 +3003,23 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
  *  Absent → null (an older snapshot predates the axis); present-but-malformed
  *  rejects the session. */
 /** D-8123: `FleetSession.limitWait` off raw JSON. Absent or null → null (an older server); a value that is not exactly the
- *  four-field shape → null, never a rejected session: the record is the Waiting on you row's source and a row the build cannot
- *  draw is better absent than half-drawn. */
-const reviveLimitWait = (o: RawObj, k: string): { since: number; reset: number | null; account: string; waiting: boolean } | null => {
+ *  field shape → null, never a rejected session: the record is the Waiting on you row's source and a row the build cannot
+ *  draw is better absent than half-drawn. `waitingBy` (D-8173) absent → `'operator'` when waiting, null when not (an older
+ *  server's only chooser); present, it must be one this build knows and agree with `waiting`. */
+const reviveLimitWait = (o: RawObj, k: string): LimitWait | null => {
   const v = o[k];
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
   const s = v as RawObj;
-  const since = s['since'], reset = s['reset'], account = s['account'], waiting = s['waiting'];
+  const since = s['since'], reset = s['reset'], account = s['account'], waiting = s['waiting'], by = s['waitingBy'];
   if (typeof since !== 'number' || !Number.isFinite(since)) return null;
   if (reset !== null && (typeof reset !== 'number' || !Number.isFinite(reset))) return null;
   if (typeof account !== 'string' || account === '' || typeof waiting !== 'boolean') return null;
-  return { since, reset, account, waiting };
+  let waitingBy: LimitWait['waitingBy'];
+  if (by === undefined) waitingBy = waiting ? 'operator' : null;
+  else if (by === null || by === 'operator' || by === 'auto') waitingBy = by;
+  else return null;
+  if ((waitingBy !== null) !== waiting) return null;
+  return { since, reset, account, waiting, waitingBy };
 };
 
 const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {

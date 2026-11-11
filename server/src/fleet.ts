@@ -955,7 +955,7 @@ export async function assembleFleetWithPanePids(
       limitWait: r.limitWait === undefined || r.limitWait === null || r.limitWait === 'unreadable'
         ? null
         : { since: r.limitWait.since * 1000, reset: r.limitWait.reset === null ? null : r.limitWait.reset * 1000,
-            account: r.limitWait.account, waiting: r.limitWait.waiting },
+            account: r.limitWait.account, waiting: r.limitWait.waiting, waitingBy: r.limitWait.waitingBy },
       // Same seconds→MS conversion, at THIS seam only, like `stoppedBy` and
       // `swapBlocked` above. An unreadable marker's fail-shut `{at: 0}` rides
       // through as 0 (not a real 1970 stamp — the PWA renders text-only when
