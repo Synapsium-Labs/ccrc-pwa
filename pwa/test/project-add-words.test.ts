@@ -207,11 +207,11 @@ describe('projectAddedText', () => {
     expect(projectAddedText('repo', 'github')).toBe('Added project repo');
   });
 
-  it('an empty project adds what it can take now, and when it can take workspaces', () => {
+  it('an empty project takes sessions and workspaces now, and pull requests once it has a GitHub remote (D-8193)', () => {
     const said = projectAddedText('project-a', 'empty');
     expect(said.startsWith('Added project project-a.')).toBe(true);
-    expect(said).toMatch(/session/);
-    expect(said).toMatch(/workspaces once it has a GitHub remote/);
+    expect(said).toMatch(/sessions and workspaces now/);
+    expect(said).toMatch(/pull requests once it has a GitHub remote/);
   });
 
 });

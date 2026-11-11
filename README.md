@@ -3507,10 +3507,14 @@ session** sheet adds one in place too: its list opens with a **New project** row
 repository (or a new name nothing matches) offers **Clone owner/repo** (or **Create empty project**), which adds it
 and picks it in one tap. The fleet door's success toast carries **Start session**, which opens that sheet on the new
 project. It is
-`POST /api/projects` → `ccd project-add`, which clones or `git init`s a NEW directory under `~/projects` on the
-fleet box, never replacing an existing name; a private repository needs the fleet box user's own git credentials.
-An empty project takes sessions in its main checkout at once, but no workspace until it has a GitHub `origin`
-(`ws-add` needs `origin/HEAD`).
+`POST /api/projects` → `ccd project-add`, which clones a NEW directory under `~/projects` on the fleet box, never
+replacing an existing name; a private repository needs the fleet box user's own git credentials. An **Empty** project
+is born ready (D-8193): ccd makes a local bare origin, `<origins>/<name>.git`, seeds it with one empty commit on
+`main` and clones the project from it, so `origin/HEAD` is set and it takes sessions and workspaces at once.
+`<origins>` is `~/.cc-sessions/origins` unless the first line of `~/.ccrc/project-origins` names another absolute path
+(a file that names none is refused, never read as the default). A re-run adopts an origin of ccd's (a bare repository
+whose config says `ccd.emptyorigin = <name>`), and anything else at that path is refused before anything is touched.
+The origin lives on the fleet box, so a pull request needs a GitHub remote added later.
 
 ### A session (`/s/<id>`)
 
@@ -7593,7 +7597,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it: in Settings (Temp root collector) for the connected fleet node, or by `$REG/collect-lane-live` until that file's retirement is recorded |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
-| `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or `git init` an empty one on `main` with no commit; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
+| `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or, for `--empty`, make (or adopt) a local bare origin `<origins>/<name>.git` (`~/.cc-sessions/origins`, or the absolute path `~/.ccrc/project-origins` names) seeded with one empty commit on `main` and clone from it, so `ws-add` works at once (D-8193); refuses an origin path that is not ccd's; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |

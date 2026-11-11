@@ -10568,8 +10568,83 @@ _project_github_url_ok() {   # url -> 0 when it is exactly a clone url `parseGit
 # kill grace (`ccd-project-add.test.ts` reads both): a clone past it dies INSIDE ccd, so ccd removes its own temp.
 PROJECT_ADD_GIT_S=220
 
+# AN EMPTY PROJECT IS BORN READY FOR A WORKSPACE (D-8193). `ws-add` bases every workspace on `origin/HEAD`, and a bare
+# `git init` has neither a commit nor an origin, so an Empty project used to take sessions in its main checkout and never
+# a workspace. `--empty` now makes a LOCAL BARE ORIGIN, `<origins>/<name>.git`, seeds one commit with the empty tree on
+# `main` there, and CLONES the project from it: `origin`, `origin/HEAD` and `main`'s upstream are then exactly what a
+# GitHub clone has, and `ws-add`'s fetch and base need no extra step. The origin is local to the fleet box, so a
+# workspace's branch pushes there and a pull request needs a GitHub remote the operator adds later.
+#
+# WHERE THE ORIGINS LIVE is machine-neutral: `$REG/origins` by default (ccd's own data directory; dotless, so no
+# registry glob, all suffix-shaped `"$REG/$id".*`, can name it, the reason `POOLS_DIR` gives), or the absolute path on
+# the first line of `~/.ccrc/project-origins`, an OPERATOR-OWNED file nothing writes. A FILE, not an env var: HOME is
+# ccd's only isolation boundary (`_rc_enabled`'s reason). A file that is there but names no absolute path is refused,
+# never read as the default: where a project's history goes is not guessed.
+PROJECT_ORIGINS_FILE="$HOME/.ccrc/project-origins"
+_project_origins_dir() {   # -> the origins directory on stdout; rc 1 with the refusal's text on stdout instead
+  local v=""
+  if [[ ! -e "$PROJECT_ORIGINS_FILE" && ! -L "$PROJECT_ORIGINS_FILE" ]]; then printf '%s' "$REG/origins"; return 0; fi
+  # `-f` before the open (`_reg_get`'s rung): a FIFO or a directory there must not hang or half-read.
+  [[ -f "$PROJECT_ORIGINS_FILE" && -r "$PROJECT_ORIGINS_FILE" ]] \
+    || { printf '%s is not a readable regular file — nothing was touched' "$PROJECT_ORIGINS_FILE"; return 1; }
+  # An empty file, or a last line with no newline, still leaves what it read in `v`; the absolute-path test judges it.
+  IFS= read -r v 2>/dev/null < "$PROJECT_ORIGINS_FILE"; v="${v%$'\r'}"
+  [[ "$v" == /* ]] \
+    || { printf "%s names '%s', not an absolute path — nothing was touched" "$PROJECT_ORIGINS_FILE" "$v"; return 1; }
+  printf '%s' "$v"
+}
+
+# OURS is a real directory (never a link), a BARE repository, whose LOCAL config names this project in
+# `ccd.emptyorigin`, the one key `_project_origin_make` writes. Anything else at the path is someone else's and is
+# never adopted, seeded or replaced. `--local` so a box-wide config cannot vouch for a directory.
+_project_origin_ours() {   # path name -> 0 when the bare origin at path is ccd's for name
+  [[ -d "$1" && ! -L "$1" ]] || return 1
+  [[ "$(git --git-dir="$1" rev-parse --is-bare-repository 2>/dev/null)" == true ]] || return 1
+  [[ "$(git --git-dir="$1" config --local --get ccd.emptyorigin 2>/dev/null)" == "$2" ]]
+}
+
+# SEED: one commit with the EMPTY TREE on `main`, made only when the origin has no `main` yet, and written with
+# `update-ref`'s empty old value, so a `main` that appeared meanwhile is never moved. Its author is `ccd` with an empty
+# address: the tool that made it, never an invented person. No index, no work tree, no hook, no signing.
+_project_origin_seed() {   # bare-path -> 0 when the origin has a main
+  local tree c
+  git --git-dir="$1" rev-parse --verify --quiet refs/heads/main >/dev/null && return 0
+  tree=$(git --git-dir="$1" hash-object -t tree -w --stdin </dev/null) || return 1
+  c=$(GIT_AUTHOR_NAME=ccd GIT_AUTHOR_EMAIL='' GIT_COMMITTER_NAME=ccd GIT_COMMITTER_EMAIL='' \
+      git --git-dir="$1" commit-tree --no-gpg-sign -m 'Initial empty commit (ccd project-add --empty)' "$tree") || return 1
+  git --git-dir="$1" update-ref -m 'ccd project-add --empty' refs/heads/main "$c" '' 2>/dev/null \
+    || git --git-dir="$1" rev-parse --verify --quiet refs/heads/main >/dev/null || return 1
+  git --git-dir="$1" symbolic-ref HEAD refs/heads/main
+}
+
+# MAKE OR ADOPT, IDEMPOTENT: an origin of ours that stands (an earlier run's, its project since removed or never moved
+# into place) is adopted with its history and seeded only if it has no `main`; an absent one is built aside in a
+# dot-named temp of this pid and moved onto the name by `_plat_mv_notdir`, which never replaces a non-empty directory.
+# A run that loses that move to a concurrent one adopts the winner's when it is ours. A failure removes only this run's
+# temp; an origin already in place is left for the next run to adopt.
+_project_origin_make() {   # dir name -> the origin's path on stdout; rc 1 with the refusal's text on stdout instead
+  local dir=$1 name=$2 origin="$1/$2.git" otmp="$1/.project-add.$2.$$.git"
+  if [[ -e "$origin" || -L "$origin" ]]; then
+    _project_origin_ours "$origin" "$name" || { printf "an origin that is not ccd's stands at %s" "$origin"; return 1; }
+    _project_origin_seed "$origin" || { printf 'could not seed the origin at %s' "$origin"; return 1; }
+    printf '%s' "$origin"; return 0
+  fi
+  mkdir -p -- "$dir" || { printf 'cannot create %s' "$dir"; return 1; }
+  [[ ! -e "$otmp" && ! -L "$otmp" ]] || { printf 'a temp of an earlier project-add stands at %s — remove it by hand' "$otmp"; return 1; }
+  if ! { git init --quiet --bare -b main -- "$otmp" >/dev/null 2>&1 \
+         && git --git-dir="$otmp" config ccd.emptyorigin "$name" && _project_origin_seed "$otmp"; }; then
+    rm -rf -- "$otmp"; printf 'could not create the origin at %s' "$origin"; return 1
+  fi
+  if [[ -e "$origin" || -L "$origin" ]] || ! _plat_mv_notdir "$otmp" "$origin" 2>/dev/null; then
+    rm -rf -- "$otmp"
+    _project_origin_ours "$origin" "$name" || { printf "an origin that is not ccd's stands at %s" "$origin"; return 1; }
+  fi
+  printf '%s' "$origin"
+}
+
 cmd_project_add() {   # ccd project-add --name <n> (--url <github-url> | --empty)
-  # A NEW PROJECT under `$PROJECTS_ROOT`, cloned from GitHub or `git init`ed empty (add-project spec 2026-11-04 §4);
+  # A NEW PROJECT under `$PROJECTS_ROOT`, cloned from GitHub or, for `--empty`, from a local bare origin ccd makes and
+  # seeds with one empty commit, so it takes a workspace at once (D-8193; add-project spec 2026-11-04 §4);
   # `POST /api/projects` reaches it through the agent's gated grant `['project-add','--name']`. EXACT ARITY, the
   # `cmd_project_pool` rule: `--name` leads, then `--url <u>` or `--empty`, and any other argv is the usage line.
   # VALIDATE, THEN BUILD ASIDE, THEN MOVE. Nothing is touched before both checks pass. The tree is built in
@@ -10590,14 +10665,25 @@ cmd_project_add() {   # ccd project-add --name <n> (--url <github-url> | --empty
   # `-L` beside `-e`: a dangling link answers false to `-e` and is still a name someone holds.
   local dest="$PROJECTS_ROOT/$name" tmp="$PROJECTS_ROOT/.project-add.$name.$$" err rc
   [[ ! -e "$dest" && ! -L "$dest" ]] || die "project exists: $name"
+  # `--empty`'s origin is judged BEFORE anything is touched (D-8193): a bad `project-origins` file, or a path at the
+  # origin that is not ccd's, refuses here with the projects root as it was.
+  local odir="" origin
+  if [[ $mode == init ]]; then
+    odir=$(_project_origins_dir) || die "$odir"
+    origin="$odir/$name.git"
+    [[ ! -e "$origin" && ! -L "$origin" ]] || _project_origin_ours "$origin" "$name"       || die "an origin that is not ccd's stands at $origin"
+  fi
   mkdir -p -- "$PROJECTS_ROOT" || die "cannot create $PROJECTS_ROOT"
   # A temp of this pid's that already stands is a killed run's, not this one's: refuse rather than adopt or delete it.
   [[ ! -e "$tmp" && ! -L "$tmp" ]] || die "a temp of an earlier project-add stands at $tmp — remove it by hand"
-  local -a op=(init --quiet -b main -- "$tmp")
+  if [[ $mode == init ]]; then origin=$(_project_origin_make "$odir" "$name") || die "$origin"; fi
+  # Both arms are a clone: `--empty`'s from the local origin just made or adopted, so it lands with `origin`,
+  # `origin/HEAD` and an upstream for `main`, as a GitHub clone does.
+  local -a op=(clone --quiet -- "${origin:-}" "$tmp")
   [[ $mode == init ]] || op=(clone --quiet -- "$url" "$tmp")
   # NO PROMPT EVER: `GIT_TERMINAL_PROMPT=0` for https, and a batch-mode ssh unless the box chose its own (GIT_SSH_COMMAND,
   # GIT_SSH or `core.sshCommand`, which the variable would override), so a private repo with no credential fails at
-  # once instead of holding the exec until its timeout. No commit on `init`: ccd does not invent an author identity.
+  # once instead of holding the exec until its timeout.
   [[ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$PROJECTS_ROOT" config --get core.sshCommand 2>/dev/null)" ]] || local -x GIT_SSH_COMMAND='ssh -o BatchMode=yes'
   err=$(GIT_TERMINAL_PROMPT=0 _plat_timeout "$PROJECT_ADD_GIT_S" git "${op[@]}" 2>&1 >/dev/null) || {
     rc=$?; rm -rf -- "$tmp"; (( rc != 124 )) || die "git ${op[0]} timed out for $name after ${PROJECT_ADD_GIT_S}s"
