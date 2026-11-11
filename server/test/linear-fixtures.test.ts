@@ -44,10 +44,11 @@ const HIERARCHY_CONSTRUCTED = Object.values(HIERARCHY_FILE).sort().map((n) => `$
 describe('every fixture parses, one capture record each', () => {
   it('holds the recorded set and the two constructed answers', () => {
     // 31 recorded answers (the capture's cleanup and cleanup-verify calls are not kept), the constructed 429, the
-    // constructed link mutation (D-8141) and the 21 constructed hierarchy answers (D-8180).
-    expect(FILES).toHaveLength(54);
+    // constructed link mutation (D-8141) the 21 constructed hierarchy answers and the constructed project-status page (D-8180).
+    expect(FILES).toHaveLength(55);
     expect(FILES.filter((f) => f.includes('constructed'))).toEqual(
-      ['error-429-ratelimited-constructed.json', 'mutation-attachment-link-url-constructed.json', ...HIERARCHY_CONSTRUCTED]);
+      ['directory-project-statuses-page-1-constructed.json', 'error-429-ratelimited-constructed.json',
+        'mutation-attachment-link-url-constructed.json', ...HIERARCHY_CONSTRUCTED]);
   });
 
   it.each(FILES)('%s is a whole record', (f) => {

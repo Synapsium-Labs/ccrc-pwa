@@ -113,6 +113,8 @@ const DIR: LinearDirectoryEntries = {
     { id: USER_A, name: 'user-a', displayName: 'User A' },
     { id: USER_B, name: 'user-b', displayName: null },
   ],
+  projectStatuses: [],
+  initiatives: 'unknown',
 };
 
 const RESOLVED: LinearResolved = {
@@ -1014,6 +1016,8 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
       labels: [{ id: LABEL_BUG, name: 'Bug', teamKey: null }],
       projects: [{ id: PROJECT_X, name: 'Project X' }],
       users: [{ id: USER_A, name: 'user-a', displayName: 'User A' }],
+      projectStatuses: [],
+      initiatives: 'unknown',
     });
     expect(varsOf('update', valid('update', { ref: 'AAA-12', body: { state: 'todo', assignee: 'me' } }), ctxOf({ directory: filled })))
       .toEqual({ id: ISSUE_ID, input: { stateId: STATE_TODO_A, assigneeId: VIEWER } });

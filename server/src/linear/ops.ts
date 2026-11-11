@@ -535,6 +535,24 @@ export interface LinearDirectoryEntries {
   labels: readonly { id: string; name: string; teamKey: string | null }[];
   projects: readonly { id: string; name: string }[];
   users: readonly { id: string; name: string; displayName: string | null }[];
+  /** The workspace's project statuses (D-8180). Empty until wave 3 reads them: no refresher cycle sends the document yet. */
+  projectStatuses: readonly { id: string; name: string; type: string }[];
+  /** Whether the initiatives capability answered (D-8180). `unknown` until wave 3 runs the probe. */
+  initiatives: 'on' | 'off' | 'unknown';
+}
+
+/**
+ * The first status of `type`, never found by name (D-8180): a project's from the project statuses, an issue's from the
+ * workflow states of `teamKey` (any team's when `teamKey` is null). Null when no status has that type.
+ */
+export function statusOfType(
+  entries: LinearDirectoryEntries, kind: 'project' | 'issue', type: string, teamKey: string | null,
+): { id: string } | null {
+  if (entries === null || entries === undefined) return null;
+  const hit = kind === 'project'
+    ? entries.projectStatuses.find((s) => s.type === type)
+    : entries.states.find((s) => s.type === type && (teamKey === null || same(s.teamKey, teamKey)));
+  return hit === undefined ? null : { id: hit.id };
 }
 
 export type LinearNameKind = 'state' | 'label' | 'project' | 'user';
@@ -1389,4 +1407,27 @@ export function readLinearDirectoryPage(kind: LinearDirectoryCollection, body: u
     out.viewerId = viewer['id'];
   }
   return out;
+}
+
+/**
+ * One page of project statuses, read (D-8180). The document is `LINEAR_HIERARCHY_DOCUMENTS.projectStatuses`, not in the
+ * refresher's collection order until wave 3: one page of at most 50, no cursor. `malformed` for a page out of its
+ * grammar; the word for an answer with `errors`.
+ */
+export function readLinearProjectStatusesPage(
+  body: unknown,
+): { ok: true; statuses: LinearDirectoryEntries['projectStatuses'][number][] } | { ok: false; word: LinearAnswerRefusalWord } {
+  const data = dataOf(body);
+  if (isWord(data)) return { ok: false, ...data };
+  const conn = data['projectStatuses'];
+  if (!isPlainObject(conn) || !Array.isArray(conn['nodes']) || conn['nodes'].length > 50) return { ok: false, word: 'malformed' };
+  const statuses: LinearDirectoryEntries['projectStatuses'][number][] = [];
+  for (const n of conn['nodes']) {
+    const b = idName(n);
+    if (b === MALFORMED || !isPlainObject(n)) return { ok: false, word: 'malformed' };
+    const type = n['type'];
+    if (typeof type !== 'string' || !/^[a-z]{1,32}$/.test(type)) return { ok: false, word: 'malformed' };
+    statuses.push({ id: b.id, name: b.name, type });
+  }
+  return { ok: true, statuses };
 }
