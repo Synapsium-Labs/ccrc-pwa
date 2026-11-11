@@ -174,6 +174,7 @@ export function parsePlanTicketAdd(body: unknown): { ok: true; add: { epic: stri
   if (x) return verbBad(x);
   if (!isPlanKey(body.epic)) return verbBad('epic is not a plan key');
   if (!isPlanKey(body.key)) return verbBad('a ticket key is not a plan key');
+  if (isAutoTicketKey(body.key)) return verbBad(`a ticket key starting ${AUTO_TICKET_PREFIX} is ccrc's own (a run's auto ticket)`);
   if (typeof body.kind !== 'string' || !(TICKET_KINDS as readonly string[]).includes(body.kind)) return verbBad('unknown ticket kind');
   if (!textOk(body.title, PLAN_BOUNDS.titleChars, true)) return verbBad('title is not 1 to 255 characters');
   if (body.body !== undefined && (typeof body.body !== 'string' || Buffer.byteLength(body.body, 'utf8') > PLAN_BOUNDS.bodyBytes)) return verbBad('body is not text within bounds');
@@ -314,6 +315,8 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
     for (const t of e.tickets ?? []) {
       const tw = was?.tickets.find((x) => x.key === t.key);
       if (tw === undefined) {
+        // a stored auto ticket restated in a put is an update; a NEW one would take a key a later run's open derives
+        if (isAutoTicketKey(t.key)) return refuse('plan-bad-body', `ticket ${t.key}: a key starting ${AUTO_TICKET_PREFIX} is ccrc's own (a run's auto ticket)`);
         changes.tickets.insert.push({
           program: stored.program, epicKey: e.key, checkpointKey: t.checkpoint ?? null, key: t.key, kind: t.kind, title: t.title,
           body: t.body ?? '', project: t.project ?? project, source: 'plan',

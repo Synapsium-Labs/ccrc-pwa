@@ -32,7 +32,8 @@ carry a `title`. A key that disappears from the body is never deleted; an epic y
 JSON
 ```
 
-`project` on an epic or a ticket is optional and defaults to the home project. Refusals: `not-plan-owner` (only the
+`project` on an epic or a ticket is optional and defaults to the home project. A new ticket's key may not start `run-`:
+that is how ccrc names the ticket of a run opened with none. Refusals: `not-plan-owner` (only the
 programme's coordinator declares it), `plan-bad-body`, `plan-too-large` (at most 24 epics, 16 checkpoints in an epic and
 200 tickets in a body), `waves-not-contiguous`, `wave-overlap`, `dropped-needs-reason`, `ticket-workspace-mismatch`,
 `linear-text-public` and `plan-closed`.

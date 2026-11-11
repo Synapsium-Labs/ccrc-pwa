@@ -1,7 +1,7 @@
 // D-8181: the plan deciders (`coord/planPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  diffPlan, epicForWave, epicIsDone, linearOwnerOf, parsePlanClose, parsePlanPut, planCallerVerdict, programmeEnd,
+  diffPlan, epicForWave, epicIsDone, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
@@ -52,6 +52,21 @@ describe('parsePlanPut', () => {
     const cp = { key: 'c-1', title: 't', kind: 'measured' as const, itemId: 4 };
     expect(parsePlanPut({ epics: [epic(1, { checkpoints: [cp] })] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
     expect(parsePlanPut({ epics: [epic(1, { checkpoints: [{ ...cp, kind: 'operator-act' }] })] })).toMatchObject({ ok: true });
+  });
+});
+
+describe('the auto ticket prefix is reserved', () => {
+  const tk = (key: string) => ({ key, kind: 'work' as const, title: 't' });
+  it('ticket-add of a run-<n> key is plan-bad-body; another key is fine', () => {
+    expect(parsePlanTicketAdd({ epic: 'e-1', ...tk('run-7') })).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    expect(parsePlanTicketAdd({ epic: 'e-1', ...tk('rerun-7') })).toMatchObject({ ok: true });
+  });
+  it('a put that adds a run-<n> ticket is plan-bad-body; restating a stored auto ticket is not', () => {
+    expect(diffPlan(emptyStored, put(epic(1, { waves: [1], tickets: [tk('run-7')] })), ctx())).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    const auto = { id: 9, program: 'prog-a', project: 'project-a', epicId: 1, checkpointId: null, key: 'run-7', kind: 'work', title: 't',
+      body: '', source: 'plan', state: 'open', runId: 7, droppedWhy: null, putBackAt: null };
+    const s = stored(storedEpic('e-1', { tickets: [auto] }));
+    expect(diffPlan(s, put(epic(1, { waves: [1], tickets: [tk('run-7')] })), ctx())).toMatchObject({ ok: true });
   });
 });
 
