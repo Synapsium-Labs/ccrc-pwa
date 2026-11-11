@@ -20488,7 +20488,7 @@ _pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR
   return 0
 }
 
-_pane_type_ready() {   # id site [append] -> 0 ccd may type into the pane now | 1 refused, and said so in swap.log (D-8271)
+_pane_type_ready() {   # id site [append] -> 0 ccd may type into the pane now | 1 refused (2 when narrow), and said so in swap.log (D-8271)
   # THE ONE CHECK BEFORE ccd TYPES (operator ruling SH-9, D-8271). Every function
   # that presses a key into a session's pane calls this before its first key, or
   # is a continuation of a sequence whose every caller did (`_route_escape`
@@ -20519,10 +20519,10 @@ _pane_type_ready() {   # id site [append] -> 0 ccd may type into the pane now | 
   # (the first refusal, a change of reason, or the same reason again after
   # COMPACT_NOTE_FLOOR, D-2013's budget) keeps swap.log readable. A pass ends the
   # episode, so the next refusal speaks at once.
-  local id="$1" site="$2" kind="${3:-}" t why="" detail="" mode said said_why saidts now
+  local id="$1" site="$2" kind="${3:-}" t why="" detail="" mode said said_why saidts now rc=1
   t=$(_tmux_t "$id")
   if [[ "$kind" != append ]] && ! _pane_measurable "$id"; then
-    why=narrow; detail="the pane is under ${READER_MIN_COLS} columns or tmux would not measure it"
+    why=narrow; rc=2; detail="the pane is under ${READER_MIN_COLS} columns or tmux would not measure it"
   elif ! mode=$(tmux display-message -p -t "$t" '#{pane_in_mode}' 2>/dev/null); then
     why=copy-mode; detail="tmux would not say whether the pane is in a mode"
   elif [[ "$mode" == 1 ]]; then
@@ -20536,10 +20536,10 @@ _pane_type_ready() {   # id site [append] -> 0 ccd may type into the pane now | 
   fi
   now=$(date +%s)
   said=$(_reg_get "$id" typerefuse); said_why="${said%% *}"; saidts="${said##* }"
-  [[ "$said_why" == "$why" && "$saidts" =~ ^[0-9]+$ && $((now - saidts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 1
+  [[ "$said_why" == "$why" && "$saidts" =~ ^[0-9]+$ && $((now - saidts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return "$rc"
   _reg_set "$id" typerefuse "$why $now"
   echo "$(date '+%F %T') type-refused $id: $why at $site, $detail" >> "$REG/swap.log"
-  return 1
+  return "$rc"
 }
 
 # FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
@@ -24666,7 +24666,7 @@ _answer_two_option_dialog() {   # pane tmuxname affirmative-substring
   fi
 }
 
-_accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, then CONFIRM the main TUI is up.
+_accept_first_run_prompts() {   # tmuxname [fromswap] [id] — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
   #   • trust-folder prompt — layout order is NOT stable across Claude Code
@@ -24687,9 +24687,13 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   # return the moment the live marker shows, so the common path stays fast.
   # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
   # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
-  # or lost auth): waiting longer cannot fix it; 6 = a live pane under READER_MIN_COLS, or of unreadable width, so every gate stood down. 3 and 4 both used to be "0 after ~15
+  # or lost auth): waiting longer cannot fix it; 6 = a live pane under READER_MIN_COLS, or of unreadable width, so every gate stood down
+  # (on the first pass, or when the typing check refuses `narrow` on a later one). 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
-  local t fromswap="${2:-0}" bound i pane t0 id="${1#cc-}"; t=$(_tmux_at "$1")
+  # `id` is the SESSION id (`_spawn_settle` passes it): the tmux name is sanitised ('.' and ':' -> '_'),
+  # so `${1#cc-}` is only the fallback, and a dotted id's refusals belong on swap.log and in the registry
+  # under the id itself, never under a name no session has (D-8271).
+  local t fromswap="${2:-0}" bound i pane t0 id="${3:-${1#cc-}}"; t=$(_tmux_at "$1")
   # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
   # bound anyone can reason about: gate branches sleep 2 EXTRA seconds each, so
   # the same 450 iterations are ~900s plain and ~1350s when gates fire. The
@@ -24785,7 +24789,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # bare Enter is `No, disable external imports` — the operator's own imports
     # silently switched off for that project, on that lane, permanently.
     if _pane_external_import_gate "$pane"; then
-      _pane_type_ready "$id" spawn || { sleep 1; continue; }   # D-8271: the one typing check, before each gate is answered
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }   # D-8271: the one typing check, before each gate is answered; narrow is rc 6
       _answer_two_option_dialog "$pane" "$t" "allow external imports"; sleep 2; continue
     fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
@@ -24793,7 +24797,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # without it supervise sits here for the full window and never reaches its watch loop.
     echo "$pane" | grep -Eq "/rc active|\? for shortcuts|esc to interrupt|shift\+tab to cycle|← for agents" && return 0
     if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Resume from summary"; then
-      _pane_type_ready "$id" spawn || { sleep 1; continue; }
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
       if [[ "$fromswap" == "1" ]]; then
         # Swap landing: auto-compact — the target account pays one summary, not a full
         # 700k-token history re-read (user decision 2026-07-03). Option 1 is the default.
@@ -24805,15 +24809,15 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
       sleep 2; continue
     fi
     if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Try the new fullscreen renderer"; then
-      _pane_type_ready "$id" spawn || { sleep 1; continue; }
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
       tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter; sleep 2; continue
     fi
     if echo "$pane" | grep -q "Bypass Permissions mode"; then
-      _pane_type_ready "$id" spawn || { sleep 1; continue; }
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
       _answer_two_option_dialog "$pane" "$t" "Yes, I accept"; sleep 2; continue
     fi
     if echo "$pane" | grep -q "trust this folder"; then
-      _pane_type_ready "$id" spawn || { sleep 1; continue; }
+      _pane_type_ready "$id" spawn || { [[ $? == 2 ]] && return 6; sleep 1; continue; }
       _answer_two_option_dialog "$pane" "$t" "trust this folder"; sleep 2; continue
     fi
     # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
@@ -26626,7 +26630,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   local id="$1" fromswap="$2" wrapper tname prompt_rc
   wrapper=$(_reg_get "$id" wrapper)
   tname=$(_tmux "$id")
-  _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
+  _accept_first_run_prompts "$tname" "$fromswap" "$id"; prompt_rc=$?
   # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — this
   # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
   # inside the unit to a `ccd start` running in another process, which is what _supervised_start

@@ -166,7 +166,7 @@ describe(`${CHECK}: three refusals and a pass, each refusal on the log`, () => {
   });
 
   it(`refuses a pane under READER_MIN_COLS (${READER_MIN_COLS}) columns`, () => {
-    expect(rc(`${CHECK} demo stale`, { BOX: EMPTY, W: String(READER_MIN_COLS - 1) })).toBe(1);
+    expect(rc(`${CHECK} demo stale`, { BOX: EMPTY, W: String(READER_MIN_COLS - 1) }), 'narrow is its own rc, so the spawn loop can say 6').toBe(2);
     expect(log()).toHaveLength(1);
     expect(log()[0]).toMatch(new RegExp(` type-refused demo: narrow at stale, .*${READER_MIN_COLS} columns`));
     expect(rc(`${CHECK} demo stale`, { BOX: EMPTY, W: String(READER_MIN_COLS) }), 'exactly the floor reads').toBe(0);
@@ -272,6 +272,32 @@ describe('a refused check sends no key at the site', () => {
     expect(r).not.toBe(0);
     expect(keys()).toEqual([]);
     expect(log()[0]).toMatch(/ copy-mode at spawn, /);
+  });
+
+  it('_accept_first_run_prompts: a dotted session id is logged and floored under itself, not its tmux name', () => {
+    // `_tmux` maps '.' and ':' to '_' (tmux renames them), so `cc-foo_bar` is foo.bar's session. The check must
+    // name foo.bar on swap.log and keep its floor in foo.bar's registry, never under an id that does not exist.
+    const trust = '  Do you trust the files in this folder?\n  ❯ 1. Yes, I trust this folder\n    2. No, exit';
+    rc('SPAWN_GATE_TRIES=2; _accept_first_run_prompts cc-foo_bar 0 foo.bar', { BOX: trust, MODE: '1' });
+    expect(keys()).toEqual([]);
+    expect(log()[0]).toMatch(/ type-refused foo\.bar: copy-mode at spawn, /);
+    expect(h.reg('foo_bar', 'typerefuse'), 'no orphan floor under the tmux name').toBeNull();
+    expect(h.reg('foo.bar', 'typerefuse')).toMatch(/^copy-mode \d+$/);
+  });
+
+  it('_spawn_settle hands its session id to the gate loop', () => {
+    h.sh(`_accept_first_run_prompts() { echo "$*" > "$HOME/afrp-args"; return 0; }; tmux() { :; };
+      _spawn_settle foo.bar 0; true`);
+    expect(h.sh('cat "$HOME/afrp-args"').trim()).toBe('cc-foo_bar 0 foo.bar');
+  });
+
+  it('_accept_first_run_prompts: a pane that goes narrow after the first pass answers 6, not a timeout', () => {
+    const trust = '  Do you trust the files in this folder?\n  ❯ 1. Yes, I trust this folder\n    2. No, exit';
+    const r = rc(`_pane_measurable() { local n; n=$(cat "$HOME/pm" 2>/dev/null); echo "x$n" > "$HOME/pm"; [[ -z "$n" ]]; };
+      SPAWN_GATE_TRIES=5; _accept_first_run_prompts cc-demo 0`, { BOX: trust });
+    expect(r).toBe(6);
+    expect(keys()).toEqual([]);
+    expect(log()[0]).toMatch(/ type-refused demo: narrow at spawn, /);
   });
 
   it('_accept_first_run_prompts: out of copy-mode the same dialog is answered', () => {
