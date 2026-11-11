@@ -1193,6 +1193,13 @@ D-8077 at 50 and 51, D-8147 at 52) (D-8126); re-measure against `origin/main` be
 `ccrc-api goals show` is behind `goals-read-v1` (the `ROUTES` count word is fifty-nine). The README names the read's two
 credentials and the `doneWhen` field. The `bigCalls` half of the read waits for A3.
 
+**Wave A3 (built, PR open).** `coordinator_calls` is migration slot 55 (`CREATE TABLE` and three indexes). Slot 54 is the runs
+rebuild's B8 (`run_close_settings.claimantGone`, D-8078), which landed first; this branch was rebased onto it and holds no placeholder
+entry. Re-measure against `origin/main` before the PR and before merge (P1): the
+count must print 54 before this entry is counted. The route is `POST /api/coord/programmes/:slug/calls` (a box-token lane), the Seen door
+is `POST /api/calls/:id/seen` (session-gated), `ccrc-api calls record` is behind `calls-v1` (the `ROUTES` count word is sixty-four), and
+the box-token lane word is sixty-seven.
+
 **A1 baseline (taken 2026-11-09; counts only).**
 - Transcript census (`transcripts --since 2026-10-26 --until 2026-11-09`, fleet box, read-only, re-run for this
   correction; 17,427 transcripts read, 13 coordinators by `is_coordinator`): typed-reply waits 123 (24 over an hour,

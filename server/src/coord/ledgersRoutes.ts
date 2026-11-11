@@ -43,6 +43,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { CloseOutcome } from './close.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
+import { callViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
@@ -124,6 +125,9 @@ export function viewOfItem(
   return itemViewOf(row, coord.itemHistory(row.id), stale, secret);
 }
 
+/** The goals read's window on a programme's big calls (D-8126). */
+const GOALS_BIG_CALLS_MAX = 20;
+
 /** What waits on the operator, whole: every programme's open and checking items, the Recently cleared trail, and goals for
  *  each programme that holds an item or a spec pin (slug order). The read route and the live frame both answer this. */
 /** The note an end-request item closes with when its run had closed before the operator's act reached it (spec §10, step 4). */
@@ -135,11 +139,14 @@ export function waitingViewOf(
   // A death between the operator's act and its item leaves an open end request on a closed run: the next read closes it.
   coord.settleEndRequestsOfClosedRuns(RUN_ALREADY_CLOSED_NOTE, now);
   const { open, cleared } = coord.itemsFor(null, now);
+  const groups = coord.callsForOperator(now);
   const programmes = [...new Set([...open.map((i) => i.program), ...cleared.map((i) => i.program), ...coord.pinnedProgrammes()])].sort();
   return {
     items: open.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
     cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
     goals: programmes.map((p) => coord.goalsFor(p)),
+    calls: groups.open.map(callViewOf),
+    callsCleared: groups.cleared.map(callViewOf),
   };
 }
 
@@ -150,6 +157,7 @@ export function goalsReadOf(coord: CoordStore, slug: string, now: number): Goals
   return {
     goals: coord.goalsFor(slug),
     openItems: coord.itemsFor(slug, now).open.map((i) => ({ id: i.id, kind: i.kind, title: i.title, neededBy: i.neededBy })),
+    bigCalls: coord.bigCallsFor(slug, GOALS_BIG_CALLS_MAX).map(callViewOf),
   };
 }
 
@@ -808,6 +816,22 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be declined from here` });
     deps.bus.emit('waiting');
     return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
+  });
+
+  /** D-8126: the operator's Seen on a big call. Session-gated like the tick; no box token. Idempotent: a second Seen answers the
+   *  same 200 and leaves `seenAt` as the first wrote it. A row that is not a big call has nothing to be Seen (`not-big`). */
+  app.post('/api/calls/:id/seen', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const raw = (req.params as { id: string }).id;
+    if (!/^[1-9][0-9]{0,15}$/.test(raw)) return bad(reply, 'the call id is a positive integer');
+    const id = Number(raw);
+    const res = coord.markCallSeen(id, deps.now());
+    if (res === 'unknown') return refuseRoute(reply, 'unknown-call', { detail: `no call ${id}` });
+    if (res === 'not-big') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notBig, { detail: `call ${id} is not a big call: only a big call is Seen` });
+    if (res === 'seen') deps.bus.emit('waiting');
+    const row = coord.callById(id);
+    return reply.code(200).send({ ok: true, call: row === null ? null : callViewOf(row) });
   });
 
   app.post('/api/items/:id/dismiss', (req, reply) => {

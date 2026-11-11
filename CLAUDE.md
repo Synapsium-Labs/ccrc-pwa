@@ -532,7 +532,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/items/:id/return`, `POST /api/items/:id/withdraw`, `POST /api/items/:id/blocking`,
   `POST /api/programmes/:slug/spec`, `POST /api/programmes/:slug/modifications` and
   `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
-  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) all call
+  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) and the coordinator call record's one route
+  `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
+  for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`,
@@ -575,7 +577,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
-  the operator and closing its item, the decline mailing the asker), `PUT /api/items/:id/secret` (plan PL6), and
+  the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
   `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four

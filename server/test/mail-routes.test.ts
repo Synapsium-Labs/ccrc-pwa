@@ -612,6 +612,11 @@ describe('the rejection table is total, in both directions', () => {
     // never merged into one, because a run refusal and a mail refusal are
     // different vocabularies that happen to share this one scanner.
     const NOT_CODES = new Set([
+      // D-8126 — the coordinator call record (`coord/coordCalls.ts`, `coord/coordCallsStore.ts`): `big-call` is the digest's
+      // line kind a big call becomes (`DIGEST_LINE_KINDS`), and `not-big` is `markCallSeen`'s answer for a row the Seen door
+      // does not take. Neither is a mail or run refusal; the route that carries `not-big` words it as its own 409 `not-big`.
+      'big-call',
+      'not-big',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       // D-2545 — the READ-FAILURE family, and the same family as

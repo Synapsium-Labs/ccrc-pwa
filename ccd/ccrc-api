@@ -21,12 +21,12 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, sixty-three rows, and nothing else; the
+#   * The route comes from ROUTES below, sixty-four rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
-#     review-rounds` is refused the same way for `review-rounds-v1` (D-8125), and
-#     `goals show` for `goals-read-v1` (D-8126).
+#     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
+#     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -89,7 +89,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Sixty-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Sixty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -222,6 +222,11 @@ declare -A ROUTES=(
   # The READ of the pin, `doneWhen` and the open items (autonomy-default wave A2, D-8126): a GET by programme slug, answered to the
   # box token or a session alike. Sent unless a CURRENT cap file omits `goals-read-v1` (the gate beside the claimant rows' below).
   [goals.show]='GET|/api/programmes/{id}/goals|yes|-'
+  # The coordinator's call record (autonomy-default wave A3, D-8126): a POST by programme slug that the box token, the
+  # attribution pair and ownership all gate on the server. Identity is the PANE's: this client splices `byId` and `byUuid` into the
+  # body and REFUSES a body that names either, so a caller cannot attribute a call to another coordinator. Sent unless a CURRENT cap
+  # file omits `calls-v1` (the gate beside the goals read's, below).
+  [calls.record]='POST|/api/coord/programmes/{id}/calls|yes|-'
   # Linear, through the server's proxy and the key ccrc holds for each workspace (D-7669, #1444): sessions never sign
   # in to Linear and never hold a key. Thirteen rows, nine reads and four writes; the SERVER decides each row's class,
   # never the method, which is why `search`, a read, is a POST: its text is free text, and free text never rides a URL
@@ -636,6 +641,25 @@ main() {
     esac
   fi
 
+  # THE FOURTH BODY THIS CLIENT FILLS, and the first it never lets the caller speak for (D-8126): a call's attribution pair is the
+  # PANE's, through `derive_identity`, as `runs.open` derives its uuid, but here the opposite of the `byId` fill's rule: a body that
+  # names `byId` or `byUuid` is REFUSED, unsent, because the call record is the coordinator's account of its own decision and
+  # the route stores `madeBy` from this pair. The textual test is the `byId` fill's, over a whitespace-stripped copy, with the
+  # same stated limits (a nested or `\u`-escaped key is the server's to refuse after parsing, `bad-field`, as the Linear rows').
+  # A bodyless call is refused (`no-body`), a body that is not a JSON object is refused, and a pane with no identity is refused;
+  # nothing is sent in any of the three. The splice is safe for the reason the `byId` fill's is: SAFE_RE admits no quote.
+  if [[ "$key" == 'calls.record' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' 'the call record needs a body on --json'
+    local cb="${body//[[:space:]]/}"
+    case "$cb" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a call is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    splice_body_field 'byUuid' "$DERIVED_UUID" 'the call body is not a JSON object; byUuid cannot be added'
+    splice_body_field 'byId' "$DERIVED_ID" 'the call body is not a JSON object; byId cannot be added'
+  fi
+
   # `approvals show` reads one row as the claimant it was held for (plan Task 16): the identity pair is the pane's,
   # never the caller's, exactly as `asks list` below derives its own.
   if [[ "$key" == 'approvals.show' ]]; then
@@ -756,6 +780,12 @@ main() {
   # torn or future file sends. The empty word is the "is the file current and well-formed" probe, as above.
   if [[ "$key" == 'goals.show' ]] && ! _api_server_cap goals-read-v1 && _api_server_cap ''; then
     refuse 'unsupported' 'the server this box talks to does not answer the goals read; update it before reading goals'
+  fi
+
+  # THE CALL RECORD'S GATE (D-8126), the goals read's rule for `calls-v1`: a current cap file that omits it refuses `unsupported`,
+  # unsent; an absent, stale, torn or future file sends.
+  if [[ "$key" == 'calls.record' ]] && ! _api_server_cap calls-v1 && _api_server_cap ''; then
+    refuse 'unsupported' 'the server this box talks to does not answer the call record; update it before recording a call'
   fi
 
   local path url

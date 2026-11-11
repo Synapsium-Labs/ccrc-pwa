@@ -10,6 +10,8 @@ import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
 import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
+import * as calls from './coordCallsStore.js';
+import type { CallRow, NewCall } from './coordCalls.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
@@ -9370,14 +9372,15 @@ export class CoordStore {
 
   /** The correction's mark (spec §10, §11), in ONE transaction with the mail that carries it: `queue` inserts the
    *  system mail (`insertSystemMailTx`, which opens no transaction of its own), then the row is marked `corrected`,
-   *  kept, and counted as a wrong ruling. A throw in either rolls both back, so a marked row always has its mail. */
-  correctWithMail<T>(rowKind: 'ask' | 'approval', id: number, queue: () => T): T {
+   *  kept, and counted as a wrong ruling. A `call` is overturned instead (`overturnCallTx`, with the operator's `note`). A throw in either rolls both back, so a marked row always has its mail. */
+  correctWithMail<T>(rowKind: 'ask' | 'approval' | 'call', id: number, queue: () => T, note = ''): T {
     return tx(this.db, () => {
       const queued = queue();
       // Two literal statements, never a table named by interpolation (`delegation-wave3`'s closed scope census reads
       // every UPDATE's table off its text).
       if (rowKind === 'ask') this.db.prepare('UPDATE asks SET corrected = 1 WHERE id = ?').run(id);
-      else this.db.prepare('UPDATE approvals SET corrected = 1 WHERE id = ?').run(id);
+      else if (rowKind === 'approval') this.db.prepare('UPDATE approvals SET corrected = 1 WHERE id = ?').run(id);
+      else this.overturnCallTx(id, note, Date.now());
       return queued;
     });
   }
@@ -10692,6 +10695,19 @@ export class CoordStore {
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
   newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
   pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+
+  // ── the coordinator call record (D-8126, wave A3) ───────────────────────────────────────────────────────────────────
+  // The SQL lives in `coordCallsStore.ts`; one writer per column (see its header).
+  insertCall(program: string, madeBy: string, call: NewCall, build: string | null, now: number): number { return calls.insertCall(this.db, program, madeBy, call, build, now); }
+  callsForRun(runId: number): CallRow[] { return calls.callsForRun(this.db, runId); }
+  bigCallsFor(program: string | null, limit: number): CallRow[] { return calls.bigCallsFor(this.db, program, limit); }
+  bigCallsIn(fromMs: number, toMs: number): CallRow[] { return calls.bigCallsIn(this.db, fromMs, toMs); }
+  callsForOperator(now: number): { open: CallRow[]; cleared: CallRow[] } { return calls.callsForOperator(this.db, now); }
+  liveBlocksOf(madeBy: string, now: number): CallRow[] { return calls.liveBlocksOf(this.db, madeBy, now); }
+  callById(id: number): CallRow | null { return calls.callById(this.db, id); }
+  markCallSeen(id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' { return calls.markCallSeen(this.db, id, now); }
+  overturnCallTx(id: number, note: string, now: number): void { calls.overturnCallTx(this.db, id, note, now); }
+  markBlockWoken(id: number, now: number): boolean { return calls.markBlockWoken(this.db, id, now); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
    *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */

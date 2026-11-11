@@ -2586,6 +2586,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!parsed.ok) return refuseRoute(reply, parsed.why);
     const out = correctDigestRow(deps.coord, parsed.body);
     if (!out.ok) return refuseRoute(reply, out.why);
+    // Overturning a big call moves it out of the operator's open calls into the cleared ones, so the live Waiting frame
+    // re-reads (the Seen door and the call route do the same); an ask or approval correction changes no waiting view.
+    if (parsed.body.rowKind === 'call') bus.emit('waiting');
     const answer: DigestCorrectAnswer = { ok: true, mailId: out.mailId, deliveryId: out.deliveryId };
     return answer;
   });

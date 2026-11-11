@@ -7139,6 +7139,8 @@ export interface RunRecordAnswer {
   events: RunRecordEvent[];
   reviewedBy: RunHit[];
   olderEvents: number;
+  /** D-8126: every class of call that names the run, oldest first. OPTIONAL on the wire: an older server omits it. */
+  calls?: CallView[];
 }
 
 export interface RunSummary {
@@ -11990,7 +11992,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12038,6 +12040,10 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  neededBy` and nothing more). `ccrc-api goals show` refuses `unsupported`, unsent, when a current cap file omits this
    *  word. Added by the change that builds the dual-credential read, cut after it. */
   'goals-read-v1': true,
+  /** D-8126 (autonomy-default wave A3): this server answers `POST /api/coord/programmes/:slug/calls` (`coordCallsRoute.ts`) with the box
+   *  token, the attribution pair and ownership, and stores the call in `coordinator_calls`. `ccrc-api calls record` refuses
+   *  `unsupported`, unsent, when a current cap file omits this word. Added by the change that builds the client row, cut after the route. */
+  'calls-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
@@ -13197,17 +13203,18 @@ export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
  *  `allow`, `deny`  an approval the held-for coordinator ruled, signed by the server;
  *  `hand-over`  the coordinator released the question or approval itself (`declined`);
  *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
- *               coordinator that the coordinator never answered, whoever acted after).
+ *               coordinator that the coordinator never answered, whoever acted after);
+ *  `big-call`   a big call the coordinator recorded and carried on from (D-8126): routine and block calls are never lines.
  * A row the operator answered while it was still held is not a line, and neither is a row minted released.
  */
-export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse'] as const;
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call'] as const;
 export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
 
 /** Which table a digest line came from, and so which id space `id` is in. */
-export type DigestRowKind = 'ask' | 'approval';
+export type DigestRowKind = 'ask' | 'approval' | 'call';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
-const DIGEST_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true };
+const DIGEST_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true, call: true };
 export const DIGEST_ROW_KINDS: readonly DigestRowKind[] = Object.keys(DIGEST_ROW_KIND_MAP) as DigestRowKind[];
 
 /** A digest line on the wire. Every text field is redacted (`redactCommand`) when the digest is built, whatever the
@@ -13240,6 +13247,8 @@ export interface DigestTotals {
   readonly denies: number;
   readonly handOvers: number;
   readonly lapses: number;
+  /** The big calls coordinators made in the window (D-8126); each is a line and counts into `decisions`. */
+  readonly calls: number;
   readonly guardForbidden: number;
 }
 
@@ -13289,8 +13298,9 @@ export const DIGEST_COMMAND_CHARS = 160;
 /** The digest routes' own refusal words, each answered at its one status by `REFUSAL_STATUS` (`shared/refusal.ts`):
  *  `not-coordinator`    the row is not a coordinator's decision (the operator answered it while it was held, or it was
  *                       minted released): there is no coordinator to correct.
- *  `digest-unreadable`  the asks or approvals rows could not be read back. */
-export const DIGEST_REFUSALS = ['not-coordinator', 'digest-unreadable'] as const;
+ *  `digest-unreadable`  the asks or approvals rows could not be read back.
+ *  `unknown-call`       a correction on a `call` row that does not exist (D-8126). */
+export const DIGEST_REFUSALS = ['not-coordinator', 'digest-unreadable', 'unknown-call'] as const;
 export type DigestRefusal = (typeof DIGEST_REFUSALS)[number];
 
 /** The server box's override of the digest hour, under its `~/.ccrc`: one integer, 0 to 23 (UTC). */
@@ -14087,3 +14097,39 @@ export interface AttentionRow {
   readonly sentence: string;
   readonly sentenceFirst: boolean;
 }
+
+/** D-8126 (coordinator-autonomy-default, §8.2): how a coordinator's recorded call weighs. `routine` is kept for the run
+ *  record only; `big` is shown to the operator until Seen, overturned or aged; `block` is a thread waiting on a
+ *  condition (the wake below), never a digest line. The runtime list is derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+export type CoordCallClass = 'routine' | 'big' | 'block';
+const COORD_CALL_CLASS_MAP: Record<CoordCallClass, true> = { routine: true, big: true, block: true };
+export const CALL_CLASSES: readonly CoordCallClass[] = Object.keys(COORD_CALL_CLASS_MAP) as CoordCallClass[];
+
+/** What a `block` call waits on: a named condition, or a clock time in epoch milliseconds. */
+export type CallWake = 'capacity' | 'account-room' | 'disk' | 'memory' | 'update' | `time:${number}`;
+export type CallWakeCondition = Exclude<CallWake, `time:${number}`>;
+const CALL_WAKE_MAP: Record<CallWakeCondition, true> = { capacity: true, 'account-room': true, disk: true, memory: true, update: true };
+export const CALL_WAKES: readonly CallWakeCondition[] = Object.keys(CALL_WAKE_MAP) as CallWakeCondition[];
+
+/** One coordinator call on the wire (the goals read, the waiting view and the run record). */
+export interface CallView {
+  id: number;
+  program: string;
+  runId: number | null;
+  madeBy: string;
+  class: CoordCallClass;
+  question: string | null;
+  options: string[] | null;
+  chosen: string;
+  why: string;
+  reversible: boolean;
+  wakeOn: CallWake | null;
+  at: number;
+  seenAt: number | null;
+  overturnedAt: number | null;
+  overturnNote: string | null;
+}
+
+/** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own
+ *  (null for the other two classes). */
+export interface CallRecordAnswer { ok: true; id: number; class: CoordCallClass; expiresAt: number | null }

@@ -172,6 +172,8 @@ export const LEDGER_ROUTE_REFUSALS = {
   // The definition of done (D-8126): a list that is not 1 to 12 strings of 1 to 2,000 characters (`bad-done-when`), and a
   // modification that carries a list with neither a `ruling` nor an `itemId` to stand on (`done-when-needs-ruling`).
   badDoneWhen: 'bad-done-when', doneWhenNeedsRuling: 'done-when-needs-ruling',
+  // The Seen door (D-8126): a call that is not a big one has nothing to be Seen.
+  notBig: 'not-big',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -300,7 +302,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'version-unverified': 409, 'approval-released': 409, 'parent-changed': 409, 'guard-forbidden': 409,
   'guard-escalate': 409, 'declined': 409, 'hook-gone': 409, 'already-ruled': 409,
   // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
-  'not-coordinator': 409, 'digest-unreadable': 503,
+  'not-coordinator': 409, 'digest-unreadable': 503, 'unknown-call': 404,
   // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed
   // in and not fresh (never 401, which raises the login screen over a live session), 429 for a spent budget, 409
   // for the passphrase arm on a box with a passkey, and 501 for a dark gate, the status the other auth routes
@@ -406,6 +408,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,
+  // The Seen door (D-8126): CHOSEN, not measured. 409 as `not-open`: the row is there, in a state this door does not act on.
+  [LEDGER_ROUTE_REFUSALS.notBig]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's
