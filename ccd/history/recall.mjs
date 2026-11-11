@@ -2132,6 +2132,8 @@ export function expandVerb(rc, parsed) {
 //    selects of a symbol query merge under that order before the one cut, and a capped answer says the newest are shown
 //    (TOUCHED_ORDERED_CAPPED_NOTE); the node the cut falls inside says its refs were cut. With `ordered` false (the bench's seam)
 //    the selects are unordered and a capped answer says so (TOUCHED_CAPPED_NOTE).
+//  - A symbol query's label-file arm is chunked ORs (D-8191): the file select with its one LIKE replaced by an OR of that predicate
+//    over the label's distinct basenames, TOUCHED_LABEL_CHUNK of them per select. A path or path:symbol query keeps its one select.
 
 const TOUCHED_FILE_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind IN ('path','path:symbol','test') AND value LIKE ? ESCAPE '\\' LIMIT ?";
 const TOUCHED_SYMBOL_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind = 'path:symbol' AND value LIKE ? ESCAPE '\\' LIMIT ?";
@@ -2145,6 +2147,17 @@ const TOUCHED_SYMBOL_ORDERED_SQL = `SELECT r.node_id, r.kind, r.value, r.origin,
 export const TOUCHED_SELECTS = Object.freeze({
   file: TOUCHED_FILE_SQL, symbol: TOUCHED_SYMBOL_SQL, fileOrdered: TOUCHED_FILE_ORDERED_SQL, symbolOrdered: TOUCHED_SYMBOL_ORDERED_SQL,
 });
+/** At most this many basenames per label-file select (D-8191): SQLite refuses an expression tree deeper than 1000 ("Expression
+ *  tree is too large", measured at an OR of 1000 LIKE terms), and one select per basename measured over 2 s at 165 of them. */
+const TOUCHED_LABEL_CHUNK = 100;
+/** The label-file select over `n` basenames: the file select's text with its one LIKE repeated n times under OR. Built from the
+ *  fixed template and a count of placeholders only; every value is bound, never interpolated. */
+function touchedLabelSql(n, ordered) {
+  const likes = Array.from({ length: n }, () => (ordered ? "r.value LIKE ? ESCAPE '\\'" : "value LIKE ? ESCAPE '\\'")).join(' OR ');
+  return ordered
+    ? `SELECT r.node_id, r.kind, r.value, r.origin, n.latest_ms FROM node_refs r JOIN nodes n ON n.node_id = r.node_id WHERE r.kind IN ('path','path:symbol','test') AND (${likes}) ${TOUCHED_ORDER_BY}`
+    : `SELECT node_id, kind, value, origin FROM node_refs WHERE kind IN ('path','path:symbol','test') AND (${likes}) LIMIT ?`;
+}
 /** The merge order of the ordered form: the select's own ORDER BY (a missing time last, newest first, then node id, kind, value). */
 function touchedOrderCmp(x, y) {
   const a = x.latest_ms ?? null;
@@ -2273,8 +2286,14 @@ export function runTouched(rc, a) {
   const limit = xlib.TOUCHED_CANDIDATE_MAX + 1;
   const selects = [];
   const ordered = a.ordered ?? xlib.TOUCHED_ORDERED_CAP;
-  if (q.kind === 'symbol') selects.push([ordered ? TOUCHED_SYMBOL_ORDERED_SQL : TOUCHED_SYMBOL_SQL, `%:${xlib.likeEscape(q.symbol)}`]);
-  for (const base of new Set(wantFiles.map((w) => w.file.slice(w.file.lastIndexOf('/') + 1)))) selects.push([ordered ? TOUCHED_FILE_ORDERED_SQL : TOUCHED_FILE_SQL, `%${xlib.likeEscape(base)}%`]);
+  const bases = [...new Set(wantFiles.map((w) => w.file.slice(w.file.lastIndexOf('/') + 1)))].sort();
+  if (q.kind === 'symbol') {
+    selects.push([ordered ? TOUCHED_SYMBOL_ORDERED_SQL : TOUCHED_SYMBOL_SQL, [`%:${xlib.likeEscape(q.symbol)}`]]);
+    for (let i = 0; i < bases.length; i += TOUCHED_LABEL_CHUNK) {
+      const chunk = bases.slice(i, i + TOUCHED_LABEL_CHUNK);
+      selects.push([touchedLabelSql(chunk.length, ordered), chunk.map((b) => `%${xlib.likeEscape(b)}%`)]);
+    }
+  } else for (const base of bases) selects.push([ordered ? TOUCHED_FILE_ORDERED_SQL : TOUCHED_FILE_SQL, [`%${xlib.likeEscape(base)}%`]]);
 
   // The candidates, under one cap of every select's distinct rows together.
   const seen = new Set();
@@ -2285,8 +2304,8 @@ export function runTouched(rc, a) {
   if (ordered) {
     // Every select orders and cuts alike, then their rows merge under the same order before the one cut.
     const pool = new Map();
-    for (const [sql, pattern] of selects) {
-      for (const r of db.prepare(sql).all(pattern, limit)) {
+    for (const [sql, patterns] of selects) {
+      for (const r of db.prepare(sql).all(...patterns, limit)) {
         const key = `${r.node_id}\0${r.kind}\0${r.value}`;
         if (!pool.has(key)) pool.set(key, r);
       }
@@ -2296,9 +2315,9 @@ export function runTouched(rc, a) {
     // The cut falls inside a node's refs when the last kept candidate and the first dropped one are the same node's (the order keeps a node's rows together).
     if (capped && merged[xlib.TOUCHED_CANDIDATE_MAX - 1].node_id === merged[xlib.TOUCHED_CANDIDATE_MAX].node_id) refsCutNode = merged[xlib.TOUCHED_CANDIDATE_MAX].node_id;
     candidates.push(...merged.slice(0, xlib.TOUCHED_CANDIDATE_MAX));
-  } else for (const [sql, pattern] of selects) {
+  } else for (const [sql, patterns] of selects) {
     if (capped) break;   // the cap is reached: the remaining selects add nothing the answer would keep
-    for (const r of db.prepare(sql).all(pattern, limit)) {
+    for (const r of db.prepare(sql).all(...patterns, limit)) {
       const key = `${r.node_id}\0${r.kind}\0${r.value}`;
       if (seen.has(key)) continue;
       if (candidates.length >= xlib.TOUCHED_CANDIDATE_MAX) { capped = true; continue; }
