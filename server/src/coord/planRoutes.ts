@@ -241,7 +241,12 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       const ep = e.project ?? home;
       texts.push([ep, e.title], [ep, e.summary], [ep, e.droppedWhy]);
       for (const c of e.checkpoints) texts.push([ep, c.title]);
-      for (const t of e.tickets ?? []) texts.push([t.project ?? ep, t.title], [t.project ?? ep, t.body]);
+      for (const t of e.tickets ?? []) {
+        // diffPlan keeps an existing ticket's stored project when the revision leaves `project` out, so that is the project
+        // whose mode judges the text; only a ticket not yet in the plan falls back to its epic's project.
+        const tp = t.project ?? ticketOf(stored, t.key)?.ticket.project ?? ep;
+        texts.push([tp, t.title], [tp, t.body]);
+      }
     }
     const unfit = textRefusal(coord, texts);
     if (unfit !== null) return unfit;
@@ -335,7 +340,12 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       patch.checkpointId = cp.id;
     }
     const project = m.project ?? ticket.project;
-    if (m.project !== undefined) patch.project = m.project;
+    if (m.project !== undefined) {
+      patch.project = m.project;
+      // a move to another project re-judges the stored text by the target project (every plan verb refuses before it stores)
+      const moveUnfit = textRefusal(coord, [[m.project, ticket.title], [m.project, ticket.body]]);
+      if (moveUnfit !== null) return moveUnfit;
+    }
     if (workspaceClash(ws, project, target.project)) return { refuse: 'ticket-workspace-mismatch', detail: `ticket ${m.ticket} would be in another workspace than epic ${target.key}` };
     plan.updateTicket(ticket.id, patch, opts.now());
     return { ok: true, plan: viewOf(plan, coord, slug) };
@@ -380,7 +390,10 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was already closed' };
     if (coord.programOpenRunCount(slug) > 0) return { refuse: 'plan-runs-open', detail: 'a run of this programme is not finished' };
     const home = coord.programHome(slug);
-    const closeUnfit = home === null ? null : textRefusal(coord, [[home, parsed.close.why]]);
+    // a legacy row with no home has no project to judge by; its `why` is judged by the strictest reading of every project the
+    // plan touches instead of being skipped
+    const closeProjects = home === null ? [...new Set(plan.planOf(slug).epics.flatMap((e) => [e.project, ...e.tickets.map((t) => t.project)]))] : [home];
+    const closeUnfit = textRefusal(coord, closeProjects.map((p) => [p, parsed.close.why] as const));
     if (closeUnfit !== null) return closeUnfit;
     plan.closePlan(slug, parsed.close.outcome, parsed.close.why === undefined ? null : mask(parsed.close.why), opts.now());
     return { ok: true, plan: viewOf(plan, coord, slug) };

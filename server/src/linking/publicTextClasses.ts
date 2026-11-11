@@ -17,7 +17,7 @@ export interface PublicTextClass {
   /** a hashed vocabulary: the `#h8` of every entry a LINE of `file` matches, never text. */
   match?: (line: string, file: string) => string[];
   /** a `match` class's hits that span a line break (a phrase reflowed across two lines), reported against the first
-   *  line (the tree scan's; the server check reads one text at a time and does not call it) */
+   *  line (the tree scan's; the server's `publicTextVerdict` calls it too, joining consecutive lines of a text) */
   matchPair?: (prev: string, line: string, file: string) => string[];
   /** how a `match` class prints a path: a file named after an entry must not put the name into the log that reports it */
   printPath?: (file: string) => string;

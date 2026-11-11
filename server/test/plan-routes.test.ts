@@ -11,6 +11,7 @@ import { registerPlanRoutes, type PlanRouteOpts } from '../src/coord/planRoutes.
 import { answerMasked } from '../src/server.js';
 import type { GateDecision } from '../src/auth/gate.js';
 import type { PlanView } from '../../shared/plan.js';
+import { setLinking } from '../src/coord/linkingStore.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const TOKEN = 'k'.repeat(64);
@@ -228,6 +229,39 @@ describe('plan tickets and epics', () => {
     const secret = `sk-${'a'.repeat(40)}`;
     await put({ home: 'project-a', epics: [epic('e1', [1], { title: `has ${secret}` })] });
     expect(plan.planOf('prog-a').epics[0]!.title).not.toContain(secret);
+  });
+});
+
+describe('plan verbs judge a ticket by its own project', () => {
+  const T = 'KEY-9 leak';
+  const modes = () => {
+    setLinking(coord.db, 'project-a', { teamKey: 'KEY', override: 'private' }, 'x', 1);
+    setLinking(coord.db, 'project-b', { teamKey: 'KEY', override: 'public' }, 'x', 1);
+  };
+  const withTicket = (over: Record<string, unknown>) => ({ home: 'project-a', epics: [epic('e1', [1], { tickets: [{ key: 't1', kind: 'work', title: 'clean', ...over }] })] });
+
+  it('a put that leaves project out on an existing public-project ticket still judges the text by that project', async () => {
+    modes();
+    expect((await put(withTicket({ project: 'project-b' }))).statusCode).toBe(200);
+    const res = await put(withTicket({ title: T }));
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
+    expect(plan.planOf('prog-a').epics[0]!.tickets[0]!.title).toBe('clean');
+  });
+
+  it('ticket-move to a public project re-judges the stored title and body', async () => {
+    modes();
+    expect((await put(withTicket({ title: T }))).statusCode).toBe(200);
+    const res = await send('/api/programmes/prog-a/plan/tickets/move', { ticket: 't1', project: 'project-b' });
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
+    expect(plan.planOf('prog-a').epics[0]!.tickets[0]!.project).toBe('project-a');
+  });
+
+  it('close on a programme with no home judges the why by the plan\'s projects', async () => {
+    modes();
+    await put(withTicket({ project: 'project-b' }));
+    coord.db.prepare('UPDATE programs SET homeProject = NULL WHERE slug = ?').run('prog-a');
+    const res = await send('/api/programmes/prog-a/plan/close', { outcome: 'done', why: T });
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
   });
 });
 

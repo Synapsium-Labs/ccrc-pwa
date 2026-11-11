@@ -288,6 +288,8 @@ function hashOf(text) {
  *  all equal those of a different token seen earlier would read that token's
  *  answer, which could hide a hit (odds about 1e-10 over this tree). */
 const INDEXES = new WeakMap();
+/** The token cache never grows past this many slots; at the bound it is emptied and refilled (answers stay exact: it is a cache). */
+const MAX_SLOTS = 1 << 20;
 function indexOf(entries) {
   let ix = INDEXES.get(entries);
   if (!ix) {
@@ -322,7 +324,10 @@ function lookup(ix, h1, h2, len, text) {
     if (ix.k1[at] === h1 && ix.k2[at] === h2 && ix.k3[at] === len) return ix.cands[at];
   }
   const cands = ix.byF.get(hashEntry(text())) ?? null;
-  if (++ix.size * 2 > ix.mask) {
+  if (++ix.size * 2 > ix.mask && ix.mask + 1 >= MAX_SLOTS) {
+    // bound: a long-running server sees unbounded distinct tokens (ids, SHAs); start the cache over rather than grow it
+    Object.assign(ix, slots(1 << 17), { size: 1 });
+  } else if (ix.size * 2 > ix.mask) {
     const old = { ...ix };
     Object.assign(ix, slots((ix.mask + 1) * 2));
     for (let at = 0; at <= old.mask; at++) if (old.used[at]) put(ix, old.k1[at], old.k2[at], old.k3[at], old.cands[at]);
