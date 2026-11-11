@@ -1147,6 +1147,8 @@ export const READ_VERBS: readonly string[];
 export const TOUCHED_CANDIDATE_MAX: 10000;
 export const TOUCHED_LIMIT_DEFAULT: 20;
 export const TOUCHED_ORDERED_CAP: boolean;
+export const TOUCHED_ORDERED_CAPPED_NOTE: string;
+export const TOUCHED_REFS_CUT_NOTE: string;
 export const TOUCHED_DISCLOSURE: string;
 export const TOUCHED_CAPPED_NOTE: string;
 export type TouchedQuery =

@@ -8878,11 +8878,16 @@ export const READ_VERBS = Object.freeze(Object.keys(READ_OPTIONS));
 // Pure deciders for `touched <path|symbol>` (spec addendum 3.5). The verb's reads and rendering are recall.mjs's.
 /** One query's candidate rows, from every select it reads together (*chosen*). */
 export const TOUCHED_CANDIDATE_MAX = 10000;
-/** Whether `touched`'s candidate selects are ordered (`ORDER BY n.latest_ms DESC, ...`, P13). False: unordered, and a capped
- *  answer prints TOUCHED_CAPPED_NOTE. Task 4C sets it only on its measurement. */
-export const TOUCHED_ORDERED_CAP = false;
+/** Whether `touched`'s candidate selects are ordered (`ORDER BY n.latest_ms DESC, ...`, P13). True since Task 4C's measurement
+ *  (the ordered p95 is under 2 s on every shape): a capped answer prints TOUCHED_ORDERED_CAPPED_NOTE. False: unordered, and it
+ *  prints TOUCHED_CAPPED_NOTE (the seam the bench still reaches). */
+export const TOUCHED_ORDERED_CAP = true;
 /** Printed last on every answer (and carried as `note` by --json). */
 export const TOUCHED_DISCLOSURE = 'refs keep one origin each (the first seen) and at most 40 per node; a node may have touched this file without listing it.';
+/** Printed when the ordered candidate cap was hit (Ruling R14): the shown rows are the newest matches. */
+export const TOUCHED_ORDERED_CAPPED_NOTE = '(candidates capped at 10000: the newest are shown, and older matches may be missing)';
+/** Printed after the refs of the one node the ordered cut falls inside (Ruling R14). */
+export const TOUCHED_REFS_CUT_NOTE = '(refs cut at the cap)';
 /** Printed when the unordered candidate cap was hit. */
 export const TOUCHED_CAPPED_NOTE = '(candidates capped at 10000: the ranking covers those only, and newer matches may be missing)';
 

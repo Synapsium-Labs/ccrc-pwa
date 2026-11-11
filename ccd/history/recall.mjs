@@ -74,6 +74,7 @@ import { loadGraph, GRAPH_MAX_BYTES } from '../compact-card.mjs';
  * @property {string} [hint]
  * @property {string} [note]                           `touched`'s disclosure: the human form prints it as its last line, --json carries it as `note` (Ruling R4)
  * @property {boolean} [candidatesCapped]              `touched` hit its candidate cap: --json carries `candidatesCapped` and its sentence
+ * @property {string} [candidatesCappedNote]           the sentence for the form that capped (ordered or unordered)
  */
 
 /** SQLite binds at most 32766 variables; an IN list is split well below that. */
@@ -2126,7 +2127,10 @@ export function expandVerb(rc, parsed) {
 //  - Each candidate is joined to its node through the scope (the scope's families, confirmed epochs only, main thread only
 //    unless --agents), split, normalised against its node's epoch root and the scope's roots, matched, grouped and ranked
 //    (lib's deciders). Rows are one per node, root and file; groups print under `touched <file> (graph | no graph)`.
-//  - TOUCHED_ORDERED_CAP is false in this build: the selects are unordered, and a capped answer says so (TOUCHED_CAPPED_NOTE).
+//  - TOUCHED_ORDERED_CAP is true in this build (P13, measured under 2 s): every select joins nodes and orders before its cut, the
+//    selects of a symbol query merge under that order before the one cut, and a capped answer says the newest are shown
+//    (TOUCHED_ORDERED_CAPPED_NOTE); the node the cut falls inside says its refs were cut. With `ordered` false (the bench's seam)
+//    the selects are unordered and a capped answer says so (TOUCHED_CAPPED_NOTE).
 
 const TOUCHED_FILE_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind IN ('path','path:symbol','test') AND value LIKE ? ESCAPE '\\' LIMIT ?";
 const TOUCHED_SYMBOL_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind = 'path:symbol' AND value LIKE ? ESCAPE '\\' LIMIT ?";
@@ -2249,6 +2253,8 @@ export function runTouched(rc, a) {
   const seen = new Set();
   const candidates = [];
   let capped = false;
+  let refsCutNode = null;
+  const cappedNote = ordered ? xlib.TOUCHED_ORDERED_CAPPED_NOTE : xlib.TOUCHED_CAPPED_NOTE;
   if (ordered) {
     // Every select orders and cuts alike, then their rows merge under the same order before the one cut.
     const pool = new Map();
@@ -2260,6 +2266,8 @@ export function runTouched(rc, a) {
     }
     const merged = [...pool.values()].sort(touchedOrderCmp);
     capped = merged.length > xlib.TOUCHED_CANDIDATE_MAX;
+    // The cut falls inside a node's refs when the last kept candidate and the first dropped one are the same node's (the order keeps a node's rows together).
+    if (capped && merged[xlib.TOUCHED_CANDIDATE_MAX - 1].node_id === merged[xlib.TOUCHED_CANDIDATE_MAX].node_id) refsCutNode = merged[xlib.TOUCHED_CANDIDATE_MAX].node_id;
     candidates.push(...merged.slice(0, xlib.TOUCHED_CANDIDATE_MAX));
   } else for (const [sql, pattern] of selects) {
     if (capped) break;   // the cap is reached: the remaining selects add nothing the answer would keep
@@ -2328,7 +2336,8 @@ export function runTouched(rc, a) {
   const rowText = (r) => {
     const f = family.get(r.sessionPk);
     const refs = [...r.refs].sort((x, y) => (x.kind < y.kind ? -1 : x.kind > y.kind ? 1 : x.value < y.value ? -1 : x.value > y.value ? 1 : 0))
-      .map((x) => `${tok(x.kind)}/${tok(x.origin)}${x.line === null ? '' : ` line ${x.line}`}${x.symbol === null ? '' : ` symbol ${tok(x.symbol)}`}`).join(', ');
+      .map((x) => `${tok(x.kind)}/${tok(x.origin)}${x.line === null ? '' : ` line ${x.line}`}${x.symbol === null ? '' : ` symbol ${tok(x.symbol)}`}`).join(', ')
+      + (r.nodeId === refsCutNode ? ` ${xlib.TOUCHED_REFS_CUT_NOTE}` : '');
     const g = touchedGist(rc, r.gist);
     const id = idShown(rc, r.nodeId);
     const body = g === null ? '(no gist)' : recallEnvelope({ src: 'node', id, ts: r.earliestMs, role: r.nodeKind, text: g });
@@ -2341,7 +2350,7 @@ export function runTouched(rc, a) {
       if (!groups.has(r.file)) groups.set(r.file, { head: headerOf(r.fileName, r.root), rows: [] });
       groups.get(r.file).rows.push(rowText(r));
     }
-    const out = capped ? [xlib.TOUCHED_CAPPED_NOTE] : [];
+    const out = capped ? [cappedNote] : [];
     for (const g of groups.values()) out.push(g.head, ...g.rows);
     if (total === 0) {
       const label = q.kind === 'symbol' ? q.symbol : q.file;
@@ -2359,15 +2368,16 @@ export function runTouched(rc, a) {
       match: r.match,
       refs: r.refs.map((x) => ({ kind: x.kind, value: redactForDisplay(x.value, rc.pairIdx), origin: x.origin, line: x.line, symbol: x.symbol === null ? null : redactForDisplay(x.symbol, rc.pairIdx) })),
       gist: touchedGist(rc, r.gist), agentId: r.agentId === '' ? null : idShown(rc, r.agentId), file: redactForDisplay(r.fileName, rc.pairIdx),
+      ...(r.nodeId === refsCutNode ? { refsCut: true } : {}),
     };
   });
   const nextFor = (n) => (n === 0 ? null : ['describe', idShown(rc, limited[0].nodeId), ...rc.scopeArgs]);
-  const extra = JSON.stringify({ note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true, candidatesCappedNote: xlib.TOUCHED_CAPPED_NOTE } : {}) }).length;
+  const extra = JSON.stringify({ note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true, candidatesCappedNote: cappedNote } : {}) }).length;
   const humanN = greatestFit(limited.length, (n) => { const b = blocksFor(n); return capOutput(b, head.line.length + TOUCHED_RESERVE).kept.length === b.length; });
   const n = Math.min(humanN, jsonPrefixCount(rc, head, items, total, nextFor, extra));
   return {
     exit: total === 0 ? EXIT.NOT_FOUND : EXIT.OK, header: null, blocks: blocksFor(n), items: items.slice(0, n), shown: n, total, next: nextFor(n),
-    note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true } : {}),
+    note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true, candidatesCappedNote: cappedNote } : {}),
   };
 }
 

@@ -15,7 +15,7 @@ import { GRAPH_MAX_BYTES } from '../../ccd/compact-card.mjs';
 import {
   READ_VERBS, READ_OPTIONS, parseReadArgs,
   touchedQuery, likeEscape, splitStoredRef, normaliseRefPath, symbolMatches, matchRef, rankTouched, touchedRows,
-  TOUCHED_CANDIDATE_MAX, TOUCHED_LIMIT_DEFAULT, TOUCHED_DISCLOSURE, TOUCHED_CAPPED_NOTE,
+  TOUCHED_CANDIDATE_MAX, TOUCHED_LIMIT_DEFAULT, TOUCHED_DISCLOSURE, TOUCHED_CAPPED_NOTE, TOUCHED_ORDERED_CAP, TOUCHED_ORDERED_CAPPED_NOTE, TOUCHED_REFS_CUT_NOTE,
 } from '../../ccd/history/lib.mjs';
 
 type Graph = { index: { files: Set<string>; byBase: Map<string, string[]> } };
@@ -258,7 +258,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
   }
   let nodeSeq = 0;
   /** A native leaf of the family's epoch with its refs; `agentTranscript` puts it on a subagent's transcript. */
-  function plant(id: string, o: { latest?: number; gist?: string | null; refs?: Array<[string, string, string?]>; tpk?: number; boundary?: number } = {}): string {
+  function plant(id: string, o: { latest?: number; gist?: string | null; refs?: Array<[string, string, string?]>; tpk?: number; boundary?: number; epoch?: number } = {}): string {
     nodeSeq += 1;
     const latest = o.latest ?? T0 + nodeSeq * 1000;
     withDb((db) => {
@@ -266,7 +266,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
         summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
         directive_flag, capped, parser_version, created_ms)
         VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', ?, NULL, NULL, ?, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`)
-        .run(id, ids.session_pk, ids.seq, o.tpk ?? ids.tpk, o.gist === undefined ? `Gist of ${id}. Second sentence.` : o.gist, o.boundary ?? null, latest - 500, latest, Date.now());
+        .run(id, ids.session_pk, o.epoch ?? ids.seq, o.tpk ?? ids.tpk, o.gist === undefined ? `Gist of ${id}. Second sentence.` : o.gist, o.boundary ?? null, latest - 500, latest, Date.now());
       const ins = db.prepare('INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
       db.exec('BEGIN');
       for (const [kind, value, origin] of o.refs ?? []) ins.run(id, kind, value, origin ?? 'tool_use');
@@ -463,10 +463,12 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     plantGraph([{ label: 'tc16foo', file: 'lib/tc16-file.mjs' }]);
     const r = touched(['tc16foo']);
     expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
-    expect(r.stdout).toContain(TOUCHED_CAPPED_NOTE);
+    expect(TOUCHED_ORDERED_CAP, 'the ordered cap is on (P13, measured)').toBe(true);
+    expect(r.stdout).toContain(TOUCHED_ORDERED_CAPPED_NOTE);
+    expect(r.stdout).not.toContain(TOUCHED_CAPPED_NOTE);
     const j = touchedJson(['tc16foo']);
     expect(j.json?.['candidatesCapped']).toBe(true);
-    expect(j.json?.['candidatesCappedNote']).toBe(TOUCHED_CAPPED_NOTE);
+    expect(j.json?.['candidatesCappedNote']).toBe(TOUCHED_ORDERED_CAPPED_NOTE);
     expect(j.json?.['note']).toBe(TOUCHED_DISCLOSURE);
     expect(lines(r).filter((l) => l !== '').at(-1), 'the disclosure still ends the answer').toBe(TOUCHED_DISCLOSURE);
   }, HEAVY);
@@ -520,18 +522,73 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(items(r).map((i) => [i['nodeId'], i['file']])).toEqual([['Lt22a', 'a/tc22a.mjs'], ['Lt22b', 'ccd/tc22y.mjs']]);
   }, HEAVY);
 
-  it('TC23 symbol candidates capped (P8, P13): no graph and 10,001 path:symbol refs naming the symbol print the cap line', () => {
+  it('TC23 symbol candidates capped (P8, P13): no graph and 10,001 path:symbol refs naming the symbol print the ordered cap line, the newest listed first', () => {
     const refs: Array<[string, string]> = [];
-    for (let i = 0; i <= TOUCHED_CANDIDATE_MAX; i += 1) refs.push(['path:symbol', `cap/t${i}.mjs:tc23foo`]);
-    plant('Lt23n1', { refs });
+    for (let i = 0; i < TOUCHED_CANDIDATE_MAX; i += 1) refs.push(['path:symbol', `cap/t${i}.mjs:tc23foo`]);
+    plant('Lt23old', { latest: T0 + 1000, refs });
+    plant('Lt23new', { latest: T0 + 9_000_000, refs: [['path:symbol', 'cap/tnew.mjs:tc23foo']] });
     const r = touched(['tc23foo']);
     expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
-    expect(r.stdout).toContain(TOUCHED_CAPPED_NOTE);
-    expect(touchedJson(['tc23foo']).json?.['candidatesCapped']).toBe(true);
+    expect(r.stdout).toContain(TOUCHED_ORDERED_CAPPED_NOTE);
+    const j = touchedJson(['tc23foo']);
+    expect(j.json?.['candidatesCapped']).toBe(true);
+    expect(items(j)[0]?.['nodeId']).toBe('Lt23new');   // the order: the newest of 10,001 candidates first
   }, HEAVY);
 
-  it.todo('TC20 the ordered cap (P13): held until Task 4C\'s p95 measurement settles it');
-  it.todo('TC23 order: under the ordered cap the newest of 10,001 symbol candidates is listed first (held with TC20)');
+  /** `rows` refs to `lib/<tag>.mjs:<i>` spread over nodes of 40 refs (the store's cap), each node `stamp(j)` old; `inScope: false` puts them in an epoch no scope holds. */
+  function plantFiller(tag: string, rows: number, stamp: (j: number) => number, inScope = true): void {
+    for (let j = 0; j * 40 < rows; j += 1) {
+      const refs: Array<[string, string]> = [];
+      for (let i = j * 40 + 1; i <= Math.min(rows, (j + 1) * 40); i += 1) refs.push(['path', `lib/${tag}.mjs:${i}`]);
+      plant(`${tag}f${j}`, { latest: stamp(j), refs, ...(inScope ? {} : { epoch: 999 }) });
+    }
+  }
+  const newestRefs = (tag: string, k: number): Array<[string, string]> => Array.from({ length: k }, (_, i) => ['path', `lib/${tag}.mjs:${50_000 + i}`]);
+
+  it('TC20 the ordered cap (P13): candidates past the cap whose newest match was inserted last are capped, and the newest is listed first', () => {
+    plantFiller('Lt20', 10_001, (j) => T0 + 1000 + j);
+    plant('Lt20new', { latest: T0 + 9_000_000, refs: newestRefs('Lt20', 1) });
+    const j = touchedJson(['lib/Lt20.mjs']);
+    expect(j.code, `${j.stderr}${j.stdout}`).toBe(0);
+    expect(j.json?.['candidatesCapped']).toBe(true);
+    expect(items(j)[0]?.['nodeId']).toBe('Lt20new');
+  }, HEAVY);
+
+  it('TC20b the select itself orders (its LIMIT is 10,001): 10,001 older candidates, then the 3 newest, inserted last: all 3 are kept', () => {
+    plantFiller('Lt20b', 10_001, (j) => T0 + 1000 + j);
+    plant('Lt20bnew', { latest: T0 + 9_000_000, refs: newestRefs('Lt20b', 3) });
+    const j = touchedJson(['lib/Lt20b.mjs']);
+    expect(j.code, `${j.stderr}${j.stdout}`).toBe(0);
+    const [first] = items(j);
+    expect(first?.['nodeId']).toBe('Lt20bnew');
+    expect(first?.['refs']).toHaveLength(3);
+    expect(first).not.toHaveProperty('refsCut');
+  }, HEAVY);
+
+  it('TC24 the cut inside a node\'s refs (R14): that node\'s row says its refs were cut, in the human line and as refsCut', () => {
+    // 9,990 newest candidates sit in an epoch no scope holds, so the one in-scope row is the node the cut falls inside (10 of its 20 refs kept).
+    plantFiller('Lt24', 9_990, (j) => T0 + 8_000_000 + j, false);
+    plant('Lt24mid', { latest: T0 + 5_000_000, refs: newestRefs('Lt24', 20) });
+    plant('Lt24old', { latest: T0 + 1000, refs: newestRefs('Lt24', 5).map(([k, v]) => [k, `${v}0`] as [string, string]) });
+    const j = touchedJson(['lib/Lt24.mjs']);
+    expect(j.code, `${j.stderr}${j.stdout}`).toBe(0);
+    expect(j.json?.['candidatesCappedNote']).toBe(TOUCHED_ORDERED_CAPPED_NOTE);
+    expect(items(j).map((i) => [i['nodeId'], i['refsCut'], (i['refs'] as unknown[]).length])).toEqual([['Lt24mid', true, 10]]);
+    const h = rowLines(touched(['lib/Lt24.mjs']));
+    expect(h).toHaveLength(1);
+    expect(h[0]).toMatch(/\(refs cut at the cap\) <ccrc-recall /);
+    expect(TOUCHED_REFS_CUT_NOTE).toBe('(refs cut at the cap)');
+  }, HEAVY);
+
+  it('TC25 a symbol with a graph merges its selects under the order before its one cut: the newest match, from the file select, is listed first', () => {
+    for (let j = 0; j < 250; j += 1) plant(`Lt25f${j}`, { latest: T0 + 1000 + j, refs: Array.from({ length: 40 }, (_, i) => ['path:symbol', `cap/m${j}x${i}.mjs:tc25foo`] as [string, string]) });
+    plant('Lt25new', { latest: T0 + 9_000_000, refs: [['path', 'lib/tc25-file.mjs']] });
+    plantGraph([{ label: 'tc25foo', file: 'lib/tc25-file.mjs' }]);
+    const j = touchedJson(['tc25foo']);
+    expect(j.code, `${j.stderr}${j.stdout}`).toBe(0);
+    expect(j.json?.['candidatesCapped']).toBe(true);
+    expect(items(j)[0]?.['nodeId']).toBe('Lt25new');
+  }, HEAVY);
 
   it('P8 a path-symbol query tests its symbol: a path:symbol ref of another symbol is not listed, the same symbol and a plain path ref are', () => {
     plant('Lt31a', { refs: [['path:symbol', 'ccd/tc31.mjs:otherSym']] });
@@ -689,7 +746,9 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
 // node_refs rows, 5,697 nodes), its kinds in the proportions classifyRef gives a mixed corpus, built through a writer handle
 // on a fixture HOME under the temp root. It times runTouched in-process on a read-only handle, in both forms (the shipped
 // unordered selects, and P13's ordered ones through runTouched's `ordered` argument), cold and warm, and writes its figures
-// to $HISTORY_BENCH_OUT (default: beside the fixture, removed with the run). Cold is a freshly opened read-only handle per run (the OS page cache cannot be dropped
+// Measured (14.5 MB fixture, 20 runs, p95 ms, unordered vs ordered; cold/warm): path 24.1 vs 16.0 / 24.3 vs 15.7, symbol with graph 33.7 vs
+// 32.4 / 31.5 vs 32.5, symbol without graph 10.7 vs 11.7 / 10.4 vs 11.5, worst case (cut hit, 79,456 rows) 31.5 vs 39.0 / 31.2 vs 35.8:
+// the ordered p95 is under 2 s on every shape, so TOUCHED_ORDERED_CAP is true (P13). It writes its figures to $HISTORY_BENCH_OUT (default: beside the fixture, removed with the run). Cold is a freshly opened read-only handle per run (the OS page cache cannot be dropped
 // here, so it is a cold handle and statement cache, not a cold disk); warm is 20 timed runs on one handle after one untimed.
 describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => {
   const RUNS = 20;

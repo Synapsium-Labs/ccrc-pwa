@@ -991,7 +991,7 @@ function emitRefusal(r, json, pairIdx) {
 function touchedExtras(res) {
   return {
     ...(res.note === undefined ? {} : { note: res.note }),
-    ...(res.candidatesCapped === true ? { candidatesCapped: true, candidatesCappedNote: TOUCHED_CAPPED_NOTE } : {}),
+    ...(res.candidatesCapped === true ? { candidatesCapped: true, candidatesCappedNote: res.candidatesCappedNote ?? TOUCHED_CAPPED_NOTE } : {}),
   };
 }
 
