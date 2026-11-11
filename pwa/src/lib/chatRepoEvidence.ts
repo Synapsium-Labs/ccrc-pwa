@@ -126,15 +126,20 @@ const PAGE = new RegExp(
   `${HOST_START}(?:www\\.)?github\\.com[/:](${SEG})/(${SEG})(?:/(?:(?:pull|issues)/(\\d+)|commit/([0-9a-f]{7,40})))?`,
   'gi',
 );
-/** The REST API's repository address, and its pulls and issues. */
-const API = new RegExp(`${HOST_START}api\\.github\\.com/repos/(${SEG})/(${SEG})(?:/(?:pulls|issues)/(\\d+))?`, 'gi');
+/** The REST API's repository address, and its pulls and issues; and its commits, `commits/<sha>` or `git/commits/<sha>`,
+ *  with or without a sub-path after the SHA (`/status`, `/check-runs`; Task C23 fix round 2, review 1800 B). */
+const API = new RegExp(
+  `${HOST_START}api\\.github\\.com/repos/(${SEG})/(${SEG})(?:/(?:(?:pulls|issues)/(\\d+)|(?:git/)?commits/([0-9a-f]{7,40})))?`,
+  'gi',
+);
 /** The raw-file and archive hosts: they name a repository and no number. */
 const RAW = new RegExp(`${HOST_START}(?:raw\\.githubusercontent|codeload\\.github)\\.com/(${SEG})/(${SEG})`, 'gi');
 /** The path of `gh api`, with or without its leading slash, and its pulls and issues, ending at the word's end, `/`, `?` or `#`;
- *  or its commit, `commits/<sha>`, ending at the word's end, `?` or `#` (Task C23 fix round 1, review 1795 F2: the way a pull
- *  page and a commit page are both addresses). */
+ *  or its commit, `commits/<sha>` or `git/commits/<sha>`, ending the same way, so a sub-path after the SHA (`/status`) names it
+ *  too (Task C23 fix round 1, review 1795 F2: the way a pull page and a commit page are both addresses; fix round 2, review
+ *  1800 B). */
 const GH_API_PATH = new RegExp(
-  `^/?repos/(${SEG})/(${SEG})(?:/(?:(?:pulls|issues)/(\\d+)(?=$|[/?#])|commits/([0-9a-fA-F]{7,40})(?=$|[?#])))?`,
+  `^/?repos/(${SEG})/(${SEG})(?:/(?:(?:pulls|issues)/(\\d+)|(?:git/)?commits/([0-9a-fA-F]{7,40}))(?=$|[/?#]))?`,
 );
 /** A `gh api` path word anywhere in a message, for the net (Task C22, review 1769 F2): `repos/o/r`, with or without its leading
  *  slash, where a word starts (no letter, digit, `_`, `.`, `/` or `-` before it, so `api.github.com/repos/…` and
@@ -195,6 +200,31 @@ function continuation(text: string, at: number): number {
   let k = at;
   while (k > 0 && text.charAt(k - 1) === '\\') k -= 1;
   return (at - k) % 2 === 0 ? length : 0;
+}
+
+/** `text` as the shell joins it, every continuation (`continuation`) deleted, and `raw[i]`, where the joined text's `i`th
+ *  character stands in `text` (`raw[text.length]` is `text`'s length), so the net can read a split flag and still tell which
+ *  command's words it stands in (Task C23 fix round 2, review 1800 A). One pass; the text itself where it holds none. */
+function shellJoined(text: string): { readonly text: string; readonly raw: (at: number) => number } {
+  if (!/\\\r?\n/.test(text)) return { text, raw: (at) => at };
+  const raw = new Int32Array(text.length + 1);
+  const pieces: string[] = [];
+  let n = 0;
+  let from = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const length = continuation(text, i);
+    if (length === 0) {
+      raw[n] = i;
+      n += 1;
+      continue;
+    }
+    pieces.push(text.slice(from, i));
+    i += length - 1;
+    from = i + 1;
+  }
+  pieces.push(text.slice(from));
+  raw[n] = text.length;
+  return { text: pieces.join(''), raw: (at) => raw[at]! };
 }
 
 /** Whether the character at `at` ends a `gh` command, outside quotes (review 1760 F1): a backtick, a line break, `;`, `&`, `|`, or
@@ -264,10 +294,11 @@ const HASH_NUMBER = /#(\d+)(?!\w)/y;
  *  quote, and ends just past it, so a later command is still read (review 1762 F3); a prose apostrophe past the command
  *  touches nothing it read (review 1766 F1). Where a `pr` or `issue` command ends at a `#n` word standing where its number
  *  stands, `hashed` is that number (review 1768 G3). A line continuation is deleted, as the shell deletes it (`continuation`,
- *  Task C23, review 1778 P1 and review 1795 F1): whitespace between words, a join inside one. Where an unquoted `gh` word stands where a flag's value is expected, the command ends there as anywhere, and is `cut`:
- *  `ghCommand` gives its number to no repository (Task C23, review 1778 A2). One forward
- *  scan: a quote's search reads up to the next quote of its kind, which a closed quote consumes, and a void one is never
- *  reached again, so each stretch is read about once however many quotes the message holds. */
+ *  Task C23, review 1778 P1 and review 1795 F1): whitespace between words, a join inside one. Where an unquoted `gh` word
+ *  stands where a flag's value is expected, the command ends there as anywhere, and is `cut`: `ghCommand` gives its number to
+ *  no repository (Task C23, review 1778 A2). One forward scan: a quote's search reads up to the next quote of its kind,
+ *  which a closed quote consumes, and a void one is never reached again, so each stretch is read about once however many
+ *  quotes the message holds. */
 function ghWords(
   text: string,
   from: number,
@@ -491,8 +522,13 @@ function claimedAt(claims: readonly Span[], cursor: { i: number }, index: number
  *  link to text, never a home link. `ghCommand` still decides which number a repository is for; a repository the net finds
  *  in no word a command read (`claims`) is no command's, so it is a candidate for every number the message gives a
  *  repository (`messageRepos`, review 1769 F3). A flag of another program (`cp -R src/lib`) in such a message names its word
- *  too, and its bare names are text. One forward pass: each flag's value ends where the next flag starts (`repoFlagValue`). */
-function repoFlags(text: string, claims: readonly Span[]): Net {
+ *  too, and its bare names are text. It reads the message as the shell joins it (`shellJoined`), so a flag spelling split by a
+ *  continuation is read in every context (Task C23 fix round 2, review 1800 A). One forward pass: each flag's value ends where
+ *  the next flag starts (`repoFlagValue`). */
+function repoFlags(message: string, claims: readonly Span[]): Net {
+  // The net reads the text as the shell joins it, so a flag split by a continuation (`-` then `R`) is read; a find's offset
+  // is mapped back to the message, where the claims stand.
+  const { text, raw } = shellJoined(message);
   const net: Net = { named: new Map(), unclaimed: new Map(), flags: false };
   const found = (r: SaidRepo, claimed: boolean): void => {
     if (!net.named.has(r.key)) net.named.set(r.key, r);
@@ -505,11 +541,11 @@ function repoFlags(text: string, claims: readonly Span[]): Net {
     const at = m.value.index;
     const value = repoFlagValue(text, at + m.value[0].length, next.done ? text.length : next.value.index);
     net.flags = true;
-    found(value === null ? LOST : flagRepo(value), claimedAt(claims, flagCursor, at));
+    found(value === null ? LOST : flagRepo(value), claimedAt(claims, flagCursor, raw(at)));
     m = next;
   }
   const pathCursor = { i: 0 };
-  for (const m of text.matchAll(GH_PATH_WORD)) found(said(`${m[1]!}/${m[2]!}`), claimedAt(claims, pathCursor, m.index));
+  for (const m of text.matchAll(GH_PATH_WORD)) found(said(`${m[1]!}/${m[2]!}`), claimedAt(claims, pathCursor, raw(m.index)));
   return net;
 }
 
@@ -555,7 +591,9 @@ export function messageRepos(text: string): MessageRepos {
     const r = addressed(m, m[1]!, m[2]!);
     if (r === null) continue;
     named.add(r.key);
-    if (m[3] !== undefined && !wordAfter(text, m.index + m[0].length)) atNumber(m[3], r);
+    if (wordAfter(text, m.index + m[0].length)) continue;
+    if (m[3] !== undefined) atNumber(m[3], r);
+    if (m[4] !== undefined) atCommit(m[4].toLowerCase(), r);
   }
   for (const m of text.matchAll(RAW)) {
     const r = addressed(m, m[1]!, m[2]!);

@@ -3372,7 +3372,14 @@ repository, as a `pulls/<n>` path names a number (F2). A budget pin covers the c
 the shell's joining reading, and its generator and seeds are in `c23.md`. R15 gains one sentence for the join and one for the
 commits path. `gh` followed by a continuation is never a command (F3, recorded).
 
-- **D-8279** - `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Fix round 1 (review 1795): a continuation joins a word it is glued inside and needs an odd backslash run (F1, C2, C3), and a `gh api` commits path names its commit (F2). Departures are named by slug in `c23.md`.
+**Fix round 2 (review 1800).** The net reads the message as the shell joins it, through an offset map, so a repository flag
+spelling split by a continuation is read in every context (A). An `api.github.com` commits address and a commits sub-path
+(`/status`, `git/commits/<sha>`) name their SHA, in a `gh api` path and in an address (B). The other commit page forms
+(`blob/`, `tree/`, `compare/`, `pull/N/commits/`, `raw.githubusercontent`, `owner/repo@sha`) are a carried gap, recorded. Two
+budget and bound pins (F5-gap, F6), the record fixes, and the fuzz's two-repository check. R15 gains one sentence for the
+net's join and one for the API commits address.
+
+- **D-8279** - `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Fix round 1 (review 1795): a continuation joins a word it is glued inside and needs an odd backslash run (F1, C2, C3), and a `gh api` commits path names its commit (F2). Fix round 2 (review 1800): the net reads the joined text (A), and an API commits address and a commits sub-path name their commit (B). Departures are named by slug in `c23.md`.
 
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.

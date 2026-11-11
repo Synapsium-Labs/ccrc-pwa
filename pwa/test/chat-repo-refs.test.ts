@@ -1071,9 +1071,10 @@ describe('Task C23: a command claims its repository flags only where it gives a 
       // A lost or cut command gives its sha to no repository.
       ["gh api repos/owner-b/repo-b/commits/1234567abc --jq 'x and 1234567abc", [['1234567abc', null]]],
       ['gh api repos/owner-b/repo-b/commits/1234567abc --jq GH and 1234567abc', [['1234567abc', null]]],
-      // A longer path is no commit address; a sha the boundary does not end is none.
+      // A sub-path after the sha names it too (fix round 2, review 1800 B: this row opened owner-c until then), so the sha is
+      // named in two repositories: text.
       ['gh api repos/owner-b/repo-b/commits/1234567abc/comments; https://github.com/owner-c/repo-c/commit/1234567abc and 1234567abc',
-        [['1234567abc', 'https://github.com/owner-c/repo-c/commit/1234567abc']]],
+        [['1234567abc', null]]],
       // Recorded (api-path-claim-unchanged): a numberless pulls path stays its command's, so the address decides.
       ["gh api repos/owner-b/repo-b/pulls --jq '.[] | select(.number==12)'; https://github.com/owner-c/repo-c/pull/12 and #12",
         [['#12', c(12)]]],
@@ -1093,6 +1094,84 @@ describe('Task C23: a command claims its repository flags only where it gives a 
     const said = messageRepos(text);
     expect(performance.now() - t).toBeLessThan(GH_COMMIT_CANDIDATES_BOUND_MS);
     expect(said.commits.sorted.length).toBe(parts.length * 3);
+  });
+
+  it('review 1800 A: the net reads the message as the shell joins it, so a split flag spelling is read in every context', () => {
+    const lf = (t: string): string => t;
+    const crlf = (t: string): string => t.replaceAll('\\\n', '\\\r\n');
+    for (const nl of [lf, crlf]) {
+      for (const ctx of [HOME, CROSS]) {
+        // A gh api command claims only its path, so its split flag is a candidate for the path's commit and number.
+        expect(links(nl('gh api repos/org-a/project-a/commits/1234567abc -\\\nR owner-b/repo-b and 1234567abc'), ctx))
+          .toEqual([['1234567abc', null]]);
+      }
+      rows([
+        [nl('gh api repos/owner-c/repo-c/commits/1234567abc --re\\\npo owner-b/repo-b and 1234567abc'), [['1234567abc', null]]],
+        [nl('gh pr list -\\\nR owner-b/repo-b; gh api repos/owner-c/repo-c/commits/1234567abc and 1234567abc'),
+          [['1234567abc', null]]],
+        // The same shapes before this round: a numberless command, another program's flag, a gh api pulls path (R2 too).
+        [nl('gh pr list -\\\nR owner-b/repo-b; https://github.com/owner-c/repo-c/pull/12 and #12'), [['#12', null]]],
+        [nl('gh pr view 12 && cp -\\\nR owner-b/repo-b x and #12'), [['#12', null]]],
+        [nl('gh api repos/owner-c/repo-c/pulls/12 -\\\nR owner-b/repo-b and #12'), [['#12', null]]],
+        [nl('gh pr list -\\\nR owner-b/repo-b; gh pr view 13 -R owner-c/repo-c; #13'), [['#13', null]]],
+        // Controls: a split flag its command reads is that command's; the net still names a flag only in a gh message.
+        [nl('gh pr view 12 -\\\nR owner-b/repo-b; gh pr view 13 -R owner-c/repo-c; #12 and #13'), [['#12', b(12)], ['#13', c(13)]]],
+        [nl('cp -\\\nR owner-b/repo-b x and #12'), [['#12', home(12)]]],
+        // A path its command read after a continuation is still that command's (the offset map).
+        [nl('gh pr view 12 -\\\nR owner-b/repo-b; gh api repos/owner-c/repo-c/pulls/13; #12 and #13'), [['#12', b(12)], ['#13', c(13)]]],
+      ]);
+    }
+  });
+
+  it('review 1800 B: an API commits address and a commits sub-path name their sha, in a gh api path and in an address', () => {
+    rows([
+      ['gh api repos/owner-b/repo-b/commits/1234567abc; https://api.github.com/repos/owner-c/repo-c/commits/1234567abc and 1234567abc',
+        [['1234567abc', null]]],
+      ['gh api repos/owner-b/repo-b/commits/1234567abc; gh api repos/owner-c/repo-c/commits/1234567abc/status and 1234567abc',
+        [['1234567abc', null]]],
+      // An API commits address alone opens its own repository's commit; so do its sub-paths and git/commits.
+      ['https://api.github.com/repos/owner-c/repo-c/commits/1234567abc and 1234567abc',
+        [['1234567abc', 'https://github.com/owner-c/repo-c/commit/1234567abc']]],
+      ['https://api.github.com/repos/owner-c/repo-c/commits/1234567abc/check-runs and 1234567abc',
+        [['1234567abc', 'https://github.com/owner-c/repo-c/commit/1234567abc']]],
+      ['gh api repos/owner-b/repo-b/git/commits/1234567abc and 1234567abc', [['1234567abc', `${commitB}`]]],
+      ['gh api repos/owner-b/repo-b/commits/1234567abc/pulls; https://api.github.com/repos/owner-c/repo-c/git/commits/1234567abc and 1234567abc',
+        [['1234567abc', null]]],
+      // A sha the boundary does not end is none.
+      ['https://api.github.com/repos/owner-c/repo-c/commits/1234567abcx and 1234567abc', [['1234567abc', null]]],
+      // A commits or pulls path that runs on into a word names no sha and no number.
+      ['gh api repos/owner-b/repo-b/commits/1234567abcz and 1234567abc', [['1234567abc', null]]],
+      ['gh api repos/owner-b/repo-b/pulls/12x and #12', [['#12', null]]],
+      // Read in any case, kept in lower case.
+      ['https://api.github.com/repos/owner-c/repo-c/commits/1234567ABC and 1234567abc',
+        [['1234567abc', 'https://github.com/owner-c/repo-c/commit/1234567abc']]],
+      // Carried (c23.md): a blob page is no commit address yet, so the path's repository wins, as a commit page does on main.
+      ['gh api repos/owner-b/repo-b/commits/1234567abc; https://github.com/owner-c/repo-c/blob/1234567abc/x.ts and 1234567abc',
+        [['1234567abc', `${commitB}`]]],
+    ]);
+  });
+
+  it('review 1800 F6: a commits path names a sha of 7 to 40 hex only, and each (repository, sha) pair once', () => {
+    expect(messageRepos('gh api repos/owner-b/repo-b/commits/abc123').commits.sorted).toEqual([]);
+    expect(messageRepos('gh api repos/owner-b/repo-b/commits/abc1234').commits.sorted.length).toBe(1);
+    expect(messageRepos(`${commitB} and ${commitB} and gh api repos/owner-b/repo-b/commits/1234567abc`).commits.sorted.length)
+      .toBe(1);
+  });
+
+  it('review 1800 F5-gap: many distinct unclaimed flags beside many commit addresses stay linear', () => {
+    const parts: string[] = ['gh pr list; '];
+    let size = parts[0]!.length;
+    let n = 0;
+    for (; size < 1 << 20; n += 1) {
+      const part = `-R o/r${n.toString(36)} github.com/o/r/commit/a${n.toString(16).padStart(6, '0')} `;
+      parts.push(part);
+      size += part.length;
+    }
+    const t = performance.now();
+    const said = messageRepos(parts.join(''));
+    expect(performance.now() - t).toBeLessThan(GH_COMMIT_CANDIDATES_BOUND_MS);
+    // Each commit takes its page's repository and at most two candidates.
+    expect(said.commits.sorted.length).toBe(n * 3);
   });
 
   it('L2-2: a value the net cuts at the next flag names an unknown repository, never home', () => {
