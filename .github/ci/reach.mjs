@@ -78,7 +78,10 @@ export const FOREIGN = {
  * resolves under a foreign prefix without an entry here.
  */
 export const READS = {
-  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
+  // server/test/scan/ (D-8288): the pwa census and scan suites import the repo's one TypeScript parser from
+  // server/test/scan/parse.ts. KNOWN WIDTH: a change to its pin alone (`typescript-api` in server/package.json and the
+  // lock) is not listed, so a pull request that only bumps it skips the pwa tests; the merge queue runs them whole.
+  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/', 'server/test/scan/'],
   browser: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
 };
 

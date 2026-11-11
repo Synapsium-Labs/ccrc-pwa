@@ -1313,8 +1313,13 @@ else
   RUN_START="$(date +%s)"
   # ui FIRST: pwa builds @ccrc/ui from SOURCE (`file:../ui`), and ui's imports
   # resolve from ui/node_modules alone — a fresh clone without it fails the
-  # build below (build-release.sh says why at length).
+  # build below (build-release.sh says why at length). server too, for the
+  # same reason (D-8288): pwa's `tsc --noEmit` typechecks its tests, which
+  # read the one parser module, server/test/scan/parse.ts, and that resolves
+  # `typescript-api` from server/node_modules alone. This install is for the
+  # build HERE; rsync excludes node_modules and the box installs its own.
   (cd ui && npm ci --no-audit --no-fund)
+  (cd server && npm ci --no-audit --no-fund)
   (cd pwa && npm ci && npm run build)
   [ -f server/dist-pwa/index.html ] \
     || { echo "deploy: PWA build produced no server/dist-pwa/index.html" >&2; exit 1; }

@@ -390,9 +390,13 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   // holds it, so a ui install sitting in deploy.sh's agent lane cannot answer
   // for the server lane's pwa build. A nested if/fi between the two, at the
   // pwa line's own depth or deeper, is not a boundary.
-  it('every SCRIPT that installs pwa installs ui first, in the same lane — the release builder, deploy.sh, install.sh', () => {
-    const PWA = /\bcd\s+["']?(?:\$\{?ROOT\}?\/|\.\.\/|~\/[\w.-]+\/)?pwa["']?\s*&&\s*npm\s+(?:ci|install|i)\b/;
-    const UI = /\bcd\s+["']?(?:\$\{?ROOT\}?\/|\.\.\/|~\/[\w.-]+\/)?ui["']?\s*&&\s*npm\s+ci\b/;
+  // One backward walk for every package pwa's build reads from: given the
+  // prerequisite install's matcher, it returns the scripts that install pwa
+  // and every pwa install line with no such install earlier in its lane.
+  const PWA = /\bcd\s+["']?(?:\$\{?ROOT\}?\/|\.\.\/|~\/[\w.-]+\/)?pwa["']?\s*&&\s*npm\s+(?:ci|install|i)\b/;
+  const installOf = (dir: string): RegExp =>
+    new RegExp(`\\bcd\\s+["']?(?:\\$\\{?ROOT\\}?\\/|\\.\\.\\/|~\\/[\\w.-]+\\/)?${dir}["']?\\s*&&\\s*npm\\s+ci\\b`);
+  const pwaLanesWithout = (pre: RegExp): { withPwa: string[]; missing: string[] } => {
     const indent = (l: string): number => /^\s*/.exec(l)![0].length;
     const isComment = (l: string): boolean => /^\s*#/.test(l);
 
@@ -418,7 +422,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
         for (let j = i - 1; j >= 0; j -= 1) {
           const p = lines[j]!;
           if (p.trim() === '' || isComment(p)) continue;
-          if (UI.test(p)) return;
+          if (pre.test(p)) return;
           if (/^\s*(?:function\s+)?[\w-]+\s*\(\)\s*\{?\s*$/.test(p)) break;
           if (/^\s*(?:else|elif\b|fi\b)/.test(p) && indent(p) < depth) break;
         }
@@ -426,9 +430,28 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       });
     }
 
+    return { withPwa, missing };
+  };
+
+  it('every SCRIPT that installs pwa installs ui first, in the same lane — the release builder, deploy.sh, install.sh', () => {
+    const { withPwa, missing } = pwaLanesWithout(installOf('ui'));
     expect(withPwa, 'the script scan went vacuous — the three known pwa builders were not found')
       .toEqual(expect.arrayContaining(['deploy/build-release.sh', 'deploy/deploy.sh', 'install.sh']));
     expect(missing, 'pwa reads ui SOURCE — `cd ui && npm ci` must precede this pwa install, in the same lane')
+      .toEqual([]);
+  });
+
+  // The same lane rule for server (D-8288): pwa's tests read the one parser
+  // module, server/test/scan/parse.ts, and pwa's `npm run build` typechecks
+  // them (`tsc --noEmit` over a tsconfig that includes test/), so
+  // `typescript-api` must resolve from server/node_modules. A lane that builds
+  // pwa without installing server first fails on a fresh clone with "Cannot
+  // find module 'typescript-api'".
+  it('every SCRIPT that installs pwa installs server first, in the same lane — pwa typechecks the server parser (D-8288)', () => {
+    const { withPwa, missing } = pwaLanesWithout(installOf('server'));
+    expect(withPwa, 'the script scan went vacuous — the three known pwa builders were not found')
+      .toEqual(expect.arrayContaining(['deploy/build-release.sh', 'deploy/deploy.sh', 'install.sh']));
+    expect(missing, 'pwa typechecks server/test/scan/parse.ts — `cd server && npm ci` must precede this pwa install, in the same lane')
       .toEqual([]);
   });
 
