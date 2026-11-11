@@ -1003,6 +1003,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     testboxToolsSync: () =>
       postJsonOr<{ readonly ok: boolean; readonly outcome?: unknown; readonly detail?: unknown } | 'unreadable'>(
         '/api/testbox/tools-sync', 'unreadable'),
+    /** D-8289: `GET /api/testbox/builds`, `{ok, claudeBuilds}`, the trusted Claude Code builds (`readClaudeBuildRecords` is the guard), and
+     *  `POST /api/testbox/builds/capture`, `{build}`, the operator's Capture again on a failed build, answered with the re-read list. */
+    testboxBuilds: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly claudeBuilds: unknown }>('/api/testbox/builds', opts),
+    testboxBuildCapture: (build: string) =>
+      postJsonOr<{ readonly ok: true; readonly claudeBuilds: unknown } | 'unreadable'>('/api/testbox/builds/capture', 'unreadable', { build }),
     /** `GET /api/testbox/admin` (test box connect plan TC12, D-8166): `{ok, status, events}`, session-gated. `useTestboxAdmin`
      *  reads it through the shared status reader; the type here is the envelope only. */
     testboxAdmin: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly status: unknown; readonly events: unknown }>('/api/testbox/admin', opts),

@@ -630,7 +630,8 @@ describe('the card: the flow mounts with no connected box, and the switch waits 
     await settle();
     expect(card().querySelector('[data-testbox="connect"]')).toBeNull();
     expect(within(card()).getByRole('radio', { name: 'On' })).toBeEnabled();
-    expect(calls).toEqual([]);
+    // D-8289: the build list's own read is the card's, whatever the server; no connect-surface door is asked.
+    expect(calls.filter((c) => c.path !== '/api/testbox/builds')).toEqual([]);
   });
 
   it('with no box connected the flow mounts above the card, and the band reaches it', async () => {

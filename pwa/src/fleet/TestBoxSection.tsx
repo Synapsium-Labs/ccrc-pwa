@@ -16,6 +16,9 @@
 //   * wide: the same, with the versions table and the pristine-installs table open side by side.
 // Every table is one shape (`TestboxTable`), so the four are one block written once.
 //
+// THE BUILDS (D-8289). Under everything else, `TestBoxBuilds` lists every Claude Code build with its capture verdict, read on
+// its own (`GET /api/testbox/builds`), so a box that is down still shows which builds are trusted.
+//
 // THE CONNECT SURFACE (D-8166, TC15). A block that carries `admin` (a server with the connect routes) mounts `TestBoxConnect`
 // above the card while no box is connected or parity has not passed, and draws the switch's On disabled, with the sentence
 // that says why, until the record passes: the server refuses `{on: true}` the same way (`parity-required`), and turning the
@@ -35,6 +38,7 @@ import { ApiError, api, apiErrorText } from '../lib/api';
 import { isRecord } from '../lib/wire';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, UNCONFIRMED_TEXT, useResultLine } from './settingsText';
+import { TestBoxBuilds } from './TestBoxBuilds';
 import { TestBoxConnect } from './TestBoxConnect';
 import { TestBoxManage } from './TestBoxManage';
 import { TESTBOX_CONNECT_TEXT } from './testboxAdminWords';
@@ -164,6 +168,8 @@ export function TestBoxSection({ poll, fleetRows = null, onFleetChanged }: TestB
       ) : (
         <Skeleton lines={3} />
       )}
+      {/* D-8289: the trusted Claude Code builds and their capture verdicts, read on their own, whatever the box's state. */}
+      {failure !== 'not-configured' && <TestBoxBuilds band={band} />}
     </Section>
   );
 }
