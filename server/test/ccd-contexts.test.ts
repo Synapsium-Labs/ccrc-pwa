@@ -1,8 +1,8 @@
 // D-6054 (ARCH-34, #536): ccd's function-to-context manifest.
 //
 // `ccd/ccd` is one bash file of some 40k lines, and nothing recorded which bounded context each of its functions
-// belongs to. `ccd/contexts.tsv` does: one row per function, naming one context of the 08-10 spec (C1 to C9, or K
-// for the kernels and platform files). This suite holds three things:
+// belongs to. `ccd/contexts.tsv` does: one row per function, naming one context of the 08-10 spec (C1 to C9),
+// C10 Session host (D-8272), or K for the kernels and platform files. This suite holds three things:
 //   1. COVERAGE: every `name() {` in `ccd/ccd` has exactly one row, and every row names a function that exists, in
 //      a context the spec defines. A new function without a row is red here, in the PR that adds it.
 //   2. THE CALL GRAPH: a reference from one function's region to another defined name is an edge
@@ -26,6 +26,8 @@ import {
 
 /** The allowed cross-context edges (D-6925): one `caller -> callee` per line, sorted. */
 const EDGES_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ccd', 'contexts-edges.tsv');
+/** The manifest itself, read here for its header legend only (the rows go through `ccdContextRows`). */
+const CONTEXTS_FILE = path.join(path.dirname(EDGES_FILE), 'contexts.tsv');
 const edgeOf = (siteText: string): string => {
   const m = /^(\S+) \(\w+\) -> (\S+) \(\w+\)$/.exec(siteText)!;
   return `${m[1]} -> ${m[2]}`;
@@ -88,6 +90,19 @@ describe('ccd/contexts.tsv: coverage (D-6054)', () => {
     // Order is for the reviewer, who reads a function's row beside its neighbours'.
     expect(rows.map((r) => r[0]), 'rows run in the order ccd/ccd defines the functions')
       .toEqual(ccdFunctionDefinitions().map((s) => nameOf(s.text)));
+  });
+
+  it('the header legend names exactly the contexts a row may name, in order, C10 Session host among them (D-8272)', () => {
+    // The legend is the header's first parenthesised list. A context added to CCD_CONTEXTS without its legend entry,
+    // or a legend entry no row may name, is red here, so a reader of the manifest sees the vocabulary the test holds.
+    // C10 is the session-host ruling (Q13): one context owning hosting, observing and driving sessions, with its home
+    // library in the file-split plan's Task 7.
+    const header = readFileSync(CONTEXTS_FILE, 'utf8').split('\n')
+      .filter((l, i, all) => all.slice(0, i + 1).every((x) => x.startsWith('#'))).map((l) => l.replace(/^# ?/, '')).join(' ');
+    const legend = /\(([^)]*)\)/.exec(header)?.[1] ?? '';
+    const ids = [...legend.matchAll(/(?:^|, |; )(C\d+|K)\b/g)].map((m) => m[1]);
+    expect(ids, 'the legend in ccd/contexts.tsv\'s header').toEqual([...CCD_CONTEXTS]);
+    expect(legend).toContain('C10 Session host');
   });
 });
 
