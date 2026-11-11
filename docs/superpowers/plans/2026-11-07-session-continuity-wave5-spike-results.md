@@ -3,7 +3,7 @@
 > **What this is.** The results note of run 730, the reduced stage 2 spike planned in
 > `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`. It records measurements only.
 > Any change they imply for stage 3 is the coordinator's, in wave 6's plan. Names are the plan's stand-ins
-> (D-8109): `scratch-a`, `scratch-b`, `lane-r`, `pool-s`, `project-s`, `<root-a>`, `<root-b>`, `<cwd>`,
+> (D-8109): `scratch-a`, `scratch-b`, `lane-r` (the plan's `real-a`), `pool-s`, `project-s`, `<root-a>`, `<root-b>`, `<cwd>`,
 > `<run-id>`, and `s1`, `s2`, … for sessions in history.
 
 ## In short
@@ -37,7 +37,7 @@
   its tail was not an interrupted turn, so Claude Code submitted none, and ccd's redrive stood down. Six stopped-task
   notifications, covering seven tasks, started no turn. The stall watch's orphaned-task mail woke it.
 - **Task 4 was not run (item 145).** The lent plan has no five-hour window, so the parent's first limit would have
-  been the weekly one, six days off. Step 6, and the longer bound for delegated work it was to inform, stay open.
+  been the weekly one, 58 points away, with its reset on 2026-11-16 at 07:00Z. Step 6, and the longer bound for delegated work it was to inform, stay open.
 
 ## 1. Task 1: the resume calls on disk
 
@@ -256,7 +256,7 @@ checks, which this wave does not read.
 Task 3 runs R1 to R3 as planned. The history adds one more call shape stage 3 could use: the whole script inline with
 `resumeFromRunId`. It was accepted 5 of 5 after a swap, but no journal was read for any of them, so whether those
 runs completed is unmeasured. As of Task 1 it was reported to the coordinator, not added to the matrix; the
-coordinator's ruling of 2026-11-08 (mail of 01:01Z) added it as row R5.
+coordinator's ruling, ruled 2026-11-08 01:03 UTC (the programme ledger), added it as row R5.
 
 ## 2. Task 3: step 5 live, the resume matrix after an ordinary swap
 
@@ -265,14 +265,15 @@ coordinator's ruling of 2026-11-08 (mail of 01:01Z) added it as row R5.
 The operator lent one existing account, which was real but idle, instead of two blank scratch accounts (items 95 and 112).
 `scratch-a` is that account, alone in `pool-s`. There is no `scratch-b`. The subject was swapped onto one real lane,
 `lane-r`, and was swapped back after Task 3 (section 2.6). The coordinator numbers these twelve departures at
-acceptance; none has a deviation number here:
+acceptance; none has a deviation number here (thirteen in all):
 - `lent-account-is-real-not-scratch`, `loan-pool-of-one`, `untagged-account-tagged-for-the-loan`;
 - `task-3-reads-under-a-real-lane-root`, `swap-back-after-task-3`, `lent-lane-homed-rows`;
 - `lent-account-stays-home-able`: `scratch-a` stayed home-able, so a real session homed on it ran there too, as
   recorded below;
 - `inline-script-row`: row R5, added after Task 1 (section 1.5);
 - `subject-needs-operator-opt-in-for-workflow`: below;
-- `lent-account-has-no-five-hour-window`, `task-4-not-run-item-145`, `arm-2-not-run-one-account`: section 3.
+- `lent-account-has-no-five-hour-window`, `task-4-not-run-item-145`, `arm-2-not-run-one-account`: section 3;
+- `two-placement-reads-not-taken`: the "Placement reads in this window" paragraph in section 2.2.
 
 **Expectations before the run, from history (section 1).** Rows R1 and R2 were expected refused, because every such
 call since 2026-10-22 had been refused (4 of 4 and 13 of 13). That expectation came from the history, not from this
@@ -295,8 +296,8 @@ run.
 operator typed a go-ahead into the subject's pane at 22:44:38Z, 2 h 52 min later (item 143). This is part of what a
 resume-after-swap test costs on this harness. The go-ahead covered Task 3 step 1's work. Just before it, the
 subject's pane was revived at 22:44:32Z (its SessionStart hook fired again, with the same uuid and the same root, and
-no resume prompt). ccd had hibernated the pane at 21:57:06Z (`hibernate <subject>: idle 2h`), and it woke when the
-operator opened the session. That was a restart before Task 3 began, not a confound.
+no resume prompt). ccd had hibernated the pane at 21:57:06Z (`hibernate <subject>: idle 2h`); what woke it at 22:44:32Z is not
+recorded; a server-composed `ensure (resume)` followed at 22:44:35Z, and the operator's go-ahead at 22:44:38Z. That was a restart before Task 3 began, not a confound.
 
 **Builds actually run**, read from the `version` field of the subject's transcript:
 - 2.1.319 until 19:52Z, although `claude --version` printed 2.1.322, the build on disk;
@@ -338,7 +339,7 @@ is a separate copy, which grew under `<root-b>` from then on.
 **`lane-r`'s limits.** The limits file was last written on 2026-10-31. Its weekly 100% was from before a reset that
 had passed, so it was stale. Its first fresh reading, at 23:02:49Z, was weekly 0% with no five-hour figure, so the
 subject stayed there. Also, ccd's own tick logged `pin-hold <subject>: pinned to lane-r by hand; the return-home/ceiling
-arm stands down` at 23:01:27Z: the manual swap's pin (D-3097) held the subject on `lane-r`. That line is not a
+arm stands down (a limit still evacuates)` at 23:01:27Z: the manual swap's pin (D-3097) held the subject on `lane-r`. That line is not a
 separate act, and nothing redrove the subject.
 
 ### 2.3 What the swap ended, and what woke the subject
@@ -413,14 +414,16 @@ interrupted agent runs again from its start, not from where it stood.
 The swap back came after both accepted runs had completed and before item 145.
 - **Placement first** (`ccd ls`, 23:24:55Z): the subject was on `lane-r`, the homed real session was still running on
   `scratch-a`, and the pools were unchanged.
-- **The swap.** `ccd swap --interrupt <subject> <scratch-a>` stays in one pool, so it carried no `--cross-pool`. It ran
+- **The swap.** `ccd swap --interrupt <subject> <scratch-a>`: the target, scratch-a, is in pool-s, the pool project-s reads, so the
+  move needed no `--cross-pool`. It ran
   from 23:25:07.9Z to 23:25:09.2Z and exited 0.
 - **The subject's `swap.log` lines:**
   - `ended <subject>: swap-manual` at 23:25:08Z;
+  - `carry <uuid>: 1 match(es), 1 copy/copies, 1 destination(s)` at 23:25:09Z;
   - `sidecar <uuid> -> <root-a>/projects/<pdir>/<uuid> (merged +6 ~0 !0, via-mount 6)` and `swap <subject>: lane-r ->
     scratch-a` at 23:25:09Z;
   - `redrive-skip <subject>: not-stalled` and `crosspool-ended <subject>: moved off lane-r` at 23:25:11Z.
-- **Where the subject was left:** idle on `scratch-a`, with no background task.
+- **Where the subject was left, as of 23:25Z:** idle on `scratch-a`, with no background task.
 
 ## 3. Task 4: step 6, a paused workflow under a blocked parent, not run
 
@@ -437,10 +440,10 @@ the cut list (D-8107):
 - **A weekly limit.** The parent's first limit would have been the weekly one, 58 points away, and the 30-minute
   bound after its reset would have fallen on about 2026-11-16 07:30Z. On the September builds a weekly limit was
   declined as `too far out to wait for` (spec §1.1, 7 runs); that was not measured on 2.1.314.
-- **The operator's Q4 ruling** (research doc #2526, §6.1) pins Claude Code's own auto-continue at the usage limit off,
-  so ccd swaps a limited session instead of Claude Code's own wait resuming it. Draft PR #2603 builds it (open at the
-  time of writing). It changes how a blocked parent is resumed. It does not change Claude Code's pause of a
-  workflow's agents. This is recorded as the ruling's reason, not as a measurement.
+- **The operator's Q4 ruling** (research doc #2526, §6.1). It pins Claude Code's own auto-continue at the usage limit
+  off, so ccd swaps a limited session to an account with room, or, when no account has room, restarts it in place
+  after the reset (PR #2603). Whether it changes Claude Code's pause of a workflow's agents is not shown by the ruling
+  or the PR, and was not measured here. This is recorded as the ruling's reason, not as a measurement.
 - **The ruling:** item 145.
 
 **Still open.** Spec §5.4 rule 2 and §11 item 3 leave "a longer bound for delegated work in flight" waiting on

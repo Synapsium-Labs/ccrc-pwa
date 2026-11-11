@@ -373,7 +373,7 @@ with its results note. The rule as first written made native handoff primary onl
 wake adopted across the account change, and no second restart authority engaged (or one could be switched off).
 
 **As measured (wave 5, 2026-11-10).** After one `ccd swap --interrupt` of a session with four interrupted workflows
-(Claude Code 2.1.319, then 2.1.322 on the lent account; every matrix call on 2.1.314), `Workflow({scriptPath,
+(Claude Code 2.1.319, then 2.1.322, both on the lent account; every matrix call on 2.1.314), `Workflow({scriptPath,
 resumeFromRunId})` was refused (`scriptPath must be a script path this tool returned, or a file you can already
 read …`) for the old root's returned path and for the same path under the current root, the carry's hard link. A
 working-directory copy and the whole script inline as `script` were accepted, and each run completed, with finished
