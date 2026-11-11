@@ -1,13 +1,12 @@
 // runCcrcOp, the server's own Linear caller (D-8180; design §6.3): the proxy's order less attribution and validation.
 // Linear is faked at the `FetchLike` boundary with constructed answers; nothing reaches a network.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runCcrcOp, type CcrcCallDeps, type CcrcOpAsk } from '../src/linear/ccrcCall.js';
 import type { FetchLike } from '../src/linear/client.js';
 import type { LinearWriteAsk, LinearWritePolicy } from '../src/linear/policy.js';
 import { linearServicesFake } from './linearServicesFake.js';
-import { linearAnswer } from './linearFetchFake.js';
+import { linearAnswer, RATELIMITED_ERRORS } from './linearFetchFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -97,6 +96,15 @@ describe('runCcrcOp (D-8180)', () => {
     expect(r.calls).toHaveLength(2);
   });
 
+  it('a rate-limited 200 answer to the probe closes the slot for the fallback wait, and says so', async () => {
+    const r = await rig(() => ok(RATELIMITED_ERRORS));
+    const PROBE: CcrcOpAsk = { ...READ, op: 'initiativesProbe', lane: 'floor', input: {} };
+    expect(await runCcrcOp(r.deps, PROBE)).toEqual({ ok: false, word: 'rate-limited', retryAfterS: 60 });
+    r.t.now += 30_000;
+    expect(await runCcrcOp(r.deps, PROBE)).toMatchObject({ ok: false, word: 'rate-limited' });
+    expect(r.calls).toHaveLength(1);
+  });
+
   it('a read takes the lane and journals nothing', async () => {
     const r = await rig(() => ok({ data: { initiatives: { nodes: [] } } }));
     const out = await runCcrcOp(r.deps, READ);
@@ -139,19 +147,3 @@ describe('runCcrcOp (D-8180)', () => {
   });
 });
 
-describe('the key containment census names ccrcCall.ts as a reader of the key', () => {
-  const SRC = path.join(__dirname, '..', 'src');
-  const readers = (files: Record<string, string>): string[] =>
-    Object.entries(files).filter(([, s]) => /\breadLinearSlotKey\b/.test(s)).map(([f]) => f).sort();
-  const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : []));
-
-  it('only the known files call readLinearSlotKey', () => {
-    const files = Object.fromEntries(walk(SRC).map((f) => [path.relative(SRC, f), readFileSync(f, 'utf8')]));
-    expect(readers(files)).toEqual(['linear/ccrcCall.ts', 'linear/proxyRoutes.ts', 'linear/refresher.ts', 'linear/resolve.ts', 'linear/store.ts']);
-  });
-
-  it('its mutant: a new file that reads the key is caught', () => {
-    const files = { 'linear/ccrcCall.ts': 'readLinearSlotKey(a)', 'linear/rogue.ts': 'await readLinearSlotKey(dir, slot)' };
-    expect(readers(files)).toContain('linear/rogue.ts');
-  });
-});

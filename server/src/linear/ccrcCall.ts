@@ -3,7 +3,8 @@
  * plan sync, drift pass and migration reach Linear. It is the proxy's order of work, less attribution and validation
  * (the caller is the server itself and its inputs are built, not parsed): take one call from the lane, read the
  * slot's key, for a write ask the policy as the ccrc actor and journal a `pending` row, call Linear, shape the answer,
- * settle the journal and the rate service.
+ * settle the journal and the rate service (`oneCallOutcome`: one call spent, and a `rate-limited` answer, a 429 or a
+ * RATELIMITED body, closes the slot for its wait).
  *
  * L4 DELIVERY, inert until wave 3: nothing calls it yet. It NEVER THROWS: a thrown fetch is `unreachable`.
  *
@@ -22,7 +23,7 @@ import {
 import type { LinearAnswerRefusalWord } from './ops.js';
 import type { CcrcPass, LinearWriteAsk, LinearWritePolicy } from './policy.js';
 import { askWithDeadline } from './policyPoint.js';
-import type { LinearRateService } from './rate.js';
+import { oneCallOutcome, type LinearRateService } from './rate.js';
 import { readLinearSlotKey, type LinearSlotRef } from './store.js';
 
 export interface CcrcCallDeps {
@@ -91,8 +92,8 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
 
   const take = deps.rate.take({ lane: ask.lane, slot: ask.slot, calls: 1 });
   if (!take.ok) return { ok: false, word: 'rate-limited', retryAfterS: take.retryAfterS };
-  let spent = 0;
-  let closeForS: number | null = null;
+  /** The one call this op made, as the rate service reads it (`oneCallOutcome`); null while none has gone out. */
+  let sent: { ok: boolean; reason?: string; retryAfterS?: number } | null = null;
   try {
     const k = await readLinearSlotKey(deps.ccrcDir, ask.slot);
     if (k.kind !== 'key') return { ok: false, word: 'not-configured', maybeSent: false };
@@ -137,10 +138,10 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
       pendingId = w.id;
     }
 
-    spent = 1;
+    sent = { ok: false, reason: 'unreachable' };
     const r = await callLinear(k.key, row.document, row.variables(ask.input), { fetch: deps.fetch, timeoutMs: deps.timeoutMs, now: deps.now });
+    sent = r;
     if (!r.ok) {
-      if (r.reason === 'rate-limited') closeForS = r.retryAfterS;
       if (r.reason === 'rate-limited') {
         journalEnd('failed', 'rate-limited', null, decisionId);
         return { ok: false, word: 'rate-limited', retryAfterS: r.retryAfterS };
@@ -153,7 +154,8 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
     const shaped = row.shape(r.body);
     if (!shaped.ok) {
       if (shaped.word === 'rate-limited') {
-        closeForS = LINEAR_RATE_LIMITED_FALLBACK_S;
+        // A RATELIMITED body on a 200 carries no wait: the fallback's, as `callLinear` reads a 429 with none.
+        sent = { ok: false, reason: 'rate-limited', retryAfterS: LINEAR_RATE_LIMITED_FALLBACK_S };
         journalEnd('failed', 'rate-limited', null, decisionId);
         return { ok: false, word: 'rate-limited', retryAfterS: LINEAR_RATE_LIMITED_FALLBACK_S };
       }
@@ -167,6 +169,6 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
     journalEnd('ok', undefined, result, decisionId);
     return { ok: true, value: shaped.value, created: shaped.created };
   } finally {
-    deps.rate.settle(take.grant, { spent, closeForS });
+    deps.rate.settle(take.grant, sent === null ? { spent: 0, closeForS: null } : oneCallOutcome(sent));
   }
 }

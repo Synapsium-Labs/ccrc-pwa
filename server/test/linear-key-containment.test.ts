@@ -2,34 +2,45 @@
 // `.key` file to `callLinear`'s `authorization` header and nowhere else, and its digest sits only in a record's
 // `keyDigest` field. Every proxy route and every Settings route (list, add, replace, check, remove) is driven through
 // every arm this rig can produce, and so are the other paths
-// that use a key: the legacy Check again, the background refresher (its queue driven by a direct call), and
-// `resolveTitle` through the preview route and directly as the workspace create and the rename call it. Everything a
+// that use a key: the legacy Check again, the background refresher (its queue driven by a direct call),
+// `resolveTitle` through the preview route and directly as the workspace create and the rename call it, and
+// `runCcrcOp` (D-8180), ccrc's own caller, every operation row against both slots.
+// The files that may read a key at all are one closed list (`KEY_READERS`, below), held with its mutants. Everything a
 // key could leak into is captured: each response's body and headers, every `console` method, both standard streams,
 // every `linear_events` row, and every file in `~/.ccrc/linear/` plus `linear.json`, each record parsed as the store
 // parses it. The key may appear only in a `.key` file and the outbound header (neither is captured here); no
 // eight-character run of it may appear anywhere captured; its digest only at `keyDigest`.
 import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { parseLinearStoreRecord } from '../../shared/linear.js';
 import { parseLinearRef } from '../../shared/slug.js';
+import { runCcrcOp, type CcrcCallDeps, type CcrcOpAsk } from '../src/linear/ccrcCall.js';
 import { parseLinearDetails } from '../src/linear/connection.js';
-import { LINEAR_VERBS, type LinearVerb } from '../src/linear/ops.js';
+import { LINEAR_CCRC_OPS, type CcrcOpInput, type CcrcOpName } from '../src/linear/hierarchyOps.js';
+import { LINEAR_JOURNAL_FIELDS } from '../src/linear/journal.js';
+import { LINEAR_HIERARCHY_DOCUMENTS, LINEAR_VERBS, type LinearVerb } from '../src/linear/ops.js';
 import { resolveTitle } from '../src/linear/resolve.js';
 import { parseLegacyTeams, readLinearStore } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { RATELIMITED_ERRORS } from './linearFetchFake.js';
 import {
-  IDS, PROXY_TOKEN, WS, proxyRig, seedLegacy, seedSlot, statusAnswer, who, type ProxyRig, type Responder,
+  IDS, PROXY_TOKEN, WS, opNameOf, proxyRig, seedLegacy, seedSlot, statusAnswer, who, type ProxyRig, type Responder,
 } from './linearProxyRig.js';
+import { LINEAR_RECORD_FILES, linearRecord } from './linearRecorded.js';
 import { WORKSPACES, settingsRig } from './linearSettingsRig.js';
 
 /** The arm the stand-in answers every Linear call with, set before each drive. */
 type Arm = 'ok' | '401' | '403' | '429' | 'ratelimited-200' | '500' | 'timeout' | 'malformed' | 'errors' | 'empty';
 let arm: Arm = 'ok';
+/** The hierarchy documents' `ok` answers (D-8180): their constructed fixtures, by document. The session documents keep
+ *  the rig's own defaults. */
+const HIERARCHY_TEXT: ReadonlySet<string> = new Set(Object.values(LINEAR_HIERARCHY_DOCUMENTS));
+const HIERARCHY_OK = new Map(LINEAR_RECORD_FILES.filter((f) => f.includes('constructed')).map((f) => linearRecord(f))
+  .filter((r) => HIERARCHY_TEXT.has(r.document)).map((r) => [r.document, r.body] as const));
 const respond: Responder = (c) => {
   switch (arm) {
-    case 'ok': return null;
+    case 'ok': return HIERARCHY_OK.has(c.document) ? { body: HIERARCHY_OK.get(c.document) } : null;
     case '401': return statusAnswer(401, {}, { errors: [{ message: 'canary authentication refused' }] });
     case '403': return statusAnswer(403);
     case '429': return statusAnswer(429, { 'retry-after': '2' });
@@ -186,6 +197,49 @@ describe('the census drives every path that uses a key, through every arm', () =
     }
   });
 
+  it('runCcrcOp, the server\'s own caller (D-8180): every operation row, against the file slot and the legacy slot, through every arm', async () => {
+    const deps: CcrcCallDeps = {
+      ccrcDir: rig.ccrcDir, rate: rig.fx.rate, journal: rig.fx.journal, policy: rig.fx.policy, fetch: rig.fetch, timeoutMs: 20, now: clock,
+    };
+    const PASTE = 'see lin_api_fixturePastedSecretQ1w2e3r4t5y6u7i8o9p0';
+    const input: CcrcOpInput = {
+      id: IDS.project, requestId: '00000000-0004-4000-8000-0000000000f1', name: 'Project A', description: PASTE, status: 'planned',
+      since: '2026-11-01T00:00:00.000Z', after: null, teams: ['AAA'], team: 'AAA', teamId: WS.a.teams[0].id, title: 'A fixture title',
+      initiativeId: IDS.project, projectId: IDS.project, issueId: IDS.issue, relatedIssueId: IDS.parent, type: 'related',
+      body: PASTE, url: 'https://github.com/example-org/example-repo/pull/1', targetDate: '2026-12-01', sortOrder: 1,
+    };
+    const LANES = ['sync', 'migration', 'floor'] as const;
+    const SLOTS = [
+      { label: 'file', slot: { source: 'file', id: WS.a.id }, workspaceId: WS.a.id, teamKey: 'AAA', issue: 'AAA-12' },
+      { label: 'legacy', slot: { source: 'legacy' }, workspaceId: WS.b.id, teamKey: 'BBB', issue: 'BBB-12' },
+    ] as const;
+    for (const a of ['ok', ...ARMS] as const) {
+      arm = a;
+      t += 7_200_000;
+      for (const [i, op] of (Object.keys(LINEAR_CCRC_OPS) as CcrcOpName[]).entries()) {
+        const row = LINEAR_CCRC_OPS[op];
+        const j = row.journalOp;
+        const issueOp = j === 'create' || j === 'update' || j === 'comment' || j === 'link';
+        for (const s of SLOTS) {
+          t += 61_000;
+          const ask: CcrcOpAsk = {
+            op, pass: 'plan-sync', lane: LANES[i % LANES.length]!, slot: s.slot, workspaceId: s.workspaceId,
+            teamKey: j === null ? null : s.teamKey,
+            target: j === null || j.endsWith('create') ? null : issueOp ? s.issue : IDS.project,
+            fields: j === null ? [] : LINEAR_JOURNAL_FIELDS[j].slice(0, 1), input,
+          };
+          const out = await runCcrcOp(deps, ask).catch((e: unknown) => ({ threw: String(e) }));
+          capture(`ccrc ${a} ${op} ${s.label}`, JSON.stringify(out));
+          snapshot(`ccrc ${a} ${op} ${s.label}`);
+        }
+      }
+    }
+    const ccrcRows = rig.rows().filter((r) => String(r['actor']).startsWith('ccrc:'));
+    expect(ccrcRows.length, 'the ccrc drive journaled no write').toBeGreaterThan(50);
+    expect(ccrcRows.some((r) => r['outcome'] === 'ok' && r['result'] !== null), 'no ccrc write ended ok with its result').toBe(true);
+    expect(captured.some((c) => c.where.startsWith('ccrc ') && c.text.includes('"threw"')), 'runCcrcOp threw').toBe(false);
+  }, 120_000);
+
   it('the Settings routes, through every arm: the list, an add, a refused add, a replace, both checks and a remove', async () => {
     const settings = await settingsRig({
       ccrcDir: rig.ccrcDir, fx: rig.fx, standIn: { fetch: rig.fetch, calls: rig.calls }, clock, timeoutMs: 20,
@@ -273,6 +327,10 @@ describe('what the census found', () => {
     for (const op of ['Issue', 'Search', 'Comments', 'Statuses', 'Projects', 'Labels', 'Users', 'IssueCreate', 'IssueUpdate',
       'CommentCreate', 'ResolveIssueAndParent', 'ResolveIssue', 'ResolveParent', 'KeyCheck', 'DirectoryStates', 'DirectoryLabels',
       'DirectoryProjects', 'DirectoryUsers']) expect(ops.has(op), `the census never sent ${op}`).toBe(true);
+    // And every ccrc operation row's document (D-8180), sent by runCcrcOp.
+    for (const row of Object.values(LINEAR_CCRC_OPS)) {
+      expect(ops.has(opNameOf(row.document)), `the census never sent ${row.op}`).toBe(true);
+    }
     // Every key was used, through the header the stand-in saw (the one allowed place besides its file).
     for (const key of keys()) expect(rig.calls.some((c) => c.authorization === key), 'a key the census guards was never used').toBe(true);
   });
@@ -282,5 +340,56 @@ describe('what the census found', () => {
     expect(existsSync(path.join(dir, `${WS.a.id}.json`))).toBe(true);
     expect(existsSync(path.join(dir, 'legacy-teams.json'))).toBe(true);
     expect(IDS.issue).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+// THE KEY READERS (D-8180, Task 1.5): the files whose code calls a function that hands back a key, as one closed list.
+// `runCcrcOp` joined it; a new reader is a change to this list, made in review, with the drive above extended to it.
+describe('only the listed files read a key', () => {
+  const ROOT = path.resolve(__dirname, '..', '..');
+  /** A call that hands back a key: the slot's, the legacy file's, or any key file's. */
+  const KEY_READ = /\breadLinear(?:Slot)?Key(?:File)?\b/;
+  const KEY_READERS = [
+    'server/src/linear/ccrcCall.ts', 'server/src/linear/connection.ts', 'server/src/linear/proxyRoutes.ts',
+    'server/src/linear/refresher.ts', 'server/src/linear/resolve.ts', 'server/src/linear/routes.ts', 'server/src/linear/store.ts',
+  ];
+  /** Code only: a sentence ABOUT a reader (`view.ts`'s docstring names one) is not a read. */
+  const code = (t: string): string => t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+  const walk = (d: string): string[] => readdirSync(d).filter((e) => !e.startsWith('__')).flatMap((e) => {
+    const p = path.join(d, e);
+    return statSync(p).isDirectory() ? walk(p) : /\.tsx?$/.test(e) ? [p] : [];
+  });
+  const tree = (): Map<string, string> => new Map(['server/src', 'shared'].flatMap((r) => walk(path.join(ROOT, r)))
+    .map((f) => [path.relative(ROOT, f), readFileSync(f, 'utf8')]));
+  /** What the census finds against the list: a reader it does not name, and a named file that no longer reads. */
+  const drift = (files: ReadonlyMap<string, string>): { unlisted: string[]; stale: string[] } => {
+    const readers = [...files].filter(([, t]) => KEY_READ.test(code(t))).map(([f]) => f).sort();
+    return { unlisted: readers.filter((f) => !KEY_READERS.includes(f)), stale: KEY_READERS.filter((f) => !readers.includes(f)) };
+  };
+
+  it('the tree reads a key in exactly the listed files, ccrcCall.ts among them', () => {
+    expect(KEY_READERS).toContain('server/src/linear/ccrcCall.ts');
+    expect(drift(tree())).toEqual({ unlisted: [], stale: [] });
+  });
+
+  it('MUTANT: a real file that starts reading a key is caught', () => {
+    const files = tree();
+    const f = 'server/src/linear/hierarchyOps.ts';
+    expect(files.has(f)).toBe(true);
+    files.set(f, `${files.get(f)!}\nexport const leak = (d: string) => readLinearSlotKey(d, { source: 'legacy' });\n`);
+    expect(drift(files)).toEqual({ unlisted: [f], stale: [] });
+  });
+
+  it('MUTANT: ccrcCall.ts with its read taken out is caught as a stale entry, so the list cannot outlive a reader', () => {
+    const files = tree();
+    const f = 'server/src/linear/ccrcCall.ts';
+    files.set(f, files.get(f)!.replace(/\breadLinearSlotKey\b/g, 'readSomethingElse'));
+    expect(drift(files)).toEqual({ unlisted: [], stale: [f] });
+  });
+
+  it('CONTROL: a comment that names a reader is not a read', () => {
+    const files = tree();
+    expect(KEY_READ.test(files.get('server/src/linear/view.ts')!)).toBe(true);
+    expect(KEY_READERS).not.toContain('server/src/linear/view.ts');
   });
 });
