@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RUN_KINDS, type ChildMark } from '../../shared/api.js';
 import { FLEET_ROLES, type FleetRole } from '../../shared/fleetRoles.js';
-import { ROLE_AMBIGUITIES, roleOf, sessionRoleOfReading, type RoleAmbiguity, type RoleFacts, type RoleReading } from '../src/roleOf.js';
+import { ROLE_AMBIGUITIES, ROLE_FACTS_CHILD_AXIS, roleOf, sessionRoleOf, sessionRoleOfReading, type RoleAmbiguity, type RoleFacts, type RoleReading } from '../src/roleOf.js';
 
 const BASE: RoleFacts = { designation: 'none', auditBody: false, replayBody: false, child: { kind: 'none' },
   childRunKind: 'unmeasured', claimsOpenRun: 'no', declaredIntent: 'no' };
@@ -97,5 +97,17 @@ describe('sessionRoleOfReading: the view', () => {
     expect(sessionRoleOfReading(role('reviewer'))).toBe('child');
     expect(sessionRoleOfReading(undecided('worker-or-reviewer'))).toBe('child');
     expect(sessionRoleOfReading(undecided('coordinator-or-plain'))).toBe('coordinator');
+  });
+});
+
+describe('SessionRole as a view of roleOf', () => {
+  it('SessionRole is a view: sessionRoleOf is the column of roleOf over the child axis', () => {
+    expect(ROLE_FACTS_CHILD_AXIS).toEqual({ designation: 'none', auditBody: false, replayBody: false,
+      childRunKind: 'unmeasured', claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured' });
+    for (const child of [{ kind: 'none' }, { kind: 'child', runId: 7 }, { kind: 'unreadable' }] as const) {
+      expect(sessionRoleOf(child)).toBe(sessionRoleOfReading(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child })));
+    }
+    expect(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child: { kind: 'none' } }))
+      .toEqual({ kind: 'undecided', between: 'coordinator-or-plain' });
   });
 });

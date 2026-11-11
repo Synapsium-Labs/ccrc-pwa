@@ -59,13 +59,23 @@ export function sessionRoleOfReading(r: RoleReading): SessionRole {
   return FLEET_ROLES[role].sessionRole;
 }
 
-/** THE ONE DERIVATION of the role, from the registry's reading of `.child` and
- *  nothing else. `unreadable` is a child: the marker file exists, which is what
- *  the start card (`session-hook.sh`'s `_hook_role_card`) tests, so the badge
+/** What the fleet frame measures for the role today: the `.child` axis only. The designation and the lanes have no
+ *  reader before their waves; claim and intent are not read on this path, so they are 'unmeasured'. */
+export const ROLE_FACTS_CHILD_AXIS: Omit<RoleFacts, 'child'> = {
+  designation: 'none', auditBody: false, replayBody: false,
+  childRunKind: 'unmeasured', claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured',
+};
+
+/** THE ONE DERIVATION of the wire's role, from the registry's reading of `.child` and nothing else: the
+ *  `SessionRole` column of `roleOf` over the child axis (`ROLE_FACTS_CHILD_AXIS`). `none` reads undecided
+ *  coordinator-or-plain, whose view is `coordinator`; `child` (its run kind not measured here) and `unreadable` read
+ *  undecided worker-or-reviewer, whose view is `child`. `unreadable` is a child: the marker file exists, which is
+ *  what the start card (`session-hook.sh`'s `_hook_role_card`) tests, so the badge
  *  and the card agree on the `.child` axis, and ONLY that axis: a session whose
  *  `.child` exists, parsed or not, is a child to both, and a dispatched child is
  *  never told, or shown, that it coordinates. The card has further silences the
  *  badge does not read: a held row (`$REG/<id>.hold`), the card-off switch, and
  *  a `resume`/`fork` start. So a held row with no `.child` shows the coordinator
  *  badge although it was never given the card; both are as spec §8 asks. */
-export const sessionRoleOf = (child: ChildMark): SessionRole => (child.kind === 'none' ? 'coordinator' : 'child');
+export const sessionRoleOf = (child: ChildMark): SessionRole =>
+  sessionRoleOfReading(roleOf({ ...ROLE_FACTS_CHILD_AXIS, child }));
