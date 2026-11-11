@@ -14,6 +14,9 @@
 //     ccrc still moves the session if an account gets room. The row says so ("ccrc is waiting until HH:MM (or moves it
 //     if an account gets room)") and KEEPS the wait control, whose confirm says it keeps the session on this account
 //     until the reset; the tap makes the wait the operator's pin. The words are the same at every width (they wrap).
+//   - A RESET THAT HAS PASSED is never shown as a time ahead. ccd keeps a transcript-dated reset that has passed while the
+//     session's own account is still full (it restarts in place only once that account has room), so every "until HH:MM"
+//     then reads "until <account> has room" instead (D-8173).
 //
 // NOTHING HERE TOUCHES THE TERMINAL. The row moves a session by ending it and resuming it on another account (the swap
 // door) or leaves it alone (the wait door): it never sends keys, because a key reaching Claude Code's rate-limit menu can
@@ -35,8 +38,8 @@ import { RowMain, RowMeta } from './rowParts';
 /** The swap control's words while no account has room, and the wait control's when the record states no reset. */
 export const NO_ROOM_YET_WORD = 'No account has room yet';
 export const WAIT_NO_CLOCK_WORD = 'Wait until the limit resets';
-/** ccrc's own wait (`waitingBy: 'auto'`), in words: when, and that it is not a pin. */
-export const autoWaitWords = (when: string | null): string => `ccrc is waiting until ${when ?? 'the limit resets'} (or moves it if an account gets room)`;
+/** ccrc's own wait (`waitingBy: 'auto'`), in words: until when (a clock, or "<account> has room"), and that it is not a pin. */
+export const autoWaitWords = (until: string): string => `ccrc is waiting until ${until} (or moves it if an account gets room)`;
 
 /** "15:00", or "15:00 · 12 Nov" when it is not today, on the page's clock and zone; `null` when the record states no reset. */
 const resetWords = (reset: number | null, now: number): string | null => (reset === null ? null : resetClock(reset / 1000, new Date(now)));
@@ -56,11 +59,15 @@ export function LimitWaitRow({ limit, now }: { limit: LimitRow; now: number }): 
     return accountsWithMeasuredRoom(byWrapper, SEVEN_DAY_CEILING_PCT).filter((w) => w !== session.wrapper);
   }, [usage, session.wrapper]);
 
-  const when = resetWords(limit.reset, now);
+  // A reset at or before now has passed: the wait now ends when the account has room, not at a clock time (D-8173).
+  const passed = limit.reset !== null && limit.reset <= now;
+  const when = passed ? null : resetWords(limit.reset, now);
   const stoppedOn = accountLabel(roster, limit.account);
   const pinned = limit.waiting && limit.waitingBy !== 'auto';   // the operator's own wait: nothing moves it before the reset
   const auto = limit.waiting && limit.waitingBy === 'auto';
-  const until = when ?? 'the limit resets';
+  const until = passed ? `${stoppedOn} has room` : (when ?? 'the limit resets');
+  const restart = passed ? 'Then ccrc restarts it in place.' : `Once ${stoppedOn} has room, ccrc restarts it in place.`;
+  const waitLabel = passed ? `Wait until ${until}` : when === null ? WAIT_NO_CLOCK_WORD : `Wait until reset at ${when}`;
 
   const wait = (): void => {
     void (async () => {
@@ -89,8 +96,8 @@ export function LimitWaitRow({ limit, now }: { limit: LimitRow; now: number }): 
         {pinned
           ? <span data-waiting-until="">{`Waiting until ${until}`}</span>
           : <>
-              {auto && <span data-waiting-until="" data-waiting-by="auto">{autoWaitWords(when)}</span>}
-              <Button variant="ghost" size="fit" onClick={() => setConfirmWait(true)}>{when === null ? WAIT_NO_CLOCK_WORD : `Wait until reset at ${when}`}</Button>
+              {auto && <span data-waiting-until="" data-waiting-by="auto">{autoWaitWords(until)}</span>}
+              <Button variant="ghost" size="fit" onClick={() => setConfirmWait(true)}>{waitLabel}</Button>
             </>}
       </span>
       <SwapSheet session={session} open={picking} onClose={() => setPicking(false)} only={room} />
@@ -99,10 +106,10 @@ export function LimitWaitRow({ limit, now }: { limit: LimitRow; now: number }): 
         onClose={() => setConfirmWait(false)}
         title="Wait until the limit resets?"
         consequence={auto
-          ? `ccrc keeps it on this account until the reset: ${limit.title} stays on ${stoppedOn} until ${until}, even if another account `
-            + `gets room. Once ${stoppedOn} has room, ccrc restarts it in place. You can still swap it from here.`
-          : `${limit.title} stays where it is, on ${stoppedOn}, until ${until}. Nothing moves it before then; once `
-            + `${stoppedOn} has room, ccrc restarts it in place. You can still swap it from here.`}
+          ? `ccrc keeps it on this account${passed ? '' : ' until the reset'}: ${limit.title} stays on ${stoppedOn} until ${until}, even if another account `
+            + `gets room. ${restart} You can still swap it from here.`
+          : `${limit.title} stays where it is, on ${stoppedOn}, until ${until}. Nothing moves it before then. ${restart} `
+            + 'You can still swap it from here.'}
         confirmLabel="Wait"
         onConfirm={wait}
       />

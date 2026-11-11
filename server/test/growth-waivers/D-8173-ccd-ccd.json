@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 64,
+  "d": "D-8173",
+  "reason": "ruling (a)'s automatic Wait until reset and its pin: the watchdog's own choice where no account has room and its restart in place (including a transcript reset that has already passed), the operator's tap that pins an automatic wait, the supervise tick's rescue and the watchdog act gate that both hold on that pin, and a standing record with no reset that takes the reset a later pass dates; measured +56 net code lines against the merge-base; kept inline because each piece is a decision inside the existing limit-wait record writers (`_limitwait_open`, `_limitwait_choose`), the watchdog (`_watchdog_one`, `_swap_watchdog_act_gate`) and the rescue policy (`_rescue_policy`) that already own these records",
+  "added": "2026-11-11"
+}

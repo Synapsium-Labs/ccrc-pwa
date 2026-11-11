@@ -224,6 +224,43 @@ describe('ccrc\'s own wait (D-8173 ruling (a): no account had room, so ccrc chos
   });
 });
 
+describe('a reset that has already passed is not shown as a time ahead (D-8173)', () => {
+  // The record keeps a transcript-dated reset even when it has passed, while the session's own account is still full.
+  const PASSED = NOW - 7 * MIN;
+  const clockOf = (ms: number): string => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+  it('ccrc\'s own wait reads "until team·max has room", with no clock, on the words, the button and the confirm', async () => {
+    setUsage(nothingHasRoom());
+    mount(stuck({ reset: PASSED, waiting: true, waitingBy: 'auto' }));
+    const row = screen.getByTestId('limit-wait-row');
+    expect(row.textContent).toContain('ccrc is waiting until team·max has room (or moves it if an account gets room)');
+    expect(row.textContent).not.toContain(clockOf(PASSED));
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['No account has room yet', 'Wait until team·max has room']);
+    fireEvent.click(screen.getByRole('button', { name: 'Wait until team·max has room' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('until team·max has room');
+    expect(dialog.textContent).not.toContain(clockOf(PASSED));
+  });
+
+  it('the operator\'s wait reads "Waiting until team·max has room"', () => {
+    mount(stuck({ reset: PASSED, waiting: true, waitingBy: 'operator' }));
+    const row = screen.getByTestId('limit-wait-row');
+    expect(row.textContent).toContain('Waiting until team·max has room');
+    expect(row.textContent).not.toContain(clockOf(PASSED));
+  });
+
+  it('a record with no choice yet offers "Wait until team·max has room"', () => {
+    setUsage(nothingHasRoom());
+    mount(stuck({ reset: PASSED }));
+    expect(screen.getByRole('button', { name: 'Wait until team·max has room' })).toBeTruthy();
+  });
+
+  it('a reset exactly now has passed too', () => {
+    mount(stuck({ reset: NOW, waiting: true, waitingBy: 'operator' }));
+    expect(screen.getByTestId('limit-wait-row').textContent).toContain('Waiting until team·max has room');
+  });
+});
+
 describe('the row sends no keystroke of its own', () => {
   it('its source never reaches the terminal doors', async () => {
     const { readFileSync } = await import('node:fs');

@@ -29703,7 +29703,7 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
   # on a banner is not — so a wait would park it; it is rescued as today, by a
   # swap whose `--resume` spawn re-drives the turn. ARMED is Claude Code's own
   # footer (`_rescue_armed`), never a draft or a line of prose saying the words.
-  local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R
+  local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R lw=""
   if [[ -z "$hb" ]]; then
     # EVERY NOT-BLOCKED TICK OF EVERY SESSION reaches this line, and the close's
     # two command substitutions fork whether or not a record exists (measured
@@ -29713,6 +29713,19 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
     return 0
   fi
   now=$(date +%s); R="${HARD_BLOCK_RESET:-}"
+  # THE OPERATOR'S LIMIT-WAIT PIN (D-8173 ruling (a)): an open `$REG/<id>.limitwait` on THIS account with `choice=wait`
+  # and no ` by=auto` is the operator's own "Wait until reset", and nothing moves the session before the reset. The
+  # watchdog honours it (`_watchdog_one`) and so does this rescue: HOLD, said once per limit episode (the `pinheld` flag
+  # on `.limitsign`, which the watchdog that opened the record wrote first). ccd's own wait (` by=auto`) is not a pin and
+  # falls through, so the tick still swaps the moment a target has room. The restart in place after the reset is the
+  # watchdog's (`_watchdog_resume_here`), and a cleared sign closes the record (`_watchdog_clear`), releasing the hold.
+  if [[ -e "$REG/$id.limitwait" ]] && _reg_get_to lw "$id" limitwait \
+     && [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait \
+           && "$(_rw_field "$lw" account)" == "$wrapper" && "$(_rw_field "$lw" by)" != auto ]]; then
+    _wd_record_read "$id" "$now" && _wd_flag_once "$id" pinheld \
+      && echo "$(date '+%F %T') rescue-hold $id: the operator chose Wait until reset on $wrapper (a limit-wait pin); the rescue moves nothing before the reset" >> "$REG/swap.log"
+    return 1
+  fi
   rec=$(_reg_get "$id" rescuewait)
   state=$(_rw_field "$rec" state); kind=$(_rw_field "$rec" kind); since=$(_rw_field "$rec" since)
   rreset=$(_rw_field "$rec" reset); rend=$(_rw_field "$rec" end)
@@ -31699,13 +31712,20 @@ _limitwait_open() {   # id wrapper sign -> the one writer of `$REG/<id>.limitwai
   # must still say when the wait ends (`_watchdog_resume_here` then restarts at once, room permitting). Else the account's
   # `fiveResetAt` or `sevenResetAt` for the window at the ceiling (the later when both are), which must be ahead of now:
   # a passed one there is a stale reading that says nothing about this block. Else `-`.
-  # An open record for the same account stands as it is (its `since` and any choice are kept); one for another account is
-  # closed `swap` first.
-  local id="$1" w="$2" sign="$3" rec="" reset="-" now r5 r7 f5 f7 best=""
+  # An open record for the same account stands as it is (its `since` and any choice are kept), with ONE exception: a record
+  # that states no reset (`-`) and carries no choice yet takes the reset a later pass dates (a first pass on a menu sign, or
+  # on a stale limits reading, dates nothing; a later banner, pane or transcript rung can), keeping its `since`, account
+  # and sign, so the watchdog's automatic choice (D-8173 ruling (a)) can apply on that same pass. One for another account
+  # is closed `swap` first.
+  local id="$1" w="$2" sign="$3" rec="" reset="-" now r5 r7 f5 f7 best="" fill=""
   _reg_get_to rec "$id" limitwait || rec=""
   if [[ "$(_rw_field "$rec" state)" == open ]]; then
-    [[ "$(_rw_field "$rec" account)" == "$w" ]] && return 0
-    _limitwait_close "$id" swap
+    if [[ "$(_rw_field "$rec" account)" == "$w" ]]; then
+      [[ "$(_rw_field "$rec" reset)" == - && -z "$(_rw_field "$rec" choice)" && "$rec" == *" reset=- "* ]] || return 0
+      fill=1
+    else
+      _limitwait_close "$id" swap
+    fi
   fi
   _now_s_to now
   if [[ "${HARD_BLOCK_RESET:-}" =~ ^[0-9]{1,12}$ ]]; then reset=$(( 10#$HARD_BLOCK_RESET ))   # dated by its row: kept when passed
@@ -31717,6 +31737,11 @@ _limitwait_open() {   # id wrapper sign -> the one writer of `$REG/<id>.limitwai
       if [[ -z "$best" ]] || (( 10#$r7 > 10#$best )); then best="$r7"; fi
     fi
     [[ "$best" =~ ^[0-9]{1,12}$ ]] && (( 10#$best > now )) && reset=$(( 10#$best ))   # the limits file's only: ahead of now
+  fi
+  if [[ -n "$fill" ]]; then
+    [[ "$reset" == - ]] && return 0   # this pass dates nothing either: the record stands as it is
+    _reg_set "$id" limitwait "${rec/ reset=- / reset=$reset }" || return 1
+    return 0
   fi
   _reg_set "$id" limitwait "state=open since=$now reset=$reset account=$w sign=$sign" || return 1
   return 0
@@ -31814,9 +31839,10 @@ _wd_running() {   # id -> rc 0 iff the session is NOT at a clean turn boundary, 
 _swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelled or backed off (logged, `lastswap` restored, nothing stopped)
   # Re-asks the decision's own question at the act, after the dispatch's jitter: stopped, hibernated or no longer live, or no
   # sign any more -> `watchdog-cancel`; output since the decision, or (under an account-only sign) a session not at a clean turn
-  # boundary, `_swap_idle_gate`'s question, or an operator hold or manual-swap pin (`_wd_operator_hold_to`) -> `rescue-backoff`.
+  # boundary, `_swap_idle_gate`'s question, or an operator hold or manual-swap pin (`_wd_operator_hold_to`) -> `rescue-backoff`;
+  # so does the operator's own limit-wait pin (`choice=wait` without ` by=auto`, D-8173), whatever the sign.
   # A DRAFT OR A STALE-PRESS DOES NOT BACK OFF (ruled): the watchdog is the net for exactly the session those holds keep on a limit. Never reads or writes the input box.
-  local id="$1" sign="" word="" why=""
+  local id="$1" sign="" word="" why="" lw=""
   # THE OPERATOR MAY HAVE STOPPED THE SESSION DURING THE JITTER. `_watchdog_one` asked at the decision; `cmd_swap` refuses
   # `.hibernated` but not `.stopped`, and its tail respawns a session (`cmd_ensure` also removes `.stopped`). A stopped
   # pane cannot be measured and the transcript rung would still read the old limit row, so the gate asks again, first.
@@ -31828,6 +31854,15 @@ _swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancel
   fi
   if [[ -n "$why" ]]; then
     echo "$(date '+%F %T') watchdog-cancel $id: $why" >> "$REG/swap.log"
+    _swap_lastswap_restore "$id"
+    return 1
+  fi
+  # THE OPERATOR MAY HAVE PINNED THE WAIT DURING THE JITTER (D-8173 ruling (a)). A watchdog rescue is dispatched for ccd's
+  # own wait (` by=auto`, not a pin), and the row keeps its Wait control meanwhile; the operator's tap drops ` by=auto` and
+  # promises nothing moves the session before the reset. So the act re-reads the record and backs off on that pin.
+  _reg_get_to lw "$id" limitwait || lw=""
+  if [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait && "$(_rw_field "$lw" by)" != auto ]]; then
+    echo "$(date '+%F %T') rescue-backoff $id: the operator chose Wait until reset (a limit-wait pin)" >> "$REG/swap.log"
     _swap_lastswap_restore "$id"
     return 1
   fi

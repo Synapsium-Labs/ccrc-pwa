@@ -6929,8 +6929,11 @@ by the time the watchdog first finds no room: the same pass then restarts the se
 automatic wait is not a pin: if another account gets room first, the watchdog moves the session there. The Waiting on you
 row says "ccrc is waiting until HH:MM (or moves it if an account gets room)" and keeps its Wait until reset control. The
 operator's own Wait until reset (that control, or `ccd limit-wait`) is a pin, including a tap on an automatic wait, which
-then loses `by=auto`: nothing moves the session until the reset. A limit with no stated reset stays the operator's to
-decide. The five-hour near-reset wait never opens any more, so every near-reset block swaps.
+then loses `by=auto`: nothing moves the session until the reset. The supervisor tick's rescue holds on that pin as the
+watchdog does, and a watchdog move already on its way backs off when the tap lands before it acts. A wait whose reset has
+passed while its account is still full reads "until <account> has room", never a past time. A limit with no stated
+reset stays the operator's to decide until a later watchdog pass finds its reset, which the open record then takes. The
+five-hour near-reset wait never opens any more, so every near-reset block swaps.
 - **Settings › Automation › Browser tools** shows the box default, the server list and how many running sessions use a
   browser. `ccrc doctor`'s `browser-mcp` check counts the Claude Code processes that run a configured browser server
   against the sessions whose last spawn applied `on`, and warns when more run one than asked for.
