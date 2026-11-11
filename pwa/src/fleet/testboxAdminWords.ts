@@ -402,6 +402,13 @@ export const TESTBOX_MANAGE_TEXT = {
   cancel: 'Cancel',
   cancelled: 'Cancelled.',
   cancelTooLate: 'Too late to cancel. The change is already being applied to the box.',
+  // Reset to default (D-8336): one tap on the row, then the confirm sheet
+  resetToDefault: 'Reset to default',
+  resetTitle: 'Reset to default',
+  resetWhat: (label: string) => `${label} goes back to its default.`,
+  resetFleet: 'ccrc takes it out of the test box settings file it wrote on this fleet host, so the fleet host reads the default from then on.',
+  resetBox: "ccrc takes it out of the box's settings file and applies the box's settings again, so the box reads the default from then on.",
+  resetDone: 'Reset. The value shown is what the fleet host reads back.',
   // the sheet
   replaceTitle: 'Replace the test box',
   disconnectTitle: 'Disconnect the test box',

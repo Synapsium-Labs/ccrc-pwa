@@ -229,6 +229,29 @@ describe('a change to the secret deny list needs the step-up although settings-f
     expect((await post(r, 'settings-fleet', { fields: DENY }, cookie)).statusCode).toBe(200);
     expect(r.calls.map((c) => c.sub)).toEqual(['settings-fleet', 'status']);   // the act, then the re-read status
   });
+  it('Reset to default of the deny list needs the step-up too, and any other reset a session only (D-8336)', async () => {
+    const r = await openApp();
+    const stale = await login(r.app);
+    for (const fields of [{ unset: ['CCRC_TESTBOX_DENY_GLOBS'] }, { unset: ['CCRC_TESTBOX_POLL', 'CCRC_TESTBOX_DENY_GLOBS'] }, { settings: { CCRC_TESTBOX_POLL: '1m' }, unset: ['CCRC_TESTBOX_DENY_GLOBS'] }]) {
+      const res = await post(r, 'settings-fleet', { fields }, stale);
+      expect(res.statusCode, JSON.stringify(fields)).toBe(REFUSAL_STATUS['step-up-required']);
+      expect(res.json()).toMatchObject({ ok: false, error: 'step-up-required' });
+    }
+    expect(r.calls).toEqual([]);
+    expect(r.rows()).toEqual([]);
+    r.stub('settings-fleet', { out: { ok: true, settings: [{ key: 'CCRC_TESTBOX_POLL', set: false }] } });
+    expect((await post(r, 'settings-fleet', { fields: { unset: ['CCRC_TESTBOX_POLL'] } }, stale)).statusCode).toBe(200);
+    expect(r.calls.map((c) => c.sub)).toEqual(['settings-fleet', 'status']);
+    const cookie = await fresh(r.app);
+    expect((await post(r, 'settings-fleet', { fields: { unset: ['CCRC_TESTBOX_DENY_GLOBS'] } }, cookie)).statusCode).toBe(200);
+    // an unset list the contract refuses is a 400 and runs nothing: a pairing setting, or a key also set
+    const before = r.calls.length;
+    for (const fields of [{ unset: ['CCRC_TESTBOX_URL'] }, { settings: { CCRC_TESTBOX_POLL: '1m' }, unset: ['CCRC_TESTBOX_POLL'] }]) {
+      expect((await post(r, 'settings-fleet', { fields }, cookie)).statusCode, JSON.stringify(fields)).toBe(400);
+    }
+    expect((await post(r, 'settings-box', { fields: { unset: ['CCRC_TESTBOX_LISTEN'] } }, cookie)).statusCode).toBe(400);
+    expect(r.calls.length).toBe(before);
+  });
   it('a settings-box that carries repository rows is a 400: only a step-up Connect names a row', async () => {
     const r = await openApp();
     const cookie = await login(r.app);

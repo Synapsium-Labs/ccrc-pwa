@@ -188,7 +188,8 @@ describe('the bash argument check is the twin of buildTestboxAdminArgv (D-8166)'
     expect(val('fleet').split(' ')).toEqual([...TESTBOX_FLEET_EDITABLE]);
     expect(val('box').split(' ')).toEqual([...TESTBOX_BOX_KEYS]);
     for (const s of SUBS) {
-      const want = Object.values(TESTBOX_ADMIN_SUBS[s].fields).map((f) => `${f.flag} ${f.grammar} ${f.required ? 1 : 0} ${f.repeatable ? 1 : 0}|`).join('');
+      // the third column: 1 required, 0 optional, + one of the sub's + fields is required (D-8336: settings or an unset list)
+      const want = Object.values(TESTBOX_ADMIN_SUBS[s].fields).map((f) => `${f.flag} ${f.grammar} ${f.required ? 1 : f.anyOf ? '+' : 0} ${f.repeatable ? 1 : 0}|`).join('');
       expect(val(`fields:${s}`), s).toBe(want);
       const phased = (TESTBOX_ADMIN_PHASES as Record<string, readonly string[]>)[s];
       expect(val(`ph:${s}`).trim(), s).toBe(phased === undefined ? '' : phased.join(' '));
@@ -242,6 +243,11 @@ describe('the bash argument check is the twin of buildTestboxAdminArgv (D-8166)'
     { sub: 'settings-fleet', fields: { settings: { CCRC_TESTBOX_POLL: '45s', CCRC_TESTBOX_DENY_GLOBS: '*.pem .env $HOME %h' } } },
     { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_WORKERS: '4' } } },
     { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_WORKERS: '4' }, whenIdle: true } },
+    // D-8336: Reset to default, alone or beside a change
+    { sub: 'settings-fleet', fields: { unset: ['CCRC_TESTBOX_DENY_GLOBS', 'CCRC_TESTBOX_POLL'] } },
+    { sub: 'settings-fleet', fields: { settings: { CCRC_TESTBOX_BUDGET: '9m' }, unset: ['CCRC_TESTBOX_POLL'] } },
+    { sub: 'settings-box', fields: { unset: ['CCRC_TESTBOX_OS_MIRROR'], whenIdle: true } },
+    { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_RUNS: '3' }, unset: ['CCRC_TESTBOX_TMPFS', 'CCRC_TESTBOX_WORKERS'] } },
     { sub: 'parity', fields: {} }, { sub: 'parity', fields: { prs: [12, 345] } },
     { sub: 'disconnect', fields: {} }, { sub: 'disconnect', fields: { replace: true } },
   ];
@@ -276,6 +282,20 @@ describe('the bash argument check is the twin of buildTestboxAdminArgv (D-8166)'
     { sub: 'settings-fleet', fields: { settings: {} }, words: [] },
     { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_WORKERS: '4' }, whenIdle: 'yes' }, words: ['--set=CCRC_TESTBOX_WORKERS=4', '--when-idle=yes'] },
     { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_WORKERS: '4' }, whenIdle: false }, words: ['--set=CCRC_TESTBOX_WORKERS=4', '--when-idle=false'] },
+    // D-8336: the unset list is policed as the settings map is
+    { sub: 'settings-box', fields: { whenIdle: true }, words: ['--when-idle=true'] },
+    { sub: 'settings-fleet', fields: { unset: ['CCRC_TESTBOX_URL'] }, words: ['--unset=CCRC_TESTBOX_URL'] },
+    { sub: 'settings-fleet', fields: { unset: ['CCRC_TESTBOX_RUNS'] }, words: ['--unset=CCRC_TESTBOX_RUNS'] },
+    { sub: 'settings-box', fields: { unset: ['CCRC_TESTBOX_POLL'] }, words: ['--unset=CCRC_TESTBOX_POLL'] },
+    { sub: 'settings-box', fields: { unset: ['CCRC_TESTBOX_LISTEN'] }, words: ['--unset=CCRC_TESTBOX_LISTEN'] },
+    { sub: 'settings-box', fields: { unset: ['CCRC_TESTBOX_PUSH_USER'] }, words: ['--unset=CCRC_TESTBOX_PUSH_USER'] },
+    { sub: 'settings-box', fields: { unset: [''] }, words: ['--unset='] },
+    { sub: 'settings-box', fields: { unset: ['ccrc_testbox_runs'] }, words: ['--unset=ccrc_testbox_runs'] },
+    { sub: 'settings-box', fields: { unset: ['CCRC_TESTBOX_RUNS=3'] }, words: ['--unset=CCRC_TESTBOX_RUNS=3'] },
+    { sub: 'settings-box', fields: { unset: ['CCRC_TESTBOX_RUNS', 'CCRC_TESTBOX_RUNS'] }, words: ['--unset=CCRC_TESTBOX_RUNS', '--unset=CCRC_TESTBOX_RUNS'] },
+    { sub: 'settings-box', fields: { settings: { CCRC_TESTBOX_RUNS: '3' }, unset: ['CCRC_TESTBOX_RUNS'] }, words: ['--set=CCRC_TESTBOX_RUNS=3', '--unset=CCRC_TESTBOX_RUNS'] },
+    { sub: 'settings-box', words: ['--unset=CCRC_TESTBOX_RUNS', '--set=CCRC_TESTBOX_RUNS=3'] },
+    { sub: 'connect', fields: { unset: ['CCRC_TESTBOX_RUNS'], repos: [ROW] }, words: ['--unset=CCRC_TESTBOX_RUNS', `--repo=${GOODROW}`] },
     { sub: 'parity', fields: { prs: [0] }, words: ['--pr=0'] },
     { sub: 'parity', fields: { prs: [5, 5] }, words: ['--pr=5', '--pr=5'] },
     { sub: 'parity', fields: { prs: Array.from({ length: 21 }, (_, i) => i + 1) }, words: Array.from({ length: 21 }, (_, i) => `--pr=${i + 1}`) },

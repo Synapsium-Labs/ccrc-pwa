@@ -131,6 +131,32 @@ describe('the testbox-admin op', () => {
     expect(readTestboxAdminOpAnswer(status)).toMatchObject({ kind: 'exited' });
   });
 
+  it('Reset to default rides the settings subs as one --unset=KEY word a key, and an unset the contract refuses spawns nothing (D-8336)', async () => {
+    const h = contained();
+    plantLauncher(h, RECORDER(h));
+    plantNodeId(h);
+    const c = await up();
+    const res = await c.req<Res>(1, { op: TESTBOX_ADMIN_OP, sub: 'settings-fleet', fields: { unset: ['CCRC_TESTBOX_POLL', 'CCRC_TESTBOX_BUDGET'] } });
+    expect(res).toMatchObject({ ok: true, kind: 'exited', code: 0 });
+    expect(readFileSync(path.join(h, 'argv'), 'utf8')).toBe([
+      path.join(h, '.local', 'bin', 'ccrc'), 'testbox-admin', 'settings-fleet', '--unset=CCRC_TESTBOX_BUDGET', '--unset=CCRC_TESTBOX_POLL',
+      '--from', 'agent', '',
+    ].join('\n'));
+    rmSync(path.join(h, 'argv'));
+    const frames: Record<string, unknown>[] = [
+      { sub: 'settings-box', fields: { unset: ['CCRC_TESTBOX_LISTEN'] } },
+      { sub: 'settings-box', fields: { unset: ['--from=cli'] } },
+      { sub: 'settings-box', fields: { unset: [] } },
+      { sub: 'settings-fleet', fields: { unset: ['CCRC_TESTBOX_URL'] } },
+      { sub: 'connect', fields: { unset: ['CCRC_TESTBOX_RUNS'] } },
+    ];
+    for (const [i, frame] of frames.entries()) {
+      expect(await c.req<Res>(i + 2, { op: TESTBOX_ADMIN_OP, ...frame }), JSON.stringify(frame))
+        .toEqual({ t: 'res', id: i + 2, ok: true, kind: 'refused', why: 'bad-field', fleetIdentity: NODE_ID });
+    }
+    expect(existsSync(path.join(h, 'argv')), 'a refused frame reached the spawn').toBe(false);
+  });
+
   it("an unknown sub or field answers the builder's refusal and spawns nothing", async () => {
     const h = contained();
     plantLauncher(h, RECORDER(h));

@@ -7,6 +7,10 @@
 //     or not set. Save sends only the keys that changed, to `settings-fleet` and `settings-box`. With runs in progress the box
 //     part offers **Apply when idle** (the verb holds it until none is, C13) and **Cancel** while it waits; a run-shaping change
 //     says parity will be needed again (§2.8). The page re-reads: what is shown after a save is what the readers answer.
+//     **Reset to default** (D-8336) sits on each row a settings file sets: one tap, then the card's one sheet confirms, and the key
+//     alone goes as the `unset` list of the same sub, so ccrc takes it out of the file it wrote and the reader answers the key's
+//     own default. Not on a default row, a pairing row, a key `ccrc.env` sets, or the two box paths whose default the installer
+//     refuses (`BOX_SETTING_FORM_START`); the deny list's reset asks for the step-up as its edit does.
 //   * **Repair** re-pushes the installed release; **Apply release to box** (only while the box's release differs, C7) re-runs the
 //     installer from the release the box holds. Both are long acts: six phases read from the status, so a reload shows the same.
 //   * **Replace** and **Disconnect** each confirm in one sheet that names what is removed (C6) and need the step-up (C14).
@@ -41,7 +45,7 @@ import { isRecord } from '../lib/wire';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import { BLANK_CONN, ConnFields, Field, PARTIAL_DISCONNECT, Phases, StateLine, connReady, keyFieldsOf, type Conn } from './TestBoxConnect';
 import {
-  BOX_SETTING_FAMILIES, FLEET_EDIT_KEYS, PAIRED_BOX_KEYS, TESTBOX_FAMILY_FOLD, actWord, TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, blockedOf, checkWord, codeSentence, ledgerLine, manageRowLine,
+  BOX_SETTING_FAMILIES, BOX_SETTING_FORM_START, FLEET_EDIT_KEYS, PAIRED_BOX_KEYS, TESTBOX_FAMILY_FOLD, actWord, TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, blockedOf, checkWord, codeSentence, ledgerLine, manageRowLine,
   phaseWord, settingLabel, shapeSentence,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
@@ -55,7 +59,9 @@ const WIDE_LEDGER_ROWS = 10;
 
 type Band = 'phone' | 'laptop' | 'wide';
 const PAIRED_LOCKED: ReadonlySet<string> = new Set(PAIRED_BOX_KEYS);
-type Sheeted = 'replace' | 'disconnect';
+type Sheeted = 'replace' | 'disconnect' | 'reset';
+/** The row a Reset to default confirms: its key, and whether it is a fleet-host key. */
+interface Resetting { readonly key: string; readonly fleet: boolean }
 
 export interface TestBoxManageProps {
   band: Band;
@@ -103,6 +109,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
   const [ccrcEnv, setCcrcEnv] = useState<ReadonlySet<string>>(new Set());
   const [offerIdle, setOfferIdle] = useState(false);
   const [sheet, setSheet] = useState<Sheeted | null>(null);
+  const [resetting, setResetting] = useState<Resetting | null>(null);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [access, setAccess] = useState<Conn>(BLANK_CONN);
@@ -207,6 +214,48 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
     line.say(Object.keys(changedBox).length === 0 ? T.saved : waitsForIdle ? T.waiting : T.applying);
   };
 
+  // -- Reset to default (D-8336) ------------------------------------------------------------------------------------
+  /** Whether a row offers Reset to default: an editable key a settings file sets (a default row has nothing to reset, an
+   *  unmeasured one is unknown), and, on the box, one whose declared default the installer takes. */
+  const resettable = (key: string, fleet: boolean): boolean => {
+    if (fleet ? ccrcEnv.has(key) || !FLEET_EDIT_KEYS.includes(key) : PAIRED_LOCKED.has(key) || Object.hasOwn(BOX_SETTING_FORM_START, key)) return false;
+    const row = (fleet ? fleetMap : boxRows).get(key);
+    return row !== undefined && row.state !== 'unmeasured' && (row.from === 'file' || row.from === 'empty');
+  };
+  const openReset = (key: string, fleet: boolean): void => { line.clear(); setResetting({ key, fleet }); setSheet('reset'); };
+  const closeSheet = (): void => { setSheet(null); setResetting(null); };
+  const resetWaits = resetting !== null && !resetting.fleet && (runsInProgress > 0 || offerIdle);
+  const resetHeld = resetting !== null && resetting.fleet && ccrcEnv.has(resetting.key);
+  const dropEdit = (key: string): void => setEdits((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => k !== key)));
+
+  const confirmReset = async (): Promise<void> => {
+    if (resetting === null) return;
+    const { key, fleet } = resetting;
+    if (fleet) {
+      const r = await run('settings-fleet', { unset: [key] }, (err) => {
+        const keys = refusalKeysOf(err).filter((k) => FLEET_EDIT_KEYS.includes(k));
+        if (refusalCodeOf(err) === 'key-in-ccrc-env' && keys.length > 0) {
+          setCcrcEnv((cur) => new Set([...cur, ...keys]));
+          setEdits((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => !keys.includes(k))));
+        }
+      });
+      if (r === null) return;
+      dropEdit(key);
+      closeSheet();
+      onFleetChanged?.();
+      line.say(T.resetDone);
+      return;
+    }
+    const waits = resetWaits;
+    const r = await run('settings-box', waits ? { unset: [key], whenIdle: true } : { unset: [key] }, (err) => {
+      if (refusalCodeOf(err) === 'runs-in-progress') setOfferIdle(true);
+    });
+    if (r === null) return;
+    dropEdit(key);
+    closeSheet();
+    line.say(waits ? T.waiting : T.applying);
+  };
+
   const cancelWait = async (): Promise<void> => {
     const r = await run('cancel', {});
     if (r === null) return;
@@ -218,6 +267,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
   const longAct = async (sub: 'repair' | 'apply-release'): Promise<void> => { await run(sub, {}); };
 
   const confirmSheet = async (): Promise<void> => {
+    if (sheet === 'reset') { await confirmReset(); return; }
     const replacing = sheet === 'replace';
     const r = await run('disconnect', replacing ? { replace: true } : {});
     if (r === null) return;
@@ -337,31 +387,43 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
   })();
 
   const ledgerRows = band === 'wide' ? admin.events.slice(0, WIDE_LEDGER_ROWS) : [];
+  const resetBody = resetting === null ? null : (
+    <>
+      <p className={QC_CONSEQUENCE}>{T.resetWhat(settingLabel(resetting.key))}</p>
+      <p className={QC_CONSEQUENCE}>{resetting.fleet ? T.resetFleet : T.resetBox}</p>
+      {!resetting.fleet && TESTBOX_RUN_SHAPING.includes(resetting.key) && <p className={QC_CONSEQUENCE}>{T.parityAgain}</p>}
+      {!resetting.fleet && runsInProgress > 0 && <p className={QC_CONSEQUENCE}>{T.runsNote}</p>}
+    </>
+  );
   const sheetNode = (
     <Sheet
       open={sheet !== null}
-      onClose={() => setSheet(null)}
-      title={sheet === 'replace' ? T.replaceTitle : T.disconnectTitle}
+      onClose={closeSheet}
+      title={sheet === 'reset' ? T.resetTitle : sheet === 'replace' ? T.replaceTitle : T.disconnectTitle}
       size="sm"
       initialFocus={cancelRef}
       footer={(
         <div className={QC_ACTIONS}>
-          <Button variant="danger" disabled={busy || stepUp.needed} onClick={() => void confirmSheet()} data-testbox="sheet-confirm">
-            {sheet === 'replace' ? T.confirmReplace : T.confirmDisconnect}
+          <Button variant={sheet === 'reset' ? 'primary' : 'danger'} disabled={busy || stepUp.needed || resetHeld} onClick={() => void confirmSheet()} data-testbox="sheet-confirm">
+            {sheet === 'reset' ? (resetWaits ? T.applyWhenIdle : T.resetToDefault) : sheet === 'replace' ? T.confirmReplace : T.confirmDisconnect}
           </Button>
-          <Button ref={cancelRef} variant="ghost" onClick={() => setSheet(null)} data-testbox="sheet-cancel">{T.sheetCancel}</Button>
+          <Button ref={cancelRef} variant="ghost" onClick={closeSheet} data-testbox="sheet-cancel">{T.sheetCancel}</Button>
         </div>
       )}
     >
       <div data-testbox="sheet">
-        <p className={QC_CONSEQUENCE}>{T.removedHead}</p>
-        <ul className="testbox-sheet-list">
-          <li className={QC_CONSEQUENCE}>{T.removedBox}</li>
-          <li className={QC_CONSEQUENCE}>{T.removedFleet}</li>
-        </ul>
-        <p className={QC_CONSEQUENCE}>{`${T.keptHead}: ${T.kept}`}</p>
-        <p className={QC_CONSEQUENCE}>{T.switchOff}</p>
-        <p className={QC_CONSEQUENCE}>{sheet === 'replace' ? `${T.rebuild} ${T.replaceThen}` : T.rebuild}</p>
+        {sheet === 'reset' ? resetBody : (
+          <>
+            <p className={QC_CONSEQUENCE}>{T.removedHead}</p>
+            <ul className="testbox-sheet-list">
+              <li className={QC_CONSEQUENCE}>{T.removedBox}</li>
+              <li className={QC_CONSEQUENCE}>{T.removedFleet}</li>
+            </ul>
+            <p className={QC_CONSEQUENCE}>{`${T.keptHead}: ${T.kept}`}</p>
+            <p className={QC_CONSEQUENCE}>{T.switchOff}</p>
+            <p className={QC_CONSEQUENCE}>{sheet === 'replace' ? `${T.rebuild} ${T.replaceThen}` : T.rebuild}</p>
+          </>
+        )}
         {sheet !== null && <ConfirmItsYou stepUp={stepUp} subject="the test box" />}
         {sheet !== null && <ResultLine line={line.line} />}
       </div>
@@ -425,7 +487,8 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
               <GroupHead text={T.boxHead} />
               {BOX_SETTING_FAMILIES.map((f) => (
                 <SettingFamily key={f.id} id={f.id} title={f.title} keys={f.keys} rows={boxRows} edits={edits} problem={problemOf}
-                  readOnly={PAIRED_LOCKED} readOnlyText={T.pairingLocked} onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))} />
+                  readOnly={PAIRED_LOCKED} readOnlyText={T.pairingLocked} onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))}
+                  reset={{ can: (k) => resettable(k, false), open: (k) => openReset(k, false), size, disabled: busy }} />
               ))}
               {status.boxSettings === null && <p className="settings-note" data-testbox="box-none">{T.boxNone}</p>}
             </section>
@@ -433,7 +496,8 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
               <GroupHead text={T.fleetHead} />
               {fleetRows === null && <p className="settings-note" data-testbox="fleet-none">{T.fleetNone}</p>}
               <SettingFamily id="fleet" title={T.fleetHead} keys={FLEET_EDIT_KEYS} rows={fleetMap} edits={edits} problem={problemOf} readOnly={ccrcEnv}
-                readOnlyText={T.setInCcrcEnv} onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))} />
+                readOnlyText={T.setInCcrcEnv} onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))}
+                reset={{ can: (k) => resettable(k, true), open: (k) => openReset(k, true), size, disabled: busy }} />
               <Family id="pairing" title={T.pairingHead}>
                 <p className="settings-note">{T.pairingNote}</p>
                 <dl className="testbox-pairing">
@@ -484,36 +548,51 @@ function StateRow({ term, id, children }: { term: string; id?: string; children:
   );
 }
 
+/** A row's Reset to default (D-8336): whether the row offers it, the tap that opens its confirm, and how it is drawn. */
+interface RowReset {
+  readonly can: (key: string) => boolean;
+  readonly open: (key: string) => void;
+  readonly size: 'full' | 'fit';
+  readonly disabled: boolean;
+}
+
 /** A folded family of setting rows, each from `rows`, with `readOnly` keys drawn disabled and noted. */
-function SettingFamily({ id, title, keys, rows, edits, problem, readOnly, readOnlyText, onEdit }: {
+function SettingFamily({ id, title, keys, rows, edits, problem, readOnly, readOnlyText, onEdit, reset }: {
   id: string; title: string; keys: readonly string[]; rows: ReadonlyMap<string, BoxSettingRow>; edits: Readonly<Record<string, string>>;
   problem: (key: string, value: string) => string | null; readOnly?: ReadonlySet<string>; readOnlyText?: string;
-  onEdit: (key: string, value: string) => void;
+  onEdit: (key: string, value: string) => void; reset: RowReset;
 }): ReactNode {
   return (
     <Family id={id} title={title}>
       <div className="testbox-form">
         {keys.map((key) => (
           <SettingRow key={key} name={key} line={manageRowLine(rows.get(key))} edit={edits[key]} problem={problem}
-            readOnlyNote={readOnly?.has(key) === true ? readOnlyText ?? T.setInCcrcEnv : null} onEdit={(v) => onEdit(key, v)} />
+            readOnlyNote={readOnly?.has(key) === true ? readOnlyText ?? T.setInCcrcEnv : null} onEdit={(v) => onEdit(key, v)}
+            reset={reset.can(key) ? reset : null} />
         ))}
       </div>
     </Family>
   );
 }
 
-/** One setting: its name, what it reads now, and an input that starts from the value (blank for a row only shown as set). */
-function SettingRow({ name, line, edit, problem, readOnlyNote, onEdit }: {
+/** One setting: its name, what it reads now, an input that starts from the value (blank for a row only shown as set), and its
+ *  Reset to default when the row offers one. */
+function SettingRow({ name, line, edit, problem, readOnlyNote, onEdit, reset }: {
   name: string;
   line: { shown: string; original: string };
   edit: string | undefined;
   problem: (key: string, value: string) => string | null;
   readOnlyNote?: string | null;
   onEdit: (v: string) => void;
+  reset: RowReset | null;
 }): ReactNode {
   const dirty = edit !== undefined && edit !== line.original;
+  const action = reset === null ? null : (
+    <Button variant="ghost" size={reset.size} className="testbox-reset" disabled={reset.disabled} onClick={() => reset.open(name)}
+      aria-label={`${T.resetToDefault}: ${settingLabel(name)}`} data-testbox="reset-default">{T.resetToDefault}</Button>
+  );
   return (
     <Field setting={name} label={settingLabel(name)} now={line.shown} value={edit ?? line.original} placeholder={line.original === '' ? T.keepSet : ''}
-      error={dirty ? problem(name, edit) : null} disabled={readOnlyNote != null} footnote={readOnlyNote ?? null} onChange={onEdit} />
+      error={dirty ? problem(name, edit) : null} disabled={readOnlyNote != null} footnote={readOnlyNote ?? null} onChange={onEdit} action={action} />
   );
 }
