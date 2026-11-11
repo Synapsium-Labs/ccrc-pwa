@@ -60,7 +60,7 @@ import {
   decideRecallOff, parseSpoolLine, RECALL_ARMS,
   recallSeamEngaged, decideHeadless, headlessMarkerOf, HEADLESS_LIST_MAX_BYTES,
   decideHeadlessStore, asOfFamilySql, decideAsOfFamily, decideHeadlessRead, decideEnvProject,
-  readEnvelope, shownLine, nextLine, TOUCHED_CAPPED_NOTE,
+  readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
 import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
 import { runTree, grepVerb, describeVerb, expandVerb, touchedVerb, familiesOf, transcriptsOf, scopeHeader, scopeJsonOf, asOfCutOf } from './recall.mjs';
@@ -991,7 +991,7 @@ function emitRefusal(r, json, pairIdx) {
 function touchedExtras(res) {
   return {
     ...(res.note === undefined ? {} : { note: res.note }),
-    ...(res.candidatesCapped === true ? { candidatesCapped: true, candidatesCappedNote: res.candidatesCappedNote ?? TOUCHED_CAPPED_NOTE } : {}),
+    ...(res.candidatesCapped === true ? { candidatesCapped: true, candidatesCappedNote: res.candidatesCappedNote } : {}),
   };
 }
 

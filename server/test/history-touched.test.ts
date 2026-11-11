@@ -1,8 +1,9 @@
 // server/test/history-touched.test.ts
-// `ccrc history touched`'s pure deciders (W4 addendum P8, Task 4A): `ccd/history/lib.mjs`, imported directly like
-// history-lib.test.ts. Pure: the one database is an in-memory node:sqlite table that runs the spec's file select
-// (section 3.5 step 1) for Review Focus 4. Nothing here touches a HOME or a live store.
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+// `ccrc history touched` (W4 addendum P8, P9, P13, P14). Three layers: the pure deciders in `ccd/history/lib.mjs`, imported directly
+// like history-lib.test.ts (the one database there is an in-memory node:sqlite table that runs the spec's file select for Review
+// Focus 4); the verb itself, spawned against a fixture HOME with its own store (Task 4B, and the cap cases of Task 4C); and a bench
+// skipped unless HISTORY_BENCH=1. Every store is a fixture; nothing here touches a live HOME or store.
+import { describe, it, expect, beforeAll, beforeEach, onTestFinished } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -11,11 +12,13 @@ import { makeHistoryBox, runSweep, runCli, withPane, seedFamily, type HistoryBox
 import { userRow, assistantRow, boundaryRow, summaryRow, type Row } from './historyFixtures.js';
 import { LANE_ROSTER } from './historyAgentFixtures.js';
 import { mkTmp } from './tmpHelpers.js';
-import { GRAPH_MAX_BYTES } from '../../ccd/compact-card.mjs';
+import { GRAPH_MAX_BYTES, loadGraph } from '../../ccd/compact-card.mjs';
+import * as storeLib from '../../ccd/history/store.mjs';
+import * as recallLib from '../../ccd/history/recall.mjs';
 import {
   READ_VERBS, READ_OPTIONS, parseReadArgs,
   touchedQuery, likeEscape, splitStoredRef, normaliseRefPath, symbolMatches, matchRef, rankTouched, touchedRows,
-  TOUCHED_CANDIDATE_MAX, TOUCHED_LIMIT_DEFAULT, TOUCHED_DISCLOSURE, TOUCHED_CAPPED_NOTE, TOUCHED_ORDERED_CAP, TOUCHED_ORDERED_CAPPED_NOTE, TOUCHED_REFS_CUT_NOTE,
+  makePairIndex, TOUCHED_CANDIDATE_MAX, TOUCHED_LIMIT_DEFAULT, TOUCHED_DISCLOSURE, TOUCHED_CAPPED_NOTE, TOUCHED_ORDERED_CAP, TOUCHED_ORDERED_CAPPED_NOTE, TOUCHED_REFS_CUT_NOTE,
 } from '../../ccd/history/lib.mjs';
 
 type Graph = { index: { files: Set<string>; byBase: Map<string, string[]> } };
@@ -69,8 +72,8 @@ describe('touched deciders', () => {
   it.each([
     ['ccd/x.mjs', { kind: 'path', file: 'ccd/x.mjs' }],
     ['./ccd/x.mjs', { kind: 'path', file: 'ccd/x.mjs' }],
-    ['ccd/x.mjs:10-20', { kind: 'path', file: 'ccd/x.mjs' }],
-    ['x.mjs:7', { kind: 'path', file: 'x.mjs' }],
+    ['ccd/x.mjs' + ':10-20', { kind: 'path', file: 'ccd/x.mjs' }],
+    ['x.mjs' + ':7', { kind: 'path', file: 'x.mjs' }],
     ['server/test/foo.test.ts', { kind: 'path', file: 'server/test/foo.test.ts' }],
     ['ccd/x.mjs:fooBar', { kind: 'path-symbol', file: 'ccd/x.mjs', symbol: 'fooBar' }],
     ['fooBar', { kind: 'symbol', symbol: 'fooBar' }],
@@ -123,9 +126,9 @@ describe('touched deciders', () => {
   });
 
   it('TC12 line suffix is kept as the line, not in the path', () => {
-    expect(splitStoredRef('path', 'ccd/x.mjs:10-20')).toEqual({ path: 'ccd/x.mjs', line: '10-20', symbol: null });
-    expect(splitStoredRef('path', 'ccd/x.mjs:7')).toEqual({ path: 'ccd/x.mjs', line: '7', symbol: null });
-    const rows = run([{ nodeId: 'n1', kind: 'path', value: 'ccd/x.mjs:10-20', origin: 'tool_use' }], 'ccd/x.mjs', [], null);
+    expect(splitStoredRef('path', 'ccd/x.mjs' + ':10-20')).toEqual({ path: 'ccd/x.mjs', line: '10-20', symbol: null });
+    expect(splitStoredRef('path', 'ccd/x.mjs' + ':7')).toEqual({ path: 'ccd/x.mjs', line: '7', symbol: null });
+    const rows = run([{ nodeId: 'n1', kind: 'path', value: 'ccd/x.mjs' + ':10-20', origin: 'tool_use' }], 'ccd/x.mjs', [], null);
     expect(rows).toHaveLength(1);
     expect(rows[0].refs[0].line).toBe('10-20');
   });
@@ -613,6 +616,32 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(items(cut).map((i) => i['nodeId'])).toEqual(['Lt30vis']);
   }, HEAVY);
 
+  it('R8 (W2-2a) under an as-of cut a node with a hidden source row loses its mined (tool_use) refs, and its row goes when none is left; model refs and a visible source stay', () => {
+    const b = withDb((db) => db.prepare('SELECT e.entry_id AS id, e.uuid AS uuid FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id ORDER BY b.ord').all() as unknown as Array<{ id: number; uuid: string }>);
+    const visible = withDb((db) => Number((db.prepare('SELECT min(entry_id) AS id FROM entries').get() as { id: number }).id));
+    const hidden = Number(b[1]!.id);
+    const src = (node: string, entry: number): void => withDb((db) => { db.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, 0)').run(node, entry); });
+    const f = 'ccd/tc33.mjs';
+    // all four nodes are shown by the cut (their boundary is the first); only the sources differ
+    plant('Lt33mined', { boundary: Number(b[0]!.id), refs: [['path', f, 'tool_use']] });
+    src('Lt33mined', hidden);
+    plant('Lt33model', { boundary: Number(b[0]!.id), refs: [['path', f, 'model']] });
+    src('Lt33model', hidden);
+    plant('Lt33both', { boundary: Number(b[0]!.id), refs: [['path', f, 'tool_use'], ['test', `${root}/${f}`, 'model']] });
+    src('Lt33both', hidden);
+    plant('Lt33seen', { boundary: Number(b[0]!.id), refs: [['path', f, 'tool_use']] });
+    src('Lt33seen', visible);
+    expect(items(touchedJson([f])).map((i) => i['nodeId']).sort(), 'CONTROL: without a cut all four are listed').toEqual(['Lt33both', 'Lt33mined', 'Lt33model', 'Lt33seen']);
+    const storeId = fs.readFileSync(path.join(box.root, 'store.id'), 'utf8').trim();
+    fs.writeFileSync(path.join(box.root, 'headless-on'), `store ${storeId}\n${ID} ${G1}\n`, { mode: 0o600 });
+    const cut = runCli(box, ['touched', f, '--json'], { env: { CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: b[0]!.uuid } });
+    expect(cut.code, `${cut.stderr}${cut.stdout}`).toBe(0);
+    const by = new Map(items(cut).map((i) => [i['nodeId'], (i['refs'] as Array<{ kind: string; origin: string }>).map((r) => `${r.kind}/${r.origin}`)]));
+    expect([...by.keys()].sort(), 'the node whose only ref was mined from a hidden row is not listed').toEqual(['Lt33both', 'Lt33model', 'Lt33seen']);
+    expect(by.get('Lt33both'), 'its tool_use ref is dropped, its model ref stays').toEqual(['test/model']);
+    expect(by.get('Lt33seen')).toEqual(['path/tool_use']);
+  }, HEAVY);
+
   it('a graph with no nodes answers as no graph (R11, failure row 28)', () => {
     plant('Lt32n1', { refs: [['path', 'lib/tc32.mjs']] });
     plantGraph([]);
@@ -697,7 +726,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
   }, HEAVY);
 
   it('a sample answer: the text and JSON forms agree on the rows, and the human form ends with shown, next and the disclosure', () => {
-    plant('Lt99n1', { latest: T0 + 70_000, gist: 'Fixed the parser. It was slow.', refs: [['path', 'ccd/tc99.mjs:10-20'], ['test', `${root}/ccd/tc99.mjs`, 'model']] });
+    plant('Lt99n1', { latest: T0 + 70_000, gist: 'Fixed the parser. It was slow.', refs: [['path', 'ccd/tc99.mjs' + ':10-20'], ['test', `${root}/ccd/tc99.mjs`, 'model']] });
     const r = touched(['ccd/tc99.mjs']);
     const j = touchedJson(['ccd/tc99.mjs']);
     expect(r.code).toBe(0);
@@ -744,12 +773,15 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
 // ── Task 4C: touched's cost at the measured node_refs size (W4 addendum P9, P13) ─────────────────────────────────────
 // Skipped unless HISTORY_BENCH=1. One fixture store at the size act M3 measured on the one session-hosting node (68,456
 // node_refs rows, 5,697 nodes), its kinds in the proportions classifyRef gives a mixed corpus, built through a writer handle
-// on a fixture HOME under the temp root. It times runTouched in-process on a read-only handle, in both forms (the shipped
-// unordered selects, and P13's ordered ones through runTouched's `ordered` argument), cold and warm, and writes its figures
-// Measured (14.5 MB fixture, 20 runs, p95 ms, unordered vs ordered; cold/warm): path 24.1 vs 16.0 / 24.3 vs 15.7, symbol with graph 33.7 vs
-// 32.4 / 31.5 vs 32.5, symbol without graph 10.7 vs 11.7 / 10.4 vs 11.5, worst case (cut hit, 79,456 rows) 31.5 vs 39.0 / 31.2 vs 35.8:
-// the ordered p95 is under 2 s on every shape, so TOUCHED_ORDERED_CAP is true (P13). It writes its figures to $HISTORY_BENCH_OUT (default: beside the fixture, removed with the run). Cold is a freshly opened read-only handle per run (the OS page cache cannot be dropped
-// here, so it is a cold handle and statement cache, not a cold disk); warm is 20 timed runs on one handle after one untimed.
+// on a fixture HOME under the temp root. It times runTouched in-process on a read-only handle, in both forms (the unordered
+// selects, and P13's ordered ones, through runTouched's `ordered` argument; the ordered form is the default now), cold and warm.
+// Measured (14.5 MB fixture, 20 runs, p95 ms, unordered vs ordered; cold/warm): path 24.1 vs 16.0 / 24.3 vs 15.7, symbol with graph
+// 33.7 vs 32.4 / 31.5 vs 32.5, symbol without graph 10.7 vs 11.7 / 10.4 vs 11.5, worst case (cut hit, 79,456 rows) 31.5 vs 39.0 /
+// 31.2 vs 35.8: the ordered p95 is under 2 s on every shape, so TOUCHED_ORDERED_CAP is true (P13). Two cells add a realistic graph
+// (about 78 MB of graph.json, a symbol spanning 150 basenames) and a 20-root project scope whose graphs are links to one file.
+// Cold is a freshly opened read-only handle per run (the OS page cache cannot be dropped here, so it is a cold handle and
+// statement cache, not a cold disk); warm is 20 timed runs on one handle after one untimed. Figures go to $HISTORY_BENCH_OUT
+// (default: beside the fixture, removed with the run).
 describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => {
   const RUNS = 20;
   const REFS_TOTAL = 68_456;
@@ -978,15 +1010,230 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
         });
       }
     }
+    // ── the graph cells (final fix wave): a realistic graph, and a project scope whose roots link one graph file ──
+    const BIG_NODES = Number(process.env['HISTORY_BENCH_GRAPH_NODES'] ?? 320_000);
+    const BIG_LINKS = Number(process.env['HISTORY_BENCH_GRAPH_LINKS'] ?? 480_000);
+    const bigDir = mkTmp('ccrc-hist-touched-biggraph-');
+    // The case's own teardown: the 78 MB graph, the fixture store and the roots go with it, not with the file's end (all under the temp root).
+    onTestFinished(() => { for (const d of [bigDir, box.home, root]) fs.rmSync(d, { recursive: true, force: true }); });
+    const bigFile = path.join(bigDir, 'graph.json');
+    {
+      const fd = fs.openSync(bigFile, 'w');
+      const SPAN_FILES = 150;   // the symbol's label sits on 150 files, each with its own basename
+      let buf = '{"nodes":[';
+      const flush = (): void => { fs.writeSync(fd, buf); buf = ''; };
+      for (let i = 0; i < BIG_NODES; i += 1) {
+        const file = i < SPAN_FILES ? `bench/d${i}/f${i}.ts` : `src/pkg${i % 400}/mod${i % 30_000}.ts`;
+        buf += `${i === 0 ? '' : ','}{"id":"n${i}","label":"${i < SPAN_FILES ? QSYM : `sym${i % 90_000}`}","source_file":"${file}","file_type":"code","source_location":"L${i % 900}"}`;
+        if (buf.length > 1 << 20) flush();
+      }
+      buf += '],"links":[';
+      for (let i = 0; i < BIG_LINKS; i += 1) {
+        buf += `${i === 0 ? '' : ','}{"source":"n${(i * 7) % BIG_NODES}","target":"n${(i * 13 + 1) % BIG_NODES}","relation":"calls","confidence":"EXTRACTED"}`;
+        if (buf.length > 1 << 20) flush();
+      }
+      buf += ']}';
+      flush();
+      fs.closeSync(fd);
+    }
+    const graphBytes = fs.statSync(bigFile).size;
+    {
+      const w = store.openWriter(dbFile);
+      const ins = w.prepare('INSERT OR IGNORE INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
+      w.exec('BEGIN');
+      for (let i = 0; i < 150; i += 1) for (let k = 0; k < 2; k += 1) ins.run(nodeIds[(i * 37 + k) % nodeIds.length]!, 'path', `bench/d${i}/f${i}.ts`, 'tool_use');
+      w.exec('COMMIT');
+      w.close();
+    }
+    const graphCells: Array<Record<string, unknown>> = [];
+    const cell = (name: string, arg: string): void => {
+      for (const form of ['unordered', 'ordered'] as const) {
+        const ask = (rc: unknown) => R.runTouched(rc, { arg, limit: 20, ordered: form === 'ordered' });
+        let peakRss = 0;
+        const note = (): void => { peakRss = Math.max(peakRss, process.memoryUsage().rss); };
+        const cold: number[] = [];
+        for (let i = 0; i < RUNS; i += 1) {
+          const db = store.openReader(dbFile);
+          const t0 = process.hrtime.bigint();
+          const out = ask(contextOn(db));
+          cold.push(ms(t0));
+          note();
+          expect(out.exit, `${name} ${form}`).toBe(0);
+          db.close();
+        }
+        const db = store.openReader(dbFile);
+        const rc = contextOn(db);
+        const first = ask(rc);
+        const warm: number[] = [];
+        for (let i = 0; i < RUNS; i += 1) { const t0 = process.hrtime.bigint(); ask(rc); warm.push(ms(t0)); note(); }
+        db.close();
+        graphCells.push({
+          cell: name, form, total: first.total, graphBytes,
+          cold: { p50: r2(pct(cold, 50)), p95: r2(pct(cold, 95)), max: r2(Math.max(...cold)) },
+          warm: { p50: r2(pct(warm, 50)), p95: r2(pct(warm, 95)), max: r2(Math.max(...warm)) },
+          peakRssMB: Math.round(peakRss / 1048576), heapUsedMBAfter: Math.round(process.memoryUsage().heapUsed / 1048576),
+        });
+      }
+    };
+    fs.rmSync(path.join(root, 'graphify-out'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(root, 'graphify-out'), { recursive: true });
+    fs.symlinkSync(bigFile, path.join(root, 'graphify-out', 'graph.json'));
+    cell('(a) one root, graph of 78 MB, symbol over 150 basenames', QSYM);
+    {
+      // (b) a project scope: 20 roots, each a worktree whose graph.json links the one file
+      const extra: string[] = [];
+      for (let i = 0; i < 19; i += 1) {
+        const d = path.join(mkTmp('ccrc-hist-touched-wt-'));
+        fs.mkdirSync(path.join(d, 'graphify-out'), { recursive: true });
+        fs.symlinkSync(bigFile, path.join(d, 'graphify-out', 'graph.json'));
+        extra.push(d);
+      }
+      const w = store.openWriter(dbFile);
+      const insE = w.prepare('INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, cwd, cwd_real, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      extra.forEach((d, i) => insE.run(fam.session_pk, Number(ep.seq) + 1 + i, `b0000000-0000-4000-8000-${String(i).padStart(12, '0')}`, 'clear', 'fixture', 1, d, d, 1));
+      w.close();
+      cell('(b) 20 roots linking one 78 MB graph, symbol over 150 basenames', QSYM);
+      cell('(b) 20 roots linking one 78 MB graph, path query', QFILE);
+    }
+    const gcRows = graphCells.map((c) => {
+      const k = c['cold'] as { p50: number; p95: number }; const w = c['warm'] as { p50: number; p95: number };
+      return `${String(c['cell']).slice(0, 62).padEnd(62)} ${String(c['form']).padEnd(9)} total=${String(c['total']).padStart(4)}  cold p50 ${k.p50} p95 ${k.p95}  warm p50 ${w.p50} p95 ${w.p95}  rss ${String(c['peakRssMB'])} MB`;
+    });
+    console.log(`graph ${graphBytes} bytes\n${gcRows.join('\n')}`);
     // the ordered form answers the same rows as the unordered while nothing is capped
     for (const shape of shapes.slice(0, 3)) expect(answers.get(`${shape.name}/ordered`), shape.name).toEqual(answers.get(`${shape.name}/unordered`));
     const out = process.env['HISTORY_BENCH_OUT'] ?? path.join(path.dirname(root), 'touched-bench.json');   // the run's temp root goes with the run: name a path to keep the figures
-    fs.writeFileSync(out, JSON.stringify({ fixtureBytes: bytes, counts, planted, runs: RUNS, results }, null, 2));
+    fs.writeFileSync(out, JSON.stringify({ fixtureBytes: bytes, counts, planted, runs: RUNS, results, graphBytes, graphCells }, null, 2));
     const rows = results.map((r) => {
       const c = r['cold'] as { p50: number; p95: number }; const w = r['warm'] as { p50: number; p95: number };
       return `${String(r['shape']).padEnd(22)} ${String(r['form']).padEnd(9)} cand=${String(r['candidateRows']).padStart(4)} total=${String(r['total']).padStart(4)}  cold p50 ${c.p50} p95 ${c.p95}  warm p50 ${w.p50} p95 ${w.p95}`;
     });
-    fs.writeFileSync(`${out}.txt`, `${rows.join('\n')}\n`);
+    fs.writeFileSync(`${out}.txt`, `${rows.join('\n')}\ngraph ${graphBytes} bytes\n${gcRows.join('\n')}\n`);
     console.log(`touched bench: fixture ${bytes} bytes, ${counts.node_refs} node_refs, ${counts.nodes} nodes\n${rows.join('\n')}`);
   }, 1_800_000);
+});
+
+
+// ── The final fix wave: a project scope's many roots, and the graph cache (W4-4 whole-branch review) ──────────────────────
+// A family with many confirmed epochs of distinct launch directories (what --project widens to) answers an empty query with one
+// header per distinct graph state, inside the 20,000-character cap; a graph file linked from several roots is loaded once; a graph
+// is loaded only for a root that needs it. Each case builds its own fixture family, in a store of its own.
+describe.skipIf(process.platform === 'darwin')('touched, project scope and the graph cache (final fix wave)', () => {
+  const FID = 'lane-a-demo';
+  const FTA = 'a1a1a1a1-1111-4111-8111-111111111111';
+  const FG1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const HEAVY = 240_000;
+
+  type Fx = { box: HistoryBox; root: string; dbFile: string; sessionPk: number; seq: number; tpk: number };
+  function fixtureFamily(prefix: string): Fx {
+    const root = mkTmp(`${prefix}root-`);
+    const box = makeHistoryBox(prefix, { roster: LANE_ROSTER });
+    const sw = runSweep(box);
+    expect(sw.code, sw.stderr).toBe(0);
+    const at = (s: number): string => new Date(Date.UTC(2026, 9, 1, 0, 0, s)).toISOString();
+    seedFamily(box, { id: FID, project: 'demo', uuid: FTA, generation: FG1, rows: [
+      userRow({ uuid: `${FTA.slice(0, 8)}-0000-4000-8000-000000000001`, ts: at(1), sessionId: FTA, cwd: root, text: 'fixture question' }),
+      assistantRow({ uuid: `${FTA.slice(0, 8)}-0000-4000-8000-000000000002`, ts: at(2), sessionId: FTA, cwd: root, text: 'Fixture answer.', requestId: 'req_1', msgId: 'msg_1' }),
+    ] });
+    const dbFile = path.join(box.root, 'db', 'history.db');
+    const db = new DatabaseSync(dbFile);
+    try {
+      const fam = db.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(FID, FG1) as { session_pk: number };
+      const ep = db.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL ORDER BY seq LIMIT 1').get(fam.session_pk) as { seq: number };
+      const tr = db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(FTA) as { transcript_pk: number };
+      db.prepare('UPDATE epochs SET cwd = ?, cwd_real = ? WHERE session_pk = ?').run(root, root, fam.session_pk);
+      return { box, root, dbFile, sessionPk: Number(fam.session_pk), seq: Number(ep.seq), tpk: Number(tr.transcript_pk) };
+    } finally { db.close(); }
+  }
+  /** One more confirmed epoch of the family per directory, each with its own launch directory; the new epochs' seqs. */
+  function addEpochs(fx: Fx, dirs: string[]): number[] {
+    const db = new DatabaseSync(fx.dbFile);
+    try {
+      const ins = db.prepare('INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, cwd, cwd_real, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const seqs: number[] = [];
+      db.exec('BEGIN');
+      dirs.forEach((d, i) => {
+        const seq = fx.seq + 1 + i;
+        ins.run(fx.sessionPk, seq, `b0000000-0000-4000-8000-${String(i).padStart(12, '0')}`, 'clear', 'fixture', 1, d, d, 1);
+        seqs.push(seq);
+      });
+      db.exec('COMMIT');
+      return seqs;
+    } finally { db.close(); }
+  }
+  function addNode(fx: Fx, id: string, epoch: number, refs: Array<[string, string]>): void {
+    const db = new DatabaseSync(fx.dbFile);
+    try {
+      db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
+        span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms)
+        VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', 'A gist.', NULL, NULL, NULL, NULL, 1000, 2000, 0, 0, 0, 0, 0, 1, 3000)`).run(id, fx.sessionPk, epoch, fx.tpk);
+      const ins = db.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, 'tool_use')");
+      for (const [k, v] of refs) ins.run(id, k, v);
+    } finally { db.close(); }
+  }
+  const graphJson = (nodes: Array<{ label: string; file: string }>): string => JSON.stringify({
+    nodes: nodes.map((n, i) => ({ id: `g${i}`, label: n.label, source_file: n.file })), links: [],
+  });
+  function putGraph(dir: string, content: string | { linkTo: string }): void {
+    fs.mkdirSync(path.join(dir, 'graphify-out'), { recursive: true });
+    const g = path.join(dir, 'graphify-out', 'graph.json');
+    if (typeof content === 'string') fs.writeFileSync(g, content);
+    else fs.symlinkSync(content.linkTo, g);
+  }
+  function contextOn(fx: Fx, db: DatabaseSync) {
+    const fams = db.prepare('SELECT session_pk, ccrc_id, generation, first_seen_ms FROM sessions WHERE ccrc_id = ? AND merged_into IS NULL').all(FID) as
+      { session_pk: number; ccrc_id: string; generation: string; first_seen_ms: number }[];
+    return {
+      db, version: storeLib.userVersion(db), schema: undefined, storeId: null, nowMs: Date.now(), home: fx.box.home, id: FID, gen: FG1, scopeArgs: [],
+      pairIdx: makePairIndex([]),
+      scope: { kind: 'project', id: FID, generation: FG1, project: 'demo', workdir: null, sessionPks: [fx.sessionPk], transcriptPks: [fx.tpk],
+        families: fams.map((f) => ({ sessionPk: Number(f.session_pk), ccrcId: f.ccrc_id, generation: f.generation, firstSeenMs: Number(f.first_seen_ms) })) },
+    };
+  }
+  const touchedIn = (fx: Fx, a: { arg: string; limit: number; loadGraph?: (p: string, m: number) => unknown }) => {
+    const db = storeLib.openReader(fx.dbFile) as unknown as DatabaseSync;
+    try {
+      const rc = contextOn(fx, db);
+      return (recallLib as unknown as { runTouched(rc: unknown, a: unknown): { exit: number; total: number; blocks: string[] } }).runTouched(rc, a);
+    } finally { db.close(); }
+  };
+
+  it('an empty answer under --project (about 600 roots) prints one header per distinct graph state and stays within the 20,000-character cap', () => {
+    const fx = fixtureFamily('ccrc-hist-touched-wide-');
+    putGraph(fx.root, graphJson([{ label: 'x', file: 'ccd/other.mjs' }]));
+    addEpochs(fx, Array.from({ length: 599 }, (_, i) => path.join(fx.root, `wt-${i}`, 'a-fairly-long-worktree-directory-name')));
+    const r = runCli(fx.box, ['touched', 'ccd/none.mjs', '--project'], { env: withPane(fx.box, FID) });
+    expect(r.code, `${r.stderr}${r.stdout.slice(0, 400)}`).toBe(3);
+    expect(r.stdout.length).toBeLessThanOrEqual(20_000);
+    const heads = r.stdout.split('\n').filter((l) => l.startsWith('touched '));
+    expect(heads.sort(), 'one `graph` line and one `no graph` line, never one per root').toEqual(['touched ccd/none.mjs (graph)', 'touched ccd/none.mjs (no graph)']);
+    const j = runCli(fx.box, ['touched', 'ccd/none.mjs', '--project', '--json'], { env: withPane(fx.box, FID) });
+    expect(j.stdout.length).toBeLessThanOrEqual(20_000);
+  }, HEAVY);
+
+  it('a graph file linked from several roots is loaded once (cached by its real path), and a root no row needs loads none', () => {
+    const fx = fixtureFamily('ccrc-hist-touched-gcache-');
+    const shared = path.join(mkTmp('ccrc-hist-touched-gshared-'), 'g.json');
+    fs.writeFileSync(shared, graphJson([{ label: 'cacheSym', file: 'ccd/cache.mjs' }]));
+    const r2 = mkTmp('ccrc-hist-touched-gr2-');
+    const r3 = mkTmp('ccrc-hist-touched-gr3-');
+    const r4 = mkTmp('ccrc-hist-touched-gr4-');
+    putGraph(fx.root, { linkTo: shared });
+    putGraph(r2, { linkTo: shared });
+    putGraph(r3, graphJson([{ label: 'cacheSym', file: 'ccd/cache.mjs' }]));   // a copy: its own real path, so its own load
+    putGraph(r4, graphJson([{ label: 'cacheSym', file: 'ccd/cache4.mjs' }]));
+    const seqs = addEpochs(fx, [r2, r3, r4]);
+    const calls: string[] = [];
+    const counting = (p: string, m: number) => { calls.push(p); return loadGraph(p, m); };
+    // A symbol query reads every root's graph for its label: three real files, four roots.
+    touchedIn(fx, { arg: 'cacheSym', limit: 20, loadGraph: counting });
+    expect(calls.length, calls.join(' ')).toBe(3);
+    expect(new Set(calls).size).toBe(3);
+    // A path query whose one ref matches exactly loads only the graph its header names: the root of the one row, never the others'.
+    addNode(fx, 'Lcl0001', seqs[2]!, [['path', 'ccd/lazy.mjs']]);
+    calls.length = 0;
+    const out = touchedIn(fx, { arg: 'ccd/lazy.mjs', limit: 20, loadGraph: counting });
+    expect(out.total).toBe(1);
+    expect(calls.length, calls.join(' ')).toBe(1);
+  }, HEAVY);
 });

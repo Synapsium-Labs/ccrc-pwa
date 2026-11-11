@@ -35,6 +35,7 @@ import { blobReadStmts, keptOf } from './derive.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
 import { basename as xbasename, join as xjoin } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { loadGraph, GRAPH_MAX_BYTES } from '../compact-card.mjs';
 
 /**
@@ -108,7 +109,7 @@ function mainOnlyAnd(rc, col) {
 }
 
 /** A select-list tail naming a node's agent_id (its transcript's), only under --agents: '' otherwise. A default read's statements are
- *  not quite the ones it prepared before W4: `mainOnlyAnd` adds the main-thread term to every select over `nodes`, and
+ *  not quite the ones it prepared before W4: `mainOnlyAnd` adds the main-thread term to every scope-wide select over `nodes`, and
  *  `resolveNodeInScope`'s select always carries a `main` column. Only the RESULTS are unchanged, for a store with no subagent row.
  *  `col` is the node's transcript_pk column. */
 function agentColumn(rc, col) {
@@ -2136,7 +2137,7 @@ const TOUCHED_FILE_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHE
 const TOUCHED_SYMBOL_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind = 'path:symbol' AND value LIKE ? ESCAPE '\\' LIMIT ?";
 // P13's ordered form of the same two selects (ruled: the cap if its p95 is measured under 2 s): each joins `nodes` and orders before
 // its cut, so a capped ranking is exact. Task 4C's bench runs both forms through runTouched's `ordered` argument; the default
-// is lib's TOUCHED_ORDERED_CAP, false in this build.
+// is lib's TOUCHED_ORDERED_CAP, true since Task 4C's measurement.
 const TOUCHED_ORDER_BY = 'ORDER BY n.latest_ms DESC, r.node_id, r.kind, r.value LIMIT ?';
 const TOUCHED_FILE_ORDERED_SQL = `SELECT r.node_id, r.kind, r.value, r.origin, n.latest_ms FROM node_refs r JOIN nodes n ON n.node_id = r.node_id WHERE r.kind IN ('path','path:symbol','test') AND r.value LIKE ? ESCAPE '\\' ${TOUCHED_ORDER_BY}`;
 const TOUCHED_SYMBOL_ORDERED_SQL = `SELECT r.node_id, r.kind, r.value, r.origin, n.latest_ms FROM node_refs r JOIN nodes n ON n.node_id = r.node_id WHERE r.kind = 'path:symbol' AND r.value LIKE ? ESCAPE '\\' ${TOUCHED_ORDER_BY}`;
@@ -2159,15 +2160,21 @@ const TOUCHED_RESERVE = 600;
 const TOUCHED_GIST_MAX = 120;
 const TOUCHED_NODE_COLS = ['node_id', 'session_pk', 'epoch_seq', 'kind', 'gist', 'earliest_ms', 'latest_ms'];
 
-/** A root's graph, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or links all read as "no graph". */
-function touchedGraphOf(root) {
+/** A graph file's graph, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or links all read as "no graph". */
+function touchedGraphOf(graphPath, load) {
   try {
-    const g = loadGraph(xjoin(root, 'graphify-out', 'graph.json'), GRAPH_MAX_BYTES);
+    const g = load(graphPath, GRAPH_MAX_BYTES);
     // Ruling R11: a graph that loads with no file at all (no node carries a source_file) is "no graph", as failure row 28's "no nodes".
     return g.files.size === 0 ? null : g;
   } catch {
     return null;
   }
+}
+
+/** Whether a relative ref could suffix-match `file` once a graph is asked (matchRef's own preconditions for that arm). */
+function touchedMaySuffix(norm, file) {
+  const p = norm.path;
+  return !norm.outside && !file.startsWith('/') && p !== '' && !p.startsWith('/') && !p.split('/').includes('..') && file.endsWith(`/${p}`);
 }
 
 /** The distinct files whose graph nodes carry `symbol` as their label, sorted. */
@@ -2205,6 +2212,7 @@ function touchedGist(rc, gist) {
 
 /** `touched` over a ReadContext. `a` is { arg, limit }, and optionally `ordered` (P13's selects; default TOUCHED_ORDERED_CAP). */
 export function runTouched(rc, a) {
+  const loadGraphFile = a.loadGraph ?? loadGraph;   // the seam a test counts loads through
   const pending = pendingFor(rc, 'touched');
   if (pending !== null) return pending;
   const q = xlib.touchedQuery(a.arg);
@@ -2226,11 +2234,20 @@ export function runTouched(rc, a) {
     if (typeof root === 'string' && root !== '') rootSet.add(root);
   }
   const roots = [...rootSet].sort();
+  // A root's graph, loaded lazily and cached by the REAL path of its graph.json, so worktrees that link one shared graph load it once.
   const graphs = new Map();
+  const graphByReal = new Map();
   const graphAt = (root) => {
     if (root === null) return null;
-    if (!graphs.has(root)) graphs.set(root, touchedGraphOf(root));
-    return graphs.get(root);
+    if (graphs.has(root)) return graphs.get(root);
+    let g = null;
+    try {
+      const real = realpathSync(xjoin(root, 'graphify-out', 'graph.json'));
+      if (!graphByReal.has(real)) graphByReal.set(real, touchedGraphOf(real, loadGraphFile));
+      g = graphByReal.get(real);
+    } catch { /* no such file: no graph */ }
+    graphs.set(root, g);
+    return g;
   };
 
   // The query's files (each with the root it is relative to, or null for any) and the selects it reads.
@@ -2295,6 +2312,10 @@ export function runTouched(rc, a) {
     }
   }
   const family = new Map(rc.scope.families.map((f) => [f.sessionPk, f]));
+  // R8 (W2-2a): under an as-of cut a ref mined from source rows (origin tool_use) of a node with a hidden source row may come from that
+  // row, so it is dropped, as describe drops it; the row goes when no matching ref is left. Only candidate nodes are asked, only under a cut.
+  const minedHidden = new Set();
+  if (cutOf(rc) !== null) for (const id of nodeById.keys()) if (cutHidesASource(rc, id)) minedHidden.add(id);
 
   // Split, normalise, match.
   const matches = [];
@@ -2302,6 +2323,7 @@ export function runTouched(rc, a) {
   for (const c of candidates) {
     const n = nodeById.get(c.node_id);
     if (n === undefined) continue;
+    if (c.origin === 'tool_use' && minedHidden.has(c.node_id)) continue;
     const nodeRoot = epochRoot.get(`${n.session_pk}:${n.epoch_seq}`);
     const sp = xlib.splitStoredRef(c.kind, c.value);
     const norm = xlib.normaliseRefPath(sp.path, nodeRoot, roots);
@@ -2322,7 +2344,9 @@ export function runTouched(rc, a) {
     for (const w of wantFiles) {
       if (!symbolOk) break;
       if (w.root !== null && w.root !== root) continue;
-      const m = xlib.matchRef(norm, w.file, graphAt(root));
+      // The graph matters only to the suffix arm: an exact or outside match, and a ref that can never suffix-match, never load one.
+      let m = xlib.matchRef(norm, w.file, null);
+      if (m === null && touchedMaySuffix(norm, w.file)) m = xlib.matchRef(norm, w.file, graphAt(root));
       if (m !== null) add(w.file, m);
     }
     if (q.kind === 'symbol' && c.kind === 'path:symbol' && xlib.symbolMatches(sp, q.symbol)) add(norm.path, norm.outside ? 'outside' : 'exact');
@@ -2353,9 +2377,10 @@ export function runTouched(rc, a) {
     const out = capped ? [cappedNote] : [];
     for (const g of groups.values()) out.push(g.head, ...g.rows);
     if (total === 0) {
+      // One header line per distinct state (at most `graph` and `no graph`), never one per root: a project scope holds hundreds of roots.
       const label = q.kind === 'symbol' ? q.symbol : q.file;
       const at = roots.length === 0 ? [null] : roots;
-      for (const r of at) out.push(headerOf(label, r));
+      for (const h of new Set(at.map((r) => headerOf(label, r)))) out.push(h);
     }
     if (total > n) out.push(`(+${total - n} not shown)`);
     return out;
@@ -2374,9 +2399,11 @@ export function runTouched(rc, a) {
   const nextFor = (n) => (n === 0 ? null : ['describe', idShown(rc, limited[0].nodeId), ...rc.scopeArgs]);
   const extra = JSON.stringify({ note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true, candidatesCappedNote: cappedNote } : {}) }).length;
   const humanN = greatestFit(limited.length, (n) => { const b = blocksFor(n); return capOutput(b, head.line.length + TOUCHED_RESERVE).kept.length === b.length; });
+  // An empty answer has no row to fit, but its headers pass the same cap.
+  const blocksOut = (n) => { const b = blocksFor(n); return total === 0 ? capOutput(b, head.line.length + TOUCHED_RESERVE).kept : b; };
   const n = Math.min(humanN, jsonPrefixCount(rc, head, items, total, nextFor, extra));
   return {
-    exit: total === 0 ? EXIT.NOT_FOUND : EXIT.OK, header: null, blocks: blocksFor(n), items: items.slice(0, n), shown: n, total, next: nextFor(n),
+    exit: total === 0 ? EXIT.NOT_FOUND : EXIT.OK, header: null, blocks: blocksOut(n), items: items.slice(0, n), shown: n, total, next: nextFor(n),
     note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true, candidatesCappedNote: cappedNote } : {}),
   };
 }

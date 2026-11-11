@@ -7232,7 +7232,7 @@ redacted exactly prints under the line
 `[window redacted alone: every word of 8 or more characters masked]`; its long words are masked, not
 lost. `--workspace` widens the scope to every family of this project that ran in the session's
 workdir, and `--project` to the whole project; nothing crosses projects, and nothing reaches another
-box. `--agents` adds the family's subagent transcripts and their nodes to any verb's reads. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
+box. `--agents` adds the scope's subagent transcripts and their nodes to any verb's reads. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
 text and the first 512 KiB of each tool output Claude Code saved to its own file; text past that is
 stored but not searched. Exit 3 is "not found on this box" (for grep, not found within that reach),
 6 "not indexed yet", 8 "recall switched off for this session" and 9 "no store here" (macOS, a
