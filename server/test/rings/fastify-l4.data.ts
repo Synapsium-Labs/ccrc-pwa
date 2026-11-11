@@ -21,6 +21,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/routes.ts': { reason: "the coordination context's HTTP routes", since: '2026-10-20' },
   'server/src/coord/ledgersRoutes.ts': { reason: "the programme ledgers' coordinator HTTP routes (PL3)", since: '2026-11-01' },
   'server/src/coord/reviewRoundsRoute.ts': { reason: "the coordinator's review-cap lift door (D-8125)", since: '2026-11-09' },
+  'server/src/coord/planRoutes.ts': { reason: "the plan verbs' HTTP routes (Linear hierarchy, D-8181): put, show, met, ticket-add, ticket-move, epic-drop and close", since: '2026-11-10' },
   'server/src/coord/endRequest.ts': { reason: "the end-request route's handler (D-8076), a session's ask to the operator", since: '2026-11-08' },
   'server/src/coord/coordCallsRoute.ts': { reason: "the coordinator call record's HTTP route (D-8126)", since: '2026-11-09' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },

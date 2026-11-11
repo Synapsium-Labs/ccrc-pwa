@@ -369,6 +369,12 @@ export function attachTicketInTx(
   return { ok: true };
 }
 
+/** The epic a run's ticket sits in (the follow-up verb's own-epic check, Task 2.4), or null for a run with no ticket. */
+export function epicOfRun(db: DatabaseSync, runId: number): number | null {
+  const r = db.prepare('SELECT t.epicId AS epicId FROM runs r JOIN plan_tickets t ON t.id = r.ticketId WHERE r.id = ?').get(runId) as { epicId: number } | undefined;
+  return r?.epicId ?? null;
+}
+
 /** Called from `advanceInner`, in its own transaction: `dispatched` starts the run's ticket and activates its epic, `done`
  *  closes the ticket and settles the epic, and a run that ends `failed` returns the ticket to `open` with no run. A review
  *  run, or a run with no ticket, moves nothing. */
@@ -468,7 +474,7 @@ export function setHierarchySettings(db: DatabaseSync, project: string, s: Hiera
 
 const PORT_FUNCTIONS = {
   planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
-  ticketById, ticketByKey, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
+  ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, hierarchySettingsOf, setHierarchySettings,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;

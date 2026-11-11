@@ -393,6 +393,7 @@ describe('the client stays closed', () => {
     // `runs.end-request` (D-8076) took it to sixty-one; it takes the caller's own body, `byId` and `byUuid` included, and fills none.
     // `linking.show` (D-8147) took it to sixty-two.
     // `goals.show` (autonomy-default wave A2, D-8126) took it to sixty-three; a GET by id, it fills nothing.
+    // The seven `plan` rows (D-8181) took it to seventy; each takes the caller's own body and fills none (the identity rides the query).
     // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
     // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
     // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
@@ -404,7 +405,8 @@ describe('the client stays closed', () => {
     // `calls.record` (autonomy-default wave A3, D-8126) took it to sixty-four; it is the one body fill that REFUSES a caller's byId
     // and byUuid, so it is counted by its own scan (`calls.record` below), not by the keyed fills' spelling.
     // `mail.inbox` (D-6780) took it to sixty-five; its read takes no body, and the ack body it synthesizes is pinned below.
-    expect(routeKeys().size).toBe(65);
+    // The seven `plan` rows (D-8181) took it to seventy-two.
+    expect(routeKeys().size).toBe(72);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

@@ -4,8 +4,8 @@ import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
   CHECKPOINT_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, isPlanKey,
-  type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPutBody, type PlanRefusal,
-  type TicketState,
+  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPutBody,
+  type PlanRefusal, type PlanTicketBody, type TicketState,
 } from '../../../shared/plan.js';
 import type { Changes, CheckpointPatch, EpicPatch, NewCheckpoint, NewEpic, NewTicket, PlanChanges, StoredPlan, TicketPatch } from './planStore.js';
 
@@ -128,6 +128,93 @@ export function parsePlanClose(body: unknown):
     return { ok: false, word: 'dropped-needs-reason', detail: 'abandoning a plan needs a reason' };
   }
   return { ok: true, close: { outcome: outcome as PlanEndOutcome, ...(why === undefined ? {} : { why }) } };
+}
+
+// ── The single-object verbs' bodies (Task 2.4) ────────────────────────────────────────────────────────────────────────
+
+type VerbBad = { ok: false; word: 'plan-bad-body' | 'dropped-needs-reason'; detail: string };
+const verbBad = (detail: string): VerbBad => ({ ok: false, word: 'plan-bad-body', detail });
+const needsReason = (detail: string): VerbBad => ({ ok: false, word: 'dropped-needs-reason', detail });
+
+/** `plan met`: `{ checkpoint, epic?, evidence }`, exactly one of `pr`, `itemId` or `path` as the evidence. `epic` names the
+ *  checkpoint's epic when two epics reuse the key. */
+export function parsePlanMet(body: unknown):
+  { ok: true; met: { checkpoint: string; epic?: string; evidence: CheckpointEvidence } } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  const x = closed(body, ['checkpoint', 'epic', 'evidence'], 'body');
+  if (x) return verbBad(x);
+  if (!isPlanKey(body.checkpoint)) return verbBad('checkpoint is not a plan key');
+  if (body.epic !== undefined && !isPlanKey(body.epic)) return verbBad('epic is not a plan key');
+  const ev = body.evidence;
+  if (!isObj(ev)) return verbBad('evidence is not an object');
+  const keys = Object.keys(ev);
+  if (keys.length !== 1) return verbBad('evidence names exactly one of pr, itemId or path');
+  const epic = body.epic === undefined ? {} : { epic: body.epic as string };
+  const k = keys[0]!;
+  const v = ev[k];
+  if ((k === 'pr' || k === 'itemId') && Number.isInteger(v) && (v as number) >= 1) {
+    return { ok: true, met: { checkpoint: body.checkpoint, ...epic, evidence: k === 'pr' ? { pr: v as number } : { itemId: v as number } } };
+  }
+  if (k === 'path' && textOk(v, PLAN_BOUNDS.reasonChars, true)) {
+    return { ok: true, met: { checkpoint: body.checkpoint, ...epic, evidence: { path: v } } };
+  }
+  return verbBad('evidence is not a pull request number, an item id or a path');
+}
+
+/** `plan ticket-add`: a ticket's body and the key of the epic it joins. */
+export function parsePlanTicketAdd(body: unknown): { ok: true; add: { epic: string; ticket: PlanTicketBody } } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  const x = closed(body, ['epic', 'key', 'kind', 'title', 'body', 'project', 'checkpoint'], 'body');
+  if (x) return verbBad(x);
+  if (!isPlanKey(body.epic)) return verbBad('epic is not a plan key');
+  if (!isPlanKey(body.key)) return verbBad('a ticket key is not a plan key');
+  if (typeof body.kind !== 'string' || !(TICKET_KINDS as readonly string[]).includes(body.kind)) return verbBad('unknown ticket kind');
+  if (!textOk(body.title, PLAN_BOUNDS.titleChars, true)) return verbBad('title is not 1 to 255 characters');
+  if (body.body !== undefined && (typeof body.body !== 'string' || Buffer.byteLength(body.body, 'utf8') > PLAN_BOUNDS.bodyBytes)) return verbBad('body is not text within bounds');
+  if (body.project !== undefined && !textOk(body.project, PLAN_BOUNDS.titleChars, true)) return verbBad('project is not a project name');
+  if (body.checkpoint !== undefined && !isPlanKey(body.checkpoint)) return verbBad('checkpoint is not a plan key');
+  const { epic, ...ticket } = body as Record<string, unknown> & { epic: string };
+  return { ok: true, add: { epic, ticket: ticket as unknown as PlanTicketBody } };
+}
+
+/** `plan ticket-move`: a ticket's key and what changes (its epic, its checkpoint, its project), or its drop with a reason. */
+export function parsePlanTicketMove(body: unknown):
+  { ok: true; move: { ticket: string; epic?: string; checkpoint?: string; project?: string; drop?: { why: string } } } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  const x = closed(body, ['ticket', 'epic', 'checkpoint', 'project', 'drop'], 'body');
+  if (x) return verbBad(x);
+  if (!isPlanKey(body.ticket)) return verbBad('ticket is not a plan key');
+  if (body.epic !== undefined && !isPlanKey(body.epic)) return verbBad('epic is not a plan key');
+  if (body.checkpoint !== undefined && !isPlanKey(body.checkpoint)) return verbBad('checkpoint is not a plan key');
+  if (body.project !== undefined && !textOk(body.project, PLAN_BOUNDS.titleChars, true)) return verbBad('project is not a project name');
+  const out: { ticket: string; epic?: string; checkpoint?: string; project?: string; drop?: { why: string } } = { ticket: body.ticket };
+  if (body.epic !== undefined) out.epic = body.epic as string;
+  if (body.checkpoint !== undefined) out.checkpoint = body.checkpoint as string;
+  if (body.project !== undefined) out.project = body.project as string;
+  if (body.drop !== undefined) {
+    if (!isObj(body.drop)) return verbBad('drop is not an object');
+    const dx = closed(body.drop, ['why'], 'drop');
+    if (dx) return verbBad(dx);
+    const why = body.drop.why;
+    if (typeof why !== 'string' || why.trim() === '') return needsReason('dropping a ticket needs a reason');
+    if (!textOk(why, PLAN_BOUNDS.reasonChars, false)) return verbBad(`why is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
+    if (out.epic !== undefined || out.checkpoint !== undefined || out.project !== undefined) return verbBad('a drop moves nothing');
+    out.drop = { why };
+  } else if (out.epic === undefined && out.checkpoint === undefined && out.project === undefined) {
+    return verbBad('the body moves nothing and drops nothing');
+  }
+  return { ok: true, move: out };
+}
+
+/** `plan epic-drop`: the epic's key and a reason. */
+export function parsePlanEpicDrop(body: unknown): { ok: true; drop: { epic: string; why: string } } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  const x = closed(body, ['epic', 'why'], 'body');
+  if (x) return verbBad(x);
+  if (!isPlanKey(body.epic)) return verbBad('epic is not a plan key');
+  if (typeof body.why !== 'string' || body.why.trim() === '') return needsReason('dropping an epic needs a reason');
+  if (!textOk(body.why, PLAN_BOUNDS.reasonChars, false)) return verbBad(`why is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
+  return { ok: true, drop: { epic: body.epic, why: body.why } };
 }
 
 // ── The diff ───────────────────────────────────────────────────────────────────────────────────────────────────────────
