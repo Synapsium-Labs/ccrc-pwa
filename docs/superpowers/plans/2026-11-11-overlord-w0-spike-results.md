@@ -535,7 +535,7 @@ covers. The deciders' anchors are a maintenance debt, not a contradiction.
 ## Fleet reads, under consent (Task 8: W0-06, W0-09, W0-12, W0-19, W0-26), measured 2026-11-11
 
 W0b (run 1820) read the fleet box under setup line 4's consent, as narrowed by the operator's ruling that the subject
-runs on the fleet's own accounts (departure `w0b-on-the-fleets-own-accounts`, below). Every read is **box**: counts,
+runs on the fleet's own accounts (D-8243, defined in the programme's index plan). Every read is **box**: counts,
 percentiles and key names only. No session id, account name, project name or value left the box, and neither
 `.credentials.json` nor a whole `.claude.json` was opened. The accounts are named here by stand-ins, `acct-01` to
 `acct-15` for the 15 Anthropic-lane config directories in roster order and `acct-g1` and `acct-g2` for the two lanes of
