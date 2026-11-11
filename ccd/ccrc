@@ -29487,7 +29487,7 @@ _usage_history_paragraph() {
     '            session into ~/.ccrc/history every 2 minutes, verbatim, secrets' \
     '            a session printed included; touch ~/.ccrc/history-off to pause' \
     '            it. status [--json] reports the store and its health. A' \
-    '            session recalls with grep|describe|expand|tree [--agents].' \
+    '            session recalls with grep|describe|expand|tree|touched [--agents].' \
     '            import|prune|reparse are dry runs unless --apply, and a dry' \
     '            run runs inside a session. Every --apply form and every' \
     '            doctor flag, such as doctor' \

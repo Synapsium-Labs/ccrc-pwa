@@ -63,7 +63,7 @@ import {
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
 import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
-import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader, scopeJsonOf, asOfCutOf } from './recall.mjs';
+import { runTree, grepVerb, describeVerb, expandVerb, touchedVerb, familiesOf, transcriptsOf, scopeHeader, scopeJsonOf, asOfCutOf } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
@@ -500,7 +500,7 @@ export function render(env) {
 /** Every bad-args answer prints this on stderr. */
 const USAGE = [
   'usage: ccrc history <verb> [options]',
-  '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>, each [--agents]',
+  '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id> | touched <path|symbol> [--limit N], each [--agents]',
   '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
   '  operator verbs: import | prune | reparse | recall-off <id> [--generation <uuid>] [--clear] | recall-off --clear-all',
@@ -967,6 +967,7 @@ const READ_RUNNERS = Object.freeze({
   grep: (rc, p, argv) => grepVerb(rc, argv),
   describe: (rc, p, argv) => describeVerb(rc, argv),
   expand: (rc, p) => expandVerb(rc, p),
+  touched: (rc, p) => touchedVerb(rc, p),
 });
 
 function refusalLine(exit, reason) {
@@ -985,6 +986,15 @@ function emitRefusal(r, json, pairIdx) {
   return r.exit;
 }
 
+/** `touched`'s two additions to the envelope (spec addendum 3.5): its disclosure rides --json as `note`, and a capped candidate set says so.
+ *  A result without either (every other verb) adds nothing. */
+function touchedExtras(res) {
+  return {
+    ...(res.note === undefined ? {} : { note: res.note }),
+    ...(res.candidatesCapped === true ? { candidatesCapped: true, candidatesCappedNote: res.candidatesCappedNote } : {}),
+  };
+}
+
 /** A verb's result. Human form: the header, the body, `shown K of N`, the next: line, the hint. --json: one
  *  envelope. The second belt (§8.3, D-4613) is structure-aware: --json maps the envelope value through redactFinalJson before
  *  it is serialised, the human page goes through redactFinalText line by line and tag by tag. */
@@ -992,19 +1002,20 @@ function emitResult(rc, res, json) {
   const h = scopeHeader(rc);
   let text;
   if (json) {
-    text = `${JSON.stringify(redactFinalJson(readEnvelope({
+    text = `${JSON.stringify(redactFinalJson({ ...readEnvelope({
       exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJsonOf(rc),
       header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
       next: res.next === null ? null : nextLine(res.next),
       // D-4595 (history-json-envelope-carries-hint): the human form prints res.hint below; --json carries it too.
       ...(res.hint === undefined ? {} : { hint: res.hint }),
-    }), rc.pairIdx))}\n`;
+    }), ...touchedExtras(res)}, rc.pairIdx))}\n`;
   } else {
     // A runner's refusal (out-of-scope, regex-syntax, migration-pending, …) names its word under the header.
     const lines = [res.header ?? h.line, ...(res.reason === undefined ? [] : [refusalLine(res.exit, res.reason)]),
       ...res.blocks, shownLine(res.shown, res.total)];
     if (res.next !== null) lines.push(nextLine(res.next));
     if (res.hint !== undefined) lines.push(`hint: ${res.hint}`);
+    if (res.note !== undefined) lines.push(res.note);
     text = redactFinalText(`${lines.join('\n')}\n`, rc.pairIdx);
   }
   process.stdout.write(text);

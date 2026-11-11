@@ -8809,6 +8809,8 @@ const COMMON_READ_OPTIONS = Object.freeze({
  *  frame near 700 chars, inside the frame reserve each paging verb holds back. `families_total` counts them all. */
 export const SCOPE_FAMILIES_JSON_MAX = 3;
 const ANY_COUNT = Number.POSITIVE_INFINITY;
+/** The default row cut of `touched`; `--limit` goes up to GREP_LIMIT_MAX. Declared above READ_OPTIONS, which reads it. */
+export const TOUCHED_LIMIT_DEFAULT = 20;
 export const READ_OPTIONS = Object.freeze({
   grep: Object.freeze({
     options: Object.freeze({
@@ -8859,9 +8861,156 @@ export const READ_OPTIONS = Object.freeze({
     defaults: Object.freeze({ depth: TREE_DEPTH_DEFAULT }),
     positional: Object.freeze({ min: 0, max: 0 }),
   }),
+  // W4 addendum P8: `touched <path|symbol>` takes one argument and `--limit`, the shape grep's entry has.
+  touched: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--limit': readOpt('int', 'limit', { min: 1, max: GREP_LIMIT_MAX }),
+    }),
+    defaults: Object.freeze({ limit: TOUCHED_LIMIT_DEFAULT }),
+    positional: Object.freeze({ min: 1, max: 1 }),
+  }),
 });
-/** The read verbs (§8.2): derived from the whitelist, never listed twice. `touched` joins in W4. */
+/** The read verbs (§8.2): derived from the whitelist, never listed twice. */
 export const READ_VERBS = Object.freeze(Object.keys(READ_OPTIONS));
+
+// ── touched (W4 addendum P8; D-8188, D-8189) ──
+// Pure deciders for `touched <path|symbol>` (spec addendum 3.5). The verb's reads and rendering are recall.mjs's.
+/** One query's candidate rows, from every select it reads together (*chosen*). */
+export const TOUCHED_CANDIDATE_MAX = 10000;
+/** Whether `touched`'s candidate selects are ordered (`ORDER BY n.latest_ms DESC, ...`, P13). True since Task 4C's measurement
+ *  (the ordered p95 is under 2 s on every shape): a capped answer prints TOUCHED_ORDERED_CAPPED_NOTE. False: unordered, and it
+ *  prints TOUCHED_CAPPED_NOTE (the seam the bench still reaches). */
+export const TOUCHED_ORDERED_CAP = true;
+/** Printed last on every answer (and carried as `note` by --json). */
+export const TOUCHED_DISCLOSURE = 'refs keep one origin each (the first seen) and at most 40 per node; a node may have touched this file without listing it.';
+/** Printed when the ordered candidate cap was hit (spec addendum 3.5 P13): the shown rows are the newest matches. */
+export const TOUCHED_ORDERED_CAPPED_NOTE = '(candidates capped at 10000: the newest are shown, and older matches may be missing)';
+/** Printed after the refs of the one node the ordered cut falls inside (spec addendum 3.5 P13). */
+export const TOUCHED_REFS_CUT_NOTE = '(refs cut at the cap)';
+/** Printed when the unordered candidate cap was hit. */
+export const TOUCHED_CAPPED_NOTE = '(candidates capped at 10000: the ranking covers those only, and newer matches may be missing)';
+
+const TOUCHED_IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+const TOUCHED_LINE_SUFFIX_RE = /^(.*?):([0-9]+(?:-[0-9]+)?)$/;
+const TOUCHED_STRENGTH = Object.freeze({ exact: 3, suffix: 2, outside: 1 });
+
+function stripDotSlash(p) {
+  let out = p;
+  while (out.startsWith('./')) out = out.slice(2);
+  return out;
+}
+
+/** The argument's shape (spec addendum 3.5): `path` and `test` are a path (its `:N`/`:N-M` suffix and a leading `./` dropped),
+ *  `path:symbol` splits at its LAST `:`, a bare identifier is a symbol (even when classifyRef calls it `sha`),
+ *  anything else is null (bad-args). */
+export function touchedQuery(arg) {
+  const s = String(arg).trim();
+  const kind = classifyRef(s);
+  if (kind === 'path' || kind === 'test') {
+    const m = TOUCHED_LINE_SUFFIX_RE.exec(s);
+    return { kind: 'path', file: stripDotSlash(m === null ? s : m[1]) };
+  }
+  if (kind === 'path:symbol') {
+    const i = s.lastIndexOf(':');
+    return { kind: 'path-symbol', file: stripDotSlash(s.slice(0, i)), symbol: s.slice(i + 1) };
+  }
+  if (TOUCHED_IDENT_RE.test(s)) return { kind: 'symbol', symbol: s };
+  return null;
+}
+
+/** Escapes `\`, `%` and `_` for a LIKE ... ESCAPE '\' pattern. The file pattern is `%<basename>%`, the symbol pattern `%:<symbol>`. */
+export function likeEscape(s) {
+  return String(s).replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/** A stored ref's value split by its kind: a `path` drops a trailing `:N`/`:N-M` into `line`, a `test` is whole,
+ *  a `path:symbol` splits at its last `:`. */
+export function splitStoredRef(kind, value) {
+  if (kind === 'path:symbol') {
+    const i = value.lastIndexOf(':');
+    if (i < 0) return { path: value, line: null, symbol: null };
+    return { path: value.slice(0, i), line: null, symbol: value.slice(i + 1) };
+  }
+  if (kind === 'path') {
+    const m = TOUCHED_LINE_SUFFIX_RE.exec(value);
+    if (m !== null) return { path: m[1], line: m[2], symbol: null };
+  }
+  return { path: value, line: null, symbol: null };
+}
+
+/** A stored (or queried) path made root-relative: absolute under the node's epoch root, else under the first of
+ *  `roots` that holds it, gives the remainder; absolute elsewhere is kept and `outside`; relative loses its leading `./`. */
+export function normaliseRefPath(path, nodeRoot, roots) {
+  if (!path.startsWith('/')) return { path: stripDotSlash(path), outside: false };
+  const under = (root) => typeof root === 'string' && root !== '' && path.startsWith(root.endsWith('/') ? root : `${root}/`);
+  for (const root of [nodeRoot, ...roots]) {
+    if (under(root)) return { path: path.slice((root.endsWith('/') ? root : `${root}/`).length), outside: false };
+  }
+  return { path, outside: true };
+}
+
+/** A path-symbol ref's symbol against the queried one: equality, case-sensitive. SQLite's LIKE is case-insensitive
+ *  for ASCII, so the `%:<symbol>` select is only a prefilter. */
+export function symbolMatches(ref, symbol) {
+  return ref.symbol === symbol;
+}
+
+function baseOf(p) {
+  return p.slice(p.lastIndexOf('/') + 1);
+}
+
+/** resolveToken's suffix-uniqueness rule (compact-card.mjs), against a graph index `{ files, byBase }`: the unique
+ *  file the relative path names, else null. lib is pure L1 and cannot import it. */
+function resolveInIndex(t, index) {
+  if (index.files.has(t)) return t;
+  const hits = (index.byBase.get(baseOf(t)) ?? []).filter((f) => f.endsWith(`/${t}`));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** A normalised ref against one query file. `exact` on equality; `outside` refs match only the same absolute path;
+ *  `suffix` for a relative ref with no `..` segment whose `/<ref>` ends `file`, when the graph resolves it to
+ *  exactly `file` (resolveToken's unique answer), or, with no graph, when the ref has two segments or more (D-8189: a bare basename
+ *  never matches without a graph). Otherwise null. */
+export function matchRef(ref, file, graph) {
+  if (ref.outside) return ref.path === file ? 'outside' : null;
+  if (ref.path === file) return 'exact';
+  // An absolute (outside) query is matched only by an outside ref of that exact path, never by suffix.
+  if (file.startsWith('/')) return null;
+  const p = ref.path;
+  if (p === '' || p.startsWith('/') || p.split('/').includes('..')) return null;
+  if (!file.endsWith(`/${p}`)) return null;
+  if (graph) return resolveInIndex(p, graph.index) === file ? 'suffix' : null;
+  return p.includes('/') ? 'suffix' : null;
+}
+
+/** Newest first (`latestMs` descending, null or undefined last), then `nodeId`. Origin is not ranked. Returns a new array. */
+export function rankTouched(rows) {
+  const ms = (r) => (typeof r.latestMs === 'number' ? r.latestMs : -Infinity);
+  return [...rows].sort((a, b) => {
+    const x = ms(a);
+    const y = ms(b);
+    if (x !== y) return x < y ? 1 : -1;
+    return a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0;
+  });
+}
+
+/** One row per (nodeId, file) from the matches `{ nodeId, file, match, ref, ...nodeFields }`, in first-seen order:
+ *  `{ ...nodeFields of the first match, nodeId, file, match, refs }`, `refs` listing each matching ref in input order,
+ *  `match` the strongest of them (exact, then suffix, then outside). */
+export function touchedRows(matches) {
+  const rows = new Map();
+  for (const { ref, match, nodeId, file, ...rest } of matches) {
+    const key = `${nodeId}\0${file}`;
+    const row = rows.get(key);
+    if (row === undefined) rows.set(key, { ...rest, nodeId, file, match, refs: [ref] });
+    else {
+      row.refs.push(ref);
+      if (TOUCHED_STRENGTH[match] > TOUCHED_STRENGTH[row.match]) row.match = match;
+    }
+  }
+  return [...rows.values()];
+}
 
 const BAD_READ_ARGS = Object.freeze({ ok: false, reason: 'bad-args' });
 
@@ -9923,13 +10072,15 @@ const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 
 /** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
  *  child, regex-worker.mjs): the shared context above plus the verb's own statements. All are v1 tables today;
  *  a version that adds a table a verb needs adds it here, in the same PR (an as-of cut reads memberships and boundaries
- *  through asOfHiddenNodesSql's CTEs, so grep, expand and tree list both). blobs_fts is a virtual table the sweep
+ *  through asOfHiddenNodesSql's CTEs, so grep, expand, tree and touched list both; touched also reads node_children there and node_sources through
+ *  cutHidesASource's lineage, as describe does). blobs_fts is a virtual table the sweep
  *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
 export const VERB_TABLES = Object.freeze({
   grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships', 'boundaries']),
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
   expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships', 'boundaries']),
   tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships', 'boundaries']),
+  touched: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'memberships', 'boundaries']),
 });
 
 /** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this
