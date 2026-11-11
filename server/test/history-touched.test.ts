@@ -598,6 +598,47 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(items(j)).toHaveLength(shown);
   }, HEAVY);
 
+  it('W2-D35 the as-of cut hides a whole epoch: its root header does not print and its nodes are not listed', () => {
+    const b = withDb((db) => db.prepare('SELECT e.entry_id AS id, e.uuid AS uuid FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id ORDER BY b.ord').all() as unknown as Array<{ id: number; uuid: string }>);
+    const root2 = mkTmp('ccrc-hist-touched-root2-');
+    const U2 = 'c3c3c3c3-3333-4333-8333-333333333333';
+    const seq2 = ids.seq + 100;
+    withDb((db) => db.prepare(`INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, cwd, cwd_real, confirmed_ms)
+      VALUES (?, ?, ?, 'fixture', 'fixture', ?, ?, ?, ?)`).run(ids.session_pk, seq2, U2, T0 + 900_000, root2, root2, T0 + 900_000));
+    try {
+      plant('Lt50one', { boundary: Number(b[0]!.id), refs: [['path', 'ccd/tc50.mjs']] });
+      plant('Lt50two', { boundary: Number(b[0]!.id), refs: [['path', 'ccd/tc50.mjs']] });
+      withDb((db) => db.prepare('UPDATE nodes SET epoch_seq = ? WHERE node_id = ?').run(seq2, 'Lt50two'));
+      const plain = touched(['ccd/tc50.mjs']);
+      expect(rowLines(plain).map((l) => l.split(' ')[0]).sort(), 'CONTROL: without a cut both epochs answer').toEqual(['Lt50one', 'Lt50two']);
+      expect(headers(plain), 'CONTROL: one header per root').toHaveLength(2);
+      const storeId = fs.readFileSync(path.join(box.root, 'store.id'), 'utf8').trim();
+      fs.writeFileSync(path.join(box.root, 'headless-on'), `store ${storeId}\n${ID} ${G1}\n`, { mode: 0o600 });
+      const cut = runCli(box, ['touched', 'ccd/tc50.mjs'], { env: { CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: b[0]!.uuid } });
+      expect(cut.code, `${cut.stderr}${cut.stdout}`).toBe(0);
+      expect(rowLines(cut).map((l) => l.split(' ')[0])).toEqual(['Lt50one']);
+      expect(headers(cut), 'the hidden epoch\'s root prints no header').toHaveLength(1);
+    } finally {
+      withDb((db) => {
+        db.prepare("DELETE FROM node_refs WHERE node_id IN ('Lt50one', 'Lt50two')").run();
+        db.prepare("DELETE FROM nodes WHERE node_id IN ('Lt50one', 'Lt50two')").run();
+        db.prepare('DELETE FROM epochs WHERE session_pk = ? AND seq = ?').run(ids.session_pk, seq2);
+      });
+    }
+  }, HEAVY);
+
+  it('the human page holds its own cap: an XML-escaped gist grows the human row past its JSON item (120 characters become 600), and the page stays within 20,000 with (+k not shown)', () => {
+    for (let i = 1; i <= 100; i += 1) {
+      plant(`Lt51n${String(i).padStart(3, '0')}`, { latest: T0 + 700_000 + i * 1000, gist: '&'.repeat(200), refs: [['path', 'ccd/tc51.mjs']] });
+    }
+    const h = touched(['ccd/tc51.mjs', '--limit', '100']);
+    const j = touchedJson(['ccd/tc51.mjs', '--limit', '100']);
+    expect(h.code, `${h.stderr}`).toBe(0);
+    expect(h.stdout.length, 'the human page').toBeLessThanOrEqual(20_000);
+    expect(j.stdout.length, 'the --json envelope').toBeLessThanOrEqual(20_000);
+    expect(h.stdout).toMatch(/\(\+\d+ not shown\)/);
+  }, HEAVY);
+
   it('a sample answer: the text and JSON forms agree on the rows, and the human form ends with shown, next and the disclosure', () => {
     plant('Lt99n1', { latest: T0 + 70_000, gist: 'Fixed the parser. It was slow.', refs: [['path', 'ccd/tc99.mjs:10-20'], ['test', `${root}/ccd/tc99.mjs`, 'model']] });
     const r = touched(['ccd/tc99.mjs']);
