@@ -141,6 +141,31 @@ for (const skin of [REFINED, INSTRUMENT]) {
             await ctx.close();
           }
         });
+
+        // D-8199 review: once the runs moved, a later refusal says so first — the server's `moved`, its runs' long
+        // programme name and the heir's long name in one line that must wrap, above the busy question.
+        it(`at ${width}px a refusal after the hand-over says the runs moved, and the busy question still fits`, async () => {
+          const { ctx, page, errors } = await openSheet(width, skin, theme);
+          try {
+            const movedRuns = RUNS.map((r) => {
+              const { id, program, wave, waveOf } = r as { id: number; program: string; wave: number; waveOf: number };
+              return { id, program, wave, waveOf };
+            });
+            await ctx.route('**/api/sessions/*/archive', (route) => route.fulfill({ status: 409, contentType: 'application/json',
+              body: JSON.stringify({ ok: false, error: 'session-busy', moved: { to: HEIR, runs: movedRuns } }) }));
+            await page.getByRole('combobox', { name: 'Hand over to' }).selectOption(HEIR);
+            await page.getByRole('button', { name: /^Hand over to heir-with-a-/ }).click();
+            await page.getByRole('button', { name: 'Hand over and archive' }).click();
+            await page.getByText("It's working. Archive anyway?").waitFor({ timeout: 20_000 });
+            await page.getByText(/^Its runs were handed to heir-with-a-.* first: run \d+ — programme-a-/).waitFor();
+            const busy = await measure(page);
+            expect(busy.buttons.map((b) => b.text)).toEqual(['Archive anyway', 'Cancel']);
+            expectFits(busy, `the busy question after the move at ${width}`);
+            expect(errors).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
       }
     });
   }

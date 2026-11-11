@@ -14,7 +14,7 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession, type StopBody } from '../../../shared/api';
+import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession, type StopAnswer, type StopBody } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, failedTo } from '../lib/api';
 
@@ -25,7 +25,7 @@ import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
 import { forgetOffered, paneGone } from './presence';
 import { hibernatedSince } from './hibernated';
-import { substrateFaultText, substrateFaultTitle } from './substrateWords';
+import { substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
 import { HoldControl } from './HoldControl';
 import { RenameSheet } from './RenameSheet';
@@ -179,23 +179,14 @@ export function SessionActionsSheet({
 
   // "Stop only" — the one place it survives (spec §5.2): offered by `ArchiveSheet` after an archive refusal the
   // operator cannot fix from the phone, so a live session is never left without a way to put it down. The same
-  // `POST /api/sessions/:id/stop` as ever, which is unchanged.
-  const stopOnly = (id: string, body?: StopBody): void => {
-    // The substrate gate (spec §4), re-read at fire time: stop is destructive while tmux cannot be reached, and the
-    // fleet frame updates live under the open sheets. `ArchiveSheet` disables the button on the same fault.
-    const stopFault = substrateFault(session);
-    if (stopFault !== null) {
-      toast(`Couldn't stop — ${substrateFaultText(stopFault)}`, 'error');
-      return;
-    }
-    void (async () => {
-      try {
-        await api.stop(id, body);
-      } catch (err) {
-        toast(failedTo('stop', err), 'error');
-      }
-    })();
+  // `POST /api/sessions/:id/stop`. D-8199: the stop door asks the archive door's question of a session that claims open
+  // runs, so `ArchiveSheet` sends it, awaits it and answers its refusal words inside the sheet (the question, then the
+  // stop repeated with the choice); it also re-reads the substrate gate (spec §4) at fire time. A stop that landed
+  // closes this sheet too, as it always did.
+  const stopOnly = async (id: string, body?: StopBody): Promise<StopAnswer | null> => {
+    const answer = body === undefined ? await api.stop(id) : await api.stop(id, body);
     onClose();
+    return answer;
   };
 
   // Fire-and-forget, same shape as SwapSheet's `move()`: QuickConfirm's own

@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
-import { ArchiveSheet } from '../src/fleet/ArchiveSheet';
+import { ArchiveSheet, type ArchiveSheetProps } from '../src/fleet/ArchiveSheet';
 import { createFleetStore } from '../src/stores/fleet';
 import { ApiError, type api } from '../src/lib/api';
 
@@ -22,7 +22,7 @@ const claimedRun = (r: typeof RUN7, state: RunSummary['state'] = 'working'): Run
 
 type Archive = typeof api.archive;
 const mount = (session: FleetSession, o: {
-  archive: Archive; onStopOnly?: (id: string, body?: unknown) => void; runs?: RunSummary[]; onArchived?: () => void;
+  archive: Archive; onStopOnly?: (id: string, body?: unknown) => unknown; runs?: RunSummary[]; onArchived?: () => void;
   sessions?: FleetSession[];
 }) => {
   const fleet = createFleetStore();
@@ -32,7 +32,7 @@ const mount = (session: FleetSession, o: {
   const view = render(
     <>
       <ArchiveSheet session={session} open onClose={onClose} archive={o.archive} fleet={fleet}
-        onStopOnly={o.onStopOnly} onArchived={o.onArchived} />
+        onStopOnly={o.onStopOnly as ArchiveSheetProps['onStopOnly']} onArchived={o.onArchived} />
       <ToastHost />
     </>,
   );
@@ -175,7 +175,8 @@ describe('"Stop only" — after a refusal the phone cannot fix, and only where t
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
     expect(onStopOnly).toHaveBeenCalledWith('demo-amber');
-    expect(onClose).toHaveBeenCalled();
+    // D-8199: the sheet awaits the stop's answer (its refusal may turn it to the question), then closes.
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   // The only stop control left in the PWA carries the gate the header's "Stop session" had (spec §4, stop is
@@ -553,5 +554,139 @@ describe('the coordinator question (D-8199): Release or Hand over, one tap then 
     expect(screen.getByText('Hand its 2 runs to heir and stop?')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hand over and stop' }));
     expect(onStopOnly).toHaveBeenCalledWith('demo-amber', { runs: 'handover', heir: 'demo-heir' });
+  });
+});
+
+// D-8199 review: the stop door asks the archive door's question, so the sheet answers its refusal words the same way —
+// the question, then the request repeated with the choice — inside the sheet, never as a toast after it closed.
+describe('the stop asks the same question: a refusal word, then the stop repeated with the choice', () => {
+  const HEIR = fleetSession({ id: 'demo-heir', name: 'heir', project: 'demo', workdir: '/w/demo/heir', workspace: 'heir',
+    role: 'coordinator' });
+
+  it('a plain Stop only the server finds coordinating turns to the question; the confirm repeats the stop with the choice', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'worktree-gone' })) as unknown as Archive;
+    const onStopOnly = vi.fn()
+      .mockRejectedValueOnce(refusal({ error: 'coordinator-has-open-runs', runs: [RUN7] }))
+      .mockResolvedValueOnce({ ok: true, moved: { to: null, runs: [RUN7] } });
+    const { onClose } = mount(s(), { archive, onStopOnly });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
+    expect(onStopOnly).toHaveBeenCalledWith('demo-amber');
+    expect(await screen.findByText('It coordinates 1 open run. What happens to them?')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    // A stop never ends a programme: Release or Hand over only.
+    expect(buttons()).toEqual(['Release runs', 'Hand over', 'Cancel']);
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and stop' }));
+    await waitFor(() => expect(onStopOnly).toHaveBeenLastCalledWith('demo-amber', { runs: 'release' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it('a stop whose move was refused (`claims-not-moved`) returns to the question with the reason; nothing closes', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'worktree-gone' })) as unknown as Archive;
+    // The frame shows no claim, so the stop is sent plain and the server names the run; the hand-over is then refused.
+    const onStopOnly = vi.fn()
+      .mockRejectedValueOnce(refusal({ error: 'coordinator-has-open-runs', runs: [RUN7] }))
+      .mockRejectedValueOnce(refusal({ error: 'claims-not-moved', moved: [], notMoved: [RUN7], refusal: { kind: 'heir-not-live' } }));
+    const self = s({ role: 'coordinator' });
+    const { onClose } = mount(self, { archive, onStopOnly, sessions: [self, HEIR] });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Hand over to' }), { target: { value: 'demo-heir' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over to heir' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over and stop' }));
+    expect(await screen.findByText('Its runs could not be moved: that coordinator is not live. Nothing was stopped or archived.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('It coordinates 1 open run. What happens to them?')).toBeInTheDocument();
+    expect(buttons()).toEqual(['Release runs', 'Hand over to heir', 'Cancel']);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a stop that fails with no word stays on the sheet, in the server\'s own words', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'worktree-gone' })) as unknown as Archive;
+    const onStopOnly = vi.fn().mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'tmux: no server running' }));
+    const { onClose } = mount(s(), { archive, onStopOnly });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
+    expect(await screen.findByText(/Couldn't stop — tmux: no server running/)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a choice over a store the server could not read: stopped, and the toast says the runs were not moved', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'status-unknown' })) as unknown as Archive;
+    const onStopOnly = vi.fn().mockResolvedValueOnce({ ok: true, claimsUnreadable: 'runs.wave' });
+    const { onClose } = mount(s(), { archive, onStopOnly, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and stop' }));
+    expect(await screen.findByText('Stopped, but its runs could not be read, so none was moved: they are still claimed by it.'))
+      .toBeInTheDocument();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+});
+
+// D-8199 review: once runs were released or handed over, every later answer says so first — the server's `moved` — as
+// `ended` does after a programme end, so a refusal that follows never reads as "nothing happened".
+describe('the runs moved ride every later refusal', () => {
+  const MOVED_RELEASE = { to: null, runs: [RUN7] };
+  const HEIR = fleetSession({ id: 'demo-heir', name: 'heir', project: 'demo', workdir: '/w/demo/heir', workspace: 'heir',
+    role: 'coordinator' });
+
+  it('released, then refused busy: the busy question says the runs were released first', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'session-busy', moved: MOVED_RELEASE })) as unknown as Archive;
+    mount(s(), { archive, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    expect(await screen.findByText("It's working. Archive anyway?")).toBeInTheDocument();
+    expect(screen.getByText('Its runs were released first: run 7 — lifecycle wave 1/3.')).toBeInTheDocument();
+  });
+
+  it('handed over, then stopped but not archived: the toast names the heir first', async () => {
+    const archive = vi.fn(async () => ({ ok: true, archived: false, stopped: true, ended: [], refusal: 'status-unknown',
+      detail: 'ccd: status-unknown', moved: { to: 'demo-heir', runs: [RUN7] } })) as unknown as Archive;
+    const self = s({ role: 'coordinator' });
+    mount(self, { archive, runs: [claimedRun(RUN7)], sessions: [self, HEIR] });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hand over to' }), { target: { value: 'demo-heir' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over to heir' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over and archive' }));
+    expect(await screen.findByText(/^Its runs were handed to heir \(run 7 — lifecycle wave 1\/3\)\. Stopped, but not archived/))
+      .toBeInTheDocument();
+  });
+
+  it('runs moved on an EARLIER send are still named when a later send stops but does not archive', async () => {
+    const archive = vi.fn()
+      .mockRejectedValueOnce(refusal({ error: 'session-busy', moved: MOVED_RELEASE }))
+      .mockResolvedValueOnce({ ok: true, archived: false, stopped: true, ended: [], refusal: 'status-unknown',
+        detail: 'ccd: status-unknown' }) as unknown as Archive;
+    mount(s(), { archive, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive anyway' }));
+    expect(await screen.findByText(/^Its runs were released \(run 7 — lifecycle wave 1\/3\)\. Stopped, but not archived/))
+      .toBeInTheDocument();
+  });
+
+  it('a 502 after the move: the sheet says the runs moved, then the server\'s words', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'ccd: boom', moved: MOVED_RELEASE })) as unknown as Archive;
+    mount(s(), { archive, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    expect(await screen.findByText('ccd: boom')).toBeInTheDocument();
+    expect(screen.getByText('Its runs were released first: run 7 — lifecycle wave 1/3.')).toBeInTheDocument();
+  });
+
+  it('a stop that fails after its move says the runs moved', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'status-unknown' })) as unknown as Archive;
+    const onStopOnly = vi.fn().mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'tmux: gone', moved: MOVED_RELEASE }));
+    mount(s(), { archive, onStopOnly, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and stop' }));
+    expect(await screen.findByText(/Couldn't stop — tmux: gone/)).toBeInTheDocument();
+    expect(screen.getByText('Its runs were released first: run 7 — lifecycle wave 1/3.')).toBeInTheDocument();
   });
 });

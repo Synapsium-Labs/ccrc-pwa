@@ -9,10 +9,13 @@
 //     and three answers, each one tap that a second (the confirm) sends: Release (`runs: 'release'`, the runs stay open
 //     and unclaimed), Hand over to a live coordinator picked from the project's (`runs: 'handover'`, `heir`), or End
 //     programme (`programme: 'end'`, every run abandoned). Nothing is ended unless the operator picks that answer;
-//     "Stop only" asks the same question, without End programme, before it stops a session that claims runs;
+//     "Stop only" asks the same question, without End programme, before it stops a session that claims runs — when the
+//     frame shows the claims, or when the stop door refuses `coordinator-has-open-runs` naming them: the sheet sends the
+//     stop itself, awaits it and answers its refusal words here (the question, then the stop repeated with the choice);
 //   - a workspace a run still claims (`run-open`): `ArchiveConflictSheet`'s own words — `force`.
-// Once a programme was ended, every later refusal says so first (the server's `ended`): a refusal only ccd can
-// measure may arrive AFTER the programme end, and the operator is never shown only the second half of what happened.
+// Once a programme was ended, or its runs released or handed over, every later refusal says so first (the server's
+// `ended` and `moved`): a refusal only ccd can measure may arrive AFTER the end or the move, and the operator is never
+// shown only the second half of what happened.
 // The opening case is read off the row the caller holds (`archiveInterrupts`, the runs frame). The server re-reads
 // both on the request; when it disagrees, its refusal turns the sheet to the case it found, and the consents already
 // given ride along — so no refusal is ever answered twice.
@@ -27,10 +30,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, CLAIMS_MOVE_REFUSALS, archiveInterrupts, isArchiveRefusal,
-  substrateFault, type ArchiveRefusal, type ClaimsChoiceBody, type FleetSession, type StopBody,
+  substrateFault, type ArchiveRefusal, type ClaimsChoiceBody, type FleetSession, type StopAnswer, type StopBody,
 } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Select, Sheet, toast } from '@ccrc/ui';
-import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
+import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial, failedTo } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ensureSession } from '../session/useEnsure';
 import {
@@ -42,6 +45,7 @@ import './fleet.css';
 import { restoreReachesEnsure } from './archivePutAway';
 import { substrateFaultText } from './substrateWords';
 import { resumeHeirs, type ResumeHeir } from './resumeHeirs';
+import { sessionLabel } from './sessionLabel';
 
 /** Restore, for both kinds of row (spec §5.2): a workspace is restored (`ws-restore`); a stopped main checkout is
  *  ensured — `cmd_ensure` clears the stop stamp on the attempt and the row's own registry fields decide the respawn,
@@ -106,6 +110,29 @@ function claimsNotMovedText(body: unknown): string {
     + `${moved.length > 0 ? ` Already moved: ${moved.map(runPhrase).join('; ')}.` : ''} Nothing was stopped or archived.`;
 }
 
+/** The runs a door already released or handed over (D-8199, the server's `moved`): `to` is the heir's id, `null` for a
+ *  release. */
+interface MovedRuns { readonly to: string | null; readonly runs: readonly ArchiveConflictRun[] }
+
+/** `moved` off an answer or a refusal body, the `ClaimsMoved` object shape only — `claims-not-moved` carries its own
+ *  `moved` ARRAY, which `claimsNotMovedText` says. `null` when absent, malformed or empty. */
+function movedOf(body: unknown): MovedRuns | null {
+  const m = typeof body === 'object' && body !== null ? (body as { moved?: unknown }).moved : undefined;
+  if (typeof m !== 'object' || m === null || Array.isArray(m)) return null;
+  const to = (m as { to?: unknown }).to;
+  if (to !== null && typeof to !== 'string') return null;
+  const runs = runsOf(m);
+  return runs.length > 0 ? { to, runs } : null;
+}
+
+/** Two `moved` readings, the earlier first: one hand-over or release per sheet, so the latest `to` speaks. */
+const joinMoved = (a: MovedRuns | null, b: MovedRuns | null): MovedRuns | null =>
+  a === null ? b : b === null ? a : { to: b.to, runs: [...a.runs, ...b.runs.filter((r) => !a.runs.some((x) => x.id === r.id))] };
+
+/** The stop went through over a store the server could not read (`claimsUnreadable`): nothing was moved. */
+const claimsUnread = (a: StopAnswer | null | undefined): boolean =>
+  typeof a === 'object' && a !== null && typeof a.claimsUnreadable === 'string';
+
 /** `runs` off a refusal body: every member read by `ArchiveConflictSheet`'s `isArchiveConflictRun`, the one validator
  *  of a run — never a second copy of its checks. */
 const runsOf = (body: unknown): readonly ArchiveConflictRun[] => {
@@ -136,8 +163,9 @@ export interface ArchiveSheetProps {
   /** The session is put away: archived, or (a main checkout) stopped into the Archived fold. */
   onArchived?: () => void;
   /** "Stop only", after a refusal the phone cannot fix (`stopOnlyClass`, below). Absent → not offered (only the
-   *  actions sheet passes it). `body` carries the claims choice (D-8199) when the session claims open runs. */
-  onStopOnly?: (id: string, body?: StopBody) => void;
+   *  actions sheet passes it). `body` carries the claims choice (D-8199) when the session claims open runs. The sheet
+   *  awaits it: a rejection is the stop door's answer (`ApiError`), read here like the archive door's. */
+  onStopOnly?: (id: string, body?: StopBody) => Promise<StopAnswer | null>;
   /** Injectable for tests — `ArchiveConflictSheet`'s own idiom. */
   archive?: typeof api.archive;
   fleet?: FleetStore;
@@ -158,6 +186,8 @@ export function ArchiveSheet({
   /** The runs the door already ended on an earlier send of this sheet (its `ended`), so a refusal after that end is
    *  never read as "nothing happened". */
   const [ended, setEnded] = useState<readonly ArchiveConflictRun[]>([]);
+  /** D-8199: the runs a door already released or handed over (its `moved`), said first on every later answer. */
+  const [moved, setMoved] = useState<MovedRuns | null>(null);
   // `gen`, `ArchiveConflictSheet`'s idiom: an answer that lands after the sheet closed, or after it was retargeted to
   // another session, speaks for nobody on screen now.
   const gen = useRef(0);
@@ -173,6 +203,7 @@ export function ArchiveSheet({
     setBusy(false);
     setError(null);
     setEnded([]);
+    setMoved(null);
     setHeirId('');
     if (!open || session === null) return;
     const claimed = claimedOf(session.id);
@@ -189,6 +220,17 @@ export function ArchiveSheet({
   // sheet's own picker).
   const heirs = resumeHeirs(sessions, session.project, sid, frameSeen);
   const heir = heirs.find((h) => h.id === heirId) ?? null;
+  /** `moved`, said: "released" or "handed to <the name the fleet shows>". */
+  const movedVerb = (m: MovedRuns): string => {
+    if (m.to === null) return 'released';
+    const row = sessions.find((x) => x.id === m.to);
+    return `handed to ${row === undefined ? m.to : sessionLabel(row)}`;
+  };
+  /** The `moved` an error body carries, folded into the sheet's own. */
+  const noteMoved = (err: unknown): void => {
+    const now = err instanceof ApiError ? movedOf(err.body) : null;
+    if (now !== null) setMoved((prev) => joinMoved(prev, now));
+  };
 
   const send = (next: Consent): void => {
     if (busy) return;
@@ -217,7 +259,9 @@ export function ArchiveSheet({
           const why = partial.refusal !== null ? ARCHIVE_REFUSAL_TEXT[partial.refusal]
             : `${partial.detail ?? 'the archive was refused'}.`;
           const endedFirst = [...ended, ...runsOf({ runs: answer?.ended })];
+          const movedFirst = joinMoved(moved, movedOf(answer));
           toast(`${endedFirst.length > 0 ? `Its programme was ended (${endedFirst.map(runPhrase).join('; ')}). ` : ''}`
+            + `${movedFirst !== null ? `Its runs were ${movedVerb(movedFirst)} (${movedFirst.runs.map(runPhrase).join('; ')}). ` : ''}`
             + `Stopped, but not archived — ${why} Archive is still offered on its row.`, 'error');
         } else {
           onArchived?.();
@@ -231,6 +275,7 @@ export function ArchiveSheet({
           ? (err.body as { error?: unknown }).error : undefined;
         const endedNow = err instanceof ApiError ? runsOf({ runs: (err.body as { ended?: unknown } | null)?.ended }) : [];
         if (endedNow.length > 0) setEnded((prev) => [...prev, ...endedNow]);
+        noteMoved(err);
         if (err instanceof ApiError && err.status === 409 && isArchiveRefusal(code)) {
           if (code === ARCHIVE_REFUSALS.sessionBusy) return setAsk({ kind: 'busy' });
           if (code === ARCHIVE_REFUSALS.runOpen) return setAsk({ kind: 'claimed', runs: runsOf(err.body) });
@@ -268,8 +313,54 @@ export function ArchiveSheet({
    *  The caller's handler re-checks at fire time, since the live frame can change under the open sheet. */
   const stopFault = substrateFault(session);
 
+  /** The stop, sent and AWAITED (D-8199): the stop door asks the archive door's question, so its refusal words are
+   *  answered here the same way — `coordinator-has-open-runs` naming runs turns the sheet to the question (a stop never
+   *  offers End programme), `claims-not-moved` returns to it with the reason, and any other failure stays on the sheet in
+   *  the server's words. The substrate gate (spec §4) is re-read at fire time: the frame is live under the open sheet. */
+  const sendStop = (body?: StopBody): void => {
+    if (busy || onStopOnly === undefined) return;
+    const fault = substrateFault(session);
+    if (fault !== null) {
+      setError(`Couldn't stop — ${substrateFaultText(fault)}`);
+      return;
+    }
+    const mine = gen.current;
+    setBusy(true);
+    setError(null);
+    void Promise.resolve(body === undefined ? onStopOnly(sid) : onStopOnly(sid, body)).then(
+      (answer) => {
+        if (gen.current !== mine) return;
+        setBusy(false);
+        // A choice the server could not act on — the store unreadable, so nothing moved — is said, never swallowed.
+        if (body?.runs !== undefined && claimsUnread(answer)) {
+          toast('Stopped, but its runs could not be read, so none was moved: they are still claimed by it.', 'error');
+        }
+        onClose();
+      },
+      (err: unknown) => {
+        if (gen.current !== mine) return;
+        setBusy(false);
+        noteMoved(err);
+        const code = err instanceof ApiError && typeof err.body === 'object' && err.body !== null
+          ? (err.body as { error?: unknown }).error : undefined;
+        if (err instanceof ApiError && err.status === 409) {
+          const named = runsOf(err.body);
+          if (code === ARCHIVE_REFUSALS.coordinatorHasOpenRuns && named.length > 0) {
+            return setAsk({ kind: 'programme', runs: named, mode: 'stop' });
+          }
+          if (code === ARCHIVE_REFUSALS.claimsNotMoved) {
+            const left = runsOf({ runs: (err.body as { notMoved?: unknown } | null)?.notMoved });
+            return setAsk({ kind: 'programme', runs: left.length > 0 ? left : claimedOf(sid), mode: 'stop',
+              error: claimsNotMovedText(err.body) });
+          }
+        }
+        setError(failedTo('stop', err));
+      },
+    );
+  };
+
   /** "Stop only" (D-8199): a session the frame says claims open runs is asked what happens to them first; any other is
-   *  stopped at once, as before. */
+   *  sent the plain stop, whose refusal may still turn the sheet to the question (`sendStop`). */
   const stopOnlyTap = (): void => {
     const claimed = claimedOf(sid);
     if (claimed.length > 0) {
@@ -277,18 +368,13 @@ export function ArchiveSheet({
       setAsk({ kind: 'programme', runs: claimed, mode: 'stop' });
       return;
     }
-    onStopOnly!(sid);
-    onClose();
+    sendStop();
   };
 
-  /** The confirm's send (D-8199): an archive carries the choice as a consent; a stop hands it to "Stop only". */
+  /** The confirm's send (D-8199): an archive carries the choice as a consent; a stop repeats the stop with it. */
   const confirmClaims = (mode: ClaimsMode, pick: ClaimsPick): void => {
     if (mode === 'stop') {
-      if (pick.kind === 'end' || onStopOnly === undefined) return;
-      const fault = substrateFault(session);
-      if (fault !== null) { setError(substrateFaultText(fault)); return; }
-      onStopOnly(sid, claimsBody(pick));
-      onClose();
+      if (pick.kind !== 'end') sendStop(claimsBody(pick));
       return;
     }
     send(pick.kind === 'end' ? { ...consent, programme: true, claims: undefined }
@@ -389,7 +475,7 @@ export function ArchiveSheet({
       claimsFooter = (
         <>
           <Button variant="danger" disabled={busy} onClick={() => confirmClaims(mode, pick)}>
-            {busy ? 'Archiving…' : label}
+            {busy ? (mode === 'stop' ? 'Stopping…' : 'Archiving…') : label}
           </Button>
           <Button variant="ghost" disabled={busy} onClick={() => setAsk({ kind: 'programme', runs: asked, mode })}>
             Back
@@ -436,7 +522,7 @@ export function ArchiveSheet({
           )}
           {claimsFooter}
           {stopOnly && (
-            <Button variant="danger" disabled={stopFault !== null}
+            <Button variant="danger" disabled={busy || stopFault !== null}
                     title={stopFault === null ? undefined : substrateFaultText(stopFault)}
                     onClick={stopOnlyTap}>
               Stop only
@@ -451,6 +537,9 @@ export function ArchiveSheet({
       <div className="archive-conflict-sheet">
         {ended.length > 0 && (
           <p className={QC_CONSEQUENCE}>{`Its programme was ended first: ${ended.map(runPhrase).join('; ')}.`}</p>
+        )}
+        {moved !== null && (
+          <p className={QC_CONSEQUENCE}>{`Its runs were ${movedVerb(moved)} first: ${moved.runs.map(runPhrase).join('; ')}.`}</p>
         )}
         {body}
         {/* After a `stopOnlyClass` refusal: what "Stop only" does, or where it is. */}

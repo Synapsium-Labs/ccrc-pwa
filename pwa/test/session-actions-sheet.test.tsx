@@ -830,10 +830,10 @@ describe('a door that fails still says so, in ccd’s own words', () => {
     expect(await screen.findByText(/ws-restore: worktree is gone/)).toBeInTheDocument();
   });
 
-  it('“Stop only” reports a /stop that failed, after the sheet has already closed', async () => {
-    // Fire-and-forget by design — QuickConfirm already ran the consequence
-    // past the operator — so the toast is the ONLY thing left that can carry
-    // a failure. Without it a stop that never landed looks like one that did.
+  it('“Stop only” reports a /stop that failed, on the sheet that is still open', async () => {
+    // D-8199: the archive sheet awaits the stop (its refusal words are answered
+    // inside the sheet), so a failure stays on the sheet in the server's words.
+    // Without it a stop that never landed looks like one that did.
     const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
     renderSheet(workspaceSession(), { archive: archive as unknown as typeof api.archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
