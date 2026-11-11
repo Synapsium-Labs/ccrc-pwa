@@ -21,12 +21,12 @@
 // skip -- §6.3's "loud, never silent" applies to the tracer's own preconditions as much as to the selector's.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, rmSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { writeFileSync, rmSync, existsSync, mkdirSync, readFileSync, readdirSync, openSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   traceArgv, traceAll, tracedCommand, tracedEnv, recordOf, runTraced, runPool,
-  SKIPS_UNDER_TRACE, SKIPS_UNDER_TRACE_WHY, markSkipsUnderTrace,
+  SKIPS_UNDER_TRACE, SKIPS_UNDER_TRACE_WHY, markSkipsUnderTrace, outputTail, tailBlock,
 } from '../../.github/ci/trace-run.mjs';
 import { FAILED_UNDER_TRACE, buildMap, traceVerdict, RECORDS_FORMAT } from '../../.github/ci/testmap.mjs';
 import type { DepRecord, Records } from '../../.github/ci/testmap.mjs';
@@ -47,10 +47,56 @@ describe('trace-run.mjs: the traced command and how a finished run is read', () 
     ]);
   });
 
-  it('tracedEnv: the exact list, CI, libuv kept off io_uring, and CCRC_TRACING marking a traced run', () => {
+  it('tracedEnv: the exact list, CI, libuv kept off io_uring, CCRC_TRACING marking a traced run, and the clock scale (D-8277)', () => {
     expect(tracedEnv({ PATH: '/bin', UV_USE_IO_URING: '1' }, '/w/list.txt')).toEqual({
       PATH: '/bin', CCRC_TEST_LIST: '/w/list.txt', CI: 'true', UV_USE_IO_URING: '0', CCRC_TRACING: '1',
+      CCRC_TIME_SCALE: '10',
     });
+  });
+
+  // ── a failed run's own output reaches the job log (D-8277) ─────────────────
+  it('runTraced with a log file: the run\'s stdout and stderr land in it, and it still resolves on exit', async () => {
+    const dir = mkTmp('ccrc-trace-run-log-');
+    const log = path.join(dir, 'output.log');
+    const fd = openSync(log, 'w');
+    let exit;
+    try {
+      exit = await runTraced(['sh', '-c', 'echo to-out; echo to-err >&2; exit 3'], {}, fd);
+    } finally {
+      closeSync(fd);
+    }
+    expect(exit).toEqual({ code: 3, signal: null, error: null });
+    expect(readFileSync(log, 'utf8')).toBe('to-out\nto-err\n');
+  });
+
+  it('outputTail: the last lines, trailing blanks dropped, long lines cut, a window-cut first line dropped; [] when unreadable', () => {
+    const dir = mkTmp('ccrc-trace-run-tail-');
+    const f = path.join(dir, 'out.log');
+    writeFileSync(f, `${Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n')}\n\n\n`);
+    expect(outputTail(f, 3)).toEqual(['line 97', 'line 98', 'line 99']);
+    expect(outputTail(f)).toHaveLength(60);
+    writeFileSync(f, `${'x'.repeat(1000)}\nend\n`);
+    expect(outputTail(f)).toEqual([`${'x'.repeat(400)}…`, 'end']);
+    // Larger than the 64 KiB window: the line the window starts inside is not shown half.
+    writeFileSync(f, `${'y'.repeat(70 * 1024)}\nlast\n`);
+    expect(outputTail(f)).toEqual(['last']);
+    expect(outputTail(path.join(dir, 'missing.log'))).toEqual([]);
+  });
+
+  it('tailBlock: a named group, every line indented, and workflow commands stopped around them by a one-off token', () => {
+    const block = tailBlock('server/test/x.test.ts', 'vitest exited 1', ['::error file=x::boom', 'Test timed out in 20000ms.'], 'tok123');
+    expect(block).toBe([
+      '::group::trace-run: server/test/x.test.ts: vitest exited 1: the last 2 line(s) of its output',
+      '::stop-commands::tok123',
+      '  | ::error file=x::boom',
+      '  | Test timed out in 20000ms.',
+      '::tok123::',
+      '::endgroup::',
+      '',
+    ].join('\n'));
+    expect(tailBlock('f', 'timeout after 8s', [], 't')).toContain('\n  (no output)\n');
+    // The token is fresh each time it is not given: a test cannot print it in advance.
+    expect(tailBlock('f', 'w', [])).not.toBe(tailBlock('f', 'w', []));
   });
 
   it('runTraced resolves when the process EXITS, even while a backgrounded descendant still holds its stdio', async () => {
@@ -319,6 +365,9 @@ describe.skipIf(isDarwin)('trace-run.mjs', () => {
       expect(red.status).toBe(0);
       expect(red.stdout).toContain(`trace-run: server/${failing}: vitest exited 1`);
       expect(red.stdout).toContain(`trace-run: server/${slow}: timeout after 8s`);
+      // The failed run's own output is in the log, inside its group (D-8277): vitest's own words for the red.
+      expect(red.stdout).toContain(`::group::trace-run: server/${failing}: vitest exited 1: the last`);
+      expect(red.stdout).toMatch(/\n {2}\| .*expected 1 to be 2/);
       expect(red.stdout).not.toContain('::error::');
       const records = JSON.parse(readFileSync(path.join(dir, 'red.json'), 'utf8'));
       expect(records.tests[`server/${failing}`]).toMatchObject({ unknown: true, why: 'vitest exited 1' });

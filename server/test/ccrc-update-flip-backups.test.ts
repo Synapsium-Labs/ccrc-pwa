@@ -11,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, rmSync, symlinkSync, openSync, closeSync, constants as fsConstants } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
@@ -212,7 +213,7 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
     expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd')), "v1.0.0's own spine re-placed its ccd body").toContain(CCD_SENTINEL);
-  }, 120_000);
+  }, scaled(120_000));
 
   it('the arm-1-then-arm-3 shape, produced by a REAL failed update (arm 1 flips back and its gate fails, ~/ccrc points at the new version again, arm 2 refuses, arm 3 restores no stamp), then a bare rollback typed by hand (`--from cli`): it flips back to the kept previous version', () => {
     const home = onKeptV1('ccrc-fx-b-arm1-arm3-');
@@ -244,7 +245,7 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(linkOf(home)).toBe(v1);
     expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
-  }, 120_000);
+  }, scaled(120_000));
 
   // ── the controls: each refuses with C27's sentence and runs no re-install ─
   it('control (the pre-W4 detour): previous disagrees with the layout and the killed-flip state does NOT hold — refused, and no re-install even with the release published', () => {
@@ -571,7 +572,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     for (;;) {
       const now = spawnSync(REAL_DATE, ['+%Y%m%d-%H%M%S'], { encoding: 'utf8' }).stdout.trim();
       if (now > after) return;
-      if (Date.now() - t0 > 3000) throw new Error(`timed out waiting for the box clock to pass ${after} (stuck at ${now})`);
+      if (Date.now() - t0 > scaled(3000)) throw new Error(`timed out waiting for the box clock to pass ${after} (stuck at ${now})`);
       spawnSync('sleep', ['0.1']);
     }
   };
@@ -748,7 +749,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
     expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe(DOCTOR_TMUX_ARGV);
     expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
-  }, 60_000);
+  }, scaled(60_000));
 
   it('P5: no prune on a failed gate (exit 4) — the parent\'s own backup and every planted dir survive', () => {
     const home = freshUpdateBox('ccrc-fx-b-p5-');
@@ -836,7 +837,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
     expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe(DOCTOR_TMUX_ARGV);
     expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
-  }, 60_000);
+  }, scaled(60_000));
 
   it('P8b: exit 3 on a rollback flip whose kept spine completed under a failing doctor (D-3461) still prunes', () => {
     const { home } = makeFlipBox('ccrc-fx-b-p8b-');
@@ -1031,7 +1032,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     const waitUntil = (cond: () => boolean, what: string): void => {
       const t0 = Date.now();
       while (!cond()) {
-        if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+        if (Date.now() - t0 > scaled(10_000)) throw new Error(`timed out waiting for ${what}`);
         spawnSync('sleep', ['0.05']);
       }
     };
@@ -1301,7 +1302,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(treeDigest(v1), 'the kept version\'s content must survive untouched').toEqual(keptBefore);
     expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
     expect(fileText(plainFile)).toBe(plainBefore);
-  }, 60_000);   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
+  }, scaled(60_000));   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
 
   // P18b/P18c (wave 17, D-5319): the harm a listed link did, through the sourced `_bak_prune` so that no other dir is listed
   // (a full update or rollback adds the run's own backup and the prior move's holds, which take newest-N slots of their own).
@@ -2068,7 +2069,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(cr.code, `stderr: ${cr.stderr}\nstdout: ${cr.stdout}`).toBe(4);
       expect(cr.stdout, 'the child really ran').toMatch(/^update: sweep: skipped — a --from restore run returns the supervisors' own build/m);
       expectUntouched(c, cBefore, cr.stdout, 'restore child');
-    }, 240_000);
+    }, scaled(240_000));
 
     it('W23-B5: a dir named at or after this run\'s lock second is neither counted nor thinned', () => {
       const home = box('ccrc-fx-w23-b5-');
@@ -2633,7 +2634,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         mkdirSync(join(home, '.ccrc'), { recursive: true });
         holders.push(spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockOf(home)], { stdio: 'ignore' }));
         for (const t0 = Date.now(); spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockOf(home)]).status === 0;) {
-          if (Date.now() - t0 > 10_000) throw new Error('the fixture holder never took the lock');
+          if (Date.now() - t0 > scaled(10_000)) throw new Error('the fixture holder never took the lock');
           spawnSync('sleep', ['0.05']);
         }
       };
@@ -2718,7 +2719,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
         expect(lr.code, `stderr: ${lr.stderr}\nstdout: ${lr.stdout}`).toBe(1);
         expect(lr.stdout).toContain('backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned');
         expect(lr.stderr).toMatch(DATA);
-      }, 120_000);
+      }, scaled(120_000));
 
       it('W24-B5: an update with both refused touches nothing and returns 1 before the lock', () => {
         const home = box('ccrc-fx-w24-b5-');
@@ -2767,7 +2768,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
           expect(fingerprint(b0, FOUR), `${shape}: every planted dir is byte-identical`).toEqual(b4);
           expect(readdirSync(backupRoot(b0)).filter((n) => !FOUR.includes(n)), `${shape}: this run's own backup is the only new dir`).toEqual([path.basename(ownDir(r))]);
         }
-      }, 120_000);
+      }, scaled(120_000));
 
       it('W24-B7: the prune line says where its keep came from', () => {
         for (const [where, file, env] of [
@@ -3331,7 +3332,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(r.stdout.split('\n')).toContain('update: WARN: CCRC_UPDATE_HEALTH_S cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader '
         + 'does not take (it reads only a plain KEY=value line) — using 90');
       expect(r.code, 'still waiting at 5 s').toBe(124);
-    }, 20_000);
+    }, scaled(20_000));
 
     // D-6747 (fix round 1, F6): digits the shell's integer test cannot compare (more than 18) are an unusable value, from the
     // file and from the environment alike: the gate WARNs and waits 90, never failing at its first probe. The probe moves the
@@ -3678,7 +3679,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // Wait (bounded) until the holder really has the lock: a fresh `flock -n` on it must fail.
       const t0 = Date.now();
       while (spawnSync(FLOCK, ['-n', lock, 'true']).status === 0) {
-        if (Date.now() - t0 > 5000) throw new Error('the lock holder never took the lock');
+        if (Date.now() - t0 > scaled(5000)) throw new Error('the lock holder never took the lock');
         spawnSync('sleep', ['0.1']);
       }
       const run = (args: string[]): Result => {
@@ -3761,7 +3762,7 @@ describe('Plan 3a Task 10 — ccrc update onto this tree on a box with no codex 
     expect(existsSync(join(home, '.ccrc', 'codex')), 'lane state was written').toBe(false);
     expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), 'the staged spine\'s closing doctor')
       .toHaveLength(1);
-  }, 120_000);
+  }, scaled(120_000));
 });
 
 // R20a (centralised-update wave 13): each test's fixture homes go in a root `afterEach`, not all at once in the
