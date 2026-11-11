@@ -50,8 +50,9 @@ export const LINEAR_IDENTITY_QUERY_KEYS = ['byId', 'byUuid'] as const;
 
 // ── the grammars and bounds (spec §5.1, §5.3, §5.4) ──
 
-/** An issue identifier (`AAA-12`): a team key, a hyphen and the issue's number. The team key is bounded as the
- *  journal bounds it (`journal.ts`), so every identifier this table accepts is one the journal can record. */
+/** An issue identifier (`AAA-12`): a team key, a hyphen and the issue's number. THE ONE GRAMMAR: the journal
+ *  (`journal.ts`) and the hierarchy rows (`hierarchyOps.ts`) read it, so every identifier this table accepts is one the
+ *  journal can record. */
 export const LINEAR_IDENTIFIER_SHAPE = /^[A-Za-z][A-Za-z0-9_]{0,15}-[0-9]{1,9}$/;
 export const isLinearIdentifier = (v: unknown): v is string => typeof v === 'string' && LINEAR_IDENTIFIER_SHAPE.test(v);
 

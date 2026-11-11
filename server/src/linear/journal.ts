@@ -1,7 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { isLinearTeamKey, isLinearUuid } from '../../../shared/linear.js';
 import { ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import { isMintedActor, type AccountActor } from '../accounts/audit.js';
 import { LINEAR_CCRC_JOURNAL_OPS } from './hierarchyOps.js';
+import { isLinearIdentifier } from './ops.js';
 import { LINEAR_CCRC_PASSES, type CcrcPass, type LinearPolicyRefusal } from './policy.js';
 import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
 
@@ -130,18 +132,14 @@ const SETTLED: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OUTCOMES.filter((o) 
 const CODES: ReadonlySet<string> = new Set<string>([...ROUTE_REFUSALS, ...LINEAR_POLICY_REFUSALS]);
 /** The client's SAFE_RE (`ccd/ccrc-api`), bounded as the mail path bounds a session id. */
 const SAFE_RE = /^[A-Za-z0-9_-]{1,128}$/;
-/** A Linear id: a slot's workspace id, a created comment's id. Lowercase, as Linear sends it. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** A team key, compared uppercased. */
-const TEAM_KEY_RE = /^[A-Z][A-Z0-9_]{0,15}$/;
-/** An issue identifier: a team key, a hyphen and the issue's number (spec §5.1's grammar, the key bounded). */
-const IDENTIFIER_RE = /^[A-Za-z][A-Za-z0-9_]{0,15}-[0-9]{1,9}$/;
 const DAY_MS = 86_400_000;
 
 const isSafe = (v: unknown): v is string => typeof v === 'string' && SAFE_RE.test(v);
-const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
-const isTeamKey = (v: unknown): v is string => typeof v === 'string' && TEAM_KEY_RE.test(v.toUpperCase());
-const isIdentifier = (v: unknown): v is string => typeof v === 'string' && IDENTIFIER_RE.test(v);
+// The shared grammars, never a copy (D-8180): a Linear id (a slot's workspace id, a created object's id; lowercase, as
+// Linear sends it), a team key (compared uppercased) and an issue identifier (a team key, a hyphen and the number).
+const isUuid = isLinearUuid;
+const isTeamKey = isLinearTeamKey;
+const isIdentifier = isLinearIdentifier;
 
 /** The stored `fields` text, or null for a list that breaks the op's closed list (an unknown name, a repeat). */
 function fieldsText(op: LinearJournalOp, fields: unknown): string | null | 'refused' {
