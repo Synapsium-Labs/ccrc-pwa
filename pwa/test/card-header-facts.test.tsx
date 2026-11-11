@@ -529,13 +529,14 @@ describe('a run row and its page header', () => {
       closedAt: null, items: { done: 1, total: 3 }, unreadMail: 0, handoffCommit: null,
       stuck: { reason: 'owner-gone', cause: null, since: NOW - 60_000, closes: null }, waitsOn: 'coordinator', blockedBy: null,
       health: { mailParked: 2, mailOutstanding: 1, mailParkedLive: 1, mailReplayMax: 0, briefQueued: null, clearError: null, coordKickoffPendingSince: null },
+      workerLastSeen: NOW - 300_000, workerLastTurn: { state: 'done', startedAt: NOW - 900_000, endedAt: NOW - 300_000 },
     } as unknown as RunSummary;
     const row = render(<ul><RunRow run={run} nowMs={NOW} session={null} /></ul>);
-    const rowTexts = [...row.container.querySelectorAll('.run-state, .run-name, .run-project, .run-crossing, .run-kind, .run-tally, .run-when, .run-resumed, .run-warn-item, .run-wait')]
+    const rowTexts = [...row.container.querySelectorAll('.run-state, .run-name, .run-project, .run-crossing, .run-kind, .run-tally, .run-when, .run-seen, .run-resumed, .run-warn-item, .run-wait')]
       .map((e) => e.textContent ?? '');
     row.unmount();
     // Neither the lamp's word nor a marker is optional in this case: the row draws them, so the header must.
-    expect(rowTexts).toEqual(expect.arrayContaining(['stuck', 'resumed, not cleared']));
+    expect(rowTexts).toEqual(expect.arrayContaining(['stuck', 'resumed, not cleared', 'last seen 5m ago']));
     expect(rowTexts.length).toBeGreaterThanOrEqual(8);
     vi.spyOn(api, 'runRecord').mockResolvedValue({ ok: true, run, events: [], reviewedBy: [], olderEvents: 0 });
     vi.spyOn(api, 'run').mockRejectedValue(new Error('offline'));

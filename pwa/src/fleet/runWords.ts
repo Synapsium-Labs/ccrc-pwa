@@ -99,6 +99,35 @@ export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
 export const runLastMove = (run: RunSummary): number | null =>
   run.lastMoveAt === undefined ? null : run.lastMoveAt ?? run.dispatchedAt ?? run.openedAt;
 
+/** D-8285 (#119): the worker heartbeat as a row and its page header draw it. */
+export interface WorkerSeenNote {
+  readonly word: string;
+  /** Past the stall watch's quiet time with no turn open: the word says "quiet", and the row's ink says it a second time. */
+  readonly quiet: boolean;
+  readonly title: string;
+}
+
+const WORKER_TURN_WORD: Record<'working' | 'failed', string> = { working: 'in a turn', failed: 'turn failed' };
+
+/** The ONE reader of `RunSummary.workerLastSeen` and `.workerLastTurn` (D-8285). Absent or not a finite number (an older
+ *  server, a marker the sweep could not read, no sweep yet) draws nothing: "not measured" is never "dead". `quietMs` is the
+ *  runs frame's `stallQuietMs`, the threshold `lastMoveAt`'s stalled word uses; null (no frame yet, an older server) is never
+ *  quiet. A turn still open is never quiet either: the marker does not move inside a turn, so its age is the turn's. */
+export function workerSeenNote(run: RunSummary, nowMs: number, quietMs: number | null): WorkerSeenNote | null {
+  const at = run.workerLastSeen;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  const state = run.workerLastTurn?.state;
+  const open = state === 'working';
+  const quiet = !open && quietMs !== null && nowMs - at > quietMs;
+  const ago = formatAge(Math.floor((nowMs - at) / 1000));
+  const tail = state === 'working' || state === 'failed' ? ` · ${WORKER_TURN_WORD[state]}` : quiet ? ' · quiet' : '';
+  const when = new Date(at).toISOString().replace('T', ' ').slice(0, 16);
+  const title = `The worker's turn marker last moved at ${when} UTC.`
+    + (open ? ' A turn is open, and the marker does not move inside one.' : '')
+    + (quiet ? ' That is longer ago than the stall watch\'s quiet time.' : '');
+  return { word: `last seen ${ago}${tail}`, quiet, title };
+}
+
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's
  *  own source, `watch.ts`'s `emitRuns`) draws the SAME line by excluding

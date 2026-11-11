@@ -30,8 +30,11 @@ const run = (id: number, over: Record<string, unknown> = {}): object => ({
 });
 
 const RUNS = [
-  run(1702, { wave: 2, branch: `ws/${'long-branch-name-'.repeat(8)}end` }),
-  run(1703, { wave: 2, kind: 'review', reviews: 1702, state: 'working' }),
+  // D-8285: each open row carries its worker heartbeat, one quiet past the frame's quiet time and one inside a turn.
+  run(1702, { wave: 2, branch: `ws/${'long-branch-name-'.repeat(8)}end`, workerLastSeen: NOW - 3 * H,
+    workerLastTurn: { state: 'done', startedAt: NOW - 4 * H, endedAt: NOW - 3 * H } }),
+  run(1703, { wave: 2, kind: 'review', reviews: 1702, state: 'working', workerLastSeen: NOW - 40 * 60_000,
+    workerLastTurn: { state: 'working', startedAt: NOW - 40 * 60_000, endedAt: null } }),
   run(1701, { wave: 1, state: 'planned', sessionId: null, workspace: null, dispatchedAt: null,
     stuck: { reason: 'overtaken', cause: null, since: NOW - 12 * DAY, closes: { at: NOW + 20 * H, armed: true } } }),
 ];
@@ -59,7 +62,7 @@ const FIXTURE: AppFixture = {
     '/api/programmes/prog-a/secrets': { ok: true, program: 'prog-a', slots: [] },
   },
   fleetFrames: [
-    { type: 'fleet', sessions: [] }, { type: 'runs', runs: RUNS },
+    { type: 'fleet', sessions: [] }, { type: 'runs', runs: RUNS, stallQuietMs: 2 * H },
     { type: 'pools', pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable' } },
   ],
 };
@@ -102,13 +105,19 @@ for (const width of WIDTHS) {
               const box = (sel: string): DOMRect => document.querySelector(sel)!.getBoundingClientRect();
               const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="programme-runs"] li.run-row, [data-testid="programme-runs"] .rf-row')]
                 .map((li) => ({ overflow: li.scrollWidth - li.clientWidth, right: li.getBoundingClientRect().right, left: li.getBoundingClientRect().left }));
+              // D-8285: each heartbeat inside its own row's box, its word whole.
+              const seen = [...document.querySelectorAll<HTMLElement>('[data-testid="programme-runs"] li.run-row .run-seen')].map((el) => {
+                const row = el.closest('li.run-row')!.getBoundingClientRect();
+                const r = el.getBoundingClientRect();
+                return { text: el.textContent ?? '', quiet: el.dataset['quiet'], inside: r.left >= row.left - 1 && r.right <= row.right + 1 };
+              });
               const goals = box('.pv-main > .pv-card'), waiting = box('.pv-main section[aria-label="Waiting on you"]'), runs = box('[data-testid="programme-runs"]');
               return {
                 tap, vw: innerWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth, rows,
                 resume: box('[data-testid="programme-facts"] .pv-resume').height, fold: box('[data-fold="closed"] .programme-fold-toggle').height,
                 goals: { l: goals.left, r: goals.right, b: goals.bottom }, waiting: { l: waiting.left, t: waiting.top, b: waiting.bottom },
                 runs: { l: runs.left, r: runs.right, t: runs.top },
-                rowCount: rows.length,
+                rowCount: rows.length, seen,
               };
             });
             expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
@@ -118,6 +127,9 @@ for (const width of WIDTHS) {
               expect(r.right, 'a row ends inside the window').toBeLessThanOrEqual(m.vw + 1);
               expect(r.left).toBeGreaterThanOrEqual(-1);
             }
+            expect(m.seen.map((x) => x.text).sort(), 'the two heartbeats').toEqual(['last seen 3h ago · quiet', 'last seen 40m ago · in a turn']);
+            expect(m.seen.find((x) => x.quiet === 'true')?.text).toBe('last seen 3h ago · quiet');
+            for (const x of m.seen) expect(x.inside, `${x.text} inside its row`).toBe(true);
             expect(m.resume, 'Resume at the tap floor').toBeGreaterThanOrEqual(m.tap - 1);
             expect(m.fold, 'the closed waves fold at the tap floor').toBeGreaterThanOrEqual(m.tap - 1);
             expect(m.waiting.t, 'Waiting on you sits under Goals').toBeGreaterThanOrEqual(m.goals.b - 1);
