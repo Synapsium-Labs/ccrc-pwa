@@ -26,9 +26,9 @@
 //   plus optional "label", "hang_ms" (N<0 never answers), "headers", "usage", "stop_reason",
 //   "chunk_ms", "stall_ms", "repeat", and (W0) "pad": N filler characters appended to the text (lines of
 //   `w0 pad ` words), with "chunk_chars": the text delta size (default 12), so a run can grow a transcript to a
-//   measured size without a megabyte scenario file. `pad` is a whole number and never on a "blocks" entry, and
-//   `chunk_chars` a positive integer: an entry that breaks either is answered HTTP 500 and logged, never a short
-//   reply. `nameAny` picks the first name the request offers (else the first listed). A header VALUE of the form
+//   measured size without a megabyte scenario file. `pad` is a whole number of at most 16 MB and never on a "blocks"
+//   entry, and `chunk_chars` a positive integer: an entry that breaks either is answered HTTP 500 and logged, never a
+//   short reply. A script "mainMarker" that is no regular expression answers every request HTTP 500 the same way. `nameAny` picks the first name the request offers (else the first listed). A header VALUE of the form
 //   `$NOW+<s>` is sent as the epoch second <s> from now.
 // Fallbacks: "default" for main and sub (else text "(mock default reply)"); "sideDefault" for side
 //   (else JSON synthesised from the request's json_schema, or "Rig session").
@@ -64,10 +64,11 @@ function loadScript() {
   try { j = JSON.parse(raw); } catch (e) { log(`SCRIPT parse error: ${e.message}`); j = []; }
   if (Array.isArray(j)) j = { entries: j };
   let marker = DEFAULT_MARKER;
+  let markerError = '';
   if (typeof j.mainMarker === 'string') {
-    try { marker = new RegExp(j.mainMarker); } catch (e) { log(`SCRIPT mainMarker is no regex (${e.message}): the env's or the default is used`); }
+    try { marker = new RegExp(j.mainMarker); } catch (e) { markerError = `mainMarker is no regular expression (${e.message})`; }
   }
-  return { entries: j.entries || [], def: j.default, sideDef: j.sideDefault, marker };
+  return { entries: j.entries || [], def: j.default, sideDef: j.sideDefault, marker, markerError };
 }
 
 function systemText(body) {
@@ -185,10 +186,12 @@ function resolveHeaders(h) {
   return out;
 }
 function chunks(s, n = 12) { const out = []; for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n)); return out.length ? out : ['']; }
+const PAD_MAX = 16 * 1024 * 1024;
 /** Why W0's `pad` or `chunk_chars` on this entry cannot be honoured, or '' (a bad chunk_chars would loop or drop the text). */
 function entryProblem(entry) {
   if (entry.chunk_chars !== undefined && !(Number.isInteger(entry.chunk_chars) && entry.chunk_chars > 0)) return 'chunk_chars must be a positive integer';
   if (entry.pad !== undefined && !(Number.isInteger(entry.pad) && entry.pad >= 0)) return 'pad must be a whole number';
+  if (entry.pad !== undefined && entry.pad > PAD_MAX) return 'pad is over 16 MB';
   if (entry.pad !== undefined && entry.blocks) return 'pad is never on a blocks entry, which would drop it';
   return '';
 }
@@ -279,6 +282,12 @@ const server = http.createServer((rq, res) => {
       }
       if (rq.method === 'POST' && url.pathname === '/v1/messages') {
         const script = loadScript();
+        if (script.markerError !== '') {
+          log(`#${n} MOCK SCRIPT ERROR: ${script.markerError}`);
+          res.writeHead(500, { 'content-type': 'application/json', 'request-id': `req_rig${n}` });
+          res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: `mock script: ${script.markerError}` } }));
+          return;
+        }
         const { kind, tools, sys } = classify(body, script.marker);
         const req = { n, body, kind, tools, sys };
         const { entry, label } = pick(req, script);

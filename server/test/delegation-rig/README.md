@@ -21,9 +21,10 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   `docs/superpowers/plans/2026-11-10-overlord/w0-spike.md`; results in
   `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`). These scenarios measure the launch ccd makes, so
   they may carry a permission bypass (D-8203). `check-scenario` refuses a bypass spelled anywhere in a scenario (a
-  flag, a `--settings` value, a file the scenario writes, any string or key once JSON escapes are decoded) unless the
-  file itself sits in this directory's own `scenarios-overlord/` (by its physical path, so a directory merely called
-  that does not count), and a test holds the delegation corpus bypass-free. `recapture.sh` and `rig.sh all` never run
+  flag, a `--settings` value, a file the scenario writes: any string or key once JSON escapes are decoded, again inside
+  every string that is itself JSON, to `BYPASS_JSON_DEPTH` levels, and the raw text lower-cased with every backslash
+  removed) unless the file itself sits in this directory's own `scenarios-overlord/` (by its physical path, so a
+  directory merely called that does not count), and a test holds the delegation corpus bypass-free. `recapture.sh` and `rig.sh all` never run
   them; each is run by hand, one at a time, with `rig.sh run <version> <file> <out-dir>`, and nothing from a run is
   committed: the results note holds the facts. **Run the set again whenever the fleet's model class advances, and on a
   new Claude Code build before a W1 piece relies on a row it measured** (spec 2026-11-09 §3.3: "W0 and the probes
@@ -45,9 +46,12 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   - `capS` (60 to 5400, the run's cap in place of 1200), `timing: true` (each step's start and `waitReady`'s elapsed
     milliseconds, in the bundle's `timing` file; never in `notes`, which `build-matrix.mjs` reads as failures) and
     `requests: true` (every request the mock answers, in the bundle's `reqs/`);
-  - `mainMarker` — the regex the mock reads a main-thread request by (its script's own key, over `MOCK_MAIN_MARKER`
-    and the default); every `scenarios-overlord` file carries
-    `You are (an interactive agent|an agent working with the user|Claude Code)`, which a test holds.
+  - `mainMarker` — the regular expression the mock reads a main-thread request by (its script's own key, over
+    `MOCK_MAIN_MARKER` and the default; one that does not compile is refused by `check-scenario` and answered HTTP 500
+    by the mock); every `scenarios-overlord` file carries
+    `You are (an interactive agent|an agent working with the user|Claude Code)`, which a test holds. Known limit: the
+    `Claude Code` alternative would also match a subagent prompt that opens "You are Claude Code", so the split rests on
+    Claude Code's `cc_is_subagent=true` stamp, which the mock reads first.
   Steps gain `relaunch` `{"mode":"fresh"}` (no `--resume`) and `{"mode":"fork"}` (`--resume <sid> --fork-session`)
   beside `true`, `paneSnap: <name>` (the pane's text, for a dialog), and `sessionsSnap: <name>` (Claude Code's `sessions/*.json`, and each transcript's name and size, at
   that instant). `rig.sh print-launch <version> <scenario> <root>` prints the launch line a run would type, after the same

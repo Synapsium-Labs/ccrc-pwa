@@ -91,6 +91,8 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     ['a flag that takes a value, followed by a flag (F4)', { launch: { args: ['--model', '--strict-mcp-config'] } }],
     ['a mainMarker that is not a string (F2)', { mainMarker: 7 }],
     ['a mainMarker of two lines (F2)', { mainMarker: 'a\nb' }],
+    ['a mainMarker that is no regular expression (M1)', { mainMarker: '(' }],
+    ['a mainMarker whose quantifier is out of order (M1)', { mainMarker: 'a{2,1}' }],
     ['a reserved env name', { launch: { env: { HOME: '/x' } } }],
     ['an ANTHROPIC_ name', { launch: { env: { ANTHROPIC_BASE_URL: 'http://x' } } }],
     ['an env name off the list', { launch: { env: { NOT_ON_THE_LIST: 'x' } } }],
@@ -135,6 +137,59 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(fs.readFileSync(f, 'utf8')).not.toMatch(BYPASS_RE);
     expect(rigsh(['check-scenario', f]).status).toBe(2);
   }, 60_000);
+
+  // Claude Code parses a --settings value, an --agents value and a settings file as JSON itself, so a bypass escaped INSIDE
+  // such a string survives one decoding of the scenario: the check decodes every string that is JSON again (review 1787 F1).
+  const NESTED = '{"permissions":{"defaultMode":"bypass\\u0050ermissions"}}';
+  it.each([
+    ['an inline --settings value', { launch: { args: ['--settings', NESTED] } }],
+    ['an overwrite of the fixture\'s settings', { launch: { files: [{ in: 'cfg', path: 'settings.json', text: NESTED }] } }],
+    ['a --settings file the scenario writes', { launch: { args: ['--settings', '@RIG_REPO@/.w0/p.json'],
+      files: [{ in: 'repo', path: '.w0/p.json', text: NESTED }] } }],
+    ['an --agents permissionMode', { launch: { args: ['--agents',
+      '{"r":{"description":"x","prompt":"x","permissionMode":"bypass\\u0050ermissions"}}'] } }],
+  ])('a bypass escaped inside a JSON string, by %s, is refused outside the rig\'s own scenarios-overlord (F1)', (_w, top) => {
+    const f = scen('scenarios', 'nested', [{ waitReady: 60 }], top);
+    expect(fs.readFileSync(f, 'utf8'), 'the premise: one decoding does not show it').not.toMatch(BYPASS_RE);
+    expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  it('a bypass spelled in a key, through a JSON escape, is refused: the check reads the keys too (M2)', () => {
+    const f = scen('scenarios', 'key', [{ waitReady: 60 }], { launch: { settings: { permissions: { KEYX: true } } } });
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('KEYX', 'bypass\\u0050ermissions'));
+    expect(fs.readFileSync(f, 'utf8').toLowerCase().replace(/\\/g, '')).not.toMatch(/bypasspermissions/);
+    expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  // A shell script a scenario writes unescapes `\P` to `P` when it runs; the raw text, lower-cased with every backslash
+  // removed, is read for both spellings too, outside the rig's own scenarios-overlord (review 1787 F1).
+  it.each([
+    ['--permission-mode bypass\\Permissions', 'the permission mode'],
+    ['--dangerously-skip\\-permissions', 'the flag'],
+  ])('a bypass that only a shell would unescape, %s (%s), is refused outside the rig\'s own scenarios-overlord (F1)', (spelled) => {
+    const f = scen('scenarios', 'raw', [{ waitReady: 60 }],
+      { launch: { files: [{ in: 'repo', path: '.w0/run.sh', text: `#!/bin/sh\nexec true ${spelled}\n`, exec: true }] } });
+    expect(JSON.parse(fs.readFileSync(f, 'utf8')).launch.files[0].text, 'the premise: the decoded text hides it').not.toMatch(
+      /bypass[-_ ]?permissions|dangerously[-_ ]?skip[-_ ]?permissions/i);
+    expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  it('the force-hook arm differs from its control only by FORCE and a paneSnap, and pins no setting source, so ccrc\'s hook is loaded (M6)', () => {
+    const read = (n: string): Record<string, any> => JSON.parse(fs.readFileSync(path.join(RIG, 'scenarios-overlord', `${n}.json`), 'utf8'));
+    const hook = read('ov-subagent-model-force-hook');
+    const control = read('ov-subagent-model');
+    expect(hook.launch.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE).toBe('1');
+    expect(control.launch.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE).toBeUndefined();
+    expect((hook.launch.args as string[]).filter((a) => /^--setting(s|-sources)\b/.test(a))).toEqual([]);
+    const strip = (s: Record<string, any>): Record<string, any> => {
+      const c = structuredClone(s);
+      delete c.scenario;
+      delete c.launch.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE;
+      c.steps = (c.steps as object[]).filter((x) => !('paneSnap' in x));
+      return c;
+    };
+    expect(strip(hook)).toEqual(strip(control));
+  });
 
   it('the committed ov-door, which carries a bypass, passes where it sits and through a link to it; a copy elsewhere is refused (F3)', () => {
     const door = path.join(RIG, 'scenarios-overlord', 'ov-door.json');
@@ -478,6 +533,7 @@ describe('mockapi.mjs: W0\'s padded reply and main-thread marker (W0 Task 5; F2,
     ['a chunk_chars that is not an integer', { text: 'W0', chunk_chars: 2.5 }],
     ['a pad that is not a whole number', { text: 'W0', pad: -3 }],
     ['a pad on a blocks entry, which would drop it', { blocks: [{ text: 'W0' }], pad: 100 }],
+    ['a pad over 16 MB (M7)', { text: 'W0', pad: 16 * 1024 * 1024 + 1, chunk_chars: 32 * 1024 * 1024 }],
   ])('refuses %s: HTTP 500, never a silently short reply (F16)', async (_w, entry) => {
     const { status } = await withMock({ entries: [{ match: 'any', chunk_ms: 0, ...entry }] }, (u) => ask(u, MAIN_OLD));
     expect(status).toBe(500);
@@ -485,6 +541,11 @@ describe('mockapi.mjs: W0\'s padded reply and main-thread marker (W0 Task 5; F2,
 
   it.each([0, -1])('refuses a chunk_chars of %i at once, before it loops (F16)', async (n) => {
     const { status } = await withMock({ entries: [{ match: 'any', text: 'W0', chunk_chars: n, chunk_ms: 0 }] }, (u) => ask(u, MAIN_OLD));
+    expect(status).toBe(500);
+  }, 60_000);
+
+  it('a script\'s mainMarker that is no regular expression is answered HTTP 500, not the default marker in silence (M1)', async () => {
+    const { status } = await withMock({ entries: [{ label: 'm', text: 'W0-MAIN', chunk_ms: 0 }], mainMarker: '(' }, (u) => ask(u, MAIN_OLD));
     expect(status).toBe(500);
   }, 60_000);
 
