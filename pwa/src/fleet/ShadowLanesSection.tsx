@@ -19,9 +19,9 @@ import type { ReactNode } from 'react';
 import { QuickConfirm, Section, Skeleton } from '@ccrc/ui';
 import {
   LANE_ARM_TEXT, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG,
-  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmLane, type LaneArmRequest, type LaneArmRowView,
+  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmLane, type LaneArmRefusal, type LaneArmRequest, type LaneArmRowView,
 } from '../../../shared/lane-arm';
-import { api } from '../lib/api';
+import { api, refusalText } from '../lib/api';
 import {
   NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT, useResultLine,
 } from './settingsText';
@@ -30,6 +30,12 @@ import { asLaneArmView, laneArmChecked, laneArmLines } from './laneArmWords';
 import { laneArmWriteRefusal, useLaneArmView, type LaneArmPoll } from './useLaneArmView';
 
 const T = LANE_ARM_TEXT;
+
+/** The refusals the row says in their own words, read through `refusalText`; every other refusal is `T.refused` with
+ *  its detail. */
+const OWN_REFUSAL_TEXT: Readonly<Record<Extract<LaneArmRefusal, 'sign-in-unarmed'>, string>> = {
+  'sign-in-unarmed': T.signInUnarmed,
+};
 
 /** The shadow record each row names, where it has one. */
 const SHADOW_LOG: Readonly<Record<LaneArmLane, string | null>> = { [ROSTER_CARD_LANE]: ROSTER_CARD_SHADOW_LOG };
@@ -82,7 +88,7 @@ function LaneRow({ row, poll }: { row: LaneArmRowView; poll: LaneArmPoll }): Rea
           const r = laneArmWriteRefusal(err);
           if (r.kind === 'confirm') { setPending(r.confirm); return; }
           if (r.kind === 'refused') {
-            line.say(r.code === 'sign-in-unarmed' ? T.signInUnarmed : `${T.refused} (${r.detail})`, 'refusal');
+            line.say(refusalText(err, OWN_REFUSAL_TEXT) ?? `${T.refused} (${r.detail})`, 'refusal');
           } else {
             line.say(r.detail === null ? T.unanswered : `${T.unanswered} (${r.detail})`);
           }

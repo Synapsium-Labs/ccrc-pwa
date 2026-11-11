@@ -5,9 +5,12 @@ import {
   LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm';
-import { isRecord } from '../lib/wire';
+import { isOneOf, isRecord } from '../lib/wire';
 
 const STORED: readonly string[] = ['shadow', 'live', 'unknown', 'absent', 'unreadable'];
+/** The 409's own word, typed from its union (`collectLaneRead.ts`'s `CONFIRM_ERRORS` shape), never a second spelling. */
+type ConfirmError = LaneArmConfirmRequired['error'];
+const CONFIRM_ERRORS = Object.keys({ 'confirm-required': true } satisfies Record<ConfirmError, true>) as ConfirmError[];
 const numOrNull = (v: unknown): v is number | null => v === null || (typeof v === 'number' && Number.isFinite(v));
 const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 
@@ -40,12 +43,12 @@ export function asLaneArmView(raw: unknown): LaneArmView | null {
 
 /** A 409's body read as the server's confirm, or null when it is not one. */
 export function asLaneArmConfirm(raw: unknown): LaneArmConfirmRequired | null {
-  if (!isRecord(raw) || raw.error !== 'confirm-required' || !isLaneArmLane(raw.lane) || typeof raw.confirmKey !== 'string') return null;
+  if (!isRecord(raw) || !isOneOf(CONFIRM_ERRORS, raw.error) || !isLaneArmLane(raw.lane) || typeof raw.confirmKey !== 'string') return null;
   const facts = raw.facts;
   if (!isRecord(facts) || typeof facts.stored !== 'string' || !STORED.includes(facts.stored)) return null;
   if (!numOrNull(facts.updatedAt) || !strOrNull(facts.shadowLog)) return null;
   return {
-    ok: false, error: 'confirm-required', lane: raw.lane, confirmKey: raw.confirmKey,
+    ok: false, error: raw.error, lane: raw.lane, confirmKey: raw.confirmKey,
     facts: { stored: facts.stored as LaneArmRowView['stored'], updatedAt: facts.updatedAt, shadowLog: facts.shadowLog },
   };
 }
