@@ -4476,15 +4476,24 @@ project's card, since board placement lasts while the workspace is held.
 **One Archive** (workspace lifecycle spec §5.2). Stop and archive are one feature. Every session's menu and its
 actions sheet offer **Archive**, and a session already put away offers **Restore** in its place. The confirm reads by
 case: an idle workspace goes offline and folds into Archived; a busy session asks first, because the turn in progress
-is lost; a main checkout is stopped and folds into Archived, and is never deleted; a coordinator with open runs offers
-only **End programme and archive** or **Cancel**, since pausing a programme is the coordinator pause switch.
+is lost; a main checkout is stopped and folds into Archived, and is never deleted; a coordinator with open runs lists
+them and asks what happens to them (D-8199): **Release runs** (they stay open and unclaimed, the programme goes on, and
+the next coordinator to open a run of it takes it), **Hand over** to a live coordinator of its project picked in the
+sheet, or **End programme** (every run abandoned). One tap picks, a second confirms, and nothing is ended unless the
+operator picks End programme; pausing a programme is the coordinator pause switch.
 `POST /api/sessions/:id/archive` runs every check it can make before anything it cannot undo: a turn in progress
 (`409 session-busy` unless `{interrupt:true}`; a main checkout's, whose stop refuses nothing, is read fail-closed —
 tmux unreachable or no readable live file is `409 status-unknown`, whatever the consents — and read again at the stop;
 a workspace's too when the programme is to end or `{interrupt:true}` is sent, before that end or stop), a worktree it
 can prove gone, a run naming the workspace as its worker (`409 run-open` unless `{force:true}`), a run it coordinates
-(`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}`), a store it cannot read (refused, fail-shut),
-and a run the abandon cannot move (one already `closing`: `409 programme-partly-ended`, nothing ended).
+(`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}` or a claims choice, `{runs:'release'}` or
+`{runs:'handover', heir}`), a store it cannot read (refused, fail-shut), and a run the abandon cannot move (one already
+`closing`: `409 programme-partly-ended`, nothing ended). A claims choice moves the claims instead of ending anything,
+after every check and before the stop and the archive: a release leaves every claimed row of the programme unclaimed
+and journals `release:<from>` on each; a hand-over goes through the reclaim writer (`reclaim:<from> -> <heir>`) once
+the heir is proved live and is not the session itself. A move that is refused answers `409 claims-not-moved`
+(`moved`, `notMoved`, `refusal`), with nothing stopped or archived, and every answer after a move, refusals and the
+`502` included, carries `moved: {to, runs}`, which the sheet says first, as it says `ended`.
 Then it ends the programme through the abandon door's own decision, stops (a main checkout, or with `interrupt`) and
 archives (a workspace). An abandon that still refuses at the act stops the door there, naming what it ended, with
 nothing stopped or archived. What only `ccd` can measure — its status read, the archive manifest and, in remote mode,
@@ -4497,7 +4506,13 @@ only**, disabled while tmux cannot be reached. Restore, in the actions sheet and
 `ws-restore` for a workspace (a merged-and-archived one included) and `ensure` for a main checkout, so a substrate
 fault disables a main checkout's. `Archived (N)` holds archived workspaces and stopped main checkouts
 (`inArchivedFold`), newest first; the Dead chip still counts a stopped main checkout, and the footer's archive list is
-still workspaces only. `ccd stop` and `POST /api/sessions/:id/stop` are unchanged. The refusal codes are
+still workspaces only. `ccd stop` is unchanged. `POST /api/sessions/:id/stop` asks the same question (D-8199): a
+session that claims open runs and sent no choice is refused `409 coordinator-has-open-runs` naming them, and the sheet
+asks Release or Hand over (never End programme) and repeats the stop with the choice; `claims-not-moved` returns it to
+the question with the reason, and a stop that fails otherwise stays on the sheet in the server's words. `{restart:true}`,
+the stop half of a restart (the session id is kept), asks nothing and moves nothing, and the swap route never asks. A
+coordination store the stop cannot read never blocks it: the stop is the escape hatch, so it goes through, moving
+nothing, and answers `{ok:true, claimsUnreadable}`. The refusal codes are
 `ARCHIVE_REFUSALS`, declared once in `shared/api.ts`. On the server box,
 `python3 deploy/measure-workspace-lifecycle.py [--db PATH] [--cache PATH] [--days N]` measures the Released and
 Archived rules from `coord.db` and `state-cache.json`, read-only: the rows it finds released (computed independently
