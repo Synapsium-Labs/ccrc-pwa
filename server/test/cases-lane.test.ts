@@ -73,6 +73,21 @@ describe('the case lane pass', () => {
   });
 });
 
+describe('the lane clock', () => {
+  it("an episode stamped after the lane's clock never opens a case below its evidence (review 1793 F3)", async () => {
+    const s = store();
+    episode(s, T + H); episode(s, T + H + 1); episode(s, T + H + 2);
+    expect((await casesPass({ coord: s, now: () => T })).opened).toBe(0);
+    expect((await casesPass({ coord: s, now: () => T + 1 })).opened).toBe(0);
+    expect(cases(s)).toEqual([]);
+    expect((await casesPass({ coord: s, now: () => T + H + 2 })).opened).toBe(1);
+    expect(cases(s)).toHaveLength(1);
+    expect(cases(s)[0]).toMatchObject({ openedAt: T + H + 2 });
+    expect((await casesPass({ coord: s, now: () => T + H + 3 })).opened).toBe(0);
+    expect(cases(s)).toHaveLength(1);
+  });
+});
+
 describe('the read window', () => {
   it('an episode whose first rung slides out of the window is not counted again after its case', async () => {
     const s = store();

@@ -4,7 +4,8 @@ import { TRIGGER_TABLE, signatureText } from '../../../shared/practice-triggers.
  * L1 policy: the case lane's decider (Overlord spec §10.5). No clock, no I/O, no store.
  *
  * An occurrence is one stall episode: the rows that parse to the same (run, arm, key), whatever their rung or mode.
- * A signature becomes a case when three occurrences fall in the window, or two programmes share it.
+ * A signature becomes a case when three occurrences fall in the window, or two programmes share it. An episode is
+ * counted when its run is in `programOf`, its time is `>= caseWindowFrom(now)`, `<= now`, and `> newestCaseAt`.
  */
 
 /** §10.5: three times in 14 days. */
@@ -81,6 +82,7 @@ export function casesDue(input: CasesInput): CaseDue[] {
   for (const e of episodes.values()) {
     const programme = input.programOf.get(e.runId);
     if (programme === undefined || e.at < windowFrom) continue;
+    if (e.at > input.now) continue; // not yet: it counts once `now` reaches it, so a case never opens below its evidence
     const newest = input.newestCaseAt.get(e.signature);
     if (newest !== undefined && e.at <= newest) continue;
     const list = counted.get(e.signature) ?? [];

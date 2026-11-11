@@ -78,6 +78,14 @@ describe('casesDue', () => {
       expect(due[0]!.evidence).toEqual([21, 31, 32]);
     }
   });
+  it('an episode later than now is not counted yet: three at NOW + 1 give nothing, the same three at NOW give a case', () => {
+    const at = (t: number): CaseDue[] => casesDue({
+      rows: [row(11, 1, t, 'quiet'), row(12, 2, t, 'quiet'), row(13, 3, t, 'quiet')],
+      programOf: progs([1, 2, 3], 'prog-a'), newestCaseAt: new Map(), now: NOW,
+    });
+    expect(at(NOW + 1)).toEqual([]);
+    expect(at(NOW)).toHaveLength(1);
+  });
   // The spec keys an occurrence by run, arm and key (§10.5), so an arm whose key is per delivery (`mail-stuck`, `coord-deaf`)
   // or moves with each wait (the quiet ladder) can count one stall more than once; the shadow counts decide it in W4b.
   it('known width (an open question for W4b): three queued deliveries behind one gate are three occurrences of mail-stuck', () => {
@@ -92,7 +100,8 @@ describe('casesDue', () => {
   });
 });
 
-// The oracle: the brief's rule, written here independently of the module.
+// The oracle: the brief's rule, written here independently of the module. An episode counts when its run has a programme,
+// its time is in [now - 14 days, now] and it is after its signature's newest case. (The grid's times are all <= NOW.)
 function oracle(input: CasesInput): CaseDue[] {
   const from = input.now - 14 * 86_400_000;
   const eps = new Map<string, { arm: string; run: number; at: number; id: number }>();
@@ -107,7 +116,7 @@ function oracle(input: CasesInput): CaseDue[] {
   for (const e of eps.values()) {
     const prog = input.programOf.get(e.run);
     const s = `stall-arm:${e.arm}`;
-    if (prog === undefined || e.at < from || e.at <= (input.newestCaseAt.get(s) ?? -Infinity)) continue;
+    if (prog === undefined || e.at < from || e.at > input.now || e.at <= (input.newestCaseAt.get(s) ?? -Infinity)) continue;
     by.set(s, [...(by.get(s) ?? []), { at: e.at, id: e.id, prog }]);
   }
   const out: CaseDue[] = [];
