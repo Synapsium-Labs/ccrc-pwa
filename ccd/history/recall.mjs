@@ -2148,7 +2148,7 @@ export const TOUCHED_SELECTS = Object.freeze({
   file: TOUCHED_FILE_SQL, symbol: TOUCHED_SYMBOL_SQL, fileOrdered: TOUCHED_FILE_ORDERED_SQL, symbolOrdered: TOUCHED_SYMBOL_ORDERED_SQL,
 });
 /** At most this many basenames per label-file select (D-8191): SQLite refuses an expression tree deeper than 1000 ("Expression
- *  tree is too large", measured at an OR of 1000 LIKE terms), and one select per basename measured over 2 s at 165 of them. */
+ *  tree is too large", measured at an OR of 1000 LIKE terms), and one select per basename measured a cold p95 over 2 s at 165 of them on a loaded box (848 ms on a quiet one). */
 const TOUCHED_LABEL_CHUNK = 100;
 /** The label-file select over `n` basenames: the file select's text with its one LIKE repeated n times under OR. Built from the
  *  fixed template and a count of placeholders only; every value is bound, never interpolated. */
