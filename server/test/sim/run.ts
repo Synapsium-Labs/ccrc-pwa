@@ -110,7 +110,7 @@ function failureMessage(name: string, seed: number, v: Violation, lines: readonl
   const at = lines.findIndex((l) => l.seq === v.seq);
   const end = at < 0 ? lines.length : at + 1;
   const base = lines.length > 0 ? lines[0]!.at : 0;
-  const tail = lines.slice(Math.max(0, end - 20), end)
+  const tail = lines.slice(Math.max(0, end - 21), end)
     .map((l) => `  #${l.seq} +${l.at - base}ms ${l.kind} ${l.id} ${l.state} ${l.actor}`);
   return [
     `scenario ${name}, seed ${seed}: ${v.invariant}: ${v.message} (line ${v.seq})`,

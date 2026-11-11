@@ -23,6 +23,8 @@ const AMBIENT_CALLS: Record<string, () => unknown> = {
   'performance.now': () => performance.now(),
   'Math.random': () => Math.random(),
   setTimeout: () => globalThis.setTimeout(() => {}, 1),
+  setInterval: () => globalThis.setInterval(() => {}, 1),
+  setImmediate: () => globalThis.setImmediate(() => {}),
 };
 
 describe('simulate and the seed-replay convention', () => {
@@ -51,7 +53,7 @@ describe('simulate and the seed-replay convention', () => {
     expect(() => assertScenario(never, [], { seeds: [1, 2, 3], testFile: 't', env: {} })).toThrow(/never reached: edge/);
     expect(() => assertScenario(never, [], { seeds: [1], testFile: 't', env: { CCRC_SIM_SEED: '1' } })).not.toThrow();
   });
-  it.each(['Date.now', 'performance.now', 'Math.random', 'setTimeout'])('the ambient guard refuses %s', (name) => {
+  it.each(['Date.now', 'performance.now', 'Math.random', 'setTimeout', 'setInterval', 'setImmediate'])('the ambient guard refuses %s', (name) => {
     const bad = { ...coin, setup: () => { AMBIENT_CALLS[name]!(); } };
     expect(() => simulate(bad, 1, [])).toThrow(`ambient ${name} inside the simulator`);
   });
@@ -67,8 +69,15 @@ describe('simulate and the seed-replay convention', () => {
     expect(() => simulate(loop, 1, [])).toThrow(/scheduled calls/);
   });
   it('the real functions are back after a run, a failed one included', () => {
-    const now = Date.now; const bad = { ...coin, setup: () => { throw new Error('boom'); } };
+    const g = globalThis;
+    const saved = { now: Date.now, perf: performance.now, random: Math.random, st: g.setTimeout, si: g.setInterval, sim: g.setImmediate };
+    const bad = { ...coin, setup: () => { throw new Error('boom'); } };
     expect(() => simulate(bad, 1, [])).toThrow('boom');
-    expect(Date.now).toBe(now);
+    expect(Date.now).toBe(saved.now);
+    expect(performance.now).toBe(saved.perf);
+    expect(Math.random).toBe(saved.random);
+    expect(g.setTimeout).toBe(saved.st);
+    expect(g.setInterval).toBe(saved.si);
+    expect(g.setImmediate).toBe(saved.sim);
   });
 });
