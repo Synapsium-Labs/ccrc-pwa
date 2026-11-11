@@ -31,18 +31,30 @@ From the review of run 1796 (fix round 1):
 - `simulate` and `assertScenario` are async, and a scheduled call that returns a promise that rejects fails the run.
   The mechanism: `SimWorld` keeps every promise a scheduled call returns until it settles, and `simulate` awaits
   `world.settle()` after `runUntil`, before it reads the fake's warnings and before it restores the ambient stubs.
-  `settle()` waits on microtasks only, up to 10 000 turns, and one turn more for the fake's own `.catch`; it never yields
-  to a timer or to I/O, so nothing outside the scenario runs while the stubs stand. The mutation runner awaits each
-  suite case, so a case that rejects kills its mutant. `server/test/fakeTime.ts` is untouched. Two rows pin it (a
-  rejection at once, and one after three awaits), and each goes red without the settle.
+  `settle()` waits on microtasks only, up to `SETTLE_TURNS` (10 000) turns, and throws if any promise is still pending
+  then (one waiting on a timer the run never reached, or on more turns than the bound), naming how many, so a run never
+  passes with a call unfinished. The world's `drop` and the fake's `.catch` react to the same promise back to back, so
+  no extra turn is needed for the fake to record a rejection. `settle()` never yields to a timer or to I/O, so no timer
+  or I/O outside the scenario runs while the ambient sources are stubbed; the exception is a microtask queued before the
+  call, which may run inside it and meets the stubs. The mutation runner awaits each suite case, so a case that rejects
+  kills its mutant. `server/test/fakeTime.ts` is untouched. Three rows pin it: a rejection at once and one after three
+  awaits, each red without the settle, and a call that awaits 10 005 times, red without the throw (fix round 2).
+- One `simulate` at a time (fix round 2): `stubAmbient` refuses while another run holds the stubs, so a second
+  `simulate` in flight throws instead of saving the first's throwers as the real functions and restoring them last. A
+  row runs two at once and goes red without the refusal.
 - CB-rung-never-falls takes its episode from the lane's `held some` .. `held none` lines, the held mail the lane reads
   itself, never from the episode the decider returns (M5: a decider that returns no episode switched the invariant
-  off). The decider opens an episode at its oldest held mail and closes it when nothing is held, so the two agree.
+  off). The decider opens an episode at its oldest held mail and closes it when nothing is held, so the two agree. The
+  violation names the episode by the decider's key, the queue time of the oldest mail held when the stretch opens
+  (fix round 2). A control row resets at a boot, at a release and at a new held stretch with no other reset between,
+  and each of the three goes red when deleted on its own.
 - CB-reach's threshold arm is exact: the push is due at the first sweep at or after the threshold, computed from the last
   boot's phase (sweeps run every `STALL_SWEEP_MS` from the boot), and within one sweep of the link being measured again
   or of a boot, as before. M6 (`<` to `<=`) differs from the decider only when a sweep falls exactly on the threshold,
   and then pushes one sweep late. Moving mail off the 5-minute grid would make it an equivalent mutant, not a killed one,
-  so the bound is made exact instead. A control row pins both a mail queued on a sweep and one queued half a sweep after.
+  so the bound is made exact instead. A control row pins both a mail queued on a sweep and one queued half a sweep after,
+  and another (fix round 2) a boot half a sweep off the minute and a run with no boot line, red when the boot does not
+  move the phase or when the phase starts at 0.
 - M5 and M6 are in the mutant set and killed: M5 by CB-rung-never-falls, M6 by CB-reach, on seed 1 first.
 
 - Task 5: the mutation runner rewrites a copy's relative imports to absolute paths, the plan's Step 3 fallback. Under
