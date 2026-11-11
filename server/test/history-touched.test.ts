@@ -7,6 +7,7 @@ import { describe, it, expect, beforeAll, beforeEach, onTestFinished } from 'vit
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, runSweep, runCli, withPane, seedFamily, type HistoryBox } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow, type Row } from './historyFixtures.js';
@@ -452,6 +453,67 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
   it('a query holding % is bad-args, exit 2', () => {
     const r = touchedJson(['tc28a%b']);
     expect([r.code, r.json?.['reason']]).toEqual([2, 'bad-args']);
+  }, HEAVY);
+
+  // D-8190: a graph.json that is no regular file is "no graph". loadGraph opens its path, and opening a FIFO with no writer blocks
+  // for good; a blocked synchronous open cannot be interrupted by vitest's timeout, so each of these cases runs the verb in a child
+  // with a hard timeout and asserts the child ended by itself.
+  describe('a graph.json that is not a regular file (D-8190)', () => {
+    const BOUND_MS = 10_000;
+    const bounded = (args: string[]): CliRun => runCli(box, ['touched', ...args], { env: withPane(box, ID), timeoutMs: BOUND_MS });
+    const endedByItself = (r: CliRun): void => {
+      expect(r.signal, `the child was killed by the ${BOUND_MS} ms bound (it hung): ${r.stderr}`).toBeNull();
+      expect(r.ms).toBeLessThan(BOUND_MS - 1000);
+    };
+    const mkfifo = (at: string): void => { execFileSync('mkfifo', [at]); };
+
+    it('a FIFO graph.json is no graph, promptly, for a path query and a symbol query', () => {
+      plant('Lt35n1', { refs: [['path', 'ccd/tc35.mjs'], ['path:symbol', 'ccd/tc35b.mjs:tc35sym', 'model']] });
+      fs.mkdirSync(graphDir(), { recursive: true });
+      mkfifo(graphFile());
+      const byPath = bounded(['ccd/tc35.mjs']);
+      endedByItself(byPath);
+      expect(byPath.code, `${byPath.stderr}${byPath.stdout}`).toBe(0);
+      expect(headers(byPath)).toEqual(['touched ccd/tc35.mjs (no graph)']);
+      const bySymbol = bounded(['tc35sym']);
+      endedByItself(bySymbol);
+      expect(bySymbol.code, `${bySymbol.stderr}${bySymbol.stdout}`).toBe(0);
+      expect(headers(bySymbol), 'only the path:symbol ref answers; no graph names the label\'s files').toEqual(['touched ccd/tc35b.mjs (no graph)']);
+    }, HEAVY);
+
+    it('a graph.json that links to a FIFO elsewhere is no graph, promptly', () => {
+      plant('Lt36n1', { refs: [['path', 'ccd/tc36.mjs']] });
+      const elsewhere = path.join(mkTmp('ccrc-hist-touched-fifo-'), 'pipe');
+      mkfifo(elsewhere);
+      fs.mkdirSync(graphDir(), { recursive: true });
+      fs.symlinkSync(elsewhere, graphFile());
+      const r = bounded(['ccd/tc36.mjs']);
+      endedByItself(r);
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+      expect(headers(r)).toEqual(['touched ccd/tc36.mjs (no graph)']);
+    }, HEAVY);
+
+    it('CONTROL: a link to a regular graph file still loads (the stat follows links)', () => {
+      plant('Lt37n1', { refs: [['path', 'ccd/tc37.mjs']] });
+      const elsewhere = path.join(mkTmp('ccrc-hist-touched-link-'), 'g.json');
+      fs.writeFileSync(elsewhere, JSON.stringify({ nodes: [{ id: 'g0', label: 'tc37sym', source_file: 'ccd/tc37.mjs' }], links: [] }));
+      fs.mkdirSync(graphDir(), { recursive: true });
+      fs.symlinkSync(elsewhere, graphFile());
+      const r = bounded(['tc37sym']);
+      endedByItself(r);
+      expect(headers(r)).toEqual(['touched ccd/tc37.mjs (graph)']);
+    }, HEAVY);
+  });
+
+  // A2: one stored ref is one row, and the node is counted once, when a symbol query's label file and the ref's own path name one file.
+  it('a symbol query lists a relative path:symbol ref once, under the graph\'s file, and counts the node once', () => {
+    plant('Lt38n1', { refs: [['path:symbol', 'tc38x.mjs:tc38foo', 'model']] });
+    plantGraph([{ label: 'tc38foo', file: 'ccd/tc38x.mjs' }]);
+    const j = touchedJson(['tc38foo']);
+    expect(j.code, `${j.stderr}${j.stdout}`).toBe(0);
+    expect(j.json?.['total'], 'one node, one file: one row').toBe(1);
+    expect(items(j).map((i) => [i['nodeId'], i['file'], i['match']])).toEqual([['Lt38n1', 'ccd/tc38x.mjs', 'suffix']]);
+    expect(headers(touched(['tc38foo']))).toEqual(['touched ccd/tc38x.mjs (graph)']);
   }, HEAVY);
 
   it('TC8 scope: --project and --workspace together are refused, exit 2', () => {
@@ -1245,7 +1307,7 @@ describe.skipIf(process.platform === 'darwin')('touched, project scope and the g
         families: fams.map((f) => ({ sessionPk: Number(f.session_pk), ccrcId: f.ccrc_id, generation: f.generation, firstSeenMs: Number(f.first_seen_ms) })) },
     };
   }
-  const touchedIn = (fx: Fx, a: { arg: string; limit: number; loadGraph?: (p: string, m: number) => unknown }) => {
+  const touchedIn = (fx: Fx, a: { arg: string; limit: number; loadGraph?: (p: string, m: number) => unknown; graphCache?: Map<string, unknown> }) => {
     const db = storeLib.openReader(fx.dbFile) as unknown as DatabaseSync;
     try {
       const rc = contextOn(fx, db);
@@ -1290,5 +1352,39 @@ describe.skipIf(process.platform === 'darwin')('touched, project scope and the g
     const out = touchedIn(fx, { arg: 'ccd/lazy.mjs', limit: 20, loadGraph: counting });
     expect(out.total).toBe(1);
     expect(calls.length, calls.join(' ')).toBe(1);
+  }, HEAVY);
+
+  it('the real-path graph cache holds only the reduced graph: no nodes, links, byFile or degree, for a symbol query and a path query', () => {
+    const fx = fixtureFamily('ccrc-hist-touched-reduced-');
+    const r2 = mkTmp('ccrc-hist-touched-red2-');
+    const r3 = mkTmp('ccrc-hist-touched-red3-');
+    putGraph(fx.root, graphJson([{ label: 'redSym', file: 'ccd/red1.mjs' }, { label: 'other', file: 'ccd/other1.mjs' }]));
+    putGraph(r2, graphJson([{ label: 'redSym', file: 'ccd/red2.mjs' }, { label: 'other', file: 'ccd/other2.mjs' }]));
+    putGraph(r3, graphJson([{ label: 'nothing', file: 'ccd/red3.mjs' }]));
+    const seqs = addEpochs(fx, [r2, r3]);
+    addNode(fx, 'Lrd0001', fx.seq, [['path', 'ccd/red1.mjs']]);
+    addNode(fx, 'Lrd0002', seqs[0]!, [['path', 'ccd/red2.mjs']]);
+    const check = (cache: Map<string, unknown>, labelFiles: string[][]): void => {
+      expect(cache.size, 'three distinct graph files were read').toBe(3);
+      const held = [...cache.values()] as Array<Record<string, unknown> | null>;
+      for (const g of held) {
+        expect(g).not.toBeNull();
+        for (const heavy of ['nodes', 'links', 'byFile', 'degree']) expect(g, `the cache holds a parsed graph's ${heavy}`).not.toHaveProperty(heavy);
+        expect(Array.isArray(g!['labelFiles'])).toBe(true);
+      }
+      expect(held.map((g) => g!['labelFiles']).sort()).toEqual(labelFiles.sort());
+    };
+    const symCache = new Map<string, unknown>();
+    const sym = touchedIn(fx, { arg: 'redSym', limit: 20, graphCache: symCache });
+    expect(sym.total, 'the reduced graph answers the same rows').toBe(2);
+    check(symCache, [['ccd/red1.mjs'], ['ccd/red2.mjs'], []]);
+    const pathCache = new Map<string, unknown>();
+    const byPath = touchedIn(fx, { arg: 'ccd/red1.mjs', limit: 20, graphCache: pathCache });
+    expect(byPath.total).toBe(1);
+    expect(pathCache.size, 'a path query reads only the graph its one row names').toBe(1);
+    for (const g of pathCache.values()) {
+      for (const heavy of ['nodes', 'links', 'byFile', 'degree']) expect(g, heavy).not.toHaveProperty(heavy);
+      expect((g as { labelFiles: string[] }).labelFiles, 'a path query keeps no label files').toEqual([]);
+    }
   }, HEAVY);
 });

@@ -35,7 +35,7 @@ import { blobReadStmts, keptOf } from './derive.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
 import { basename as xbasename, join as xjoin } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { loadGraph, GRAPH_MAX_BYTES } from '../compact-card.mjs';
 
 /**
@@ -2160,12 +2160,16 @@ const TOUCHED_RESERVE = 600;
 const TOUCHED_GIST_MAX = 120;
 const TOUCHED_NODE_COLS = ['node_id', 'session_pk', 'epoch_seq', 'kind', 'gist', 'earliest_ms', 'latest_ms'];
 
-/** A graph file's graph, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or links all read as "no graph". */
-function touchedGraphOf(graphPath, load) {
+/** A graph file's graph reduced to what touched reads, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or
+ *  links all read as "no graph". `{ files, index, labelFiles }`: matchRef reads only `index`, and `labelFiles` is the distinct files whose
+ *  graph nodes carry `symbol` as their label (an empty list with no symbol). The parsed graph (its nodes, links, byFile and degree) is
+ *  dropped here, so only the reduced form is held while the next root's graph is parsed (D-8190, W4 review F6). */
+function touchedGraphOf(graphPath, load, symbol) {
   try {
     const g = load(graphPath, GRAPH_MAX_BYTES);
-    // Ruling R11: a graph that loads with no file at all (no node carries a source_file) is "no graph", as failure row 28's "no nodes".
-    return g.files.size === 0 ? null : g;
+    // A graph that loads with no file at all (no node carries a source_file) is "no graph", as failure row 28's "no nodes".
+    if (g.files.size === 0) return null;
+    return { files: g.files, index: g.index, labelFiles: symbol === null ? [] : touchedLabelFiles(g, symbol) };
   } catch {
     return null;
   }
@@ -2177,7 +2181,7 @@ function touchedMaySuffix(norm, file) {
   return !norm.outside && !file.startsWith('/') && p !== '' && !p.startsWith('/') && !p.split('/').includes('..') && file.endsWith(`/${p}`);
 }
 
-/** The distinct files whose graph nodes carry `symbol` as their label, sorted. */
+/** The distinct files whose graph nodes carry `symbol` as their label, sorted (read from a PARSED graph, once, by touchedGraphOf). */
 function touchedLabelFiles(graph, symbol) {
   const files = new Set();
   for (const n of graph.nodes.values()) if (n.label === symbol) files.add(n.source_file);
@@ -2235,17 +2239,23 @@ export function runTouched(rc, a) {
   }
   const roots = [...rootSet].sort();
   // A root's graph, loaded lazily and cached by the REAL path of its graph.json, so worktrees that link one shared graph load it once.
+  // Both maps hold the REDUCED graph only (touchedGraphOf), so a parsed graph is released before the next root's parse; `a.graphCache`
+  // is the seam a test reads the real-path cache through.
   const graphs = new Map();
-  const graphByReal = new Map();
+  const graphByReal = a.graphCache ?? new Map();
+  const askedSymbol = q.kind === 'symbol' ? q.symbol : null;
   const graphAt = (root) => {
     if (root === null) return null;
     if (graphs.has(root)) return graphs.get(root);
     let g = null;
     try {
       const real = realpathSync(xjoin(root, 'graphify-out', 'graph.json'));
-      if (!graphByReal.has(real)) graphByReal.set(real, touchedGraphOf(real, loadGraphFile));
+      // D-8190: only a regular file is loaded. loadGraph opens its path, and opening a FIFO with no writer blocks for good (no timer can
+      // interrupt it), so a FIFO, socket, device or directory, and any stat error, is "no graph". statSync follows links, so a link to a
+      // regular file loads. Residual: a file swapped for a FIFO between this stat and loadGraph's open.
+      if (!graphByReal.has(real)) graphByReal.set(real, statSync(real).isFile() ? touchedGraphOf(real, loadGraphFile, askedSymbol) : null);
       g = graphByReal.get(real);
-    } catch { /* no such file: no graph */ }
+    } catch { /* no such file, or one that cannot be statted: no graph */ }
     graphs.set(root, g);
     return g;
   };
@@ -2255,7 +2265,7 @@ export function runTouched(rc, a) {
   if (q.kind === 'symbol') {
     for (const r of roots) {
       const g = graphAt(r);
-      if (g !== null) for (const f of touchedLabelFiles(g, q.symbol)) wantFiles.push({ file: f, root: r });
+      if (g !== null) for (const f of g.labelFiles) wantFiles.push({ file: f, root: r });
     }
   } else {
     wantFiles.push({ file: xlib.normaliseRefPath(q.file, null, roots).path, root: null });
@@ -2345,6 +2355,7 @@ export function runTouched(rc, a) {
     };
     // A path:symbol candidate of a path-symbol query must also carry its symbol; a path or test ref to the file matches on the path.
     const symbolOk = q.kind !== 'path-symbol' || c.kind !== 'path:symbol' || xlib.symbolMatches(sp, q.symbol);
+    let listedUnderGraphFile = false;
     for (const w of wantFiles) {
       if (!symbolOk) break;
       if (w.root !== null && w.root !== root) continue;
@@ -2353,9 +2364,11 @@ export function runTouched(rc, a) {
       // does, so a `suffix` or null first answer is asked again through the graph; an `exact` or `outside` one is final.
       let m = xlib.matchRef(norm, w.file, null);
       if (m !== 'exact' && m !== 'outside' && touchedMaySuffix(norm, w.file)) m = xlib.matchRef(norm, w.file, graphAt(root));
-      if (m !== null) add(w.file, m);
+      if (m !== null) { add(w.file, m); listedUnderGraphFile = true; }
     }
-    if (q.kind === 'symbol' && c.kind === 'path:symbol' && xlib.symbolMatches(sp, q.symbol)) add(norm.path, norm.outside ? 'outside' : 'exact');
+    // The ref's own path is its file only when no graph file took it: a relative ref (`x.mjs:foo`) the graph's label file (`ccd/x.mjs`) matched
+    // is that file's row, listed once under the graph's name, and counted once (A2).
+    if (q.kind === 'symbol' && c.kind === 'path:symbol' && !listedUnderGraphFile && xlib.symbolMatches(sp, q.symbol)) add(norm.path, norm.outside ? 'outside' : 'exact');
   }
   const ranked = xlib.rankTouched(xlib.touchedRows(matches));
   const total = ranked.length;
