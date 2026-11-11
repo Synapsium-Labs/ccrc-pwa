@@ -136,3 +136,77 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(r.stderr).not.toContain('set -euo pipefail');
   }, 60_000);
 });
+
+const STUBS = path.join(RIG, 'stubs');
+/** Run one stub with `args`, `stdin` and extra env; stdout and the exit status. */
+function runStub(stub: string, args: string[], stdin: string, env: NodeJS.ProcessEnv = {}): { stdout: string; status: number | null } {
+  const r = spawnSync(process.execPath, [path.join(STUBS, stub), ...args], { input: stdin, encoding: 'utf8', env: { ...process.env, ...env }, timeout: 30_000 });
+  return { stdout: r.stdout, status: r.status };
+}
+const run = (stub: string, args: string[], stdin: string): string => runStub(stub, args, stdin).stdout;
+const runRc = (stub: string, stdin: string): number | null => runStub(stub, [], stdin).status;
+/** The door stub fed one JSON-RPC 2.0 request line per call (id = its index), stdin then closed: its replies, in order, and its log. */
+async function door(calls: Array<string | [string, object]>, env: NodeJS.ProcessEnv): Promise<{ replies: Array<Record<string, any>>; log: string }> {
+  const log = path.join(mkTmp('ccrc-dlg-door-'), 'door.ndjson');
+  const input = calls.map((c, id) => {
+    const [method, params] = typeof c === 'string' ? [c, {}] : c;
+    return JSON.stringify({ jsonrpc: '2.0', id, method, params });
+  }).join('\n') + '\n';
+  const r = runStub('door-stub.mjs', [], input, { ...env, DOOR_LOG: log });
+  return { replies: r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l)), log: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
+}
+/** statusline-capture.mjs fed `payload`: its log's last line, parsed. */
+function capture(payload: object): Record<string, unknown> {
+  const log = path.join(mkTmp('ccrc-dlg-sl-'), 'status.ndjson');
+  runStub('statusline-capture.mjs', [], JSON.stringify(payload), { RIG_STATUS_LOG: log });
+  const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+  return JSON.parse(lines[lines.length - 1] as string);
+}
+
+describe('the rig\'s W0 stubs (W0 Task 3)', () => {
+  it('the door stub lists card, read and act, and logs the nonce as present, never its value', async () => {
+    const { replies, log } = await door(['initialize', 'tools/list', ['tools/call', { name: 'card', arguments: {} }]],
+      { DOOR_NONCE: 'n-7f3a' });
+    expect(replies[1]!.result.tools.map((t: { name: string }) => t.name).sort()).toEqual(['act', 'card', 'read']);
+    expect(JSON.stringify(replies[2])).toContain('W0-CARD-CANARY');
+    expect(log).toContain('"nonce":"present"');
+    expect(log).not.toContain('n-7f3a');
+  }, 60_000);
+
+  it('the door stub answers read with a record and act with ok, and logs the nonce absent when none is set', async () => {
+    const { replies, log } = await door(['initialize', ['tools/call', { name: 'read', arguments: {} }], ['tools/call', { name: 'act', arguments: {} }]], { DOOR_NONCE: '' });
+    expect(replies[1]!.result.content[0].text).toBe('{"kind":"record","id":"r-1"}');
+    expect(replies[2]!.result.content[0].text).toBe('ok');
+    expect(log).toContain('"nonce":"absent"');
+  }, 60_000);
+
+  it.each([9951, 10000, 10001, 12000])('emit-context prints exactly %i characters between its canaries', (n) => {
+    const t = JSON.parse(run('emit-context.mjs', ['--event', 'SessionStart', '--chars', String(n)], '{"source":"startup"}'))
+      .hookSpecificOutput.additionalContext as string;
+    expect(t.length).toBe(n);
+    expect(t.startsWith(`W0-HEAD-${n}-`) && t.endsWith(`-W0-TAIL-${n}`)).toBe(true);
+  }, 60_000);
+
+  it('emit-context\'s wide filler is two UTF-8 bytes a character, and its log names the event and the source', () => {
+    const log = path.join(mkTmp('ccrc-dlg-emit-'), 'emit.ndjson');
+    const out = runStub('emit-context.mjs', ['--event', 'SessionStart', '--chars', '6000', '--fill', 'wide'], '{"source":"clear"}', { RIG_EMIT_LOG: log }).stdout;
+    const t = JSON.parse(out).hookSpecificOutput.additionalContext as string;
+    expect(t.length).toBe(6000);
+    expect(Buffer.byteLength(t, 'utf8')).toBeGreaterThan(11_900);
+    expect(JSON.parse(fs.readFileSync(log, 'utf8').trim())).toMatchObject({ event: 'SessionStart', source: 'clear' });
+  }, 60_000);
+
+  it('precompact-refuse blocks auto and passes manual', () => {
+    expect(runRc('precompact-refuse.mjs', '{"trigger":"auto"}')).toBe(2);
+    expect(runRc('precompact-refuse.mjs', '{"trigger":"manual"}')).toBe(0);
+  }, 60_000);
+
+  it('statusline capture keeps numbers and key paths, never a string value but the model id', () => {
+    const o = capture({ model: { id: 'm-1', display_name: 'private-x' }, cwd: '/w0/cwd/p',
+      context_window: { total_input_tokens: 1200, context_window_size: 200000 } });
+    expect(o['context_window.total_input_tokens']).toBe(1200);
+    expect(o['model.id']).toBe('m-1');
+    expect(o['cwd']).toBe('<string>');
+    expect(JSON.stringify(o)).not.toMatch(/private-x|\/w0\/cwd/);
+  }, 60_000);
+});
