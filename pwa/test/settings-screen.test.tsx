@@ -80,8 +80,8 @@ import {
   STALL_SECTION_TEXT, STALL_SOURCE_TEXT, STALL_STAGE_TEXT, STALL_STORED_TEXT,
 } from '../../shared/api';
 import {
-  fillStallText, quietChoices, quietText, stallConfirmLines, stallConfirmTitle, stallCountLine, stallNextLines,
-  stallNowLines,
+  fillStallText, quietChoices, quietText, stallConfirmLines, stallConfirmTitle, stallCountLine, stallHeldLine,
+  stallNextLines, stallNowLines,
 } from '../src/screens/StallWatchSection';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -2153,9 +2153,56 @@ describe('SettingsScreen — stall watch: helpers (stall-watch-settings W2 Task 
   it('one line per held flag, in StallHeld order', () => {
     const v = swView({ effective: swEffective({ source: 'held', held: swHeld({ watchOff: true, mailOff: true, gateStrict: true, wave2HeldByStrict: true }) }),
       chosen: swChosen({ level: 'all' }) });
-    const held = swTexts(v).filter((t) => (Object.values(STALL_HELD_TEXT) as string[]).includes(t));
-    expect(held).toEqual([STALL_HELD_TEXT.watchOff, STALL_HELD_TEXT.mailOff, STALL_HELD_TEXT.gateStrict,
+    const held = stallNowLines(v).filter((l) => l.tone === 'warn').map((l) => l.text);
+    expect(held).toEqual([stallHeldLine('watchOff'), STALL_HELD_TEXT.mailOff, stallHeldLine('gateStrict'),
       STALL_HELD_TEXT.wave2HeldByStrict]);
+  });
+
+  // D-8339: a hold by an override marker names the marker and how to lift it. Both markers are terminal-only emergency
+  // overrides: the card says how, and offers no control for either.
+  const SW_REMEDY = (marker: string): string =>
+    `To lift it, remove ${marker} from the registry at a terminal on the fleet box. It is an emergency override, so it has no control here.`;
+  const swKill = (): StallWatchView => swView({
+    chosen: swChosen({ level: 'all' }),
+    effective: swEffective({ level: 'off', source: 'held', stages: swStages({ runs: false, checks: false, busyGate: false }),
+      held: swHeld({ watchOff: true }), next: { kind: 'none' } }),
+  });
+  const swStrict = (): StallWatchView => swView({
+    chosen: swChosen({ level: 'deliver' }),
+    effective: swEffective({ level: 'alert', source: 'held', stages: swStages({ alerts: true, busyGate: false }),
+      held: swHeld({ gateStrict: true }), next: { kind: 'none' } }),
+  });
+
+  it('D-8339: the kill switch\'s held text names stall-watch-disabled and its remedy, at a terminal', () => {
+    const lines = stallNowLines(swKill());
+    const at = lines.findIndex((l) => l.tone === 'warn');
+    expect(lines.slice(at)).toEqual([
+      { text: 'The stall-watch-disabled marker on the fleet box is a kill switch: the watch is off, whatever is chosen here.', tone: 'warn' },
+      { text: SW_REMEDY('stall-watch-disabled'), tone: 'note' },
+    ]);
+    expect(lines.some((l) => l.text.includes('mail-gate-strict'))).toBe(false);
+  });
+
+  it('D-8339: the strict gate\'s held text names mail-gate-strict, says what it does, and gives its remedy', () => {
+    const lines = stallNowLines(swStrict());
+    const at = lines.findIndex((l) => l.tone === 'warn');
+    expect(lines.slice(at)).toEqual([
+      { text: 'The mail-gate-strict marker on the fleet box sets the mail gate to strict: busy delivery and the busy gate are off.', tone: 'warn' },
+      { text: 'While it stands, mail is delivered to idle sessions only.', tone: 'note' },
+      { text: SW_REMEDY('mail-gate-strict'), tone: 'note' },
+    ]);
+    expect(lines.some((l) => l.text.includes('stall-watch-disabled'))).toBe(false);
+  });
+
+  it('D-8339: both markers held: each names its own marker and remedy; mail off and the wave-2 hold name none', () => {
+    const v = swView({ chosen: swChosen({ level: 'all' }), effective: swEffective({ source: 'held',
+      held: swHeld({ watchOff: true, mailOff: true, gateStrict: true, wave2HeldByStrict: true }) }) });
+    const texts = swTexts(v);
+    expect(texts.filter((t) => t.startsWith('To lift it,'))).toEqual([SW_REMEDY('stall-watch-disabled'), SW_REMEDY('mail-gate-strict')]);
+    expect(texts).toContain(STALL_HELD_TEXT.mailOff);
+    expect(texts).toContain(STALL_HELD_TEXT.wave2HeldByStrict);
+    // Nothing held: no marker is named and no remedy is given.
+    expect(swTexts(swView()).filter((t) => /stall-watch-disabled|mail-gate-strict|To lift it/.test(t))).toEqual([]);
   });
 
   it('M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off', () => {
@@ -2416,6 +2463,24 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(await within(section()).findByText(STALL_SECTION_TEXT.unread)).toBeInTheDocument();
     expect(within(section()).queryByRole('status', { name: 'Loading' })).toBeNull();
     expect(within(section()).queryByRole('radio')).toBeNull();
+  });
+
+  it('D-8339: a hold by a marker renders its name and remedy as words, and the card offers no control for it', async () => {
+    await mount(swView({ chosen: swChosen({ level: 'all' }), effective: swEffective({ level: 'off', source: 'held',
+      stages: swStages({ runs: false, checks: false, busyGate: false }), held: swHeld({ watchOff: true, gateStrict: true }),
+      next: { kind: 'none' } }) }));
+    const s = section();
+    expect(within(s).getByText(stallHeldLine('watchOff'))).toBeInTheDocument();
+    expect(within(s).getByText(stallHeldLine('gateStrict'))).toBeInTheDocument();
+    expect(within(s).getByText('While it stands, mail is delivered to idle sessions only.')).toBeInTheDocument();
+    for (const marker of ['stall-watch-disabled', 'mail-gate-strict']) {
+      expect(within(s).getByText(new RegExp(`^To lift it, remove ${marker} from the registry at a terminal`))).toBeInTheDocument();
+    }
+    // Terminal-only: no button, switch or checkbox; the only controls are the level radios and the quiet-time select.
+    expect(within(s).queryAllByRole('button', { hidden: true })).toEqual([]);
+    expect(within(s).queryAllByRole('switch', { hidden: true })).toEqual([]);
+    expect(within(s).queryAllByRole('checkbox', { hidden: true })).toEqual([]);
+    expect(within(s).getAllByRole('radio').length).toBe(STALL_LEVELS.length + 1);
   });
 
   it('P1: a later failed read keeps the landed view and adds the stale line', async () => {

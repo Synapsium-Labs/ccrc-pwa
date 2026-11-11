@@ -11508,13 +11508,23 @@ export const STALL_HELD_REASON = {
   watchOff: 'its kill switch is on',
   gateStrict: 'its mail gate is set to strict',
 } as const;
-/** One line per `StallHeld` flag, worded without file names (§13). */
+/** One line per `StallHeld` flag (§13). The wire stays booleans, never file names; since D-8339 the two terminal-only
+ *  overrides, the kill switch and the strict gate, name their marker through a `{marker}` slot the PWA fills from the
+ *  switchboard's constant (`shared/switches.ts`), so the name is spelled once. */
 export const STALL_HELD_TEXT = {
-  watchOff: 'A kill switch on the fleet box has the watch off, whatever is chosen here.',
+  watchOff: 'The {marker} marker on the fleet box is a kill switch: the watch is off, whatever is chosen here.',
   mailOff: 'Mail is switched off on the fleet box: no mail is delivered, and checks and reports are held. Pushes to you still go.',
-  gateStrict: 'The mail gate is set to strict on the fleet box: busy delivery and the busy gate are off.',
+  gateStrict: 'The {marker} marker on the fleet box sets the mail gate to strict: busy delivery and the busy gate are off.',
   wave2HeldByStrict: 'The strict mail gate also holds the further checks off, because they need busy delivery.',
 } as const satisfies Record<keyof StallHeld, string>;
+/** D-8339: the line under a marker's held line that says what the override does, for the one whose effect reaches past
+ *  the watch (the strict gate changes every session's mail). */
+export const STALL_HELD_DOES = {
+  gateStrict: 'While it stands, mail is delivered to idle sessions only.',
+} as const satisfies Partial<Record<keyof StallHeld, string>>;
+/** D-8339: how to lift a marker's hold. Both are emergency overrides with no writer in the tree, so the card offers no
+ *  control: the remedy is a person at a terminal. `{marker}` is the held line's own. */
+export const STALL_HELD_REMEDY = 'To lift it, remove {marker} from the registry at a terminal on the fleet box. It is an emergency override, so it has no control here.';
 /** The busy gate's Now sentence: `holds` always while `stages.busyGate`, then `logs` while busy delivery is off. */
 export const STALL_BUSY_GATE_TEXT = {
   holds: 'The mail gate also holds mail for a session whose main turn is running.',
