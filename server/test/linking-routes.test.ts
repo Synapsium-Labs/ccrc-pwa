@@ -59,7 +59,7 @@ describe('POST /api/projects/:project/linking', () => {
     expect(res.statusCode).toBe(200);
     // Lower case in, upper case stored and answered: the answer is the row read back.
     expect(res.json()).toEqual({
-      ok: true, linking: { teamKey: 'KEY', override: 'private', measured: { state: 'unmeasured' }, mode: 'private' },
+      ok: true, linking: { teamKey: 'KEY', override: 'private', measured: { state: 'unmeasured' }, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false },
     });
     expect(coord!.linkingOf('project-a').teamKey).toBe('KEY');
   });
@@ -69,7 +69,7 @@ describe('POST /api/projects/:project/linking', () => {
     await post(app, 'project-a', { teamKey: 'KEY', override: null });
     const res = await post(app, 'project-a', { teamKey: null, override: null });
     expect(res.statusCode).toBe(200);
-    expect(res.json().linking).toMatchObject({ teamKey: null, override: null, mode: 'unknown' });
+    expect(res.json().linking).toMatchObject({ teamKey: null, override: null, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false });
   });
 
   it('refuses override private while the last reading is public, and still saves a key under a stored private', async () => {
@@ -131,8 +131,8 @@ describe('GET /api/projects carries a linking cell', () => {
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
     const byName = Object.fromEntries((res.json().projects as { name: string; linking?: unknown }[]).map((p) => [p.name, p.linking]));
-    expect(byName['project-a']).toEqual({ teamKey: 'KEY', override: 'public', measured: { state: 'unmeasured' }, mode: 'public' });
-    expect(byName['project-b']).toEqual({ teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown' });
+    expect(byName['project-a']).toEqual({ teamKey: 'KEY', override: 'public', measured: { state: 'unmeasured' }, mode: 'public', initiatives: 'on', linearOwner: null, ownsTeam: false });
+    expect(byName['project-b']).toEqual({ teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false });
   });
 
   it('leaves the key off the wire when there is no coordination store (an older server\'s shape)', async () => {
@@ -155,7 +155,7 @@ describe('GET /api/linking: a session reads its own project\'s row', () => {
     const res = await get(app, me);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, project: 'project-a', teamKey: 'KEY', override: 'private', measured: { state: 'unmeasured' }, mode: 'private',
+      ok: true, project: 'project-a', teamKey: 'KEY', override: 'private', measured: { state: 'unmeasured' }, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false,
     });
   });
 
@@ -184,7 +184,7 @@ describe('GET /api/linking: a session reads its own project\'s row', () => {
     app = await open({ coord, mailToken: ID_GATE_TOKEN });
     const res = await get(app, me);
     expect(res.json()).toEqual({
-      ok: true, project: 'project-a', teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown',
+      ok: true, project: 'project-a', teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false,
     });
     await app.close();
     seedRow(home, 'bare-session', { project: '' });

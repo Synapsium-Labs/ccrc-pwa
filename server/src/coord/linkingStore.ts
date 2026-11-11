@@ -20,6 +20,7 @@ const COLUMNS = 'project, teamKey, override, visibility, slug, template, failRea
 /** A project with no row: no key, no override, nothing measured. */
 export const UNSET_LINKING: ProjectLinkingWire = Object.freeze({
   teamKey: null, override: null, measured: Object.freeze({ state: 'unmeasured' as const }), mode: 'unknown' as const,
+  initiatives: 'on' as const, linearOwner: null, ownsTeam: false,
 });
 
 function wireOf(row: Row | undefined): ProjectLinkingWire {
@@ -38,7 +39,8 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
     && row.template !== null
     ? { state: 'measured', visibility: row.visibility, slug: row.slug, template: row.template, at: measured.at }
     : measured;
-  return { teamKey, override, measured, mode: linkingMode(override, ruled) };
+  // The hierarchy settings are filled from their own columns in Task 2.6 (D-8181); until then every project reads the defaults.
+  return { teamKey, override, measured, mode: linkingMode(override, ruled), initiatives: 'on', linearOwner: null, ownsTeam: false };
 }
 
 /** The operator's write: the key and the override, who and when; the reading is left as it is. */
