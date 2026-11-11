@@ -204,6 +204,13 @@ EOF
     ;;
   esac
 }
+# A leg's `TP|` lines, colour escapes first removed. With colour on (a CI runner: no agent in the environment and TERM not
+# dumb; FORCE_COLOR) vitest prints each console log as a grey header whose closing escapes (ESC[22m ESC[39m) come AFTER
+# the header's newline, so the logged line itself starts with them and a `^TP|` match on the raw stream misses it: a
+# one-line log (socket, workers) vanished and a multi-line one (git-state) silently lost its first line (D-8166).
+_tp_lines() {   # <leg stdout> -> its TP lines on stdout
+  sed "s/$(printf '\033')\[[0-9;]*m//g" "$1" 2>/dev/null | grep '^TP|' || :
+}
 _tp_fixture() {   # <worktree> <name> <command>... -> 0 iff both sides ran and printed the same lines, at least one
   local wt="$1" name="$2" f="testbox-parity-fixture-$2.test.mjs" cfg="testbox-parity-fixture.config.mjs" tag="fx-$2" ok=0
   shift 2
@@ -213,8 +220,8 @@ _tp_fixture() {   # <worktree> <name> <command>... -> 0 iff both sides ran and p
   # includes exactly the fixture files at the package root.
   printf "export default { test: { include: ['testbox-parity-fixture-*.test.mjs'] } };\n" > "$wt/$pkg/$cfg"
   if _tp_legs "$wt" "$tag" "$@" --config "$cfg" "$f"; then
-    grep '^TP|' "$TP_TMP/$tag.local.out" > "$TP_TMP/$tag.local.lines" 2>/dev/null || :
-    grep '^TP|' "$TP_TMP/$tag.box.out" > "$TP_TMP/$tag.box.lines" 2>/dev/null || :
+    _tp_lines "$TP_TMP/$tag.local.out" > "$TP_TMP/$tag.local.lines"
+    _tp_lines "$TP_TMP/$tag.box.out" > "$TP_TMP/$tag.box.lines"
     [ -s "$TP_TMP/$tag.local.lines" ] && cmp -s "$TP_TMP/$tag.local.lines" "$TP_TMP/$tag.box.lines" && ok=1
   fi
   rm -f -- "${wt:?}/${pkg:?}/${f:?}" "${wt:?}/${pkg:?}/${cfg:?}"
@@ -222,13 +229,15 @@ _tp_fixture() {   # <worktree> <name> <command>... -> 0 iff both sides ran and p
   if [ "$ok" = 1 ]; then fx_results+=(pass); printf 'fixture %s: byte-identical on both sides\n' "$name"
   else
     fx_results+=(fail); printf 'fixture %s: DIFFERS (or a leg could not run)\n' "$name"; total=$((total + 1))
-    # What each side printed, so a difference names itself (no `TP|` line on a side: that leg's last stderr lines).
+    # What each side printed, so a difference names itself (no `TP|` line on a side: that leg's last stdout and stderr
+    # lines, control bytes made visible, so an escape or a prefix in front of a TP line shows itself).
     local side
     for side in local box; do
       if [ -s "$TP_TMP/$tag.$side.lines" ]; then sed "s/^/$PROG: fixture $name: $side: /" "$TP_TMP/$tag.$side.lines" >&2
       else
         echo "$PROG: fixture $name: $side: no TP line" >&2
-        tail -n 15 "$TP_TMP/$tag.$side.err" 2>/dev/null | sed "s/^/$PROG: fixture $name: $side stderr: /" >&2 || :
+        tail -n 15 "$TP_TMP/$tag.$side.out" 2>/dev/null | cat -v | sed "s/^/$PROG: fixture $name: $side stdout: /" >&2 || :
+        tail -n 15 "$TP_TMP/$tag.$side.err" 2>/dev/null | cat -v | sed "s/^/$PROG: fixture $name: $side stderr: /" >&2 || :
       fi
     done
   fi

@@ -181,7 +181,10 @@ require('fs').writeFileSync(a[i + 1], 'remote\\tid\\ttext\\n');
 const r = require('child_process').spawnSync(a[a.indexOf('--') + 1], a.slice(a.indexOf('--') + 2), { stdio: 'inherit' });
 process.exit(r.status ?? 1);
 `);
-    const env = { ...t.env, PATH: `${join(REPO, 'server', 'node_modules', '.bin')}:${t.env.PATH ?? ''}` };
+    // Colour forced on, as on a CI runner (no agent in the environment, TERM not dumb): vitest then wraps each console
+    // log's header in escapes whose closing codes land at the START of the logged line, so a `^TP|` match on the raw
+    // stream misses it. Inside an agent shell vitest turns colour off, which is why this passed there and failed in CI.
+    const env = { ...t.env, FORCE_COLOR: '1', PATH: `${join(REPO, 'server', 'node_modules', '.bin')}:${t.env.PATH ?? ''}` };
     const r = spawnSync(BASH, [t.tool, '--repo', real, '--package', 'server', '--fixtures', '--rev', rev, '--', 'vitest', 'run'], { env, encoding: 'utf8', cwd: t.dir });
     expect(r.stdout + r.stderr).not.toContain('No test files found');
     for (const f of FX) expect(r.stdout, r.stdout + r.stderr).toContain(`fixture ${f}: byte-identical on both sides`);
