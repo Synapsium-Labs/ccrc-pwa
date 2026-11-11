@@ -41,6 +41,7 @@ import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync,
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import type { ExecKind } from '../../shared/roster.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
@@ -1971,7 +1972,7 @@ export function installDoctorHooks(): void {
   // own message, not every case in the file.
   beforeAll(() => {
     try { compiledSecretJs(); } catch { /* the first case that plants an auth module builds it again and reports why it could not */ }
-  }, 120_000);
+  }, scaled(120_000));
   afterEach(async () => { for (const h of codexHomes.splice(0)) await killLaneProcesses(h); });
 }
 

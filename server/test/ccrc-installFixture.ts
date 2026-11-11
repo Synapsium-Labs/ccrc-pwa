@@ -78,6 +78,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
@@ -1250,7 +1251,7 @@ export function runInstallTty(home: string, args: string[], entries: string[]): 
       clearTimeout(timer);
       resolve({ code, stdout: out, stderr: '' });
     };
-    const timer = setTimeout(() => { p.kill(); finish(-1); }, 19_000);
+    const timer = setTimeout(() => { p.kill(); finish(-1); }, scaled(19_000));
     p.onData((d) => {
       out += d;
       // One entry per prompt SEEN, so a run that refuses before the second

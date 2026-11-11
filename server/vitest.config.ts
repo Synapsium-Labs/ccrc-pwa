@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { scaled } from './test/timeScale.js';
 
 // This suite is not a unit suite that happens to be slow: over a hundred files
 // SHELL OUT — real `bash` running `ccd`, real `git` building fixture repos,
@@ -81,11 +82,17 @@ import { defineConfig } from 'vitest/config';
 // 20s while their siblings passed — the shape of a slow clock, not a hang
 // (the job's own setup and 5,400 other tests were green). 90s keeps the
 // hung-child ceiling meaningful while clearing the observed spread.
+//
+// BOTH CLOCKS SCALE under a slow environment (D-8277, test/timeScale.ts): the
+// dependency map's traced runs set CCRC_TIME_SCALE, because `strace -f` slows
+// every fork these tests make several times over, and a traced file whose
+// budget runs out is recorded `unknown`. Unset, as in every ordinary run, the
+// scale is 1 and these are the literals.
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    testTimeout: process.platform === 'darwin' ? 90_000 : 20_000,
-    hookTimeout: process.platform === 'darwin' ? 90_000 : 20_000,
+    testTimeout: scaled(process.platform === 'darwin' ? 90_000 : 20_000),
+    hookTimeout: scaled(process.platform === 'darwin' ? 90_000 : 20_000),
     // See the long comment above: a PERCENTAGE, not a fixed count, because a
     // fixed number is an absolute value under vitest 4's `resolveMaxWorkers`
     // (not a cap) and would raise CI's worker count instead of lowering it.
