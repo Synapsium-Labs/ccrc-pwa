@@ -89,7 +89,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
   };
   return { deps, coord, lines, calls, wakes, refunds, set };
 }
-const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map() });
+const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map() });
 const pass = (f: Fake, rows: FleetSession[] = [row(COORD)], names: readonly string[] = [], m = mem()) =>
   rollPass(f.deps, m, rows, rows.map((r) => rec(r.id)), names);
 
@@ -127,8 +127,9 @@ describe('rollPass: what is rolled (D-7452)', () => {
     expect(f.calls).toEqual([]);
   });
 
-  it('an idle child is never rolled, and nothing is measured for it', async () => {
+  it('under coordinators, an idle child is never rolled, and nothing is measured for it', async () => {
     const f = fake();
+    f.set.targets = 'coordinators';
     let measured = 0;
     const live = f.deps.liveWord;
     const deps = { ...f.deps, liveWord: async (r: SessionRecord) => { measured++; return live(r); } };
@@ -307,8 +308,9 @@ describe('rollPass: claimed runs and claims do not hold a roll (D-7562)', () => 
     }
   });
 
-  it('with claims, a non-coordinator is still never rolled', async () => {
+  it('under coordinators, with claims, a non-coordinator is still never rolled', async () => {
     const f = fake();
+    f.set.targets = 'coordinators';
     openRun(f.coord, { claimedBy: CHILD, state: 'planned' });
     claim(f.coord, CHILD);
     expect(await rollPass(f.deps, mem(), [childRow(CHILD)], [rec(CHILD)], [])).toEqual([{ id: CHILD, kind: 'skipped', reason: 'not-coordinator' }]);
@@ -469,8 +471,9 @@ describe('the roll does not hold the coordination serialiser across its ccd call
     expect(f.lines.join('\n')).toMatch(new RegExp(`rolled ${COORD} onto the current release .*; by the time ccd answered it was no longer a roll target \\(setting-off\\)`));
   });
 
-  it('a row that stopped being a coordinator while the call ran is journalled so', async () => {
+  it('under coordinators, a row that stopped being a coordinator while the call ran is journalled so', async () => {
     const f = fake();
+    f.set.targets = 'coordinators';
     const t = inFlight(f);
     const p = pass(f);
     await settle();
@@ -692,5 +695,142 @@ describe('a coordinator that will not roll does not keep the others from rolling
     expect(f.calls.length).toBe(1);
     now = NOW + ROLL_HOLD_OFF_MS;
     expect(await rollPass(deps, m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR + ROLL_HOLD_OFF_MS }]);
+  });
+});
+
+describe('rollPass: every idle session (D-8276, the operator\'s ruling of 2026-11-10)', () => {
+  const CHILD2 = 'lane-a-project-b-ws-child';
+
+  it('under the default, an idle child behind on release is rolled by the same one act', async () => {
+    const f = fake();
+    expect(await rollPass(f.deps, mem(), [childRow(CHILD)], [rec(CHILD)], [])).toEqual([{ id: CHILD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', CHILD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+    expect(f.wakes).toEqual([CHILD]);
+  });
+
+  it('a busy child is never rolled, and nothing is called', async () => {
+    const f = fake();
+    f.set.word = 'busy';
+    expect(await rollPass(f.deps, mem(), [childRow(CHILD)], [rec(CHILD)], [])).toEqual([{ id: CHILD, kind: 'skipped', reason: 'idle-gate:live-word' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a child carrying .no-roll is held, and nothing is called', async () => {
+    const f = fake();
+    expect(await rollPass(f.deps, mem(), [childRow(CHILD)], [rec(CHILD)], [`${CHILD}.no-roll`])).toEqual([{ id: CHILD, kind: 'skipped', reason: 'no-roll' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a child ccd refuses at the act (a draft) is skipped by ccd\'s word', async () => {
+    const f = fake();
+    f.set.hibernate = () => refused('ccd: session-busy: draft — a message is half-typed in the input box; nothing was touched');
+    expect(await rollPass(f.deps, mem(), [childRow(CHILD)], [rec(CHILD)], [])).toEqual([{ id: CHILD, kind: 'skipped', reason: 'ccd:draft' }]);
+  });
+
+  it('the stagger is unchanged: one roll a pass across coordinators and children alike', async () => {
+    const f = fake();
+    const rows = [row(COORD), childRow(CHILD), childRow(CHILD2)];
+    expect(await rollPass(f.deps, mem(), rows, rows.map((r) => rec(r.id)), [])).toEqual([
+      { id: COORD, kind: 'rolled', idleMs: 2 * HOUR },
+      { id: CHILD, kind: 'skipped', reason: 'one-per-pass' },
+      { id: CHILD2, kind: 'skipped', reason: 'one-per-pass' },
+    ]);
+    expect(f.calls.filter((c) => c[0] === 'hibernate').length).toBe(1);
+  });
+
+  it('the memory gate still holds a child\'s roll', async () => {
+    const f = fake();
+    f.set.wake = 'memory-gate:pressure-warn';
+    expect(await rollPass(f.deps, mem(), [childRow(CHILD)], [rec(CHILD)], [])).toEqual([{ id: CHILD, kind: 'skipped', reason: 'memory-gate:pressure-warn' }]);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: behind on the Claude Code build (D-8276)', () => {
+  /** Both panes started after the node's current install: only the build can put one behind. The act's fresh row is
+   *  the pass's own (`rowAtAct` re-reads the frame's row, version included). */
+  const fresh = (): Fake => fake({ startedAt: INSTALLED + MIN });
+  const buildPass = (f: Fake, rows: FleetSession[], names: readonly string[] = [], m = mem()) => {
+    (f.deps.act as { rowAtAct: RollActPort['rowAtAct'] }).rowAtAct = async (r) => ({ ok: true as const, row: rows.find((x) => x.id === r.id)! });
+    return pass(f, rows, names, m);
+  };
+
+  it('a session on an older build than the newest the fleet runs is rolled, though its release is current', async () => {
+    const f = fresh();
+    const rows = [row(COORD, { version: '2.1.302' }), row(COORD2, { version: '2.1.296' })];
+    expect(await buildPass(f, rows)).toEqual([{ id: COORD2, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD2, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('a fleet all on one build, or with no build measured, has nothing behind and writes nothing', async () => {
+    const f = fresh();
+    expect(await buildPass(f, [row(COORD, { version: '2.1.302' }), row(COORD2, { version: '2.1.302' })])).toEqual([]);
+    expect(await buildPass(f, [row(COORD), row(COORD2)])).toEqual([]);
+    expect(f.calls).toEqual([]);
+    expect(f.lines).toEqual([]);
+  });
+
+  it('a hibernated session on an old build does not set the newest build, and an archived one neither', async () => {
+    const f = fresh();
+    const rows = [row(COORD, { version: '2.1.296' }), row(COORD2, { version: '2.1.302', hibernatedAt: NOW - HOUR })];
+    expect(await buildPass(f, rows)).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a session rolled for this newest build that came back on its old one is not rolled for it again', async () => {
+    const f = fresh();
+    const m = mem();
+    const rows = [row(COORD, { version: '2.1.302' }), row(COORD2, { version: '2.1.296' })];
+    expect(await buildPass(f, rows, [], m)).toEqual([{ id: COORD2, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(m.builtFor.get(COORD2)).toBe('2.1.302');
+    expect(await buildPass(f, rows, [], m), 'the restart did not reach the newest build: no loop').toEqual([]);
+    expect(f.calls.length).toBe(1);
+    const newer = [row(COORD, { version: '2.1.303' }), row(COORD2, { version: '2.1.296' })];
+    expect(await buildPass(f, newer, [], m), 'a newer build asks again').toEqual([{ id: COORD2, kind: 'rolled', idleMs: 2 * HOUR }]);
+  });
+
+  it('two lanes: a session behind only the OTHER lane\'s build is not rolled (a restart keeps it on its lane\'s build)', async () => {
+    // Binary-lifecycle spec §2.2: the launcher picks the lane's own recorded build before the highest installed one,
+    // so a restart reaches the newest build an awake session on the same lane runs, not the fleet's newest.
+    const f = fresh();
+    const m = mem();
+    const rows = [row(COORD, { wrapper: 'lane-a', version: '2.1.302' }), row(COORD2, { wrapper: 'lane-b', version: '2.1.296' })];
+    expect(await buildPass(f, rows, [], m)).toEqual([]);
+    expect(f.calls).toEqual([]);
+    expect(m.builtFor.size).toBe(0);
+  });
+
+  it('two lanes: a session behind its own lane\'s newest build is rolled, and remembered for that build', async () => {
+    const f = fresh();
+    const m = mem();
+    const rows = [
+      row(COORD, { wrapper: 'lane-a', version: '2.1.302' }),
+      row(COORD2, { wrapper: 'lane-b', version: '2.1.296' }),
+      row(CHILD, { wrapper: 'lane-b', version: '2.1.300', role: 'child', child: { kind: 'child', runId: 3 } }),
+    ];
+    expect(await buildPass(f, rows, [], m)).toEqual([{ id: COORD2, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD2, '--surface', 'agent', '--actor', 'sweep:roll']]);
+    expect(m.builtFor.get(COORD2), 'the build its lane reaches, not the fleet\'s newest').toBe('2.1.300');
+    expect(f.lines.join('\n')).toMatch(new RegExp(`rolled ${COORD2} onto the current release \\(its lane's newest Claude Code build is 2\\.1\\.300\\)`));
+  });
+
+  it('the memory of a roll is forgotten with its row', async () => {
+    const f = fresh();
+    const m = mem();
+    await buildPass(f, [row(COORD, { version: '2.1.302' }), row(COORD2, { version: '2.1.296' })], [], m);
+    expect(m.builtFor.has(COORD2)).toBe(true);
+    await buildPass(f, [row(COORD, { version: '2.1.302' })], [], m);
+    expect(m.builtFor.has(COORD2)).toBe(false);
+  });
+
+  it('a build-behind session that is busy, or carries .no-roll, is not rolled', async () => {
+    const rows = [row(COORD, { version: '2.1.302' }), row(COORD2, { version: '2.1.296' })];
+    const busy = fresh();
+    busy.set.word = 'busy';
+    expect(await buildPass(busy, rows)).toEqual([{ id: COORD2, kind: 'skipped', reason: 'idle-gate:live-word' }]);
+    expect(busy.calls).toEqual([]);
+    const opted = fresh();
+    expect(await buildPass(opted, rows, [`${COORD2}.no-roll`])).toEqual([{ id: COORD2, kind: 'skipped', reason: 'no-roll' }]);
+    expect(opted.calls).toEqual([]);
   });
 });

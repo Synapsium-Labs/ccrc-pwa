@@ -1,6 +1,7 @@
-// Settings › Automation › "Roll idle sessions" (D-7453): the store's one row and its door, `GET`/`POST
-// /api/coord/roll-idle`. The seed is the operator's rule (`coordinators`, the row ON); `off` rolls nothing; there is no
-// `all`. A bare Fastify, the stall-watch route suite's idiom.
+// Settings › Automation › "Roll idle sessions" (D-7453; D-8276): the store's one row and its door, `GET`/`POST
+// /api/coord/roll-idle`. The default is `all` (every idle session, the operator's ruling of 2026-11-10); `coordinators`
+// keeps the 2026-10-29 rule as a choice; `off` rolls nothing. The migration's seed (`coordinators`, never written by an
+// operator) reads as the default. A bare Fastify, the stall-watch route suite's idiom.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -32,38 +33,48 @@ async function setup(): Promise<{ app: FastifyInstance; coord: CoordStore; notif
   return { app, coord, notifyLog };
 }
 
-describe('the roll setting row (D-7453)', () => {
-  it('a fresh database is seeded ON: coordinators', async () => {
+describe('the roll setting row (D-7453; D-8276)', () => {
+  it('a fresh database\'s seed, never written by an operator, reads as the default: every idle session', async () => {
     const { coord } = await setup();
-    expect(rollTargetsOf(coord.rollSettings())).toBe('coordinators');
+    expect(coord.rollSettings()).toEqual({ kind: 'row', targets: 'coordinators', seeded: true });
+    expect(rollTargetsOf(coord.rollSettings())).toBe('all');
   });
 
-  it('GET answers the setting, its default and its two choices', async () => {
+  it('GET answers the setting, its default and its three choices', async () => {
     const { app } = await setup();
     const r = await app.inject({ method: 'GET', url: '/api/coord/roll-idle' });
     expect(r.statusCode).toBe(200);
-    expect(r.json()).toEqual({ ok: true, targets: 'coordinators', default: 'coordinators', choices: ['coordinators', 'off'] });
+    expect(r.json()).toEqual({ ok: true, targets: 'all', default: 'all', choices: ['all', 'coordinators', 'off'] });
   });
 
-  it('POST off turns it off, records who did, and POST coordinators turns it back on', async () => {
+  it('POST off turns it off, records who did, and POST all turns it back on', async () => {
     const { app, coord } = await setup();
     const off = await app.inject({ method: 'POST', url: '/api/coord/roll-idle', payload: { targets: 'off' } });
     expect(off.statusCode).toBe(200);
     expect(off.json().targets).toBe('off');
     expect(rollTargetsOf(coord.rollSettings())).toBe('off');
     const ev = coord.feedEvents(10).at(-1)!;
-    expect([ev.kind, ev.title, ev.body]).toEqual(['coord', 'roll idle sessions changed', 'roll idle sessions: coordinators -> off; by flag-off']);
-    const on = await app.inject({ method: 'POST', url: '/api/coord/roll-idle', payload: { targets: 'coordinators' } });
-    expect(on.json().targets).toBe('coordinators');
+    expect([ev.kind, ev.title, ev.body]).toEqual(['coord', 'roll idle sessions changed', 'roll idle sessions: all -> off; by flag-off']);
+    const on = await app.inject({ method: 'POST', url: '/api/coord/roll-idle', payload: { targets: 'all' } });
+    expect(on.json().targets).toBe('all');
   });
 
-  it('all, or anything else, is refused and changes nothing', async () => {
+  it('POST coordinators on the untouched seed writes it, so the 10-29 rule can still be chosen and stays chosen', async () => {
     const { app, coord } = await setup();
-    for (const bad of [{ targets: 'all' }, { targets: 1 }, {}]) {
+    const r = await app.inject({ method: 'POST', url: '/api/coord/roll-idle', payload: { targets: 'coordinators' } });
+    expect(r.json().targets).toBe('coordinators');
+    expect(coord.rollSettings()).toEqual({ kind: 'row', targets: 'coordinators', seeded: false });
+    const ev = coord.feedEvents(10).at(-1)!;
+    expect(ev.body).toBe('roll idle sessions: all -> coordinators; by flag-off');
+  });
+
+  it('anything outside the three is refused and changes nothing', async () => {
+    const { app, coord } = await setup();
+    for (const bad of [{ targets: 'children' }, { targets: 1 }, {}]) {
       const r = await app.inject({ method: 'POST', url: '/api/coord/roll-idle', payload: bad });
       expect(r.statusCode, JSON.stringify(bad)).toBe(400);
     }
-    expect(rollTargetsOf(coord.rollSettings())).toBe('coordinators');
+    expect(rollTargetsOf(coord.rollSettings())).toBe('all');
   });
 
   it('a write that changes nothing keeps the stored time', async () => {
