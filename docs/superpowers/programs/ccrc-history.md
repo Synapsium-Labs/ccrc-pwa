@@ -86,7 +86,29 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-10, 22:15Z
+## Current checkpoint — 2026-11-11, 18:35Z
+
+This supersedes the 2026-11-10 checkpoints below where they differ; the current route and the definition of done above
+stand. The evidence is under "Latest rulings and evidence — 2026-11-11, W4-4 landed".
+
+- **W4 is built.** W4-4 (`ccrc history touched`, read-only) merged through the merge queue at 18:30:24Z as `88bdf0f4e`
+  (#2663), at head `bfd3d7daa`, after reviews 1822, 1830 and 1833 and two fix rounds. It defines D-8188 to D-8191.
+  Run 1767 closed done after its MERGED mail. Every W4 build PR is merged: #2554, #2563, #2594 and #2663. Done-item 3's
+  remaining part is the operator's: turning subagent history on per node, then its acceptance.
+- **Run 1834 keeps the programme open** (wave 33, planned, no worker). It was opened before run 1767 closed, because the
+  programme's item and ledger routes answer only to a coordinator that holds an open run of the programme. It carries
+  the programme's close work: act 5's report at the cohort's end, W1-b's re-measure, the recall-use report, W4's
+  per-node acceptance and the final ledger.
+- **The W3 cohort is running.** Two releases on the session node changed the steering surface: v0.0.1088 at
+  2026-11-10 22:46:34Z (W4-2 and W4-3) and v0.0.1121 at 2026-11-11 13:33:15Z (#2651). Act 5's report gives the
+  figures before and after each. W4-4's release is the next one, when it reaches the node.
+- **#2651 merged** at 10:52:34Z as `f927c3c7e`: the history redaction rules are now `shared/redact.mjs` profiles
+  (D-5867), with byte-identical output. The coordinator's two rulings on it, and the residual it leaves for a resumed W2
+  study, are in the evidence below.
+- **Open with the operator:** whether Settings shows the stall watch at "Everything" (CP-04), and whether to write up
+  the two carried speed-ups for `touched`.
+
+### Checkpoint of 2026-11-10, 22:15Z
 
 This supersedes the earlier 2026-11-10 checkpoints below where they differ; the current route and the definition of
 done above stand. The evidence is under "Latest rulings and evidence — 2026-11-10, W4-2 and W4-3 landed, act M3".
@@ -319,11 +341,123 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 29 | W4-1: the subagent walk, ingest, the pause order, the marker gate, the import form and the census (W4 plan group W4-1) | fleet | #2554 | **merged** 2026-11-10 16:21Z as `b9731a15a` at head `6fc0ef99b` (run 1745, done; reviews 1749, 1750 and 1752; two fix rounds); defines D-8151 to D-8163; number 8164 unwritten |
 | 30 | W4-2: subagent leaves on their own chain, with no receipt and no card (W4 plan Task 2) | fleet | #2563 | **merged** 2026-11-10 19:16Z as `6b2330eeb` at head `d1528cd6e` (run 1754, done; reviews 1757 and 1759; one fix round); defines D-8168 and D-8169; numbers 8170 and 8171 unwritten |
 | 31 | W4-3: subagent rows show only under `--agents` (W4 plan Task 3) | fleet | #2594 | **merged** 2026-11-10 22:06Z as `e3d91a7b6` at head `6e904736f` (run 1761, done; reviews 1763 and 1765; one fix round); defines D-8175 and D-8176; numbers 8177 and 8178 unwritten |
-| 32 | W4-4: `touched` (W4 plan Tasks 4A to 4C) | fleet | — | **open, held** (run 1767, planned); block of numbers 8188 to 8191 (8188 and 8189 approved, 8190 and 8191 held); dispatch after the consolidation programme's `lib.mjs` slot |
+| 32 | W4-4: `touched`, read-only (W4 plan Tasks 4A to 4C) | fleet | #2663 | **merged** 2026-11-11 18:30Z as `88bdf0f4e` at head `bfd3d7daa` (run 1767, done; reviews 1822, 1830 and 1833; two fix rounds; one queue ejection on an unrelated browser row, re-enqueued); defines D-8188 to D-8191 |
+| 33 | Programme close: act 5's report, W1-b, the recall-use report, W4's per-node acceptance, the final ledger | coordinator | — | **open, planned** (run 1834, no worker); keeps the programme's item and ledger routes open |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; steering-surface releases v0.0.1078 and v0.0.1088 not on the node; focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1, W4-2 and W4-3 **merged** (#2554, #2563, #2594; waves 29 to 31); W4-4 open and held (wave 32); act M3 measured; no node armed; B4 live still required |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 to W4-4 **merged** (#2554, #2563, #2594, #2663; waves 29 to 32); act M3 measured; no node armed; B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-11, W4-4 landed
+
+**#2651, the consolidation programme's redaction PR (ARCH-66 C1l PR 2).**
+- The peer asked two rulings before review (mail 17543). The coordinator answered in mail 17544.
+  - (j9): a mutant that swaps `BASE_RULES` cannot red (j9), because (j9) compares the door's output with
+    `v2(base, idx)` over the same base. The coordinator's condition of 2026-11-10 that named (j9) was wrong. The 5h-2
+    plan's M9 measured that such a mutant reds (j4), (j5) and (j7), and that (j10) stays green. Ruled: the mutant must
+    red (j14), the frozen base's digest, and (j7) where it is among its rows; (j9) and (j10) stay unedited; the
+    consolidation plan's mutant row is corrected under D-5867. The peer confirmed it (mail 17614).
+  - gate_code: #2651 needs no `deploy/history-gate.mjs` edit, and the cohort's `release_tag` is enough. Residual,
+    carried: if the W2 study is expressly resumed, `shared/redact.mjs` and `shared/workflow-ids.mjs` join
+    `GATE_CODE_FILES` and the frozen-tree diff set before any record or superseding draft is signed.
+- Accepted: `history-lib.test.ts`' L1 import pin admits `shared/redact.mjs`, and each shared file is still asserted
+  to import nothing. Until the cohort ends, the peer mails before any PR that edits a history profile's rows.
+- Merged 10:52:34Z as `f927c3c7e`. `lib.mjs` builds `BASE_RULES` and `CONTEXT_RULES` from the profiles `history-base`
+  and `history-v2`; `BELT_VERSION` stays 2. No live claim named a history path after it, so W4-4 was dispatched.
+
+**W4-4 (#2663, run 1767).**
+- Dispatched 11:15Z from main at `f927c3c7e`, with the block 8188 to 8191: D-8188
+  (`history-w4-touched-graph-labels`) and D-8189 (`history-w4-suffix-without-graph`) approved, 8190 and 8191 held.
+- **First stop, Task 4C Step 4 (mail 17662).**
+  - Measured: at act M3's size (68,456 `node_refs` rows, 5,697 nodes), the plan bench's ordered p95 was at most
+    39 ms on every shape. So `TOUCHED_ORDERED_CAP` is true and TC20 runs (P13).
+  - A cell with a 77.6 MB graph gave a symbol query's p95 of 1.4 to 2.7 s, with peak RSS about 1 GB.
+  - Ruled (A) in mail 17663. P9's 2 s target governs `touched`'s store path: section 3.5's cost paragraph and section
+    9's acceptance line measure it "on a fixture of the measured `node_refs` size", and P9's remedies are all store
+    remedies. The graph's parse is `loadGraph`'s existing cost, under the `GRAPH_MAX_BYTES` bound the addendum adopted.
+  - A lower graph bound of `touched`'s own was refused: it changes what TC7 ties to `GRAPH_MAX_BYTES`, a trade nobody
+    had ruled on.
+- **Review 1822** read the whole branch and confirmed six findings. Fix round 1 (mail 17710) ruled:
+  - a case that runs the verb on `_` and `%`, since the escape guard had tested only the decider;
+  - `VERB_TABLES.touched` gains `node_children` and `node_sources`, and `touched` joins the migration-pending loop;
+  - the note's cost attribution corrected: the store path runs one full `node_refs` scan per basename of a symbol's
+    label, so it grows with the label's span and with the store.
+    - A cell was added at the widest identifier-shaped label the coordinator measured in a real graph: 165 basenames,
+      in a graph of 67,679 nodes and 4,756 files, where 2 labels span 150 or more and none spans 350.
+  - D-8190 (`history-w4-touched-graph-regular-file`): a `graph.json` that is a FIFO hung the verb forever. So `touched`
+    loads a graph only when a stat, following links, finds a regular file, as the hook's `[ -f ]` test does; anything
+    else is no graph for that root. The residual is a file swapped between the stat and the open.
+  - each root's graph reduced to its files, its index and the queried label's files, so that a `--project` scope
+    holds no whole graph;
+  - one stored ref listed once, under the graph's file.
+- **Second stop, fix round 1 (mail 17729).** The 165-basename cell read a cold p95 of 2,018 ms at load 14 to 17, and
+  848 ms at load 4.
+  - Ruled (B) in mail 17731: section 9's acceptance is a measured p95 under 2 s, and taking the quiet run would choose
+    the favourable figure.
+  - D-8191 (`history-w4-touched-label-files-one-select`) reads a label's files by OR selects of at most 100 escaped
+    basenames each, with section 3.5's kinds, order and limit. SQLite refuses an expression tree of depth 1000, as
+    measured in `node:sqlite` and in Python's `sqlite3`. The coordinator's in-memory differential: 165 selects took
+    about 950 ms, and one OR select about 460 ms, for the same rows.
+  - After D-8191 the cell runs 3 selects, at a cold p95 of 223 ms (load 4.9).
+- **The ledger guard.** Its owner holds it at warn until #2663 lands, then turns on enforce (D-6926). From then on,
+  this programme's plan and ledger commits ride `ledger/ccrc-history-*` branches or carry a `Ledger-Edit:` trailer.
+  #2663's plan commits after the notice carry `Ledger-Edit: D-8191`.
+- **Review 1830** read fix round 1 and found two tests that could not fail: the two-chunk case's decoys could not be
+  selected, and nothing pinned the chunking (a chunk size of 1 passed).
+  - Fix round 2 (mail 17762) was tests, comments and the note only.
+  - It ruled from section 3.5, steps 4 and 5: a `path:symbol` ref in a label's file that carries another symbol is
+    listed for a symbol query. The label's files add file-query candidates matched by path, and "whose symbol equals it"
+    governs the symbol select's refs.
+- **Review 1833** (the third, the last under the review cap) read fix round 2 and confirmed nothing. Its carries are
+  below.
+- **Landing.** `verdict.sh` answered `ROUTE Q method=squash admin=never strict=no`, and the PR was enqueued at
+  17:48:59Z pinned to `bfd3d7daa`.
+  - It was dequeued at 18:03:47Z by a failed browser shard on `pwa/browser/delegation-adopt-card.browser.test.ts`, a
+    timing row whose own check said "this row measures nothing". #2663 changes no `pwa/` file.
+  - It was re-measured and re-enqueued at 18:07:02Z, and merged at 18:30:24Z as `88bdf0f4e`.
+  - Run 1834 opened first; then run 1767 closed done after its MERGED mail (17778).
+- **Carried, no number.**
+  - The select-count pin admits chunk sizes 100 to 111; sizes 1 and 1000 red.
+  - The two-chunk case's CONTROL runs a copy of the select, not `touchedLabelSql`.
+  - The bench's symbol-with-graph EXPLAIN hard-codes its three patterns.
+  - Two code comments paraphrase rather than cite.
+  - With a loaded graph that does not hold the queried file, suffix refs do not match, while exact refs do.
+  - Applied here as text to `w4-4.md`: the cap case is the dedupe's pin, and mail 17762's ruling on another symbol's
+    ref.
+- **Proposals for the operator, not built:**
+  - one scan that matches every label basename, or a label index, for the label-file arm;
+  - the scope inside section 3.5's selects (`history-w4-touched-scope-in-select`);
+  - per-root headers under `--project` that name their root.
+
+**The cohort's releases (O11 as amended).** The session node's releases since the cohort began. The coordinator also
+watches `shared/redact.mjs`, since #2651 builds the history rules from it.
+
+| Release | Installed (UTC) | Watched change | Steering boundary |
+|---|---|---|---|
+| v0.0.1088 | 2026-11-10 22:46:34 | W4-2 and W4-3 (`ccd/history`) | yes |
+| v0.0.1115 | 2026-11-11 08:58:47 | the hook's roster card (#2622, #2638), outside its steer, history and PreCompact parts | no |
+| v0.0.1121 | 2026-11-11 13:33:15 | #2651 (`lib.mjs`, `shared/redact.mjs`) | yes |
+| v0.0.1124 | 2026-11-11 14:57:19 | the hook's tmux socket lookup (#2642); the node has no socket setting, so its call is unchanged | no |
+| v0.0.1126 | 2026-11-11 15:06:38 | none | no |
+| v0.0.1128 | 2026-11-11 15:34:32 | none | no |
+
+**Another programme's question (#2491).** Its spec needs a baseline for its replay-quiz metric, and the quiz is this
+programme's.
+- The coordinator answered (mails 17685, 17686) that a reduced run of the W2 runbook's quiz conflicts with this
+  programme's rulings:
+  - the runbook freezes releases while fleet deploys continue during the cohort;
+  - the code check misses `shared/redact.mjs`;
+  - its signed records would need the operator's express word.
+- The quiz also cannot run reduced as written: `arms` and `judge` read part 2, and `arms` always runs both recall arms.
+- The operator chose that programme's own first weekly quiz as the baseline, under four conditions: it reads the
+  store only, writes no history marker, mails this coordinator before any PR that extends the replay, gate or quiz
+  code, and is never written up as a W2 result.
+
+**Linear.** The operator's ops session answered the open question (mail 17502): keep the existing CP tickets in step
+as waves land, with state moves and short comments citing PRs and D-numbers, and open no new ones.
+- The tickets of CP-32, CP-41a and CP-82 were cancelled under the skip ruling.
+- The W4 build ticket is done.
+- CP-04's ticket waits for the operator's answer on the stall watch.
 
 ### Latest rulings and evidence — 2026-11-10, W4-2 and W4-3 landed, act M3
 
