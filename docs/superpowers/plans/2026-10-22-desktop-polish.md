@@ -3384,6 +3384,30 @@ net's join and one for the API commits address.
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.
 
+### Task C24: the gh reader's net reads the raw and the joined text, and quotes as the shell does (D-8291) — now
+
+**Why.** Review 1808, the third and last review of Task C23, found that the net read only the text as the shell joins it, so
+a continuation glued to the word before a repository flag or a `repos/` word hid the repository the raw text names (F1), a
+continuation inside an `api.github.com` address named nothing (F2), the join reached inside single quotes (F3), and a word
+glued after a closing quote was dropped from the value (F4); and ten minors. The rule stays as R15 sets it: open the
+repository the message means, or stay text. The receipts are in `c24.md`.
+
+**Items, and what was done.**
+- **F1 and F2.** The net reads the raw message and the joined one, and names what either finds, so the join can only add
+  what the net finds. A continuation between a flag and its value is read as the space the shell reads.
+- **F3.** A continuation inside `'..'` or `$'..'` is not joined, as in the shell; a quote between two letters is prose.
+- **F4.** A word glued after a repository flag value's closing quote belongs to the value.
+- **M5.** The address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text as well as the raw. What only
+  the joined reading finds may only add: a repository it names, or a repository for a number or commit the raw reading
+  already gives one. The `gh` command reader still reads the raw text only (recorded).
+- **Minors.** The two commit-candidate pins read 3 MiB (M1); the record items M2, M3, M4, M8 and M10 are in `c24.md`; R15's
+  "Not read" names `owner/repo@sha` (M6); the mutants are named with their old and new text (M9).
+
+R15 gains one sentence for the union, one for single quotes and one for the glued tail, and its "Not read" list names
+`owner/repo@sha` (M6, the coordinator's answer to this task's ask), and nothing else in the spec changes.
+
+- **D-8291** - `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

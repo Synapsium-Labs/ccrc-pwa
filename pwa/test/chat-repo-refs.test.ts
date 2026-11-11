@@ -1209,7 +1209,9 @@ describe('Task C24: the net reads the raw and the joined text, and reads quotes 
           [nl('gh pr view 12 -R owner-b/repo-b\\\n--repo org-a/project-a; #12'), [['#12', null]]],
         ]);
         // Controls: a space before the backslash, or an indented next line, keeps the flag a word of its own: the command's.
+        // A path its command read stays that command's in both readings, each walking the claims with its own cursor.
         rows(ctx, [
+          [nl('gh api repos/owner-b/repo-b/pulls/12; gh api repos/owner-c/repo-c/pulls/13 \\\nand #12 and #13'), [['#12', b(12)], ['#13', c(13)]]],
           [nl('gh pr view 12 --title foo \\\n--repo owner-b/repo-b and #12'), [['#12', b(12)]]],
           [nl('gh pr view 12 --title foo\\\n  --repo owner-b/repo-b and #12'), [['#12', b(12)]]],
         ]);
@@ -1252,6 +1254,8 @@ describe('Task C24: the net reads the raw and the joined text, and reads quotes 
         [nl('see https://github.com/owner-c/repo-c/commit/1234\\\n567abc and 1234567abc'), [['1234567abc', null]]],
         // It adds a repository to a name the raw reading gives one: the same one leaves the link, another makes it text.
         [nl('https://github.com/owner-c/repo-c/pull/12; https://github.com/owner-c/repo-c/pu\\\nll/12 and #12'), [['#12', c(12)]]],
+        // A joined number the name boundary does not end is none, as in the raw reading.
+        [nl('https://github.com/owner-b/repo-b/pull/12; https://github.com/owner-c/repo-c/pu\\\nll/12x and #12'), [['#12', b(12)]]],
         [nl('https://github.com/owner-b/repo-b/commit/1234567abc; https://github.com/owner-c/repo-c/commit/1234\\\n567abc and 1234567abc'),
           [['1234567abc', null]]],
         [nl('https://github.com/owner-c/repo-c/commit/1234567abc; https://github.com/owner-c/repo-c/commit/1234\\\n567abc and 1234567abc'),
@@ -1272,7 +1276,8 @@ describe('Task C24: the net reads the raw and the joined text, and reads quotes 
     // is joined, which makes #12 text. Unjoined (in single quotes) it names no number, so #12 opens owner-b.
     const pull = 'https://github.com/owner-c/repo-c/pu\\\nll/12';
     const withB = (t: string): string => `https://github.com/owner-b/repo-b/pull/12; ${t} and #12`;
-    rows(HOME, [
+    for (const nl of [lf, crlf]) {
+      rows(HOME, ([
       [withB(`'${pull}'`), [['#12', b(12)]]],
       [withB(`$'${pull}'`), [['#12', b(12)]]],
       [withB(`"${pull}"`), [['#12', null]]],
@@ -1283,9 +1288,11 @@ describe('Task C24: the net reads the raw and the joined text, and reads quotes 
       // A quote between two letters is prose, and a quote no closing one follows before a bare line break is a character.
       [withB(`it's at ${pull}, don't`), [['#12', null]]],
       [`${withB(`'tis ${pull}`)}\nthe end'`, [['#12', null]]],
-      // An escaped quote opens nothing.
+      // An escaped quote opens nothing; a span's closing quote opens no other.
       [withB(`\\'${pull}'`), [['#12', null]]],
-    ]);
+      [withB(`'x' ${pull} 'y'`), [['#12', null]]],
+    ] as [string, [string, string | null][]][]).map(([t, e]) => [nl(t), e]));
+    }
   });
 
   it('F4: a word glued after a closing quote belongs to the value, as the shell glues it', () => {
@@ -1310,8 +1317,10 @@ describe('Task C24: the net reads the raw and the joined text, and reads quotes 
     for (const nl of [lf, crlf]) {
       rows(HOME, [
         [nl('G\\\nH_REPO=owner-b/repo-b; gh pr list -R \\\norg-a/project-a; #12'), [['#12', null]]],
-        // Control: without GH_REPO the shell reads only the home repository.
+        // Control: without GH_REPO the shell reads only the home repository; so with the continuation glued after -R or =.
         [nl('gh pr list -R \\\norg-a/project-a; #12'), [['#12', home(12)]]],
+        [nl('gh pr list -R\\\norg-a/project-a; #12'), [['#12', home(12)]]],
+        [nl('gh pr list -R=\\\norg-a/project-a; #12'), [['#12', home(12)]]],
         // A gh word the join forms makes the net run (review 1800 F3, which opened home): its flag names owner-b.
         [nl('g\\\nh pr view 12 -R owner-b/repo-b and #12'), [['#12', null]]],
         [nl('g\\\nh api repos/owner-b/repo-b/commits/1234567abc; https://api.github.com/repos/owner-c/repo-c/commits/1234567abc and 1234567abc'),
