@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the thirteen separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These thirteen are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the twelve separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These twelve are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -391,8 +391,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // accounts word's signed-in window (D-6058 (3), (6)) is the accounts spec's own 7 d since the last good check (§4.1),
     // a separate quantity that does not import the token interval. The stale arm's idle span (D-6639) is the separate quantity
     // spec 2026-10-23-fleet-disk-retention-design §2.7.3 (rulings G2) chose: seven days, the expiry horizon, which ccd's WS_STALE_IDLE_S measures on the box.
-    // The programme ledgers' "Recently cleared" trail (spec 2026-10-31-programme-ledgers-design D13, ruled in by the
-    // coordinator for PL1) is a separate quantity too: seven days of cleared items, unrelated to token rotation.
+    // The programme ledgers' "Recently cleared" trail (spec 2026-10-31-programme-ledgers-design D13) was a holder until D-8194
+    // cut it to 48 hours; it holds no seven days now.
     // The delegation lease expiry (delegation broker wave 5, D-7829) is a separate quantity: an adopted or retained lease's cleanup-due
     // interval, which every Retain resets, not the workspace lifecycle's archive-to-expiry interval. The operator approved it as one of
     // the wave 5 plan's thresholds (D-7794, 2026-11-04), and the coordinator ruled it in here. It does not import the token interval.
@@ -400,10 +400,10 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // answers the operator ruled (D-8115): `never-started`'s age (§7 row 5, planned work over 7 days old with nothing else open
     // in its programme), and A55's window, how long a closed programme's claimant is still measured after its last close. Each is
     // the spec's own seven days of run age or programme quiet, unrelated to token rotation, and neither imports the token interval.
-    // The programme cards' quiet fold (D-8075, spec §8.2 item 8) is the twelfth: a programme with no run opened or closed
+    // The programme cards' quiet fold (D-8075, spec §8.2 item 8) is the eleventh: a programme with no run opened or closed
     // for seven days folds under quiet programmes and a finished one leaves the Finished fold. It is the spec's own seven
     // days of programme quiet, a display threshold on the client, and it does not import the token interval.
-    // The run-close lanes' refusal tally (D-8077, spec §12.3) is the thirteenth: how many closes the arm refused in the last seven
+    // The run-close lanes' refusal tally (D-8077, spec §12.3) is the twelfth: how many closes the arm refused in the last seven
     // days, shown on the Advanced row. It is the spec's own seven days of a count, and it does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
@@ -418,7 +418,6 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
       'shared/accounts.ts:SIGNED_IN_WITHIN_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
-      'shared/ledgers.ts:CLEARED_WINDOW_MS',
     ]);
   });
 });

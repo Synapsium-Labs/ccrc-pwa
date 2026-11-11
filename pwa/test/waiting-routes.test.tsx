@@ -9,6 +9,7 @@ import { ROUTES, matchRoute } from '../src/lib/routes';
 import { ItemListColumn, ItemRoute, ItemRouteAt, WaitingRoute } from '../src/ledgers/WaitingRoutes';
 import { navigate, useLocation } from '../src/lib/router';
 import { refetchWaiting } from '../src/ledgers/waitingStore';
+import { forgetItemReads } from '../src/ledgers/itemReads';
 import { SAVED_ROWS_WORD, itemPath } from '../src/ledgers/ledgerWords';
 import { run as runFixture } from './rollupFixture';
 import { fleetSession } from './fleetFixture';
@@ -20,7 +21,7 @@ const mk = () => createFleetStore({ makeSocket });
 // Every case starts with nothing saved on the device: a read now saves the list (console speed C4), and a copy left by one
 // case would be the next store's cold-start copy.
 beforeEach(() => { window.localStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); })); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); history.replaceState(null, '', '/'); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); history.replaceState(null, '', '/'); forgetItemReads(); });
 
 describe('ItemRoute', () => {
   it('a tick calls the route with the typed answer, then reads the list again', async () => {
@@ -747,5 +748,69 @@ describe('the walk keeps its place while the operator stays on one item (fix rou
     step('Next item');
     expect(within(strip()).getByRole('status')).toBe(pos);
     expect(pos.textContent).toBe('2 of 2, Item 11');
+  });
+});
+
+// D-8194: an item opened by its id after it has left the 48-hour Recently cleared window still opens, read-only, from the server's
+// read of that one item; and "item N" in an item's text links to that item where it is one: the list's own at once, any other
+// once the server has said it is an item.
+describe('an item by its id, and the items its text names (D-8194)', () => {
+  const DAY = 24 * 60 * MIN;
+  const old = itemView({ id: 40, state: 'done', title: 'Approved last week', closedAt: NOW - 5 * DAY,
+    history: [{ at: NOW - 6 * DAY, act: 'raise', note: null }, { at: NOW - 5 * DAY, act: 'confirm', note: null }] });
+
+  it('an item that left the window opens from the server\'s read, read-only', async () => {
+    const store = mk();
+    act(() => store.setState({ runsFrameSeen: true, runs: [runRow({ id: 1, program: 'prog-a' })], waiting: waitingView({ items: [itemView({ id: 2 })] }) }));
+    const read = vi.spyOn(api, 'item').mockResolvedValue({ ok: true, item: old });
+    render(<ItemRoute id={40} store={store} />);
+    expect(await screen.findByRole('heading', { name: 'Approved last week' })).toBeTruthy();
+    expect(read).toHaveBeenCalledWith(40);
+    const panel = screen.getByRole('region', { name: 'Your move' });
+    expect(panel.textContent).toContain('This item is done.');
+    expect(within(panel).queryAllByRole('button')).toEqual([]);
+    expect(screen.queryByText('That item is not on the list any more.')).toBeNull();
+    expect(screen.getByText('#40')).toBeTruthy();
+  });
+
+  it('a number the server has no item for is still gone, and an item the list holds is never read', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 2, title: 'Two' })] }) }));
+    const read = vi.spyOn(api, 'item').mockRejectedValue(new ApiError(404, { ok: false, error: 'unknown-item' }));
+    const view = render(<ItemRoute id={77} store={store} />);
+    await waitFor(() => expect(read).toHaveBeenCalledWith(77));
+    expect(screen.getByText('That item is not on the list any more.')).toBeTruthy();
+    view.unmount();
+    read.mockClear();
+    render(<ItemRoute id={2} store={store} />);
+    expect(screen.getByRole('heading', { name: 'Two' })).toBeTruthy();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('the page links "item N" to an item the list holds at once, to one the server knows once read, and leaves a stranger as text', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [
+      itemView({ id: 5, why: 'Needs item 6, item 40 and item 77 first.' }), itemView({ id: 6, title: 'Six' }),
+    ] }) }));
+    const read = vi.spyOn(api, 'item').mockImplementation(async (id: number) => {
+      if (id === 40) return { ok: true, item: old };
+      throw new ApiError(404, { ok: false, error: 'unknown-item' });
+    });
+    render(<ItemRoute id={5} store={store} />);
+    const hrefs = (): (string | null)[][] => screen.queryAllByRole('link').map((a) => [a.textContent, a.getAttribute('href')]);
+    expect(hrefs()).toContainEqual(['item 6', '/waiting/6']);
+    await waitFor(() => expect(hrefs()).toContainEqual(['item 40', '/waiting/40']));
+    expect(hrefs().map((h) => h[0])).not.toContain('item 77');
+    expect(read.mock.calls.map((c) => c[0]).sort()).toEqual([40, 77]);
+  });
+
+  it('a card on the list links the items its text names', async () => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [
+      itemView({ id: 5, title: 'Unblock item 6' }), itemView({ id: 6, title: 'Six' }),
+    ] }) }));
+    render(<WaitingRoute store={store} />);
+    const li = document.querySelector<HTMLElement>('li:has([data-item="5"])')!;
+    expect(within(li).getByRole('link', { name: 'item 6' }).getAttribute('href')).toBe('/waiting/6');
   });
 });

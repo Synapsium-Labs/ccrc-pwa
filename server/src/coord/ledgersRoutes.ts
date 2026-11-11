@@ -38,6 +38,7 @@ import {
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
+import { operatorWasShown } from './ledgersStore.js';
 import type { CoordRoutesHandle } from './routes.js';
 import type { CloseOutcome } from './close.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
@@ -650,6 +651,21 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf, secretOf) });
+  });
+
+  // D-8194: one item by its id, whatever its state and however long ago it closed, so an item opened by its number (a link in
+  // another item's text, a page kept open) still opens, read-only, after it has left the Recently cleared window. The
+  // operator's read beside the list: session-gated, no box token. An item the operator was never shown (held, or settled
+  // inside its hold: `operatorWasShown`, the list's own rule) is `unknown-item`, as is a number no item has.
+  app.get('/api/items/:id', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const id = itemIdOf(req);
+    if (id === null) return bad(reply, 'the item id is a positive integer');
+    const now = deps.now();
+    const item = coord.itemById(id);
+    if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    return reply.code(200).send({ ok: true, item: viewOfItem(coord, item, now, deps.presenceOf, secretOf) });
   });
 
   // EXEMPT-BUT-AUTHENTICATED (D-149's pattern, D-8126): a live session OR the box token, 401 only when both fail, and before

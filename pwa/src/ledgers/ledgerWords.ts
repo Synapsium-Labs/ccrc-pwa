@@ -7,7 +7,7 @@
 // An item's state is its `state` column only (plan PL5b R2): `Came back` is an OPEN item whose latest coordinator move was
 // a return, read from its history, never from a field that keeps the last round's value.
 import { shapeProgramSlug, type FleetSession, type RunSummary } from '../../../shared/api';
-import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
+import { CLEARED_WINDOW_MS, orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { isRunClosed, sessionProgramme } from '../fleet/runWords';
@@ -41,6 +41,47 @@ export const NO_PROGRAMME_WORD = 'Not in a programme';
 /** A decide item's recommended option (plan PL9; spec §3.2, D24): the mark on it, and the heading of its reasons. */
 export const RECOMMENDED_WORD = 'Recommended';
 export const RECOMMENDED_WHY_HEADING = 'Why it is recommended';
+
+/** An item's number (D-8194): its own id as the API sends it, after a `#`, so a coordinator's "item 129" matches a card and a
+ *  page. Never a number of the list's own: the id is the one both sides hold. */
+export const itemNumber = (item: Pick<ItemView, 'id'>): string => `#${item.id}`;
+
+/** What a closed item's page says (D-8194): an item opened by its number after it closed is read-only, and says why. Null for an
+ *  item still waiting (open, checking). */
+export function closedItemWords(state: ItemView['state']): string | null {
+  const said = state === 'done' ? 'This item is done.' : state === 'withdrawn' ? 'The coordinator withdrew this item.'
+    : state === 'dismissed' ? 'You dismissed this item.' : null;
+  return said === null ? null : `${said} There is nothing to do on it.`;
+}
+
+/** The Recently cleared trail (D-8194): how many of it show before Show all, and the control's two words. */
+export const CLEARED_SHOWN = 5;
+export const showAllWord = (n: number): string => `Show all ${n}`;
+export const SHOW_FEWER_WORD = 'Show fewer';
+
+/** The Recently cleared trail opened whole, by programme (D-8194): one group per programme in the order of its newest clear (the
+ *  trail is newest first), each holding its items in the trail's order. */
+export interface ClearedGroup { readonly program: string; readonly items: readonly ItemView[] }
+export function clearedGroups(trail: readonly ItemView[]): ClearedGroup[] {
+  const by = new Map<string, ItemView[]>();
+  for (const i of trail) { const g = by.get(i.program); if (g === undefined) by.set(i.program, [i]); else g.push(i); }
+  return [...by].map(([program, items]) => ({ program, items }));
+}
+/** The line beside a card that links the items its text names (D-8194): a card is one button, so its links sit beside it. */
+export const MENTIONS_WORD = 'Mentions';
+/** A reference's words on that line. */
+export const itemRefWord = (id: number): string => `item ${id}`;
+/** A cleared group's count, beside its programme's name. */
+export const clearedCountWord = (n: number): string => `${n} cleared`;
+
+/** What the Recently cleared trail draws (D-8194): the items cleared inside `CLEARED_WINDOW_MS` of the page clock, the edge
+ *  included as the server's list includes it, newest first (the id breaks a tie). The server sends the same window; this
+ *  read keeps a list heard a while ago from showing what has since aged out. A copy: the input is not touched. */
+export function clearedTrail(items: readonly ItemView[], now: number): ItemView[] {
+  return items
+    .filter((i) => i.closedAt !== null && i.closedAt >= now - CLEARED_WINDOW_MS)
+    .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0) || b.id - a.id);
+}
 
 /** What a pill's colour means; a pill always says it in words too, so no state is read out of colour alone. */
 export type PillTone = 'blocking' | 'soon' | 'later' | 'checking' | 'stale' | 'bounced' | 'ask';

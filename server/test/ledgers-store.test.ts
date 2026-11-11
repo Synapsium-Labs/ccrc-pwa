@@ -199,7 +199,7 @@ describe('tickWithMail (plan PL2)', () => {
 });
 
 describe('listing items (plan PL2)', () => {
-  it('itemsFor keeps done items 7 days in cleared and drops them after', () => {
+  it('itemsFor keeps done items for CLEARED_WINDOW_MS (48 hours, D-8194) in cleared and drops them after', () => {
     const s = mk();
     const done = (closedAt: number): number => {
       const id = raise(s, {}, closedAt - 10);

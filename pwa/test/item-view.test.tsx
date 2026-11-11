@@ -503,3 +503,50 @@ describe('an end-request item in the item view (Task 24, spec 2026-11-04 §10; D
     expect(screen.queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
   });
 });
+
+// D-8194: the item's page carries its number, so a coordinator's "item 129" can be matched to it.
+describe('the item\'s number (D-8194)', () => {
+  it('the page shows the item\'s own id as #<id>', () => {
+    show(itemView({ id: 129, title: 'Flip the lane' }));
+    expect(screen.getByText('#129')).toBeTruthy();
+  });
+});
+
+// D-8194: "item N" in an item's text is a link to that item's page when the page knows it is an item (`itemHref`), and a closed
+// item opens read-only: it says it is closed and offers no act.
+describe('item references and a closed item (D-8194)', () => {
+  const KNOWN = new Set([12, 13, 40]);
+  const itemHref = (id: number): string | null => (KNOWN.has(id) ? `/waiting/${id}` : null);
+
+  it('"item N" in the why, a step and a sent-back note is a link to that item\'s page; a number no item has stays text', () => {
+    show(itemView({
+      id: 5, why: 'It waits on item 12, not item 99.', how: ['Do items 13 and 40 first.'],
+      history: [{ at: NOW - MIN, act: 'raise', note: null }, { at: NOW, act: 'return', note: 'See item #12.' }],
+    }), { itemHref });
+    const hrefs = screen.getAllByRole('link').map((a) => [a.textContent, a.getAttribute('href')]);
+    expect(hrefs).toEqual([
+      ['item 12', '/waiting/12'], ['items 13', '/waiting/13'], ['40', '/waiting/40'], ['item #12', '/waiting/12'],
+    ]);
+    expect(screen.getByText(/not item 99\./)).toBeTruthy();
+  });
+
+  it('without an itemHref no number is a link', () => {
+    show(itemView({ why: 'It waits on item 12.' }));
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it.each([
+    ['done', 'This item is done.'], ['withdrawn', 'The coordinator withdrew this item.'], ['dismissed', 'You dismissed this item.'],
+  ] as const)('a %s item opens read-only: it says so, and offers neither Mark done nor Dismiss', (state, words) => {
+    show(itemView({ state, closedAt: NOW - MIN }), { programmeLive: false });
+    const panel = screen.getByRole('region', { name: 'Your move' });
+    expect(panel.textContent).toContain(words);
+    expect(within(panel).queryAllByRole('button')).toEqual([]);
+  });
+
+  it('a closed decide item draws no choices to make', () => {
+    show(itemView({ kind: 'decide', options: ['A', 'B'], state: 'done', closedAt: NOW - MIN, answer: 'A' }));
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+});

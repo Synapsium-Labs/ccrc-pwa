@@ -150,6 +150,14 @@ export function itemsFor(db: DatabaseSync, program: string | null, now: number):
   return { open: open.map(itemRowOf), cleared: cleared.map(itemRowOf) };
 }
 
+/** Whether the operator was ever shown an item (D-8194), the hold rule `itemsFor` filters by, for one row read by its id: an
+ *  item still held (`heldUntil` in the future) is not, nor is one its coordinator settled inside the hold (closed before
+ *  `heldUntil`); every other item is, whatever its state and however long ago it closed. */
+export function operatorWasShown(row: Pick<ItemRow, 'heldUntil' | 'closedAt'>, now: number): boolean {
+  if (row.heldUntil === null) return true;
+  return row.closedAt === null ? row.heldUntil <= now : row.closedAt >= row.heldUntil;
+}
+
 /** One move, inside a transaction the CALLER holds. The decider is `nextItemState`; this reads the row, asks it, and
  *  writes the state, the timestamps and one event, or writes nothing and answers its word. THE ONLY WRITER of
  *  `operator_items.state`. `fields.answer` is kept on a tick; `fields.note` is kept on the row only for a return (the

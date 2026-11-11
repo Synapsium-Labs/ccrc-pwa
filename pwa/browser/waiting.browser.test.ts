@@ -70,10 +70,17 @@ const WAITING = {
         { at: NOW - 60 * MIN, act: 'return', note: 'Settings still shows record only.' }],
     }),
     item(4, 'prog-b', { state: 'checking', tickedAt: NOW - 5 * MIN, title: 'Review the requested change' }),
-    item(5, 'prog-a', { neededBy: 'later', title: 'Pick a release date' }),
+    // Its why names a cleared item: the card links it on the line under it (D-8194).
+    item(5, 'prog-a', { neededBy: 'later', title: 'Pick a release date', why: 'The date waits on item 9, which was approved yesterday.' }),
     item(6, 'prog-a', { state: 'checking', stale: true, tickedAt: NOW - 50 * MIN, title: 'Flip the setting' }),
   ],
-  cleared: [item(9, 'prog-b', { state: 'done', closedAt: NOW - 24 * 60 * MIN, title: 'Approve the prototype' })],
+  // Seven in the last 48 hours across both programmes, so Show all is drawn and the whole trail groups by programme (D-8194); the
+  // newest is prog-a's, so prog-a's heading comes first.
+  cleared: [
+    item(9, 'prog-b', { state: 'done', closedAt: NOW - 24 * 60 * MIN, title: 'Approve the prototype' }),
+    ...([[10, 'prog-a', 2], [11, 'prog-b', 3], [12, 'prog-a', 5], [13, 'prog-a', 8], [14, 'prog-b', 12], [15, 'prog-a', 30]] as const)
+      .map(([id, program, hours]) => item(id, program, { state: 'done', closedAt: NOW - hours * 60 * MIN, title: `Cleared item ${id}, a title long enough to wrap on a phone` })),
+  ],
   goals: [],
 };
 const FIXTURE: AppFixture = {
@@ -204,6 +211,69 @@ describe.each(SKINS)('Waiting on you in %s', (skin) => {
         }
       });
     }
+  }
+});
+
+// D-8194: Show all opens the whole 48-hour trail grouped by programme, each heading in its programme's hue and collapsed; a
+// heading opens its rows. A card links the items its text names, on a line under it; the link opens the closed item read-only.
+// At 390, 1280 and 1920 in both skins: nothing scrolls sideways, every heading sits inside the page at the tap floor, and its
+// swatch is the computed `--prog-<hue>`.
+describe.each(SKINS)('the grouped Recently cleared list and item links in %s (D-8194)', (skin) => {
+  for (const width of WIDTHS) {
+    it(`at ${width}: grouped, collapsed, in hue, opens a group, links a named item; no sideways scroll`, async () => {
+      const { ctx, page, errors } = await open(skin, PALETTES[0]!, width, '/waiting');
+      try {
+        const sideways = (): Promise<number> => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        await page.click('.wl-cleared-more');
+        await page.waitForSelector('.wl-cg-head');
+        const heads = (): Promise<{ program: string; hue: string; expanded: string; swatch: string; hueColour: string; left: number; right: number; height: number; vw: number }[]> =>
+          page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.wl-cg-head')].map((h) => {
+            const g = h.closest<HTMLElement>('.wl-cgroup')!;
+            const probe = document.createElement('span');
+            probe.style.color = `var(--prog-${g.getAttribute('data-hue') ?? ''})`;
+            g.appendChild(probe);
+            const hueColour = getComputedStyle(probe).color;
+            probe.remove();
+            const box = h.getBoundingClientRect();
+            return {
+              program: h.getAttribute('data-program') ?? '', hue: g.getAttribute('data-hue') ?? '', expanded: h.getAttribute('aria-expanded') ?? '',
+              swatch: getComputedStyle(h.querySelector('.wl-swatch')!).backgroundColor, hueColour,
+              left: box.left, right: box.right, height: box.height, vw: document.documentElement.clientWidth,
+            };
+          }));
+        const before = await heads();
+        expect(before.map((h) => [h.program, h.expanded])).toEqual([['prog-a', 'false'], ['prog-b', 'false']]);
+        for (const h of before) {
+          expect(h.hue, `${h.program} has a fleet hue`).toMatch(/^(cyan|violet|magenta|blue)$/);
+          expect(h.swatch, `${h.program}'s swatch is its hue`).toBe(h.hueColour);
+          expect(h.left, `${h.program}'s heading starts inside the page`).toBeGreaterThanOrEqual(0);
+          expect(h.right, `${h.program}'s heading ends inside the page`).toBeLessThanOrEqual(h.vw);
+          expect(h.height, `${h.program}'s heading is at the tap floor`).toBeGreaterThanOrEqual(44);
+        }
+        expect(await page.locator('.wl-cgroup li').count(), 'every group starts collapsed').toBe(0);
+        expect(await sideways(), 'sideways scroll, grouped').toBe(0);
+        await page.click('.wl-cg-head[data-program="prog-a"]');
+        expect(await page.locator('.wl-cgroup li').count(), "prog-a's four").toBe(4);
+        expect(await sideways(), 'sideways scroll, a group open').toBe(0);
+        const shots = process.env['CCRC_SHOTS'];
+        if (shots !== undefined && shots !== '') await page.screenshot({ path: `${shots}/waiting-cleared-${skin}-${width}.png`, fullPage: true });
+        const rowsFit = await page.evaluate(() => [...document.querySelectorAll('.wl-cgroup li')]
+          .every((li) => li.getBoundingClientRect().right <= document.documentElement.clientWidth));
+        expect(rowsFit, 'every opened row fits the page').toBe(true);
+        // The card's line under it links the cleared item its why names; it opens that item's page, read-only.
+        const link = page.locator('li:has(.wl-item[data-item="5"]) .wl-refs a');
+        expect(await link.textContent()).toBe('item 9');
+        await link.click();
+        await page.waitForSelector('.wi');
+        expect(await page.evaluate(() => location.pathname)).toBe('/waiting/9');
+        expect(await page.textContent('.wi-act')).toContain('This item is done.');
+        expect(await page.locator('.wi-act button').count(), 'a closed item offers no act').toBe(0);
+        expect(await sideways(), 'sideways scroll, the closed item').toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
   }
 });
 

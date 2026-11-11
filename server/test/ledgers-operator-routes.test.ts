@@ -324,6 +324,51 @@ async function armed(): Promise<{ app: FastifyInstance; coord: CoordStore }> {
   return { app, coord };
 }
 
+// D-8194: an item opened by its id (a link in another item's text, a page kept open) still opens after it has left the 48-hour
+// Recently cleared window, read-only, because the console can read it by its id whatever its state and age.
+describe('GET /api/items/:id (D-8194)', () => {
+  const read = (r: Rig, id: number | string) => r.app.inject({ method: 'GET', url: `/api/items/${id}` });
+
+  it('answers an item that left the Recently cleared window, with its state and history', async () => {
+    const r = await rig();
+    const id = raise(r);
+    expect(r.coord.moveItem(id, 'tick', 'operator', { answer: null }, NOW0 + 1, { programmeHasOpenRun: true }).ok).toBe(true);
+    expect(r.coord.moveItem(id, 'confirm', 'coordinator', {}, NOW0 + 2, { programmeHasOpenRun: true }).ok).toBe(true);
+    // Cleared days before the server's clock: the list no longer carries it.
+    const w = ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting;
+    expect(w.cleared.map((i) => i.id)).not.toContain(id);
+    const res = await read(r, id);
+    expect(res.statusCode, res.body).toBe(200);
+    const item = (res.json() as { ok: true; item: ItemView }).item;
+    expect(item).toMatchObject({ id, state: 'done', title: 'Turn on the setting', closedAt: NOW0 + 2 });
+    expect(item.history.map((h) => h.act)).toEqual(['raise', 'tick', 'confirm']);
+  });
+
+  it('answers an open item and a withdrawn one alike', async () => {
+    const r = await rig();
+    const open = raise(r);
+    const gone = raise(r, { title: 'Withdrawn' });
+    expect(r.coord.moveItem(gone, 'withdraw', 'coordinator', {}, NOW0 + 1, { programmeHasOpenRun: true }).ok).toBe(true);
+    expect((await read(r, open)).json()).toMatchObject({ ok: true, item: { id: open, state: 'open' } });
+    expect((await read(r, gone)).json()).toMatchObject({ ok: true, item: { id: gone, state: 'withdrawn' } });
+  });
+
+  it('an item the operator was never shown (held) is unknown-item, as is a number no item has', async () => {
+    const r = await rig();
+    const held = raise(r, { heldUntil: Date.now() + 3_600_000 });
+    for (const id of [held, 9999]) {
+      const res = await read(r, id);
+      expect(res.statusCode, res.body).toBe(404);
+      expect(res.json()).toMatchObject({ ok: false, error: 'unknown-item' });
+    }
+  });
+
+  it('a malformed id is a bad request', async () => {
+    const r = await rig();
+    for (const id of ['0', 'abc', '-1', '01']) expect((await read(r, id)).statusCode).toBe(400);
+  });
+});
+
 describe('GET /api/programmes/:slug/goals takes a session or the box token (EXEMPT-BUT-AUTHENTICATED, D-149\'s pattern)', () => {
   const url = '/api/programmes/prog-a/goals';
   const cookieOf = async (a: FastifyInstance): Promise<string> => {

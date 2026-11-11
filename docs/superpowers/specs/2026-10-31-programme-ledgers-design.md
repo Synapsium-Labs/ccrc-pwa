@@ -37,7 +37,7 @@ The Docs reader's coordinator was consulted (2026-10-31) and its guidance is ado
 This section describes the three views. The prototype on branch `brainstorm/programme-ledgers` shows them on example data; the operator called it "pretty great overall" (2026-10-31).
 
 - **A "Waiting on you" entry in the top navigation** with a count. The count is the number of items that need the operator: open, sent back, and session questions. Items being checked do not count.
-- **The combined list.** A summary line counts items by state: blocking now, questions from sessions, needed soon, being checked, came back. Below that, items are grouped by programme in the programme's hue, with blocking items first in each group and programmes with a blocking item first. A side rail filters to one programme. A "Recently cleared" trail at the bottom lists items the coordinator confirmed in the last seven days.
+- **The combined list.** A summary line counts items by state: blocking now, questions from sessions, needed soon, being checked, came back. Below that, items are grouped by programme in the programme's hue, with blocking items first in each group and programmes with a blocking item first. A side rail filters to one programme. A "Recently cleared" trail at the bottom lists items the coordinator confirmed in the last seven days (48 hours since D-8194, newest five with Show all).
 - **The programme box chip.** A programme box in the fleet list shows "N waiting on you" when N is above zero. Tapping it opens the programme view.
 - **The programme view.** Goals on one side, this programme's share of the list on the other. When nothing is waiting on the operator, that panel says what the programme *is* waiting on, for example "Nothing needs you. Waiting on: review of task G4." So a programme that is stopped with nothing on the list is plainly not stopped on the operator.
 - **The item view.** What, why, how as numbered steps, a "needed by" label, the item's history, and the action panel for its kind (§3).
@@ -106,7 +106,7 @@ stateDiagram-v2
 - **A tick mails the coordinator.** Ticking writes the answer, moves the item to checking and queues system mail from `operator` to the item's coordinator, in one transaction, on the digest-correction pattern (`correctDigestRow`). The mail names the item and carries the answer. Delivery is the ordinary idle-gated mail lane, so checking may last until the coordinator is next free. Nothing waits on it.
 - **A silent coordinator is visible, but not pushed.** While an item is checking and its tick's mail is still undelivered, or its coordinator measures dead or registry-absent, the item says so ("ticked; coordinator not responding"). This is a label computed on read, with no push and no new stall-watch arm. The existing `coord-deaf` arm measures a worker's mail to its coordinator, not the operator's, so it does not cover this case.
 - **Sent back is open again.** It returns to the operator's count with the coordinator's note shown on the item, so the operator never fixes something twice without being told why.
-- **Done items leave the list** and appear in "Recently cleared" for seven days.
+- **Done items leave the list** and appear in "Recently cleared" for seven days (48 hours since D-8194).
 
 ```mermaid
 sequenceDiagram
@@ -255,7 +255,7 @@ Every decision is Agreed: the operator's own rulings, and the coordinator's call
 | D10 | Values the operator pastes | Free text only; text and secrets | Both; secrets go to a protected store, never through a coordinator | Agreed |
 | D11 | Where items are stored | Repo ledger file; console database | Console database: the repo is public and items may name private things | Agreed |
 | D12 | Secrets in the first release | Ship the store with no reader yet; secrets as Do items only, store later | Ship the store and the paste field now; readers come with the features that need them | Agreed |
-| D13 | "Recently cleared" trail | None; seven days | Seven days, so a vanished item is never a mystery | Agreed |
+| D13 | "Recently cleared" trail | None; seven days | Seven days, so a vanished item is never a mystery | Agreed; 48 hours since D-8194 |
 | D14 | Push notifications | Every item; blocking only | Blocking items and session questions only; the rest change the count | Agreed |
 | D15 | Items of an ended programme | Delete; mark orphaned in the store; show as ended while no run is open | Shown as ended while no run is open, dismissable then, live again if a run reopens | Agreed |
 | D16 | Seeding from a spec | Parse specs continuously; seed once at approval | Seed once at approval; the list is the source of truth afterwards | Agreed |
