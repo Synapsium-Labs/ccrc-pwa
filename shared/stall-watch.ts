@@ -39,7 +39,7 @@ export function stallDurationText(ms: number): string {
 }
 
 /** The watch's arms: wave 1's (§4.2) and wave 2's (§5.2). Each key is added with the code that fires it, and
- *  `STALL_ARM_WAVE` says which wave's arming it answers to. */
+ *  `coord/stall.ts#STALL_ARM_WAVE` says which wave's arming it answers to. */
 const STALL_ARM_MAP = {
   quiet: 'the ladder: the worker holds the ball and has been idle past the quiet threshold (r1 worker, r2 coordinator, r3 operator)',
   'limit-cap': 'the usage-limit hold past its cap: one operator push per episode',

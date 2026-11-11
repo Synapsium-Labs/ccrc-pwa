@@ -2549,6 +2549,8 @@ export const MIGRATIONS: readonly string[] = [
   //
   // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 56` takes rule 3
   // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
+  // This build's writer names its columns, so a later build that adds a column to `practice_cases` must make it nullable
+  // or give it a DEFAULT, or this build's writer fails after a rollback.
   // RE-MEASURE the slot before the PR and before merge (it must print 55 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'

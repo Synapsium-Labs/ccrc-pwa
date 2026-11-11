@@ -321,8 +321,6 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
   });
 });
 
-// Worker stall watch, wave 2 (spec §5.1): the turn marker port's two judgements. `turnmark.ts` (L3) and the stall
-// lane (L1) both judge by these, so each is a table here.
 describe('the arm vocabulary lives in L0', () => {
   it('the arms have one definition, in L0, and stall.ts re-exports the same list', () => {
     expect(L0_ARMS).toBe(STALL_ARMS);
@@ -331,6 +329,8 @@ describe('the arm vocabulary lives in L0', () => {
   });
 });
 
+// Worker stall watch, wave 2 (spec §5.1): the turn marker port's two judgements. `turnmark.ts` (L3) and the stall
+// lane (L1) both judge by these, so each is a table here.
 describe('the turn marker port: its state words, staleness and restart grace (worker stall watch wave 2, §5.1)', () => {
   it('names the three state words and the five-minute restart grace', () => {
     expect([...TURN_MARK_STATES]).toEqual(['working', 'done', 'failed']);
