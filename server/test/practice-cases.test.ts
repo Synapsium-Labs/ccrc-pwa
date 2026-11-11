@@ -94,6 +94,14 @@ describe('casesDue', () => {
       { signature: 'stall-arm:mail-stuck', cause: 'count', occurrences: 3, programmes: ['prog-a'], evidence: [11, 12, 13], windowFrom: FROM },
     ]);
   });
+  it('two signatures fed in descending event order come out sorted by signature, evidence ascending', () => {
+    const rows = [
+      row(30, 3, FROM + 30, 'quiet'), row(20, 2, FROM + 20, 'quiet'), row(10, 1, FROM + 10, 'quiet'),
+      row(25, 6, FROM + 25, 'dead'), row(15, 5, FROM + 15, 'dead'), row(5, 4, FROM + 5, 'dead'),
+    ];
+    const due = casesDue({ rows, programOf: progs([1, 2, 3, 4, 5, 6], 'prog-a'), newestCaseAt: new Map(), now: NOW });
+    expect(due.map((d) => [d.signature, d.evidence])).toEqual([[sig('dead'), [5, 15, 25]], [sig('quiet'), [10, 20, 30]]]);
+  });
   it('caseRunIds names each run of a parseable row once, ascending', () => {
     const rows = [row(1, 7, NOW, 'quiet'), row(2, 3, NOW, 'dead'), row(3, 7, NOW, 'dead'), { eventId: 4, runId: 1, at: NOW, detail: null }];
     expect(caseRunIds(rows)).toEqual([3, 7]);

@@ -8,6 +8,11 @@ import { casesPass, type CasesCoord } from '../src/coord/casesLane.js';
 import { stallDetail } from '../src/coord/stall.js';
 import { parsedFile } from './scan/symbols.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { mkdirSync } from 'node:fs';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { loadConfig } from '../src/config.js';
+import { seedRoster, testDeps } from './helpers.js';
 
 afterEach(() => { vi.restoreAllMocks(); removeTmpFixtures(); });
 
@@ -165,6 +170,26 @@ describe('a failing store', () => {
   it('(d) an openPracticeCase that throws rejects the pass', async () => {
     const s = seed();
     await expect(casesPass({ coord: over(s, { openPracticeCase: () => { throw new Error('boom'); } }), now: () => T })).rejects.toThrow('boom');
+  });
+});
+
+describe('the watcher', () => {
+  it('tick() dispatches the case lane', async () => {
+    const home = mkTmp('ccrc-cases-tick-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    try {
+      const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
+      const w = new FleetWatcher(deps as never, new Bus(), 10_000);
+      const spy = vi.spyOn(w, 'sweepCases').mockResolvedValue(undefined);
+      await w.tick();
+      await w.tick();
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      coord.db.close();
+    }
   });
 });
 
