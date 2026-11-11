@@ -35,6 +35,7 @@ import { parseJournalLine } from '../src/coord/journalparse.js';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { refusalSentence } from '../src/wsaudit.js';
 import { NotifyLog } from '../src/notifylog.js';
+import { releaseReviewAction } from '../../shared/ledgers.js';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_SKIP, childReclaimBackoffMs, childReclaimFailingSentence,
   childReclaimJournalRow, childReclaimKeptManySentence, type ChildReclaimSweepVerdict,
@@ -421,6 +422,28 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{ kind: 'kept', sessionId: 'demo-r',
       runId: review.id, word: 'review-report-stale', sentence: CHILD_RECLAIM_SKIP['review-report-stale'].sentence }]);
     expect(f.requests).toEqual([]);
+  });
+
+  it('past its ceiling a REVIEW child is a Waiting on you item, and its Release lets the sweep reclaim it (D-8293)', async () => {
+    const f = fixture();
+    const work = f.openRun();
+    const review = f.openReview(work);
+    f.abandon(review);
+    f.plant('demo-r', { child: String(review.id) });
+    await f.pass();
+    expect(f.coord.openReleaseReviewItems(), 'no item before its ceiling').toEqual([]);
+    f.wallStep(7 * 24 * 3_600_000 + 1);
+    f.next(); await f.pass();
+    const items = f.coord.openReleaseReviewItems();
+    expect(items.map((i) => i.action)).toEqual([releaseReviewAction(work.id, review.id, 'demo-r')]);
+    // A second pass raises no second item.
+    f.next(); await f.pass();
+    expect(f.coord.openReleaseReviewItems().map((i) => i.id)).toEqual([items[0]!.id]);
+    expect(f.requests).toEqual([]);
+    // The operator's Release, then two sightings, and the ordinary reclaim asks for it.
+    expect(f.coord.moveItem(items[0]!.id, 'act', 'operator', {}, f.now(), { programmeHasOpenRun: true }).ok).toBe(true);
+    f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-r']);
   });
 
   it('keeps a REVIEW child while the run it reviewed is open, and reclaims it once that run is terminal', async () => {

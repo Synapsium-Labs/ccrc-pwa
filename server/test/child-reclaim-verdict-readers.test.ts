@@ -134,8 +134,11 @@ describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
     const DECLARED = 'const judged = new Map<string, ChildReclaimSweepVerdict>()';
     const SET = 'judged.set(r.id, v)';
     const ASSIGNED = 'this.childReclaimJudged = judged';
-    expect(coverage('sweepChildReclaim', body.join('\n'), /\bjudged\b/, [DECLARED, SET, ASSIGNED])).toEqual([
-      `sweepChildReclaim: ${DECLARED}`, `sweepChildReclaim: ${SET}`, `sweepChildReclaim: ${ASSIGNED}`,
+    // D-8293: the release-review items read the verdicts to raise and settle an operator's item, a surface like the
+    // attention list. They decide no reclaim: only the operator's act on the item releases a child.
+    const ITEMS = 'routeReviewReleases({ coord }, staleReviews, judged, now)';
+    expect(coverage('sweepChildReclaim', body.join('\n'), /\bjudged\b/, [DECLARED, SET, ASSIGNED, ITEMS])).toEqual([
+      `sweepChildReclaim: ${DECLARED}`, `sweepChildReclaim: ${SET}`, `sweepChildReclaim: ${ASSIGNED}`, `sweepChildReclaim: ${ITEMS}`,
     ].sort());
   });
 

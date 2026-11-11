@@ -214,6 +214,7 @@ import {
   CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, type ChildReclaimSweepInput, type ChildStaleAsk,
 } from './childReclaimSweep.js';
 import { ChildStaleArm, childReclaimReviewedRun, readStaleHoldAt, readStaleHoldBytes, staleHoldWanted, type StaleHoldRead } from './coord/childReclaimStale.js';
+import { routeReviewReleases, type ReviewReleaseSighting } from './coord/reviewRelease.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   CHILD_SHADOW_OUTCOME, EXPIRE_AUDITS_PER_PASS, EXPIRE_CHILD_LIVE_MARKER, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
@@ -4549,6 +4550,8 @@ export class FleetWatcher {
     const seen = new Set<string>();
     const judged = new Map<string, ChildReclaimSweepVerdict>();
     const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string; stale: ChildStaleAsk | null }[] = [];
+    // D-8293: the review children judged past their ceiling this pass, for their Waiting on you item.
+    const staleReviews: ReviewReleaseSighting[] = [];
     // Declared here, not at section FOUR below, so the hold-release job (a
     // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
     // pushed onto it from inside this same per-child loop, the instant its
@@ -4660,6 +4663,9 @@ export class FleetWatcher {
       };
       const v = childReclaimSweepVerdict(sweepIn);
       judged.set(r.id, v);
+      if (!v.eligible && v.why === 'review-report-stale' && reviewedId !== null) {
+        staleReviews.push({ sessionId: r.id, reviewRunId: v.runId, reviewedRunId: reviewedId });
+      }
       recordChildReclaimKeptReason({ coord, notifyLog: this.deps.notifyLog }, this.childReclaimKeptReasons, sweepIn, v);
       // D-6639: the stale arm judges BESIDE the verdict. An ask only when armed, on a box that proves the flag.
       const stale = this.childStale.judge({ coord, record: r, hold: staleHolds.get(r.id), input: sweepIn, verdict: v, names,
@@ -4768,6 +4774,8 @@ export class FleetWatcher {
       due.push({ r, entry, runId: actRunId, id: r.id, stale });
     }
     this.childReclaimJudged = judged;
+    // D-8293: a review child past its ceiling is a Waiting on you item whose Release is the operator's (`coord/reviewRelease.ts`).
+    routeReviewReleases({ coord }, staleReviews, judged, now);
     // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
     // pass lists what it kept and writes nothing (spec §5.9). Recorded, never pushed.
     for (const a of this.childReclaimPublishAttention(mirrorArms, live)) {

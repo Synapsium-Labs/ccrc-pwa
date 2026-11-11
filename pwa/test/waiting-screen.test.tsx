@@ -13,7 +13,7 @@ import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
 import { run as runFixture } from './rollupFixture';
 import { ApiError, api } from '../src/lib/api';
 import { needsYou, needsYouCount } from '../src/ledgers/needsYou';
-import { ITEM_DOORS, closeRefusedAction, endRunAction } from '../../shared/ledgers';
+import { ITEM_DOORS, closeRefusedAction, endRunAction, releaseReviewAction } from '../../shared/ledgers';
 import { matchRoute } from '../src/lib/routes';
 import { ITEM_DOOR_WORDS } from '../src/ledgers/ItemActs';
 
@@ -467,6 +467,51 @@ describe('the controls on /waiting (Task 24)', () => {
     open({ runs: [], view: waitingView({ items: [endItem()] }) });
     expect(screen.queryByRole('button', { name: 'Abandon run' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Keep the run' })).toBeTruthy();
+  });
+
+  // D-8293: a review child kept past its ceiling. Its one control needs no run among the runs heard.
+  const releaseItem = (over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
+    id: 51, program: 'port-api', runId: 7, title: 'Review workspace kept: Port the API · review of wave 1',
+    why: 'This review\'s workspace (demo-rv) is kept because the run it reviewed, run 7, is still open.\nIts coordinator did not answer',
+    how: ['Release the workspace.', 'Or leave it.'], action: releaseReviewAction(7, 9, 'demo-rv'), ...over,
+  });
+
+  it('a release-review row carries Release workspace, laid beside the row like the other controls', () => {
+    open({ runs: [], view: waitingView({ items: [releaseItem()] }) });
+    const li = rowOf(51);
+    expect(li.getAttribute('data-acts')).toBe('true');
+    const acts = within(li).getByRole('group', { name: 'Workspace demo-rv' });
+    expect(within(acts).getAllByRole('button').map((b) => b.textContent)).toEqual(['Release workspace']);
+    expect(acts.parentElement).toBe(li);
+    expect(within(li).queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
+  });
+
+  it('Release workspace opens its sheet, and only the confirm calls act', async () => {
+    const release = vi.spyOn(api, 'releaseReviewItem').mockResolvedValue({ ok: true, released: true, item: releaseItem({ state: 'done' }) });
+    open({ runs: [], view: waitingView({ items: [releaseItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Release workspace' }));
+    expect(await screen.findByText('Release workspace demo-rv?')).toBeTruthy();
+    expect(screen.getByText(/stops keeping it for run 7/)).toBeTruthy();
+    expect(release).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Release workspace' }));
+    await waitFor(() => expect(release).toHaveBeenCalledWith(51));
+  });
+
+  it('a refused release is said in the sheet, which stays open', async () => {
+    vi.spyOn(api, 'releaseReviewItem').mockRejectedValue(new ApiError(409, { error: 'not-open' }));
+    open({ runs: [], view: waitingView({ items: [releaseItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Release workspace' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Release workspace' }));
+    expect(await screen.findByText(/This item is not open any more/)).toBeTruthy();
+    expect(screen.getByText('Release workspace demo-rv?')).toBeTruthy();
+  });
+
+  it('a saved copy draws Release disabled, and a closed release-review item carries none', () => {
+    open({ runs: [], notCurrent: 'Saved on this device.', view: waitingView({ items: [releaseItem()] }) });
+    expect((screen.getByRole('button', { name: 'Release workspace' }) as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+    open({ runs: [], view: waitingView({ items: [releaseItem({ state: 'checking', tickedAt: NOW })] }) });
+    expect(screen.queryByRole('button', { name: 'Release workspace' })).toBeNull();
   });
 
   it('an item being checked or closed carries no end-run control', () => {
