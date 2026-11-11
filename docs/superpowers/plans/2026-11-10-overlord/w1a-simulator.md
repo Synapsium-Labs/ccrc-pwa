@@ -786,6 +786,12 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
 - **The simulator side of D-8225** (one-mulberry32, defined in `w1a-time-ports.md`): The nine test copies of `mulberry32` move onto the one the time-ports piece exports from
   `server/test/fakeTime.ts` (the same slug there), so the simulator's chance is not a tenth. The move changes imports
   only.
+- **D-8240, reach-clock-stops-while-the-server-is-down, shape** — on today's unmutated decider, seed 9 reported a
+  coordinator-blocked reach violation as this plan words the invariant: a mail fell due at the very instant the server
+  crashed, and the invariant judged the boot line, and any line during the downtime, on the old clock. The scenario
+  records a `server crash down` line, and the reach invariant's clock stops from that line until the boot, which
+  restarts it. Two control rows pin this. The run-less push latch's own behaviour across a restart is untouched; it is
+  the stall code owner's open question in the programme's ledger.
 
 **Settled by the spec's later edition, so no longer deviations:** the skeleton drives the new
 deciders on the fake ports, with crash and gap injection; the real lanes join once the watcher's runner reads

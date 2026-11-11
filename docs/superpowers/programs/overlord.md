@@ -98,7 +98,8 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   D-8235 and D-8236 are the role table's two (the table's runtime guard, and the stall pin's one more import). Its
   third departure, deviations-in-a-note, is the process rule in the next bullet and takes no number. D-8237 to D-8239
   are W0a's three, all of method: the rig tooling beyond the files Task 2 named, the scenario arms split one
-  environment to a run, and the force arm pinning its setting sources. Twelve numbers of the block remain unwritten.
+  environment to a run, and the force arm pinning its setting sources. D-8240 is the simulator's: the reach
+  invariant's clock stops while the server is down. Eleven numbers of the block remain unwritten.
 - **Review 1780 on the time ports (2026-11-11), at 65415597a.** Panel verdict: no critical finding. One important
   finding was kept by two of three refuters: the ambient scan missed the `globalThis.`, `?.` and `node:process` forms.
   Six minor findings and five observations; one raised-important finding (a zero-delay re-arm hangs the fake's
