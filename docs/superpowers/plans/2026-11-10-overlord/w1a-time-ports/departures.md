@@ -57,7 +57,10 @@ guard refuses an edit to it from a work branch.
   - destructuring (`const { hrtime } = process`, `const { random } = Math`);
   - a comment inside the access (`process /* c */ .hrtime()`);
   - `require('node:process')` and a dynamic `import('node:process')`;
-  - `Intl.DateTimeFormat().format()` and `os.uptime()`.
+  - `Intl.DateTimeFormat().format()` and `os.uptime()`;
+  - a cast before the member, `(process as X).hrtime()`;
+  - a global reached through another global, `global.globalThis.Math.random()`;
+  - a non-literal SQL modifier after `'subsec'`, such as a column, `date('subsec', col)`.
 
   It also reports a `typeof` query in type position as ambient (`type T = typeof process.hrtime`).
 - The SQL statement finder (`sqlStatementsInFile`) sees no `SELECT` without `FROM`, no `WITH` and no `PRAGMA`, so a
