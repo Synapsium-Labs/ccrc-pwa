@@ -2312,10 +2312,14 @@ export function runTouched(rc, a) {
     }
   }
   const family = new Map(rc.scope.families.map((f) => [f.sessionPk, f]));
-  // R8 (W2-2a): under an as-of cut a ref mined from source rows (origin tool_use) of a node with a hidden source row may come from that
-  // row, so it is dropped, as describe drops it; the row goes when no matching ref is left. Only candidate nodes are asked, only under a cut.
-  const minedHidden = new Set();
-  if (cutOf(rc) !== null) for (const id of nodeById.keys()) if (cutHidesASource(rc, id)) minedHidden.add(id);
+  // Under an as-of cut a ref mined from source rows (origin tool_use) of a node with a hidden source row may come from that row, so it
+  // is dropped, as describe drops it; the row goes when no matching ref is left. Asked only under a cut, only for a node holding a
+  // tool_use candidate that would otherwise match, and once per node.
+  const minedMemo = new Map();
+  const minedHidden = (id) => {
+    if (!minedMemo.has(id)) minedMemo.set(id, cutHidesASource(rc, id));
+    return minedMemo.get(id);
+  };
 
   // Split, normalise, match.
   const matches = [];
@@ -2323,7 +2327,6 @@ export function runTouched(rc, a) {
   for (const c of candidates) {
     const n = nodeById.get(c.node_id);
     if (n === undefined) continue;
-    if (c.origin === 'tool_use' && minedHidden.has(c.node_id)) continue;
     const nodeRoot = epochRoot.get(`${n.session_pk}:${n.epoch_seq}`);
     const sp = xlib.splitStoredRef(c.kind, c.value);
     const norm = xlib.normaliseRefPath(sp.path, nodeRoot, roots);
@@ -2334,6 +2337,7 @@ export function runTouched(rc, a) {
       sessionPk: Number(n.session_pk), agentId: agentsOn(rc) ? (n.agent_id ?? '') : '', ref,
     };
     const add = (file, match) => {
+      if (c.origin === 'tool_use' && minedHidden(c.node_id)) return;
       const key = `${n.node_id}\0${root}\0${file}\0${c.kind}\0${c.value}`;
       if (done.has(key)) return;
       done.add(key);
@@ -2345,8 +2349,10 @@ export function runTouched(rc, a) {
       if (!symbolOk) break;
       if (w.root !== null && w.root !== root) continue;
       // The graph matters only to the suffix arm: an exact or outside match, and a ref that can never suffix-match, never load one.
+      // With no graph a ref of two or more segments answers `suffix` (D-8189), but with a graph present only resolveToken's unique answer
+      // does, so a `suffix` or null first answer is asked again through the graph; an `exact` or `outside` one is final.
       let m = xlib.matchRef(norm, w.file, null);
-      if (m === null && touchedMaySuffix(norm, w.file)) m = xlib.matchRef(norm, w.file, graphAt(root));
+      if (m !== 'exact' && m !== 'outside' && touchedMaySuffix(norm, w.file)) m = xlib.matchRef(norm, w.file, graphAt(root));
       if (m !== null) add(w.file, m);
     }
     if (q.kind === 'symbol' && c.kind === 'path:symbol' && xlib.symbolMatches(sp, q.symbol)) add(norm.path, norm.outside ? 'outside' : 'exact');

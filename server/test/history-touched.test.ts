@@ -642,6 +642,19 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(by.get('Lt33seen')).toEqual(['path/tool_use']);
   }, HEAVY);
 
+  it('with a graph present a suffix match needs the graph\'s unique answer; with no graph a ref of two segments is a suffix (D-8189)', () => {
+    plant('Lt34n1', { refs: [['path', 'ccd/tc34.mjs']] });
+    const q = 'src/ccd/tc34.mjs';
+    const listed = (): string[] => items(touchedJson([q])).map((i) => `${String(i['nodeId'])}/${String(i['match'])}`);
+    expect(listed(), 'no graph: a two-segment ref is a suffix').toEqual(['Lt34n1/suffix']);
+    plantGraph([{ label: 'a', file: 'src/ccd/tc34.mjs' }, { label: 'b', file: 'other/ccd/tc34.mjs' }]);   // two files end in /ccd/tc34.mjs: ambiguous
+    expect(listed(), 'a graph with the basename ambiguous lists nothing').toEqual([]);
+    plantGraph([{ label: 'a', file: 'lib/other.mjs' }]);   // a graph that lacks the file
+    expect(listed(), 'a graph that lacks the file lists nothing').toEqual([]);
+    plantGraph([{ label: 'a', file: 'src/ccd/tc34.mjs' }]);   // a graph that holds it once
+    expect(listed(), 'a graph with a unique answer lists it as a suffix').toEqual(['Lt34n1/suffix']);
+  }, HEAVY);
+
   it('a graph with no nodes answers as no graph (R11, failure row 28)', () => {
     plant('Lt32n1', { refs: [['path', 'lib/tc32.mjs']] });
     plantGraph([]);
@@ -1082,6 +1095,7 @@ describe.skipIf(process.platform === 'darwin')('touched bench (Task 4C)', () => 
     {
       // (b) a project scope: 20 roots, each a worktree whose graph.json links the one file
       const extra: string[] = [];
+      onTestFinished(() => { for (const d of extra) fs.rmSync(d, { recursive: true, force: true }); });   // the 19 worktree roots go with the case
       for (let i = 0; i < 19; i += 1) {
         const d = path.join(mkTmp('ccrc-hist-touched-wt-'));
         fs.mkdirSync(path.join(d, 'graphify-out'), { recursive: true });
