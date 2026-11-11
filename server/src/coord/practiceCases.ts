@@ -43,8 +43,9 @@ export function caseWindowFrom(now: number): number {
 }
 
 /** Where the lane starts reading observation rows: two windows back, so that every episode's earliest row is in the
- *  decider's input. `casesDue` takes an episode's time from its earliest row it is given, and still counts only the
- *  episodes whose earliest row is at or after `caseWindowFrom(now)`. */
+ *  decider's input, unless the episode's rows span more than 14 days (the recorded residual). `casesDue` takes an
+ *  episode's time from its earliest row it is given, and still counts only the episodes whose earliest row is at or
+ *  after `caseWindowFrom(now)`. */
 export function caseReadFrom(now: number): number {
   return caseWindowFrom(now) - CASE_WINDOW_MS;
 }

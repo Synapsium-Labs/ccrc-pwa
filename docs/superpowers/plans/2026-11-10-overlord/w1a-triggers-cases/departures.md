@@ -1,25 +1,27 @@
 # W1a trigger table and case lane: departures found while carrying out the plan
 
 A note for the programme's coordinator to fold into `w1a-triggers-cases.md`'s "Deviations found" and the index plan.
-It names each departure by a plain-words slug; the coordinator issues its number. The plan file is left unedited,
-because the ledger guard refuses an edit to it from a work branch.
+The coordinator issued the one new departure's number, D-8241, and defined it in the index plan
+(`docs/superpowers/plans/2026-11-10-overlord.md`); this note cites it and defines nothing. The plan file is left
+unedited, because the ledger guard refuses an edit to it from a work branch.
 
 ## New departures
 
-- **case-read-looks-back-two-windows, correction.** The plan's pass read `stallObservationsSince(caseWindowFrom(now))`.
-  `casesDue` takes an episode's time from its earliest row in its input, so when an episode's first rung slid out of
-  the 14-day window while a later rung stayed inside, the episode took the later rung's time. A case had already
-  consumed that episode, so it counted again, and an episode that began more than 14 days ago counted as "in 14 days".
-  The pass now reads from `caseReadFrom(now)`, two windows back (`practiceCases.ts`), so every episode's earliest row is
-  in the decider's input; the decider still counts only episodes that began inside the window. The read is the same
-  statement with a lower bound, so the M17d plan is unchanged.
-  Residual, recorded and not closed: one episode's rows can span days, so it can still be counted a second time. Two
-  ways reach it. A shadow rung counts as done only while its delivery stays shadow (`coord/stall.ts#rungDoneAt`), so
-  arming the live marker, the wave-2 marker or a Settings level re-sends that rung live under the same key, whenever the
-  operator arms it. And the wave-1 ladder keeps one key until the worker mails, with its second and third rungs due only
-  once the worker is idle again (`coord/stall.ts#stallWaveOneLadder`). A shadow first rung at T0, a case at T0 + 1 h and
-  a live re-send at T0 + 20 d are counted again by a pass at T0 + 29 d, whose read starts at T0 + 1 d. In shadow that is a
-  wrong count, not a wrong act.
+- **The case read looks back two windows (D-8241), correction.** The plan's pass read
+  `stallObservationsSince(caseWindowFrom(now))`. `casesDue` takes an episode's time from its earliest row in its input,
+  so when an episode's first rung slid out of the 14-day window while a later rung stayed inside, the episode took the
+  later rung's time. A case had already consumed that episode, so it counted again, and an episode that began more than
+  14 days ago counted as "in 14 days". The pass now reads from `caseReadFrom(now)`, two windows back
+  (`practiceCases.ts`), so every episode's earliest row is in the decider's input, unless the episode's rows span more
+  than 14 days (the recorded residual); the decider still counts only episodes that began inside the window. The read
+  is the same statement with a lower bound, so the M17d plan is unchanged.
+  Residual, recorded and not closed: one episode's rows can span more than 14 days, so it can still be counted a second
+  time. Two ways reach it. A shadow rung counts as done only while its delivery stays shadow
+  (`coord/stall.ts#rungDoneAt`), so arming the live marker, the wave-2 marker or a Settings level re-sends that rung
+  live under the same key, whenever the operator arms it. And the wave-1 ladder keeps one key until the worker mails,
+  with its second and third rungs due only once the worker is idle again (`coord/stall.ts#stallWaveOneLadder`). A
+  shadow first rung at T0, a case at T0 + 1 h and a live re-send at T0 + 20 d are counted again by a pass at T0 + 29 d,
+  whose read starts at T0 + 1 d. In shadow that is a wrong count, not a wrong act.
 
 ## Rulings within the plan
 
@@ -56,3 +58,10 @@ because the ledger guard refuses an edit to it from a work branch.
   left out without a warning.
 - **The missing reds (F4).** Two signatures fed in descending order pin both sorts, an absent run pins the run filter,
   and a `tick()` test pins the lane's dispatch.
+
+## Known limits
+
+- The `tick()` test sees only the dispatch from `tick`, not `sweepCases`' own body (its `runLane('cases', …)` and its
+  `Deps.time` clock), the same shape as the sibling lanes' tests.
+- No input of the decider's grid is later than `NOW`, so the oracle comparison cannot see `casesDue`'s `e.at > now`
+  guard; the dedicated tests (an episode later than `now`, and the lane-clock pass) kill it.

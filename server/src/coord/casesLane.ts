@@ -10,10 +10,12 @@ export interface CasesPassDeps { readonly coord: CasesCoord; readonly now: () =>
 export interface CasesPassResult { readonly opened: number; readonly superseded: number; readonly unread: 'observations' | 'cases' | 'runs' | null }
 
 /** One pass. It reads the observation rows from `caseReadFrom(now)`, two windows back, so a consumed episode whose first
- *  rung has slid out of the window is never revived by a later rung. A failed observations or cases read opens nothing: it
- *  is answered in `unread` and warned (`ccrc-server: cases: <which> read failed: <detail>`), and the next pass tries again.
- *  A failed run read lowers the count (that run is left out), warns once and answers `unread: 'runs'`; an absent run is
- *  left out and not counted, with no warning. `unread: null` means every read succeeded. A thrown write rejects the pass, and the lane row's warnKey reports it. */
+ *  rung has slid out of the window is never revived by a later rung, unless the episode's rows span more than 14 days
+ *  (the recorded residual). A failed observations or cases read opens nothing: it is answered in `unread` and warned
+ *  (`ccrc-server: cases: <which> read failed: <detail>`), and the next pass tries again. A failed run read lowers the
+ *  count (that run is left out), warns once and answers `unread: 'runs'`; an absent run is left out and not counted, with
+ *  no warning. `unread: null` means every read succeeded. A thrown write rejects the pass, and the lane row's warnKey
+ *  reports it. */
 export async function casesPass(deps: CasesPassDeps): Promise<CasesPassResult> {
   const { coord } = deps;
   const now = deps.now();
