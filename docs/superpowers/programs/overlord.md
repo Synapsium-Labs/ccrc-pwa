@@ -25,7 +25,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | W1a, foundations | The coordinator skill made lean: its procedures in reference files, the wave lifecycle one file per step | #2557, #2558 and #2560 (the tests, first); #2559 | merged |
 | W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
 | W1a, foundations | Ports for time and chance | run 1776, #2623; plan `w1a-time-ports.md` | review 1780: no critical finding; fix round 1 sent 2026-11-11 |
-| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775; plan `w1a-roles.md` | open |
+| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775, #2624; plan `w1a-roles.md` | wave-done verified 2026-11-11; under review (run 1781) |
 | W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | after the role table merges, and after #2606 |
 | W1a, foundations | The simulator's skeleton and the first model | plan `w1a-simulator.md` | after the time ports merge; its Task 6 after W0a's Task 7 |
 | W1a, the machine | Generations, the receipt and renewal for every long-lived role; the anchor and the card; notes; probes; launch profiles | not planned yet | waits for W0's measurements |
@@ -95,7 +95,9 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   defines it in the index plan on a ledger PR before the worker's PR merges. D-8232 to D-8234 are the first three so
   issued (2026-11-11), for the time ports: the SQL clock pattern also catches SQLite's date functions called with no
   time value, the ambient scan also sees `AbortSignal.timeout` and the timers modules, and the fake refuses re-entry.
-  Seventeen numbers of the block remain unwritten.
+  D-8235 and D-8236 are the role table's two (the table's runtime guard, and the stall pin's one more import). Its
+  third departure, deviations-in-a-note, is the process rule in the next bullet and takes no number. Fifteen numbers of
+  the block remain unwritten.
 - **Review 1780 on the time ports (2026-11-11), at 65415597a.** Panel verdict: no critical finding. One important
   finding was kept by two of three refuters: the ambient scan missed the `globalThis.`, `?.` and `node:process` forms.
   Six minor findings and five observations; one raised-important finding (a zero-delay re-arm hangs the fake's
