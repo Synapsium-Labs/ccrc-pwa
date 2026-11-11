@@ -49,6 +49,7 @@ import { SPAWN_STALL_MS, holdReason, lcRefusalWord, type ChildReclaimStatus } fr
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { sourceOfSymbol } from './scan/symbols.js';
+import { mulberry32 } from './fakeTime.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -2122,16 +2123,6 @@ describe('S2: seeded rows at the lane — every licence rests on a continuous ep
   const G = 2.5 * CHILD_RECLAIM_SWEEP_MS;
   const MODES = ['none', 'back-hole', 'suspend', 'slow-persistent'] as const;
   type Mode = typeof MODES[number];
-  const mulberry32 = (seed: number): (() => number) => {
-    let a = seed >>> 0;
-    return () => {
-      a = (a + 0x6D2B79F5) >>> 0;
-      let t = a;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
-    };
-  };
   const rows: [number, number, Mode][] = [];
   for (const mode of MODES) for (let n = 1; n <= 6; n += 1) for (const seed of [1, 2]) rows.push([seed, n, mode]);
 

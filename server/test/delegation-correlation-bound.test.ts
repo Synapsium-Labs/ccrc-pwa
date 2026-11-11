@@ -59,6 +59,7 @@ import {
   type DelegationJournalRecordV1,
 } from '../src/coord/delegation-model.js';
 import { delegationLostWindowsOf, delegationNotReadyWindowOf } from '../src/watch.js';
+import { mulberry32 } from './fakeTime.js';
 
 // ── fixtures (the style of delegation-correlation-cost.test.ts, copied: a test file imports no other test file) ────────
 
@@ -395,18 +396,6 @@ const EXPECTED_ROWS: Record<Shape, readonly Row[]> = {
 // that claims by a SubagentStart and by a launch response. Two forced reruns are reached only by a scene made for them, and here they are: the
 // unknown-window rerun (a window with no repository over a rung-4 candidate) and the lost-evidence rerun (a lost window over one). Without a
 // rung-4 candidate under such a window neither could be true, because no rung-2 or rung-3 verdict depends on a listing window at all.
-
-/** mulberry32: a 32-bit seeded generator, so the stream (and its digest) is the same on every run and every box. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const SEED_R2 = 0x5642b2;
 const R2_PASSES = 580;
