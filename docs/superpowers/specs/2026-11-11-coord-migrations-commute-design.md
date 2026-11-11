@@ -37,7 +37,8 @@ step from the operator (§7.4).
   has.
 - **No reserved or no-op entries exist today.** Every one of the 60 entries does real work. The word "reserved" in
   `schema.ts` appears only for the `linear-sync` programme row that entry 59 inserts.
-- Each entry ends with the same instruction: re-measure the slot before the PR and before merge with
+- 44 of the 60 entries (every one from 39 on, and most from 14 on) carry the same instruction: re-measure the slot
+  before the PR and before merge with
   `git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'` (it must print *k-1*).
 
 ### 1.2 What a migration pull request touches
@@ -133,7 +134,8 @@ flag, and a no-op entry template.
 - `openCoordDb` runs the legacy loop exactly as today while `user_version` is below the legacy length. It then reads the
   applied names and applies every named migration not yet applied, in dependency order with ties broken by name. Each
   is one transaction: its SQL, the `INSERT` into `coord_migrations`, and `PRAGMA user_version = <legacy length> +
-  <number of applied names>`.
+  <number of applied names>`. A file whose version is above that sum, or whose applied set holds a name this build
+  does not ship, came from a newer build and takes rule 3 (§7.2 item 4).
 
 **Why it reaches the goal.** Two pull requests add two different files. Neither edits a line the other edits, so git
 merges them in either order and the queue never sees a conflict. An install that already applied A applies B on its
@@ -205,11 +207,20 @@ it.
    `^\d{4}-\d{2}-\d{2}-[a-z0-9]+(-[a-z0-9]+)*$`.
 3. **The applied set** `coord_migrations`. The runner creates it with `CREATE TABLE IF NOT EXISTS` inside the first
    named migration's transaction, so it needs no slot of its own.
-4. **The second loop** in `openCoordDb`, after the legacy loop:
-   - If `coord_migrations` holds a name this build does not ship, a newer build has been here: warn, read as it is,
-     migrate nothing (rule 3, the same sentence as today's warning).
+4. **The second loop** in `openCoordDb`, after the legacy loop. Write *L* for the legacy length (60) and *a* for the
+   number of names in `coord_migrations` (0 when the table does not exist yet).
+   - **Rule 3 has two triggers**, and either one is enough. (a) `coord_migrations` holds a name this build does not
+     ship. (b) `user_version` is above *L + a*: the version says more migrations ran than the applied set accounts
+     for, whether every applied name is known or the table is missing altogether (a file at 67 with no
+     `coord_migrations` is this case). Either way a newer build has been here: warn once with the same sentence as
+     today's warning, read as it is, migrate nothing and write nothing. This check replaces today's
+     `current > COORD_SCHEMA_VERSION`, and it runs before either loop.
    - Otherwise apply each missing migration in dependency order, ties by name, each in one transaction with its
      `coord_migrations` row and the new `user_version`.
+   - **The version only goes up.** The runner writes `user_version` in exactly one place: inside a named migration's
+     transaction, as *L + a* counted after that migration's row went in. It gets there only when trigger (b) did not
+     fire, so the stored value was at most *L + a* before the migration and the write raises it by at least one. When
+     nothing is missing it writes nothing. So no path writes the version downward, which is what §3 requires of rule 3.
    - On failure, refuse to start with `CoordDbUnmigratable`, naming the migration and the ones that already committed
      this start (the named form of `describeMigrationProgress`).
    - A malformed directory (a bad name, an `after` that names nothing, a cycle) also refuses to start. It is a build
@@ -218,11 +229,34 @@ it.
    names`. It no longer identifies a migration, but it still goes up by one per migration. That keeps the snapshot
    keeper's "before a schema migration" backup working unchanged, and it means a build from before this design (one
    that knows 60) opening a file at 61 or above takes today's rule 3: it warns, reads and migrates nothing.
+   `COORD_SCHEMA_VERSION` keeps the meaning every test already gives it, "the version a file fully migrated by this
+   build has": it becomes `LEGACY_MIGRATION_COUNT + NAMED_MIGRATIONS.length`, where `LEGACY_MIGRATION_COUNT` is
+   `MIGRATIONS.length` (pinned at 60) and `NAMED_MIGRATIONS` is the directory's contents, loaded and exported by
+   `schema.ts` so the runner and the tests read one list.
 6. **The build copies the directory** into `dist/`, and `build-release.sh` checks the copy.
-7. **Three test edits, once.** The count tests in `coord-db.test.ts` become "the legacy list is closed at 60". The
-   rewind in `run-close-switch.test.ts` builds a version-53 database from `MIGRATIONS[0..52]` (the pattern the newer
-   entry tests already use) instead of dropping later tables by hand. `PLAN_SLOT` stays: it names a legacy entry, which
-   never moves again.
+7. **Three test edits, once**, all in the pull request that adds the runner (line numbers as on `6c857a1ab`):
+   - The count tests in `coord-db.test.ts` (`toBe(60)` at lines 718, 719 and 806) become "the legacy list is closed":
+     `LEGACY_MIGRATION_COUNT` is 60, and `COORD_SCHEMA_VERSION` is `LEGACY_MIGRATION_COUNT + NAMED_MIGRATIONS.length`.
+   - The rewind in `run-close-switch.test.ts` builds a version-53 database from `MIGRATIONS[0..52]` (the pattern the
+     newer entry tests already use) instead of dropping later tables by hand.
+   - The `buildAt` helper in `coord-db.test.ts` (line 938), which mocks `schema.js` with a cut `MIGRATIONS` to stand in
+     for an older build, also sets `NAMED_MIGRATIONS: []`. Every build it imitates predates named migrations; without
+     the edit, a build cut at entry 54 would run the named migrations over a partial legacy prefix.
+
+   **Unchanged, and still valid:**
+   - `PLAN_SLOT` stays: it names a legacy entry, which never moves again.
+   - The eight rule-3 tests that fake a newer build by raising `user_version` alone: `coord-db.test.ts` lines 152
+     (`COORD_SCHEMA_VERSION + 7`), 1620, 2377 and 2441 (`+ 3` each), `landing-line-migration.test.ts:104`,
+     `landing-journal-migration.test.ts:114`, `collect-lane-migration.test.ts:107` and `ledgers-migration.test.ts:127`
+     (`+ 1` each). Each one first opens the file with this build, so every shipped name is applied and *a* is the
+     number shipped; it then sets the version to `COORD_SCHEMA_VERSION + k`, which is *L + a + k*. Trigger (b) of item
+     4 fires: one warning with today's sentence ("this build knows …", "reading it as-is and migrating nothing"),
+     nothing migrated, and the version left where the test put it, never written down. Without trigger (b) these
+     tests would fail. With every applied name known, trigger (a) stays silent, so no warning comes. And on a file
+     with no `coord_migrations` at *L + k* (what these tests build while no named migration has shipped yet), the
+     runner would apply every named migration and write *L + n*, which is downward whenever *n* is below *k*.
+   - The 45 assertions in 13 test files that a fresh or migrated open reaches `COORD_SCHEMA_VERSION`, because the
+     constant now counts the named migrations too.
 8. **The guard on landed files**: a CI step (beside the ledger guard) that refuses any status other than "added" for a
    path under `server/src/coord/migrations/` in the diff against the merge base.
 
@@ -243,7 +277,8 @@ name. It edits no shared count, banner, rewind list or constant. If it builds on
 | Behind (below 60) | The legacy loop runs to 60 exactly as today, then the named migrations run |
 | Fresh | Legacy 1 to 60, then every named migration |
 | Rolled back to a build from before this design | It sees a version above 60 and takes rule 3: reads, migrates nothing, warns. The new tables are unknown to it and ignored |
-| Rolled back to an older build from after this design | The applied set holds names it does not ship, so rule 3 again |
+| Rolled back to an older build from after this design | The applied set holds names it does not ship, so rule 3 again (trigger a) |
+| Version above what its applied set explains (above *L + a*, with or without `coord_migrations`) | Rule 3, trigger (b): warns, reads, migrates nothing, and leaves the version where it is |
 | Restored from a snapshot | `VACUUM INTO` copies `coord_migrations` with everything else, so the applied set travels with the data it describes |
 
 Pull requests open when this lands that still add a numbered entry 61 fail the "legacy list is closed" test on their
@@ -262,10 +297,18 @@ In `server/test/`, failing first:
    every row written before the open is still there.
 3. **Fresh and behind.** A new file, and one stopped at version 53, both end with the legacy prefix complete and every
    named migration applied.
-4. **Rule 3, both kinds.** A file whose applied set holds a name this build does not ship is read, warned about and not
-   migrated (version and set unchanged). And after any named migration `user_version` is above the legacy length,
-   which is exactly the condition (`current > COORD_SCHEMA_VERSION` with 60) under which a pre-design build reads
-   without migrating.
+4. **Rule 3, every trigger, and the version never goes down.** Each of these is read, warned about exactly once and
+   not migrated, with the version and the applied set unchanged:
+   - a file whose applied set holds a name this build does not ship (trigger a);
+   - a file this build fully migrated, then raised to `COORD_SCHEMA_VERSION + 1` and `+ 7` (trigger b with every
+     applied name known, the state the existing rule-3 tests build);
+   - a file at *L + 7* with no `coord_migrations` table, opened by a build that ships two named migrations (trigger b
+     with the table missing). This is the case that, without trigger (b), would apply both and write the version
+     down to *L + 2*.
+
+   And after any named migration `user_version` is above the legacy length, which is exactly the condition
+   (`current > COORD_SCHEMA_VERSION` with 60) under which a pre-design build reads without migrating. Across tests 1, 2,
+   3 and 5, every value the runner writes to `user_version` is above the one stored before it.
 5. **Each migration in its own transaction.** A fixture migration that throws halfway leaves no table, no
    `coord_migrations` row and no version change; the refusal names it and the migrations that committed before it.
 6. **Isolation (declared dependencies are enough).** For every shipped named migration: a database at legacy 60 plus
@@ -307,4 +350,5 @@ The runner's new refusal words go through a declared union with a guard, as ever
 
 - **D-8338 (2026-11-11)** — coord-DB migrations merge in either order: new migrations are named files with declared
   dependencies and an applied-set table, the 60 numbered entries stay as a closed legacy prefix, and `user_version`
-  becomes a count (this design; the operator rules O1 to O4).
+  becomes a count that the runner only ever writes upward, with a version above legacy plus applied read as rule 3
+  (this design; the operator rules O1 to O4).
