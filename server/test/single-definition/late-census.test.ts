@@ -367,15 +367,16 @@ describe('ccrc history: the headless marker and the arm words are defined once, 
 // ARCH-66 (#801); spec §5.1 rule 3). The redactor ratchet, appended after the capability ratchet so no cited line above
 // it moves. The JS/TS modules that spell redaction rule patterns of their own (`consolidationCensus.ts`'s
 // `redactRuleTables`, `shared/redact.mjs` counted) were three: `coord/redact.ts`, `shared/docs.ts` and
-// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moves the third, and then the bound
-// is one. The set may only shrink. The census is loaded inside the row, so this block adds no import line.
+// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moved the third (lib's BASE_RULES and
+// CONTEXT_RULES are its history profiles), and the bound is one. The set may only shrink. The census is loaded inside the
+// row, so this block adds no import line.
 describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () => {
-  it('at most two modules spell redaction rule patterns, and no TypeScript module is one', async () => {
+  it('exactly one module spells redaction rule patterns, shared/redact.mjs, and no TypeScript module is one', async () => {
     const { redactRuleTables } = await import('../consolidationCensus.js');
     const tables = redactRuleTables();
-    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBeLessThanOrEqual(2);
+    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBe(1);
     expect(tables.filter((f) => /\.tsx?$/.test(f)), 'a TypeScript redaction table').toEqual([]);
-    expect(tables).toContain('shared/redact.mjs');
+    expect(tables).toEqual(['shared/redact.mjs']);
   });
 });
 
