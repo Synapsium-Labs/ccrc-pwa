@@ -303,17 +303,19 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
   });
 
   // Claude Code 2.1.310's nine `anthropic-beta` values, measured on the live lane's first traffic after the flip
-  // (runbook step 4, 2026-10-27; D-7093). Seven gate shapes the bridge never sends, answers itself or already counts by
+  // (runbook step 4, 2026-10-27; D-7093), and `redact-thinking-2026-02-12`, Claude Code's `redact_thinking` beta, first
+  // seen on both lanes between 2026-10-29 and 2026-11-04 (ccd/codexbridge/known.py says why the bridge needs no action). Seven gate shapes the bridge never sends, answers itself or already counts by
   // their own family; the two tool-change betas gate `tool_addition`/`tool_removal` blocks in a system entry, which
   // inbound honours since D-7143 (ccd/codexbridge/inbound.py#_fold_tool_changes). All nine are explained, so the
   // doctor is quiet on them.
   const MEASURED_BETAS = [
     'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
     'inline-tools-2026-09-15', 'interleaved-thinking-2025-05-14', 'mid-conversation-tool-changes-2026-07-01',
-    'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13', 'token-counting-2024-11-01',
+    'redact-thinking-2026-02-12', 'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13',
+    'token-counting-2024-11-01',
   ];
-  it("Claude Code's nine measured betas are explained, the two tool-change betas among them (D-7143)", async () => {
-    expect(MEASURED_BETAS).toHaveLength(9);
+  it("Claude Code's ten measured betas are explained, the two tool-change betas and redact_thinking among them (D-7143)", async () => {
+    expect(MEASURED_BETAS).toHaveLength(10);
     const { home, file } = lane('cb-stats-betas-');
     const all = [...MEASURED_BETAS, 'effort-2025-11-24'];
     const out = await run(home, [open(file), ...all.map((b) => call('name', ['betaValue', b])), { op: 'stats-snapshot' }]);
@@ -321,6 +323,34 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     // the control: every beta was counted, so the empty unexplained list is about KNOWN, not a call that missed
     expect(Object.keys(snap.doc.names.betaValue).sort()).toEqual([...all].sort());
     expect(snap.doc.unexplained.betaValue).toBeUndefined();
+  });
+
+  // The four response header names of the CDN edge's own HTML error page (lane-a, twice between 2026-10-29 and
+  // 2026-11-04): `content-type` carries its media type as a second name (server._media_type), so `text/html` is a name
+  // of its own. All four are explained, and a header name nobody has explained still lands in `unexplained`.
+  const EDGE_PAGE_NAMES = ['cache-control', 'expires', 'x-frame-options'];
+  it("the CDN edge page's four header names are explained, and a new header name is still not", async () => {
+    const { home, file } = lane('cb-stats-edge-');
+    const out = await run(home, [
+      open(file),
+      call('header_names', [Object.fromEntries(['server', 'cf-ray', 'content-type', ...EDGE_PAGE_NAMES].map((n) => [n, 'fx']))]),
+      call('name', ['responseHeader', 'content-type:text/html']),
+      { op: 'stats-snapshot' },
+    ]);
+    const snap = out[out.length - 1];
+    // the control: every name was counted, so the empty unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.responseHeader).sort()).toEqual(
+      ['server', 'cf-ray', 'content-type', ...EDGE_PAGE_NAMES, 'content-type:text/html'].sort());
+    expect(snap.doc.unexplained.responseHeader).toBeUndefined();
+
+    const next = lane('cb-stats-edge-new-');
+    const out2 = await run(next.home, [
+      open(next.file),
+      call('header_names', [{ 'x-fx-new-header': 'fx', 'cache-control': 'fx' }]),
+      call('name', ['responseHeader', 'content-type:text/xml']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(out2[out2.length - 1].doc.unexplained.responseHeader).toEqual(['content-type:text/xml', 'x-fx-new-header']);
   });
 
   // The block names inbound counts for a system entry (ccd/codexbridge/inbound.py#@system-entry-dropped-blocks): the

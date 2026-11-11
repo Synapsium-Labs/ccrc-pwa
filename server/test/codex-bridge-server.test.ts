@@ -1252,3 +1252,100 @@ describe.skipIf(!PY)('the handler never leaks (the plan\'s Global Constraints)',
     }, { serve: { fault: 'post-raises' } });
   });
 });
+
+// The one log line of an upstream answer that is not the backend's own (`server.log_upstream_page`): the CDN edge's HTML
+// error page, measured twice on a live lane and untraceable because the bridge wrote nothing per request. The line is
+// bounded tokens only; the answer to the client stays the error table's (`errors.classify_http` reads no code from a body
+// that is not JSON).
+describe.skipIf(!PY)('an upstream page logs one bounded line (the CDN edge answering instead of the backend)', () => {
+  const PAGE_LINE = /^ccgpt-proxy: direct: upstream-page (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) status=(\d{3}) route=(messages|compact) type=(\S+) edge=(yes|no)$/;
+  const pageLines = (b: SpawnedBridge): string[] => b.stderr().split('\n').filter((l) => l.includes('upstream-page'));
+  /** The page's log line is written before the answer; the pipe's data event may land a tick later. */
+  async function linesWhen(b: SpawnedBridge, n: number): Promise<string[]> {
+    const t0 = Date.now();
+    while (pageLines(b).length < n && Date.now() - t0 < 3000) await sleep(25);
+    return pageLines(b);
+  }
+  const edgeHeaders = { 'content-type': 'text/html; charset=UTF-8', 'cf-ray': 'fx-ray-1', server: 'fx-edge', 'x-oai-request-id': null };
+
+  it('a 502 HTML page with the edge marker is one line with its status, route, type and marker, and no body text', async () => {
+    const sentinel = `SENTINEL-PAGE-${randomBytes(6).toString('hex')}`;
+    const page = `<!DOCTYPE html><html><head><title>${sentinel}</title></head><body>${sentinel}</body></html>`;
+    await withBridge([{ status: 502, body: page, headers: { ...edgeHeaders, 'cache-control': 'no-store', 'x-request-id': `req-${sentinel}` } }], async ({ bridge, lane }) => {
+      const before = Date.now();
+      const a = await call(bridge, '/v1/messages', { body: messages({ text: sentinel }) });
+      // the answer is the error table's, not the page's
+      expect(a.status).toBe(503);
+      expect(a.json?.error.type).toBe('api_error');
+      expect(a.text).not.toContain(sentinel);
+      const lines = await linesWhen(bridge, 1);
+      expect(lines).toHaveLength(1);
+      const m = PAGE_LINE.exec(lines[0]);
+      expect(m, lines[0]).not.toBeNull();
+      expect(m!.slice(2)).toEqual(['502', 'messages', 'text/html', 'yes']);
+      const at = Date.parse(m![1]);
+      expect(at).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+      expect(at).toBeLessThanOrEqual(Date.now());
+      await statsWhen(lane, (d) => d.outcomes['5xx'] === 1);
+      // nothing of the body, a request id or the client's request is in the lane's stderr
+      expect(bridge.stderr()).not.toContain(sentinel);
+      expect(bridge.stderr()).not.toContain('fx-ray-1');
+      expect(bridge.stderr()).not.toContain('fx-edge');
+    });
+  });
+
+  it('the edge marker reads no when the origin answered, and a compaction request names its route', async () => {
+    const compaction = messages();
+    compaction.messages = [{ role: 'user', content: [{ type: 'text', text: 'CRITICAL: Respond with TEXT ONLY. Summarise.' }] }];
+    await withBridge([{ status: 502, body: '<html></html>', headers: { 'content-type': 'text/html', 'x-oai-request-id': 'req-fx-origin', 'cf-ray': 'fx-ray-2' } }], async ({ bridge }) => {
+      const a = await call(bridge, '/v1/messages', { body: compaction });
+      expect(a.status).toBe(503);
+      const lines = await linesWhen(bridge, 1);
+      expect(lines).toHaveLength(1);
+      expect(PAGE_LINE.exec(lines[0])!.slice(2)).toEqual(['502', 'compact', 'text/html', 'no']);
+    });
+  });
+
+  it('a 2xx page that is not an event stream is a 503 api_error and one line', async () => {
+    const sentinel = `SENTINEL-PAGE-${randomBytes(6).toString('hex')}`;
+    await withBridge([{ status: 200, body: `<html><body>${sentinel}</body></html>`, headers: edgeHeaders }], async ({ bridge, lane }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status).toBe(503);
+      expect(a.json?.error.type).toBe('api_error');
+      expect(a.text).not.toContain(sentinel);
+      const lines = await linesWhen(bridge, 1);
+      expect(lines).toHaveLength(1);
+      expect(PAGE_LINE.exec(lines[0])!.slice(2)).toEqual(['200', 'messages', 'text/html', 'yes']);
+      await statsWhen(lane, (d) => d.outcomes['5xx'] === 1);
+      expect(bridge.stderr()).not.toContain(sentinel);
+    });
+  });
+
+  it('a media type outside the bounded shape is logged as unrecognised, never as received', async () => {
+    const odd = 'text/h tml;'.repeat(1);
+    await withBridge([{ status: 503, body: '<html></html>', headers: { 'content-type': `${odd} SENTINEL-TYPE`, 'cf-ray': 'fx-ray-3' } }], async ({ bridge }) => {
+      await call(bridge, '/v1/messages', { body: messages() });
+      const lines = await linesWhen(bridge, 1);
+      expect(lines).toHaveLength(1);
+      expect(PAGE_LINE.exec(lines[0])!.slice(2, 5)).toEqual(['503', 'messages', 'unrecognised']);
+      expect(bridge.stderr()).not.toContain('SENTINEL-TYPE');
+    });
+  });
+
+  it('a JSON error answer, an event stream and a stream with no content type write no such line', async () => {
+    const answers: ResponsesAnswer[] = [
+      { status: 500, body: { error: { code: 'server_error', message: 'x' } }, headers: { 'cf-ray': 'fx-ray-4' } },
+      { status: 429, body: { error: { type: 'rate_limit_error' } }, headers: { 'x-oai-request-id': 'req-fx-429' } },
+      { status: 200, sse: textReply('ok') },
+      { status: 200, sse: textReply('ok again'), headers: { 'content-type': null } },
+    ];
+    await withBridge(answers, async ({ bridge, lane }) => {
+      const out: Answer[] = [];
+      for (let i = 0; i < answers.length; i += 1) out.push(await call(bridge, '/v1/messages', { body: messages() }));
+      expect(out.map((a) => a.status)).toEqual([503, 429, 200, 200]);
+      await statsWhen(lane, (d) => d.outcomes['2xx'] === 2);
+      await sleep(100);
+      expect(pageLines(bridge)).toEqual([]);
+    });
+  });
+});
