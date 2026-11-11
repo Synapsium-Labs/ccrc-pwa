@@ -52,9 +52,10 @@ export async function runMutants<M>(set: MutantSet<M>): Promise<MutationReport> 
     writeFileSync(file, rewriteRelativeImports(text, fromDir));
     return (await import(/* @vite-ignore */ pathToFileURL(file).href)) as M;
   };
-  const runSuite = (mod: M): string | null => {
-    for (const [name, fn] of Object.entries(set.suite(mod))) {
-      try { fn(); } catch (err) { return `${name}: ${message(err)}`; }
+  const errText = (err: unknown): string => (err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+  const runCases = (cases: Readonly<Record<string, () => void>>): string | null => {
+    for (const [name, fn] of Object.entries(cases)) {
+      try { fn(); } catch (err) { return `${name}: ${errText(err)}`; }
     }
     return null;
   };
@@ -62,9 +63,11 @@ export async function runMutants<M>(set: MutantSet<M>): Promise<MutationReport> 
   let baselineCases: number;
   try {
     const base = await load('baseline', source);
-    const failed = runSuite(base);
+    const cases = set.suite(base);
+    baselineCases = Object.keys(cases).length;
+    if (baselineCases === 0) throw new Error('the suite ran no case');
+    const failed = runCases(cases);
     if (failed !== null) throw new Error(failed);
-    baselineCases = Object.keys(set.suite(base)).length;
   } catch (err) {
     throw new Error(`baseline failed: ${message(err)}`);
   }
@@ -83,7 +86,14 @@ export async function runMutants<M>(set: MutantSet<M>): Promise<MutationReport> 
       results.push({ id: m.id, status: 'invalid', detail: `syntax: ${message(err)}` });
       continue;
     }
-    const failed = runSuite(mod);
+    let cases: Readonly<Record<string, () => void>>;
+    try {
+      cases = set.suite(mod);
+    } catch (err) {
+      results.push({ id: m.id, status: 'invalid', detail: `suite: ${errText(err)}` });
+      continue;
+    }
+    const failed = runCases(cases);
     results.push(failed === null
       ? { id: m.id, status: 'survived', detail: 'every suite case passed' }
       : { id: m.id, status: 'killed', detail: failed });

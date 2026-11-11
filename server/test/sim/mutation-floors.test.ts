@@ -46,6 +46,9 @@ it('BASELINE: an unmutated copy loaded the same way runs and passes every suite 
   const r = await runMutants({ ...MUTANT_SETS[KEY]!, mutants: [] });
   expect([r.results, r.baselineCases]).toEqual([[], 32]);
 }, 60_000);
+it('a baseline that ran no case is a failure, never a pass', async () => {
+  await expect(runMutants({ ...MUTANT_SETS[KEY]!, mutants: [], suite: () => ({}) })).rejects.toThrow(/baseline/);
+}, 60_000);
 it('a mutant whose old text is absent is invalid, and the run throws', async () => {
   await expect(runMutants({ ...MUTANT_SETS[KEY]!, mutants: [{ id: 'x', old: 'no such text', new: '' }] }))
     .rejects.toThrow(/invalid: x/);
