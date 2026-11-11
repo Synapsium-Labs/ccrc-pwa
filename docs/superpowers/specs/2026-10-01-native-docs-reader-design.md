@@ -3527,6 +3527,8 @@ The shell's `frame-src` meta (§5.6.1) is in the bundle bytes, so the precache c
 
 ### 7.4 Retiring a standalone docs server: operator steps
 
+**First, the rich-docs spec's retirement gate** (its §9) (amended 2026-11-11; retirement parity, D-8287): retiring drops no feature, so these steps start only once every capability the old server has is kept in ccrc's reader (that spec's §6 parity table, its Kept and Open rows resolved, the private draft-review store included) and a side-by-side check against the old server finds nothing missing. Until then both keep running.
+
 **ccrc performs none of these steps.** No ccrc code or check names such a server, its forwarder, its proxy mapping, or the operator's global `CLAUDE.md`. The README carries a short form (7.5). These steps use roles, not names: substitute your own proxy, your forwarder unit, your docs-server unit and `<old-port>`.
 
 > **Warning.** A docs server that passes raw HTML through must never stay mapped on an origin that also serves the PWA. Any page it answers there runs script on the same origin as the PWA's session cookie, and ccrc's mockup sandbox cannot reach bytes another app sends. That is why removing the mapping is Step 1, before any verification.
@@ -3555,7 +3557,7 @@ Use your proxy's own help for the syntax; this spec gives none.
 **Step 3, move your link convention.** This lives in your own global `CLAUDE.md`, which ccrc does not edit.
 
 - Chat links become `https://<your-origin>/docs/<project>/<section>/<path>`, with `?ref=<branch>` for unmerged work.
-- `<project>` is the directory name under ccd's projects root, as `docs-index` lists it, not a docs-server config label. A root your old server served that is not such a directory is reached with `?ref=<its branch>` on its parent project.
+- `<project>` is the directory name under ccd's projects root, as `docs-index` lists it, not a docs-server config label. A root your old server served that is not such a directory is reached with `?ref=<its branch>` on its parent project. A folder outside ccd's projects root is not moved: it is read through the reader's own outside-folder feature (rich-docs spec G3) (amended 2026-11-11; retirement parity, D-8287).
 - Durable links stay GitHub blob URLs (`https://github.com/<owner>/<repo>/blob/<default-branch>/<path>`). The page's View on GitHub builds one when the tree answer names a GitHub origin. A Docs URL never belongs in a ticket, a PR or tracked text.
 - Links on any other origin that also serves the PWA stop working once auth is armed: the cookie is host-only (`auth/cookie.ts:110-122`) and passkeys bind `CCRC_RP_ID`. Rewrite them to `CCRC_ORIGIN`.
 
