@@ -373,8 +373,9 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
   // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
   // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
-  // a `SWITCHES` row. KNOWN WIDTH: the stall watch's map keys (`coord/stall.ts`) are not `*_MARKER` constants and are
-  // not rows yet; a name assembled from pieces is not seen.
+  // a `SWITCHES` row. KNOWN WIDTH: the stall watch's map keys (`coord/stall.ts`) other than its kill switch (a row since
+  // D-8339, keyed by the row's constant) are not `*_MARKER` constants and are not rows yet; a name assembled from pieces is
+  // not seen.
   it('mail-disabled is defined once, in its switchboard row (may only shrink)', () => {
     const sites = markerDefinitions('mail-disabled');
     expect(sites.length, 'a second definition of mail-disabled').toBeLessThanOrEqual(1);

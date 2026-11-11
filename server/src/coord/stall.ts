@@ -1,5 +1,6 @@
 import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 import { STALL_ARMS, isStallArm } from '../../../shared/stall-watch.js';
+import { STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';
 import type { StallArm } from '../../../shared/stall-watch.js';
 import { sessionRoleOf } from '../roleOf.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
@@ -87,9 +88,11 @@ export type StallHold = keyof typeof STALL_HOLD_MAP;
 export const STALL_HOLDS = Object.keys(STALL_HOLD_MAP) as StallHold[];
 
 /** The lane's registry markers. None has a writer in the tree. Each is touched and removed by hand on the fleet box,
- *  following the `mail-disabled` precedent, and the lane reads them from one listing per tick. */
+ *  following the `mail-disabled` precedent, and the lane reads them from one listing per tick. The kill switch is a
+ *  switchboard row (`shared/switches.ts`, D-8339), so its name is spelled there once and this map keys it by the row's
+ *  constant. */
 const STALL_MARKER_MAP = {
-  'stall-watch-disabled': 'the lane returns: nothing is recorded or sent',
+  [STALL_WATCH_DISABLED_MARKER]: 'the lane returns: nothing is recorded or sent',
   'stall-watch-live': 'notices to the stalled session itself are sent (r1); absent, every arm is shadow',
   'stall-watch-escalate': 'with the live marker, coordinator notices and operator pushes are sent',
   'stall-watch-w2-live': 'the wave-2 arms may send under the other two markers; absent, every wave-2 arm records shadow only',
@@ -121,7 +124,7 @@ export interface StallArming { readonly disabled: boolean; readonly live: boolea
 /** One registry listing (the one `tick()` already took) gives the arming. A marker is a whole file name. */
 export function stallArmingOf(names: readonly string[]): StallArming {
   const has = (m: StallMarker): boolean => names.includes(m);
-  return { disabled: has('stall-watch-disabled'), live: has('stall-watch-live'), escalate: has('stall-watch-escalate'), w2Live: has('stall-watch-w2-live') };
+  return { disabled: has(STALL_WATCH_DISABLED_MARKER), live: has('stall-watch-live'), escalate: has('stall-watch-escalate'), w2Live: has('stall-watch-w2-live') };
 }
 
 export type StallRecipient = 'worker' | 'coordinator' | 'operator';

@@ -78,6 +78,10 @@ export const MAIL_GATE_STRICT_MARKER = 'mail-gate-strict';
 export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';
 /** `$REG/mail-gate-busy-shadow`: the mail gate's first hand-armed step. */
 export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';
+/** `$REG/stall-watch-disabled` (D-8339): the worker stall watch's kill switch. It wins over the level chosen in Settings, so
+ *  it is an emergency override with no control: touched and removed by hand at a terminal, no writer in the tree. Its
+ *  reader is the lane's arming (`server/src/coord/stall.ts`); the Stall watch card names it while it holds the watch. */
+export const STALL_WATCH_DISABLED_MARKER = 'stall-watch-disabled';
 /** `$REG/coordinator-roster-card-live`: arms the session hook's roster card (durability D4, #757) and its wake arm (R-5a,
  *  D-8201). Unarmed, the card goes to a shadow log only. No writer in the tree. */
 export const COORDINATOR_ROSTER_CARD_LIVE_MARKER = 'coordinator-roster-card-live';
@@ -277,6 +281,11 @@ export const SWITCHES = {
   [MAIL_GATE_BUSY_SHADOW_MARKER]: {
     storage: { marker: MAIL_GATE_BUSY_SHADOW_MARKER }, default: 'absent: the shell mode', owner: 'C5',
     meaning: 'The gate decides busy as the busy mode would, delivers nothing more, and logs what it would have sent.',
+    writer: 'hand-only',
+  },
+  [STALL_WATCH_DISABLED_MARKER]: {
+    storage: { marker: STALL_WATCH_DISABLED_MARKER }, default: 'absent: the watch runs at the level that applies', owner: 'C5',
+    meaning: 'The worker stall watch does nothing at all: nothing is recorded or sent, whatever level is chosen in Settings.',
     writer: 'hand-only',
   },
   [COORDINATOR_ROSTER_CARD_LIVE_MARKER]: {
