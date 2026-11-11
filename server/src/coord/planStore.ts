@@ -184,11 +184,11 @@ export function settleEpicInTx(db: DatabaseSync, epicId: number, now: number): v
 // ── Writes: the plan ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 const ARRAY_FIELDS = new Set(['waves', 'proves']);
-function patchStatement(table: string, patch: Record<string, unknown>, allowed: readonly string[], id: number): { sql: string; args: unknown[] } | null {
+function patchStatement(update: string, patch: Record<string, unknown>, allowed: readonly string[], id: number): { sql: string; args: unknown[] } | null {
   const cols = Object.keys(patch).filter((k) => allowed.includes(k) && patch[k] !== undefined);
   if (cols.length === 0) return null;
   return {
-    sql: `UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
+    sql: `${update}${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
     args: [...cols.map((c) => (ARRAY_FIELDS.has(c) ? JSON.stringify(patch[c]) : patch[c])), id],
   };
 }
@@ -233,7 +233,7 @@ export function updateTicket(db: DatabaseSync, id: number, patch: TicketPatch, n
   tx(db, () => {
     const before = ticketById(db, id);
     if (before === null) return;
-    const st = patchStatement('plan_tickets', patch, TICKET_COLS, id);
+    const st = patchStatement('UPDATE plan_tickets SET ', patch, TICKET_COLS, id);
     if (st !== null) db.prepare(st.sql).run(...(st.args as never[]));
     const touched = new Set<number>([before.epicId]);
     if (patch.epicId !== undefined) touched.add(patch.epicId);
@@ -263,7 +263,7 @@ export function applyPlanChanges(
       touchEpic(epicIdByKey(db, program, e.project, e.key));
     }
     for (const u of changes.epics.update) {
-      const st = patchStatement('plan_epics', u, EPIC_COLS, u.id);
+      const st = patchStatement('UPDATE plan_epics SET ', u, EPIC_COLS, u.id);
       if (st !== null) db.prepare(st.sql).run(...(st.args as never[]));
       touchEpic(u.id);
     }
@@ -280,7 +280,7 @@ export function applyPlanChanges(
       touchEpic(epicId);
     }
     for (const u of changes.checkpoints.update) {
-      const st = patchStatement('plan_checkpoints', u, CHECKPOINT_COLS, u.id);
+      const st = patchStatement('UPDATE plan_checkpoints SET ', u, CHECKPOINT_COLS, u.id);
       if (st !== null) db.prepare(st.sql).run(...(st.args as never[]));
       touchEpic((db.prepare('SELECT epicId FROM plan_checkpoints WHERE id = ?').get(u.id) as { epicId: number } | undefined)?.epicId ?? null);
     }
@@ -296,7 +296,7 @@ export function applyPlanChanges(
     for (const u of changes.tickets.update) {
       const before = ticketById(db, u.id);
       if (before === null) continue;
-      const st = patchStatement('plan_tickets', u, TICKET_COLS, u.id);
+      const st = patchStatement('UPDATE plan_tickets SET ', u, TICKET_COLS, u.id);
       if (st !== null) db.prepare(st.sql).run(...(st.args as never[]));
       touchEpic(before.epicId);
       touchEpic(u.epicId ?? null);
