@@ -1,13 +1,13 @@
 # Rich Docs reader and a shared renderer — design
 
-**Spec** · 2026-10-12 · Status: Approved by the operator 2026-10-12 (R-g) · Owner: the operator · Linear: none · Related: docs/superpowers/specs/2026-10-01-native-docs-reader-design.md, docs/superpowers/programs/native-docs-reader.md
+**Spec** · 2026-10-12 · Status: Approved by the operator 2026-10-12 (R-g); amended 2026-11-11 for the retirement-parity ruling (R-b, R-e, §6, §9) · Owner: the operator · Linear: none · Related: docs/superpowers/specs/2026-10-01-native-docs-reader-design.md, docs/superpowers/programs/native-docs-reader.md
 
 ## In short
 
 This spec amends the 2026-10-01 Docs reader spec (the "base spec") in two ways.
 
 - **One shared renderer.** The rich reading layout becomes one small public library, named `docserver` and published as `@synapsium-labs/docserver` under the MIT licence. It is pure and pinned by exact version. ccrc and other viewers each keep their own transport, auth, content source and hosting.
-- **ccrc's reader becomes your docs server.** It runs at ccrc's own public address, behind the same passkey session, at feature parity. It replaces the tailnet-only standalone docs server for you.
+- **ccrc's reader becomes your docs server.** It runs at ccrc's own public address, behind the same passkey session, at feature parity. It replaces the tailnet-only standalone docs server for you, and retiring that server drops no feature: every capability it has is kept, and the old server stays in use until ccrc's reader has them all, checked side by side (amended 2026-11-11; retirement parity, D-8287).
 
 What changes in ccrc:
 
@@ -30,10 +30,10 @@ This section covers the rulings, what is already built, and why the standalone d
 | Id | Ruling | What it means here |
 |---|---|---|
 | R-a | Recorded by the coordinator: "ccrc has its own docs server (its native reader). Other viewers keep their own. The RENDERING is one shared library: one public repo, permissively licensed, pulled in as a pinned dependency." You accepted the recommendation in full: each product keeps its transport, auth, content source and hosting; the library holds the pure parts only; its own small programme builds it first; ccrc mounts it in a sandboxed frame in a later wave; W5 stays plain plus the `<br>` fix; W4 is unchanged. | §2, §3, §4, §8 |
-| R-b | In your words: "ccrc access right now is set up via duckdns, and a passkey, I'm suggesting same auth for [the docs server] applies." | ccrc's Docs reader, at `CCRC_ORIGIN` behind the passkey session, is your docs server. It replaces the standalone docs server at parity (§6, §9). |
+| R-b | In your words: "ccrc access right now is set up via duckdns, and a passkey, I'm suggesting same auth for [the docs server] applies." | ccrc's Docs reader, at `CCRC_ORIGIN` behind the passkey session, is your docs server. It replaces the standalone docs server at parity (§6, §9). **Reopened** (amended 2026-11-11; retirement parity, D-8287): on 2026-10-25 you ruled that retiring the standalone server drops no feature (#1418), and on 2026-11-10 that this ruling wins over the rows this spec had marked Dropped. "At parity" therefore means every capability: §6's Dropped rows are now Kept, needed before the old server goes off, and §9's gate adds a side-by-side check against the old server. |
 | R-c | 13:15, in your words: "yes to MIT license". | The library is MIT (§3.6). |
 | R-d | 13:15, in your words: "doc's address - yes". | Page URLs may carry a commit as `at=<sha>` for the version view. This amends the base rule "page URLs never carry a commit". G6 is unconditional in W5b (§6, A14). |
-| R-e | 13:15, in your words: "[the docs server's] roots - move". | Roots outside ccd's projects root are moved under it. This is your step in the retirement gate, done only when no live session works in them (§6 G3, §9). |
+| R-e | 13:15, in your words: "[the docs server's] roots - move". | ~~Roots outside ccd's projects root are moved under it, as a retirement-gate step.~~ **Reopened** (amended 2026-11-11; retirement parity, D-8287): under the 2026-10-25 no-feature-loss ruling (#1418), confirmed 2026-11-10, folders outside ccd's projects root stay as their own reader feature. They need not become git repos or move, and moving them is no longer a gate step (§6 G3, §9, RD21). How the reader serves them is a follow-on design. |
 | R-f | 13:16, in your words: "name: docserver". | The library and its repo are named `docserver`. The unscoped npm name is taken, so the package is `@<scope>/docserver`. The scope is the only naming item still waiting. W4's M7.9 forbids the word in the PWA, so A21 amends it (§7). |
 | R-g | About 14:07, in this session: start the library programme now; the `docserver` repo stays private until v1 and becomes public with v1; the npm scope is `@synapsium-labs`; the spec is approved as written. | The package is `@synapsium-labs/docserver` (§3.6). The library programme starts at once (§8). Its first public release is v1, which ccrc's W8 pins. |
 
@@ -484,10 +484,11 @@ These close the gaps found against the standalone docs server (research B). Each
 | G5 changes since | No new verb. The PWA reads the base and head through two existing `docs-show` pins and diffs the lines itself, keyed to `data-line`. The base may be any 40 or 64 hex commit, because a committed pin reads any commit, still inside the sections (base §0 `evidence`). "Since last visit" sends the stored served commit, and the oldest day window sends a commit's parent; neither need be in the doc's history. A draft answers "unavailable". `diff` stays on the never-used list. The alternative is a `docs-diff` verb. | W8 | §4 gains a pure diff module | Agreed |
 | G6 version view | Page URLs gain `at=<sha>` (40 or 64 hex), a change to "page URLs never carry a commit". The page opens a committed pin at that commit, and the truth line names it and links back to the latest. "Only this day" keeps its base, and "Back to the latest" its ref, in `history.state` for the visit, not in the URL. Inside the frame, the `version` op asks for a version (§4.4). | W5b (the key and the page), W8 (the menu) | §0 `http` row, §3.1, §4.3, M3.2 | Ruled |
 | G7 reader state | Theme, width, marks and last visit live in ccrc's own localStorage, per device, under the reader prefix `ccrc:reader:v1:`, which no console key uses. They are written through the allow-listed `store.set` and seeded back on mount. Reader prefs are kept apart from console prefs. No server storage in v1. | W8 | The library's `./host` store under ccrc's prefix, over the storage port that `docs/reader/bridge.ts` hands it; there is no `docs/reader/store.ts` (amended 2026-10-31; W8a `./host`) | Agreed |
-| G3 roots outside ccd's projects root | Moved under it as git repos (R-e). This is your step in the retirement gate (§9 Step 1), done only when no live session works in them. Two small non-git directories (28 files) are affected. One stale entry has nothing to move. Once moved, ccd serves them like any other project. | none: your step | None: restates base §0 | Ruled |
+| G3 folders outside ccd's projects root | Kept as their own reader feature (R-e reopened) (amended 2026-11-11; retirement parity, D-8287). They stay where they are and need not become git repos; moving one is never a gate step. Today two small non-git directories (28 files) are affected, and one stale entry has nothing to serve. A follow-on design says how the reader lists and reads a folder with no commit (what the truth line, history and drafts mean there) without relaxing the current caps or exposing a live working tree outside the session gate. Before that design, the 2026-10-12 text moved them under ccd's projects root as git repos, as your Step 1. | Follow-on | Base §0 scope (one projects root) | Reopened |
 | G9 HTML specs and mockups | They use W6's mockup frame unchanged. An HTML spec that loads a CDN script needs two taps: Run scripts, then Load external. Those two taps hold only once W6's script-text census lands (base §5.6.3): until then, a spec whose inline script imports from a CDN never offers Load external (amended 2026-10-13, Share/Export). The sandbox is deliberately stricter than the standalone server's. | W6 | None | Agreed |
+| G11 private draft-review store (#1420) | New (amended 2026-11-11; retirement parity, D-8287). Sharing a draft for review keeps a private store with a lifecycle. Your 2026-10-25 choice on #1420 is fixed: the link shows a frozen snapshot taken at share time, the page says when a newer draft is available, and you re-share after later edits; the link never reads the live draft. Capability link or signed-in access, reviewer comments (never a merge approval), revocation, retention and the referenced assets a snapshot hides are the follow-on design's threat model, not chosen here. The committed Share and Export (base §4.16, §4.17) do not supply this store, and general hosted publishing stays a separate decision (completion spec §7). | Follow-on | Base §0 `share-drafts` (Share sends only the committed permalink) | Kept |
 
-**Parity, capability by capability.** "Yes" means the base spec already covers it. "Agreed" means a gap that this spec closes. "Dropped" is an accepted loss.
+**Parity, capability by capability.** "Yes" means the base spec already covers it. "Agreed" means a gap that this spec closes. "Kept" means a capability retirement must keep that is not delivered yet: it is needed before the old server goes off, through a follow-on design and plan. "Open" means a row still to reconcile with the no-feature-loss ruling: delivered, or waived by you as a console item, never waived by its older label. No row is Dropped: on 2026-10-25 you ruled that retirement drops no feature (#1418), and this table is not limited to that ruling's five named examples (amended 2026-11-11; retirement parity, D-8287).
 
 | Capability of the standalone docs server | Verdict | Where |
 |---|---|---|
@@ -511,12 +512,15 @@ These close the gaps found against the standalone docs server (research B). Each
 | Footnotes | Agreed, L2 adds styles | They have no styles today |
 | Fonts | Yes, same as today | Latin subsets only; other scripts fall back to system fonts |
 | HTML specs and mockups | Yes, base §5.6, with a stricter sandbox (G9) | |
-| The `classic` old layout and the design-prototype variants | Dropped | Only the default layout ships (§3.3) |
-| The figure overlay's Back-to-close | Dropped | The frame keeps no history entries of its own (`hash` uses `replaceState`). Esc and the close button still close it. |
-| Files over 2 MiB, and PDFs | Dropped | Download only. Larger reads wait for the reserved `docs-show-range` verb. |
-| Issue-tracker item links | Dropped | Off. ccrc has no per-project docs config. |
-| Print | Later | It needs `allow-modals`, which is forbidden |
-| Reader state kept on the old server's origin | Dropped | Per-device state starts fresh |
+| The `classic` old layout and the design-prototype variants | Kept, needed before the old server goes off | Today only the default layout ships (§3.3). A follow-on design says how the reader offers every kept variant. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
+| Files over 2 MiB | Kept, needed before the old server goes off | Today download only. A bounded larger read, such as the reserved `docs-show-range` verb, becomes required, not Later; the current caps are not relaxed in its place. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
+| PDFs | Kept, needed before the old server goes off | Today download only (`other` class). The follow-on design covers viewing inline as well as download, inside the current frame walls. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
+| Issue-tracker item links | Kept, needed before the old server goes off | Today off: ccrc has no per-project docs config. The follow-on design adds the configured tracker links. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
+| Folders outside ccd's projects root | Kept, needed before the old server goes off | Their own reader feature, G3 (R-e reopened). Was "moved under it as git repos" before (amended 2026-11-11; retirement parity, D-8287). |
+| Draft review by link | Kept, needed before the old server goes off | The private draft-review store with its lifecycle, G11 (#1420) (amended 2026-11-11; retirement parity, D-8287). |
+| The figure overlay's Back-to-close | Open | The frame keeps no history entries of its own (`hash` uses `replaceState`). Esc and the close button still close it. Reconcile before the gate, keeping the frame walls (§5.1) until a reviewed design or your ruling. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
+| Print | Open | It needs `allow-modals`, which is forbidden. A genuine conflict with the frame walls comes to you as a console item; until then nothing adds `allow-modals`. Was Later before (amended 2026-11-11; retirement parity, D-8287). |
+| Reader state kept on the old server's origin | Open | Per-device state starts fresh today (G7). Reconcile with the no-feature-loss ruling before the gate; no migration is authorised here. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
 
 ## 7. Amendments to the 2026-10-01 spec
 
@@ -542,7 +546,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | A15 | §4 | Reader state in ccrc's localStorage via `store.set`, under the reader prefix | G7 | M8.15 | Agreed |
 | A16 | §4.10 step 3, docs profile only | `<br>`, `<br/>` and `<br />` with no attributes become a real `br` element, never parsed HTML. All other raw HTML stays text. Chat is unchanged. W5 also amends W4's profile-equality case (W4 plan, refinement (f)): the two profiles' outcomes are equal, except on inputs that hold `<br>`, which differ only by `br` elements in the docs profile. | W5 ruling | M9.1 | Agreed |
 | A17 | §1 units, §4.1 files | Add `docs/ReaderFrame.tsx`, `docs/ReaderSheets.tsx`, `docs/reader/{bridge,policy,assets,images,readerText}.ts`, `lib/{readerRenderJob,readerLimits}.ts` (the `docsRunner` render job and its caps), the exact library pin in `pwa/package.json`, and §4.7's import rule: ccrc never imports `./enhance` or `./render` into the main thread, and imports `./host` only in `docs/reader/bridge.ts`, lazily. W8b adds `docs/reader/diff.ts`. There is no `seed.ts`, `store.ts` or L0 `parseBridgeMessage`: the library's `./host` owns them (amended 2026-10-31; W8a `./host`). The reader lab adds `docs/reader/labPolicy.ts`, the wall frame's policy, under `docs/reader/` because that is `./frame`'s one home (M8.10); and `profile?` on the mount's input, decided by `policy.ts#readerMountPlan` (amended 2026-11-03; reader lab) | Layer 3 | M8.10, M8.12, M10.10, M10.15 | Agreed |
-| A18 | §7.4 | A retirement gate before the base steps (§9) | R-b at parity | none | Agreed |
+| A18 | §7.4 | A retirement gate before the base steps (§9), which from 2026-11-11 requires every Kept and Open row of §6 resolved and a side-by-side check against the old server (amended 2026-11-11; retirement parity, D-8287) | R-b at parity, which drops no feature | none | Agreed |
 | A19 | §7.7 | Waves W5b, W8a and W8b and their dependencies (§8) (amended 2026-10-31; W8 split) | Sequencing | none | Agreed |
 | A20 | §0 `features` | The rich layout, history, changes since and the version view join what carries over from the old preview | R-b | none | Agreed |
 | A21 | §7.10 M7.9 (W4's row; W4 plan, refinement (v)) | The PWA name rule gains one exception. The exact specifier `@synapsium-labs/docserver` and its subpaths may appear as an import specifier in `pwa/src`, in `pwa/package.json` and `pwa/package-lock.json`, and in the `globIgnores` entry of `pwa/vite.config.ts` (unused from W8a, whose entry names Mermaid's chunk and not the library, so the config stays fully red for the name; amended 2026-10-31; W8a). Every other occurrence, in any case, stays red. The directory needle is unchanged. It lands in W8, which edits M7.9's block in `docs-parity.test.ts` in place: the one exception to that file's append-only header, recorded in W8's plan. | R-f: the word now names the library | M8.18 | Agreed |
@@ -714,7 +718,7 @@ ccrc performs none of these steps (base §7.4). This section adds a gate in fron
 
 ```mermaid
 flowchart TB
-  M["Step 1: move the outside roots<br/>under ccd's projects root"] --> G{"Gate met?"}
+  M["Step 1: compare side by side<br/>with the old server"] --> G{"Gate met?"}
   G -->|"no"| K["Keep both running<br/>on separate paths"]
   G -->|"yes"| S2["Step 2: remove the /docs<br/>proxy mapping first"]
   S2 --> S3["Step 3: verify through<br/>the in-app Docs door"]
@@ -723,14 +727,16 @@ flowchart TB
   S5 --> S6["Step 6: stop the docs server"]
   S6 --> S7["Step 7: check the old port is closed"]
 ```
-*Figure 4. Retirement. Start with the move of the outside roots, which is part of the gate. After the gate, removing the mapping comes first, so one URL is never answered by two apps.*
+*Figure 4. Retirement. Start with the side-by-side check against the old server, which is part of the gate; a missing row sends you back to keeping both. After the gate, removing the mapping comes first, so one URL is never answered by two apps (amended 2026-11-11; retirement parity, D-8287).*
 
 **The gate.** All of these hold on both boxes, on a release:
 
 | Condition | Delivered by |
 |---|---|
 | Every section you read is served, `vision` and `promise` included | W5b (G1) |
-| The outside roots are moved under ccd's projects root | Your Step 1 (R-e) |
+| Every Kept row of §6 is delivered: the variants, files over 2 MiB, PDFs, issue-tracker links, folders outside ccd's projects root (G3) and the private draft-review store (G11) (amended 2026-11-11; retirement parity, D-8287) | Follow-on designs and plans (#1418, #1420) |
+| Every Open row of §6 is resolved: Back-to-close, print and old-origin state, each delivered or waived by you (amended 2026-11-11; retirement parity, D-8287) | The follow-on parity inventory |
+| A side-by-side check against the old server finds nothing missing: every row of §6's parity table, on the same docs, on both servers, on the installed release (amended 2026-11-11; retirement parity, D-8287) | Your Step 1, with the completion spec's installed comparison (its §8) |
 | `<br>` renders | W5 |
 | Mermaid renders | W8 |
 | History and changes since | W5b (G4) and W8 (G5) |
@@ -744,7 +750,7 @@ flowchart TB
 | Step | Act | Notes |
 |---|---|---|
 | 0 | Drop `/docs` from `CCRC_SW_DENYLIST` in your deploy env before the W4 deploy | The W4 build refuses that entry (base §7.3) |
-| 1 | Move each root outside ccd's projects root under it, as a git repo | Only when no live session works in that root. Part of the gate. |
+| 1 | Compare side by side: open every row of §6's parity table on the old server and on ccrc's reader, on the same docs | Part of the gate. A missing or worse row blocks every step after it, and both keep running. Moving a folder under ccd's projects root is no longer a step (R-e reopened); a folder outside it is read through G3 (amended 2026-11-11; retirement parity, D-8287). |
 | 2 | Remove the `/docs` proxy mapping on every origin that also serves the PWA | First after the gate, before any check |
 | 3 | Verify by content through the Docs door, never by status code | The shell answers 200 for any path |
 | 4 | Move the preview links in your global instructions to `https://<your-origin>/docs/<project>/<section>/<path>` | Use the bare `?ref=<branch>`, not `origin/<branch>`. `<project>` is the directory name. Durable links stay GitHub blob URLs. |
@@ -753,17 +759,17 @@ flowchart TB
 | 7 | Check the old port is closed | `ss -ltn` |
 
 > [!NOTE]
-> Until the gate is met, both run. The standalone server stays on its tailnet path and ccrc's reader on `CCRC_ORIGIN`. An armed ccrc cannot sign in on a tailnet origin: the cookie is host-only and the passkey is bound to `CCRC_RP_ID` (`server/src/auth/cookie.ts:110`, `server/src/auth/webauthn.ts:216`). Read marks and settings from the old server do not carry over.
+> Until the gate is met, both run. The standalone server stays on its tailnet path and ccrc's reader on `CCRC_ORIGIN`. An armed ccrc cannot sign in on a tailnet origin: the cookie is host-only and the passkey is bound to `CCRC_RP_ID` (`server/src/auth/cookie.ts:110`, `server/src/auth/webauthn.ts:216`). Whether read marks and settings from the old server carry over is an Open row of §6; until it is resolved, they start fresh (amended 2026-11-11; retirement parity, D-8287).
 
 ## 10. Decisions
 
-Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 2026-10-13 for RD23 (amended 2026-10-13), and the rulings of 2026-10-15 for RD33 (amended 2026-10-15; W5h). Rows marked Agreed are the coordinator's and need your approval. Rows marked Waiting need your ruling.
+Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 2026-10-13 for RD23 (amended 2026-10-13), and the rulings of 2026-10-15 for RD33 (amended 2026-10-15; W5h). Rows marked Agreed are the coordinator's and need your approval. Rows marked Waiting need your ruling. Rows marked Reopened were ruled and then reopened by a later ruling of yours (amended 2026-11-11; retirement parity, D-8287).
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
 | RD1 | One shared rendering library | One per product; a shared library | One public, permissive, pinned library (R-a) | Ruled |
 | RD2 | What stays per product | Share transport or hosting; keep them apart | Each keeps transport, auth, content source and hosting (R-a) | Ruled |
-| RD3 | Your docs server | Keep the standalone server; ccrc's reader | ccrc's reader at `CCRC_ORIGIN` behind the passkey, at parity (R-b) | Ruled |
+| RD3 | Your docs server | Keep the standalone server; ccrc's reader | ccrc's reader at `CCRC_ORIGIN` behind the passkey, at parity (R-b). Parity drops no feature (#1418): the standalone server stays in use until §9's gate, side-by-side check included, is met (amended 2026-11-11; retirement parity, D-8287). | Ruled |
 | RD4 | W4 and W5 | Fold the library into W4 or W5 | W4 unchanged, W5 plain plus `<br>` (R-a) | Ruled |
 | RD5 | Layering | Library with I/O; pure library | Three layers, with the library pure (§2) | Agreed |
 | RD6 | Library API | Today's script as is; adapters | `render`, `frameDocument`, `enhance`, `host`, `assets`, `conformance`; versioned bridge | Agreed |
@@ -781,12 +787,12 @@ Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 
 | RD18 | G5 changes since | A `docs-diff` verb; a client diff | Client diff of two `docs-show` reads | Agreed |
 | RD19 | G6 commit in page URLs | In-visit state; `at=<sha>` | `at=<sha>` (R-d). `only` and `latest` stay in-visit state. | Ruled |
 | RD20 | G7 reader state | Server storage; per-device | ccrc localStorage through `store.set`, per device, under its own prefix and budget | Agreed |
-| RD21 | G3 outside roots | Serve non-git trees; move; drop | Moved under ccd's projects root by you, as a retirement-gate step (R-e) | Ruled |
+| RD21 | G3 outside roots | Serve non-git trees; move; drop | Reopened (amended 2026-11-11; retirement parity, D-8287): folders outside ccd's projects root stay as their own reader feature, with no move and no git conversion required (#1418). How the reader serves a non-git tree is the follow-on design. It was: moved under ccd's projects root by you, as a retirement-gate step (R-e). | Reopened |
 | RD22 | G9 HTML specs | A looser sandbox; W6's frame | W6's frame, unchanged | Agreed |
 | RD23 | W5b placement | Before W5; after W5 | After W5, as you ruled on 2026-10-13 (amended 2026-10-13, Share/Export). | Ruled |
 | RD24 | When the frame lands | In W5; a new W8; W8 in two runs | W8a (the frame core), gated on library v1, beside W5h-a and Share; W8b (the version menu and "changes since") after W5b; W7 last. You ruled the split on 2026-10-31, amending the Agreed single W8 (amended 2026-10-31; W8 split) | Ruled |
 | RD25 | Library programme start | After W5; now | Now, in parallel with W4 and W5 (R-g; amended 2026-10-13) | Ruled |
-| RD26 | Retirement | ccrc acts; you act | A parity gate, then your steps only, mapping removed first | Agreed |
+| RD26 | Retirement | ccrc acts; you act | A parity gate with a side-by-side check against the old server (amended 2026-11-11; retirement parity, D-8287), then your steps only, mapping removed first | Agreed |
 | RD27 | npm scope | Any scope you hold | `@synapsium-labs` (R-g; amended 2026-10-13) | Ruled |
 | RD28 | Where `render()` runs | In the frame; in W4's parse worker | The parse worker, which can be terminated. Only `enhance()` and Mermaid run in the frame. | Agreed |
 | RD29 | W5b rollout order | Fleet first, with W5 dropping unknown slugs; server first | Server first, so W5 needs no change | Agreed |
@@ -804,10 +810,10 @@ Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 
 
 - One shared, permissive, pinned rendering library, holding pure parts only. Each product keeps its transport, auth, content source and hosting. Its own programme builds it first, and ccrc mounts it in a sandboxed frame in a later wave. You ruled this on 2026-10-12 (R-a).
 - W4 is unchanged. W5 stays plain plus the `<br>` fix (R-a).
-- ccrc's reader, at ccrc's own address behind the passkey session, replaces the standalone docs server for you at parity. You ruled this on 2026-10-12 (R-b).
+- ccrc's reader, at ccrc's own address behind the passkey session, replaces the standalone docs server for you at parity. You ruled this on 2026-10-12 (R-b). Parity drops no feature (2026-10-25, #1418; reopened R-b, 2026-11-10): every Kept and Open row of §6 is resolved and a side-by-side check finds nothing missing before the old server goes off (amended 2026-11-11; retirement parity, D-8287).
 - The library is MIT (R-c).
 - Page URLs may carry a commit as `at=<sha>` for the version view (R-d).
-- Roots outside ccd's projects root are moved under it, by you, as a retirement-gate step, only when no live session works in them (R-e).
+- Folders outside ccd's projects root stay as their own reader feature, G3; no move or git conversion is required (R-e and RD21 reopened, 2026-11-10) (amended 2026-11-11; retirement parity, D-8287).
 - The library and its repo are named `docserver`, and the package is `@<scope>/docserver` (R-f), with the scope `@synapsium-labs` (R-g).
 - The library programme starts now. The repo is private until v1 and public from v1 (R-g).
 - This spec, its Agreed rows in §10 and its Agreed amendments in §7, approved as written (R-g). Each wave's plan still comes to you for review.
@@ -816,15 +822,13 @@ Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 
 
 ### Waiting on you
 
-Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23) (amended 2026-10-13, Share/Export).
+Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23) (amended 2026-10-13, Share/Export). The follow-on designs for §6's Kept and Open rows raise any genuine product conflict, such as print against the frame walls, as a console item when they need it (amended 2026-11-11; retirement parity, D-8287).
 
 ### Later
 
 - Server-side reader state for sync across devices. It needs a `coord.db` migration and a write route. It comes back if per-device state proves too thin.
 - `only` and `latest` in the URL beside `at=`, if in-visit state proves too thin.
-- `docs-show-range`, for files over 2 MiB and PDFs, once a real file needs it.
-- Issue-tracker item links. They need a per-project docs config, which ccrc does not have.
-- Print from the reader, which needs `allow-modals` (forbidden), and Ctrl/Cmd+K clashing with ccrc shortcuts. Both come back after W8's phone pass.
+- Ctrl/Cmd+K clashing with ccrc shortcuts, after W8's phone pass. Files over 2 MiB, PDFs and issue-tracker links left this list for §6's Kept rows, and print for its Open rows: retirement needs them (amended 2026-11-11; retirement parity, D-8287).
 - A no-JS static variant from `frameDocument`, for the Export action, once W8 lands.
 - Index page "newest five" cards (G10), as a presentation follow-up.
 - Mermaid drawn on open in the reader (ruled 2026-11-03), after the reader lab's E17 measurement and the library change (amended 2026-11-03; reader lab). The colouring divergences are ruled for now (the W8a row, §8); one colouring for both paths, through the library's `./highlight`, comes back only if you ask (amended 2026-10-31).
