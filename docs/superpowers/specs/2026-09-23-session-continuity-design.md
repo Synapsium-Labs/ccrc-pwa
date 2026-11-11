@@ -969,6 +969,14 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
    ruled (2026-09-24): no in-place restart; stage 4's instrument counts the no-room waits that outlive their own
    reset by more than `RESCUE_WAIT_GRACE` without ending in place, and the seconds each spent past it (§9), and the
    question comes back with that count in hand. It is tracked outside the repository as its own ticket.
+   **Closed 2026-11-10 (the programme's item 140).** From 2026-10-04 to 2026-11-10 the count read 0. Only one no-room
+   wait opened, on 2026-10-19: it had no dated reset, and it ended after 32 s when Claude Code continued by itself. The
+   operator ruled to keep idling as ruled. The four rows stay in every stage-4 reading, and the question returns if one
+   reads above 0. **Superseded in part by a later ruling.** The operator's Q4 ruling (#2526, §6.1) pins Claude Code's own
+   auto-continue off, the path that ended that wait. PR #2603, which builds it (merged 2026-11-11), also has ccd wait for
+   a no-room session whose limit states a reset and restart it in place after that reset (the operator's ruling (a)). That
+   is the restart this item ruled out. A wait with no stated reset stays the operator's. The rows are re-read after #2603
+   deploys.
 
 Decided 2026-11-07, when the operator offered a scratch account (the programme's items 59 and 75):
 
