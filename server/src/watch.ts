@@ -1486,8 +1486,8 @@ export class FleetWatcher {
   stamp(name: LaneName): void { this.lanes.stamp(name); }
 
   /** A synchronous beat on the row's cadence (the claim pair, the daily prune, the digest's beat): runs `fn` when it is
-   *  due at `now` (default: the row's clock) and answers whether it did. */
-  runLaneSync(name: LaneName, fn: () => void, now?: number): boolean { return this.lanes.runSync(name, fn, now); }
+   *  due on the row's own clock and answers whether it did (D-8197: no caller hands in a reading). */
+  runLaneSync(name: LaneName, fn: () => void): boolean { return this.lanes.runSync(name, fn); }
   /** The lane runs on the next tick. */
   kick(name: LaneName): void { this.lanes.kick(name); }
   /** The post-gather re-stamp on the decision clock, with the reading the pass decided on when it has one. */
