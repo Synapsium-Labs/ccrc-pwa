@@ -16,6 +16,7 @@ import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRuns, parentOfSession } from './coordReadHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const TOKEN = 'f'.repeat(64);
 const headers = { 'x-ccrc-mail-token': TOKEN };
@@ -51,6 +52,7 @@ const runner: Runner = async (_cmd, args) =>
 const openApp = async (home: string) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  for (const [slug, h] of [['program-a', 'project-a'], ['program-z', 'project-z'], ['program-b', 'project-b'], ['program-w', 'project-c']] as const) seedLegacyProgramme(coord.db, slug, h);
   const base = testDeps(home, runner);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord });
   return { app, coord };

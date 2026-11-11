@@ -289,6 +289,9 @@ const API_ERROR_TEXT: Record<string, string> = {
   // D-8147: the pull request and the workspace create answer it when the project's linking or the branch's commits could
   // not be read, which the rule needs before it can say nothing carries a ticket id; the linking routes, with no store.
   unavailable: 'This box could not do that just now, so nothing was changed or sent. Try again in a minute.',
+  // D-8181: a plan verb (and the plan sync before each write) refuses text a public repository's tracker must not carry;
+  // the box names the class in its own detail, which is never shown.
+  'linear-text-public': 'This text names a ticket id, a person or a private name, and this project is public, so it was not saved or sent. Say it in words a stranger could read.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a

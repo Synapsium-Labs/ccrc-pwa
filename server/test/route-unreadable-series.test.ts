@@ -12,6 +12,7 @@ import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const TOKEN = 'f'.repeat(64);
 let app: FastifyInstance | undefined;
@@ -39,6 +40,7 @@ describe('POST /api/runs/:id/route over an unreadable run series', () => {
     const fleetState = { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ROUTE_CAP, ACTOR_FLAGS_CAP] as string[] };
     app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, fleetState });
+    seedLegacyProgramme(coord.db, 'p', 'demo');
     const headers = { 'x-ccrc-mail-token': TOKEN };
     const opened = (await app.inject({ method: 'POST', url: '/api/runs', headers, payload: {
       program: 'p', title: 't', project: 'demo', wave: 1, waveOf: 3, claimedBy: 'coord', homeProject: 'demo', claimedByUuid: 'u-coord' } })).json() as { id: number };
@@ -69,6 +71,7 @@ describe('POST /api/runs from a coordinator that claims a run this process canno
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const fleetState = { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [ACTOR_FLAGS_CAP] as string[] };
     app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, fleetState });
+    seedLegacyProgramme(coord.db, 'p', 'demo');
     const own = coord.openRun({ program: 'q', title: 'q', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'coord' }) as { id: number };
     coord.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own.id);
     const res = await app.inject({ method: 'POST', url: '/api/runs', headers: { 'x-ccrc-mail-token': TOKEN }, payload: {

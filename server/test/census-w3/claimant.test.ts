@@ -167,12 +167,14 @@ describe('the claimant client census (D-7320)', () => {
   // Q3l re-pointed the guard from `$family` (the fifth field it removed) to `$claimant`, the row test it wrote (D-7324;
   // named exception): still one call, for the four claimant rows only.
   // The goals read's gate (D-8126) is the third call and the call record's the fourth, each guarded by its own row test, `"$key" == 'goals.show'` and `'calls.record'`, before it.
-  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 4, the claimant guard, the review-rounds loop, the goals read\'s gate and the call record\'s gate (D-7322, D-7324, D-8125, D-8126)', () => {
+  // The plan door's gate (D-8181) is the fifth, guarded by the plan rows' family test, `"$key" == plan.*`, before it.
+  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 5, the claimant guard, the review-rounds loop, the goals read\'s gate, the call record\'s gate and the plan door\'s gate (D-7322, D-7324, D-8125, D-8126, D-8181)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
       [false, 'if _api_server_cap "$rwant"; then'],
       [true, 'if [[ -n "$claimant" ]] && _api_server_cap "$want"; then'],
       [true, 'if [[ "$key" == \'goals.show\' ]] && ! _api_server_cap goals-read-v1 && _api_server_cap \'\'; then'],
       [true, 'if [[ "$key" == \'calls.record\' ]] && ! _api_server_cap calls-v1 && _api_server_cap \'\'; then'],
+      [true, 'if [[ "$key" == plan.* ]] && ! _api_server_cap plan-v1 && _api_server_cap \'\'; then'],
     ]);
   });
 });

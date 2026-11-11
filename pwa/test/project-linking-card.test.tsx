@@ -17,7 +17,7 @@ const NOW = Date.UTC(2026, 10, 9, 12, 0, 0);
 const measured = (over: Partial<Extract<ProjectLinkingWire['measured'], { state: 'measured' }>> = {}): ProjectLinkingWire['measured'] =>
   ({ state: 'measured', visibility: 'private', slug: 'owner/repo', template: 'absent', at: NOW - 3 * 3_600_000, ...over });
 const wire = (over: Partial<ProjectLinkingWire> = {}): ProjectLinkingWire =>
-  ({ teamKey: null, override: null, measured: measured(), mode: 'private', ...over });
+  ({ teamKey: null, override: null, measured: measured(), mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false, ...over });
 const row = (name: string, linking?: ProjectLinkingWire): ProjectRow =>
   ({ name, workdir: `/w/${name}`, ...(linking === undefined ? {} : { linking }) });
 const serve = (projects: ProjectRow[]) => vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });

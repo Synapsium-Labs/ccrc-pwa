@@ -40,6 +40,7 @@ import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
+import { planStorePort } from './coord/planStore.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
@@ -329,6 +330,8 @@ deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);
 deps.linearJournal = linearJournal;
+// The plan tables through their port (D-8181), built once beside the journal: the plan routes' only door to them.
+deps.plan = planStorePort(coord.db);
 deps.linearPolicy = allowAll;
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown

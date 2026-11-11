@@ -50,6 +50,7 @@ import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { RunCloseRefusal } from './run-close.js';
 import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
+import type { PlanRefusal } from './plan.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -229,7 +230,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The adoption switch's door (delegation broker wave 5 PR8b, D-8113): declared once, `delegation-adopt.ts#DELEGATION_ADOPT_REFUSALS`.
   | DelegationAdoptRefusal
   // The linking standard's words (D-8147): declared once, `linking.ts#LINKING_REFUSALS`, each with its status below.
-  | LinkingRefusal;
+  | LinkingRefusal
+  // The plan verbs' and the hierarchy routes' words (Linear hierarchy design, D-8181): declared once, `plan.ts#PLAN_REFUSALS`.
+  | PlanRefusal;
 
 /** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
  *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
@@ -431,6 +434,13 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // what the coordinator sent. (The lift is always on, D-8165: there is no refusal for a box that turned it off.)
   [REVIEW_ROUNDS_REFUSALS.capNotReached]: 409,
   ...LANDING_REFUSAL_STATUS,
+  // The plan's words (D-8181): CHOSEN, not measured. Who may not 403, an absent plan object 404, a body that cannot be a plan
+  // 400, every refusal of a state that exists 409.
+  'not-plan-owner': 403, 'not-linear-owner': 403, 'unknown-epic': 404, 'unknown-checkpoint': 404, 'unknown-ticket': 404,
+  'plan-too-large': 400, 'plan-bad-body': 400, 'waves-not-contiguous': 400, 'dropped-needs-reason': 400,
+  'wave-overlap': 409, 'ticket-workspace-mismatch': 409, 'linear-text-public': 409, 'plan-owned': 409, 'map-rewrites-plan': 409,
+  'map-incomplete': 409, 'migration-in-flight': 409, 'not-managed': 409, 'issue-not-inbound': 409, 'item-act-mismatch': 409,
+  'plan-closed': 409, 'plan-runs-open': 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -441,7 +451,8 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
  *  so they are not `RouteRefusal`s (D-5384, audit ticket ARCH-21). */
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'>;
+  | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -453,6 +464,8 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   'attribution-required': 409, 'not-a-child': 409,
   // D-6795: chosen, not measured — a new word, 409 like its family.
   'cap-review-rounds': 409,
+  // D-8181: chosen, not measured — the plan's five words, 409 like the family.
+  'wave-epic-mismatch': 409, 'plan-missing': 409, 'reserved-programme': 409, 'ticket-unavailable': 409, 'plan-closed': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

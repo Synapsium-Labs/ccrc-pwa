@@ -166,8 +166,10 @@ export function HeadResumeSheet({ open, onClose, view, sessions, fleetFrameSeen,
 }
 
 /** The Runs section: open waves newest first with reviews nested, then the closed waves fold. */
-export function ProgrammeRunsSection({ view, sessions, fleetFrameSeen, runsHeard }: {
+export function ProgrammeRunsSection({ view, sessions, fleetFrameSeen, runsHeard, quietMs = null }: {
   view: ProgrammeRunsView; sessions: readonly FleetSession[]; fleetFrameSeen: boolean; runsHeard: boolean;
+  /** D-8285: the runs frame's `stallQuietMs`, each row's heartbeat threshold. */
+  quietMs?: number | null;
 }): ReactNode {
   const dispatching = anyDispatchPending(view.open);
   const nowMs = useNow(dispatching ? 1_000 : 30_000);
@@ -180,7 +182,7 @@ export function ProgrammeRunsSection({ view, sessions, fleetFrameSeen, runsHeard
   keep.current = view.reload;
   const rowFor = (run: RunSummary): ReactNode => (isStuckRun(run)
     ? <StuckRow key={run.id} run={run} nowMs={nowMs} current={false} onAbandon={setTarget} />
-    : <RunRow key={run.id} run={run} nowMs={nowMs} session={workerOf(run, byId)} />);
+    : <RunRow key={run.id} run={run} nowMs={nowMs} session={workerOf(run, byId)} quietMs={quietMs} />);
   return (
     <section className="pv-card pv-runs" aria-label="Runs" data-testid="programme-runs">
       <h2 className="pv-h">Runs</h2>

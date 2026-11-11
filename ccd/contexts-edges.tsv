@@ -1,14 +1,19 @@
 _accept_first_run_prompts -> _tmux_at
+_accept_first_run_prompts -> _tmx
+_am_who -> _tmx_sock
+_answer_two_option_dialog -> _tmx
 _attic_project -> _reg_get
 _auto_compact_check -> _reg_get_to
 _auto_compact_check -> _reg_set
 _auto_compact_check -> _route_get
 _auto_compact_check -> _tmux_t
+_auto_compact_check -> _tmx
 _auto_stale_check -> _pane_narrow_note
 _auto_stale_check -> _reg_get
 _auto_stale_check -> _reg_get_to
 _auto_stale_check -> _reg_set
 _auto_stale_check -> _tmux_t
+_auto_stale_check -> _tmx
 _auto_swap_check -> _pane_born
 _auto_swap_check -> _pane_box_read
 _auto_swap_check -> _pane_measurable
@@ -44,6 +49,7 @@ _compact_note -> _reg_set
 _dispatch_swap -> _svc_run_detached
 _docs_py -> _gh_repo_slug
 _end_cause -> _reg_get
+_end_cause -> _tmx
 _end_note_gone -> _reg_get
 _end_record -> _reg_set
 _follow_continued_in -> _reg_get
@@ -65,10 +71,12 @@ _operator_choice_promote -> _route_word_in
 _operator_choice_promote -> cmd_route
 _operator_choice_unmark -> _session_probe
 _pane_born -> _tmux_t
+_pane_born -> _tmx
 _pane_carried_in -> _limit_dated
 _pane_for_keystroke -> _tmux_t
 _pane_limit_capture_to -> _tmux_t
 _pane_measurable -> _tmux_t
+_pane_scope_tmux -> _tmx
 _pane_type_ready -> _reg_get
 _pane_type_ready -> _reg_set
 _pane_type_ready -> _tmux_t
@@ -78,6 +86,7 @@ _pr_bind_facts -> _reg_get
 _pr_num_valid -> _child_runid_valid
 _redrive_after_spawn -> _reg_get
 _redrive_after_spawn -> _tmux_at
+_redrive_after_spawn -> _tmx
 _reg_generation_read -> _compact_lock_same
 _reg_purge -> _compact_lock_acquire
 _reg_purge -> _compact_lock_release
@@ -99,8 +108,10 @@ _route_apply_seed -> _reg_set
 _route_apply_seed -> _route_peek
 _route_compact_settling -> _reg_get
 _route_escape -> _tmux_t
+_route_escape -> _tmx
 _route_inert_has -> _route_word_in
 _route_model_ack_wait -> _tmux_t
+_route_model_ack_wait -> _tmx
 _route_model_close -> _tmux_t
 _route_note -> _reg_get
 _route_note -> _reg_set
@@ -120,8 +131,10 @@ _route_retry_ok -> _reg_get
 _route_try_bump -> _reg_get
 _route_try_bump -> _reg_set
 _route_type_effort -> _tmux_t
+_route_type_effort -> _tmx
 _route_type_model -> _is_anthropic_backend
 _route_type_model -> _tmux_t
+_route_type_model -> _tmx
 _route_unmeasured_note -> _route_note_floored
 _route_unread_note -> _route_note_floored
 _route_wanted_to -> _route_effort_for_to
@@ -168,6 +181,7 @@ _spawn_start -> _route_restore
 _spawn_start -> _route_stale_degrade_clear
 _spawn_start -> _route_tries_clear
 _spawn_start -> _serviceable
+_spawn_start -> _tmx
 _spawn_start -> _typed_note
 _spawn_start -> _ws_expire_spawn_gate
 _spawn_start -> _ws_expire_spawn_release
@@ -190,6 +204,7 @@ _sync_uuid -> _reg_get
 _sync_uuid -> _reg_set
 _sync_uuid -> _tmux_t
 _tick_strand_undecidable -> _tmux_t
+_tmux_new_session -> _tmx
 _transcript_path -> _cfg_dir
 _transcript_path -> _reg_get
 _transcript_path -> _transcript_matches
@@ -206,6 +221,7 @@ _watchdog_resume_run -> _operator_choice_keep
 _watchdog_resume_run -> _operator_choice_unmark
 _watchdog_resume_run -> _svc_stop
 _watchdog_resume_run -> _tmux_t
+_watchdog_resume_run -> _tmx
 _watchdog_resume_run -> cmd_ensure
 _watchdog_sign_to -> _pane_born
 _watchdog_sign_to -> _pane_carried_in
@@ -291,6 +307,7 @@ _ws_reap_tail -> _reg_get
 _ws_reap_tail -> _reg_retire
 _ws_reap_tail -> _reg_set
 _ws_reap_tail -> _tmux_t
+_ws_reap_tail -> _tmx
 _ws_reap_tail -> _ws_unsupervise
 _ws_reclaim_eval -> _child_runid_valid
 _ws_reclaim_eval -> _reg_get
@@ -325,6 +342,7 @@ _ws_reclaim_tail -> _svc_label
 _ws_reclaim_tail -> _svc_launchctl
 _ws_reclaim_tail -> _tmux
 _ws_reclaim_tail -> _tmux_t
+_ws_reclaim_tail -> _tmx
 _ws_reclaim_tail -> _ws_unsupervise
 _ws_reclaim_workdir_shared -> _reg_read
 _ws_shed_asleep_why -> _session_probe
@@ -359,6 +377,7 @@ cmd_attach -> cmd_ensure
 cmd_caps -> _pool_sync_installed
 cmd_clip -> _alive
 cmd_clip -> _tmux_t
+cmd_clip -> _tmx
 cmd_enable -> _ws_expire_refuse_return
 cmd_enable -> _ws_project_valid
 cmd_enable -> cmd_start
@@ -386,6 +405,7 @@ cmd_forget -> _reg_read_to
 cmd_forget -> _reg_retire
 cmd_forget -> _session_verdict
 cmd_forget -> _tmux_t
+cmd_forget -> _tmx
 cmd_forget -> _ws_unsupervise
 cmd_hibernate -> _alive
 cmd_hibernate -> _idle_for_keystroke
@@ -402,6 +422,7 @@ cmd_hibernate -> _reg_id_ok
 cmd_hibernate -> _reg_set
 cmd_hibernate -> _session_verdict
 cmd_hibernate -> _tmux_t
+cmd_hibernate -> _tmx
 cmd_hibernate -> _ws_unsupervise
 cmd_menu -> _alive
 cmd_menu -> cmd_ensure
@@ -456,6 +477,7 @@ cmd_stop -> _pane_scope_of
 cmd_stop -> _pane_scope_stop
 cmd_stop -> _reg_id_ok
 cmd_stop -> _tmux_t
+cmd_stop -> _tmx
 cmd_stop -> _ws_unsupervise
 cmd_supervise -> _auto_compact_check
 cmd_supervise -> _auto_stale_check
@@ -479,10 +501,12 @@ cmd_swap -> _svc_start
 cmd_swap -> _svc_stop
 cmd_swap -> _tmux
 cmd_swap -> _tmux_t
+cmd_swap -> _tmx
 cmd_swap -> _typed_note
 cmd_swap -> _ws_expire_refuse_return
 cmd_swap -> _ws_status
 cmd_swap -> cmd_ensure
+cmd_win_size -> _tmx
 cmd_ws_add -> _child_runid_valid
 cmd_ws_add -> _compact_lock_acquire
 cmd_ws_add -> _compact_lock_release
@@ -518,6 +542,7 @@ cmd_ws_archive -> _reg_set
 cmd_ws_archive -> _session_probe
 cmd_ws_archive -> _svc_is_active
 cmd_ws_archive -> _tmux_t
+cmd_ws_archive -> _tmx
 cmd_ws_archive -> _ws_status
 cmd_ws_archive -> _ws_unsupervise
 cmd_ws_attic -> _lc_done
@@ -583,6 +608,7 @@ cmd_ws_rm -> _lc_tx
 cmd_ws_rm -> _reg_get
 cmd_ws_rm -> _reg_retire
 cmd_ws_rm -> _tmux_t
+cmd_ws_rm -> _tmx
 cmd_ws_rm -> _ws_unsupervise
 cmd_ws_shed_deps -> _lc_dec_ok
 cmd_ws_shed_deps -> _lc_surface_norm

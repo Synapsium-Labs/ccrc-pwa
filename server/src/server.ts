@@ -81,6 +81,9 @@ import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
+import { registerPlanRoutes } from './coord/planRoutes.js';
+import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
+import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
 import { UNSET_LINKING } from './coord/linkingStore.js';
 import { createAccountGate } from './accounts/gate.js';
@@ -97,7 +100,7 @@ import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type CoordStore, type NodeRow } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts, withWorkerSeen } from './coord/runWire.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -238,6 +241,10 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/items/:id',
   // The stored-secrets read (the PL6 follow-up, programme item 9): no value, but each slot's asking item's title, which a session wrote.
   '/api/programmes/:slug/secrets',
+  // The plan (D-8181): epic, checkpoint and ticket titles and a close's reason are written by sessions.
+  '/api/programmes/:slug/plan',
+  // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
+  '/api/hierarchy',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -1771,7 +1778,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
             const summaries = withLastMoves(deps.coord, read.runs.map(toRunSummary), (d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the runs' last moves (${d}) — lastMoveAt absent`));
             const withIds = sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`));
             // D-8071: the stuck verdict's fields, from the watcher's one reader (`withVerdicts`); no watcher or an empty reader stamps nothing.
-            onRuns(watcher === undefined ? withIds : withVerdicts(watcher.runVerdicts, withIds));
+            // D-8285: and the worker heartbeat, from the stall sweep's board (`withWorkerSeen`), on the same terms.
+            onRuns(watcher === undefined ? withIds : withWorkerSeen(watcher.workerSeen, withVerdicts(watcher.runVerdicts, withIds)));
           }
         }
         catch (err) {
@@ -2077,6 +2085,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The stop-done lane (D-5370) stops a finished run's worker on the same serialiser, so a dispatch opening a run onto
   // it cannot fall between the lane's store read and its `ccd stop`. Optional for the same stand-in watcher's reason.
   watcher?.useStopDoneSerialiser?.(coordRoutes);
+  // The plan verbs (Linear hierarchy design §4.3, D-8181) in a file of their own, after `registerCoordRoutes` so their writes take
+  // its handle's `serial`: one mutex holds a plan write and a run's open apart. The follow-up verb's own-epic check reads the
+  // caller's open run (the binding's one view, `bindingsOf(...).worker()`, ARCH-42), and that run's ticket's epic, from the
+  // plan port.
+  registerPlanRoutes(app, {
+    coord: deps.coord, plan: deps.plan, serial: coordRoutes.serial, mailToken: () => deps.mailToken ?? null,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    sessionAuth, authEnabled: deps.cfg.authEnabled, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
+    runOfSession: (id) => {
+      const open = deps.coord?.bindingsOf(id).worker();
+      const run = open?.ok === true ? open.siblings[0] : undefined;
+      return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
+    },
+    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys,
+  });
+
+  // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
+  registerHierarchyRoutes(app, {
+    plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
+  });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
   // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`

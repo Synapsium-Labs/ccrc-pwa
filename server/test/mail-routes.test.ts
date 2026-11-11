@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { isReviewRoundsRefusal } from '../../shared/refusal.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
+import { isPlanKebab } from '../../shared/plan.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -586,7 +587,10 @@ describe('the rejection table is total, in both directions', () => {
     // amendment, architecture increment 3) rather than living only as an
     // untyped string a route happened to send.
     const src = sources();
-    for (const code of RUN_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+    // D-8181: the plan's five run refusals are declared by Task 2.1 and first sent by Task 2.5 (runs attach to tickets);
+    // Task 2.5 deletes this exemption in the commit that sends them.
+    const NOT_YET_SENT = new Set(['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']);
+    for (const code of RUN_REFUSE_CODES) if (!NOT_YET_SENT.has(code)) expect(src, code).toContain(`'${code}'`);
   });
 
   it('every declared AskRefuseCode is emitted somewhere in server/src/coord or server/src/inject (F7)', () => {
@@ -844,6 +848,8 @@ describe('the rejection table is total, in both directions', () => {
       if (NOT_CODES.has(tok)) continue;
       expect((MAIL_REJECT_CODES as readonly string[]).includes(tok)
         || isRunRefuseCode(tok)
+        // LINEAR HIERARCHY WAVE 2 (D-8181) — the plan's words, admitted through their exported guard (`shared/plan.ts`).
+        || isPlanKebab(tok)
         // BUILD 9a WAVE 4 — a FOURTH union, checked together and never merged, for
         // the reason the `enter-ignored` note above already states. `LifecycleGapReason`
         // reaches this scanner because `mirrorplan.ts` lives in `server/src/coord` and

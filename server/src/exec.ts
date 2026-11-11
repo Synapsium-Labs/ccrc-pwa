@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import { homedir } from 'node:os';
 import type { PaneProbe } from '../../shared/api.js';
-import { tmuxTarget } from '../../shared/tmux-target.js';
+import { readTmuxSocketSetting, tmuxRoute, tmuxTarget, type TmuxSocketSetting } from '../../shared/tmux-target.js';
 
 /** The unmeasured vocabulary lives in `./unmeasured.js` (D-5896): it is a word, not an exec, and `lifecycle.ts`
  *  reached `node:child_process` only to read it. Re-exported so every other import keeps working. */
@@ -50,9 +52,15 @@ export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
  *  in `error.signal`, and `error.killed` stays FALSE because node did not do it.
  *  Dropping `signal` here is what made that case indistinguishable from a clean
  *  `ccd` refusal. */
+/** D-8270: the tmux socket setting of THIS box, read under the HOME its `ccd` reads (`$HOME/.ccrc/tmux-socket`), at
+ *  every call, so the local Tmux adapter and the local drawer follow ccd's own lookup (`_tmx_sock`). */
+export const hostTmuxSocket = (): TmuxSocketSetting => readTmuxSocketSetting(homedir(), fs);
+
 export const realRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
-    execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // D-8270: a tmux call runs on the socket this box's setting names (`tmuxRoute`); anything else passes untouched.
+    const routed = tmuxRoute(cmd, args, hostTmuxSocket);
+    execFile(routed.file, [...routed.args], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
       const e = err as (NodeJS.ErrnoException & { code?: number; killed?: boolean; signal?: string }) | null;
       const code = err ? (e?.code as number | undefined ?? 1) : 0;
       const measured = {

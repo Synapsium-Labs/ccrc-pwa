@@ -2368,6 +2368,11 @@ export interface ProjectLinkingWire {
     | { state: 'unmeasured' }
     | { state: 'failed'; reason: string; at: number };
   mode: LinkingMode;
+  /** The per-project hierarchy settings (D-8181): whether the project's programmes get Linear initiatives, the coordinator
+   *  named to own its Linear team, and whether this project's coordinator owns the team now. */
+  initiatives: 'on' | 'off';
+  linearOwner: string | null;
+  ownsTeam: boolean;
 }
 
 /**
@@ -6650,7 +6655,10 @@ export type RunRefuseCode =
   | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
   | 'cap-review-rounds'   // D-6795: a fourth review run for one work run
   | 'ejection-not-merging'   // D-7619: an ejection body on a run not at merging
-  | 'intent-held';   // D-8085: another programme's run holds a landing intent this dispatch names
+  | 'intent-held'   // D-8085: another programme's run holds a landing intent this dispatch names
+  // D-8181: the plan's refusals of a run (Linear hierarchy design): the wave names no planned epic, the programme has no
+  // plan, the reserved programme, a ticket another run holds or that is dropped, and a plan the coordinator closed.
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6662,6 +6670,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
+  'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -7401,6 +7410,26 @@ export interface RunSummary {
    *  sends no `lastMoveAt`, so nothing reads as stalled. Declared here, not on that member, so the frame's line in the
    *  union does not move a cited line below it. */
   lastMoveAt?: number | null;
+
+  /** D-8285: the worker's heartbeat, the `at` of the newest main-thread event its turn marker (`$REG/<id>.turn.json`)
+   *  records: a prompt, a Stop, a failure or a restart. It is read by the stall watch's own marker read, once a sweep per
+   *  open run's worker (`workerSeenOf`, `server/src/coord/workerSeen.ts`), so it adds no read and no loop. A tool call
+   *  inside a turn moves no marker, so during a long turn it is the turn's start: read it beside `workerLastTurn`.
+   *  ADDITIVE and OPTIONAL; `FLEET_PROTO` is not bumped. Absent before the first sweep, after a restart, while the stall
+   *  watch is disabled, and when the marker could not be read (absent, foreign, stale, malformed or unmeasured): absence
+   *  says "not measured", never "dead". Its stale threshold is `stallQuietMs`, as for `lastMoveAt`. Read it ONLY through
+   *  `workerSeenNote` (`pwa/src/fleet/runWords.ts`). */
+  workerLastSeen?: number;
+  /** D-8285: the worker's last turn as the same marker read records it, present exactly when `workerLastSeen` is. */
+  workerLastTurn?: RunWorkerTurn;
+}
+
+/** D-8285: a run worker's last turn, from its turn marker: `working` (a turn open since `startedAt`), `done` (its last Stop
+ *  at `endedAt`) or `failed` (a turn that ended on a StopFailure at `endedAt`). Either time is null when the marker has none. */
+export interface RunWorkerTurn {
+  readonly state: 'working' | 'done' | 'failed';
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
 }
 
 /** `GET /api/runs`'s paged answer: `nextBefore` asks for the next page of older terminal runs and is absent when none remain. */
@@ -12071,7 +12100,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12123,6 +12152,11 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  token, the attribution pair and ownership, and stores the call in `coordinator_calls`. `ccrc-api calls record` refuses
    *  `unsupported`, unsent, when a current cap file omits this word. Added by the change that builds the client row, cut after the route. */
   'calls-v1': true,
+  /** D-8181 (Linear hierarchy wave 2): this server answers the plan verbs (`plan put`, `plan show`, `plan close` and their
+   *  siblings, `server/src/coord/planRoutes.ts`) and refuses a `runs open` the plan refuses (`wave-epic-mismatch`,
+   *  `plan-missing`, `reserved-programme`, `ticket-unavailable`, `plan-closed`). `ccrc-api plan` refuses `no-plan-door`,
+   *  unsent, when a current cap file omits this word. Added by the change that builds the plan routes, cut after them. */
+  'plan-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

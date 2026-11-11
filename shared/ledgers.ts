@@ -78,7 +78,33 @@ export const ABANDONING_DOORS: readonly ItemDoor[] = ['abandon', 'abandon-anyway
  *  refused, with the doors the operator may take; only an abandoning door reaches `act`, and `decline` applies to `end-run` alone. */
 export type ItemAction =
   | { verb: 'end-run'; runId: number; stuckReason: StuckReason | null }
-  | { verb: 'close-refused'; runId: number; doors: ItemDoors };
+  | { verb: 'close-refused'; runId: number; doors: ItemDoors }
+  // The hierarchy items (Linear hierarchy design, D-8181): none names a run, so none can abandon one.
+  | { verb: 'linear-map'; migrationId: number }
+  | { verb: 'linear-report'; migrationId: number }
+  | { verb: 'linear-drift'; bindingId: number }
+  | { verb: 'linear-initiatives'; workspaceId: string }
+  | { verb: 'linear-owner'; project: string };
+/** The five hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). */
+export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner';
+export type LinearItemAct = 'approve' | 'return' | 'put-back' | 'done' | 'hand' | 'keep' | 'check-again' | 'name';
+const LINEAR_ACTION_VERB_MAP: Record<LinearActionVerb, true> = {
+  'linear-map': true, 'linear-report': true, 'linear-drift': true, 'linear-initiatives': true, 'linear-owner': true,
+};
+export const isLinearActionVerb = (v: unknown): v is LinearActionVerb =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ACTION_VERB_MAP, v);
+const LINEAR_ITEM_ACT_MAP: Record<LinearItemAct, true> = {
+  approve: true, return: true, 'put-back': true, done: true, hand: true, keep: true, 'check-again': true, name: true,
+};
+export const isLinearItemAct = (v: unknown): v is LinearItemAct =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ITEM_ACT_MAP, v);
+export const LINEAR_ITEM_ACTS: Readonly<Record<LinearActionVerb, readonly LinearItemAct[]>> = {
+  'linear-map': ['approve', 'return'], 'linear-report': ['put-back', 'done'], 'linear-drift': ['hand', 'keep'],
+  'linear-initiatives': ['check-again'], 'linear-owner': ['name'],
+};
+export type LinearItemAction = Extract<ItemAction, { verb: LinearActionVerb }>;
+export const isLinearItemAction = (a: ItemAction | null): a is LinearItemAction =>
+  a !== null && Object.prototype.hasOwnProperty.call(LINEAR_ITEM_ACTS, a.verb);
 /** The `end-run` action, and the one place its verb is spelled for the readers that ask which action an item carries. */
 export type EndRunAction = Extract<ItemAction, { verb: 'end-run' }>;
 export const isEndRunAction = (a: ItemAction | null): a is EndRunAction => a !== null && a.verb === 'end-run';
@@ -89,13 +115,32 @@ export const isCloseRefusedAction = (a: ItemAction | null): a is CloseRefusedAct
 export const closeRefusedAction = (runId: number, doors: ItemDoors): CloseRefusedAction => ({ verb: 'close-refused', runId, doors });
 /** Can the operator's `act` abandon the run for this action: an `end-run`, or a `close-refused` with an abandoning door. */
 export const actAbandons = (a: ItemAction | null): boolean =>
-  a !== null && (a.verb === 'end-run' || a.doors.some((d) => ABANDONING_DOORS.includes(d)));
+  a !== null && (a.verb === 'end-run' || (a.verb === 'close-refused' && a.doors.some((d) => ABANDONING_DOORS.includes(d))));
 /** Reads a stored action column; null when it is not an `ItemAction`. The one reader of the column's JSON. */
 export function parseItemAction(text: string): ItemAction | null {
   let v: unknown;
   try { v = JSON.parse(text); } catch { return null; }
   if (typeof v !== 'object' || v === null) return null;
   const o = v as Record<string, unknown>;
+  const int = (k: string): number | null => (typeof o[k] === 'number' && Number.isInteger(o[k]) ? (o[k] as number) : null);
+  const word = (k: string): string | null => (typeof o[k] === 'string' && o[k] !== '' ? (o[k] as string) : null);
+  // The hierarchy verbs name no run.
+  if (o['verb'] === 'linear-map' || o['verb'] === 'linear-report') {
+    const migrationId = int('migrationId');
+    return migrationId === null ? null : { verb: o['verb'], migrationId };
+  }
+  if (o['verb'] === 'linear-drift') {
+    const bindingId = int('bindingId');
+    return bindingId === null ? null : { verb: 'linear-drift', bindingId };
+  }
+  if (o['verb'] === 'linear-initiatives') {
+    const workspaceId = word('workspaceId');
+    return workspaceId === null ? null : { verb: 'linear-initiatives', workspaceId };
+  }
+  if (o['verb'] === 'linear-owner') {
+    const project = word('project');
+    return project === null ? null : { verb: 'linear-owner', project };
+  }
   if (typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
   if (o['verb'] === 'close-refused') {
     const doors = o['doors'];

@@ -13,13 +13,15 @@ interface Row {
   project: string; teamKey: string | null; override: LinkingOverride | null;
   visibility: RepoVisibility | null; slug: string | null; template: TemplateState | null;
   failReason: string | null; measuredAt: number | null;
+  initiatives: string; linearOwner: string | null; ownsTeam: number;
 }
 
-const COLUMNS = 'project, teamKey, override, visibility, slug, template, failReason, measuredAt';
+const COLUMNS = 'project, teamKey, override, visibility, slug, template, failReason, measuredAt, initiatives, linearOwner, ownsTeam';
 
 /** A project with no row: no key, no override, nothing measured. */
 export const UNSET_LINKING: ProjectLinkingWire = Object.freeze({
   teamKey: null, override: null, measured: Object.freeze({ state: 'unmeasured' as const }), mode: 'unknown' as const,
+  initiatives: 'on' as const, linearOwner: null, ownsTeam: false,
 });
 
 function wireOf(row: Row | undefined): ProjectLinkingWire {
@@ -38,7 +40,11 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
     && row.template !== null
     ? { state: 'measured', visibility: row.visibility, slug: row.slug, template: row.template, at: measured.at }
     : measured;
-  return { teamKey, override, measured, mode: linkingMode(override, ruled) };
+  // D-8181: the hierarchy settings come from their own columns (migration 59); a project with no row reads the defaults.
+  return {
+    teamKey, override, measured, mode: linkingMode(override, ruled),
+    initiatives: row?.initiatives === 'off' ? 'off' : 'on', linearOwner: row?.linearOwner ?? null, ownsTeam: row?.ownsTeam === 1,
+  };
 }
 
 /** The operator's write: the key and the override, who and when; the reading is left as it is. */

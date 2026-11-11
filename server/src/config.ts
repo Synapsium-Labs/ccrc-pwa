@@ -10,6 +10,7 @@ import { isReleaseSourceName } from '../../shared/release-notes.js';
 import { SPAWN_STALL_MS, type NodeRole } from '../../shared/api.js';
 import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
 import { backupStaleHoursOf } from '../../shared/backup.js';
+import { privateTrackerKeysOf } from './linking/publicTextClasses.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
 import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 import {
@@ -233,6 +234,10 @@ export interface CcrcConfig {
    *  reads `stale`. A whole number from 1 to `BACKUP_STALE_HOURS_MAX`, else `BACKUP_STALE_HOURS_DEFAULT` (36), read by
    *  `backupStaleHoursOf` (shared/backup.ts), the decider's own vocabulary. */
   backupStaleHours: number;
+  /** D-8181: `CCRC_PRIVATE_TRACKER_KEYS`, this installer's private tracker keys (comma-separated), whose ticket ids the
+   *  public-text check refuses in a public project's plan text. Empty by default: the keys are the installer's, never the
+   *  code's. Read by `privateTrackerKeysOf`; an entry outside the key shape is left out and said once at load. */
+  privateTrackerKeys: readonly string[];
   /**
    * Stage 3a's session gate — is it ARMED? `false` is the shipped default and
    * the whole deploy story: with the flag off `server/src/auth/gate.ts`'s one
@@ -460,6 +465,16 @@ export function wakeGateConfigOf(env: NodeJS.ProcessEnv): WakeGateConfig {
   return { pressure, headroomMinBytes: gib * 2 ** 30 };
 }
 
+/** `CCRC_PRIVATE_TRACKER_KEYS` read for the config: the keys, and one line at load naming the entries left out. */
+function privateTrackerKeysRead(raw: string | undefined): readonly string[] {
+  const { keys, refused } = privateTrackerKeysOf(raw);
+  if (refused.length > 0) {
+    console.warn(`ccrc-server: CCRC_PRIVATE_TRACKER_KEYS leaves out ${refused.length} entr${refused.length === 1 ? 'y' : 'ies'} `
+      + 'that are not a tracker key (a letter, then up to 15 letters, digits or _).');
+  }
+  return keys;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
   // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line — which is
@@ -580,6 +595,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     wakeGate: wakeGateConfigOf(env),
     dispatchAbandonMs,
     backupStaleHours: backupStaleHoursOf(env.CCRC_BACKUP_STALE_HOURS),
+    privateTrackerKeys: privateTrackerKeysRead(env.CCRC_PRIVATE_TRACKER_KEYS),
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the
     // plan parks config in Task 10, but there is no gating a route on a key
     // that does not exist); Task 8 adds `rpId`/`origin`/`passkeysPath`; Task 10

@@ -4525,3 +4525,27 @@ describe('the skills teach end-request as asking', () => {
     }
   });
 });
+
+describe('the plan reference (D-8181)', () => {
+  const plan = (): string => refs('plan.md');
+
+  it('ships with the plan-missing refusal, and api.md points at it', () => {
+    expect(REFERENCE_NAMES).toContain('plan.md');
+    expect(refs('api.md')).toContain('references/plan.md');
+  });
+
+  it('names every wave-2 plan verb as a ccrc-api command, never as a raw route, and the body\'s `home`', () => {
+    for (const verb of ['put', 'show', 'met', 'ticket-add', 'ticket-move', 'epic-drop', 'close']) {
+      expect(plan(), `plan.md does not run \`ccrc-api plan ${verb}\``).toContain(`"$API" plan ${verb}`);
+    }
+    expect(plan()).toContain('"home"');
+    expect(plan(), 'plan.md names a raw /api/ path').not.toMatch(/\/api\//);
+  });
+
+  it('names the five run refusals the plan adds, each with its recovery', () => {
+    for (const code of ['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']) {
+      expect(plan(), `plan.md does not name ${code}`).toContain(`\`${code}\``);
+      expect(refs('api.md'), `api.md does not name ${code}`).toContain(`\`${code}\``);
+    }
+  });
+});

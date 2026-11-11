@@ -19,7 +19,7 @@ import {
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, dispatchStalledTitle,
   childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel,
-  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState, runStateWord, runWaitLine,
+  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState, runStateWord, runWaitLine, workerSeenNote,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
@@ -38,6 +38,7 @@ export const RunRow = memo(function RunRow({
   nowMs,
   session,
   current = false,
+  quietMs = null,
 }: {
   run: RunSummary;
   /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
@@ -55,6 +56,8 @@ export const RunRow = memo(function RunRow({
   session: FleetSession | null;
   /** This run is the one open in the broad pane (spec §8.4): the row says so to a screen reader and to the eye. */
   current?: boolean;
+  /** D-8285: the runs frame's `stallQuietMs`, the heartbeat's stale threshold; null (or omitted) is never quiet. */
+  quietMs?: number | null;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -119,6 +122,8 @@ export const RunRow = memo(function RunRow({
   // §7: what the run waits on, in place of the row's ordinary line. The DECISION is `runWaitLine`'s. A run behind a stuck run
   // links that run, and a link cannot sit inside the open button, so it stands beside it.
   const waitLine = runWaitLine(run, nowMs);
+  // D-8285: the worker heartbeat, `workerSeenNote`'s words. Absent draws nothing.
+  const seen = workerSeenNote(run, nowMs, quietMs);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -143,6 +148,7 @@ export const RunRow = memo(function RunRow({
       <span className="run-when">
         {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
       </span>
+      {seen !== null && <span className="run-seen" data-quiet={String(seen.quiet)} title={seen.title}>{seen.word}</span>}
       {/* Two cues on both branches — a word and a glyph — the same rule every
           other state cell on this board follows: nothing here may be read out
           of colour alone. The in-flight line is an ordinary progress

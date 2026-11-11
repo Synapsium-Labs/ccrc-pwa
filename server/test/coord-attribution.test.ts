@@ -17,6 +17,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { appFor, recorder, seedRow, ID_GATE_TOKEN } from './idGateFixture.js';
 import { absentField, unreadableField } from './ioDoubles.js';
 import { okRuns } from './coordReadHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const SENDER = 'project-a-calm-mesa';
 const ABSENT = 'project-a-no-such';
@@ -91,6 +92,7 @@ async function answer(f: Fixture, lane: Lane) {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   const w = await appFor(home, recorder().run, f.io ? { io: f.io } : {});
   app = w.app;
+  seedLegacyProgramme(w.coord.db, OPEN.program, OPEN.homeProject);
   const uuid = f.staleUuid ? 'u-someone-else' : `u-${f.from}`;
   const headers = { 'x-ccrc-mail-token': ID_GATE_TOKEN };
   const res = lane === 'inbox'

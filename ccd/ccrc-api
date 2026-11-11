@@ -21,12 +21,13 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, sixty-five rows, and nothing else; the
+#   * The route comes from ROUTES below, seventy-two rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
 #     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
-#     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`.
+#     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
+#     the seven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -91,7 +92,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Sixty-five rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Seventy-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -257,6 +258,17 @@ declare -A ROUTES=(
   # visibility, and the mode they give. One read, no id and no query key: the project is the caller's registry record's, and the
   # identity rides the query like every Linear row's (the block in `main` that appends it).
   [linking.show]='GET|/api/linking|no|-'
+  # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
+  # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
+  # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a
+  # ticket) rides the JSON body.
+  [plan.put]='POST|/api/programmes/{id}/plan|yes|-'
+  [plan.show]='GET|/api/programmes/{id}/plan|yes|-'
+  [plan.met]='POST|/api/programmes/{id}/plan/met|yes|-'
+  [plan.ticket-add]='POST|/api/programmes/{id}/plan/tickets|yes|-'
+  [plan.ticket-move]='POST|/api/programmes/{id}/plan/tickets/move|yes|-'
+  [plan.epic-drop]='POST|/api/programmes/{id}/plan/epics/drop|yes|-'
+  [plan.close]='POST|/api/programmes/{id}/plan/close|yes|-'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -264,6 +276,35 @@ declare -A ROUTES=(
 # `AAA-` and `search` are refused here, locally, as `bad-ref` (D-7685), and never sent. The server checks it again. The classes are spelled
 # out, never ranges, for the reason `_api_server_cap` gives: under a UTF-8 locale a range may collate non-ASCII letters.
 LINEAR_REF_RE='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*-[0123456789]{1,9}$'
+
+# >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
+# `_TMX_ARGV` holds, so moving the fleet to another server is a change of setting. The setting is the first line of
+# ~/.ccrc/tmux-socket: absent or empty is tmux's default server and adds no flag; a socket name puts `-L <name>` first;
+# anything else asks no tmux at all and answers why with rc 1, never the "can't find session" that reads as gone. A
+# file, not a variable: every process on the box reads one answer, and no caller redirects a door with its environment.
+# Twin: shared/tmux-target.ts.
+# READ ONCE PER PROCESS, AT LOAD, WITH BUILTINS ONLY: the supervise tick's fork budget (tick-diet spec §9) is exactly
+# main's. A statement calls `_tmx …`. A capture `$( … )`, a pipeline stage, or a wrapper that execs its argv
+# (`_plat_timeout`, `timeout`, `exec`) spreads `"${_TMX_ARGV[@]}" …` itself: bash runs a lone command there without a
+# second fork, and a function in its place costs that fork on every call.
+_tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
+  local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
+  TMX_SOCK=""; TMX_WHY=""
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ]; then IFS= read -r s < "$f" || :; else TMX_WHY="$f cannot be read"; return 1; fi
+  [[ -z "$s" || "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] \
+    || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
+  TMX_SOCK="$s"
+}
+# shellcheck disable=SC2120  # the home is optional: every caller today asks for the running user's own (D-8270)
+_tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
+  if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+}
+_tmx_argv
+_tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
+# <<< D-8270 tmux socket lookup
 
 # ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──
 # ccrc:generated 1 sha256=b13a129bd7002352be7dfc797c104d07461cf4b34ab6bc1d6cb6e2dde47e177a
@@ -411,7 +452,7 @@ derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call i
     || refuse 'no-pane' 'not inside a tmux pane (TMUX_PANE unset); identity cannot be derived'
   [[ "$pane" =~ ^%[0-9]+$ ]] \
     || refuse 'bad-pane' 'TMUX_PANE is not a pane id'
-  tname=$(tmux display-message -p -t "$pane" '#S' 2>/dev/null) \
+  tname=$("${_TMX_ARGV[@]}" display-message -p -t "$pane" '#S' 2>/dev/null) \
     || refuse 'no-tmux' 'tmux could not answer for this pane'
   [[ -n "$tname" ]] || refuse 'no-tmux' 'tmux named no session for this pane'
   DERIVED_ID="${tname#cc-}"
@@ -862,6 +903,13 @@ main() {
     query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
 
+  # The plan verbs' identity (D-8181), the Linear block's rule for the same reason: the query, after the declared keys, and never
+  # the body, which goes on the wire byte for byte. `plan show` is the one row that sends none (a session-or-token read).
+  if [[ "$key" == plan.* && "$key" != 'plan.show' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+
   if [[ "$key" == 'asks.list' ]]; then
     derive_identity
     [[ -z "$ask_parent" || "$ask_parent" == "$DERIVED_ID" ]] \
@@ -968,6 +1016,13 @@ main() {
   # unsent; an absent, stale, torn or future file sends.
   if [[ "$key" == 'calls.record' ]] && ! _api_server_cap calls-v1 && _api_server_cap ''; then
     refuse 'unsupported' 'the server this box talks to does not answer the call record; update it before recording a call'
+  fi
+
+  # THE PLAN DOOR'S GATE (D-8181), the goals read's fail direction: a CURRENT, well-formed cap file that omits `plan-v1` says the
+  # server is older than the plan verbs, so `no-plan-door` is answered and nothing is sent; an absent, stale, torn or future file
+  # sends. The empty word is the "is the file current and well-formed" probe, as above.
+  if [[ "$key" == plan.* ]] && ! _api_server_cap plan-v1 && _api_server_cap ''; then
+    refuse 'no-plan-door' 'the server this box talks to does not answer the plan verbs; update it before using them'
   fi
 
   local path url

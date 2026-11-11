@@ -1494,18 +1494,19 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the sixty-seven machine lanes the
+liveness gate reads the shipped sha out of it), the seventy-four machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
+the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id`, `/api/runs/:id/record`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, and the
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, and the
 one POST of the kind, `/api/testbox/tools-sync`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -4381,6 +4382,14 @@ Two codes rather than one because the caller does different things with them:
 the first says "you reused the wrong workspace", the second says "you are
 opening someone else's programme".
 
+**The plan adds its own refusals at the same door** (design 2026-11-10 §4.4): a
+work run attaches to one ticket of its programme's plan, in the epic that lists
+its wave. `wave-epic-mismatch` — **409**, no `by` — answers a wave no live epic
+lists, or a named `ticket` that sits in another epic; `plan-missing`,
+`plan-closed`, `ticket-unavailable` and `reserved-programme` are its siblings,
+each a bare **409**. Like the two above, all five are decided before the row is
+opened. A programme that existed before the plan model opens as it always did.
+
 **A third refusal guards the tree's depth.** `claimant-is-a-worker` — **409**,
 `{"ok":false,"refused":"claimant-is-a-worker","by":"<that worker's coordinator>"}`
 — fires at `POST /api/runs` when `claimedBy` is itself the worker of an open
@@ -5055,6 +5064,9 @@ and `/:id/close`, with `/:id/items` and `/:id/route` beside them — one run row
    earlier runs belong to another project is refused `project-mismatch`
    (**409**, `by:` that project). Both `-mismatch` refusals are decided
    *before the row is opened*, so neither leaves a `planned` orphan.
+   A planned programme's open also names its ticket (`ticket`, optional) and is
+   refused `wave-epic-mismatch` when no live epic lists the wave, before the row
+   is opened as well.
    The response names `ledgerRepo` and `ledgerAbsPath` beside the relative
    `ledgerPath`, both null while the stored home is. Wave 1 (no
    `sessionId` in the body) places **no hold yet** — dispatch is what claims

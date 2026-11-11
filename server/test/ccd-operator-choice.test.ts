@@ -810,8 +810,9 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
     };
-    // `tmux -L "$sock" -f /dev/null kill-session` is the account pane's own server (accounts plan Task A20).
-    const STOP = /tmux (-L "\$sock" -f \/dev\/null )?kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
+    // `tmux -L "$sock" -f /dev/null kill-session` is the account pane's own server (accounts plan Task A20). Every
+    // fleet call is `_tmx …`, or `"${_TMX_ARGV[@]}" …` in a capture or behind a wrapper that execs it (the socket lookup, D-8270).
+    const STOP = /(?:_tmx|"\$\{_TMX_ARGV\[@\]\}"|tmux -L "\$sock" -f \/dev\/null) kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
     const live = (l: string): boolean => !/^\s*#/.test(l);
     const stoppers = new Set(src.flatMap((l, i) => (live(l) && STOP.test(l) ? [owner(i)] : [])));
     expect([...stoppers].sort(), 'a function that stops a session is in neither list').toEqual([...KEEPS, ...Object.keys(ENDS)].sort());
@@ -822,7 +823,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       // Each stop's keep is GUARDED on the marker (a session already stopped and read is not read again), and
       // its kill — the statement after the stop's own — unmarks on failure, so a live session is never marked.
       const GUARD = /^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"/;
-      const UNMARK = /tmux kill-session -t "\$\(_tmux_t "\$id"\)" 2>\/dev\/null \|\| _operator_choice_unmark "\$id"/;
+      const UNMARK = /_tmx kill-session -t "\$\(_tmux_t "\$id"\)" 2>\/dev\/null \|\| _operator_choice_unmark "\$id"/;
       if (fn === 'cmd_swap' || fn === '_watchdog_resume_run') {
         expect(src[i]).toMatch(GUARD);
         expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
@@ -870,7 +871,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
     };
-    const SPAWN = /tmux (-L "\$sock" -f \/dev\/null )?new-session|_tmux_new_session |new-window|respawn-pane/;
+    const SPAWN = /(?:_tmx|"\$\{_TMX_ARGV\[@\]\}"|tmux -L "\$sock" -f \/dev\/null) new-session|_tmux_new_session |new-window|respawn-pane/;
     const owners = new Set(src.flatMap((l, i) => (!/^\s*#/.test(l) && SPAWN.test(l) ? [owner(i)] : [])));
     expect([...owners].sort(), 'a function creates a pane outside _spawn_start').toEqual([...SPAWNS, ...Object.keys(EXCEPTIONS)].sort());
   });
