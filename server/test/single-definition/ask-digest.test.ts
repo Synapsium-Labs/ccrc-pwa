@@ -676,9 +676,9 @@ describe('the swap route spells its refusal words once (D-5240)', () => {
 
 // D-5301 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 10; spec §8). APPENDED. The
 // session role is enumerated once (`SESSION_ROLE_MAP`, its list derived by `Object.keys`), narrowed by one guard, and
-// DERIVED once, by `sessionRoleOf` from the registry's `.child` reading; `server/src/fleet.ts` is the one place the
+// DERIVED once, by `sessionRoleOf` (`server/src/roleOf.ts`) from the registry's `.child` reading; `server/src/fleet.ts` is the one place the
 // wire field is computed, and it computes it through that function. Code lines only (`stallCode`).
-describe('the session role is enumerated, narrowed and derived once, in shared/api.ts (D-5301)', () => {
+describe('the session role is enumerated and narrowed once in shared/api.ts, and derived once (D-5301)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
 
   it('CONTROL: the patterns see a definition and pass over comment lines', () => {
@@ -687,11 +687,11 @@ describe('the session role is enumerated, narrowed and derived once, in shared/a
     expect(stallCodeText('// const SESSION_ROLE_MAP = {}\nconst x = 1;')).not.toMatch(/\bSESSION_ROLE_MAP\s*[:=]/);
   });
 
-  it('SESSION_ROLE_MAP, SESSION_ROLES, isSessionRole and sessionRoleOf are each defined in shared/api.ts and nowhere else', () => {
+  it('SESSION_ROLE_MAP, SESSION_ROLES and isSessionRole are each defined in shared/api.ts, and sessionRoleOf in server/src/roleOf.ts, and nowhere else', () => {
     expect(holders(/\bSESSION_ROLE_MAP\s*[:=]/)).toEqual(['shared/api.ts']);
     expect(holders(/\bSESSION_ROLES\s*[:=]/)).toEqual(['shared/api.ts']);
     expect(holders(/\bfunction\s+isSessionRole\b|\bisSessionRole\s*=/)).toEqual(['shared/api.ts']);
-    expect(holders(/\bfunction\s+sessionRoleOf\b|\bsessionRoleOf\s*=/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bfunction\s+sessionRoleOf\b|\bsessionRoleOf\s*=/)).toEqual(['server/src/roleOf.ts']);
   });
 
   it('SESSION_ROLES is derived from its map, never a hand-kept list', () => {

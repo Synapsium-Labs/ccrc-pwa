@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { sessionRoleOf, type ChildMark } from '../../shared/api.js';
+import type { ChildMark } from '../../shared/api.js';
+import { sessionRoleOf } from '../src/roleOf.js';
 import { rollTargetVerdict } from '../src/coord/rollTarget.js';
 
 const MARKS: readonly [ChildMark, 'coordinator' | 'child'][] = [

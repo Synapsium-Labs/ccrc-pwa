@@ -1,4 +1,5 @@
-import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead, sessionRoleOf } from '../../../shared/api.js';
+import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
+import { sessionRoleOf } from '../roleOf.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
 import { stallWatchSays } from '../sessionReading.js';

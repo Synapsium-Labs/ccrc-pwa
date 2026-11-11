@@ -108,17 +108,6 @@ export function isSessionRole(v: unknown): v is SessionRole {
   return typeof v === 'string' && (SESSION_ROLES as readonly string[]).includes(v);
 }
 
-/** THE ONE DERIVATION of the role, from the registry's reading of `.child` and
- *  nothing else. `unreadable` is a child: the marker file exists, which is what
- *  the start card (`session-hook.sh`'s `_hook_role_card`) tests, so the badge
- *  and the card agree on the `.child` axis, and ONLY that axis: a session whose
- *  `.child` exists, parsed or not, is a child to both, and a dispatched child is
- *  never told, or shown, that it coordinates. The card has further silences the
- *  badge does not read: a held row (`$REG/<id>.hold`), the card-off switch, and
- *  a `resume`/`fork` start. So a held row with no `.child` shows the coordinator
- *  badge although it was never given the card; both are as spec §8 asks. */
-export const sessionRoleOf = (child: ChildMark): SessionRole => (child.kind === 'none' ? 'coordinator' : 'child');
-
 /** `FleetSession.limitWait`'s value (D-8123; `waitingBy`, D-8173): see the field's own doc. */
 export interface LimitWait {
   readonly since: number;
@@ -642,7 +631,7 @@ export interface FleetSession {
 
   /**
    * What this session is to the routing (D-5301, coordinator-first spec §8):
-   * `sessionRoleOf(child)` above, the one derivation, computed by
+   * `sessionRoleOf(child)` (`server/src/roleOf.ts#sessionRoleOf`), the one derivation, computed by
    * `server/src/fleet.ts` from the registry's `.child` reading. The PWA shows a
    * quiet "coordinator" badge from it before any run exists.
    *

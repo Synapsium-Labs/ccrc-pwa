@@ -58,3 +58,14 @@ export function sessionRoleOfReading(r: RoleReading): SessionRole {
   const role = r.kind === 'role' ? r.role : ROLE_AMBIGUITIES[r.between][0];
   return FLEET_ROLES[role].sessionRole;
 }
+
+/** THE ONE DERIVATION of the role, from the registry's reading of `.child` and
+ *  nothing else. `unreadable` is a child: the marker file exists, which is what
+ *  the start card (`session-hook.sh`'s `_hook_role_card`) tests, so the badge
+ *  and the card agree on the `.child` axis, and ONLY that axis: a session whose
+ *  `.child` exists, parsed or not, is a child to both, and a dispatched child is
+ *  never told, or shown, that it coordinates. The card has further silences the
+ *  badge does not read: a held row (`$REG/<id>.hold`), the card-off switch, and
+ *  a `resume`/`fork` start. So a held row with no `.child` shows the coordinator
+ *  badge although it was never given the card; both are as spec §8 asks. */
+export const sessionRoleOf = (child: ChildMark): SessionRole => (child.kind === 'none' ? 'coordinator' : 'child');
