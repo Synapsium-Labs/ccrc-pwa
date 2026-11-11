@@ -1030,12 +1030,13 @@ describe('measure-codex-watch.py: the store and the events are printed', () => {
 describe('measure-codex-watch.py: its second spellings are bound to their homes', () => {
   const src = (): string => fs.readFileSync(SCRIPT, 'utf8');
   const op = (): string => fs.readFileSync(path.join(ROOT, 'deploy', 'models-op.mjs'), 'utf8');
+  const reEsc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');   // every RegExp metacharacter
 
   it('ADVANCE_FILE and WINDOWS_FILE are models-op.mjs\'s advancePath and windowsPath', () => {
     for (const [name, fn] of [['ADVANCE_FILE', 'advancePath'], ['WINDOWS_FILE', 'windowsPath']] as const) {
       const def = new RegExp(`^const ${fn} = \\(id\\) => path\\.join\\(modelsDir\\(\\), \`\\$\\{id\\}([^\`]+)\`\\);$`, 'm').exec(op());
       expect(def, fn).not.toBeNull();
-      expect(src(), name).toMatch(new RegExp(`^${name} = "%s${def![1]!.replace(/\./g, '\\.')}"$`, 'm'));
+      expect(src(), name).toMatch(new RegExp(`^${name} = "%s${reEsc(def![1]!)}"$`, 'm'));
     }
   });
 
