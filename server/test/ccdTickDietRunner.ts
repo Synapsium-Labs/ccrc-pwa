@@ -500,17 +500,17 @@ export function runScript(h: CcdHarness, script: string, env: NodeJS.ProcessEnv 
 // ── E3: the W1 rows ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** `_session_probe`'s direct-branch test, read from the LIVE `ccd/ccd`: the `if …; then` line whose next line runs
- *  `tmux has-session` with no deadline. At `main` it is `[[ $(type -t tmux) == function ]]`; D-4960 makes it
+ *  `tmux has-session` (through the socket lookup's `"${_TMX_ARGV[@]}"` since D-8270) with no deadline. At `main` it is `[[ $(type -t tmux) == function ]]`; D-4960 makes it
  *  `declare -F tmux >/dev/null`. Reading it, rather than restating either, is what makes E3a a row about the shipped
  *  text. */
 function probePredicate(): string {
   const block = fnBlock(ccdSource(), '_session_probe');
   if (block === null) throw new Error('ccd/ccd defines no _session_probe');
   const lines = block.split('\n');
-  const hits = lines.flatMap((l, i) => (/^\s*out=\$\(tmux has-session/.test(lines[i + 1] ?? '')
+  const hits = lines.flatMap((l, i) => (/^\s*out=\$\((?:tmux|"\$\{_TMX_ARGV\[@\]\}") has-session/.test(lines[i + 1] ?? '')
     ? [/^\s*if (.+); then\s*$/.exec(l)?.[1] ?? ''] : []));
   if (hits.length !== 1 || hits[0] === '') {
-    throw new Error(`_session_probe's direct branch is not one \`if …; then\` above \`out=$(tmux has-session\` (found ${hits.length})`);
+    throw new Error(`_session_probe's direct branch is not one \`if …; then\` above \`out=$(tmux has-session\` or its \`"\${_TMX_ARGV[@]}"\` spelling (D-8270) (found ${hits.length})`);
   }
   return hits[0]!;
 }
