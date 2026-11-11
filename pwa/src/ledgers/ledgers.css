@@ -95,6 +95,11 @@
   font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm);
   background: var(--bg-raised); color: var(--ink-secondary); white-space: nowrap;
 }
+/* D-8194: an item's number, quiet under its kind chip from 521 up (the chip's column stays narrow), beside it on a narrow row,
+   where the row is one column. Mono and the meta's ink, never truncated. */
+.wl-item .wl-tag { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.wl-item .wl-num,
+.wi-card .wi-num { font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); color: var(--ink-secondary); white-space: nowrap; }
 .wl-item .wl-main,
 .wl-capitem .wl-main,
 .wl-limit .wl-main { display: grid; gap: 2px; min-width: 0; }
@@ -115,6 +120,7 @@
   .wl-item .wl-meta,
   .wl-capitem .wl-meta,
   .wl-limit .wl-meta { justify-items: start; }
+  .wl-item .wl-tag { flex-direction: row; align-items: center; gap: var(--sp-2); }
 }
 /* The controls take a row of their own under the row's three columns and wrap at every width, so nothing scrolls sideways. The
    row itself is no tap target. */
@@ -141,6 +147,7 @@
 .wl-cleared ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
 .wl .wl-cleared-row { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wl .wl-cleared-row s { color: var(--ink-secondary); }
+.wl-cleared .wl-cleared-more { justify-self: start; }
 
 /* The item view. */
 .wi-band {
@@ -168,6 +175,7 @@
 .wi-detail { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; gap: var(--sp-3); align-items: start; }
 @media (max-width: 900px) { .wi-detail { grid-template-columns: minmax(0, 1fr); } }
 .wi-card { display: grid; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); border: 1px solid var(--edge-subtle); border-radius: var(--r-md); }
+.wi-card .wi-tag { justify-self: start; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 .wi-card .wi-kind {
   justify-self: start; font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm);
   background: var(--bg-raised); color: var(--ink-secondary); white-space: nowrap;
@@ -254,6 +262,7 @@
 .wl-banners:has(> .banner-slot > *, > .banner-more) { padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0; }
 .wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
 .wl-beside .wl-item .wl-meta { justify-items: start; }
+.wl-beside .wl-item .wl-tag { flex-direction: row; align-items: center; gap: var(--sp-2); }
 /* The column is 320 to 420 wide in both skins, so the controls of an end-request row or a cap row sit under it, not beside it,
    whatever the viewport (the media query above reads the viewport; this reads the place). */
 .wl-beside .wl-li[data-acts='true'] { grid-template-columns: minmax(0, 1fr); }

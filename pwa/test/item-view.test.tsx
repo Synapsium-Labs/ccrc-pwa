@@ -503,3 +503,11 @@ describe('an end-request item in the item view (Task 24, spec 2026-11-04 §10; D
     expect(screen.queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
   });
 });
+
+// D-8194: the item's page carries its number, so a coordinator's "item 129" can be matched to it.
+describe('the item\'s number (D-8194)', () => {
+  it('the page shows the item\'s own id as #<id>', () => {
+    show(itemView({ id: 129, title: 'Flip the lane' }));
+    expect(screen.getByText('#129')).toBeTruthy();
+  });
+});

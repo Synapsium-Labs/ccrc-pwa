@@ -615,3 +615,59 @@ describe('the doors of a refused close (Task 27)', () => {
     for (const d of ITEM_DOORS) expect(ITEM_DOOR_WORDS[d]).toBe(WORDS[d]);
   });
 });
+
+// D-8194: the operator matches a coordinator's "item 129" to its card by the item's own id, and the Recently cleared trail covers
+// the last 48 hours (CLEARED_WINDOW_MS), newest five first, with a Show all control for the rest of the window.
+describe('item numbers and the 48-hour Recently cleared trail (D-8194)', () => {
+  const HOUR = 60 * MIN;
+  const done = (id: number, closedAt: number, title = `Cleared ${id}`) =>
+    itemView({ id, state: 'done', title, closedAt, history: [{ at: closedAt, act: 'confirm', note: null }] });
+
+  it('an item\'s card carries its number, the API\'s own id', () => {
+    open({ view: waitingView({ items: [itemView({ id: 129, title: 'Flip the lane' })] }) });
+    const row = screen.getByRole('button', { name: /Flip the lane/ });
+    expect(within(row).getByText('#129')).toBeTruthy();
+  });
+
+  it('a cleared row carries its number too', () => {
+    open({ view: waitingView({ cleared: [done(131, NOW - HOUR, 'Approve the prototype')] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText(/#131/)).toBeTruthy();
+  });
+
+  it('an item cleared 47h59m ago shows; one cleared 48h01m ago does not', () => {
+    open({ view: waitingView({ cleared: [done(1, NOW - (48 * HOUR - MIN), 'Just inside'), done(2, NOW - (48 * HOUR + MIN), 'Just outside')] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText('Just inside')).toBeTruthy();
+    expect(within(trail).queryByText('Just outside')).toBeNull();
+  });
+
+  it('a trail whose every item is older than 48 hours is not drawn', () => {
+    open({ view: waitingView({ cleared: [done(2, NOW - 3 * 24 * HOUR, 'Three days old')] }) });
+    expect(screen.queryByRole('region', { name: 'Recently cleared' })).toBeNull();
+  });
+
+  it('shows the newest five, and Show all reveals the rest of the 48 hours and collapses back', () => {
+    // Out of order on purpose: the trail orders by when each was cleared, newest first.
+    const cleared = [3, 1, 7, 5, 2, 6, 4].map((h) => done(100 + h, NOW - h * HOUR, `Cleared ${h}h ago`));
+    open({ view: waitingView({ cleared: [...cleared, done(200, NOW - 50 * HOUR, 'Too old')] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    const titles = (): string[] => within(trail).getAllByRole('listitem').map((li) => li.querySelector('s')?.textContent ?? '');
+    expect(titles()).toEqual([1, 2, 3, 4, 5].map((h) => `Cleared ${h}h ago`));
+    const more = within(trail).getByRole('button', { name: 'Show all 7' });
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(more);
+    expect(titles()).toEqual([1, 2, 3, 4, 5, 6, 7].map((h) => `Cleared ${h}h ago`));
+    const fewer = within(trail).getByRole('button', { name: 'Show fewer' });
+    expect(fewer.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(fewer);
+    expect(titles()).toHaveLength(5);
+  });
+
+  it('five or fewer cleared items draw no Show all control', () => {
+    open({ view: waitingView({ cleared: [1, 2, 3, 4, 5].map((h) => done(h, NOW - h * HOUR)) }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getAllByRole('listitem')).toHaveLength(5);
+    expect(within(trail).queryByRole('button')).toBeNull();
+  });
+});

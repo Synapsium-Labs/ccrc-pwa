@@ -413,8 +413,9 @@ export function doneWhenOf(raw: unknown): { ok: true; doneWhen: string[] } | { o
   return { ok: true, doneWhen: out };
 }
 
-/** "Recently cleared" keeps seven days (spec D13). */
-export const CLEARED_WINDOW_MS = 7 * 24 * 3600 * 1000;
+/** "Recently cleared" keeps the last 48 hours (D-8194; was seven days, spec D13): the server's list and the console's trail both
+ *  read this one window, so neither shows what the other has dropped. */
+export const CLEARED_WINDOW_MS = 48 * 3600 * 1000;
 /** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
  *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
 export const TICK_UNANSWERED_MS = 30 * 60 * 1000;

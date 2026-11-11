@@ -5,15 +5,15 @@
 // join the same way, from their `limitWait` record, D-8123) and runs, and the page clock. It routes nowhere itself: the
 // shell passes what opening an item or a session does, so this file imports no route (ring L4, no decisions: every
 // grouping, count and label is `ledgerWords.ts`'s).
-import type { ReactNode } from 'react';
-import { BareRow } from '@ccrc/ui';
+import { useState, type ReactNode } from 'react';
+import { BareRow, Button } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
-  CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
+  CLEARED_HEADING, CLEARED_SHOWN, SHOW_FEWER_WORD, clearedTrail, itemNumber, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, REVIEW_CAP_WORD, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups,
   openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
@@ -76,7 +76,11 @@ function ItemRow({ item, now, onOpen, current, rowActs }: {
     <li className="wl-li" data-acts={carries ? 'true' : undefined}>
       <BareRow className="wl-item" data-item={item.id} data-state={item.state} data-needed={item.neededBy}
                {...(current ? { 'aria-current': 'page' as const } : {})} onClick={() => onOpen(item.id)}>
-        <span className="wl-kind">{KIND_WORD[item.kind]}</span>
+        {/* The kind chip and, under it (beside it on a narrow row), the item's number (D-8194). */}
+        <span className="wl-tag">
+          <span className="wl-kind">{KIND_WORD[item.kind]}</span>
+          <span className="wl-num">{itemNumber(item)}</span>
+        </span>
         <RowMain what={item.title} why={item.why} lines={item.action !== undefined && item.action !== null}>
           {back && note !== null && <span className="wl-bounce">{`The coordinator sent it back: ${note}`}</span>}
         </RowMain>
@@ -164,27 +168,37 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
   );
 }
 
-/** "Recently cleared": what the coordinator confirmed in the last seven days, each struck through with when. `where` names the
- *  programme beside a row where the list holds several; the list filtered to one programme leaves it out. Nothing is drawn for
- *  none. */
+/** "Recently cleared": what the coordinator confirmed in the last 48 hours (`CLEARED_WINDOW_MS`, D-8194), newest first, each struck
+ *  through with its number and when. The newest `CLEARED_SHOWN` show; Show all reveals the rest of the window and Show fewer
+ *  folds it back. `where` names the programme beside a row where the list holds several; the list filtered to one programme
+ *  leaves it out. Nothing is drawn for none. */
 export function ClearedTrail({ items, where, now }: {
   items: readonly ItemView[]; where?: (item: ItemView) => string; now: number;
 }): ReactNode {
-  if (items.length === 0) return null;
+  const [all, setAll] = useState(false);
+  const trail = clearedTrail(items, now);
+  if (trail.length === 0) return null;
+  const more = trail.length > CLEARED_SHOWN;
+  const shown = all || !more ? trail : trail.slice(0, CLEARED_SHOWN);
   return (
     <section className="wl-cleared" aria-label={CLEARED_HEADING}>
       <h3 className="wl-cleared-title">{CLEARED_HEADING}</h3>
       <ul>
-        {items.map((c) => {
-          const tail = [where?.(c), c.closedAt === null ? undefined : `confirmed ${ageWords(c.closedAt, now)}`].filter((t) => t !== undefined);
+        {shown.map((c) => {
+          const tail = [itemNumber(c), where?.(c), c.closedAt === null ? undefined : `confirmed ${ageWords(c.closedAt, now)}`].filter((t) => t !== undefined);
           return (
             <li key={c.id} className="wl-cleared-row">
               <span aria-hidden="true">✓ </span><s>{c.title}</s>
-              {tail.length === 0 ? '' : ` · ${tail.join(' · ')}`}
+              {` · ${tail.join(' · ')}`}
             </li>
           );
         })}
       </ul>
+      {more && (
+        <Button variant="ghost" size="fit" className="wl-cleared-more" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+          {all ? SHOW_FEWER_WORD : showAllWord(trail.length)}
+        </Button>
+      )}
     </section>
   );
 }

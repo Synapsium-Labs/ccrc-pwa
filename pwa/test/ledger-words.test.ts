@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
-  type ItemList, type QuestionRow,
+  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedTrail, itemNumber,
 } from '../src/ledgers/ledgerWords';
+import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -357,5 +358,28 @@ describe('review caps in the grouping (Task 24, F21)', () => {
   it('an item\'s place in a list ignores the cap rows', () => {
     const groups = groupByProgramme([itemView({ id: 3, program: 'prog-a' }), itemView({ id: 4, program: 'prog-a' })], [], [], [cap(12, 'prog-a')]);
     expect(itemPlace(4, COMBINED_LIST, groups)).toMatchObject({ index: 1, total: 2, prev: 3, next: null });
+  });
+});
+
+// D-8194: the Recently cleared trail is the last 48 hours (CLEARED_WINDOW_MS, the server's window too), newest first.
+describe('clearedTrail and itemNumber (D-8194)', () => {
+  const HOUR = 60 * MIN;
+  const done = (id: number, closedAt: number | null) => itemView({ id, state: 'done', closedAt });
+
+  it('the window is 48 hours, one shared constant', () => {
+    expect(CLEARED_WINDOW_MS).toBe(48 * HOUR);
+  });
+
+  it('keeps what was cleared inside the window, edge included, newest first; drops the older and the undated', () => {
+    const items = [done(1, NOW - 2 * HOUR), done(2, NOW - CLEARED_WINDOW_MS), done(3, NOW - CLEARED_WINDOW_MS - 1), done(4, NOW - HOUR), done(5, null)];
+    expect(clearedTrail(items, NOW).map((i) => i.id)).toEqual([4, 1, 2]);
+  });
+
+  it('the shown count is five', () => {
+    expect(CLEARED_SHOWN).toBe(5);
+  });
+
+  it('an item\'s number is its id after a #', () => {
+    expect(itemNumber(itemView({ id: 129 }))).toBe('#129');
   });
 });

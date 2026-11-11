@@ -50,7 +50,7 @@ import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWo
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
 import { ItemControls, useItemActs, type ItemActs } from './ItemActs';
-import { ageWords, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
+import { ageWords, itemNumber, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
 export interface ItemViewProps {
@@ -525,7 +525,11 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
       </div>
       <div className="wi-detail">
         <div className="wi-card">
-          <span className="wl-kind wi-kind">{KIND_WORD[item.kind]}</span>
+          {/* The kind chip and the item's number beside it (D-8194). */}
+          <span className="wi-tag">
+            <span className="wl-kind wi-kind">{KIND_WORD[item.kind]}</span>
+            <span className="wi-num">{itemNumber(item)}</span>
+          </span>
           <h1 className="wi-what"><Linked text={item.title} homeProject={home} /></h1>
           <section>
             <h3 className="wi-h">Why</h3>
