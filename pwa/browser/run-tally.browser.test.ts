@@ -1,7 +1,8 @@
 // D-8292 (#119): a run row's tally says it counts settled items, and the worker branch's commit count stands beside it.
 // In a real Chrome over the production build, at 360, 390, 1280, 1470 and 1920 wide, both skins and both themes: on the
 // programme page's run row and on the run's own page header, both words are drawn, each inside its row, and the page
-// never scrolls sideways. Names are neutral.
+// never scrolls sideways. The row also carries its worker heartbeat (D-8285): the three facts share the row and the
+// header draws all three (the header is the superset). Names are neutral.
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/run-tally.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -24,6 +25,7 @@ const RUN = {
   state: 'working', kind: 'work', reviews: null, claimedBy: 'project-a-coord', resumed: false, clearedAt: null,
   openedAt: NOW - 3 * H, dispatchStartedAt: null, dispatchedAt: NOW - 2 * H, closedAt: null, handoffCommit: null,
   items: { done: 0, total: 5 }, unreadMail: 0,
+  workerLastSeen: NOW - 5 * 60_000, workerLastTurn: { state: 'done', startedAt: NOW - 20 * 60_000, endedAt: NOW - 5 * 60_000 },
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: false,
     clearError: null, coordKickoffPendingSince: null },
   childReclaim: null, reviewCap: null, hadChild: false,
@@ -97,13 +99,13 @@ for (const width of WIDTHS) {
   for (const skin of SKINS) {
     for (const theme of THEMES) {
       describe(`the run tally and commits, ${skin} ${theme} at ${width}px`, () => {
-        it('the programme page\'s row draws "0/5 settled" and "58 commits" inside the row', async () => {
+        it('the programme page\'s row draws "0/5 settled", "58 commits" and the heartbeat inside the row', async () => {
           const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, FIXTURE);
           try {
             await page.goto(`${server!.origin}/programmes/prog-a`);
             await page.locator('[data-testid="programme-runs"] li.run-row .run-commits').first().waitFor({ timeout: 30_000 });
-            const m = await page.evaluate(measure, { sels: ['li.run-row .run-tally', 'li.run-row .run-commits'], within: '[data-testid="programme-runs"] li.run-row' });
-            expect(m.parts.map((p) => p.text)).toEqual(['0/5 settled', '58 commits']);
+            const m = await page.evaluate(measure, { sels: ['li.run-row .run-tally', 'li.run-row .run-commits', 'li.run-row .run-seen'], within: '[data-testid="programme-runs"] li.run-row' });
+            expect(m.parts.map((p) => p.text)).toEqual(['0/5 settled', '58 commits', 'last seen 5m ago']);
             for (const p of m.parts) {
               expect(p.inside, `${p.sel} inside its row`).toBe(true);
               expect(p.title, `${p.sel} says what it counts`).toBeTruthy();
@@ -121,8 +123,8 @@ for (const width of WIDTHS) {
           try {
             await page.goto(`${server!.origin}/runs/1801`);
             await page.locator('.rd-head .rd-commits').first().waitFor({ timeout: 30_000 });
-            const m = await page.evaluate(measure, { sels: ['.rd-head .rd-tally', '.rd-head .rd-commits'], within: '.rd-head' });
-            expect(m.parts.map((p) => p.text)).toEqual(['0/5 settled', '58 commits']);
+            const m = await page.evaluate(measure, { sels: ['.rd-head .rd-tally', '.rd-head .rd-commits', '.rd-head .rd-seen'], within: '.rd-head' });
+            expect(m.parts.map((p) => p.text)).toEqual(['0/5 settled', '58 commits', 'last seen 5m ago']);
             for (const p of m.parts) expect(p.inside, `${p.sel} inside the header`).toBe(true);
             expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
             expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
