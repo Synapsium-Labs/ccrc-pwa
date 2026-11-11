@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 75,
+  "d": "D-8335",
+  "reason": "an empty, unrecorded workspace folder archives (#2360): the proof `_ws_archive_unrecorded_empty` (a plain directory, not a mount point, no entry; no worktree record from a list it read and no admin entry naming it; the branch in no local ref, no tracking ref and on no remote asked live), its arm in `_ws_archive_manifest` and the `ahead` guard in `cmd_ws_archive`; about +68 net lines against the merge-base; kept beside `_ws_archive_manifest`, its one caller",
+  "added": "2026-11-11"
+}
