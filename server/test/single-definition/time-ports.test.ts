@@ -25,4 +25,12 @@ describe('the time ports (Overlord spec §11.5, §3.6 H2): one definition, in th
       .filter((f) => spelled.test(codeOnly(readFileSync(path.join(REPO, f), 'utf8'))));
     expect(holders).toEqual(['server/src/time/rules.ts']);
   });
+
+  it('system.ts is L3, and its chance comes from node:crypto alone', () => {
+    expect(serverRing('server/src/time/system.ts').ring).toBe('L3');
+    const p = parsedFile('server/src/time/system.ts');
+    const crypto = p.imports.filter((e) => e.specifier === 'node:crypto').flatMap((e) => e.names);
+    expect(crypto).toEqual(expect.arrayContaining(['randomBytes', 'randomUUID', 'randomInt']));
+    expect(p.calls.map((c) => c.callee)).not.toContain('Math.random');
+  });
 });

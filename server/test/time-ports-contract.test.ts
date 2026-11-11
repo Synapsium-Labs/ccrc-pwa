@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { TimePorts } from '../src/time/ports.js';
 import { TIMER_MAX_MS } from '../src/time/rules.js';
+import { systemTimePorts } from '../src/time/system.js';
 import { fakeTime, FAKE_T0, mulberry32 } from './fakeTime.js';
 
 interface Rig { ports: TimePorts; tick(ms: number): void; warnings(): string[] }
@@ -101,5 +102,22 @@ describe('the fake alone', () => {
     f.ports.scheduler.after(10, () => { f.ports.scheduler.after(5, () => at.push(f.ports.clock.mono())); });
     f.advance(15);
     expect(at).toEqual([15]);
+  });
+});
+
+timeContract('the system adapters, under vitest fake timers', () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'], now: FAKE_T0 });
+  const lines: string[] = [];
+  return { ports: systemTimePorts((m) => lines.push(m)), tick: (ms) => vi.advanceTimersByTime(ms), warnings: () => lines };
+});
+afterEach(() => { vi.useRealTimers(); });
+
+describe('the system adapters alone', () => {
+  it('a scheduled call does not hold the process open', () => {
+    const spy = vi.spyOn(globalThis, 'setTimeout');
+    const cancel = systemTimePorts().scheduler.after(60_000, () => {});
+    const handle = spy.mock.results[0]!.value as NodeJS.Timeout;
+    expect(handle.hasRef()).toBe(false);
+    cancel(); spy.mockRestore();
   });
 });
