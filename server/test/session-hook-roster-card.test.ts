@@ -103,6 +103,18 @@ describe('D4: the roster card, armed', () => {
     expect(last).toContain('parked mail #16 (2)');
   });
 
+  // CHARACTERIZATION (D-8201): the card's exact text, pinned before its builder moves out of the hook, so the move is
+  // proved to change no byte of it.
+  it('the card, byte for byte: the header, one line per run, the awaiting-you line', () => {
+    fakeApi(list(run_('', { id: 11 }), run_('', { id: 12, state: 'awaiting-review', waveOf: null, unreadMail: 1 })));
+    expect(rosterOf(hook('compact'))).toBe([
+      'ccrc-roster: 2 open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`.',
+      '#11 prog-a w1/3 working worker=worker-a 3h unread=0',
+      '#12 prog-a w1 awaiting-review worker=worker-a 3h unread=1',
+      'awaiting you: review #12',
+    ].join('\n'));
+  });
+
   it('says nothing for a startup, whose context is fresh', () => {
     fakeApi(list(run_('')));
     expect(hook('startup')).not.toContain('ccrc-roster');
