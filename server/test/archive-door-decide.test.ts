@@ -2,7 +2,7 @@
 // refusals, the one act it takes, and how ccd's answer reaches the wire.
 import { describe, it, expect } from 'vitest';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, frameRowVerdict, refusedAtStop, stopVerdict, worktreeOf,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, decideStopClaims, frameRowVerdict, refusedAtStop, stopVerdict, worktreeOf,
   type ArchiveCoordPort, type ArchiveMeasure, type StopReadings,
 } from '../src/coord/archiveDoor.js';
 import type { CloseOutcome } from '../src/coord/close.js';
@@ -45,9 +45,41 @@ const port = (o: { worker?: OpenSiblingsResult; claimed?: OpenSiblingsResult;
       return o.refuse?.[runId]
         ?? { ok: true, id: runId, state: 'failed', released: true, childReclaim: 'not-queued' } as CloseOutcome;
     },
+    // D-8199's claims step is not exercised by these rows; reaching it is a test bug.
+    moveClaims: async () => { throw new Error('moveClaims is not part of this fake'); },
   };
   return { p, seen };
 };
+
+// D-8199 review: the stop is the escape hatch — "Stop only" is what the sheet offers after the archive door refused on a
+// store it could not read — so the stop's claims step never fails shut. A store it cannot read has nothing it can move:
+// the stop goes through, moving nothing, and says the claims went unread (`claimsUnreadable`, the store's detail).
+describe('decideStopClaims — an unreadable store never blocks the stop', () => {
+  const movesNothing = (p: ArchiveCoordPort, seen: string[]) => ({
+    bindingsOf: p.bindingsOf,
+    moveClaims: async () => { seen.push('move'); return { ok: true as const, moved: [] }; },
+  });
+
+  it('a plain stop goes through, nothing moved, the store\'s detail carried', async () => {
+    const { p, seen } = port({ claimed: UNREADABLE });
+    expect(await decideStopClaims(movesNothing(p, seen), 'demo-c', { restart: false }))
+      .toEqual({ ok: true, moved: null, claimsUnreadable: 'runs.wave' });
+    expect(seen).toEqual(['claimant:demo-c']);
+  });
+
+  it('a store read that THROWS is the same unreadable store: through, never a rejection', async () => {
+    const { p, seen } = port({ throws: { claimed: true } });
+    expect(await decideStopClaims(movesNothing(p, seen), 'demo-c', { restart: false }))
+      .toEqual({ ok: true, moved: null, claimsUnreadable: 'database is not open' });
+  });
+
+  it('a choice given over an unreadable store moves nothing (it has nothing to move) and the stop still goes through', async () => {
+    const { p, seen } = port({ claimed: UNREADABLE });
+    expect(await decideStopClaims(movesNothing(p, seen), 'demo-c', { restart: false, claims: { kind: 'release' } }))
+      .toEqual({ ok: true, moved: null, claimsUnreadable: 'runs.wave' });
+    expect(seen).not.toContain('move');
+  });
+});
 
 describe('archiveFlags', () => {
   it('reads an absent body as no consent at all', () => {
@@ -88,13 +120,13 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   it('a busy row with `interrupt` proceeds, and the stop comes first', async () => {
     const { p } = port();
     expect(await decideArchive(p, 'demo-a', { ...NONE, interrupt: true }, { ...IDLE_WS, turn: 'busy' }))
-      .toEqual({ ok: true, stop: true, wsArchive: true, ended: [] });
+      .toEqual({ ok: true, stop: true, wsArchive: true, ended: [], moved: null });
   });
 
   it('an idle workspace is archived without a stop; a main checkout is stopped and never reaches ws-archive', async () => {
-    expect(await decideArchive(port().p, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [] });
+    expect(await decideArchive(port().p, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [], moved: null });
     expect(await decideArchive(port().p, 'claude-demo', NONE, IDLE_MAIN))
-      .toEqual({ ok: true, stop: true, wsArchive: false, ended: [] });
+      .toEqual({ ok: true, stop: true, wsArchive: false, ended: [], moved: null });
   });
 
   it('a busy main checkout without `interrupt` refuses too — busy is read for both kinds of row', async () => {
@@ -130,7 +162,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   it('an UNMEASURED worktree is not a refusal — in remote mode this box cannot read one; ccd measures it', async () => {
     const { p, seen } = port({ claimed: { ok: true, siblings: [run(1)] } });
     expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, { ...IDLE_WS, worktree: 'unmeasured' }))
-      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(1)] });
+      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(1)], moved: null });
     expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:1', 'abandon:1']);
   });
 
@@ -180,7 +212,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   it('`programme:"end"` abandons every run it coordinates, in id order, and then proceeds', async () => {
     const { p, seen } = port({ claimed: { ok: true, siblings: [run(7), run(8, 2)] } });
     expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, IDLE_WS))
-      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(7), run(8, 2)] });
+      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(7), run(8, 2)], moved: null });
     expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:7', 'can:8', 'abandon:7', 'abandon:8']);
   });
 
@@ -225,7 +257,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   });
 
   it('a box with no coordination archives exactly as before — no store, no claim checks', async () => {
-    expect(await decideArchive(null, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [] });
+    expect(await decideArchive(null, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [], moved: null });
   });
 });
 

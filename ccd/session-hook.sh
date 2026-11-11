@@ -3201,9 +3201,10 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
 # roster line at all, never an error and never a wait beyond 4 s. Its own ceiling, ROSTER_CARD_MAX_CHARS, is added to
 # the emitter's worst case AFTER CARD_TOTAL_MAX_CHARS (a test pins the sum). Children, subagents and kill-switched
 # sessions get nothing (`_hook_roster_eligible`, the one spelling of that rule for both callers); a held coordinator
-# still gets its roster. Unarmed (no `coordinator-roster-card-live` marker) it only appends the card to a size-capped
-# shadow log the operator can read, naming the event (`compact`, `resume`, `clear` or `wake`); armed, it sets
-# CARD_ROSTER. The caller decides WHEN; this function decides nothing about the event.
+# still gets its roster. Armed only by an exact `"rosterCard":"live"` in that same reply, the server's Shadow lanes row
+# (D-8274, R-6; the one read of the switch, for both callers; the retired `$REG` marker is not read), it sets
+# CARD_ROSTER; else it only appends the card to a size-capped shadow log the operator can read, naming the event
+# (`compact`, `resume`, `clear` or `wake`). The caller decides WHEN; this function decides nothing about the event.
 ROSTER_CARD_MAX_CHARS=2048
 ROSTER_CARD_LIB="${BASH_SOURCE[0]%/*}/lib"
 [[ -f "$ROSTER_CARD_LIB/roster-card.jq" ]] || ROSTER_CARD_LIB="$HOME/.cc-sessions/lib"
@@ -3221,7 +3222,7 @@ _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends th
   card=$(jq -L "$ROSTER_CARD_LIB" -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
     --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) 'include "roster-card"; roster_card($me; $now; $max)' <<<"$body" 2>/dev/null) || return 0
   [ -n "$card" ] || return 0
-  if [ -e "$REG/coordinator-roster-card-live" ]; then
+  if jq -e '.rosterCard == "live"' <<<"$body" >/dev/null 2>&1; then
     CARD_ROSTER="$card"
   elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then
     mkdir -p "${log%/*}" 2>/dev/null

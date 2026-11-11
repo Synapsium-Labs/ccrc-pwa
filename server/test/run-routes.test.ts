@@ -2772,7 +2772,8 @@ describe('GET /api/runs', () => {
     await postClose(app, opened.id, {
       fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP }, final: true,
     });
-    expect((await getRuns(app)).json()).toEqual({ runs: [] });
+    // D-8274: the reply also carries the roster card's switch for the session hook (`rosterCard`, seeded shadow).
+    expect((await getRuns(app)).json()).toEqual({ runs: [], rosterCard: 'shadow' });
     const withClosed = (await getRuns(app, true)).json() as { runs: { id: number }[] };
     expect(withClosed.runs.map((r) => r.id)).toContain(opened.id);
   });

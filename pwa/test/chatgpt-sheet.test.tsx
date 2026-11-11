@@ -504,7 +504,7 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
   const reauthClient = (b: Box): { [K in keyof ReauthClient]: Mock<ReauthClient[K]> } => ({
     accountAuthStart: b.sc.accountAuthStart, accountAuthStatus: b.sc.accountAuthStatus, accountAuthCode: b.sc.accountAuthCode, accountAuthCancel: b.sc.accountAuthCancel,
     accountCheck: b.client.accountCheck, accountSet: b.sc.accountSet, accountSignOut: b.sc.accountSignOut,
-    accountRevokeAck: vi.fn(async () => ({ ok: true as const })), stop: vi.fn<ReauthClient['stop']>(async () => {}),
+    accountRevokeAck: vi.fn(async () => ({ ok: true as const })), stop: vi.fn<ReauthClient['stop']>(async () => null),
   });
   const live: FleetSession = fleetSession({ id: 'lane-g:p-one', wrapper: 'lane-g', home: 'lane-g', project: 'p-one', title: 'one' });
   const reauth = (b: Box, freshUntil: number | null = Date.now() + 3_600_000): void => {

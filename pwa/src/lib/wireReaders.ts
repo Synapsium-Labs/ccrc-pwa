@@ -1,7 +1,7 @@
 // The PWA's readers of a 2xx or refusal body: each takes `unknown` off the wire and answers the typed view or null,
 // never a field it did not check. Pure (L1) apart from `ApiError`'s class, a leaf. `lib/api.ts` re-exports all of it
 // (ARCH-13b, #557).
-import type { AutoMode, ArchiveAnswer, ArchiveBody, ArchiveRefusal, Dialog, DialogAnswered, NotifyMode, RouteFields, UpdateChannel } from '../../../shared/api';
+import type { AutoMode, ArchiveAnswer, ArchiveBody, ArchiveRefusal, ClaimsChoiceBody, Dialog, DialogAnswered, NotifyMode, RouteFields, UpdateChannel } from '../../../shared/api';
 import { isArchiveRefusal, isLeaseDoorRefusal, LEASE_DOOR_REFUSALS } from '../../../shared/api';
 import {
   LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, LINEAR_TEAMS_MAX, isLinearStoredName, isLinearTeamKey, isLinearUrlKey, isLinearUuid,
@@ -328,7 +328,7 @@ export function linearNotConnectedOf(err: unknown): LinearConnectionView | 'unre
 
 /** What the archive door can be asked beyond the plain tap: `force`, and the two consents that answer a refusal
  *  (workspace lifecycle §5.2). */
-export interface ArchiveOptions { force?: boolean; interrupt?: boolean; programme?: 'end' }
+export interface ArchiveOptions extends ClaimsChoiceBody { force?: boolean; interrupt?: boolean; programme?: 'end' }
 
 /** The archive door's body: each consent rides only when given, and a plain tap sends no body at all. */
 export function archiveBody(opts?: ArchiveOptions): ArchiveBody | undefined {
@@ -336,6 +336,9 @@ export function archiveBody(opts?: ArchiveOptions): ArchiveBody | undefined {
     ...(opts?.force === true ? { force: true as const } : {}),
     ...(opts?.interrupt === true ? { interrupt: true as const } : {}),
     ...(opts?.programme === 'end' ? { programme: 'end' as const } : {}),
+    // D-8199: the claims choice, sent only when given; `heir` only beside a hand-over.
+    ...(opts?.runs !== undefined ? { runs: opts.runs } : {}),
+    ...(opts?.runs === 'handover' && opts.heir !== undefined ? { heir: opts.heir } : {}),
   };
   return Object.keys(body).length > 0 ? body : undefined;
 }

@@ -74,8 +74,16 @@ describe('the roster card has one builder (D4, R-5a, D-8201)', () => {
     expect(fn).not.toContain('.child');
   });
 
-  it('the switch is read at one site: the marker test lives in the card function alone', () => {
-    expect(hookCode().filter((l) => l.includes('coordinator-roster-card-live'))).toHaveLength(1);
+  it('the switch is read at one site: the `rosterCard` test lives in the card function alone (D-8274)', () => {
+    // Both callers, the SessionStart arm and the wake arm, are armed by that one read of the server's Shadow lanes row.
+    const reads = hookCode().filter((l) => l.includes('rosterCard'));
+    expect(reads, 'one read of the switch in the hook').toHaveLength(1);
+    const body = readFileSync(HOOK, 'utf8');
+    const start = body.indexOf('_hook_roster_card() {');
+    const fn = body.slice(start, body.indexOf('\n}\n', start));
+    expect(fn, 'and it is in the card function').toContain(reads[0]!.trim());
+    // The retired hand marker (R-6) is read nowhere in the hook's code.
+    expect(hookCode().filter((l) => l.includes('coordinator-roster-card-live'))).toEqual([]);
     // The shadow log has one writer on the box (shared/switches.ts names it in its `default` sentence, which is prose).
     expect(BASH.filter((f) => codeLines(f).some((l) => l.includes('roster-card-shadow.log'))).map(rel)).toEqual(['ccd/session-hook.sh']);
   });

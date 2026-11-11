@@ -9222,6 +9222,7 @@ _acct_live() {   # <id>
 # fail closed: an unreadable field may be the one that names the lane, so a
 # partial census must never be presented as complete.
 ACCT_ROW_FIELDS=()
+# shellcheck disable=SC2178  # f is a local string here; the arrays named f are other functions' locals (shellcheck does not scope names by function)
 _acct_row_fields_on() {   # <id> [<what-was-written>] -> "<sid>:<field>" entries in ACCT_ROW_FIELDS
   local id="$1" f="" sid="" field="" value="" had_nullglob=0 stands="${2:-Nothing was removed.}"
   ACCT_ROW_FIELDS=()
@@ -15657,6 +15658,7 @@ _codex_roster_lock() {   # <who> <why> <how the refusal ends>
   fi
 }
 
+# shellcheck disable=SC2128,SC2178  # said is a local string here; the arrays named said are other functions' locals (shellcheck does not scope names by function)
 _codex_cmd_switch() {   # <id> <litellm|direct>
   local id to="${2:-}" from up t w q rc said='' all=1 outgoing rev='' stopped='' down='' state pfd=''
   _codex_row "${1:-}" || exit $?
@@ -19494,6 +19496,7 @@ _inst_enable() {
 # no class registry to render from. A failure is one line and one
 # `codex-lanes` in INST_DEGRADED, never a stop. Skipped on a server-role box,
 # like the tiers step.
+# shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 _inst_codex_lanes() {
   [ "$INST_ROLE" = server ] && return 0
   local lanes id st lrc=0 rendered=0 kept=0 failed=0
@@ -19611,6 +19614,7 @@ _inst_codex_lanes() {
 # names an older generation (or none) is not on the one that resolves now, so
 # a restart does move it there, and it is restarted as before. The shim tier
 # does not run on the generation, and is restarted as before.
+# shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 _inst_codex_tiers() {
   [ "$INST_ROLE" = server ] && return 0
   local lanes id tier ours stale py ready deadline back stopword rc lrc=0 mode mine
@@ -20222,6 +20226,7 @@ _inst_graphify_skill() {
 # was the converge's unmarked-`## graphify` refusal, which THIS step's commit
 # deletes, and every number in this file moves the moment a line is added above
 # it. This step stays in the tree afterwards exactly as that one does.
+# shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 _inst_graph_always_on_off() {
   [ "$INST_ROLE" = server ] && return 0
   local n=0 kept=0 ts backups
@@ -20420,6 +20425,7 @@ _inst_ws_build_excludes() {
 # NOT use), and it is what lets a hook that CHAINS other content — an
 # operator's own lines before or after graphify's block — be told apart and
 # refused rather than partially eaten.
+# shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 _inst_graph_hooks_off() {
   [ "$INST_ROLE" = server ] && return 0
   local roots=("$HOME/projects" "$HOME/worktrees") root d hooks h n=0 kept=0
@@ -20554,6 +20560,7 @@ _inst_legacy_verified_parent() {
 # lane-state files cannot be written (a registry that is not a directory, a
 # full disk) still takes its update: each failure is said on stderr, counted on
 # the summary line, and the next account verb on the lane writes it.
+# shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 _inst_lane_state() {
   if [ "$INST_ROLE" = server ]; then echo "install: lane-state: skipped — a server-role box hosts no sessions"; return 0; fi
   # D-5756: an upgraded darwin node's existing `~/.cc-secrets` was never
@@ -21849,6 +21856,7 @@ _rollback_killed_flip_state() {   # <to> <role> -> 0 holds, 1 not applicable, 2 
 # with `_upd_fetch`'s own sentence, and the by-hand remedy is `ccrc update
 # --to <tag> --downgrade --allow-unsigned`. A bundle that FAILS refuses either
 # way.
+# shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 cmd_rollback() {
   UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
   local to="" detach=0 from="cli" via="--to" w ok=0 prc=0 erc=0
@@ -23179,6 +23187,7 @@ _upd_lock_probe() {
 # function closes is the common case — a FIFO already sitting at the path
 # when a caller asks — not a same-user race timed to this exact window.
 UPD_REPORT_CAP=65536
+# shellcheck disable=SC2128,SC2178  # f is a local string here; the arrays named f are other functions' locals (shellcheck does not scope names by function)
 _upd_report_readable() {
   local f="${1:-$BOX_UPDATE_JSON}" sz=""
   { [ -e "$f" ] || [ -L "$f" ]; } || return 1
@@ -23360,6 +23369,7 @@ _upd_unlock() {
 # from this function's own words, or a GRAMMAR-VALIDATED document value (the
 # checks below splice in `issued`/`lease`/`desired`, already grammar-checked
 # above) — never a raw byte of the file. Always rc 0; prints nothing.
+# shellcheck disable=SC2128,SC2178  # f and rest are local strings here; the arrays of those names are other functions' locals (shellcheck does not scope names by function)
 _upd_intent_state() {
   local LC_ALL=C   # `-n 65536` is a BYTE cap only under C (`_acct_pool_state`'s reason)
   local f="$BOX_INTENT_FILE" role="" body="" tail="" rest="" now="" k v i want=""
@@ -24055,6 +24065,7 @@ _upd_converged() {
 # never hands its child the tag that just failed, whichever way `previous`
 # came to name it and whether or not the running build's own install of it
 # had completed.
+# shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 _upd_write_previous() {
   local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
@@ -24247,6 +24258,7 @@ _upd_stamp_moved() {   # <old_sha>
 # `foreign`/`unreadable` count as untouched while they read the same word:
 # `_inst_tree` refuses both before it writes a byte
 # (D-3429). Reads only; never dies.
+# shellcheck disable=SC2128,SC2178  # pl is a local string here; the arrays named pl are other functions' locals (shellcheck does not scope names by function)
 _upd_tree_untouched() {   # <pre_layout> <pre_current>
   local pl="$1" pc="$2"
   grep -q '^BOX_VERSIONS_ROOT=' "$UPD_TREE/ccd/ccrc" 2>/dev/null || return 1
@@ -26376,6 +26388,7 @@ _rollout_role_why() {
 # unconditionally: an absent, unreadable or refused file is not this
 # function's failure to report, only nothing to print — the empty answer is
 # read the same way by every caller either way.
+# shellcheck disable=SC2128,SC2178  # box is a local string here; the arrays named box are other functions' locals (shellcheck does not scope names by function)
 _rollout_exit3_detail() {
   local box="$1"
   "${ROLLOUT_SSH[@]}" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$box" \
@@ -27390,6 +27403,7 @@ _bak_list() {
 # refused: the backup was taken. Each keep is `_keep_knob`'s (D-6589), and a refused one stops only its own act (D-6590): it is
 # one stderr line in `_ccrc_die`'s form, said before the lock, and the other act runs; both refused return at once. Every
 # return after a refusal is 1, so `ccrc backup` exits 1. A floor that is not recorded (only a direct call reaches it) prunes nothing.
+# shellcheck disable=SC2128,SC2178  # keep is a local string here; the arrays named keep are other functions' locals (shellcheck does not scope names by function)
 _bak_prune() {
   local keep="" kwhy="" dwhy="" r=0   # `_keep_knob` makes KEEP decimal (`0002` is two): the loop below is ARITHMETIC
   _bak_keep && keep="$KEEP" || { kwhy=1; r=1; echo "$PROG: $KEEP_WHY — nothing was pruned" >&2; }
@@ -27641,6 +27655,7 @@ _bak_restamp() {   # <detail>
 # agrees with the server's parse on canonical digits only; any reading it cannot decide WARNs, makes this rc 1 and leaves the bound the
 # re-stamp less the margin, already past, so the keep-set stops after its first full verification and `thin` starts none (it still
 # finishes an interrupted thinning). No UPD_THIN_AT (a direct call) passes no bound; `ccrc backup` passes none, as it holds no lease.
+# shellcheck disable=SC2128,SC2178  # keep is a local string here; the arrays named keep are other functions' locals (shellcheck does not scope names by function)
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="" ksrc="" kwhy="" dwhy=""   # KEEP_FROM is taken at once: `_bak_data_keep` calls `_keep_knob` next
   _bak_keep && { keep="$KEEP"; ksrc="$KEEP_FROM"; } || { kwhy=1; echo "$lead: backups: WARN: $KEEP_WHY — nothing pruned"; }
@@ -27888,6 +27903,7 @@ _ver_protect() {
 # belt over `_keep_ok`, which every caller has asked first): `[ -lt ]` answers 2,
 # which the plain `if` below reads as "no", i.e. `prunable`. Then EVERY
 # version is `kept: unmeasured` and nothing is doomed, never one guess.
+# shellcheck disable=SC2128,SC2178  # keep is a local string here; the arrays named keep are other functions' locals (shellcheck does not scope names by function)
 _ver_verdicts() {
   declare -gA VER_VERDICT=()
   local mode="$1" keep="$2" n slots=0 trc
@@ -27976,6 +27992,7 @@ _ver_keep() { _keep_knob CCRC_VERSIONS_KEEP 3; }
 # layout (only `linked`/`migrated` prunes), then sweep a dead process's
 # leftovers ONCE (`_ver_sweep_leftovers`) — all before any return that could
 # end the prune early.
+# shellcheck disable=SC2128,SC2178  # keep is a local string here; the arrays named keep are other functions' locals (shellcheck does not scope names by function)
 _ver_gc() {
   local pfx="$1" mode="$2" keep="" lead n i cur
   local rc=0 lrc=0 prc=0 ncomp=0 npart=0 gone
@@ -28081,6 +28098,7 @@ _ver_gc() {
 # update's flip), completes a crashed migration first, prunes, and then
 # lists what is left. Exit 0 listed or pruned; 1 a prune skipped or a
 # removal failed; 2 usage.
+# shellcheck disable=SC2128,SC2178  # keep is a local string here; the arrays named keep are other functions' locals (shellcheck does not scope names by function)
 cmd_versions() {
   local prune=0 keep="" grc=0 lrc=0 prc=0 n mark cpl line
   while [ $# -gt 0 ]; do
@@ -28418,6 +28436,7 @@ _uninst_graph_store() {
 # `disable --now` operand there as a literal unit name, and an instance name is
 # built from an id at run time. A refusal is reported and the uninstall
 # continues, as every `disable --now` in `_uninst_units` is.
+# shellcheck disable=SC2178  # failed is a local string here; the arrays named failed are other functions' locals (shellcheck does not scope names by function)
 _uninst_codex_usage() {
   local ids id u n=0 failed=0
   if ! ids="$(_codex_usage_enabled_ids)"; then
@@ -28968,6 +28987,7 @@ _uninst_hooks() {
 # The >1MiB stat guard is `gen-wrappers.mjs`'s own OVERSIZE gate from the
 # other language (D-92's cross-language class): the 324MB upstream binary is
 # never read, let alone judged.
+# shellcheck disable=SC2128,SC2178  # removed is a local string here; the arrays named removed are other functions' locals (shellcheck does not scope names by function)
 _uninst_wrappers() {
   local shape="$CCRC_HERE/ccrc-wrapper-shape"
   if [ ! -f "$shape" ]; then
@@ -29110,6 +29130,7 @@ _uninst_cc_sessions() {
 # second `rm -rf` through that symlink would be a no-op anyway — de-duping
 # first keeps the reported count honest about how many directories this run
 # actually touched.
+# shellcheck disable=SC2128,SC2178  # removed is a counter in this function's command-substitution subshell; the arrays named removed are other functions' locals (shellcheck does not scope names by function)
 _uninst_graphify_skills() {
   local sh="$HOME/.ccrc/accounts.sh"
   if [ ! -f "$sh" ]; then

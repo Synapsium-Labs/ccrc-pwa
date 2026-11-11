@@ -3325,6 +3325,13 @@ button.proj-card-pool::before {
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
 }
+/* The archive sheet's hand-over picker (D-8199): its label over the chooser, full width at every width, inside the
+   sheet's own ground. */
+.archive-conflict-sheet .archive-claims-heir {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+}
 /* The abandon sheet's repeated row (D-8073): the run's name and context line, then the notes. They take the sheet's own
    ground and ink; text wraps, nothing is ellipsised. */
 .abandon-sheet .abandon-name {

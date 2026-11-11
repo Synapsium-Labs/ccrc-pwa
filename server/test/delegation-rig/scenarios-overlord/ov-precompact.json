@@ -1,0 +1,279 @@
+{
+  "scenario": "ov-precompact",
+  "covers": [
+    "W0-13"
+  ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "requests": true,
+  "timing": true,
+  "capS": 1500,
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000"
+    },
+    "settings": {
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source"
+              }
+            ]
+          }
+        ],
+        "PreCompact": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/precompact-refuse.mjs"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 t1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 t2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t2"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 t3"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t3"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 t4"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t4"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 t5"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t5"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 t6"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t6"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 t7"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t7"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sleep": 10
+    },
+    {
+      "type": "/compact"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 20
+    },
+    {
+      "type": "w0 t8"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "t8"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "settleS": 3,
+  "entries": [
+    {
+      "label": "t1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t1$"
+      },
+      "text": "W0-T1",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "t2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t2$"
+      },
+      "text": "W0-T2",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "t3",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t3$"
+      },
+      "text": "W0-T3",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "t4",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t4$"
+      },
+      "text": "W0-T4",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "t5",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t5$"
+      },
+      "text": "W0-T5",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "t6",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t6$"
+      },
+      "text": "W0-T6",
+      "stop_reason": "model_context_window_exceeded",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "t7",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t7$"
+      },
+      "status": 400,
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "prompt is too long: 210000 tokens > 200000 maximum"
+        }
+      }
+    },
+    {
+      "label": "t8",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 t8$"
+      },
+      "text": "W0-T8"
+    }
+  ],
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  }
+}

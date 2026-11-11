@@ -576,6 +576,7 @@ while read -r u _; do
   # a verdict) and skips the scope: the next tick that measures all of them judges it on that carried clock, and a `would-stop`
   # or `held` it then reaches is announced again (PREVV is `carry`, not the old verdict).
   youngest=-1 oldest=-1
+  # shellcheck disable=SC2128,SC2178  # a is this loop's scalar age; the arrays named a are locals of _ss_sockets, _ss_peers and _ss_busy_judge (shellcheck does not scope names by function)
   for p in "${procs[@]}"; do
     _ss_stat "$p" || continue   # unreadable: one that still exists makes _ss_box below unmeasurable, one that has gone has no ns/net to read
     a=$(_ss_age "$p"); (( youngest < 0 || a < youngest )) && youngest=$a; (( a > oldest )) && oldest=$a

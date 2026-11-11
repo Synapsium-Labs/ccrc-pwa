@@ -214,7 +214,7 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
     // Restart it onto the token: stop, then ensure. Nothing predates the switch now, so the button is plain.
     fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
     await waitFor(() => expect(props.ensure).toHaveBeenCalledWith('lane-b:p-one'));
-    expect(b.client.stop).toHaveBeenCalledWith('lane-b:p-one');
+    expect(b.client.stop).toHaveBeenCalledWith('lane-b:p-one', { restart: true });
     expect(await screen.findByText('restarted')).toBeInTheDocument();
     expect(screen.queryByText(signOldOutDanger(1, 'lane-b', 'kept'))).toBeNull();
     expect(screen.queryByRole('button', { name: SIGN_OLD_OUT_ANYWAY })).toBeNull();

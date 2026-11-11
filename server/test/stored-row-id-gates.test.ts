@@ -295,6 +295,7 @@ describe('the abandon arm closes a bad stored id failed with no fleet act (spec 
       bindingsOf: (sid) => d.coord.bindingsOf(sid),
       abandonRefusal: refusalOf,
       abandon,
+      moveClaims: async () => { throw new Error('moveClaims is not part of this gate'); },
     }, CLAIMED_BY, { force: false, interrupt: false, programmeEnd: true }, IDLE_MAIN));
     if (!plan.ok) throw new Error(`the door refused: ${JSON.stringify(plan.reply)}`);
     expect(plan.ended.map((r) => r.id), 'no programme-partly-ended: both runs ended').toEqual([bad, good]);

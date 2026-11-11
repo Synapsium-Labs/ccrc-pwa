@@ -31,7 +31,8 @@
  * Spec §5.2 asks for EVERY refusable check before any act; these are the ones the server cannot run, by measurement.
  */
 import {
-  ARCHIVE_REFUSALS, archiveInterrupts, type ArchiveBody, type ArchiveRefusal, type FleetSession,
+  ARCHIVE_REFUSALS, archiveInterrupts, isRegistryId, type ArchiveBody, type ArchiveRefusal, type ClaimsChoiceBody,
+  type ClaimsMoved, type FleetSession, type StopBody,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 import { workspaceEdge } from '../../../shared/workspaceTransitions.js';
@@ -40,6 +41,7 @@ import { turnSays, turnWordOf } from '../sessionReading.js';
 import type { CloseOutcome } from './close.js';
 import type { OpenSibling, OpenSiblingsResult } from './store.js';
 import type { SessionBindings } from './bindingReads.js';
+import type { ClaimsChoice, ClaimsMoveOutcome } from './reclaim.js';
 
 /** The consents a request carries, read once. `force` and `interrupt` are honoured only as `true` (anything else is
  *  absent, as `force` always was); `programme` is `'end'` or absent — a consent to end a programme is exact or it is
@@ -48,6 +50,20 @@ export interface ArchiveFlags {
   readonly force: boolean;
   readonly interrupt: boolean;
   readonly programmeEnd: boolean;
+  /** D-8199: what happens to the runs the session claims — absent when not given. */
+  readonly claims?: ClaimsChoice;
+}
+
+/**
+ * D-8199: the claims choice off a body (`ClaimsChoiceBody`) — `undefined` when none was given, `null` when it is
+ * malformed: a `runs` word that is not one of the two, a hand-over whose `heir` is not a registry id, or an `heir`
+ * without a hand-over. Exact or refused, like `programme`.
+ */
+export function claimsChoiceOf(b: { readonly [K in keyof ClaimsChoiceBody]?: unknown }): ClaimsChoice | undefined | null {
+  if (b.runs === undefined) return b.heir === undefined ? undefined : null;
+  if (b.runs === 'release') return b.heir === undefined ? { kind: 'release' } : null;
+  if (b.runs === 'handover') return isRegistryId(b.heir) ? { kind: 'handover', heir: b.heir } : null;
+  return null;
 }
 
 export function archiveFlags(raw: unknown): ArchiveFlags | null {
@@ -56,7 +72,28 @@ export function archiveFlags(raw: unknown): ArchiveFlags | null {
   // Keyed by L0's `ArchiveBody`, the wire shape the PWA builds: a renamed consent is a compile error here.
   const b = raw as { readonly [K in keyof ArchiveBody]?: unknown };
   if (b.programme !== undefined && b.programme !== 'end') return null;
-  return { force: b.force === true, interrupt: b.interrupt === true, programmeEnd: b.programme === 'end' };
+  const claims = claimsChoiceOf(b);
+  // Ending the programme and moving its claims are two answers to one question: both at once is no answer.
+  if (claims === null || (claims !== undefined && b.programme === 'end')) return null;
+  return { force: b.force === true, interrupt: b.interrupt === true, programmeEnd: b.programme === 'end',
+    ...(claims !== undefined ? { claims } : {}) };
+}
+
+/** `POST /api/sessions/:id/stop`'s consents (D-8199): `restart` (the id is kept, so nothing is asked) or a claims
+ *  choice, never both. `null` refuses the body (400). */
+export interface StopFlags {
+  readonly restart: boolean;
+  readonly claims?: ClaimsChoice;
+}
+
+export function stopFlags(raw: unknown): StopFlags | null {
+  if (raw === undefined || raw === null) return { restart: false };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const b = raw as { readonly [K in keyof StopBody]?: unknown };
+  if (b.restart !== undefined && b.restart !== true) return null;
+  const claims = claimsChoiceOf(b);
+  if (claims === null || (claims !== undefined && b.restart === true)) return null;
+  return { restart: b.restart === true, ...(claims !== undefined ? { claims } : {}) };
 }
 
 /** What `server.ts` measured before deciding. `turn` is the turn verdict (`TurnVerdict`): from the fail-closed read
@@ -197,7 +234,8 @@ const STATUS_WORD = /^[a-z_-]+$/;
  *   nothing runs ahead of ccd's own read at `ws-archive`, which decides.
  */
 export function busyReadFailsClosed(workspace: boolean, flags: ArchiveFlags): boolean {
-  return !workspace || flags.programmeEnd || flags.interrupt;
+  // D-8199: a claims choice moves the programme's chair before `ws-archive` reads anything, so it is read as the end is.
+  return !workspace || flags.programmeEnd || flags.interrupt || flags.claims !== undefined;
 }
 
 /** A worktree's measured presence (D-114: absent and unreadable are two facts, and only the first is "gone"). A
@@ -217,22 +255,30 @@ export interface ArchiveCoordPort {
    *  `abandonRefusal`); `null` when it can move it. */
   abandonRefusal(runId: number): Extract<CloseOutcome, { ok: false }> | null;
   abandon(runId: number): Promise<CloseOutcome>;
+  /** D-8199: move the claims on `claimed` as chosen (`reclaim.ts#moveClaims`), inside the same serialiser. */
+  moveClaims(choice: ClaimsChoice, claimed: readonly OpenSibling[]): Promise<ClaimsMoveOutcome>;
 }
+
+/** The two reads and the one act the STOP door's claims step needs (D-8199) — `ArchiveCoordPort`'s, narrowed. */
+export type ClaimsCoordPort = Pick<ArchiveCoordPort, 'bindingsOf' | 'moveClaims'>;
 
 /** An answer the route sends as it stands. */
 export interface ArchiveReply { readonly status: number; readonly body: Readonly<Record<string, unknown>> }
 
 export type ArchiveDecision =
   | { readonly ok: false; readonly reply: ArchiveReply }
-  | { readonly ok: true; readonly stop: boolean; readonly wsArchive: boolean; readonly ended: readonly OpenSibling[] };
+  | { readonly ok: true; readonly stop: boolean; readonly wsArchive: boolean; readonly ended: readonly OpenSibling[];
+      /** D-8199: the claims a choice moved, `null` when none was asked or none was open. */
+      readonly moved: ClaimsMoved | null };
 
-const reply = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown>): ArchiveDecision =>
+type Refused = Extract<ArchiveDecision, { ok: false }>;
+const reply = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown>): Refused =>
   ({ ok: false, reply: { status, body: { ok: false, error, ...extra } } });
 
 /** A refusal is an edge of `WORKSPACE_TRANSITIONS` (ARCH-41, #776) and its status is `REFUSAL_STATUS`'s, the one table
  *  the wire reads (ARCH-36): a word with no row throws rather than being sent, and no status is spelled here. */
 export const edgeStatus = (code: ArchiveRefusal): number => REFUSAL_STATUS[workspaceEdge('archive', code).refusal];
-const refuseEdge = (code: ArchiveRefusal, extra: Record<string, unknown> = {}): ArchiveDecision =>
+const refuseEdge = (code: ArchiveRefusal, extra: Record<string, unknown> = {}): Refused =>
   reply(edgeStatus(code), code, extra);
 
 /** A box whose ccd predates the verb: a route-shape word (no state of the workspace causes it), so no table row. */
@@ -282,11 +328,18 @@ export async function decideArchive(
     // Fail-shut, with or without `programme:'end'`: a programme this box cannot enumerate cannot be ended.
     if (!coordinates.ok) return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
     claimed = coordinates.siblings;
-    if (claimed.length > 0 && !flags.programmeEnd) {
+    // D-8199: the programme is never ended by itself — the operator answers what happens to its runs, or nothing moves.
+    if (claimed.length > 0 && !flags.programmeEnd && flags.claims === undefined) {
       return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
     }
   }
   if (m.workspace && !m.verbSupported) return unsupported();
+  // D-8199: the claims move, the act a choice brings, after every check above and before the stop and the archive.
+  if (flags.claims !== undefined) {
+    const moved = await moveOrRefuse(port, flags.claims, claimed);
+    if (!moved.ok) return moved;
+    return { ok: true, stop: flags.interrupt || !m.workspace, wsArchive: m.workspace, ended: [], moved: moved.moved };
+  }
   // The last check: every run the abandon arm could not move from its row alone, found BEFORE the first is ended —
   // otherwise whether a programme is left partly ended would depend on run id order. Nothing is ended here.
   for (const run of claimed) {
@@ -316,7 +369,47 @@ export async function decideArchive(
     }
     ended.push(run);
   }
-  return { ok: true, stop: flags.interrupt || !m.workspace, wsArchive: m.workspace, ended };
+  return { ok: true, stop: flags.interrupt || !m.workspace, wsArchive: m.workspace, ended, moved: null };
+}
+
+/** The move and its refusal word (D-8199): `null` when nothing was claimed, the moved runs when all moved, else
+ *  `claims-not-moved` naming what moved, what did not and why. */
+async function moveOrRefuse(
+  port: Pick<ArchiveCoordPort, 'moveClaims'> | null, choice: ClaimsChoice, claimed: readonly OpenSibling[],
+): Promise<{ ok: true; moved: ClaimsMoved | null } | Refused> {
+  if (port === null || claimed.length === 0) return { ok: true, moved: null };
+  let out: ClaimsMoveOutcome;
+  try { out = await port.moveClaims(choice, claimed); } catch (e) {
+    out = { ok: false, moved: [], notMoved: claimed, refusal: { kind: 'threw', detail: thrown(e) } };
+  }
+  if (!out.ok) {
+    return refuseEdge(ARCHIVE_REFUSALS.claimsNotMoved, { moved: out.moved, notMoved: out.notMoved, refusal: out.refusal });
+  }
+  return { ok: true, moved: { to: choice.kind === 'handover' ? choice.heir : null, runs: out.moved } };
+}
+
+/**
+ * The STOP door's claims step (D-8199): `POST /api/sessions/:id/stop` asks the archive door's question of a session that
+ * claims open runs — the same refusal (`coordinator-has-open-runs`, naming them) and the same move — before its stop. A
+ * `restart` stop keeps the session id, so it asks nothing and moves nothing; no coordination store, nothing to ask either.
+ * Runs on the coordination serialiser.
+ *
+ * NEVER FAIL-SHUT, unlike the archive door: the stop is the escape hatch — "Stop only" is what the sheet offers after the
+ * archive door refused on a store it could not read — so a live session is never left without a way to put it down. A
+ * store this box cannot read (or whose read throws) has nothing it can move: the stop goes through, moving nothing,
+ * whatever choice was given, and its answer says the claims went unread (`claimsUnreadable`, the store's detail).
+ */
+export async function decideStopClaims(
+  port: ClaimsCoordPort | null, id: string, flags: StopFlags,
+): Promise<{ ok: true; moved: ClaimsMoved | null; claimsUnreadable?: string } | Refused> {
+  if (port === null || flags.restart) return { ok: true, moved: null };
+  const coordinates = measured(() => port.bindingsOf(id).claimant());
+  if (!coordinates.ok) return { ok: true, moved: null, claimsUnreadable: coordinates.detail };
+  const claimed = coordinates.siblings;
+  if (claimed.length > 0 && flags.claims === undefined) {
+    return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
+  }
+  return flags.claims === undefined ? { ok: true, moved: null } : moveOrRefuse(port, flags.claims, claimed);
 }
 
 /**
@@ -326,9 +419,12 @@ export async function decideArchive(
  * state became unreadable (`unmeasured` → `409 status-unknown`, D-3881). The word is chosen HERE, from the verdict.
  * Carries the runs already ended, so the question that follows never reads as "nothing happened".
  */
-export function refusedAtStop(verdict: 'busy' | 'unmeasured', ended: readonly OpenSibling[]): ArchiveReply {
+export function refusedAtStop(
+  verdict: 'busy' | 'unmeasured', ended: readonly OpenSibling[], moved: ClaimsMoved | null = null,
+): ArchiveReply {
   const error = verdict === 'busy' ? ARCHIVE_REFUSALS.sessionBusy : ARCHIVE_REFUSALS.statusUnknown;
-  return { status: edgeStatus(error), body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}) } };
+  return { status: edgeStatus(error), body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}),
+    ...(moved !== null ? { moved } : {}) } };
 }
 
 /**
@@ -356,13 +452,16 @@ export function ccdArchiveRefusal(stderr: string): ArchiveRefusal | null {
  */
 export function archiveOutcome(
   stopped: boolean, ended: readonly OpenSibling[], res: { ok: boolean; stderr: string; ran?: boolean },
+  moved: ClaimsMoved | null = null,
 ): ArchiveReply {
-  if (res.ok) return { status: 200, body: { ok: true, archived: true, stopped, ended } };
+  // D-8199: the claims a choice moved ride every answer after the move, as `ended` does after an end.
+  const movedSpread = moved !== null ? { moved } : {};
+  if (res.ok) return { status: 200, body: { ok: true, archived: true, stopped, ended, ...movedSpread } };
   // D-6840: a call that never ran has no refusal word to read, only the runner's own words.
   const refusal = res.ran === false ? null : ccdArchiveRefusal(res.stderr);
   const detail = res.stderr.trim();
-  if (stopped) return { status: 200, body: { ok: true, archived: false, stopped: true, ended, refusal, detail } };
-  const endedSpread = ended.length > 0 ? { ended } : {};
+  if (stopped) return { status: 200, body: { ok: true, archived: false, stopped: true, ended, refusal, detail, ...movedSpread } };
+  const endedSpread = { ...(ended.length > 0 ? { ended } : {}), ...movedSpread };
   if (refusal !== null) return { status: edgeStatus(refusal), body: { ok: false, error: refusal, detail, ...endedSpread } };
   return { status: 502, body: { ok: false, stderr: res.stderr, ...endedSpread } };
 }
