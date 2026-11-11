@@ -88,6 +88,16 @@ export type ItemAction =
 /** The five hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). */
 export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner';
 export type LinearItemAct = 'approve' | 'return' | 'put-back' | 'done' | 'hand' | 'keep' | 'check-again' | 'name';
+const LINEAR_ACTION_VERB_MAP: Record<LinearActionVerb, true> = {
+  'linear-map': true, 'linear-report': true, 'linear-drift': true, 'linear-initiatives': true, 'linear-owner': true,
+};
+export const isLinearActionVerb = (v: unknown): v is LinearActionVerb =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ACTION_VERB_MAP, v);
+const LINEAR_ITEM_ACT_MAP: Record<LinearItemAct, true> = {
+  approve: true, return: true, 'put-back': true, done: true, hand: true, keep: true, 'check-again': true, name: true,
+};
+export const isLinearItemAct = (v: unknown): v is LinearItemAct =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ITEM_ACT_MAP, v);
 export const LINEAR_ITEM_ACTS: Readonly<Record<LinearActionVerb, readonly LinearItemAct[]>> = {
   'linear-map': ['approve', 'return'], 'linear-report': ['put-back', 'done'], 'linear-drift': ['hand', 'keep'],
   'linear-initiatives': ['check-again'], 'linear-owner': ['name'],
