@@ -390,6 +390,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was already closed' };
     if (coord.programOpenRunCount(slug) > 0) return { refuse: 'plan-runs-open', detail: 'a run of this programme is not finished' };
     const home = coord.programHome(slug);
+    // (a plan with no epics and no tickets has no Linear target, so an empty list here checks nothing, by design)
     // a legacy row with no home has no project to judge by; its `why` is judged by the strictest reading of every project the
     // plan touches instead of being skipped
     const closeProjects = home === null ? [...new Set(plan.planOf(slug).epics.flatMap((e) => [e.project, ...e.tickets.map((t) => t.project)]))] : [home];

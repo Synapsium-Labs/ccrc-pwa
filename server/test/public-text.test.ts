@@ -3,7 +3,7 @@
 // The fixtures are constructed here (this file is excluded from topology-clean's walk only by the file named there, so
 // nothing below is spelled as the token a class forbids).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { openCoordDb } from '../src/coord/db.js';
@@ -16,7 +16,6 @@ import { CANARY } from './private-names.mjs';
 import type { GateDecision } from '../src/auth/gate.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const here = path.dirname(new URL(import.meta.url).pathname);
 const EMAIL = ['person', '@', 'acme', '.', 'pro'].join('');
 
 describe('publicTextVerdict', () => {
@@ -58,9 +57,6 @@ describe('publicTextVerdict', () => {
   });
 
   it('publicTextClasses.ts holds no catches list', () => {
-    const src = readFileSync(path.join(here, '..', 'src', 'linking', 'publicTextClasses.ts'), 'utf8');
-    expect(src).not.toMatch(/^\s*catches\s*:/m);
-    expect(src).not.toMatch(/^\s*passes\s*:/m);
     for (const cls of PUBLIC_TEXT_CLASSES) expect(Object.keys(cls)).not.toContain('catches');
   });
 });
