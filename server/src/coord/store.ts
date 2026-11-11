@@ -1274,8 +1274,9 @@ const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
 export const haltingRowSql = (t: string): string =>
   `(${t}.updateState IN ${HALTED_UPDATE_SQL} AND NOT (${t}.updateState = 'failed' AND ` +
   `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
-/** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
- *  which is busy and never halts. */
+/** The same notion over a read-back row (`handOffLease`'s `why`): the dispatcher's own halt rule, `isHaltingUpdate`
+ *  (shared/update-move.ts), asked rather than restated (residue R33(a), D-8340). A state this build cannot name reads
+ *  `unknown`, which is busy and never halts. */
 const rowHalts = (state: UpdateState, detail: string | null): boolean => isHaltingUpdate(state, detail);
 
 /** The shape of a node id: the lowercase uuid `_inst_node_id` mints and nothing else, so an uppercase, padded or
