@@ -1,0 +1,41 @@
+// L4 delivery: the case lane's one pass (Overlord spec §10.5), in shadow. It decides nothing: practiceCases.ts does.
+// It reads the observation window, the newest case of each signature and the programme of each run, asks the decider
+// what is due and records each case through the store's compare-and-set. It sends no mail, no push and no feed row.
+import type { WatcherCoordPort } from './ports.js';
+import { caseRunIds, caseWindowFrom, casesDue } from './practiceCases.js';
+
+/** The four store members the pass reaches, declared by this consumer, so a test can hand a small fake. */
+export type CasesCoord = Pick<WatcherCoordPort, 'stallObservationsSince' | 'practiceCaseNewest' | 'run' | 'openPracticeCase'>;
+export interface CasesPassDeps { readonly coord: CasesCoord; readonly now: () => number }
+export interface CasesPassResult { readonly opened: number; readonly superseded: number; readonly unread: 'observations' | 'cases' | null }
+
+/** One pass. A failed read is answered in `unread` and warned (`ccrc-server: cases: <which> read failed: <detail>`),
+ *  and the next pass tries again. A thrown write rejects the pass, and the lane row's warnKey reports it. */
+export async function casesPass(deps: CasesPassDeps): Promise<CasesPassResult> {
+  const { coord } = deps;
+  const now = deps.now();
+  const obs = coord.stallObservationsSince(caseWindowFrom(now));
+  if (!obs.ok) {
+    console.warn(`ccrc-server: cases: observations read failed: ${obs.detail}`);
+    return { opened: 0, superseded: 0, unread: 'observations' };
+  }
+  const newest = coord.practiceCaseNewest();
+  if (!newest.ok) {
+    console.warn(`ccrc-server: cases: cases read failed: ${newest.detail}`);
+    return { opened: 0, superseded: 0, unread: 'cases' };
+  }
+  // A run whose read is not ok, or that is absent, is left out: that can only lower what is counted.
+  const programOf = new Map<number, string>();
+  for (const id of caseRunIds(obs.rows)) {
+    const r = coord.run(id);
+    if (r.ok && r.run !== null) programOf.set(id, r.run.program);
+  }
+  const due = casesDue({ rows: obs.rows, programOf, newestCaseAt: newest.newest, now });
+  let opened = 0;
+  let superseded = 0;
+  for (const d of due) {
+    const w = coord.openPracticeCase(d, newest.newest.get(d.signature) ?? null, now);
+    if (w.opened) opened += 1; else superseded += 1;
+  }
+  return { opened, superseded, unread: null };
+}

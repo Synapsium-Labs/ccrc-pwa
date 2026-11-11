@@ -9,7 +9,7 @@ import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
-import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS } from '../src/laneSchedule.js';
+import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS } from '../src/laneSchedule.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
@@ -514,9 +514,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 39 of 39 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 40 of 40 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(39);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(40);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -574,5 +574,14 @@ describe('the two sleep lanes (ARCH-43)', () => {
     expect(await other).toBe('ran');
     held.resolve();
     await first;
+  });
+});
+
+describe('the case lane row (Overlord spec §10.5, Table 11.1c)', () => {
+  it('rides the drift reconciler\'s cadence by reference, skips an overlap and names its warning', () => {
+    expect(laneRow('cases')).toMatchObject({
+      cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the case lane failed', derivedFrom: { name: 'DRIFT_SWEEP_MS' },
+    });
   });
 });
