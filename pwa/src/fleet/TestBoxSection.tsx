@@ -16,6 +16,9 @@
 //   * wide: the same, with the versions table and the pristine-installs table open side by side.
 // Every table is one shape (`TestboxTable`), so the four are one block written once.
 //
+// THE BUILDS (D-8289). Under everything else, `TestBoxBuilds` lists every Claude Code build with its capture verdict, read on
+// its own (`GET /api/testbox/builds`), so a box that is down still shows which builds are trusted.
+//
 // THE CONNECT SURFACE (D-8166, TC15). A block that carries `admin` (a server with the connect routes) mounts `TestBoxConnect`
 // above the card while no box is connected or parity has not passed, and draws the switch's On disabled, with the sentence
 // that says why, until the record passes: the server refuses `{on: true}` the same way (`parity-required`), and turning the
@@ -31,13 +34,14 @@ import {
   PROBE_REFUSAL_SENTENCE, TESTBOX_FALLBACK, TESTBOX_TOOLS, versionCellsDiffer, type StatusAnswer, type TestboxProbes, type TestboxTool,
   type TestboxToolVersions,
 } from '../../../shared/testbox';
-import { ApiError, api, apiErrorText } from '../lib/api';
-import { isRecord } from '../lib/wire';
+import { api } from '../lib/api';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, UNCONFIRMED_TEXT, useResultLine } from './settingsText';
+import { TestBoxBuilds } from './TestBoxBuilds';
 import { TestBoxConnect } from './TestBoxConnect';
 import { TestBoxManage } from './TestBoxManage';
 import { TESTBOX_CONNECT_TEXT } from './testboxAdminWords';
+import { TESTBOX_UNANSWERED, testboxFailure } from './testboxFailure';
 import type { TestboxBlock, TestboxPoll } from './useTestboxView';
 import type { BoxSettingRow } from '../../../shared/api';
 
@@ -105,7 +109,7 @@ export const TESTBOX_TEXT = {
   unread: 'The test box status could not be read.',
   stale: 'The latest read failed; this is the last status that landed.',
   unpolled: 'The server has not checked the test box yet.',
-  unanswered: 'No answer from the server',
+  unanswered: TESTBOX_UNANSWERED,
 } as const;
 
 const T = TESTBOX_TEXT;
@@ -164,16 +168,10 @@ export function TestBoxSection({ poll, fleetRows = null, onFleetChanged }: TestB
       ) : (
         <Skeleton lines={3} />
       )}
+      {/* D-8289: the trusted Claude Code builds and their capture verdicts, read on their own, whatever the box's state. */}
+      {failure !== 'not-configured' && <TestBoxBuilds band={band} />}
     </Section>
   );
-}
-
-/** A refusal's words: the server's detail, else the client's one reading of the error (`apiErrorText`). */
-function refusalText(err: unknown): string {
-  if (!(err instanceof ApiError)) return T.unanswered;
-  const body = isRecord(err.body) ? err.body : {};
-  const detail = typeof body.detail === 'string' && body.detail.trim() !== '' ? body.detail.trim() : null;
-  return detail ?? apiErrorText(err);
 }
 
 function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
@@ -198,7 +196,7 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
     void api.setTestboxSwitch(on)
       .then(
         (answer) => { if (answer === 'unreadable') switchLine.say(UNCONFIRMED_TEXT); },
-        (err: unknown) => { switchLine.say(refusalText(err), 'refusal'); },
+        (err: unknown) => { const f = testboxFailure(err); switchLine.say(f.text, f.tone); },
       )
       .finally(() => { setSwitching(false); poll.reload(); });
   };
@@ -215,7 +213,7 @@ function TestboxBody({ block, stale, poll, band, fleetRows, onFleetChanged }: {
           const outcome = typeof answer.outcome === 'string' ? answer.outcome : T.unanswered;
           syncLine.say(T.syncNotSent(outcome, typeof answer.detail === 'string' ? answer.detail : null), 'refusal');
         },
-        (err: unknown) => { syncLine.say(refusalText(err), 'refusal'); },
+        (err: unknown) => { const f = testboxFailure(err); syncLine.say(f.text, f.tone); },
       )
       .finally(() => { setSyncing(false); poll.reload(); });
   };

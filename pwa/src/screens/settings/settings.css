@@ -207,6 +207,23 @@
    full width, the key line wrapping inside its block with Copy under it. Laptop: the step list on the left and the current step
    on the right, the act's button at the end of its state line, settings a two-column form. Wide: a third area beside them, the
    ledger's recent acts. A key line or a fingerprint is one long token, so it wraps anywhere rather than push the card sideways. */
+/* D-8289: the card's Claude Code builds. One layout at every width: each build one wrapping row (the build and its verdict, where
+   it came from, and for a failure the replay output and Capture again). The output wraps inside its block, so a long line
+   never pushes the card sideways. No colour is set here: the words wear `.settings-note`, `.settings-catalogue--amber` or the
+   card's ink. */
+.testbox-builds { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); }
+.testbox-builds-title { margin: 0; font-weight: var(--weight-semibold); }
+.testbox-build-list { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.testbox-build { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-build-head { margin: 0; overflow-wrap: anywhere; }
+.testbox-build-name { font-family: var(--family-mono); font-weight: var(--weight-medium); }
+.testbox-build-output, .testbox-builds-older { min-width: 0; }
+.testbox-builds-older > .testbox-build-list { margin-top: calc(var(--pad-card) / 2); }
+.testbox-card:not([data-band='phone']) .testbox-build-again { justify-self: start; }
+.testbox-build-log {
+  margin: calc(var(--pad-card) / 4) 0 0; max-height: 16em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--family-mono); font-size: var(--fs-meta);
+}
 .testbox-connect { display: grid; gap: var(--pad-card); min-width: 0; padding-bottom: var(--pad-card); border-bottom: 1px solid var(--edge-subtle); }
 .testbox-connect-grid { display: grid; gap: var(--pad-card); min-width: 0; }
 .testbox-steps { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding-inline-start: 1.5em; list-style: decimal; }
