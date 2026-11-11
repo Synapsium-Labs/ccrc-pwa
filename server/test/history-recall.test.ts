@@ -190,8 +190,9 @@ describe('the read verbs\' pure halves: parseReadArgs, selectColumns and recall-
     expect(parse('expand', ['--around', rid(TA, 1)]).ok).toBe(true);
     expect(parse('expand', ['x', '--before', String(libRead.AROUND_MAX + 1)])).toEqual(bad);
     expect(parse('tree', ['--session', '..']).ok, 'the id grammar is decideScope\'s, after the parse').toBe(true);
-    expect(parse('touched', [])).toEqual(bad);
-    expect([...libRead.READ_VERBS]).toEqual(['grep', 'describe', 'expand', 'tree']);
+    expect(parse('touched', [])).toEqual(bad);   // W4 Task 4B: bad from touched's own grammar (one positional), no longer as an unknown verb
+    expect(parse('touched', ['ccd/x.mjs']).ok).toBe(true);
+    expect([...libRead.READ_VERBS]).toEqual(['grep', 'describe', 'expand', 'tree', 'touched']);
   });
 
   it('selectColumns names what the store\'s version has and NULLs what it lacks; an unknown table or column throws', () => {

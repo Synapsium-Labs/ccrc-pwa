@@ -1140,12 +1140,13 @@ export interface ReadVerbSpec {
   readonly defaults: Readonly<Record<string, string | number | boolean | null>>;
   readonly positional: Readonly<{ min: number; max: number }>;
 }
-export const READ_OPTIONS: Readonly<Record<'grep' | 'describe' | 'expand' | 'tree', ReadVerbSpec>>;
+export const READ_OPTIONS: Readonly<Record<'grep' | 'describe' | 'expand' | 'tree' | 'touched', ReadVerbSpec>>;
 export const READ_VERBS: readonly string[];
 
 // ── touched (W4 addendum P8; D-8188, D-8189) ──
 export const TOUCHED_CANDIDATE_MAX: 10000;
 export const TOUCHED_LIMIT_DEFAULT: 20;
+export const TOUCHED_ORDERED_CAP: boolean;
 export const TOUCHED_DISCLOSURE: string;
 export const TOUCHED_CAPPED_NOTE: string;
 export type TouchedQuery =
@@ -1234,7 +1235,7 @@ export function renderEntryText(body: unknown): string;
 export const EXPLORE_READ_MAX: number;
 export function exploreOutline(text: string, kind: ExploreKind, fileName: string | undefined, idx: PairIndex): string;
 // ── W1-B2 Task 17: version-aware reads ──
-export const VERB_TABLES: Readonly<Record<'grep' | 'describe' | 'expand' | 'tree', readonly string[]>>;
+export const VERB_TABLES: Readonly<Record<'grep' | 'describe' | 'expand' | 'tree' | 'touched', readonly string[]>>;
 export function missingTablesAt(version: number, verb: string, schema?: Readonly<Record<number, SchemaVersionAdded>>,
   verbTables?: Readonly<Record<string, readonly string[]>>): string[];
 export function schemaAdditive(schema: Readonly<Record<number, SchemaVersionAdded>>,

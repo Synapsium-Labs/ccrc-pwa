@@ -7218,7 +7218,10 @@ swaps. Sessions call them by absolute path, because `ccrc` is not on a fleet ses
   line per child or source with its size; a pasted line goes in single quotes, each `'` in it
   written `'\''`;
 - `expand <node id or message uuid>` prints the real text in order, with a cursor past one page;
-- `tree` lists the family's epochs and nodes.
+- `tree` lists the family's epochs and nodes;
+- `touched <path|symbol>` lists, newest first, the nodes whose stored refs name a file (20 rows, or
+  `--limit N`). It sees only the refs the store kept, one origin each and at most 40 per node, so an
+  empty answer does not mean the file was never touched.
 
 Every answer opens with a header naming its scope, `coverage=this-box` and the index lag, prints at
 most 20,000 characters with `shown K of N` and a `next:` line (run only the `next:` line printed outside
@@ -7229,7 +7232,7 @@ redacted exactly prints under the line
 `[window redacted alone: every word of 8 or more characters masked]`; its long words are masked, not
 lost. `--workspace` widens the scope to every family of this project that ran in the session's
 workdir, and `--project` to the whole project; nothing crosses projects, and nothing reaches another
-box. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
+box. `--agents` adds the family's subagent transcripts and their nodes to any verb's reads. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
 text and the first 512 KiB of each tool output Claude Code saved to its own file; text past that is
 stored but not searched. Exit 3 is "not found on this box" (for grep, not found within that reach),
 6 "not indexed yet", 8 "recall switched off for this session" and 9 "no store here" (macOS, a

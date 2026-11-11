@@ -2,9 +2,17 @@
 // `ccrc history touched`'s pure deciders (W4 addendum P8, Task 4A): `ccd/history/lib.mjs`, imported directly like
 // history-lib.test.ts. Pure: the one database is an in-memory node:sqlite table that runs the spec's file select
 // (section 3.5 step 1) for Review Focus 4. Nothing here touches a HOME or a live store.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { makeHistoryBox, runSweep, runCli, withPane, seedFamily, type HistoryBox } from './historyHelpers.js';
+import { userRow, assistantRow, type Row } from './historyFixtures.js';
+import { mkTmp } from './tmpHelpers.js';
+import { GRAPH_MAX_BYTES } from '../../ccd/compact-card.mjs';
 import {
+  READ_VERBS, READ_OPTIONS, parseReadArgs,
   touchedQuery, likeEscape, splitStoredRef, normaliseRefPath, symbolMatches, matchRef, rankTouched, touchedRows,
   TOUCHED_CANDIDATE_MAX, TOUCHED_LIMIT_DEFAULT, TOUCHED_DISCLOSURE, TOUCHED_CAPPED_NOTE,
 } from '../../ccd/history/lib.mjs';
@@ -200,4 +208,359 @@ describe('touched deciders', () => {
     expect(likeEscape('a%b\\c')).toBe('a\\%b\\\\c');
     db.close();
   });
+});
+
+
+// ── Task 4B: the verb itself, run as a session runs it (W4 addendum P8, P14) ─────────────────────────────────────────
+// One fixture store, built once: a family with one confirmed epoch whose launch directory is a temp directory (the verb's
+// root), into which each case plants its own graphify-out/graph.json. Nodes and refs are written straight into the derived
+// tables through a writer handle that is closed before the CLI runs; every case names its own files and symbols, so a case's
+// answer is its own. The CLI runs against the fixture HOME only.
+describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb (Task 4B)', () => {
+  const ID = 'claude-a-demo';
+  const PROJECT = 'demo';
+  const TA = 'a1a1a1a1-1111-4111-8111-111111111111';
+  const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const T0 = Date.UTC(2026, 9, 1, 10, 0, 0);
+  const HEAVY = 240_000;
+  type CliRun = ReturnType<typeof runCli>;
+
+  let box: HistoryBox;
+  let root = '';
+  let dbFile = '';
+  let ids: { session_pk: number; seq: number; tpk: number };
+
+  const rid = (n: number): string => `${TA.slice(0, 8)}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+  const iso = (k: number): string => new Date(T0 + k * 1000).toISOString();
+  function turns(cwd: string): Row[] {
+    const rows: Row[] = [];
+    for (let i = 1; i <= 2; i += 1) {
+      rows.push(userRow({ uuid: rid(2 * i - 1), ts: iso(2 * i - 1), sessionId: TA, cwd, text: `fixture question ${i}` }));
+      rows.push(assistantRow({ uuid: rid(2 * i), ts: iso(2 * i), sessionId: TA, cwd, text: `Fixture answer ${i}.`, requestId: `req_${i}`, msgId: `msg_${i}` }));
+    }
+    return rows;
+  }
+  function withDb<T>(fn: (db: DatabaseSync) => T): T {
+    const db = new DatabaseSync(dbFile);
+    try { return fn(db); } finally { db.close(); }
+  }
+  let nodeSeq = 0;
+  /** A native leaf of the family's epoch with its refs; `agentTranscript` puts it on a subagent's transcript. */
+  function plant(id: string, o: { latest?: number; gist?: string | null; refs?: Array<[string, string, string?]>; tpk?: number } = {}): string {
+    nodeSeq += 1;
+    const latest = o.latest ?? T0 + nodeSeq * 1000;
+    withDb((db) => {
+      db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
+        summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
+        directive_flag, capped, parser_version, created_ms)
+        VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`)
+        .run(id, ids.session_pk, ids.seq, o.tpk ?? ids.tpk, o.gist === undefined ? `Gist of ${id}. Second sentence.` : o.gist, latest - 500, latest, Date.now());
+      const ins = db.prepare('INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
+      db.exec('BEGIN');
+      for (const [kind, value, origin] of o.refs ?? []) ins.run(id, kind, value, origin ?? 'tool_use');
+      db.exec('COMMIT');
+    });
+    return id;
+  }
+  const graphDir = (): string => path.join(root, 'graphify-out');
+  const graphFile = (): string => path.join(graphDir(), 'graph.json');
+  function plantGraph(nodes: Array<{ label: string; file: string }>, extra: Record<string, unknown> = {}): void {
+    fs.mkdirSync(graphDir(), { recursive: true });
+    fs.writeFileSync(graphFile(), JSON.stringify({
+      ...extra, nodes: nodes.map((n, i) => ({ id: `g${i}`, label: n.label, source_file: n.file })), links: [],
+    }));
+  }
+  const touched = (args: string[], env: Record<string, string> = {}): CliRun =>
+    runCli(box, ['touched', ...args], { env: { ...withPane(box, ID), ...env } });
+  const touchedJson = (args: string[]): CliRun => touched([...args, '--json']);
+  const items = (r: CliRun): Array<Record<string, any>> => (r.json?.['items'] ?? []) as Array<Record<string, any>>;
+  const lines = (r: CliRun): string[] => r.stdout.split('\n');
+  /** The row lines of a human answer: those that open with a node id and name its kind. */
+  const rowLines = (r: CliRun): string[] => lines(r).filter((l) => /^L[0-9a-z]+ native_leaf /.test(l));
+  const headers = (r: CliRun): string[] => lines(r).filter((l) => l.startsWith('touched '));
+
+  beforeAll(() => {
+    root = mkTmp('ccrc-hist-touched-root-');
+    box = makeHistoryBox('ccrc-hist-touched-');
+    const sw = runSweep(box);
+    expect(sw.code, sw.stderr).toBe(0);
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(root) });
+    dbFile = path.join(box.root, 'db', 'history.db');
+    ids = withDb((db) => {
+      const fam = db.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(ID, G1) as { session_pk: number };
+      const ep = db.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL ORDER BY seq LIMIT 1').get(fam.session_pk) as { seq: number };
+      const tr = db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(TA) as { transcript_pk: number };
+      db.prepare('UPDATE epochs SET cwd = ?, cwd_real = ? WHERE session_pk = ?').run(root, root, fam.session_pk);
+      return { session_pk: Number(fam.session_pk), seq: Number(ep.seq), tpk: Number(tr.transcript_pk) };
+    });
+  }, 600_000);
+  beforeEach(() => { fs.rmSync(graphDir(), { recursive: true, force: true }); });
+
+  it('CONTROL: the fixture family answers a read verb, and its root is the epoch directory', () => {
+    plant('Lc0ntr0l1', { refs: [['path', 'ccd/control.mjs']] });
+    const r = touchedJson(['ccd/control.mjs']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(items(r).map((i) => i['nodeId'])).toEqual(['Lc0ntr0l1']);
+  }, HEAVY);
+
+  it('TC1 no graph.json: a path answers from refs, and a symbol answers from path:symbol refs only, through the bounded symbol select', () => {
+    plant('Lt01n1', { refs: [['path', 'ccd/tc1.mjs'], ['path:symbol', 'ccd/tc1b.mjs:tc1sym', 'model']] });
+    const byPath = touched(['ccd/tc1.mjs']);
+    expect(byPath.code, `${byPath.stderr}${byPath.stdout}`).toBe(0);
+    expect(headers(byPath)).toEqual(['touched ccd/tc1.mjs (no graph)']);
+    expect(rowLines(byPath)).toHaveLength(1);
+    expect(rowLines(byPath)[0]).toContain(' exact refs path/tool_use ');
+    const bySymbol = touched(['tc1sym']);
+    expect(bySymbol.code, `${bySymbol.stderr}${bySymbol.stdout}`).toBe(0);
+    expect(headers(bySymbol)).toEqual(['touched ccd/tc1b.mjs (no graph)']);
+    expect(rowLines(bySymbol)[0]).toContain(' exact refs path:symbol/model symbol tc1sym ');
+  }, HEAVY);
+
+  it('TC2 a symbol with a graph: two files whose nodes carry the label are two groups', () => {
+    plant('Lt02a', { latest: T0 + 9000, refs: [['path', 'a/tc2a.mjs']] });
+    plant('Lt02b', { latest: T0 + 8000, refs: [['path', 'b/tc2b.mjs']] });
+    plantGraph([{ label: 'tc2foo', file: 'a/tc2a.mjs' }, { label: 'tc2foo', file: 'b/tc2b.mjs' }, { label: 'other', file: 'c/other.mjs' }]);
+    const r = touched(['tc2foo']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(headers(r)).toEqual(['touched a/tc2a.mjs (graph)', 'touched b/tc2b.mjs (graph)']);
+    expect(items(touchedJson(['tc2foo'])).map((i) => [i['nodeId'], i['file']])).toEqual([['Lt02a', 'a/tc2a.mjs'], ['Lt02b', 'b/tc2b.mjs']]);
+  }, HEAVY);
+
+  it('TC4 a cut is shown: 25 matches at the default limit print 20 rows and (+5 not shown); --limit 25 prints all', () => {
+    for (let i = 1; i <= 25; i += 1) plant(`Lt04n${String(i).padStart(2, '0')}`, { latest: T0 + 100_000 + i * 1000, refs: [['path', 'ccd/tc4.mjs']] });
+    const r = touched(['ccd/tc4.mjs']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(rowLines(r)).toHaveLength(20);
+    expect(r.stdout).toContain('(+5 not shown)');
+    expect(r.stdout).toContain('shown 20 of 25');
+    expect(rowLines(r)[0], 'newest first (TC3)').toMatch(/^Lt04n25 /);
+    const all = touched(['ccd/tc4.mjs', '--limit', '25']);
+    expect(rowLines(all)).toHaveLength(25);
+    expect(all.stdout).not.toContain('not shown');
+    expect(touchedJson(['ccd/tc4.mjs']).json?.['total']).toBe(25);
+  }, HEAVY);
+
+  it('TC5 read-only: the store bytes, mtime and user_version are unchanged, and nothing is written under graphify-out', () => {
+    plant('Lt05n1', { refs: [['path', 'ccd/tc5.mjs'], ['path:symbol', 'ccd/tc5.mjs:tc5sym']] });
+    plantGraph([{ label: 'tc5sym', file: 'ccd/tc5.mjs' }]);
+    const store = (): { sha: string; mtimeMs: number; version: number } => ({
+      sha: createHash('sha256').update(fs.readFileSync(dbFile)).digest('hex'),
+      mtimeMs: fs.statSync(dbFile).mtimeMs,
+      version: withDb((db) => Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)),
+    });
+    const listing = (): string[] => fs.readdirSync(graphDir()).sort();
+    const before = store();
+    const dir = listing();
+    for (const args of [['ccd/tc5.mjs'], ['tc5sym'], ['ccd/tc5.mjs:tc5sym', '--json']]) {
+      const r = touched(args);
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    }
+    expect(store()).toEqual(before);
+    expect(listing(), 'nothing new under graphify-out').toEqual(dir);
+    expect(dir).toEqual(['graph.json']);
+  }, HEAVY);
+
+  it('TC6 not the card\'s tag: a node whose only ref for the file is model-origin is listed', () => {
+    plant('Lt06n1', { refs: [['path', 'ccd/tc6.mjs', 'model']] });
+    const r = touched(['ccd/tc6.mjs']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(rowLines(r)).toHaveLength(1);
+    expect(rowLines(r)[0]).toContain(' refs path/model ');
+    expect(items(touchedJson(['ccd/tc6.mjs']))[0]?.['refs']).toEqual([{ kind: 'path', value: 'ccd/tc6.mjs', origin: 'model', line: null, symbol: null }]);
+  }, HEAVY);
+
+  it('TC7 a graph over GRAPH_MAX_BYTES: a symbol query falls back to path:symbol refs only (as TC1), and a path query answers', () => {
+    plant('Lt07n1', { refs: [['path', 'o/tc7.mjs'], ['path:symbol', 'p/tc7other.mjs:tc7sym']] });
+    fs.mkdirSync(graphDir(), { recursive: true });
+    const fd = fs.openSync(graphFile(), 'w');
+    try {
+      fs.writeSync(fd, '{"nodes":[{"id":"g0","label":"tc7sym","source_file":"o/tc7.mjs"}],"links":[],"pad":"');
+      const chunk = Buffer.alloc(1024 * 1024, 'x');
+      for (let n = 0; n <= GRAPH_MAX_BYTES / chunk.length; n += 1) fs.writeSync(fd, chunk);
+      fs.writeSync(fd, '"}');
+    } finally { fs.closeSync(fd); }
+    try {
+      expect(fs.statSync(graphFile()).size, 'CONTROL: the fixture graph is over the bound').toBeGreaterThan(GRAPH_MAX_BYTES);
+      const sym = touched(['tc7sym']);
+      expect(sym.code, `${sym.stderr}${sym.stdout}`).toBe(0);
+      expect(headers(sym), 'only the path:symbol ref answers; the label\'s file is unknown').toEqual(['touched p/tc7other.mjs (no graph)']);
+      const byPath = touched(['o/tc7.mjs']);
+      expect(byPath.code, `${byPath.stderr}${byPath.stdout}`).toBe(0);
+      expect(headers(byPath)).toEqual(['touched o/tc7.mjs (no graph)']);
+    } finally {
+      fs.rmSync(graphFile(), { force: true });
+    }
+  }, HEAVY);
+
+  it('a malformed graph answers as no graph (failure row 28)', () => {
+    plant('Lt28n1', { refs: [['path', 'ccd/tc28.mjs'], ['path:symbol', 'ccd/tc28b.mjs:tc28sym']] });
+    fs.mkdirSync(graphDir(), { recursive: true });
+    fs.writeFileSync(graphFile(), '{ this is not json');
+    for (const [arg, head] of [['ccd/tc28.mjs', 'touched ccd/tc28.mjs (no graph)'], ['tc28sym', 'touched ccd/tc28b.mjs (no graph)']] as const) {
+      const r = touched([arg]);
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+      expect(headers(r)).toEqual([head]);
+    }
+    fs.writeFileSync(graphFile(), JSON.stringify({ nodes: [], links: 'x' }));
+    expect(headers(touched(['ccd/tc28.mjs']))).toEqual(['touched ccd/tc28.mjs (no graph)']);
+  }, HEAVY);
+
+  it('TC8 scope: --project and --workspace together are refused, exit 2', () => {
+    const r = touchedJson(['ccd/x.mjs', '--project', '--workspace']);
+    expect([r.code, r.json?.['reason']]).toEqual([2, 'bad-args']);
+  }, HEAVY);
+
+  it('TC9 agents hidden (P7): a subagent node naming the file is hidden without --agents and listed with agent:<id> with it', () => {
+    const tpk = withDb((db) => {
+      db.prepare("INSERT INTO transcripts (cc_session_uuid, agent_id) VALUES (?, 'agtc9')").run(TA);
+      return Number((db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = 'agtc9'").get(TA) as { transcript_pk: number }).transcript_pk);
+    });
+    plant('Lt09main', { latest: T0 + 5000, refs: [['path', 'ccd/tc9.mjs']] });
+    plant('Lt09agent', { latest: T0 + 6000, tpk, refs: [['path', 'ccd/tc9.mjs']] });
+    const off = touched(['ccd/tc9.mjs']);
+    expect(rowLines(off).map((l) => l.split(' ')[0])).toEqual(['Lt09main']);
+    expect(off.stdout).not.toContain('agent:');
+    expect(items(touchedJson(['ccd/tc9.mjs'])).map((i) => i['nodeId'])).toEqual(['Lt09main']);
+    const on = touched(['ccd/tc9.mjs', '--agents']);
+    expect(rowLines(on).map((l) => l.split(' ')[0])).toEqual(['Lt09agent', 'Lt09main']);
+    expect(rowLines(on)[0]).toMatch(/^Lt09agent native_leaf agent:agtc9 /);
+    expect(rowLines(on)[1]).not.toContain('agent:');
+    expect(items(touchedJson(['ccd/tc9.mjs', '--agents'])).map((i) => i['agentId'])).toEqual(['agtc9', null]);
+  }, HEAVY);
+
+  it('TC15 disclosure: every answer, empty ones included, ends with the disclosure line; --json carries it as note', () => {
+    plant('Lt15n1', { refs: [['path', 'ccd/tc15.mjs']] });
+    for (const arg of ['ccd/tc15.mjs', 'ccd/tc15-nothing.mjs']) {
+      const r = touched([arg]);
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(arg.includes('nothing') ? 3 : 0);
+      expect(lines(r).filter((l) => l !== '').at(-1)).toBe(TOUCHED_DISCLOSURE);
+      const j = touchedJson([arg]);
+      expect(j.json?.['note']).toBe(TOUCHED_DISCLOSURE);
+      expect(j.json).not.toHaveProperty('candidatesCapped');
+    }
+    const empty = touched(['ccd/tc15-nothing.mjs']);
+    expect(headers(empty)).toEqual(['touched ccd/tc15-nothing.mjs (no graph)']);
+    expect(empty.stdout).toContain('shown 0 of 0');
+  }, HEAVY);
+
+  it('TC16 candidates capped: 6,000 symbol refs and 4,001 file refs, 10,001 together, print the cap line; --json carries candidatesCapped', () => {
+    const refs: Array<[string, string]> = [];
+    for (let i = 0; i < 6000; i += 1) refs.push(['path:symbol', `cap/s${i}.mjs:tc16foo`]);
+    for (let i = 1; i <= 4001; i += 1) refs.push(['path', `lib/tc16-file.mjs:${i}`]);
+    plant('Lt16n1', { refs });
+    plantGraph([{ label: 'tc16foo', file: 'lib/tc16-file.mjs' }]);
+    const r = touched(['tc16foo']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain(TOUCHED_CAPPED_NOTE);
+    const j = touchedJson(['tc16foo']);
+    expect(j.json?.['candidatesCapped']).toBe(true);
+    expect(j.json?.['candidatesCappedNote']).toBe(TOUCHED_CAPPED_NOTE);
+    expect(j.json?.['note']).toBe(TOUCHED_DISCLOSURE);
+    expect(lines(r).filter((l) => l !== '').at(-1), 'the disclosure still ends the answer').toBe(TOUCHED_DISCLOSURE);
+  }, HEAVY);
+
+  it('TC16 CONTROL: 10,000 candidates together are not capped', () => {
+    const refs: Array<[string, string]> = [];
+    for (let i = 0; i < 6000; i += 1) refs.push(['path:symbol', `cap/c${i}.mjs:tc16bar`]);
+    for (let i = 1; i <= 4000; i += 1) refs.push(['path', `lib/tc16-bar.mjs:${i}`]);
+    plant('Lt16n2', { refs });
+    plantGraph([{ label: 'tc16bar', file: 'lib/tc16-bar.mjs' }]);
+    const j = touchedJson(['tc16bar']);
+    expect(j.code, `${j.stderr}${j.stdout}`).toBe(0);
+    expect(j.json).not.toHaveProperty('candidatesCapped');
+  }, HEAVY);
+
+  it('TC17 one verb list (A7): the read-verb whitelist is derived from one list and includes touched', () => {
+    expect(READ_VERBS).toContain('touched');
+    expect([...READ_VERBS]).toEqual(Object.keys(READ_OPTIONS));
+    expect(parseReadArgs('touched', ['ccd/x.mjs', '--agents', '--limit', '100']).ok).toBe(true);
+    expect(parseReadArgs('touched', ['ccd/x.mjs', '--limit', '101'])).toEqual({ ok: false, reason: 'bad-args' });
+    expect(parseReadArgs('touched', [])).toEqual({ ok: false, reason: 'bad-args' });
+    expect(parseReadArgs('touched', ['a', 'b'])).toEqual({ ok: false, reason: 'bad-args' });
+  });
+
+  it('TC18 a test-kind ref: /root/server/test/foo.test.ts stored as kind test is listed for server/test/foo.test.ts, exact', () => {
+    plant('Lt18n1', { refs: [['test', `${root}/server/test/tc18.test.ts`]] });
+    const r = touchedJson(['server/test/tc18.test.ts']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(items(r).map((i) => [i['nodeId'], i['match'], i['file']])).toEqual([['Lt18n1', 'exact', 'server/test/tc18.test.ts']]);
+    expect(touched(['server/test/tc18.test.ts']).stdout).toContain(' exact refs test/tool_use ');
+  }, HEAVY);
+
+  it('TC21 header provenance (P14): no header carries a sha, with or without a graph', () => {
+    plant('Lt21n1', { refs: [['path', 'ccd/tc21.mjs']] });
+    const BUILT = 'abcdef0123456789abcdef0123456789abcdef01';
+    for (const graph of [false, true]) {
+      if (graph) plantGraph([{ label: 'x', file: 'ccd/tc21.mjs' }], { built_at_commit: BUILT });
+      const r = touched(['ccd/tc21.mjs']);
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+      expect(headers(r)).toEqual([`touched ccd/tc21.mjs (${graph ? 'graph' : 'no graph'})`]);
+      expect(r.stdout).not.toContain(BUILT.slice(0, 7));
+    }
+  }, HEAVY);
+
+  it('TC22 a symbol with a graph and refs together (P8): the labelled file\'s node and a path:symbol ref in an unlabelled file are both listed', () => {
+    plant('Lt22a', { latest: T0 + 4000, refs: [['path', 'a/tc22a.mjs']] });
+    plant('Lt22b', { latest: T0 + 3000, refs: [['path:symbol', 'ccd/tc22y.mjs:tc22foo']] });
+    plantGraph([{ label: 'tc22foo', file: 'a/tc22a.mjs' }]);
+    const r = touchedJson(['tc22foo']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(items(r).map((i) => [i['nodeId'], i['file']])).toEqual([['Lt22a', 'a/tc22a.mjs'], ['Lt22b', 'ccd/tc22y.mjs']]);
+  }, HEAVY);
+
+  it('TC23 symbol candidates capped (P8, P13): no graph and 10,001 path:symbol refs naming the symbol print the cap line', () => {
+    const refs: Array<[string, string]> = [];
+    for (let i = 0; i <= TOUCHED_CANDIDATE_MAX; i += 1) refs.push(['path:symbol', `cap/t${i}.mjs:tc23foo`]);
+    plant('Lt23n1', { refs });
+    const r = touched(['tc23foo']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain(TOUCHED_CAPPED_NOTE);
+    expect(touchedJson(['tc23foo']).json?.['candidatesCapped']).toBe(true);
+  }, HEAVY);
+
+  it.todo('TC20 the ordered cap (P13): held until Task 4C\'s p95 measurement settles it');
+  it.todo('TC23 order: under the ordered cap the newest of 10,001 symbol candidates is listed first (held with TC20)');
+
+  it('a sample answer: the text and JSON forms agree on the rows, and the human form ends with shown, next and the disclosure', () => {
+    plant('Lt99n1', { latest: T0 + 70_000, gist: 'Fixed the parser. It was slow.', refs: [['path', 'ccd/tc99.mjs:10-20'], ['test', `${root}/ccd/tc99.mjs`, 'model']] });
+    const r = touched(['ccd/tc99.mjs']);
+    const j = touchedJson(['ccd/tc99.mjs']);
+    expect(r.code).toBe(0);
+    expect(items(j)).toHaveLength(1);
+    expect(items(j)[0]).toMatchObject({
+      nodeId: 'Lt99n1', nodeKind: 'native_leaf', match: 'exact', file: 'ccd/tc99.mjs', gist: 'Fixed the parser.', agentId: null,
+      family: { ccrcId: ID, generation: G1 },
+    });
+    expect(rowLines(r)[0]).toContain('refs path/tool_use line 10-20, test/model ');
+    const tail = lines(r).filter((l) => l !== '');
+    expect(tail.at(-1)).toBe(TOUCHED_DISCLOSURE);
+    expect(tail.at(-2)).toMatch(/^next: .* describe Lt99n1/);
+    expect(tail.at(-3)).toBe('shown 1 of 1');
+    if (process.env['TOUCHED_SAMPLE'] !== undefined) fs.writeFileSync(process.env['TOUCHED_SAMPLE'], `${r.stdout}\n----\n${j.stdout}`);
+  }, HEAVY);
+
+  it('touched takes one argument: none, or one that is no path or symbol, is bad-args', () => {
+    for (const args of [[], ['a b'], ['9lives']]) {
+      const r = touchedJson(args);
+      expect([r.code, r.json?.['reason']], args.join(' ')).toEqual([2, 'bad-args']);
+    }
+  }, HEAVY);
+
+  it('touched answers the read verbs\' store exits (failure row 32): the same code and reason as tree on each store state', () => {
+    const ask = (b: HistoryBox, verb: 'tree' | 'touched'): [number | null, unknown] => {
+      const r = runCli(b, verb === 'tree' ? ['tree', '--json'] : ['touched', 'ccd/x.mjs', '--json'], { env: withPane(b, ID) });
+      return [r.code, r.json?.['reason']];
+    };
+    const fresh = makeHistoryBox('ccrc-hist-touched-exit-a-');
+    expect(ask(fresh, 'touched')).toEqual(ask(fresh, 'tree'));
+    expect(ask(fresh, 'touched')[0]).toBe(6);
+    const zero = makeHistoryBox('ccrc-hist-touched-exit-b-');
+    fs.mkdirSync(path.join(zero.root, 'db'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(zero.root, 'db', 'history.db'), '', { mode: 0o600 });
+    expect(ask(zero, 'touched')).toEqual(ask(zero, 'tree'));
+    expect(ask(zero, 'touched')).toEqual([5, 'store-zero-byte']);
+    const server = makeHistoryBox('ccrc-hist-touched-exit-c-', { role: 'server' });
+    expect(ask(server, 'touched')).toEqual(ask(server, 'tree'));
+    expect(ask(server, 'touched')[0]).toBe(9);
+  }, HEAVY);
 });

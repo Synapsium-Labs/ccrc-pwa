@@ -201,6 +201,8 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
   const CARD_FORMS: Record<string, readonly string[]> = {
     'sweep.mjs': ['{ isBoundaryLine }'],
     'derive.mjs': ['{ HEADING_RE, fencedRanges, mineTokens }'],
+    // W4 Task 4B: `touched` reads each root's graph through loadGraph, bounded by GRAPH_MAX_BYTES (review 1735 A1).
+    'recall.mjs': ['{ loadGraph, GRAPH_MAX_BYTES }'],
   };
 
   it('only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names', () => {
@@ -8408,7 +8410,7 @@ describe('lib: version-aware reads (W1-B2 Task 17; spec §6.11 "The CLI keeps an
     expect(t17lib.missingTablesAt(2, 'tree', seam, vt)).toEqual([]);
     expect(t17lib.missingTablesAt(3, 'tree', seam, vt)).toEqual([]);
     expect(t17lib.missingTablesAt(1, 'grep', seam, vt), 'only the verb that needs it').toEqual([]);
-    expect(() => t17lib.missingTablesAt(1, 'touched')).toThrow(TypeError);
+    expect(() => t17lib.missingTablesAt(1, 'nonesuch'), 'an unknown verb is a typo, not an old store (touched is a read verb since W4 Task 4B)').toThrow(TypeError);
   });
 
   it('schemaAdditive: the real SCHEMA_ADDED is additive and equals what MIGRATIONS build; a rename, a drop, a re-listed column, an unknown key or a gap is refused', async () => {
@@ -11976,7 +11978,7 @@ describe('--agents (W4 addendum P7, Task 3): one read option every read verb der
     flags: { project: false, workspace: false, session: null, ...flags } as libScope.ScopeInputs['flags'],
     reg: { project: v('demo'), workdir: v('/w'), sessionProject: v('demo') },
   });
-  const ARGS: Record<string, string[]> = { grep: ['x'], describe: ['L0123ab'], expand: ['L0123ab'], tree: [] };
+  const ARGS: Record<string, string[]> = { grep: ['x'], describe: ['L0123ab'], expand: ['L0123ab'], tree: [], touched: ['ccd/x.mjs'] };
 
   it('every read verb takes --agents as a flag that defaults to false, and a repeat is bad-args', () => {
     for (const verb of libScope.READ_VERBS) {

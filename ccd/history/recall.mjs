@@ -34,7 +34,8 @@ import { childrenOf, parentOf, ftsGateFactsOn, blobPlainText, blobPlainTextMeasu
 import { blobReadStmts, keptOf } from './derive.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
-import { basename as xbasename } from 'node:path';
+import { basename as xbasename, join as xjoin } from 'node:path';
+import { loadGraph, GRAPH_MAX_BYTES } from '../compact-card.mjs';
 
 /**
  * @typedef {object} ScopeFamily
@@ -71,6 +72,8 @@ import { basename as xbasename } from 'node:path';
  * @property {number} total                            N: the true in-scope count
  * @property {string[] | null} next                    the argv after `history` on the next: line
  * @property {string} [hint]
+ * @property {string} [note]                           `touched`'s disclosure: the human form prints it as its last line, --json carries it as `note` (Ruling R4)
+ * @property {boolean} [candidatesCapped]              `touched` hit its candidate cap: --json carries `candidatesCapped` and its sentence
  */
 
 /** SQLite binds at most 32766 variables; an IN list is split well below that. */
@@ -103,8 +106,9 @@ function mainOnlyAnd(rc, col) {
   return agentsOn(rc) ? '' : ` AND ${col} IN (${MAIN_TRANSCRIPTS})`;
 }
 
-/** A select-list tail naming a node's agent_id (its transcript's), only under --agents: '' otherwise, so a default read prepares the
- *  statements it prepared before, with one exception: `resolveNodeInScope`'s select always carries a `main` column (results unchanged).
+/** A select-list tail naming a node's agent_id (its transcript's), only under --agents: '' otherwise. A default read's statements are
+ *  not quite the ones it prepared before W4: `mainOnlyAnd` adds the main-thread term to every select over `nodes`, and
+ *  `resolveNodeInScope`'s select always carries a `main` column. Only the RESULTS are unchanged, for a store with no subagent row.
  *  `col` is the node's transcript_pk column. */
 function agentColumn(rc, col) {
   return agentsOn(rc) ? `, (SELECT t.agent_id FROM transcripts t WHERE t.transcript_pk = ${col}) AS agent_id` : '';
@@ -338,9 +342,10 @@ function renderJson(rc, head, items, shown, total, next) {
 }
 
 /** The greatest complete item prefix that fits the final JSON envelope. Each check measures the exact string
- * cli.mjs writes (the same redactFinalJson then JSON.stringify); monotonic binary search avoids rendering every candidate prefix of a large scope. */
-function jsonPrefixCount(rc, head, items, total, nextFor) {
-  const fits = (n) => renderJson(rc, head, items.slice(0, n), n, total, nextFor(n)).length <= OUTPUT_CAP;
+ * cli.mjs writes (the same redactFinalJson then JSON.stringify); monotonic binary search avoids rendering every candidate prefix of a large scope.
+ * `extra` is the length of top-level fields cli.mjs adds beyond the envelope (touched's note and cap fields); 0 for every other verb. */
+function jsonPrefixCount(rc, head, items, total, nextFor, extra = 0) {
+  const fits = (n) => renderJson(rc, head, items.slice(0, n), n, total, nextFor(n)).length + extra <= OUTPUT_CAP;
   let lo = 0;
   let hi = items.length;
   while (lo < hi) {
@@ -2110,6 +2115,219 @@ export function expandVerb(rc, parsed) {
   const p = xlib.expandArgsOf(parsed);
   if (!p.ok) return refusal('bad-args', EXPAND_TARGET_HINT);
   return runExpand(rc, { ...p.args, json: parsed.opts.json === true });
+}
+
+// ── touched (W4 addendum P8, P14; D-8188, D-8189; spec addendum 3.5) ─────────────────────────────────────────────────────
+// `touched <path|symbol>` lists the nodes whose STORED refs name a file. Read-only: it reads node_refs, nodes and epochs, and
+// each in-scope root's graphify-out/graph.json through loadGraph (any throw is "no graph" for that root); nothing is written.
+//  - The selects are section 3.5's, verbatim, each with LIMIT TOUCHED_CANDIDATE_MAX + 1. The cap counts the DISTINCT rows of
+//    every select together, as the SELECT returns them (the spec's cap is on the select's rows, before the scope join): a
+//    candidate of another family counts, so the cap line says the truth about what the prefilter handed to the ranking.
+//  - Each candidate is joined to its node through the scope (the scope's families, confirmed epochs only, main thread only
+//    unless --agents), split, normalised against its node's epoch root and the scope's roots, matched, grouped and ranked
+//    (lib's deciders). Rows are one per node, root and file; groups print under `touched <file> (graph | no graph)`.
+//  - TOUCHED_ORDERED_CAP is false in this build: the selects are unordered, and a capped answer says so (TOUCHED_CAPPED_NOTE).
+
+const TOUCHED_FILE_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind IN ('path','path:symbol','test') AND value LIKE ? ESCAPE '\\' LIMIT ?";
+const TOUCHED_SYMBOL_SQL = "SELECT node_id, kind, value, origin FROM node_refs WHERE kind = 'path:symbol' AND value LIKE ? ESCAPE '\\' LIMIT ?";
+/** What touched's human page holds back from the cap besides its header and blocks: the shown, next and disclosure lines. */
+const TOUCHED_RESERVE = 600;
+/** The gist text a row shows, at most. */
+const TOUCHED_GIST_MAX = 120;
+const TOUCHED_NODE_COLS = ['node_id', 'session_pk', 'epoch_seq', 'kind', 'gist', 'earliest_ms', 'latest_ms'];
+
+/** A root's graph, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or links all read as "no graph". */
+function touchedGraphOf(root) {
+  try {
+    return loadGraph(xjoin(root, 'graphify-out', 'graph.json'), GRAPH_MAX_BYTES);
+  } catch {
+    return null;
+  }
+}
+
+/** The distinct files whose graph nodes carry `symbol` as their label, sorted. */
+function touchedLabelFiles(graph, symbol) {
+  const files = new Set();
+  for (const n of graph.nodes.values()) if (n.label === symbol) files.add(n.source_file);
+  return [...files].sort();
+}
+
+/** The root an absolute ref was made relative to: `abs` ends with the normalised remainder, so the root is what precedes it. */
+function touchedRowRoot(abs, norm, nodeRoot, roots) {
+  if (!abs.startsWith('/') || norm.outside) return nodeRoot;
+  const prefix = abs.slice(0, abs.length - norm.path.length).replace(/\/+$/, '');
+  return [nodeRoot, ...roots].find((r) => typeof r === 'string' && r.replace(/\/+$/, '') === prefix) ?? nodeRoot;
+}
+
+/** Of 0..max, the greatest n for which `fits(n)`; fits is monotonic. */
+function greatestFit(max, fits) {
+  let lo = 0;
+  let hi = max;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/** The one-line gist a row shows: the first sentence of the redacted gist, folded and cut at TOUCHED_GIST_MAX; null when none. */
+function touchedGist(rc, gist) {
+  if (typeof gist !== 'string' || gist === '') return null;
+  const one = snippetLine(foldOneLine(xlib.firstSentence(redactForDisplay(gist, rc.pairIdx))), TOUCHED_GIST_MAX);
+  return one === '' ? null : one;
+}
+
+/** `touched` over a ReadContext. `a` is { arg, limit }. */
+export function runTouched(rc, a) {
+  const pending = pendingFor(rc, 'touched');
+  if (pending !== null) return pending;
+  const q = xlib.touchedQuery(a.arg);
+  if (q === null) return refusal('bad-args', hintLine('touched takes a path (ccd/x.mjs), a path and symbol (ccd/x.mjs:fooBar) or a bare symbol (fooBar)'));
+  const head = scopeHeader(rc);
+  const db = rc.db;
+  const sessionJson = JSON.stringify(rc.scope.sessionPks);
+
+  // The scope's roots: each confirmed in-scope epoch's launch directory, and which epoch's root a node belongs to.
+  const epochRoot = new Map();
+  const rootSet = new Set();
+  for (const e of db.prepare('SELECT session_pk, seq, cwd, cwd_real FROM epochs WHERE confirmed_ms IS NOT NULL AND session_pk IN (SELECT value FROM json_each(?))').all(sessionJson)) {
+    const root = e.cwd_real ?? e.cwd;
+    epochRoot.set(`${e.session_pk}:${e.seq}`, typeof root === 'string' && root !== '' ? root : null);
+    if (typeof root === 'string' && root !== '') rootSet.add(root);
+  }
+  const roots = [...rootSet].sort();
+  const graphs = new Map();
+  const graphAt = (root) => {
+    if (root === null) return null;
+    if (!graphs.has(root)) graphs.set(root, touchedGraphOf(root));
+    return graphs.get(root);
+  };
+
+  // The query's files (each with the root it is relative to, or null for any) and the selects it reads.
+  const wantFiles = [];
+  if (q.kind === 'symbol') {
+    for (const r of roots) {
+      const g = graphAt(r);
+      if (g !== null) for (const f of touchedLabelFiles(g, q.symbol)) wantFiles.push({ file: f, root: r });
+    }
+  } else {
+    wantFiles.push({ file: xlib.normaliseRefPath(q.file, null, roots).path, root: null });
+  }
+  const limit = xlib.TOUCHED_CANDIDATE_MAX + 1;
+  const selects = [];
+  if (q.kind === 'symbol') selects.push([TOUCHED_SYMBOL_SQL, `%:${xlib.likeEscape(q.symbol)}`]);
+  for (const base of new Set(wantFiles.map((w) => w.file.slice(w.file.lastIndexOf('/') + 1)))) selects.push([TOUCHED_FILE_SQL, `%${xlib.likeEscape(base)}%`]);
+
+  // The candidates, under one cap of every select's distinct rows together.
+  const seen = new Set();
+  const candidates = [];
+  let capped = false;
+  for (const [sql, pattern] of selects) {
+    for (const r of db.prepare(sql).all(pattern, limit)) {
+      const key = `${r.node_id}\0${r.kind}\0${r.value}`;
+      if (seen.has(key)) continue;
+      if (candidates.length >= xlib.TOUCHED_CANDIDATE_MAX) { capped = true; continue; }
+      seen.add(key);
+      candidates.push(r);
+    }
+  }
+
+  // Each candidate's node, through the scope: its families, confirmed epochs, and the main thread unless --agents.
+  const nodeById = new Map();
+  if (candidates.length > 0) {
+    const cols = selectColumns(rc.version, 'nodes', TOUCHED_NODE_COLS, rc.schema, 'n');
+    const ids = JSON.stringify([...new Set(candidates.map((c) => c.node_id))]);
+    for (const n of db.prepare(`SELECT ${cols}${agentColumn(rc, 'n.transcript_pk')} FROM nodes n
+      WHERE n.node_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))${mainOnlyAnd(rc, 'n.transcript_pk')}`).all(ids, sessionJson)) {
+      if (epochRoot.has(`${n.session_pk}:${n.epoch_seq}`)) nodeById.set(n.node_id, n);
+    }
+  }
+  const family = new Map(rc.scope.families.map((f) => [f.sessionPk, f]));
+
+  // Split, normalise, match.
+  const matches = [];
+  const done = new Set();
+  for (const c of candidates) {
+    const n = nodeById.get(c.node_id);
+    if (n === undefined) continue;
+    const nodeRoot = epochRoot.get(`${n.session_pk}:${n.epoch_seq}`);
+    const sp = xlib.splitStoredRef(c.kind, c.value);
+    const norm = xlib.normaliseRefPath(sp.path, nodeRoot, roots);
+    const root = touchedRowRoot(sp.path, norm, nodeRoot, roots);
+    const ref = { kind: c.kind, value: c.value, origin: c.origin, line: sp.line, symbol: sp.symbol };
+    const base = {
+      nodeId: n.node_id, root, nodeKind: n.kind, earliestMs: n.earliest_ms ?? null, latestMs: n.latest_ms ?? null, gist: n.gist ?? null,
+      sessionPk: Number(n.session_pk), agentId: agentsOn(rc) ? (n.agent_id ?? '') : '', ref,
+    };
+    const add = (file, match) => {
+      const key = `${n.node_id}\0${root}\0${file}\0${c.kind}\0${c.value}`;
+      if (done.has(key)) return;
+      done.add(key);
+      matches.push({ ...base, file: `${root ?? ''}\0${file}`, fileName: file, match });
+    };
+    for (const w of wantFiles) {
+      if (w.root !== null && w.root !== root) continue;
+      const m = xlib.matchRef(norm, w.file, graphAt(root));
+      if (m !== null) add(w.file, m);
+    }
+    if (q.kind === 'symbol' && c.kind === 'path:symbol' && xlib.symbolMatches(sp, q.symbol)) add(norm.path, norm.outside ? 'outside' : 'exact');
+  }
+  const ranked = xlib.rankTouched(xlib.touchedRows(matches));
+  const total = ranked.length;
+  const limited = ranked.slice(0, a.limit);
+
+  // Render: groups by (root, file), in the first row's rank; rows keep the rank order inside a group.
+  const tok = (v) => escapeXmlText(displayToken(v, rc.pairIdx));
+  const rowText = (r) => {
+    const f = family.get(r.sessionPk);
+    const refs = [...r.refs].sort((x, y) => (x.kind < y.kind ? -1 : x.kind > y.kind ? 1 : x.value < y.value ? -1 : x.value > y.value ? 1 : 0))
+      .map((x) => `${x.kind}/${x.origin}${x.line === null ? '' : ` line ${x.line}`}${x.symbol === null ? '' : ` symbol ${tok(x.symbol)}`}`).join(', ');
+    const g = touchedGist(rc, r.gist);
+    const id = idShown(rc, r.nodeId);
+    const body = g === null ? '(no gist)' : recallEnvelope({ src: 'node', id, ts: r.earliestMs, role: r.nodeKind, text: g });
+    return `${id} ${r.nodeKind}${agentMark(rc, r.agentId)} ${nodeRangeText(r.earliestMs, r.latestMs)} ${f === undefined ? '-' : tok(f.ccrcId)} ${r.match} refs ${refs} ${body}`;
+  };
+  const headerOf = (file, root) => `touched ${tok(file)} (${graphAt(root) === null ? 'no graph' : 'graph'})`;
+  const blocksFor = (n) => {
+    const groups = new Map();
+    for (const r of limited.slice(0, n)) {
+      if (!groups.has(r.file)) groups.set(r.file, { head: headerOf(r.fileName, r.root), rows: [] });
+      groups.get(r.file).rows.push(rowText(r));
+    }
+    const out = capped ? [xlib.TOUCHED_CAPPED_NOTE] : [];
+    for (const g of groups.values()) out.push(g.head, ...g.rows);
+    if (total === 0) {
+      const label = q.kind === 'symbol' ? q.symbol : q.file;
+      const at = roots.length === 0 ? [null] : roots;
+      for (const r of at) out.push(headerOf(label, r));
+    }
+    if (total > n) out.push(`(+${total - n} not shown)`);
+    return out;
+  };
+  const items = limited.map((r) => {
+    const f = family.get(r.sessionPk);
+    return {
+      nodeId: r.nodeId, nodeKind: r.nodeKind, earliestMs: r.earliestMs, latestMs: r.latestMs,
+      family: f === undefined ? null : { ccrcId: idShown(rc, f.ccrcId), generation: idShown(rc, f.generation) },
+      match: r.match,
+      refs: r.refs.map((x) => ({ kind: x.kind, value: redactForDisplay(x.value, rc.pairIdx), origin: x.origin, line: x.line, symbol: x.symbol === null ? null : redactForDisplay(x.symbol, rc.pairIdx) })),
+      gist: touchedGist(rc, r.gist), agentId: r.agentId === '' ? null : idShown(rc, r.agentId), file: r.fileName,
+    };
+  });
+  const nextFor = (n) => (n === 0 ? null : ['describe', idShown(rc, limited[0].nodeId), ...rc.scopeArgs]);
+  const extra = JSON.stringify({ note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true, candidatesCappedNote: xlib.TOUCHED_CAPPED_NOTE } : {}) }).length;
+  const humanN = greatestFit(limited.length, (n) => { const b = blocksFor(n); return capOutput(b, head.line.length + TOUCHED_RESERVE).kept.length === b.length; });
+  const n = Math.min(humanN, jsonPrefixCount(rc, head, items, total, nextFor, extra));
+  return {
+    exit: total === 0 ? EXIT.NOT_FOUND : EXIT.OK, header: null, blocks: blocksFor(n), items: items.slice(0, n), shown: n, total, next: nextFor(n),
+    note: xlib.TOUCHED_DISCLOSURE, ...(capped ? { candidatesCapped: true } : {}),
+  };
+}
+
+/** cli.mjs's READ_RUNNERS.touched: Task 10's parseReadArgs answer (one positional, `--limit`). */
+export function touchedVerb(rc, parsed) {
+  return runTouched(rc, { arg: parsed.positional[0], limit: Number(parsed.opts.limit) });
 }
 
 // ── version-aware reads (W1-B2 Task 17) ─────────────────────────────────────────────────────────────────

@@ -8809,6 +8809,8 @@ const COMMON_READ_OPTIONS = Object.freeze({
  *  frame near 700 chars, inside the frame reserve each paging verb holds back. `families_total` counts them all. */
 export const SCOPE_FAMILIES_JSON_MAX = 3;
 const ANY_COUNT = Number.POSITIVE_INFINITY;
+/** The default row cut of `touched`; `--limit` goes up to GREP_LIMIT_MAX. Declared above READ_OPTIONS, which reads it. */
+export const TOUCHED_LIMIT_DEFAULT = 20;
 export const READ_OPTIONS = Object.freeze({
   grep: Object.freeze({
     options: Object.freeze({
@@ -8859,16 +8861,26 @@ export const READ_OPTIONS = Object.freeze({
     defaults: Object.freeze({ depth: TREE_DEPTH_DEFAULT }),
     positional: Object.freeze({ min: 0, max: 0 }),
   }),
+  // W4 addendum P8: `touched <path|symbol>` takes one argument and `--limit`, the shape grep's entry has.
+  touched: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--limit': readOpt('int', 'limit', { min: 1, max: GREP_LIMIT_MAX }),
+    }),
+    defaults: Object.freeze({ limit: TOUCHED_LIMIT_DEFAULT }),
+    positional: Object.freeze({ min: 1, max: 1 }),
+  }),
 });
-/** The read verbs (§8.2): derived from the whitelist, never listed twice. `touched` joins in W4. */
+/** The read verbs (§8.2): derived from the whitelist, never listed twice. */
 export const READ_VERBS = Object.freeze(Object.keys(READ_OPTIONS));
 
 // ── touched (W4 addendum P8; D-8188, D-8189) ──
 // Pure deciders for `touched <path|symbol>` (spec addendum 3.5). The verb's reads and rendering are recall.mjs's.
 /** One query's candidate rows, from every select it reads together (*chosen*). */
 export const TOUCHED_CANDIDATE_MAX = 10000;
-/** The default row cut; `--limit` goes up to GREP_LIMIT_MAX. */
-export const TOUCHED_LIMIT_DEFAULT = 20;
+/** Whether `touched`'s candidate selects are ordered (`ORDER BY n.latest_ms DESC, ...`, P13). False: unordered, and a capped
+ *  answer prints TOUCHED_CAPPED_NOTE. Task 4C sets it only on its measurement. */
+export const TOUCHED_ORDERED_CAP = false;
 /** Printed last on every answer (and carried as `note` by --json). */
 export const TOUCHED_DISCLOSURE = 'refs keep one origin each (the first seen) and at most 40 per node; a node may have touched this file without listing it.';
 /** Printed when the unordered candidate cap was hit. */
@@ -10062,6 +10074,7 @@ export const VERB_TABLES = Object.freeze({
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
   expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships', 'boundaries']),
   tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships', 'boundaries']),
+  touched: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs']),
 });
 
 /** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this
