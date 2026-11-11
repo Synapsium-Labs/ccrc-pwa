@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the twelve separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These twelve are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the fourteen separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These fourteen are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -405,11 +405,16 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // days of programme quiet, a display threshold on the client, and it does not import the token interval.
     // The run-close lanes' refusal tally (D-8077, spec §12.3) is the twelfth: how many closes the arm refused in the last seven
     // days, shown on the Advanced row. It is the spec's own seven days of a count, and it does not import the token interval.
+    // Coordinator calls (D-8126 wave A3) bring the thirteenth and fourteenth, both from the coordinator-autonomy design: how long a
+    // big call stays the operator's to see before it ages out of the Waiting group, and the furthest ahead a `time:` wake may be
+    // set. Each is that design's own week, unrelated to token rotation, and neither imports the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
       'server/src/childReclaimSweep.ts:REVIEW_CHILD_CEILING_MS',
+      'server/src/coord/coordCalls.ts:BLOCK_TIME_WAKE_MAX_MS',
+      'server/src/coord/coordCalls.ts:CALL_SEEN_WINDOW_MS',
       'server/src/coord/delegation-lease-state.ts:DELEGATION_LEASE_EXPIRY_MS',
       'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
       'server/src/coord/runCloseSwitch.ts:RUN_CLOSE_TALLY_MS',
