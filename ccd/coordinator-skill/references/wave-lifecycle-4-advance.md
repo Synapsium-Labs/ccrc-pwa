@@ -64,7 +64,11 @@ same, and shows as `absent`.
   never read). Send it once the worker is genuinely underway, and ALSO to
   send work back from `awaiting-review`, or to record a lost merge race from
   `merging` — `RUN_TRANSITIONS` treats both as the ordinary case, not a
-  failure, and neither re-measures.
+  failure, and neither re-measures. From `dispatched` the server makes this
+  move itself once the worker takes its wave brief (its delivery ingested or
+  acked; the run's trail shows it by ccrc, `work-started:`, D-8292), so a
+  `bad-transition` whose `from` is `working` on this call means the move is
+  already made: carry on, and send nothing else for it.
 - **`{"to":"awaiting-review"}`** (from `working`) or **`{"to":"merging"}`**
   (from `awaiting-review` ONLY — see above) — re-measured. Send it when a
   `status`/`wave-done` mail carries a claimed fingerprint (`{branchTip,
