@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 70,
+  "d": "D-8193",
+  "reason": "an empty project is born ready for a workspace: `project-add --empty` makes or adopts a local bare origin (`_project_origins_dir`, `_project_origin_ours`, `_project_origin_seed`, `_project_origin_make`) and clones the project from it, so `ws-add` finds `origin/HEAD`; about +53 net lines against the merge-base; kept inline beside `cmd_project_add`, its only caller, which uses the file's `_plat_mv_notdir` and project-name grammar",
+  "added": "2026-11-11"
+}

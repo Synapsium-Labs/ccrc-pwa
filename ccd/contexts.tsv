@@ -179,6 +179,10 @@ _reg_project_glob_has	C1
 cmd_project_pool	C1
 _project_new_name_ok	C4
 _project_github_url_ok	C4
+_project_origins_dir	C4
+_project_origin_ours	C4
+_project_origin_seed	C4
+_project_origin_make	C4
 cmd_project_add	C4
 cmd_ws_archive	C4
 _ws_archive_manifest	C4

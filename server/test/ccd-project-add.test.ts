@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, ghContainedEnv, ccdSource, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, ccdSource, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: CcdHarness;
@@ -338,19 +338,131 @@ exec sleep 60
   });
 });
 
-describe('project-add --empty: a fresh repository', () => {
-  it('git inits the project on branch main, with no commit and no remote, and says so', () => {
+// D-8193: an empty project is BORN READY for a workspace. It gets a local bare origin under ccd's origins directory
+// (`$REG/origins` by default, `~/.ccrc/project-origins` names another), one empty commit on `main` there, and the project
+// is cloned from it, so `origin`, `origin/HEAD` and `main`'s upstream are what a GitHub clone has.
+describe('project-add --empty: a project born ready for a workspace (D-8193)', () => {
+  const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+  const originAt = (dir: string, name: string): string => path.join(dir, `${name}.git`);
+  const defaultOrigins = (): string => path.join(home, '.cc-sessions', 'origins');
+  const gitStatus = (cwd: string, ...args: string[]): number | null =>
+    spawnSync('git', ['-C', cwd, ...args], { env: { ...inheritedEnv(), HOME: home } }).status;
+
+  it('makes a local bare origin, an empty commit on main pushed to it, and origin/HEAD, and says so', () => {
     const r = ccd(['--name', 'fresh', '--empty']);
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('added fresh\n');
     const main = path.join(projects, 'fresh');
+    const origin = originAt(defaultOrigins(), 'fresh');
     expect(listing()).toEqual(['fresh']);
     expect(fs.statSync(path.join(main, '.git')).isDirectory()).toBe(true);
     expect(h.git(main, 'symbolic-ref', 'HEAD')).toBe('refs/heads/main');
-    expect(h.git(main, 'remote')).toBe('');
-    const head = spawnSync('git', ['-C', main, 'rev-parse', '--verify', '--quiet', 'HEAD'], { env: inheritedEnv() });
-    expect(head.status, 'no commit was made').not.toBe(0);
+    expect(h.git(main, 'config', '--get', 'remote.origin.url')).toBe(origin);
+    expect(h.git(main, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
+    expect(h.git(main, 'rev-parse', '--abbrev-ref', 'main@{upstream}')).toBe('origin/main');
+    // One commit, with the empty tree: ccd adds no file to the operator's project.
+    expect(h.git(main, 'rev-list', '--count', 'HEAD')).toBe('1');
+    expect(h.git(main, 'rev-parse', 'HEAD^{tree}')).toBe(EMPTY_TREE);
+    expect(h.git(main, 'rev-parse', 'HEAD')).toBe(h.git(main, 'rev-parse', 'origin/main'));
+    expect(fs.readdirSync(main)).toEqual(['.git']);
+    // The origin is bare, says it is ccd's for this name, and holds the same main.
+    expect(h.git(home, '--git-dir', origin, 'rev-parse', '--is-bare-repository')).toBe('true');
+    expect(h.git(home, '--git-dir', origin, 'config', '--get', 'ccd.emptyorigin')).toBe('fresh');
+    expect(h.git(home, '--git-dir', origin, 'rev-parse', 'refs/heads/main')).toBe(h.git(main, 'rev-parse', 'HEAD'));
+    // No dot-named temp is left in either directory.
+    expect(fs.readdirSync(defaultOrigins())).toEqual(['fresh.git']);
+  });
+
+  it('then takes a workspace with no extra step: ws-add succeeds', () => {
+    expect(ccd(['--name', 'fresh', '--empty']).status).toBe(0);
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add fresh`);
+    const wt = path.join(home, 'worktrees', 'fresh', 'quiet-mesa');
+    expect(fs.existsSync(path.join(wt, '.git'))).toBe(true);
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('ws/quiet-mesa');
+    expect(h.git(wt, 'rev-parse', 'HEAD')).toBe(h.git(path.join(projects, 'fresh'), 'rev-parse', 'origin/main'));
+    expect(h.reg('fresh-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(h.reg('fresh-quiet-mesa', 'workspace')).not.toBeNull();
+  });
+
+  it('puts the origin where ~/.ccrc/project-origins says, creating that directory', () => {
+    const dir = path.join(home, 'elsewhere', 'origins');
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'project-origins'), `${dir}\n`);
+    const r = ccd(['--name', 'fresh', '--empty']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(h.git(path.join(projects, 'fresh'), 'config', '--get', 'remote.origin.url')).toBe(originAt(dir, 'fresh'));
+    expect(fs.existsSync(defaultOrigins())).toBe(false);
+  });
+
+  it.each([
+    ['a relative path', 'origins\n'],
+    ['an empty first line', '\n'],
+    ['nothing at all', ''],
+  ])('refuses ~/.ccrc/project-origins naming %s, and touches nothing', (_label, body) => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'project-origins'), body);
+    refused(ccd(['--name', 'fresh', '--empty']), 'project-origins');
+    expect(listing()).toBeNull();
+    expect(fs.existsSync(defaultOrigins())).toBe(false);
+  });
+
+  it('a re-run adopts the origin an earlier run left behind, and keeps its history', () => {
+    expect(ccd(['--name', 'fresh', '--empty']).status).toBe(0);
+    const origin = originAt(defaultOrigins(), 'fresh');
+    const first = h.git(home, '--git-dir', origin, 'rev-parse', 'refs/heads/main');
+    // The project is gone (an earlier run killed after the origin, or the operator removed the checkout).
+    fs.rmSync(path.join(projects, 'fresh'), { recursive: true, force: true });
+    const r = ccd(['--name', 'fresh', '--empty']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('added fresh\n');
+    const main = path.join(projects, 'fresh');
+    expect(h.git(main, 'rev-parse', 'HEAD')).toBe(first);
+    expect(h.git(home, '--git-dir', origin, 'rev-parse', 'refs/heads/main')).toBe(first);
+    expect(h.git(main, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
+  });
+
+  it('a re-run of ours with no main yet (an origin made but never seeded) seeds it', () => {
+    const origin = originAt(defaultOrigins(), 'fresh');
+    fs.mkdirSync(defaultOrigins(), { recursive: true });
+    h.git(home, 'init', '--quiet', '--bare', '-b', 'main', origin);
+    h.git(home, '--git-dir', origin, 'config', 'ccd.emptyorigin', 'fresh');
+    const r = ccd(['--name', 'fresh', '--empty']);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(h.git(path.join(projects, 'fresh'), 'rev-parse', 'HEAD^{tree}')).toBe(EMPTY_TREE);
+    expect(gitStatus(home, '--git-dir', origin, 'rev-parse', '--verify', '--quiet', 'refs/heads/main')).toBe(0);
+  });
+
+  const seedForeign = (kind: 'dir' | 'file' | 'link' | 'bare' | 'other-name'): string => {
+    const origin = originAt(defaultOrigins(), 'fresh');
+    fs.mkdirSync(defaultOrigins(), { recursive: true });
+    if (kind === 'dir') { fs.mkdirSync(origin); fs.writeFileSync(path.join(origin, 'keep'), 'mine\n'); }
+    if (kind === 'file') fs.writeFileSync(origin, 'mine\n');
+    if (kind === 'link') fs.symlinkSync(path.join(home, 'nowhere'), origin);
+    if (kind === 'bare' || kind === 'other-name') h.git(home, 'init', '--quiet', '--bare', '-b', 'main', origin);
+    if (kind === 'other-name') h.git(home, '--git-dir', origin, 'config', 'ccd.emptyorigin', 'other');
+    return origin;
+  };
+
+  it.each(['dir', 'file', 'link', 'bare', 'other-name'] as const)(
+    'refuses when a %s that is not ccd\'s stands at the origin, and touches nothing', (kind) => {
+      const origin = seedForeign(kind);
+      const before = kind === 'link' ? fs.readlinkSync(origin) : JSON.stringify(fs.lstatSync(origin).mtimeMs);
+      refused(ccd(['--name', 'fresh', '--empty']), `ccd: an origin that is not ccd's stands at ${origin}`);
+      expect(listing()).toBeNull();
+      expect(fs.readdirSync(defaultOrigins())).toEqual(['fresh.git']);
+      expect(kind === 'link' ? fs.readlinkSync(origin) : JSON.stringify(fs.lstatSync(origin).mtimeMs)).toBe(before);
+      if (kind === 'dir') expect(fs.readdirSync(origin)).toEqual(['keep']);
+      if (kind === 'bare') expect(gitStatus(home, '--git-dir', origin, 'config', '--get', 'ccd.emptyorigin')).not.toBe(0);
+    });
+
+  it('an existing project is still refused before the origin is looked at', () => {
+    fs.mkdirSync(path.join(projects, 'fresh'), { recursive: true });
+    refused(ccd(['--name', 'fresh', '--empty']), 'ccd: project exists: fresh');
+    expect(fs.existsSync(defaultOrigins())).toBe(false);
   });
 });
 
