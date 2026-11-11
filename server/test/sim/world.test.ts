@@ -54,6 +54,14 @@ describe('the simulator world, on the time-ports fake', () => {
       expect(() => w.envAfter(ms, () => {})).toThrow(RangeError);
     }
   });
+  it('a world timer that re-arms itself at 0 ms stops at the budget, and the fake warns', () => {
+    const w = new SimWorld({ wallMs: T0, seed: 1, maxCalls: 50 }); let n = 0;
+    const again = (): void => { n++; w.envAfter(0, again); };
+    w.envAfter(0, again);
+    w.runUntil(1_000);
+    expect(n).toBe(50);
+    expect(w.time.warnings[0]).toMatch(/more than 50 scheduled calls/);
+  });
   it('the server is handed the fake\'s one seeded chance', () => {
     const w = world();
     expect(w.server.entropy).toBe(w.time.ports.entropy);

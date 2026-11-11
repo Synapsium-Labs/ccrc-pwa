@@ -60,6 +60,12 @@ describe('simulate and the seed-replay convention', () => {
       ctx.world.server.scheduler.after(1, () => { throw new Error('boom'); }); } };
     expect(() => simulate(bad, 1, [])).toThrow('scenario coin, seed 1: ccrc-server: a scheduled call failed: boom');
   });
+  it('a timer that re-arms at 0 ms fails the run at the budget, instead of hanging', () => {
+    const loop = { ...coin, setup: (ctx: SimContext<CoinEdge>) => {
+      const again = (): void => { ctx.world.envAfter(0, again); };
+      ctx.world.envAfter(0, again); } };
+    expect(() => simulate(loop, 1, [])).toThrow(/scheduled calls/);
+  });
   it('the real functions are back after a run, a failed one included', () => {
     const now = Date.now; const bad = { ...coin, setup: () => { throw new Error('boom'); } };
     expect(() => simulate(bad, 1, [])).toThrow('boom');

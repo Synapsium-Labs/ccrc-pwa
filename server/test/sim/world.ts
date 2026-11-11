@@ -18,14 +18,20 @@ export class SimWorld {
   // The server's pending Cancels. Under server/src a stored handle like this would make a file a scheduler under the
   // ring rule (and the ring reader cannot see it yet); under server/test/ the ring rule does not apply.
   private readonly live = new Set<Cancel>();
+  // A budget of scheduled calls per world: a counter, not a queue, so it orders nothing. The fake's advance loops while
+  // a call is due, so a timer that re-arms at 0 ms would never let it return; past the budget the call is not made, the
+  // throw becomes the fake's warning, the re-arm stops and simulate fails on the warning.
+  private readonly maxCalls: number;
+  private calls = 0;
 
-  constructor(opts: { readonly wallMs: number; readonly seed: number }) {
+  constructor(opts: { readonly wallMs: number; readonly seed: number; readonly maxCalls?: number }) {
+    this.maxCalls = opts.maxCalls ?? 200_000;
     this.time = fakeTime({ wallMs: opts.wallMs, seed: opts.seed });
     const host = this.time.ports;
     const clock: Clock = { wall: () => host.clock.wall() - this.skew, mono: () => host.clock.mono() };
     const scheduler: Scheduler = {
       after: (ms, fn) => {
-        const inner: Cancel = host.scheduler.after(ms, () => { this.live.delete(cancel); return fn(); });
+        const inner: Cancel = host.scheduler.after(ms, this.budgeted(() => { this.live.delete(cancel); return fn(); }));
         const cancel: Cancel = () => { this.live.delete(cancel); inner(); };
         this.live.add(cancel);
         return cancel;
@@ -36,7 +42,17 @@ export class SimWorld {
   }
 
   /** The world's own timer (the fleet, the operator, the coordinator): the fake's `after`. Survives crash(). */
-  envAfter(ms: number, fn: () => unknown): Cancel { return this.time.ports.scheduler.after(ms, fn); }
+  envAfter(ms: number, fn: () => unknown): Cancel { return this.time.ports.scheduler.after(ms, this.budgeted(fn)); }
+
+  /** Wraps a scheduled call: counts it, and past maxCalls throws instead of calling fn. */
+  private budgeted(fn: () => unknown): () => unknown {
+    return () => {
+      if (++this.calls > this.maxCalls) {
+        throw new RangeError(`SimWorld: more than ${this.maxCalls} scheduled calls; a timer re-arms itself without end?`);
+      }
+      return fn();
+    };
+  }
 
   /** Registers a boot routine and runs it now; each boot after a crash runs every routine again. */
   onBoot(run: () => void): void { this.boots.push(run); run(); }
@@ -52,10 +68,10 @@ export class SimWorld {
     for (const cancel of [...this.live]) cancel();
     this.live.clear();
     this.down = true;
-    this.time.ports.scheduler.after(downMs, () => {
+    this.time.ports.scheduler.after(downMs, this.budgeted(() => {
       for (const run of this.boots) run();
       this.down = false;
-    });
+    }));
   }
 
   /** True from a crash until its boot routines have run. */
@@ -71,3 +87,4 @@ export function chance(entropy: Entropy, p: number): boolean { return entropy.be
 
 /** `xs[entropy.below(xs.length)]`. One draw; an empty list throws the fake's RangeError. */
 export function pick<T>(entropy: Entropy, xs: readonly T[]): T { return xs[entropy.below(xs.length)] as T; }
+
