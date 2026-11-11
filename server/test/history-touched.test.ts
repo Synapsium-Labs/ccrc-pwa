@@ -505,7 +505,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     }, HEAVY);
   });
 
-  // A2: one stored ref is one row, and the node is counted once, when a symbol query's label file and the ref's own path name one file.
+  // Review 1822: one stored ref is one row, and the node is counted once, when a symbol query's label file and the ref's own path name one file.
   it('a symbol query lists a relative path:symbol ref once, under the graph\'s file, and counts the node once', () => {
     plant('Lt38n1', { refs: [['path:symbol', 'tc38x.mjs:tc38foo', 'model']] });
     plantGraph([{ label: 'tc38foo', file: 'ccd/tc38x.mjs' }]);

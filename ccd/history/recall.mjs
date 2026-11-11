@@ -2163,7 +2163,7 @@ const TOUCHED_NODE_COLS = ['node_id', 'session_pk', 'epoch_seq', 'kind', 'gist',
 /** A graph file's graph reduced to what touched reads, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or
  *  links all read as "no graph". `{ files, index, labelFiles }`: matchRef reads only `index`, and `labelFiles` is the distinct files whose
  *  graph nodes carry `symbol` as their label (an empty list with no symbol). The parsed graph (its nodes, links, byFile and degree) is
- *  dropped here, so only the reduced form is held while the next root's graph is parsed (D-8190, W4 review F6). */
+ *  dropped here, so only the reduced form is held while the next root's graph is parsed (review 1822). */
 function touchedGraphOf(graphPath, load, symbol) {
   try {
     const g = load(graphPath, GRAPH_MAX_BYTES);
@@ -2367,7 +2367,7 @@ export function runTouched(rc, a) {
       if (m !== null) { add(w.file, m); listedUnderGraphFile = true; }
     }
     // The ref's own path is its file only when no graph file took it: a relative ref (`x.mjs:foo`) the graph's label file (`ccd/x.mjs`) matched
-    // is that file's row, listed once under the graph's name, and counted once (A2).
+    // is that file's row, listed once under the graph's name, and counted once (review 1822).
     if (q.kind === 'symbol' && c.kind === 'path:symbol' && !listedUnderGraphFile && xlib.symbolMatches(sp, q.symbol)) add(norm.path, norm.outside ? 'outside' : 'exact');
   }
   const ranked = xlib.rankTouched(xlib.touchedRows(matches));
