@@ -12,8 +12,11 @@
  */
 import type { LinearCcrcJournalOp } from './hierarchyOps.js';
 
-/** Which of ccrc's own passes a write belongs to (D-8180): attribution only, as the session pair is. */
-export type CcrcPass = 'plan-sync' | 'drift-restore' | 'migration' | 'put-back';
+/** ccrc's own passes (D-8180), THE ONE LIST: the type below is derived from it and `ccrcActor` (`journal.ts`) mints
+ *  an actor for each member and for nothing else. Attribution only, as the session pair is. */
+export const LINEAR_CCRC_PASSES = ['plan-sync', 'drift-restore', 'migration', 'put-back'] as const;
+/** Which of ccrc's own passes a write belongs to. */
+export type CcrcPass = (typeof LINEAR_CCRC_PASSES)[number];
 
 /** What a write asks. Every resource value is the resolved one: `teamKey` and `issue` are the team and the current
  *  identifier the resolve found (spec §4.5), never the reference's prefix, and `parentTeamKey` the resolved parent's

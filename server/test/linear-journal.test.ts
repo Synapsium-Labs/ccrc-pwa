@@ -22,6 +22,7 @@ import { MIGRATIONS } from '../src/coord/schema.js';
 import {
   LINEAR_JOURNAL_FIELDS, LINEAR_JOURNAL_RETENTION_DAYS, LinearJournal, ccrcActor, type LinearPendingInput,
 } from '../src/linear/journal.js';
+import { LINEAR_CCRC_PASSES } from '../src/linear/policy.js';
 import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { mkTmp } from './tmpHelpers.js';
 import { IDS, WS as WS_FIX, proxyRig, seedLegacy, seedSlot, type ProxyRig } from './linearProxyRig.js';
@@ -583,5 +584,30 @@ describe('LinearJournal: the ccrc actor (D-8180)', () => {
     const { journal } = linearServicesFake({ clock: () => NOW });
     expect(journal.pending(row({ op: 'initiative-create', teamKey: null, fields: ['name', 'status'] })).ok).toBe(true);
     expect(journal.pending(row({ op: 'relation-create', fields: ['type', 'related'] })).ok).toBe(true);
+  });
+  it('a key act under a ccrc actor is refused (actor): a key act keeps the account gate\'s actor', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const warn = quiet();
+    for (const op of ['key-add', 'key-replace', 'key-remove', 'key-check'] as const) {
+      expect(journal.pending(row({ op, teamKey: null, target: null, fields: [] })), op).toEqual({ ok: false, why: 'actor' });
+    }
+    warn.mockRestore();
+  });
+  it('a hierarchy update, link or unlink names its target: one with none is refused (target)', () => {
+    const { journal } = linearServicesFake({ clock: () => NOW });
+    const warn = quiet();
+    const named = { 'initiative-update': ['name'], 'project-update': ['name'], 'milestone-update': ['name'],
+      'initiative-link': ['project'], 'initiative-unlink': ['project'] } as const;
+    for (const [op, fields] of Object.entries(named)) {
+      expect(journal.pending(row({ op: op as LinearPendingInput['op'], target: null, fields })), op).toEqual({ ok: false, why: 'target' });
+      expect(journal.pending(row({ op: op as LinearPendingInput['op'], target: UUID_A, fields })).ok, op).toBe(true);
+    }
+    // A create names none: the object does not exist yet.
+    expect(journal.pending(row({ op: 'project-create', target: null })).ok).toBe(true);
+    warn.mockRestore();
+  });
+  it('the passes are one list: every pass mints its actor, and nothing else does', () => {
+    for (const pass of LINEAR_CCRC_PASSES) expect(String(ccrcActor(pass))).toBe(`ccrc:${pass}`);
+    expect(() => ccrcActor('no-such-pass' as never)).toThrow();
   });
 });
