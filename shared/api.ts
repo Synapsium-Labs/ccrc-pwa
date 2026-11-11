@@ -9139,6 +9139,10 @@ export interface LifecycleMeas {
    *  the registry rows that hold the child, comma-joined (`?` for one whose id ccd does not print). Null: no row held it,
    *  an older ccd, or another act. */
   readonly heldBy: string | null;
+  /** A `reclaim` or `expire` intent's stale index locks (D-5945): the `index.lock` paths rung 6 passed as stale (a
+   *  regular, empty file older than ccd's bound that no process holds), comma-joined; the tail removes them with the
+   *  tree. Null: no stale lock passed, an older ccd, or another act. */
+  readonly staleLock: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -9165,6 +9169,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   startpoint: true,
   witness: true,
   heldBy: true,
+  staleLock: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot

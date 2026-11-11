@@ -185,7 +185,7 @@ describe('the meas key vocabulary is ONE list', () => {
   // records does not currently exist to re-state.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 39', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 40', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so — the identical failure mode `home`/`pool`/`reason`
@@ -215,7 +215,10 @@ describe('the meas key vocabulary is ONE list', () => {
     // record); declared in the fix that follows, before the merge.
     // 38 -> 39 (cleanup un-wedge R2, D-8000): `meas.heldBy`, the ids of the rows that hold a child, on the reclaim audit's
     // `probe-unmeasured` line; declared in the commit that first emits it.
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 39').toBe(39);
+    // 39 -> 40 (D-5945, shipped under D-8286): `meas.staleLock`, the stale index locks rung 6 passed, on the reclaim
+    // and expiry intent lines; declared in the commit that first emits it.
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 40').toBe(40);
+    expect.soft(all.has('staleLock'), 'rung 6\'s stale index locks are a declared key').toBe(true);
     expect.soft(all.has('heldBy'), 'the reclaim audit\'s holding rows are a declared key').toBe(true);
     expect.soft(all.has('startpoint'), 'the ws-add --base start point is a declared key').toBe(true);
     expect.soft(all.has('witness'), 'the collector\'s moved-host word is a declared key').toBe(true);

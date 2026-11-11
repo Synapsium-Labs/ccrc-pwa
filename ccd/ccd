@@ -13482,6 +13482,7 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
 }
 
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
+WS_INDEX_LOCK_STALE_S=21600   # D-5945: an empty, unheld index.lock is stale only once older than this (6 h)
 REAP_IGNLOCK_WAIT=5       # D-5884: the most a retry waits on `.ignored-scan.lock` before it retries unlocked
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
@@ -15330,7 +15331,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   if [[ $mode == reclaim ]]; then
     printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,' \
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-    _ws_rescue_doc; _ws_held_by_doc
+    _ws_rescue_doc; _ws_held_by_doc; _ws_stale_lock_doc
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -33065,6 +33066,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_WIP_SHA=""        # `_ws_wip_commit`'s answer for the tree it was just handed
   RECLAIM_WIP_WHY=""; RECLAIM_PIN_WHY=""; _WS_RECLAIM_CLASSIFY_WHY=""
   RECLAIM_KEPT=()           # branches this reclaim KEEPS, never deletes, and records (`keptBranches`)
+  RECLAIM_STALE_LOCKS=""    # D-5945: the stale `index.lock` paths rung 6 passed, one per line (`staleLock`)
   _WS_LADDER_BIND=()        # the token's LEADING inputs — the caller's rungs 1-2 set them (`_ws_reclaim_ladder`)
   EXPIRE_ARCHIVED_AT=""     # ws-expire's archive epoch, as READ (the EXPIRE region); '' on every reclaim
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""   # the rows rung's entry-field counts: '' = not counted, printed null
@@ -35207,6 +35209,61 @@ _ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC 
   return 2
 }
 
+_WS_LOCK_STATE=''; _WS_LOCK_WHY=''
+_ws_index_lock_state() {   # lockpath -> 0 always; _WS_LOCK_STATE = absent | held | stale | unmeasured, and
+  #                            _WS_LOCK_WHY says why for held, stale and unmeasured (D-5945, spec 2026-10-20 §2.4)
+  # RUNG 6's ONE CLASSIFIER, for the child's own tree and the nested checkout's
+  # twin alike. A lock a crashed git command left behind wedged an archived
+  # workspace for good: `tree-busy` is a retry word, and an expiry has no
+  # `--defer-expired`. STALE needs all three: a regular, EMPTY file (git writes
+  # the new index into its lock, so a writer that is still writing leaves
+  # bytes); an mtime older than `WS_INDEX_LOCK_STALE_S` (a future mtime is
+  # young, never a negative age read as old); and no holder the process probe
+  # `_ws_path_users` can find. Anything else that stands there — a link,
+  # dangling or not, a directory, a non-empty or young file, a holder — is
+  # `held`, and a read or a probe that could not run is `unmeasured`, never
+  # stale. ccd NEVER deletes the lock: the audit writes nothing, and the tail
+  # removes it with the tree after the pin, which copies the index through a
+  # scratch file and never takes the lock (`_ws_reclaim_index_src`).
+  local l="$1" size mt now age rc
+  _WS_LOCK_STATE=unmeasured; _WS_LOCK_WHY=''
+  if [[ ! -e "$l" && ! -L "$l" ]]; then _WS_LOCK_STATE=absent; return 0; fi
+  if [[ -L "$l" || ! -f "$l" ]]; then _WS_LOCK_STATE=held; _WS_LOCK_WHY="it is not a regular file"; return 0; fi
+  size=$(_plat_size "$l" 2>/dev/null) && [[ "$size" =~ ^[0-9]+$ ]] \
+    || { _WS_LOCK_WHY="its size could not be read"; return 0; }
+  (( size == 0 )) || { _WS_LOCK_STATE=held; _WS_LOCK_WHY="it holds $size bytes"; return 0; }
+  mt=$(_plat_mtime "$l" 2>/dev/null) && [[ "$mt" =~ ^[0-9]+$ ]] \
+    || { _WS_LOCK_WHY="its modification time could not be read"; return 0; }
+  now=$(_now_s); [[ "$now" =~ ^[0-9]+$ ]] || { _WS_LOCK_WHY="the clock could not be read"; return 0; }
+  age=$(( now - mt ))
+  (( age > WS_INDEX_LOCK_STALE_S )) \
+    || { _WS_LOCK_STATE=held; _WS_LOCK_WHY="it was written ${age}s ago, within the ${WS_INDEX_LOCK_STALE_S}s a git command may hold it"; return 0; }
+  _ws_path_users "$l"; rc=$?
+  case "$rc" in
+    0) _WS_LOCK_STATE=stale; _WS_LOCK_WHY="an empty file written ${age}s ago that no process holds" ;;
+    1) _WS_LOCK_STATE=held; _WS_LOCK_WHY="$_WS_PATH_USERS_WHY" ;;
+    *) _WS_LOCK_WHY="$_WS_PATH_USERS_WHY" ;;
+  esac
+  return 0
+}
+
+_ws_stale_lock_doc() {   # -> prints `"staleLock":[…],` for an audit document when rung 6 passed a stale lock, else nothing
+  # Absent, never `[]`, when none passed (D-5945): a document from a tree with no lock is byte-identical to before.
+  local l first=1
+  [[ -n "$RECLAIM_STALE_LOCKS" ]] || return 0
+  printf '"staleLock":['
+  while IFS= read -r l; do
+    [[ -n "$l" ]] || continue
+    (( first )) || printf ','; first=0
+    printf '%s' "$(_json_str "$l")"
+  done <<< "$RECLAIM_STALE_LOCKS"
+  printf '],'
+}
+_ws_stale_lock_meas() {   # -> the stale lock paths rung 6 passed, comma-joined, for `meas.staleLock` ('' when none)
+  local v="${RECLAIM_STALE_LOCKS%$'\n'}"
+  printf '%s' "${v//$'\n'/,}"
+}
+
 _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
 _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git's OWN record of tree: an
   #                               admin directory `$common/worktrees/<n>` whose `gitdir` file names
@@ -35578,8 +35635,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at $workdir"; return 1; }
     h=$(git -C "$workdir" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
       || { _ws_reclaim_unmeasured "could not locate the index of $workdir"; return 1; }
-    [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-      || { _ws_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock)"; return 1; }
+    _ws_index_lock_state "$h.lock"   # D-5945: a stale lock passes, named; a held one is busy
+    case "$_WS_LOCK_STATE" in
+      absent) : ;;
+      stale) RECLAIM_STALE_LOCKS+="$h.lock"$'\n' ;;
+      held) _ws_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock) — $_WS_LOCK_WHY"; return 1 ;;
+      *) _ws_reclaim_unmeasured "whether a process holds the index lock of $workdir ($h.lock) could not be asked: $_WS_LOCK_WHY"; return 1 ;;
+    esac
   fi
   # THE BRANCH DELETED IS THE REGISTRY'S (spec §5.5: nothing that is not the
   # child's is deleted). A worktree whose HEAD has DRIFTED onto another branch
@@ -35677,8 +35739,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       if (( ! defer )); then
         h=$(git -C "$p" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
           || { _ws_reclaim_unmeasured "could not locate the index of the nested checkout at $p"; return 1; }
-        [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-          || { _ws_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock)"; return 1; }
+        _ws_index_lock_state "$h.lock"   # D-5945: the same rule as the child's own tree
+        case "$_WS_LOCK_STATE" in
+          absent) : ;;
+          stale) RECLAIM_STALE_LOCKS+="$h.lock"$'\n' ;;
+          held) _ws_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock) — $_WS_LOCK_WHY"; return 1 ;;
+          *) _ws_reclaim_unmeasured "whether a process holds the index lock of the nested checkout at $p ($h.lock) could not be asked: $_WS_LOCK_WHY"; return 1 ;;
+        esac
         op=$(_ws_child_op "$p") \
           || { _ws_reclaim_unmeasured "could not probe the nested checkout at $p for an in-progress git operation"; return 1; }
         [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at the nested checkout at $p"; return 1; }
@@ -35749,7 +35816,8 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     "statusDigest=$RECLAIM_STATUSDIGEST" \
     "ignoredDigest=$REAP_IGNDIGEST" "secretsDigest=$REAP_SENSDIGEST" "hiddenDigest=$RECLAIM_HIDDENDIGEST" \
     "stashes=${RECLAIM_STASHES//$'\n'/,}" "opHeads=${RECLAIM_OPHEADS//$'\n'/,}" \
-    "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST")
+    "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST" \
+    ${RECLAIM_STALE_LOCKS:+"staleLock=${RECLAIM_STALE_LOCKS//$'\n'/,}"})   # D-5945: only when one passed, so no other token moves
   REAP_VERDICT=reclaimable
   return 0
 }
@@ -40227,6 +40295,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
   lctx=$(_lc_tx)
   _lc_intent reclaim "$id" "$lctx" verb ws-reclaim meas.childOf "$RECLAIM_CHILDOF" meas.project "$project" \
     meas.workdir "$workdir" meas.branch "$REAP_BRANCH" meas.resumed "$resumed" \
+    ${RECLAIM_STALE_LOCKS:+meas.staleLock "$(_ws_stale_lock_meas)"} \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   if [[ -z "$phase" ]]; then
     # THE PIN PHASE, before anything is destroyed (spec §5.5), then the
@@ -40830,6 +40899,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   lctx=$(_lc_tx)
   _lc_intent expire "$id" "$lctx" verb ws-expire meas.archivedAt "$EXPIRE_ARCHIVED_AT" meas.project "$project" \
     meas.workdir "$workdir" meas.branch "$REAP_BRANCH" meas.resumed "$resumed" \
+    ${RECLAIM_STALE_LOCKS:+meas.staleLock "$(_ws_stale_lock_meas)"} \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   if [[ -z "$phase" ]]; then
     # THE PIN PHASE, before anything is destroyed, then the tombstone (its
@@ -40924,7 +40994,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
     "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-  _ws_rescue_doc; _ws_held_by_doc
+  _ws_rescue_doc; _ws_held_by_doc; _ws_stale_lock_doc
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
   # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
   if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then

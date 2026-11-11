@@ -12,7 +12,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { refusalsOf } from './lifecycleHelpers.js';
-import { CHILD_ID, CHILD_STUBS, TMUX_FAULTS, evalOf, makeChild, plantTmux } from './childReclaimFixture.js';
+import {
+  CHILD_ID, CHILD_STUBS, TMUX_FAULTS, evalOf, lockProbe, makeChild, plantIndexLock, plantTmux,
+} from './childReclaimFixture.js';
 import {
   EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, WEEK, archiveAt, expireAudit, expireEvalOf, expireVerb, holdCwd, makeArchived,
 } from './wsExpireFixture.js';
@@ -636,5 +638,115 @@ describe('rungs 7 to 9 and the identity refusal — the RECLAIM ladder’s, aske
     expect(gone.verdict, gone.detail).toBe('expirable');
     expect(gone.token).toMatch(/^[0-9a-f]{64}$/);
     expect(gone.token).not.toBe(present.token);
+  }, 60_000);
+});
+
+// D-5945 (#318 item 2; spec 2026-10-20 §2.4), shipped under D-8286: rung 6 CLASSIFIES an `index.lock` before it refuses.
+// A regular, EMPTY file older than `WS_INDEX_LOCK_STALE_S` that the process probe (`_ws_path_users`) finds no holder of is
+// STALE: the rung passes, the token binds it (`staleLock=`) and the audit document names it. Held, young, non-empty or
+// not a regular file stays `tree-busy`; a probe that could not run is `unmeasured`, never stale. ccd never deletes the
+// lock: the tail removes it with the tree. The probe is stubbed for the lock path alone (`lockProbe`), so the case
+// reads the same on a Darwin box, where the real probe answers unmeasured; every other path asks the real one
+// (`lockProbe`, `plantIndexLock`: `childReclaimFixture.ts`).
+describe('rung 6 — a stale index.lock is named, not tree-busy (D-5945)', () => {
+  const HOURS7 = 7 * 3600;
+  const plantLock = (wt: string, ageS: number, body = ''): string => plantIndexLock(h, wt, ageS, body);
+  const staleOf = (pre: string): string =>
+    h.sh(`${EXP_STUBS} ${pre} _WS_RCL_ACT=expire; _ws_expire_eval ${EXP_ID} >/dev/null; printf '%s' "$RECLAIM_STALE_LOCKS"`);
+  const probed = (): string[] => h.calls().filter((l) => l.startsWith('path-users '));
+
+  it('an empty lock older than the bound with no holder: passes, its path named, the probe asked of that lock', () => {
+    const { wt } = makeArchived(h);
+    const lock = plantLock(wt, HOURS7);
+    const r = expireEvalOf(h, { pre: lockProbe(0) });
+    expect(r.verdict, r.detail).toBe('expirable');
+    expect(r.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(staleOf(lockProbe(0)), 'the one stale lock, by path').toBe(lock);
+    expect(probed()).toContain(`path-users ${lock}`);
+    expect(fs.existsSync(lock), 'the audit never deletes the lock').toBe(true);
+  }, 60_000);
+
+  it('the same lock held by a process: tree-busy, naming the holder', () => {
+    const { wt } = makeArchived(h);
+    const lock = plantLock(wt, HOURS7);
+    const r = expireEvalOf(h, { pre: lockProbe(1) });
+    expect(r.verdict, r.detail).toBe('tree-busy');
+    expect(r.token).toBe('');
+    expect(r.detail).toBe(`a git command holds the index lock of ${wt} (${lock}) — process 4242 holds it open`);
+  }, 60_000);
+
+  it('a young empty lock: tree-busy, and the probe is not asked', () => {
+    const { wt } = makeArchived(h);
+    plantLock(wt, 60);
+    const r = expireEvalOf(h, { pre: lockProbe(0) });
+    expect(r.verdict, r.detail).toBe('tree-busy');
+    expect(r.detail).toContain('within the 21600s a git command may hold it');
+    expect(probed()).toEqual([]);
+  }, 60_000);
+
+  it('a lock dated in the future is young: tree-busy, never a negative age read as old', () => {
+    const { wt } = makeArchived(h);
+    plantLock(wt, -HOURS7);
+    expect(expireEvalOf(h, { pre: lockProbe(0) }).verdict).toBe('tree-busy');
+  }, 60_000);
+
+  it('the bound is WS_INDEX_LOCK_STALE_S: an hour-old lock is young under the default, stale under a 30-minute bound', () => {
+    const { wt } = makeArchived(h);
+    plantLock(wt, 3600);
+    expect(expireEvalOf(h, { pre: lockProbe(0) }).verdict).toBe('tree-busy');
+    expect(expireEvalOf(h, { pre: `${lockProbe(0)} WS_INDEX_LOCK_STALE_S=1800;` }).verdict).toBe('expirable');
+  }, 60_000);
+
+  it('a non-empty old lock: tree-busy — a git command was writing an index into it', () => {
+    const { wt } = makeArchived(h);
+    plantLock(wt, HOURS7, 'DIRC partial index');
+    const r = expireEvalOf(h, { pre: lockProbe(0) });
+    expect(r.verdict, r.detail).toBe('tree-busy');
+    expect(r.detail).toContain('it holds 18 bytes');
+  }, 60_000);
+
+  it('a directory or a link standing at the lock path: tree-busy', () => {
+    const { wt } = makeArchived(h);
+    const lock = plantLock(wt, HOURS7);
+    fs.rmSync(lock);
+    fs.mkdirSync(lock);
+    expect(expireEvalOf(h, { pre: lockProbe(0) }).verdict).toBe('tree-busy');
+    fs.rmdirSync(lock);
+    fs.symlinkSync(path.join(h.home, 'nowhere'), lock);
+    expect(expireEvalOf(h, { pre: lockProbe(0) }).verdict).toBe('tree-busy');
+  }, 60_000);
+
+  it('a probe that cannot run: unmeasured, never stale, and no token', () => {
+    const { wt } = makeArchived(h);
+    const lock = plantLock(wt, HOURS7);
+    const r = expireEvalOf(h, { pre: lockProbe(2) });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toBe(`whether a process holds the index lock of ${wt} (${lock}) could not be asked: the walk of /proc did not finish`);
+  }, 60_000);
+
+  it('the token binds the stale lock: the same tree without it has another token, each stable', () => {
+    const { wt } = makeArchived(h);
+    const clean = expireEvalOf(h).token;
+    const lock = plantLock(wt, HOURS7);
+    const stale = expireEvalOf(h, { pre: lockProbe(0) }).token;
+    expect(stale).toMatch(/^[0-9a-f]{64}$/);
+    expect(stale).not.toBe(clean);
+    expect(expireEvalOf(h, { pre: lockProbe(0) }).token).toBe(stale);
+    fs.rmSync(lock);
+    expect(expireEvalOf(h).token, 'a tree with no lock keeps the token it had before D-5945').toBe(clean);
+  }, 60_000);
+
+  it('ws-audit --expire names the stale lock beside its token; a tree with none prints no key', () => {
+    const { wt } = makeArchived(h);
+    const plain = JSON.parse(expireAudit(h).stdout) as Record<string, unknown>;
+    expect(plain['staleLock']).toBeUndefined();
+    const lock = plantLock(wt, HOURS7);
+    const a = expireAudit(h, { pre: lockProbe(0) });
+    expect(a.code, a.stderr).toBe(0);
+    const doc = JSON.parse(a.stdout) as Record<string, unknown>;
+    expect(doc['verdict']).toBe('expirable');
+    expect(doc['staleLock']).toEqual([lock]);
+    expect(doc['token']).toBe(expireEvalOf(h, { pre: lockProbe(0) }).token);
   }, 60_000);
 });
