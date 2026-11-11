@@ -516,6 +516,90 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
     expect(headers(touched(['tc38foo']))).toEqual(['touched ccd/tc38x.mjs (graph)']);
   }, HEAVY);
 
+  // D-8191: a symbol query's label-file arm is chunked ORs, at most 100 basenames a select. Each case names its own files and symbol.
+  const labelFiles = (tag: string, n: number): string[] => Array.from({ length: n }, (_, i) => `ccd/${tag}${i}/lab${tag}${i}.mjs`);
+  const baseOf = (f: string): string => f.slice(f.lastIndexOf('/') + 1);
+  const sortedBases = (files: string[]): string[] => [...new Set(files.map(baseOf))].sort();
+  const fileOfBase = (files: string[], b: string): string => files.find((f) => baseOf(f) === b)!;
+
+  it('D-8191 two chunks answer what one select per basename did: 130 label basenames (two selects) list exactly the files that carry a ref, and the decoys stay out', () => {
+    const files = labelFiles('d8a', 130);
+    const bases = sortedBases(files);
+    expect(bases.length, 'CONTROL: more than one chunk of 100').toBe(130);
+    const picked = [files[0]!, fileOfBase(files, bases[0]!), fileOfBase(files, bases[99]!), fileOfBase(files, bases[100]!), fileOfBase(files, bases[129]!), files[57]!];
+    const want = [...new Set(picked)];
+    want.forEach((f, i) => plant(`Ld8a${i}`, { latest: T0 + 700_000 - i * 1000, refs: [['path', f]] }));
+    plant('Ld8adecoy1', { latest: T0 + 800_000, refs: [['path', 'ccd/d8a0/other8a.mjs'], ['path', 'ccd/d8adecoy/lab8a130.mjs']] });
+    plant('Ld8adecoy2', { latest: T0 + 801_000, refs: [['path:symbol', 'ccd/d8a0/lab8a0.mjs:otherSymbol']] });
+    plantGraph(files.map((f) => ({ label: 'd8aSym', file: f })));
+    const j = touchedJson(['d8aSym']);
+    expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(j).map((i) => [i['nodeId'], i['file']])).toEqual(want.map((f, i) => [`Ld8a${i}`, f]));
+  }, HEAVY);
+
+  it('D-8191 the last basename of a chunk is in its OR: the only ref sits on the 100th basename by sort order (and, in a second case, on the last of the final short chunk)', () => {
+    const files = labelFiles('d8l', 130);
+    const bases = sortedBases(files);
+    const lastOfFirst = fileOfBase(files, bases[99]!);
+    const lastOfAll = fileOfBase(files, bases[129]!);
+    plant('Ld8lfirst', { latest: T0 + 600_000, refs: [['path', lastOfFirst]] });
+    plantGraph(files.map((f) => ({ label: 'd8lSym', file: f })));
+    const a = touchedJson(['d8lSym']);
+    expect(a.code, `${a.stderr}${a.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(a).map((i) => [i['nodeId'], i['file']]), `${bases[99]} is the last basename of the first chunk`).toEqual([['Ld8lfirst', lastOfFirst]]);
+    plant('Ld8llast', { latest: T0 + 601_000, refs: [['path', lastOfAll]] });
+    const b = touchedJson(['d8lSym']);
+    expect(items(b).map((i) => [i['nodeId'], i['file']]), `${bases[129]} is the last basename of the final chunk`).toEqual([['Ld8llast', lastOfAll], ['Ld8lfirst', lastOfFirst]]);
+  }, HEAVY);
+
+  it('D-8191 a label spanning 1,000 basenames answers (ten selects), never "Expression tree is too large"', () => {
+    const files = labelFiles('d8b', 1000);
+    plant('Ld8b1', { latest: T0 + 650_000, refs: [['path', files[999]!]] });
+    plantGraph(files.map((f) => ({ label: 'd8bSym', file: f })));
+    const j = touchedJson(['d8bSym']);
+    expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(j).map((i) => [i['nodeId'], i['file']])).toEqual([['Ld8b1', files[999]!]]);
+  }, HEAVY);
+
+  it('D-8191 a row two selects both return is kept once: one ref value that two chunks match, and a path:symbol ref the symbol select and a chunk both return', () => {
+    // Sorted, `8c.mjs` is the first basename and `x8c.mjs` the 101st (99 `9f…` names between), so they sit in two chunks; the value
+    // ccd/d8c/x8c.mjs holds both as substrings, and the path:symbol ref is also the symbol select's.
+    const files = ['ccd/d8c/8c.mjs', ...Array.from({ length: 99 }, (_, i) => `ccd/d8c/9f${String(i).padStart(3, '0')}.mjs`), 'ccd/d8c/x8c.mjs'];
+    expect(sortedBases(files).indexOf('x8c.mjs'), 'CONTROL: x8c.mjs opens the second chunk').toBe(100);
+    plant('Ld8cpath', { latest: T0 + 660_000, refs: [['path', 'ccd/d8c/x8c.mjs']] });
+    plant('Ld8csym', { latest: T0 + 659_000, refs: [['path:symbol', 'ccd/d8c/x8c.mjs:d8cSym', 'model']] });
+    plantGraph(files.map((f) => ({ label: 'd8cSym', file: f })));
+    const j = touchedJson(['d8cSym']);
+    expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(j).map((i) => [i['nodeId'], i['file']])).toEqual([['Ld8cpath', 'ccd/d8c/x8c.mjs'], ['Ld8csym', 'ccd/d8c/x8c.mjs']]);
+    expect(j.json?.['total']).toBe(2);
+    expect(items(j).map((i) => (i['refs'] as unknown[]).length), 'each ref is listed once').toEqual([1, 1]);
+  }, HEAVY);
+
+  it('D-8191 the cap counts a row two chunks both return once: 9,999 symbol refs and one ref two chunks match are 10,000 distinct rows, not capped', () => {
+    const files = ['ccd/d8d/8d.mjs', ...Array.from({ length: 99 }, (_, i) => `ccd/d8d/9f${String(i).padStart(3, '0')}.mjs`), 'ccd/d8d/x8d.mjs'];
+    const refs: Array<[string, string]> = [];
+    for (let i = 1; i <= 9_999; i += 1) refs.push(['path:symbol', `ccd/d8dsym${i}.mjs:d8dSym`]);
+    plant('Ld8dsyms', { latest: T0 + 670_000, refs });
+    plant('Ld8dtwice', { latest: T0 + 671_000, refs: [['path', 'ccd/d8d/x8d.mjs']] });
+    plantGraph(files.map((f) => ({ label: 'd8dSym', file: f })));
+    const j = touchedJson(['d8dSym']);
+    expect(j.json?.['total'], 'CONTROL: both nodes answer').toBeGreaterThan(1);
+    expect(j.json, 'the shared row counts once: 10,000 distinct candidates are exactly the cap').not.toHaveProperty('candidatesCapped');
+  }, HEAVY);
+
+  it('D-8191 a label basename holding _ matches only itself in a chunk: 10,001 newer decoys neither fill the cap nor push the real node out', () => {
+    plant('Ld8ereal', { latest: T0 + 500_000, refs: [['path', 'ccd/d8e/d8e_ab.mjs']] });
+    const decoys: Array<[string, string]> = [];
+    for (let i = 1; i <= 10_001; i += 1) decoys.push(['path', `ccd/d8e/d8eXab.mjs:${i}`]);
+    plant('Ld8edecoy', { latest: T0 + 900_000, refs: decoys });
+    plantGraph([{ label: 'd8eSym', file: 'ccd/d8e/d8e_ab.mjs' }, { label: 'd8eSym', file: 'ccd/d8e/zz8e.mjs' }]);
+    const j = touchedJson(['d8eSym']);
+    expect(j.code, `${j.stderr}${j.stdout.slice(0, 400)}`).toBe(0);
+    expect(items(j).map((i) => i['nodeId'])).toEqual(['Ld8ereal']);
+    expect(j.json).not.toHaveProperty('candidatesCapped');
+  }, HEAVY);
+
   it('TC8 scope: --project and --workspace together are refused, exit 2', () => {
     const r = touchedJson(['ccd/x.mjs', '--project', '--workspace']);
     expect([r.code, r.json?.['reason']]).toEqual([2, 'bad-args']);
