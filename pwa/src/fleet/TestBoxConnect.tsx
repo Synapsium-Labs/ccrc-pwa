@@ -28,7 +28,7 @@ import type { TestboxAdminResult, TestboxEventRow } from '../../../shared/api';
 import { parseRepoRow } from '../../../shared/testbox';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
-import { ApiError, api } from '../lib/api';
+import { ApiError } from '../lib/api';
 import { testboxRouteText } from '../lib/refusalWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import {
@@ -36,6 +36,7 @@ import {
   codeSentence, isIpLiteral, isPublicIpLiteral, listenFor, listenHostOf, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
+import { loadProjects } from './useProjectRows';
 
 const T = TESTBOX_CONNECT_TEXT;
 /** A test box act's step-up is learned from the route's refusal, the way the Linear card learns it. */
@@ -202,7 +203,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
     if (step !== 4 || offered.current) return undefined;
     offered.current = true;
     let live = true;
-    void api.projects().then((read) => {
+    void loadProjects().then((read) => {
       if (!live) return;
       const found = new Map<string, Offer>();
       for (const p of read.projects) {
