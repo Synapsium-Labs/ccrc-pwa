@@ -18,6 +18,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import type { FleetReadiness } from '../src/readiness.js';
 import { parseOpMarker, parsePassMarker } from '../../ccd/history/lib.mjs';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude9-Project-F';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -246,7 +247,7 @@ describe('lifecycle routes', () => {
     // ccdVerbs explicit (fix round 3): this test is about wrapper-prefix
     // resolution, not the capability gate.
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/claude9-cctest/stop', payload: {} });
@@ -279,7 +280,7 @@ describe('lifecycle routes', () => {
     // ccdVerbs explicit (fix round 3): this test is about workspace-id
     // handling, not the capability gate.
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/project-j-quiet-mesa/stop', payload: {} });
@@ -360,7 +361,7 @@ describe('lifecycle routes', () => {
       }
     })();
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue,
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue, time: fakeTime().ports,
     });
 
     let release!: () => void;
@@ -454,7 +455,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     // The rest of this composition mirrors index.ts's local branch: real
     // evidence carried in `fleetState`, exactly as the fix requires.
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
@@ -483,7 +484,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     const cfg = loadConfig({ CCRC_HOME: home });
     expect(cfg.fleetMode).toBe('local');
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
@@ -504,7 +505,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
@@ -543,7 +544,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     });
 
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState,
     });
 

@@ -16,6 +16,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
+import { fakeTime } from './fakeTime.js';
 
 let home: string;
 let projectsRoot: string;
@@ -26,7 +27,7 @@ const dead: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' }
 const open = async (io: FleetIO = localIO): Promise<FastifyInstance> => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });
   const a = await buildServer({
-    cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io, queue: new KeyedQueue(),
+    cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io, queue: new KeyedQueue(), time: fakeTime().ports,
   });
   await a.ready();
   return a;

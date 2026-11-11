@@ -16,6 +16,7 @@ import type { Dialog, FleetSession, SessionStreamMsg } from '../../shared/api.js
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO } from './ioDoubles.js';
+import { fakeTime } from './fakeTime.js';
 
 const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
 const fixture = (name: string) => readFileSync(path.join(panesDir, name), 'utf8');
@@ -250,7 +251,7 @@ describe('FleetWatcher dialog detection', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const bus = new Bus();
     const msgs: SessionStreamMsg[] = [];
     const fleets: FleetSession[][] = [];
@@ -320,7 +321,7 @@ describe('FleetWatcher hookstate wiring', () => {
         return read;
       },
     };
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const bus = new Bus();
     const fleets: FleetSession[][] = [];
     const hooks: HookReading[] = [];
@@ -373,7 +374,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const watcher = new FleetWatcher(deps, new Bus());
     const sweep = (): Promise<void> => (watcher as unknown as { sweepHookStates: () => Promise<void> }).sweepHookStates();
 
@@ -414,7 +415,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.wrapper`));
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
     // clock before each call so this test can force a real re-sweep on its
@@ -475,7 +476,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
       readdir: async (p) => (blind && p === dir ? null : localIO.readdir(p)),
     };
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const watcher = new FleetWatcher(deps, new Bus());
     const forceSweep = async (): Promise<void> => {
       watcher.kick('tasks');
@@ -537,7 +538,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const bus = new Bus();
     const fleets: FleetSession[][] = [];
     bus.on('fleet', (s) => fleets.push(s));
@@ -590,7 +591,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const watcher = new FleetWatcher(deps, new Bus());
     const sweep = (): Promise<void> => (watcher as unknown as { sweepHookStates: () => Promise<void> }).sweepHookStates();
 
@@ -627,7 +628,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
     // clock before each call so this test can force a real re-sweep on its

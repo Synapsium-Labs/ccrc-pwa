@@ -18,6 +18,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { usageSidecarPath, USAGE_FRESH_S } from '../src/usage.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const seedSession = (home: string, id: string, wrapper: string): void => {
   const reg = path.join(home, '.cc-sessions');
@@ -45,7 +46,7 @@ const idleRun: Runner = async (_cmd, args) => {
 
 const makeWatcher = (home: string, io: FleetIO): FleetWatcher => {
   const cfg = loadConfig({ CCRC_HOME: home });
-  const deps = { cfg, runCcd: ccdRunner(idleRun, cfg), tmux: new Tmux(idleRun), io, queue: new KeyedQueue() };
+  const deps = { cfg, runCcd: ccdRunner(idleRun, cfg), tmux: new Tmux(idleRun), io, queue: new KeyedQueue(), time: fakeTime().ports };
   return new FleetWatcher(deps, new Bus());
 };
 

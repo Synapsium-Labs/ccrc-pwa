@@ -33,4 +33,15 @@ describe('the time ports (Overlord spec §11.5, §3.6 H2): one definition, in th
     expect(crypto).toEqual(expect.arrayContaining(['randomBytes', 'randomUUID', 'randomInt']));
     expect(p.calls.map((c) => c.callee)).not.toContain('Math.random');
   });
+
+  it('only the composition root takes the system adapters, and it builds them once', () => {
+    const ADAPTER = 'server/src/time/system.ts';
+    const target = (f: string, spec: string): string =>
+      path.posix.join(path.posix.dirname(f), spec.replace(/\.js$/, '.ts'));
+    const files = walkSrc({ roots: ['server/src'], min: 150 });
+    expect(files.filter((f) => parsedFile(f).imports.some((e) => target(f, e.specifier) === ADAPTER)))
+      .toEqual(['server/src/index.ts']);
+    expect(parsedFile('server/src/index.ts').calls.filter((c) => c.callee === 'systemTimePorts')).toHaveLength(1);
+    expect(files.filter((f) => parsedFile(f).imports.some((e) => /(^|\/)test\//.test(e.specifier)))).toEqual([]);
+  });
 });

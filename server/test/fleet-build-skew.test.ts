@@ -32,6 +32,7 @@ import { seedRoster, testDeps } from './helpers.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 import type { ConnectedFleet } from '../src/remote/client.js';
 import { mkTmp } from './tmpHelpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const OWN: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false };
 
@@ -50,7 +51,7 @@ function remoteDeps(fleetBuild: BuildInfo | null, ownBuild: BuildInfo | null): D
   };
   return {
     cfg, build: ownBuild, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner),
-    io: localIO, fleetState, queue: new KeyedQueue(),
+    io: localIO, fleetState, queue: new KeyedQueue(), time: fakeTime().ports,
   };
 }
 
@@ -389,7 +390,7 @@ describe('end to end (the NO-COORD FALLBACK path) — a stamp on the fleet host\
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const app = await buildServer({
       cfg, build: ownBuild, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner),
-      io: localIO, fleetState: live.state, queue: new KeyedQueue(),
+      io: localIO, fleetState: live.state, queue: new KeyedQueue(), time: fakeTime().ports,
     });
     try {
       return (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
@@ -502,7 +503,7 @@ describe('end to end (the NO-COORD FALLBACK path) — a stamp on the fleet host\
       expect(coord.nodeByLabel(FLEET_LABEL)?.stampRead).toBe('ok');
       const app = await buildServer({
         cfg, build: null, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner),
-        io: localIO, fleetState: { ...fleet.state, build: null }, queue: new KeyedQueue(), coord,
+        io: localIO, fleetState: { ...fleet.state, build: null }, queue: new KeyedQueue(), time: fakeTime().ports, coord,
       });
       try {
         const h = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;

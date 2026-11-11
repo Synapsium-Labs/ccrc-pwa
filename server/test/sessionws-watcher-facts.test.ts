@@ -16,6 +16,7 @@ import { readSessionRecord, type SessionRecord } from '../src/registry.js';
 import type { FleetSession, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-f';
 const UUID_A = 'a'.repeat(36);
@@ -96,7 +97,7 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
       statMeasured: async (p) => { await wait(); return localIO.statMeasured(p); },
       readFileMeasured: async (p) => { await wait(); return localIO.readFileMeasured(p); },
     };
-    deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const read = await readSessionRecord(localIO, cfg, ID);
     if (read.kind !== 'found') throw new Error('fixture row unreadable');
     record = read.record;
