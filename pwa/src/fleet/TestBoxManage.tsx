@@ -37,8 +37,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, Skeleton, useCancelFirst } from '@ccrc/ui';
 import {
-  TESTBOX_BOX_KEYS, TESTBOX_LINE_CODES, TESTBOX_PAIRING_KEYS, TESTBOX_PHASED_SUB_MAP, TESTBOX_RUN_SHAPING, fitsTestboxShape,
-  type TestboxAdminFields, type TestboxAdminSub, type TestboxPhasedSub,
+  TESTBOX_BOX_KEYS, TESTBOX_PAIRING_KEYS, TESTBOX_PHASED_SUB_MAP, TESTBOX_RUN_SHAPING, fitsTestboxShape, isTestboxLineCode,
+  type TestboxAdminFields, type TestboxLineCode, type TestboxAdminSub, type TestboxPhasedSub,
 } from '../../../shared/testbox-admin';
 import type { BoxSettingRow, TestboxAdminResult } from '../../../shared/api';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
@@ -66,7 +66,11 @@ const PAIRED_LOCKED: ReadonlySet<string> = new Set(PAIRED_BOX_KEYS);
 type Sheeted = 'replace' | 'disconnect' | 'reset' | 'rotate' | 'revoke';
 /** The row a Reset to default confirms: its key, and whether it is a fleet-host key. */
 interface Resetting { readonly key: string; readonly fleet: boolean }
-const LINE_CODES: ReadonlySet<string> = new Set(TESTBOX_LINE_CODES);
+/** The head over a key line to remove by hand, by the code that carries it: a rotated key's old line only; a revoked key's every
+ *  ccrc line (D-8337). */
+const HAND_LINE_HEAD: Readonly<Record<TestboxLineCode, string>> = {
+  'old-line-kept': T.handLineHeadRotate, 'revoked-box-skipped': T.handLineHead, 'revoked-unpair-failed': T.handLineHead,
+};
 
 /** What the section shows above the card after an access key act: a sentence, and the PUBLIC key words to remove by hand, if any,
  *  under the head that says which lines go (a revoke: every ccrc line; a rotate: only the old key's). */
@@ -161,11 +165,11 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
       // The fleet side is clean whether or not the box answered: the box side was skipped or did not finish, and the status is read again.
       const code = refusalCodeOf(err);
       // An access key act that is done on this side and leaves a line on the box (D-8337): the section shows it, with its key words.
-      if (code !== null && LINE_CODES.has(code)) {
+      if (code !== null && isTestboxLineCode(code)) {
         partial.current = true;
         admin.reload(); onChanged?.();
         const keyLine = refusalLineOf(err);
-        onKeyNotice?.({ sentence: codeSentence(code), line: keyLine, head: keyLine === null ? null : code === 'old-line-kept' ? T.handLineHeadRotate : T.handLineHead });
+        onKeyNotice?.({ sentence: codeSentence(code), line: keyLine, head: keyLine === null ? null : HAND_LINE_HEAD[code] });
         return {};
       }
       if (code !== null && PARTIAL_DISCONNECT.has(code)) { admin.reload(); onChanged?.(); line.say(codeSentence(code), 'refusal'); return {}; }

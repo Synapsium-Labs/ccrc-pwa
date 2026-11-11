@@ -325,7 +325,11 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
 };
 /** The codes whose refusal carries `line`: the PUBLIC words of an access key whose line the operator removes from the box's
  *  authorized_keys by hand (D-8337). Never a private key; the route holds it to one printable line. */
-export const TESTBOX_LINE_CODES: readonly TestboxAdminCode[] = Object.freeze(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);
+export type TestboxLineCode = Extract<TestboxAdminCode, 'old-line-kept' | 'revoked-box-skipped' | 'revoked-unpair-failed'>;
+export const TESTBOX_LINE_CODES: readonly TestboxLineCode[] = Object.freeze(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);
+const TESTBOX_LINE_CODE_SET: ReadonlySet<string> = new Set(TESTBOX_LINE_CODES);
+/** A refusal code that carries `line` (one of `TESTBOX_LINE_CODES`). */
+export function isTestboxLineCode(v: string): v is TestboxLineCode { return TESTBOX_LINE_CODE_SET.has(v); }
 export const TESTBOX_ADMIN_CODE_MAP: Record<TestboxAdminCode, true> = Object.fromEntries(
   Object.keys(TESTBOX_ADMIN_CODE_SENTENCE).map((k) => [k, true]),
 ) as Record<TestboxAdminCode, true>;
