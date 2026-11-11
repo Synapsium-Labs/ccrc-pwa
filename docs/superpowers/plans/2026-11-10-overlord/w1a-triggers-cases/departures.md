@@ -17,8 +17,9 @@ because the ledger guard refuses an edit to it from a work branch.
 
 ## Rulings within the plan
 
-- **The migration slot moved.** The plan named entry 49; `main` stood at 55 when Task 5 was written, so
-  `practice_cases` is entry 56 (`user_version` 55 to 56), re-measured before the push.
+- **The migration slot moved.** The plan named entry 49; `main` stood at 55 when Task 5 was written, and at 56 before
+  the push, so `practice_cases` is entry 57 (`user_version` 56 to 57). Another piece took 56 first: the branch absorbed
+  `main` a second time, on its own conflict, and renumbered the entry and nothing else.
 - **The time ports merged mid-wave.** The branch absorbed `main` once, as a merge, on the coordinator's licence, so the
   lane takes its wall clock from `Deps.time.clock.wall()`. The lane's new files, and the role table's
   (`server/src/roleOf.ts`, `shared/fleetRoles.ts`), joined `TIME_PORT_FILES` in
