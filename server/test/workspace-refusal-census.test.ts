@@ -48,7 +48,8 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('archive', 'live', 'session-busy', 'server', 'the turn is in progress and `interrupt` was not given'),
   e('archive', 'live|stopped', 'worktree-gone', 'server', 'a workspace whose worktree the box proved gone'),
   e('archive', 'live', 'run-open', 'server', 'the session is the worker of a non-terminal run and `force` was not given'),
-  e('archive', 'live', 'coordinator-has-open-runs', 'server', 'the session claims a non-terminal run and `programme:end` was not given, or the store is unreadable'),
+  e('archive', 'live', 'coordinator-has-open-runs', 'server', 'the session claims a non-terminal run and neither `programme:end` nor a claims choice (`runs`, D-8199) was given, or the store is unreadable'),
+  e('archive', 'live', 'claims-not-moved', 'server', 'D-8199: the release or hand-over of the runs the session claims was refused or threw part-way, so nothing is stopped or archived'),
   e('archive', 'live', 'programme-partly-ended', 'server', 'ending the programme was refused or threw part-way, so nothing is stopped or archived'),
   e('archive', 'live|stopped', 'manifest-unbuildable', 'server', 'ccd could not build the archive manifest (ccd refuses; the door reads its answer, ccdArchiveRefusal)'),
   // restore: archived -> live.
@@ -172,8 +173,8 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   it('pins the per-verb edge counts exactly (a verb gaining or losing a refusal is a decision, not drift)', () => {
     const counts: Record<string, number> = {};
     for (const x of WORKSPACE_REFUSAL_CENSUS) counts[x.verb] = (counts[x.verb] ?? 0) + 1;
-    expect(counts).toEqual({ archive: 7, restore: 4, forget: 7, reap: 43, expire: 20, reclaim: 16, collect: 10 });
-    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(107);
+    expect(counts).toEqual({ archive: 8, restore: 4, forget: 7, reap: 43, expire: 20, reclaim: 16, collect: 10 });
+    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(108);
   });
 
   it('every edge’s code is read by a client: an archive wire word, a SENTENCES key or an LC_REFUSAL_WORD key', () => {

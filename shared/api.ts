@@ -11120,6 +11120,8 @@ export const REVIEW_DONE_SUBJECT = 'review-done';
  *   - `coordinatorHasOpenRuns` — this session is the CLAIMANT of a non-terminal run. `{programme:'end'}` ends the
  *     programme first; the 409 names the runs, or carries `runs: []` when the store could not be read (fail-shut).
  *   - `programmePartlyEnded` — `{programme:'end'}` could not end every run. Nothing was stopped or archived.
+ *   - `claimsNotMoved` — D-8199: `{runs:'release'}` or `{runs:'handover', heir}` (`ClaimsChoiceBody`) could not move every
+ *     claimed run; `moved` and `notMoved` name them and `refusal` says why. Nothing was stopped or archived.
  *   - `worktreeGone`, `statusUnknown`, `manifestUnbuildable` — the three refusals the operator cannot fix from the
  *     phone (`ARCHIVE_STOP_ONLY`), each ccd's own `cmd_ws_archive` refusal before it touches anything. The server
  *     issues two itself: `statusUnknown` where its fail-closed read could not measure the turn (`decideArchive`,
@@ -11136,6 +11138,7 @@ export const ARCHIVE_REFUSALS = {
   worktreeGone: 'worktree-gone',
   statusUnknown: 'status-unknown',
   manifestUnbuildable: 'manifest-unbuildable',
+  claimsNotMoved: 'claims-not-moved',
 } as const;
 export type ArchiveRefusal = (typeof ARCHIVE_REFUSALS)[keyof typeof ARCHIVE_REFUSALS];
 
@@ -11156,10 +11159,50 @@ export const ARCHIVE_STOP_ONLY: readonly ArchiveRefusal[] = [
  *  the refusal it answers: `force` answers `run-open`, `interrupt` answers `session-busy` and `programme: 'end'`
  *  answers `coordinator-has-open-runs`. Absent means not given. The PWA builds it (`api.archive`) and the server reads
  *  it by these keys (`archiveFlags`), so a renamed consent is a compile error on both sides. */
-export interface ArchiveBody {
+export interface ArchiveBody extends ClaimsChoiceBody {
   readonly force?: true;
   readonly interrupt?: true;
   readonly programme?: 'end';
+}
+
+/**
+ * D-8199: what happens to the open runs a session CLAIMS when the operator archives or stops it — the answer to
+ * `coordinator-has-open-runs`. `release` leaves every run of each claimed programme unclaimed (the programme goes on,
+ * held for nobody, until a coordinator opens its next run); `handover` gives them to `heir`, a live coordinator, through
+ * the reclaim writer. Neither ends a run: ending a programme stays the operator's separate act. `heir` rides only beside
+ * `handover`. Absent means not given, and a session that claims no open run needs neither.
+ */
+export const CLAIMS_CHOICES = ['release', 'handover'] as const;
+export type ClaimsChoiceWord = (typeof CLAIMS_CHOICES)[number];
+export interface ClaimsChoiceBody {
+  readonly runs?: ClaimsChoiceWord;
+  readonly heir?: string;
+}
+
+/** `POST /api/sessions/:id/stop`'s body (D-8199): the claims choice, or `restart` — the stop is half of a restart that
+ *  keeps the session id (stop, then ensure), so its claims stay where they are and nothing is asked. */
+export interface StopBody extends ClaimsChoiceBody {
+  readonly restart?: true;
+}
+
+/** The words a refused claims move (D-8199, `claims-not-moved`) names as its `refusal.kind` of its own, beside the reclaim
+ *  door's words it passes on (`unknown-session`, `heir-is-a-worker`, `registry-unmeasurable` and the rest): the heir is the
+ *  session being put down; the heir's pane is not up; the chair moved to somebody else before the release. */
+export const CLAIMS_MOVE_REFUSALS = {
+  heirIsThisSession: 'heir-is-this-session',
+  heirNotLive: 'heir-not-live',
+  claimantChanged: 'claimant-changed',
+} as const;
+export type ClaimsMoveRefusalWord = (typeof CLAIMS_MOVE_REFUSALS)[keyof typeof CLAIMS_MOVE_REFUSALS];
+const CLAIMS_MOVE_REFUSAL_WORDS: readonly string[] = Object.values(CLAIMS_MOVE_REFUSALS);
+export function isClaimsMoveRefusal(v: unknown): v is ClaimsMoveRefusalWord {
+  return typeof v === 'string' && CLAIMS_MOVE_REFUSAL_WORDS.includes(v);
+}
+
+/** The claims a door moved (D-8199), on its answer: `to` is the heir, or `null` for a release. */
+export interface ClaimsMoved {
+  readonly to: string | null;
+  readonly runs: readonly { readonly id: number; readonly program: string; readonly wave: number; readonly waveOf: number | null }[];
 }
 
 /** The door's 2xx answer. `archived: true` — the session is put away: a workspace archived, a main checkout stopped
@@ -11174,6 +11217,8 @@ export interface ArchiveAnswer {
   readonly ended: readonly { readonly id: number; readonly program: string; readonly wave: number; readonly waveOf: number | null }[];
   readonly refusal?: ArchiveRefusal | null;
   readonly detail?: string;
+  /** D-8199: the claims a `ClaimsChoiceBody` moved before the stop and the archive; absent when none was asked. */
+  readonly moved?: ClaimsMoved;
 }
 
 /**

@@ -850,7 +850,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   // The codes as test DATA, bound to the declaration by the first case: a scan driven by `Object.values` alone would
   // scan nothing, and stay green, on a tree where the declaration is gone.
   const CODES = ['run-open', 'session-busy', 'coordinator-has-open-runs', 'programme-partly-ended', 'worktree-gone',
-    'status-unknown', 'manifest-unbuildable'];
+    'status-unknown', 'manifest-unbuildable', 'claims-not-moved'];
 
   it('scans every code the declaration holds', () => {
     expect(Object.values(ARCHIVE_REFUSALS ?? {}).sort()).toEqual([...CODES].sort());

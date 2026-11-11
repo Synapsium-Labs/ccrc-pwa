@@ -88,13 +88,13 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   it('a busy row with `interrupt` proceeds, and the stop comes first', async () => {
     const { p } = port();
     expect(await decideArchive(p, 'demo-a', { ...NONE, interrupt: true }, { ...IDLE_WS, turn: 'busy' }))
-      .toEqual({ ok: true, stop: true, wsArchive: true, ended: [] });
+      .toEqual({ ok: true, stop: true, wsArchive: true, ended: [], moved: null });
   });
 
   it('an idle workspace is archived without a stop; a main checkout is stopped and never reaches ws-archive', async () => {
-    expect(await decideArchive(port().p, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [] });
+    expect(await decideArchive(port().p, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [], moved: null });
     expect(await decideArchive(port().p, 'claude-demo', NONE, IDLE_MAIN))
-      .toEqual({ ok: true, stop: true, wsArchive: false, ended: [] });
+      .toEqual({ ok: true, stop: true, wsArchive: false, ended: [], moved: null });
   });
 
   it('a busy main checkout without `interrupt` refuses too — busy is read for both kinds of row', async () => {
@@ -130,7 +130,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   it('an UNMEASURED worktree is not a refusal — in remote mode this box cannot read one; ccd measures it', async () => {
     const { p, seen } = port({ claimed: { ok: true, siblings: [run(1)] } });
     expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, { ...IDLE_WS, worktree: 'unmeasured' }))
-      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(1)] });
+      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(1)], moved: null });
     expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:1', 'abandon:1']);
   });
 
@@ -180,7 +180,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   it('`programme:"end"` abandons every run it coordinates, in id order, and then proceeds', async () => {
     const { p, seen } = port({ claimed: { ok: true, siblings: [run(7), run(8, 2)] } });
     expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, IDLE_WS))
-      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(7), run(8, 2)] });
+      .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(7), run(8, 2)], moved: null });
     expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:7', 'can:8', 'abandon:7', 'abandon:8']);
   });
 
@@ -225,7 +225,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   });
 
   it('a box with no coordination archives exactly as before — no store, no claim checks', async () => {
-    expect(await decideArchive(null, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [] });
+    expect(await decideArchive(null, 'demo-a', NONE, IDLE_WS)).toEqual({ ok: true, stop: false, wsArchive: true, ended: [], moved: null });
   });
 });
 

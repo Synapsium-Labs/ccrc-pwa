@@ -367,6 +367,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [ARCHIVE_REFUSALS.runOpen]: 409, [ARCHIVE_REFUSALS.coordinatorHasOpenRuns]: 409,
   [ARCHIVE_REFUSALS.programmePartlyEnded]: 409, [ARCHIVE_REFUSALS.worktreeGone]: 409,
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 409,
+  // D-8199: CHOSEN, not measured — a new word. 409, the request was well-formed and the heir's or the store's state
+  // refused the move (the heir not live, not known, a worker elsewhere); nothing was stopped or archived.
+  [ARCHIVE_REFUSALS.claimsNotMoved]: 409,
   // The question door family (W3 Q3f, D-7030): CHOSEN, not measured — a new word. 400: an id of the other principal's
   // kind, or a body kind that disagrees with the id's, is the caller's to fix, like a malformed body.
   'kind-mismatch': 400,

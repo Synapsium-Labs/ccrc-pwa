@@ -49,22 +49,24 @@ function sendRefused(reply: FastifyReply, body: RefusedBody): FastifyReply {
 
 export async function actArchive(
   reply: FastifyReply, plan: Planned, flags: ArchiveFlags, archiveArgv: CcdArgv | null, ports: ArchiveActPorts,
-): Promise<FastifyReply | { ok: true; archived: true; stopped: boolean; ended: Planned['ended'] }> {
-  const endedSpread = plan.ended.length > 0 ? { ended: plan.ended } : {};
+): Promise<FastifyReply | { ok: true; archived: true; stopped: boolean; ended: Planned['ended']; moved?: NonNullable<Planned['moved']> }> {
+  // D-8199: the claims a choice moved ride every answer after the move, beside `ended`.
+  const movedSpread = plan.moved !== null ? { moved: plan.moved } : {};
+  const endedSpread = { ...(plan.ended.length > 0 ? { ended: plan.ended } : {}), ...movedSpread };
   let stopped = false;
   if (plan.stop) {
     // Re-read at the act, fail-closed, unless the operator consented to lose the turn. A turn measured in progress
     // is `session-busy`, a state nobody could read `status-unknown` — the word is `refusedAtStop`'s (3881).
     const verdict = flags.interrupt ? 'idle' : await ports.turnVerdict();
     if (verdict !== 'idle') {
-      const refused = refusedAtStop(verdict, plan.ended);
+      const refused = refusedAtStop(verdict, plan.ended, plan.moved);
       return sendRefused(reply, refused.body as RefusedBody);
     }
     const res = await ports.runCcd(ports.stopArgv());
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr), ...endedSpread });
     stopped = true;
   }
-  if (archiveArgv === null || !plan.wsArchive) return { ok: true, archived: true, stopped, ended: plan.ended };
+  if (archiveArgv === null || !plan.wsArchive) return { ok: true, archived: true, stopped, ended: plan.ended, ...movedSpread };
   const archived = await ports.runCcd(archiveArgv);
   // REVIEW 240's F1 (workspace lifecycle wave 3b): `ws-archive` answers `already archived <id>` at exit 0 having
   // stopped NOTHING — a row archived earlier whose pane came back without a spawn path clearing the stamp (a pre-#143
@@ -80,7 +82,7 @@ export async function actArchive(
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr), ...endedSpread });
     stopped = true;
   }
-  const out = archiveOutcome(stopped, plan.ended, archived);
+  const out = archiveOutcome(stopped, plan.ended, archived, plan.moved);
   // The 409 arm is a refusal and answers through the one helper; the 200 and the 502 `{ stderr }` arms are not words.
   return out.status === 409 ? sendRefused(reply, out.body as RefusedBody) : reply.code(out.status).send(out.body);
 }

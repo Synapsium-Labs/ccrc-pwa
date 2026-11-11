@@ -1814,6 +1814,16 @@ function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
   return out;
 }
 
+/** D-8199: the id a `reclaimProgram` RELEASE row displaced (`release:<from>`, written when the chair is left to nobody),
+ *  or `null` for text that does not start with `release:`. There is no heir and no separator to split on, so the whole
+ *  rest is `from`; a `from` longer than `TMPROOT_ID_MAX_CHARS` is dropped (`[]`) for the bound's own reason above. */
+function childReclaimReleasedCandidates(detail: string): string[] | null {
+  const prefix = 'release:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  return body.length <= TMPROOT_ID_MAX_CHARS ? [body] : [];
+}
+
 /** The acts the birth read returns (spec §5.7: a creation is placed, or it is doubt). `create` opens a generation,
  *  and `purge` is the one removal. Every removal of a row ends in ccd's `_reg_purge`, which journals `purge done`
  *  BEFORE it unlinks the row's files, and that line carries the row's `meas.uuid`. `collect` never purges: it
@@ -2220,7 +2230,7 @@ export class CoordStore {
    * fetches. Re-rendering it here would trade a true historical line for a
    * violation of the one rule the mail body has.
    */
-  reclaimProgram(runId: number, to: string, at: number, coordProject: string | null): ReclaimProgramResult {
+  reclaimProgram(runId: number, to: string | null, at: number, coordProject: string | null): ReclaimProgramResult {
     return tx(this.db, () => {
       const run = this.db.prepare('SELECT program, claimedBy FROM runs WHERE id = ?')
         .get(runId) as { program: string; claimedBy: string | null } | undefined;
@@ -2234,10 +2244,17 @@ export class CoordStore {
       // none rather than a second identical trail. `ORDER BY id` so `runIds` is
       // the same list twice — the query planner may reach these rows through
       // `runs_by_program` (schema.ts:88) rather than by rowid.
-      const moved = this.db.prepare(
-        'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
-        'AND claimedBy != ? ORDER BY id',
-      ).all(run.program, to) as { id: number; claimedBy: string }[];
+      // D-8199: `to === null` is a RELEASE — the operator archiving or stopping the claimant chose to leave the chair to
+      // nobody. Every claimed row moves (there is no `to` to exclude), by the same R1 rule as a hand-over: `openRun`'s
+      // guard reads the lowest claimed id with no state predicate, so a terminal row left naming the released session
+      // would refuse the coordinator that picks the programme up.
+      const moved = (to === null
+        ? this.db.prepare('SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id')
+          .all(run.program)
+        : this.db.prepare(
+          'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
+          'AND claimedBy != ? ORDER BY id',
+        ).all(run.program, to)) as { id: number; claimedBy: string }[];
       // D-2922: `claimedBy` and `coordProject` move TOGETHER, under one WHERE.
       // They are two facts about the same coordinator — who holds the chair,
       // and which card that chair's workers render on — and rewriting only the
@@ -2260,13 +2277,18 @@ export class CoordStore {
       // home (`boardPlacement`'s own contract), while the stale value would
       // have the board assert a coordinator this very statement retired.
       this.db.prepare('UPDATE runs SET claimedBy = ?, coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL')
-        .run(to, coordProject, run.program);
-      // D-8073 (spec §11.7): the programme's untold rows go to the heir with its runs, in this same transaction.
-      this.db.prepare('UPDATE run_close_untold SET claimant = ? WHERE program = ? AND claimant != ?').run(to, run.program, to);
+        .run(to, to === null ? null : coordProject, run.program);
+      // D-8073 (spec §11.7): the programme's untold rows go to the heir with its runs, in this same transaction. A
+      // release (D-8199) has no heir to tell, so they stay on the displaced claimant, where its outstanding reads find them.
+      if (to !== null) {
+        this.db.prepare('UPDATE run_close_untold SET claimant = ? WHERE program = ? AND claimant != ?').run(to, run.program, to);
+      }
       for (const m of moved) {
         // One `at` for N rows (D-1134): the operator acted once, and a trail that
-        // reads five clock samples describes five acts.
-        this.recordRunEvent(m.id, 'operator', `reclaim:${m.claimedBy} -> ${to}`, at);
+        // reads five clock samples describes five acts. A release journals
+        // `release:<from>` (D-8199), which the child-reclaim fence reads as a
+        // displacement beside `reclaim:` (`childReclaimCoordinatorClaims`).
+        this.recordRunEvent(m.id, 'operator', to === null ? `release:${m.claimedBy}` : `reclaim:${m.claimedBy} -> ${to}`, at);
       }
       // EVERY id THIS RECLAIM DISPLACED, not just `run.claimedBy`. The result's
       // `from` names one row's claimant; `moved` is the set the UPDATE above
@@ -2277,8 +2299,10 @@ export class CoordStore {
       // reports on corpses the same rewrite just declared displaced. `to` is
       // never in this set: the `claimedBy != ?` selection above excludes it.
       const displaced = [...new Set(moved.map((m) => m.claimedBy))];
-      if (displaced.length > 0) {
-        this.cancelKickoffsTo(displaced);
+      // A release cancels the displaced claimant's kickoffs too — the chair it was told to take is left — and repoints
+      // no mail: there is no heir, so role-addressed reports stay on the displaced claimant's box (D-8199).
+      if (displaced.length > 0) this.cancelKickoffsTo(displaced);
+      if (displaced.length > 0 && to !== null) {
         this.repointCoordinatorMail(run.program, to, displaced);
         // LAST, and the position is LOAD-BEARING — but not for `cancelKickoffsTo`'s
         // reason above, which is about a narrowing statement running before a
@@ -4820,13 +4844,16 @@ export class CoordStore {
     // (`TMPROOT_ID_MAX_CHARS`, whose docstring states why dropping
     // a longer one is safe). There is no SQL `MAX`: each row's instant is
     // proven before the fold compares it.
+    // D-8199: a RELEASE row (`release:<from>`, the same writer with no heir) is a displacement too — its `from` held
+    // a chair until that instant and no run names it any more — read with the same case-sensitive `substr`.
     const displacements = this.db.prepare(
       'SELECT DISTINCT detail, CAST(at AS TEXT) AS atText FROM run_events ' +
-      "WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
+      "WHERE causedBy = 'operator' AND substr(detail, 1, 8) IN ('reclaim:', 'release:')",
     ).all() as { detail: string; atText: string | null }[];
     for (const row of displacements) {
-      const froms = childReclaimDisplacedCandidates(row.detail);
-      const heirs = childReclaimDisplacedHeirCandidates(row.detail);
+      const released = childReclaimReleasedCandidates(row.detail);
+      const froms = released ?? childReclaimDisplacedCandidates(row.detail);
+      const heirs = released === null ? childReclaimDisplacedHeirCandidates(row.detail) : [];
       if (froms === null || heirs === null) {
         throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
       }
