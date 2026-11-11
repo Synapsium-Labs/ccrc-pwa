@@ -75,7 +75,7 @@ export type RollTargetVerdict =
 
 /** May an automatic roll take this session at all? `off` takes nothing; then only a coordinator. A row whose role is
  *  unknown (an older build's snapshot) is never taken, and an unreadable `.child` already reads `child`
- *  (`sessionRoleOf`). */
+ *  (`server/src/roleOf.ts#sessionRoleOf`). */
 export function rollTargetVerdict(targets: ClaudeRollTargets, role: SessionRole | null): RollTargetVerdict {
   if (targets === 'off') return { take: false, skip: 'setting-off' };
   if (role === null) return { take: false, skip: 'role-unknown' };
@@ -100,7 +100,7 @@ export function rollTargetsOf(r: RollSettingsRead): ClaudeRollTargets | null {
 export interface AutoRollInput {
   /** The Settings row; null when it could not be read. */
   readonly targets: ClaudeRollTargets | null;
-  /** `FleetSession.role` (`sessionRoleOf`); null when the row did not say. */
+  /** `FleetSession.role` (`server/src/roleOf.ts#sessionRoleOf`); null when the row did not say. */
   readonly role: SessionRole | null;
   /** When the node's current ccrc install completed (epoch ms); null when it could not be read. */
   readonly release: number | null;
