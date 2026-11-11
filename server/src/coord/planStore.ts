@@ -9,7 +9,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { RunState } from '../../../shared/api.js';
 import {
-  LINEAR_SYNC_PROGRAMME,
+  LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX,
   type BindingKind, type BindingState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
   type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
@@ -93,7 +93,6 @@ const checkpointOf = (r: Raw): CheckpointRow => ({
 });
 const ticketOf = (r: Raw): TicketRow => r as unknown as TicketRow;
 
-const UPKEEP_DUE_PREFIX = 'upkeep:';
 /** The due-queue key of an epic: its programme's slug, or `upkeep:<project>` for a team's Upkeep epic. */
 const dueKeyOf = (e: { program: string | null; project: string }): string =>
   e.program ?? `${UPKEEP_DUE_PREFIX}${e.project}`;

@@ -41,6 +41,8 @@ export const PLAN_BOUNDS = {
 /** The reserved programme row the sync's own work runs under, and the epic every programme keeps for upkeep. */
 export const LINEAR_SYNC_PROGRAMME = 'linear-sync';
 export const UPKEEP_EPIC_KEY = 'upkeep';
+/** The due queue's key prefix for an upkeep epic: `upkeep:<project>` (design 4.2). */
+export const UPKEEP_DUE_PREFIX = 'upkeep:';
 export const UPKEEP_EPIC_TITLE = 'Upkeep';
 
 /** A plan key (an epic, checkpoint or ticket key) has the programme slug grammar. */
