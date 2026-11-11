@@ -1284,3 +1284,8 @@ W4-3 (run 1761) defines two, dated 2026-11-10: D-8175 and D-8176, the build ques
 
 - **D-8175 — `history-w4-agents-mark-on-read-verbs`** (2026-11-10). Under `--agents`, `grep`, `describe`, `expand` and `tree` mark a subagent row `agent:<agent_id>`, as `touched` does; P7 rules visibility, not the mark.
 - **D-8176 — `history-w4-recall-carry-reread`** (2026-11-10). The `recall.mjs` carry's comments are re-read against the code as it stands after D-7095, and only what the code contradicts is reworded.
+
+W4-4 (run 1767) defines two, dated 2026-11-11: D-8188 and D-8189, the build questions the coordinator approved for it and numbered at dispatch.
+
+- **D-8188 — `history-w4-touched-graph-labels`** (2026-11-11). A `touched` symbol matches a graph node's `label`, read through `loadGraph`; `touched` calls neither `loadLabels` nor `fileFacts`, whose community facts its output does not carry.
+- **D-8189 — `history-w4-suffix-without-graph`** (2026-11-11). With no graph loaded, a relative stored ref of two segments or more, with no `..`, matches by suffix on a segment boundary and prints match `suffix`; a bare basename never matches without a graph.
