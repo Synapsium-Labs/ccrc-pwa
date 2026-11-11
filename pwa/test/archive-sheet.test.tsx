@@ -22,10 +22,12 @@ const claimedRun = (r: typeof RUN7, state: RunSummary['state'] = 'working'): Run
 
 type Archive = typeof api.archive;
 const mount = (session: FleetSession, o: {
-  archive: Archive; onStopOnly?: (id: string) => void; runs?: RunSummary[]; onArchived?: () => void;
+  archive: Archive; onStopOnly?: (id: string, body?: unknown) => void; runs?: RunSummary[]; onArchived?: () => void;
+  sessions?: FleetSession[];
 }) => {
   const fleet = createFleetStore();
   if (o.runs) act(() => { fleet.setState({ runs: o.runs! }); });
+  if (o.sessions) act(() => { fleet.setState({ sessions: o.sessions!, fleetFrameSeen: true }); });
   const onClose = vi.fn();
   const view = render(
     <>
@@ -38,6 +40,11 @@ const mount = (session: FleetSession, o: {
 };
 const refusal = (body: Record<string, unknown>, status = 409) => new ApiError(status, { ok: false, ...body });
 const buttons = (): string[] => screen.getAllByRole('button').map((b) => b.textContent ?? '');
+/** D-8199: ending the programme is one of the coordinator question's three answers — picked, then confirmed. */
+const endProgramme = async (): Promise<void> => {
+  fireEvent.click(await screen.findByRole('button', { name: 'End programme' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'End programme and archive' }));
+};
 
 describe('the confirm reads by case', () => {
   it('an idle workspace: its words, and Archive sends the plain call', async () => {
@@ -71,15 +78,15 @@ describe('the confirm reads by case', () => {
     await waitFor(() => expect(archive).toHaveBeenCalledWith('claude-demo', { interrupt: true }));
   });
 
-  it('a coordinator with open runs (L5): "End programme and archive" or "Cancel", nothing else, and how to pause instead', async () => {
+  it('a coordinator with open runs (L5, D-8199): it lists them and asks Release, Hand over or End programme — nothing is sent on the first tap', async () => {
     const archive = vi.fn(async () => null) as unknown as Archive;
     mount(s(), { archive, runs: [claimedRun(RUN7), claimedRun(RUN8), claimedRun({ ...RUN7, id: 6 }, 'done')] });
-    expect(screen.getByText('It has 2 open runs. End its programme too?')).toBeInTheDocument();
-    expect(screen.getByText('Its workers will be cleaned up.')).toBeInTheDocument();
-    expect(screen.getByText(/coordinator pause switch under Advanced on the Runs screen/)).toBeInTheDocument();
-    expect(buttons()).toEqual(['End programme and archive', 'Cancel']);
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    expect(screen.getByText('It coordinates 2 open runs. What happens to them?')).toBeInTheDocument();
+    expect(screen.getByText('run 7 — lifecycle wave 1/3; run 8 — lifecycle wave 2/3.')).toBeInTheDocument();
+    expect(buttons()).toEqual(['Release runs', 'Hand over', 'End programme', 'Cancel']);
+    await endProgramme();
     await waitFor(() => expect(archive).toHaveBeenCalledWith('demo-amber', { programme: 'end' }));
+    expect(screen.getByText(/coordinator pause switch under Advanced on the Runs screen/)).toBeInTheDocument();
   });
 });
 
@@ -101,9 +108,9 @@ describe('the server re-reads, and its refusal turns the sheet', () => {
       .mockResolvedValueOnce(null) as unknown as Archive;
     mount(s({ status: 'busy', bucket: 'working' }), { archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
-    expect(await screen.findByText('It has 1 open run. End its programme too?')).toBeInTheDocument();
+    expect(await screen.findByText('It coordinates 1 open run. What happens to them?')).toBeInTheDocument();
     expect(screen.getByText('run 7 — lifecycle wave 1/3.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     await waitFor(() => expect(archive).toHaveBeenLastCalledWith('demo-amber', { interrupt: true, programme: 'end' }));
   });
 
@@ -115,7 +122,7 @@ describe('the server re-reads, and its refusal turns the sheet', () => {
       runs: [RUN7, { id: 9, program: 5, wave: 1, waveOf: null }, null] })) as unknown as Archive;
     mount(s({ status: 'busy', bucket: 'working' }), { archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
-    expect(await screen.findByText('It has 1 open run. End its programme too?')).toBeInTheDocument();
+    expect(await screen.findByText('It coordinates 1 open run. What happens to them?')).toBeInTheDocument();
     expect(screen.getByText('run 7 — lifecycle wave 1/3.')).toBeInTheDocument();
     expect(screen.queryByText(/run 9/)).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/undefined|null/);
@@ -145,7 +152,7 @@ describe('the server re-reads, and its refusal turns the sheet', () => {
     const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'programme-partly-ended', closed: [RUN7],
       notClosed: [RUN8], refusal: { id: 8, kind: 'bad-transition', detail: 'closing → closing' } })) as unknown as Archive;
     mount(s(), { archive, runs: [claimedRun(RUN7), claimedRun(RUN8)] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     expect(await screen.findByText('The programme was only partly ended')).toBeInTheDocument();
     expect(screen.getByText('Ended: run 7 — lifecycle wave 1/3. Still open: run 8 — lifecycle wave 2/3. '
       + 'Run 8 could not be ended (bad-transition: closing → closing). Nothing was stopped or archived.')).toBeInTheDocument();
@@ -211,16 +218,23 @@ describe('"Stop only" — after a refusal the phone cannot fix, and only where t
     expect(onStopOnly).toHaveBeenCalledWith('demo-amber');
   });
 
-  it('offered after a programme it could not end — a run no abandon can move, and nothing was stopped', async () => {
+  it('offered after a programme it could not end — and, the session still claiming a run, it asks first (D-8199)', async () => {
     const onStopOnly = vi.fn();
     const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'programme-partly-ended', closed: [],
       notClosed: [RUN7], refusal: { id: 7, kind: 'bad-transition', detail: 'closing → closing' } })) as unknown as Archive;
     mount(s(), { archive, onStopOnly, runs: [claimedRun(RUN7, 'closing')] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     expect(await screen.findByText('The programme was only partly ended')).toBeInTheDocument();
     expect(buttons()).toEqual(['Stop only', 'Cancel']);
     fireEvent.click(screen.getByRole('button', { name: 'Stop only' }));
-    expect(onStopOnly).toHaveBeenCalledWith('demo-amber');
+    expect(onStopOnly).not.toHaveBeenCalled();
+    expect(screen.getByText('It coordinates 1 open run. What happens to them?')).toBeInTheDocument();
+    // A stop never ends a programme: Release or Hand over only.
+    expect(buttons()).toEqual(['Release runs', 'Hand over', 'Cancel']);
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    expect(screen.getByText('Release its run and stop?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Release and stop' }));
+    expect(onStopOnly).toHaveBeenCalledWith('demo-amber', { runs: 'release' });
   });
 
   it('offered after `501 unsupported` — a box whose ccd has no ws-archive refuses every retry until it is updated', async () => {
@@ -261,7 +275,7 @@ describe('the outcome', () => {
     const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'worktree-gone', detail: 'ccd: worktree is gone: /w',
       ended: [RUN7] })) as unknown as Archive;
     mount(s(), { archive, onStopOnly: vi.fn(), runs: [claimedRun(RUN7)] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     expect(await screen.findByText('Its programme was ended first: run 7 — lifecycle wave 1/3.')).toBeInTheDocument();
     expect(screen.getByText("Couldn't archive")).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop only' })).toBeInTheDocument();
@@ -282,7 +296,7 @@ describe('the outcome', () => {
       .mockResolvedValueOnce({ ok: true, archived: false, stopped: true, ended: [], refusal: 'status-unknown',
         detail: 'ccd: status-unknown' }) as unknown as Archive;
     mount(s(), { archive, runs: [claimedRun(RUN7)] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     fireEvent.click(await screen.findByRole('button', { name: 'Archive anyway' }));
     await waitFor(() => expect(archive).toHaveBeenLastCalledWith('demo-amber', { interrupt: true, programme: 'end' }));
     expect(await screen.findByText(/^Its programme was ended \(run 7 — lifecycle wave 1\/3\)\. Stopped, but not archived/))
@@ -328,7 +342,7 @@ describe('the shapes a well-formed fixture never sends', () => {
     const archive = vi.fn().mockRejectedValueOnce(
       refusal({ error: 'programme-partly-ended' })) as unknown as Archive;
     mount(s(), { archive, runs: [claimedRun(RUN7)] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     expect(await screen.findByText('No run was ended. Nothing was stopped or archived.')).toBeInTheDocument();
   });
 
@@ -336,12 +350,12 @@ describe('the shapes a well-formed fixture never sends', () => {
     const archive = vi.fn().mockRejectedValueOnce(
       new ApiError(409, 'programme-partly-ended')) as unknown as Archive;
     mount(s(), { archive, runs: [claimedRun(RUN7)] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     // A body that is not an object carries no `error` either, so there is no
     // partly-ended sentence to say — and the sheet must stay on its confirm
     // rather than turn into a titled refusal with an empty body.
     await waitFor(() =>
-      expect(screen.getByText('It has 1 open run. End its programme too?')).toBeInTheDocument());
+      expect(screen.getByText('End its programme and archive?')).toBeInTheDocument());
     expect(screen.queryByText('The programme was only partly ended')).toBeNull();
   });
 
@@ -350,7 +364,7 @@ describe('the shapes a well-formed fixture never sends', () => {
       error: 'programme-partly-ended', closed: [RUN7], refusal: { detail: 'something' },
     })) as unknown as Archive;
     mount(s(), { archive, runs: [claimedRun(RUN7)] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     const said = await screen.findByText(/Ended: run 7/);
     expect(said.textContent).not.toMatch(/undefined|could not be ended/);
   });
@@ -360,7 +374,7 @@ describe('the shapes a well-formed fixture never sends', () => {
       error: 'programme-partly-ended', notClosed: [RUN8], refusal: { id: 8, kind: 'claimed' },
     })) as unknown as Archive;
     mount(s(), { archive, runs: [claimedRun(RUN7)] });
-    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    await endProgramme();
     const said = await screen.findByText(/Still open: run 8/);
     expect(said.textContent).toContain('Run 8 could not be ended (claimed).');
     expect(said.textContent).not.toMatch(/undefined/);
@@ -447,5 +461,97 @@ describe('a superseded archive cannot act on the sheet that is up now', () => {
     await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
     expect(screen.queryByText("It's working. Archive anyway?"),
       "one row's refusal turned another row's sheet").toBeNull();
+  });
+});
+
+describe('the coordinator question (D-8199): Release or Hand over, one tap then confirm', () => {
+  const HEIR = fleetSession({ id: 'demo-heir', name: 'heir', project: 'demo', workdir: '/w/demo/heir', workspace: 'heir',
+    role: 'coordinator' });
+  const runs = [claimedRun(RUN7), claimedRun(RUN8)];
+
+  it('Release: the first tap says what it does, the second sends `runs: "release"`', async () => {
+    const archive = vi.fn(async () => null) as unknown as Archive;
+    const { onClose } = mount(s(), { archive, runs });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    expect(archive).not.toHaveBeenCalled();
+    expect(screen.getByText('Release its 2 runs and archive?')).toBeInTheDocument();
+    expect(screen.getByText(/They stay open, claimed by nobody\. Nothing is ended/)).toBeInTheDocument();
+    expect(buttons()).toEqual(['Release and archive', 'Back', 'Cancel']);
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('demo-amber', { runs: 'release' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it('Hand over: the picker lists the project\'s live coordinators, never the session itself; the confirm sends the heir', async () => {
+    const archive = vi.fn(async () => null) as unknown as Archive;
+    const self = s({ role: 'coordinator' });
+    mount(self, { archive, runs, sessions: [self, HEIR] });
+    expect(screen.getByRole('button', { name: 'Hand over' })).toBeDisabled();
+    const picker = screen.getByRole('combobox', { name: 'Hand over to' });
+    expect([...picker.querySelectorAll('option')].map((o) => o.value)).toEqual(['', 'demo-heir']);
+    fireEvent.change(picker, { target: { value: 'demo-heir' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over to heir' }));
+    expect(screen.getByText('Hand its 2 runs to heir and archive?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over and archive' }));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('demo-amber', { runs: 'handover', heir: 'demo-heir' }));
+  });
+
+  it('with no live coordinator to take them, Hand over stays off and the sheet says why', () => {
+    mount(s(), { archive: vi.fn() as unknown as Archive, runs, sessions: [fleetSession({ id: 'demo-heir', project: 'demo', workdir: '/w/demo/heir', workspace: 'heir', role: 'coordinator',
+      status: 'dead' })] });
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.getByText('No other live coordinator of demo to hand them to.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hand over' })).toBeDisabled();
+  });
+
+  it('Back returns to the question, and nothing was sent', () => {
+    const archive = vi.fn() as unknown as Archive;
+    mount(s(), { archive, runs });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByText('It coordinates 2 open runs. What happens to them?')).toBeInTheDocument();
+    expect(archive).not.toHaveBeenCalled();
+  });
+
+  it('found coordinating by the server: its runs, then the question', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'coordinator-has-open-runs', runs: [RUN7] }))
+      .mockResolvedValueOnce(null) as unknown as Archive;
+    mount(s(), { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(await screen.findByText('It coordinates 1 open run. What happens to them?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    await waitFor(() => expect(archive).toHaveBeenLastCalledWith('demo-amber', { runs: 'release' }));
+  });
+
+  it('a refused move (`claims-not-moved`) returns to the question with the reason, and nothing was stopped or archived', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'claims-not-moved', moved: [], notMoved: [RUN7, RUN8],
+      refusal: { kind: 'heir-not-live', detail: 'its pane is gone (the lifecycle reads stopped)' } })) as unknown as Archive;
+    const self = s({ role: 'coordinator' });
+    mount(self, { archive, runs, sessions: [self, HEIR] });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hand over to' }), { target: { value: 'demo-heir' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over to heir' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over and archive' }));
+    expect(await screen.findByText('Its runs could not be moved: that coordinator is not live '
+      + '(its pane is gone (the lifecycle reads stopped)). Nothing was stopped or archived.')).toBeInTheDocument();
+    expect(screen.getByText('It coordinates 2 open runs. What happens to them?')).toBeInTheDocument();
+  });
+
+  it('Stop only on a session that claims runs hands the choice to the stop, never ending the programme', async () => {
+    const onStopOnly = vi.fn();
+    // "Stop only" is offered after a refusal the phone cannot fix; the frame says the session claims runs.
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'status-unknown' })) as unknown as Archive;
+    const self = s({ role: 'coordinator' });
+    mount(self, { archive, onStopOnly, runs, sessions: [self, HEIR] });
+    fireEvent.click(screen.getByRole('button', { name: 'Release runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release and archive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
+    expect(onStopOnly).not.toHaveBeenCalled();
+    expect(buttons()).toEqual(['Release runs', 'Hand over', 'Cancel']);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hand over to' }), { target: { value: 'demo-heir' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over to heir' }));
+    expect(screen.getByText('Hand its 2 runs to heir and stop?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over and stop' }));
+    expect(onStopOnly).toHaveBeenCalledWith('demo-amber', { runs: 'handover', heir: 'demo-heir' });
   });
 });

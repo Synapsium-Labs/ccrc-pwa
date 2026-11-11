@@ -234,6 +234,8 @@ export const ARCHIVE_REFUSAL_TEXT: Readonly<Record<ArchiveRefusal, string>> = {
   [ARCHIVE_REFUSALS.worktreeGone]: 'Its worktree is gone, so it cannot be described for the archive record.',
   [ARCHIVE_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be archived on a guess.',
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 'It cannot be described truthfully for the archive record. Nothing was touched.',
+  // D-8199: a release or hand-over of its runs was refused; the sheet names which runs and why.
+  [ARCHIVE_REFUSALS.claimsNotMoved]: 'Its runs could not be moved. Nothing was stopped or archived.',
 };
 
 /**

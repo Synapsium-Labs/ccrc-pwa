@@ -14,7 +14,7 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
+import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession, type StopBody } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, failedTo } from '../lib/api';
 
@@ -180,7 +180,7 @@ export function SessionActionsSheet({
   // "Stop only" — the one place it survives (spec §5.2): offered by `ArchiveSheet` after an archive refusal the
   // operator cannot fix from the phone, so a live session is never left without a way to put it down. The same
   // `POST /api/sessions/:id/stop` as ever, which is unchanged.
-  const stopOnly = (id: string): void => {
+  const stopOnly = (id: string, body?: StopBody): void => {
     // The substrate gate (spec §4), re-read at fire time: stop is destructive while tmux cannot be reached, and the
     // fleet frame updates live under the open sheets. `ArchiveSheet` disables the button on the same fault.
     const stopFault = substrateFault(session);
@@ -190,7 +190,7 @@ export function SessionActionsSheet({
     }
     void (async () => {
       try {
-        await api.stop(id);
+        await api.stop(id, body);
       } catch (err) {
         toast(failedTo('stop', err), 'error');
       }
