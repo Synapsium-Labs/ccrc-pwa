@@ -697,6 +697,24 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
 - **D-8207, w0-quiz-baseline-deferred, scope, if ruled B** — §3.3.9 C52 says W0 runs the replay quiz once as the
   baseline; under B, M13's baseline is the first run of W1a's quiz lane instead.
 
+**Found by W0a (run 1774), waiting for their numbers.** The coordinator issues each number and defines it in the
+index plan; the whole decision is in the results note's "Departures from the plan"
+(`docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`).
+
+- **w0a-rig-tooling-beyond-the-named-files, method** — Tasks 5 and 6 add rig features Task 2 did not list (the mock's
+  padded reply, `cfg2` files and an `@RIG_PROJECT@` path, a `paneSnap` verb, the emitter's tag and payload summary,
+  transcript sizes), and fix round 1 adds a scenario's `mainMarker`, the bare-flag list and `run_opts`. Each has a test
+  where the rig's tests reach it without a real launch (the run-time verbs' came in fix round 1, after the code);
+  `cmd_run`'s mock start with `MOCK_REQDIR` and its `logs/` directory are untested, because they act only in a real
+  launch. Step timings go to their own file, not `notes`.
+- **w0a-scenario-arms-split, method** — one environment per run, so two scenarios are two files each and the subagent
+  model three; `ov-forks` sets the fork and agent-view switches in one run, never the agent-teams switch, with one fork
+  relaunch under both; the renewal timing runs resumes before fresh starts; the idle arms seed reported usage. Tasks 5
+  and 6 share a commit, and Task 5's long-run results landed in Task 7's; the pull request is squash-merged.
+- **w0a-force-arm-pins-sources, method** — ccrc's D-6798 arm refuses every Agent call under
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, so the force arm pins its setting sources to measure the model; the refusal is
+  measured on its own, with ccrc's hook loaded (`ov-subagent-model-force-hook`, W0-11).
+
 **Settled by the spec's later edition, so no longer deviations:** W0 changes nothing that runs,
 and its test-only files ship (§14). W0 measures a swap with a stand-in renewal, and W1a measures the real act
 (§3.4). The first model is a dependency-free explorer (§11.7).
