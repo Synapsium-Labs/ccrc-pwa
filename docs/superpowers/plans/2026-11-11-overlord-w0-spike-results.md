@@ -187,3 +187,282 @@ characters arrived whole (both canaries) with each of the three prompts, includi
 after `/compact`. A second UserPromptSubmit hook with `timeout: 3` that sleeps 8 s before emitting never logged a
 line, and no text of it reached any request; the prompt went ahead after the timeout. **Outcome: delivered, and the
 late one drops its output, as designed** (the per-prompt delta stays in W1a).
+
+## Compaction, clear and the fresh start (Task 5: W0-05, W0-06, W0-08, W0-13, W0-14), measured 2026-11-11
+
+**W0-05, does a compaction change the session id (rig, both builds, identical).** `ov-compact` took `sessionsSnap`
+before and after a manual `/compact`, and before and after an automatic compaction past a lowered window
+(`CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`, the mock reporting 150,000 input tokens). Claude Code's live-session record
+(`sessions/<pid>.json`) named the same `sessionId` in all four snapshots, and one transcript file, under that id, grew
+throughout; every hook payload carried that id. With the corpus's `/clear` (a new id) and `--resume` (the same id),
+**the answer is: `/clear` mints a new session id; a compaction, manual or automatic, keeps it.** `ccd/ccd#_sync_uuid`'s
+header ("compaction keeps its transcript") is the right one. The attribution comment in `server/src/coord/routes.ts`
+and the socket header in `server/src/sessionws.ts` ("clear/compact") are wrong about compaction; a follow-up issue,
+not W0. **Outcome: the binding to the session id stands either way** (C2).
+
+A second fact `ov-compact` showed, and the design needs: **the automatic compaction under the mock sent no summarising
+request.** The PreCompact hook fired with `trigger: auto`; then the next request went out with the earlier turns
+dropped and no summary in their place, and neither a SessionStart `compact` nor a PostCompact followed. The manual
+`/compact` in the same run sent two summarising requests, then fired PostCompact `manual` and SessionStart `compact`,
+whose context reached the next request (W0-02). Whether a real automatic compaction, on real usage figures, takes the
+same path is not shown here (the mock's usage figures are fixed numbers): it is a rig result. It matters because the
+anchor's re-injection keys on SessionStart `compact`. **Proposal (last section):** W1a reads an automatic compaction
+by PreCompact `auto`, not by SessionStart `compact`, until a real one is measured.
+
+**W0-06, the fresh start's time and the roll's overhead.** Recorded below when the renewal-time runs end. The fleet
+half (the roll's overhead from ccd's lifecycle journal) is W0b's.
+
+**W0-08, what `/clear` and a fresh start do to work in flight (rig, both builds, identical).** `ov-clear-effects`
+started, in one main turn, a reader (`Agent`, `model: sonnet`, whose request the mock held for 100 s), a background
+shell (`sleep 90`), a session cron and a durable cron (`CronCreate` every minute, `durable` false and true), then a
+20-second main turn during which `w0 queued` was typed, then `/clear`. `ov-clear-effects-fresh` is the same with a
+fresh relaunch in place of `/clear`.
+
+| In flight | After `/clear` | After a fresh start |
+|---|---|---|
+| The reader | **Survives**: its SubagentStop fired about 100 s after it started, after the clear, and **its result was delivered into the new conversation** | Killed: no SubagentStop, and its result reached no request |
+| The background shell | Its completion reached no request, in either conversation | Gone with the process |
+| Text typed during the running turn | Ran in the **old** conversation, after that turn and before the clear | Lost: never sent |
+| The session cron | **Survives**: fired three times into the new conversation | Gone |
+| The durable cron (persisted to `.claude/scheduled_tasks.json`) | **Survives**: fired three times | **Survives**: fired three times into the fresh session |
+
+**Outcome: the drain wait and the fence are load-bearing, as designed** (a reader that survives a clear reports into
+the new conversation). **Crons survive both a clear and a fresh start** (the durable one), so the Overlord's profile
+denies the cron tools (`CronCreate`, `CronList`, `CronDelete`; or `CLAUDE_CODE_DISABLE_CRON=1`), H1 amended. Queued
+input is not carried across a clear (it runs before it), so the delivery lane's hold during `clearing` stays as
+designed, and a fresh start loses it outright.
+
+**W0-13, a PreCompact refusal of a proactive compaction (rig, both builds, identical).** `ov-precompact`: the refuser
+(exit code 2 on `trigger: auto`) on PreCompact, the window lowered to 100,000 and the mock reporting 150,000 input
+tokens, for seven turns. Each turn from the second on began with one PreCompact `auto`, refused, and then ran
+uncompacted to a reply (the conversation grew by one exchange a turn). Seven refusals in all (turns 2 to 7 and one
+continuation), one a turn, never two. At the window's end (emulated, from the API's stop-reason page): a reply with
+`stop_reason: model_context_window_exceeded` was treated as an output-limit stop and continued once on its own ("Output
+token limit hit. Resume directly"); an HTTP 400 `invalid_request_error`, "prompt is too long", ended that turn with
+StopFailure `invalid_request`, and no recovery compaction was attempted. The session was not stuck: a manual `/compact`
+under the same hook passed (PreCompact `manual`, passed), compacted and answered the next prompt. **Outcome: honoured,
+turn intact, asked again at every turn's start, so the arm refuses once and lets the next through (the soft budget),
+not armed to refuse forever.**
+
+## The launch profile (Task 6: W0-09 to W0-12, W0-15 to W0-19), measured 2026-11-11
+
+**W0-09, auto memory (rig, both builds, identical).** `ov-memory` put a canary in the fixture config's project memory
+(`projects/<project>/memory/MEMORY.md`), and a different canary in the second config that `swapConfig` makes; the
+session was resumed on the second config. With the switch at its default, the first canary reached the first request,
+and after the swap the second config's canary was injected anew (as a user-turn reminder, not in the system prompt),
+beside the first, which the resumed history still carried. `ov-memory-off`, the same with
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` at launch: **no canary reached any request, before or after the swap.**
+**Outcome: off by a launch setting, so it is the profile's column** (H14 stands: one env name per session, no account
+setting needed). A swap loads the new account's project memory unless the switch is off, which is why H14 turns it off
+for every role. The fleet census (non-empty memory directories per account) is W0b's.
+
+**W0-10, forks, agent view and agent teams (rig, both builds, identical).** `ov-forks` launched with
+`CLAUDE_CODE_FORK_SUBAGENT=0` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` and compared its first request with a default
+launch (`ov-sources`). The tool list was the same 13 names, `ListAgents` among them, but the `Agent` tool changed: its
+description no longer mentions forks, and its schema regains `run_in_background`, which the default launch does not
+offer. No team tool is offered in either launch (agent teams are off by default). A `--resume … --fork-session`
+relaunch still worked under the switches and reported `fork`: the fork switch governs the fork subagent, not a resume
+fork. **Outcome: the switches hold, so they are the profile's column**; a resume fork is a separate act, and the fork
+refusal line (keyed on `fork`, W0-02) is its guard. One run set both switches, so which of the two moved which part of
+the `Agent` tool is not separated here.
+
+**W0-11, the subagent model against a call that names another (rig, both builds, identical).** `ov-subagent-model`:
+`CLAUDE_CODE_SUBAGENT_MODEL=sonnet` and an `--agents` reader defined with `model: sonnet`; the mock made four Agent
+calls in one turn (a general-purpose and a reader call each naming `opus`, and each naming no model). **The two calls
+naming `opus` ran on Opus** (the sub request's `model`): neither the env nor the reader's definition held against a
+per-call model, as the documentation's order says. The two calls naming no model never ran: ccrc's own hook refuses an
+Agent call that names no model (D-6798). `ov-subagent-model-force`, the same with `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`
+and the setting sources pinned (`project,local`, its grants in a `--settings` file): **all four calls ran on Sonnet.**
+**Outcome: a pin holds, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, so the profile uses it** (C55 stands; no PreToolUse arm
+is needed for the model). **A conflict found:** under FORCE, the PreToolUse payload's `tool_input` carries no `model`
+even when the call named one, so ccrc's D-6798 arm refuses every Agent call (measured: all four refused when ccrc's hook
+was loaded). W1 must exempt a FORCE-pinned session from that arm, or have the arm read the pin (proposal, last
+section).
+
+**W0-12, a typed `/model` and the flagged-request switch (rig, both builds, identical; the refusal emulated).**
+`ov-model-switch` registered `PreModelSwitch` and `PostModelSwitch` emitters and a statusline capture, with
+`switchModelsOnFlag: true`:
+- A typed `/model sonnet` after the first exchange opened a **"Switch model?" dialog** ("This conversation is cached for
+  the current model…", options "Yes, switch" and "No, go back"), which the next typed line answered. The switch then
+  fired `PreModelSwitch` and `PostModelSwitch`, **both carrying `from_model` and `to_model`**, and printed "saved as
+  your default for new sessions": a typed `/model` writes the account's settings, as D-2808 found for `/effort`.
+- `/model fable` switched with no dialog and the same two hooks.
+- The mock answered the Fable request with `stop_reason: refusal` (emulated from the API's stop-reason page; the mock
+  sent no `stop_details`). Claude Code printed "Fable 5.x's safeguards stopped the response above · continuing once
+  with that noted" and **re-ran on the same Fable model**: no model switch, no switch hook, no dialog; the statusline's
+  `model.id` stayed Fable, and so did the next turn.
+
+**Outcome:** a hook payload names the model for a typed switch, so the hook arm journals it (Table 3.6a). For Claude
+Code's own switch on a flagged request the rig is **inconclusive**: with this emulated shape no switch happened, so
+which hook or row would report a real one is unmeasured. That selects the conservative branch, the statusline writer
+journals a model change too, and the fleet's history counts the real notices (W0b). The dialog on a typed `/model`
+mid-conversation is a new fact for everything that types `/model` today (Table 1.2a lists it among ccrc's typed
+strings), recorded in the last section.
+
+**W0-19, what an account's config directory loads (rig, both builds, identical).** `ov-config-load` gave the fixture
+config a user `CLAUDE.md`, a skill (`skills/`), an agent (`agents/`), a user-scope tool server (`mcpServers` in its
+`.claude.json`, the door stub) and a settings key, and launched it twice:
+
+| Kind in the account config | Default sources | `--setting-sources project,local` |
+|---|---|---|
+| User memory file (`CLAUDE.md`) | loaded (canary in the first request) | **not loaded** |
+| Skill | listed | **not listed** |
+| Agent | listed | **not listed** |
+| Tool server (`.claude.json` `mcpServers`) | started (the stub logged its calls) and named in the request | **not started** |
+| Settings (`settings.json`: hooks, grants) | loaded (ccrc's hook captured four events) | **not loaded**: ccrc's own hook did not run at all |
+| Plugin | not built: a plugin needs a marketplace install the fixture does not have | unmeasured |
+
+**Outcome: pinning excludes every kind measured, as designed** (H1). Plugins (mods) are unmeasured by the rig, so
+doctor's no-mods check stays required before designation, and the fleet census of `plugins/` is W0b's. **One
+consequence the profile must carry:** pinned sources drop ccrc's own hook with the account settings, so the profile
+registers the hook itself, through `--settings` (W0-15 measures that it then fires). Without it a pinned session runs
+with no ccrc hook at all.
+
+**W0-17, peer messaging (rig half, both builds, identical; the inbox socket by documentation only, D-8206).**
+`ov-peer` set only `crossSessionInbound: refuse`: the first request still offered `ListAgents`, and a ToolSearch for
+`SendMessage`, `ListAgents` and `TeamCreate` loaded the first two (no team tool exists with teams off). **The inbound
+switch alone does not take the peer tools away**; the deny rules do or do not, which `ov-door` measures under the whole
+profile. The documentation names `crossSessionInbound` (`accept`, `hold`, `refuse`) for inbound messages and
+`--remote-control`/`remoteControlAtStartup` for Remote Control, and describes no interface a local process may use to
+put a message into a session's inbox. **Outcome on the socket: no documented interface, so today's delivery stays**
+(H2); the Later item's trigger is not met.
+
+**W0-15, the door process under the restricted launch (rig, both builds, identical).** `ov-door` launched the
+profile as H1 states it: `--setting-sources project`; a `--settings` profile file carrying ccrc's own hook on its
+twelve events and a SessionStart anchor emitter of 1,500 characters, auto memory and idle compaction off,
+`crossSessionInbound: refuse`, `switchModelsOnFlag: true`, workflows off, `defaultMode: bypassPermissions` and deny
+rules for `Bash`, `Edit`, `Write`, `WebFetch`, `WebSearch`, `SendMessage`, `ListAgents` and `Workflow`;
+`--strict-mcp-config` with the door stub as its one tool server; `--tools Agent,Skill`; a reader in `--agents`;
+`--permission-mode bypassPermissions`; the fork, agent-view, auto-memory and subagent-model env names; `DOOR_NONCE`
+in the launch env; one project skill, and one account-level skill that must not load.
+
+| H4 property | Measured |
+|---|---|
+| Tools offered to the main thread | `Agent`, `Skill`, `mcp__door__card`, `mcp__door__read`, `mcp__door__act`: no shell, no editor, no web tool, no workflow, no peer tool |
+| Hooks | ccrc's hook fired from the profile file (SessionStart, UserPromptSubmit, PreToolUse and PostToolUse on every call, SubagentStart, SubagentStop, Stop, SessionEnd), though the account settings were not loaded |
+| The anchor | the 1,500-character emitter's text arrived whole (both canaries) in the first request |
+| Skills | the project skill listed; the account-level skill not |
+| Permission mode | `bypassPermissions` in every hook payload; the pane showed "bypass permissions on" |
+| Door calls | `card` and `read` from the main thread, `read` and `act` from the reader, every one served with no prompt (the stub logged each) |
+| The deny rule | a main-thread `Bash` call and a reader `Bash` call both answered "No such tool available: Bash. Bash is disabled for this session, in subagents as well as here" |
+| The nonce | `present` on every door call: the door process inherits the launch env |
+| First launch on a fresh account config | **a bypass acceptance dialog** ("WARNING: Claude Code running in Bypass Permissions mode", default "No, exit") came first; the run accepted it by key |
+
+**Outcome: all hold, as designed; the door process stands, and the §3.6 fallback is not selected.** Two facts the
+profile must carry: it registers ccrc's hook itself (W0-19), and a fresh account config needs the bypass acceptance
+recorded before an unattended start, or the start stops at that dialog (the fleet's configs have accepted it already;
+a new account would not have).
+
+**W0-16, readers with no shell (rig, both builds, identical).** In `ov-door` the `--agents` reader resolved by its
+type, ran on Sonnet, and was offered exactly the tools its definition listed that the profile allows
+(`mcp__door__read`, `mcp__door__act`); `Bash`, also in its definition, was removed by the session's deny rule.
+SubagentStart carries `agent_id` and `agent_type`; SubagentStop adds `permission_mode`, `effort`,
+`agent_transcript_path`, `last_assistant_message` and `background_tasks`; and **each PreToolUse inside the reader
+carries `agent_id` and `agent_type: w0-reader`**, absent on the main thread's. The reader's `act` call was served:
+a reader is limited only by its definition's tool list. **Outcome: the scope arm keys on PreToolUse's `agent_type`**,
+and refuses any door but the read door from a reader whose type is a reader type, as designed (C55).
+
+**W0-17, completed.** Under the whole profile `ListAgents` and `SendMessage` are not offered, and `ToolSearch`, which
+loads deferred tools, is not offered either (`--tools Agent,Skill`); the deny rules name both peer tools. So **the profile closes the peer tools; W1's sandbox check verifies the deny rules are
+present**, and nothing blocks W1. The inbound switch alone (`ov-peer`) does not remove them.
+
+**W0-18, the statusline's fields and its idle cadence (rig, both builds, identical; binary).** `ov-statusline` ran
+`statusline-capture.mjs` as the status line, the mock sending usage figures and the unified rate-limit headers
+(`5h-utilization` 0.42, `7d-utilization` 0.17, with resets), then ten idle minutes. The payload carries
+`context_window.total_input_tokens` (input plus cache read plus cache creation: 50,000 + 20,000 + 1,000 rendered as
+71,000), `total_output_tokens`, `context_window_size` (1,000,000 for this model), `used_percentage` and
+`remaining_percentage` (7 and 93), `current_usage.*` per kind, `exceeds_200k_tokens`, `model.id`, `cost.*` and
+`prompt_cache.*`. **No `rate_limits` field appeared** although the headers were sent: under API-key billing the
+statusline does not carry them (the documentation lists `rate_limits.five_hour` and `.seven_day`, which a
+subscription sign-in may fill; the rig cannot sign in). **Four renders in each run, and none in the ten idle
+minutes** (a 601 s gap): without `refreshInterval` the status line renders only on events. The builds read no
+per-model weekly header (Task 1's binary read). **Outcome:** the token and window fields are present, so **the
+sidecar gains `total_input_tokens` and `context_window_size` in W1a** (Table 3.3.11b's hard cap reads them, not a
+percentage); no idle renders, so a stale sample is unmeasured, as designed (or the profile sets `refreshInterval`,
+proposal below); no per-model figure, so W0-24 compares against `/usage` only.
+
+## The first model, re-run on the merged edition (Task 7: W0-27), 2026-11-11
+
+The research model (`docs/superpowers/research/2026-11-10-overlord-model-check/`) was run as it is, with nothing in it
+changed (model). Python 3, standard library only, on the fleet box, load about 8 on 16 cores.
+
+**Round one** (`check.py --matrix`, 243 s; `check.py --mutations`, 136 s). At the defaults (the safe readings, which
+are the sentences `REPORT.md` proposed and the spec's later editions wrote in) **every scenario holds every invariant
+(I1 to I10, D1 to D3, X1 to X5) and ends under the bound of 3,000,000 states**:
+
+| Scenario | States | Transitions | Violated |
+|---|---|---|---|
+| core | 94,966 | 345,638 | none |
+| push | 8,746 | 29,492 | none |
+| pause | 7,465 | 25,271 | none |
+| race | 1,888 | 6,831 | none |
+| renewal | 508,800 | 1,778,920 | none |
+| asks | 4,304 | 14,394 | none |
+| grants | 134,691 | 462,582 | none |
+| value | 264 | 709 | none |
+| lineage | 424 | 977 | none |
+| nohold | 35,684 | 148,271 | none |
+| deadpush | 812 | 2,287 | none |
+| restore | 4,563 | 13,002 | none |
+| genmachine | 674,982 | 2,214,248 | none |
+| rebind | 40,745 | 119,611 | none |
+| readiness | 336,549 | 1,292,292 | none |
+
+The largest, `genmachine`, is about a fifth of the bound, so no scenario was cut. The matrix's other 34 rows flip one
+switch each to the reading the text had left open, and three combinations; each breaks what `REPORT.md` says it
+breaks, and the whole matrix matches the committed `matrix.out` line for line. **Mutations:** the 12 an invariant
+should catch are each caught by that invariant (`restart_extends_deadline` I1, `reach_without_outbox` I2,
+`no_reach_guard` I2, `sweep_raw_clock` I1, `item_answer_no_act_row` I3, `no_fence` I5, `staged_no_fence_recheck` I5,
+`staged_no_grant_recheck` I4, `mayhold_ignores_readiness` I9, `no_operator_has_it` X2, `no_restore_detection` I7,
+`held_rows_hidden` I10), and the 2 marked "none expected" (`renewing_keeps_all`, `no_natural_key`) are not caught;
+identical to the committed `mutations.out`.
+
+**The switches against the merged edition (Step 1).** Each default is the spec's reading; the sentence that settles
+each is in the merged edition: A1 and A2 (one transaction for the outcome, the reach stamp and the outbox row; stamped
+at most once) §6.7 and I2 in §11.7; A3 and A4 (the `pending` write ends the hold and moves the revision) §6.7's
+revisions; A5 (a `refused` answer) §3.7's outcome words; A6 (a stale operator tap) §6.7, which chose the
+correction-at-the-current-revision reading the REPORT allowed; A7 (the card door skips steps 3, 4, 6, 8 and 9) §11.2;
+A8 (open holds never trimmed from the card) §3.3.3; A9 (pause releases each hold in one grouped push) §3.4's
+`stranded` rows and §6.7; A10 (staging writes the reach stamp) §7.2; A11 (`operator-has-it`, doors after the boot
+pass) §6.4 and §11.2; A12 (a silent outbox row) and A13 (retry with backoff while running) §6.7; A14 (a start while
+the server is down) and A15, A16 (a failed renewal returns to the state it left; `checkpointed` times out to `clearing`
+without the note) §3.3.11; A17 (`unproved`) §6.4; A18 (only `unknown` removed, by a re-raise) §6.7; A19
+(`state-a-fact` rests on an operator message) §6.7 and §7.1; A20 (`unmeasured` at boot keeps standing holds) §6.7;
+A21 (I9's scope) §11.7; A22 (a narrowing is done once a witness holds it) §7.6; A23 (I1 and I2's wording) §11.7; A24
+(`degraded` is chat only) §3.3.11 and §6.4. **No default disagrees with the merged edition**, so no switch needed a
+second run beyond the matrix, which runs every one both ways.
+
+**Round two** (`round-two/check.py --matrix` and `--mutations`): every check holds under the safe readings, and **all
+40 mutations are caught**; identical to the committed outputs. **Round three, accounts and privacy, and round four,
+oversight** (each `check.py --matrix` and `--mutations`): identical to their committed outputs.
+
+**Round three, the deciders, on the merged edition** (`OVERLORD_SPEC` set to the spec file, `./run_all.sh`; its
+outputs were written to scratch and the committed `out/` left as it was). **Fourteen anchors stop**: each check reads
+the spec by quoting a sentence, and the later editions reworded these. For each, the merged edition's sentence keeps
+the rule, refined: the grants door (§7.2, "and `DELETE` to revoke" dropped); Pause (§7.5, extended: it "stays `off`
+where it was"); the five-hour figure (§3.4, now "while anything is left of the reserve in the seven-day window");
+`glanced` (§6.6, now "any other answer, a tap from a push and a bulk Seen included"); the unreadable child mark
+(§3.3.9, widened to "a child mark that could not be measured"); Figure 2's timeout edge (now split, "from active:
+back, with a hold-off" and "from degraded: back to degraded", which settles the committed `GEN-back` counterexample);
+Figure 6's decision node (redrawn: d11's figure-against-prose check did not run on this edition); readiness `dead`
+(§6.4, now with the restart time); the blind check's "unarmed" sentence (§7.2, reworded); `hands-off` follow-up
+(§5.4, extended); `voided` (§10.1, reworded); the disagreement bound (§11.5's weights changed it from 0.14 to
+0.05); `blocking-now` (§4.2, extended); a `decide` item of class `unknown` (§6.7, "whose whole class is
+`unknown`"). A stopped check runs none of its later rules, so **the deciders' re-check on the merged edition is
+incomplete**: the anchors must be re-pointed before the deciders mean anything for this edition, which the simulator
+piece does when it moves the model (proposal, last section). The checks that did run report, on the merged edition:
+`ACT-off` (also in the committed output); `REQ-figure`, new with the proposed edits ("Figure 3 draws `needs-you` to
+`done`; Table 5.1b gives no actor that move"); and seven `VOC-refusal` words the vocabulary scan reads as refusals
+with no row in Table 11.6 (`active`, `direction`, `examined`, `failed`, `lambda`, `opus`, `reversible`), most of them
+new text the scan misreads. None is a model violation; they are text-consistency findings, listed for the
+coordinator below.
+
+**What the model leaves out** (`REPORT.md`, its last section): one or two questions, two to four ticks, at most one
+server crash where holds stand and one session crash; the breaker never reaches its half-open trial; admission is
+earliest deadline first only; the ladder is the operator's rung and two latches; one grant, with no shadow, expiry or
+blind check; commands, requests, mail delivery, `unwitnessed`, egress, the policy port, the privacy journal and
+`diverged` rows are not modelled; liveness is a path on the bounded graph, not fairness; and it is one reading of a
+long text.
+
+**Outcome (W0-27): no violation; the machines compose as specified** on the merged edition, within what the model
+covers. The deciders' anchors are a maintenance debt, not a contradiction.

@@ -1,0 +1,177 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-subagent-model-force",
+  "covers": [
+    "W0-11"
+  ],
+  "launch": {
+    "args": [
+      "--setting-sources",
+      "project,local",
+      "--settings",
+      "@RIG_REPO@/.w0/force-settings.json",
+      "--agents",
+      "{\"w0-reader\":{\"description\":\"W0 reader\",\"prompt\":\"You are a W0 reader.\",\"model\":\"sonnet\",\"tools\":[\"Read\"]}}"
+    ],
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+      "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
+    },
+    "settings": {
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ],
+        "SubagentStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SubagentStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "files": [
+      {
+        "in": "repo",
+        "path": ".w0/force-settings.json",
+        "text": "{\"permissions\": {\"defaultMode\": \"default\", \"allow\": [\"Agent\", \"Task\", \"Read\"]}, \"env\": {\"DISABLE_AUTOUPDATER\": \"1\"}}\n"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "paneSnap": "started"
+    },
+    {
+      "type": "w0 a1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "a1",
+        "a1-done"
+      ],
+      "timeoutS": 180
+    },
+    {
+      "sleep": 10
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "a1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 a1$"
+      },
+      "blocks": [
+        {
+          "tool_use": {
+            "nameAny": [
+              "Agent",
+              "Task"
+            ],
+            "input": {
+              "description": "w0 gp-opus",
+              "prompt": "w0 sub gp-opus",
+              "subagent_type": "general-purpose",
+              "model": "opus"
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "nameAny": [
+              "Agent",
+              "Task"
+            ],
+            "input": {
+              "description": "w0 reader-opus",
+              "prompt": "w0 sub reader-opus",
+              "subagent_type": "w0-reader",
+              "model": "opus"
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "nameAny": [
+              "Agent",
+              "Task"
+            ],
+            "input": {
+              "description": "w0 reader-plain",
+              "prompt": "w0 sub reader-plain",
+              "subagent_type": "w0-reader"
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "nameAny": [
+              "Agent",
+              "Task"
+            ],
+            "input": {
+              "description": "w0 gp-plain",
+              "prompt": "w0 sub gp-plain",
+              "subagent_type": "general-purpose"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "a1-done",
+      "match": {
+        "kind": "main",
+        "hasToolResult": true
+      },
+      "text": "W0-A1-DONE"
+    },
+    {
+      "match": {
+        "kind": "sub",
+        "lastUser": "w0 sub"
+      },
+      "text": "W0-SUB-DONE",
+      "repeat": true
+    }
+  ]
+}

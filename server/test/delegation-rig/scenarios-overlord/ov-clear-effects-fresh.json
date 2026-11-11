@@ -1,0 +1,242 @@
+{
+  "scenario": "ov-clear-effects-fresh",
+  "covers": [
+    "W0-08"
+  ],
+  "requests": true,
+  "timing": true,
+  "capS": 900,
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson"
+    },
+    "settings": {
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 e1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "e1",
+        "e1-tools"
+      ],
+      "timeoutS": 90
+    },
+    {
+      "sleep": 10
+    },
+    {
+      "type": "w0 e2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "type": "w0 queued"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 60
+    },
+    {
+      "sleep": 150
+    },
+    {
+      "type": "w0 e3"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "e3"
+      ],
+      "timeoutS": 90
+    },
+    {
+      "probeLabels": [
+        "queued"
+      ],
+      "timeoutS": 1
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "settleS": 3,
+  "entries": [
+    {
+      "label": "e1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 e1"
+      },
+      "tool_use": {
+        "name": "ToolSearch",
+        "input": {
+          "query": "select:CronCreate",
+          "max_results": 1
+        }
+      }
+    },
+    {
+      "label": "e1-tools",
+      "match": {
+        "kind": "main",
+        "hasToolResult": true
+      },
+      "blocks": [
+        {
+          "tool_use": {
+            "nameAny": [
+              "Agent",
+              "Task"
+            ],
+            "input": {
+              "description": "w0 reader",
+              "prompt": "w0 reader: read one thing and report",
+              "subagent_type": "general-purpose",
+              "model": "sonnet"
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "name": "Bash",
+            "input": {
+              "command": "sleep 90; echo W0-BG-DONE",
+              "description": "w0 background shell",
+              "run_in_background": true
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "name": "CronCreate",
+            "input": {
+              "cron": "* * * * *",
+              "prompt": "w0 cron-session",
+              "recurring": true
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "name": "CronCreate",
+            "input": {
+              "cron": "* * * * *",
+              "prompt": "w0 cron-durable",
+              "recurring": true,
+              "durable": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "reader",
+      "match": {
+        "kind": "sub",
+        "lastUser": "w0 reader"
+      },
+      "hang_ms": 100000,
+      "text": "W0-READER-RESULT"
+    },
+    {
+      "label": "e2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 e2"
+      },
+      "hang_ms": 20000,
+      "text": "W0-E2"
+    },
+    {
+      "label": "queued",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 queued"
+      },
+      "text": "W0-QUEUED"
+    },
+    {
+      "label": "cron-session",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 cron-session"
+      },
+      "text": "W0-CRON-SESSION",
+      "repeat": true
+    },
+    {
+      "label": "cron-durable",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 cron-durable"
+      },
+      "text": "W0-CRON-DURABLE",
+      "repeat": true
+    },
+    {
+      "label": "e3",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 e3"
+      },
+      "text": "W0-E3"
+    }
+  ],
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  }
+}

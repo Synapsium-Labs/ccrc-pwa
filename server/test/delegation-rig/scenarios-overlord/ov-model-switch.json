@@ -1,0 +1,220 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-model-switch",
+  "covers": [
+    "W0-12"
+  ],
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "RIG_STATUS_LOG": "@RIG_ROOT@/logs/status.ndjson"
+    },
+    "settings": {
+      "switchModelsOnFlag": true,
+      "statusLine": {
+        "type": "command",
+        "command": "node @RIG_STUBS@/statusline-capture.mjs"
+      },
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ],
+        "PreModelSwitch": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event PreModelSwitch --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ],
+        "PostModelSwitch": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event PostModelSwitch --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 w1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "w1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/model sonnet"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 5
+    },
+    {
+      "paneSnap": "after-model-sonnet"
+    },
+    {
+      "type": "w0 w2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "w2"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/model fable"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 5
+    },
+    {
+      "paneSnap": "after-model-fable"
+    },
+    {
+      "type": "w0 w3"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "w3-flag"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sleep": 15
+    },
+    {
+      "paneSnap": "after-flag"
+    },
+    {
+      "probeLabels": [
+        "w3-retry"
+      ],
+      "timeoutS": 5
+    },
+    {
+      "type": "w0 w4"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "w4"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "paneSnap": "end"
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "w1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 w1$"
+      },
+      "text": "W0-W1"
+    },
+    {
+      "label": "w2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 w2$"
+      },
+      "text": "W0-W2"
+    },
+    {
+      "label": "w3-flag",
+      "match": {
+        "kind": "main",
+        "model": "fable",
+        "lastUser": "w0 w3$"
+      },
+      "text": "",
+      "stop_reason": "refusal"
+    },
+    {
+      "label": "w3-retry",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 w3$"
+      },
+      "text": "W0-W3-RETRY"
+    },
+    {
+      "label": "w4",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 w4$"
+      },
+      "text": "W0-W4"
+    }
+  ]
+}

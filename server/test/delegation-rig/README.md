@@ -31,15 +31,17 @@ subagent metadata — measured per installed binary, so the delegation broker (s
     refused, here and in `launch.settings.env`);
   - `launch.settings` — merged over the fixture's `settings.json` with jq's `*`, each `hooks.<event>` array appended so
     ccrc's own hook stays;
-  - `launch.files` — `[{in: "cfg"|"repo", path, text, exec?}]`, written under the fixture config or the fixture repo;
+  - `launch.files` — `[{in: "cfg"|"repo"|"cfg2", path, text, exec?}]`, written under the fixture config or the fixture
+    repo at setup, or under the second config when `swapConfig` makes it; a path may name `@RIG_PROJECT@`, the project
+    directory Claude Code derives from the fixture repo (for project memory);
   - placeholders `@RIG_ROOT@`, `@RIG_HOME@`, `@RIG_CFG@`, `@RIG_REPO@` and `@RIG_STUBS@`, replaced literally in
     args, env values, settings strings and file texts;
   - `capS` (60 to 5400, the run's cap in place of 1200), `timing: true` (each step's start and `waitReady`'s elapsed
     milliseconds, in the bundle's `timing` file; never in `notes`, which `build-matrix.mjs` reads as failures) and
     `requests: true` (every request the mock answers, in the bundle's `reqs/`).
   Steps gain `relaunch` `{"mode":"fresh"}` (no `--resume`) and `{"mode":"fork"}` (`--resume <sid> --fork-session`)
-  beside `true`, and `sessionsSnap: <name>` (Claude Code's `sessions/*.json` and the transcript names, at that
-  instant). `rig.sh print-launch <version> <scenario> <root>` prints the launch line a run would type, after the same
+  beside `true`, `paneSnap: <name>` (the pane's text, for a dialog), and `sessionsSnap: <name>` (Claude Code's `sessions/*.json`, and each transcript's name and size, at
+  that instant). `rig.sh print-launch <version> <scenario> <root>` prints the launch line a run would type, after the same
   setup, and starts nothing.
 - `recapture.sh` — the corpus's one re-capture script: the steps below, in order (spec §8.2).
 - `sanitize.mjs` — raw run bundles → `server/test/fixtures/delegation/<version>/<scenario>.json`, fail-closed on any

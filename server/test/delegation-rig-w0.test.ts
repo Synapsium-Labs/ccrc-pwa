@@ -128,6 +128,27 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(fs.statSync(path.join(root, 'repo/CLAUDE.md')).mode & 0o111).not.toBe(0);
   }, 60_000);
 
+  it('a launch file path may name @RIG_PROJECT@, the project directory Claude Code derives from the fixture repo; cfg2 files wait for swapConfig', () => {
+    launchLine({ files: [{ in: 'cfg', path: 'projects/@RIG_PROJECT@/memory/MEMORY.md', text: 'W0-MEM-A' },
+      { in: 'cfg2', path: 'projects/@RIG_PROJECT@/memory/MEMORY.md', text: 'W0-MEM-B' }] });
+    const root = path.dirname(path.dirname(cfg));
+    const project = path.join(root, 'repo').replace(/[^A-Za-z0-9]/g, '-');
+    expect(fs.readFileSync(path.join(cfg, 'projects', project, 'memory/MEMORY.md'), 'utf8')).toBe('W0-MEM-A');
+    expect(fs.existsSync(path.join(root, 'fixhome/cfg2')), 'cfg2 is written by swapConfig, never at setup').toBe(false);
+  }, 60_000);
+
+  it.each([
+    ['a placeholder other than @RIG_PROJECT@ in a path', { launch: { files: [{ in: 'cfg', path: 'projects/@RIG_ROOT@/x', text: '' }] } }],
+    ['a paneSnap name with a slash', { steps: [{ paneSnap: 'a/b' }] }],
+  ])('check-scenario refuses %s, exit 2', (_w, top) => {
+    expect(rigsh(['check-scenario', scen('scenarios-overlord', 'bad2', [{ waitReady: 60 }], top)]).status).toBe(2);
+  }, 60_000);
+
+  it('check-scenario accepts a paneSnap step and a cfg2 file', () => {
+    const f = scen('scenarios-overlord', 'ps', [{ paneSnap: 'after-model' }], { launch: { files: [{ in: 'cfg2', path: 'CLAUDE.md', text: 'x' }] } });
+    expect(rigsh(['check-scenario', f]).status).toBe(0);
+  }, 60_000);
+
   it('the usage names print-launch, and the header still ends on its last line', () => {
     const r = rigsh(['bogus']);
     expect(r.status).toBe(2);
@@ -203,6 +224,14 @@ describe('the rig\'s W0 stubs (W0 Task 3)', () => {
     expect(t.startsWith('W0-HEAD-200-compact-') && t.endsWith('-compact-W0-TAIL-200')).toBe(true);
   }, 60_000);
 
+  it('emit-context --log-payload logs the payload\'s keys, token-like values as they are, and no free text', () => {
+    const log = path.join(mkTmp('ccrc-dlg-emit-'), 'emit.ndjson');
+    runStub('emit-context.mjs', ['--event', 'PostModelSwitch', '--chars', '100', '--log-payload'],
+      JSON.stringify({ model: 'claude-sonnet-5-5', prompt: 'a private sentence', n: 3, cwd: '/w0/x' }), { RIG_EMIT_LOG: log });
+    const o = JSON.parse(fs.readFileSync(log, 'utf8').trim());
+    expect(o.payload).toEqual({ model: 'claude-sonnet-5-5', prompt: '<string>', n: 3, cwd: '<string>' });
+  }, 60_000);
+
   it('precompact-refuse blocks auto and passes manual', () => {
     expect(runRc('precompact-refuse.mjs', '{"trigger":"auto"}')).toBe(2);
     expect(runRc('precompact-refuse.mjs', '{"trigger":"manual"}')).toBe(0);
@@ -215,5 +244,31 @@ describe('the rig\'s W0 stubs (W0 Task 3)', () => {
     expect(o['model.id']).toBe('m-1');
     expect(o['cwd']).toBe('<string>');
     expect(JSON.stringify(o)).not.toMatch(/private-x|\/w0\/cwd/);
+  }, 60_000);
+});
+
+describe('mockapi.mjs: a padded reply, for W0\'s renewal-time transcripts (W0 Task 5)', () => {
+  it('appends exactly `pad` filler characters to an entry\'s text and streams it in `chunk_chars` pieces', async () => {
+    const dir = mkTmp('ccrc-dlg-pad-');
+    const file = path.join(dir, 'script.json');
+    fs.writeFileSync(file, JSON.stringify({ entries: [{ match: 'any', text: 'W0-PAD', pad: 1000, chunk_chars: 100, chunk_ms: 0 }] }));
+    const env: NodeJS.ProcessEnv = { ...process.env, MOCK_PORT: '0', MOCK_SCRIPT: file };
+    delete env.MOCK_LOG; delete env.MOCK_REQDIR;
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, [path.join(RIG, 'mockapi.mjs')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      const port = await new Promise<string>((resolve, reject) => {
+        let out = '';
+        const t = setTimeout(() => reject(new Error('mock did not start')), 10_000);
+        child.stdout!.on('data', (b: Buffer) => { out += b.toString(); const m = /listening 127\.0\.0\.1:(\d+)/.exec(out); if (m) { clearTimeout(t); resolve(m[1] as string); } });
+      });
+      const r = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stream: true, model: 'm', tools: [{ name: 'Bash' }], system: 'You are an interactive agent', messages: [{ role: 'user', content: 'x' }] }) });
+      const deltas = (await r.text()).split('\n\n').filter((b) => b.includes('text_delta'))
+        .map((b) => JSON.parse(b.slice(b.indexOf('data: ') + 6)).delta.text as string);
+      expect(deltas.join('').length).toBe('W0-PAD'.length + 1000);
+      expect(deltas.join('').startsWith('W0-PAD')).toBe(true);
+      expect(deltas).toHaveLength(Math.ceil(1006 / 100));
+    } finally { child.kill('SIGKILL'); }
   }, 60_000);
 });

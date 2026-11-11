@@ -1,0 +1,115 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-memory",
+  "covers": [
+    "W0-09"
+  ],
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson"
+    },
+    "settings": {
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "files": [
+      {
+        "in": "cfg",
+        "path": "projects/@RIG_PROJECT@/memory/MEMORY.md",
+        "text": "- [W0 memory](w0.md) - W0-MEM-CANARY-A, the first config, project memory\n"
+      },
+      {
+        "in": "cfg2",
+        "path": "projects/@RIG_PROJECT@/memory/MEMORY.md",
+        "text": "- [W0 memory](w0.md) - W0-MEM-CANARY-B, the second config, project memory\n"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 m1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "m1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "swapConfig": true
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 m2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "m2"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "m1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 m1$"
+      },
+      "text": "W0-M1"
+    },
+    {
+      "label": "m2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 m2$"
+      },
+      "text": "W0-M2"
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-config-load-pinned",
+  "covers": [
+    "W0-19"
+  ],
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "DOOR_LOG": "@RIG_ROOT@/logs/door.ndjson"
+    },
+    "settings": {
+      "permissions": {
+        "deny": [
+          "WebFetch"
+        ]
+      },
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "files": [
+      {
+        "in": "cfg",
+        "path": "CLAUDE.md",
+        "text": "W0-USER-CLAUDEMD-CANARY: the account config user memory file.\n"
+      },
+      {
+        "in": "cfg",
+        "path": "skills/w0-user-skill/SKILL.md",
+        "text": "---\nname: w0-user-skill\ndescription: W0-USER-SKILL-CANARY, an account-level skill\n---\n\nbody\n"
+      },
+      {
+        "in": "cfg",
+        "path": "agents/w0-user-agent.md",
+        "text": "---\nname: w0-user-agent\ndescription: W0-USER-AGENT-CANARY, an account-level agent\n---\n\nYou are a W0 agent.\n"
+      },
+      {
+        "in": "cfg",
+        "path": ".claude.json",
+        "text": "{\"numStartups\":5,\"hasCompletedOnboarding\":true,\"firstStartTime\":\"2026-01-01T00:00:00.000Z\",\"lastOnboardingVersion\":\"9.9.9\",\"lastReleaseNotesSeen\":\"9.9.9\",\"lastClawdEntranceVersion\":\"9.9.9\",\"fullscreenUpsellSeenCount\":3,\"officialMarketplaceAutoInstallAttempted\":true,\"customApiKeyResponses\":{\"approved\":[\"rrrrrrrrrrrrrrrrrrAA\"],\"rejected\":[]},\"projects\":{\"@RIG_REPO@\":{\"hasTrustDialogAccepted\":true,\"hasCompletedProjectOnboarding\":true,\"projectOnboardingSeenCount\":5,\"allowedTools\":[]}},\"mcpServers\":{\"w0-user-mcp\":{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"@RIG_STUBS@/door-stub.mjs\"]}}}"
+      },
+      {
+        "in": "repo",
+        "path": ".w0/grants.json",
+        "text": "{\"permissions\":{\"defaultMode\":\"default\",\"allow\":[\"Bash\",\"Read\",\"Agent\"]},\"env\":{\"DISABLE_AUTOUPDATER\":\"1\"}}"
+      }
+    ],
+    "args": [
+      "--setting-sources",
+      "project,local",
+      "--settings",
+      "@RIG_REPO@/.w0/grants.json"
+    ]
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "paneSnap": "started"
+    },
+    {
+      "type": "w0 g1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "g1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "g1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 g1$"
+      },
+      "text": "W0-G1"
+    }
+  ]
+}

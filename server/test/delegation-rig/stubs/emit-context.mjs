@@ -5,7 +5,9 @@
 // text arrived; the head alone survives a spill's preview. The filler is `x`, or `é` (U+00E9, two UTF-8 bytes) for
 // wide. A tag goes inside both canaries (`W0-HEAD-<N>-<t>-`, `-<t>-W0-TAIL-<N>`), for two emitters on one event;
 // `--tag-source` makes the payload's `source` the tag, so each start's text is told apart in a later request.
-// Appends {t, event, source} from its stdin payload to $RIG_EMIT_LOG.
+// Appends {t, event, source} from its stdin payload to $RIG_EMIT_LOG; with --log-payload, also `payload`: every
+// top-level key, a number, boolean or null as it is, a token-like string (letters, digits and `._:[]-`, at most 80) as
+// it is, and any other value as "<string>" or "<object>", so no prompt, path or free text reaches the log.
 import { logLine, readPayload } from './log.mjs';
 
 const argv = process.argv.slice(2);
@@ -20,5 +22,8 @@ const head = `W0-HEAD-${n}-${tag ? `${tag}-` : ''}`;
 const tail = `${tag ? `-${tag}` : ''}-W0-TAIL-${n}`;
 if (head.length + tail.length > n) { process.stderr.write('emit-context: --chars is shorter than the two canaries\n'); process.exit(2); }
 const text = head + fill.repeat(n - head.length - tail.length) + tail;
-logLine('RIG_EMIT_LOG', { t: Date.now(), event, source: payload.source ?? null, tag: tag || null });
+const summary = (v) => (v === null || typeof v === 'number' || typeof v === 'boolean' ? v
+  : typeof v === 'string' ? (/^[A-Za-z0-9._:[\]-]{1,80}$/.test(v) ? v : '<string>') : '<object>');
+const extra = argv.includes('--log-payload') ? { payload: Object.fromEntries(Object.entries(payload).map(([k, v]) => [k, summary(v)])) } : {};
+logLine('RIG_EMIT_LOG', { t: Date.now(), event, source: payload.source ?? null, tag: tag || null, ...extra });
 process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } })}\n`);

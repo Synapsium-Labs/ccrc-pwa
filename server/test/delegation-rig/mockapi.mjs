@@ -23,7 +23,9 @@
 // Response (one of): { "text" } | { "tool_use": { "name" | "nameAny": [...], "input", "id"? } }
 //   | { "blocks": [ {thinking}|{text}|{tool_use} ] } | { "status": 4xx|5xx, "headers"?, "body"? }
 //   plus optional "label", "hang_ms" (N<0 never answers), "headers", "usage", "stop_reason",
-//   "chunk_ms", "stall_ms", "repeat". `nameAny` picks the first name the request offers (else the
+//   "chunk_ms", "stall_ms", "repeat", and (W0) "pad": N filler characters appended to the text (lines of
+//   `w0 pad ` words), with "chunk_chars": the text delta size (default 12), so a run can grow a transcript to a
+//   measured size without a megabyte scenario file. `nameAny` picks the first name the request offers (else the
 //   first listed). A header VALUE of the form `$NOW+<s>` is sent as the epoch second <s> from now.
 // Fallbacks: "default" for main and sub (else text "(mock default reply)"); "sideDefault" for side
 //   (else JSON synthesised from the request's json_schema, or "Rig session").
@@ -139,11 +141,16 @@ function pick(req) {
   const sch = schemaOf(req.body);
   return { entry: { text: sch ? JSON.stringify(synth(sch)) : 'Rig session' }, label: 'sideDefault(synth)' };
 }
+/** `n` filler characters: `w0 pad ` words, a newline every 104 characters. */
+function padText(n) {
+  const line = `${'w0 pad '.repeat(14)}w0 pa\n`;
+  return line.repeat(Math.ceil(n / line.length)).slice(0, n);
+}
 function blocksOf(entry) {
   if (entry.blocks) return entry.blocks;
   const b = [];
   if (entry.thinking) b.push({ thinking: entry.thinking });
-  if (entry.text !== undefined) b.push({ text: entry.text });
+  if (entry.text !== undefined || entry.pad) b.push({ text: (entry.text ?? '') + (entry.pad ? padText(entry.pad) : '') });
   if (entry.tool_use) b.push({ tool_use: entry.tool_use });
   return b.length ? b : [{ text: '' }];
 }
@@ -210,7 +217,7 @@ async function answer(res, req, entry) {
     const b = blocks[i];
     if (b.type === 'text') {
       ev('content_block_start', { index: i, content_block: { type: 'text', text: '' } });
-      for (const c of chunks(b.text)) { ev('content_block_delta', { index: i, delta: { type: 'text_delta', text: c } }); await afterDelta(); }
+      for (const c of chunks(b.text, entry.chunk_chars ?? 12)) { ev('content_block_delta', { index: i, delta: { type: 'text_delta', text: c } }); await afterDelta(); }
     } else if (b.type === 'thinking') {
       ev('content_block_start', { index: i, content_block: { type: 'thinking', thinking: '', signature: '' } });
       for (const c of chunks(b.thinking)) { ev('content_block_delta', { index: i, delta: { type: 'thinking_delta', thinking: c } }); await afterDelta(); }

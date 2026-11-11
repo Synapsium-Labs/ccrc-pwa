@@ -34,7 +34,7 @@ VERSIONS=$REAL_HOME/.local/share/claude/versions
 SOCK_RE='^dlg[A-Za-z0-9_-]*$'
 VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 SESSION=cc-rig-hookcap
-VERBS='waitReady type keys waitLabels probeLabels answerDialog sleep kill9 swapConfig relaunch snapshot sessionsSnap'
+VERBS='waitReady type keys waitLabels probeLabels answerDialog sleep kill9 swapConfig relaunch snapshot sessionsSnap paneSnap'
 # The Overlord's W0 launch block (plan 2026-11-10-overlord/w0-spike.md, Task 2): the ONLY flags a scenario's launch.args may
 # carry, and the ONLY env names its launch.env may set. Each flag is in Claude Code's CLI reference (W0 Task 1 Step 2).
 RIG_LAUNCH_FLAGS='--setting-sources --settings --mcp-config --strict-mcp-config --agents --allowedTools --disallowedTools --permission-mode --dangerously-skip-permissions --model --tools --autocompact --append-system-prompt --disable-slash-commands'
@@ -154,6 +154,7 @@ check_scenario() {
     done
     if [[ $verb == snapshot ]]; then jq -e '.snapshot | type == "string" and test("^[a-z0-9-]{1,40}$")' <<<"$step" >/dev/null || return 1; fi
     if [[ $verb == sessionsSnap ]]; then jq -e '.sessionsSnap | type == "string" and test("^[a-z0-9-]{1,40}$")' <<<"$step" >/dev/null || return 1; fi
+    if [[ $verb == paneSnap ]]; then jq -e '.paneSnap | type == "string" and test("^[a-z0-9-]{1,40}$")' <<<"$step" >/dev/null || return 1; fi
     if [[ $verb == relaunch ]]; then jq -e '.relaunch == true or .relaunch == {mode: "fresh"} or .relaunch == {mode: "fork"}' <<<"$step" >/dev/null || return 1; fi
   done < <(jq -c '.steps[]' "$f")
   k=$(jq -r '.settleS // 8 | tostring' "$f"); [[ $k =~ ^[0-9]{1,5}$ ]] || return 1
@@ -181,8 +182,9 @@ check_launch() {
          and ((.env // {}) | type == "object" and all(keys[]; test($reserved) | not))
          and ((.hooks // {}) | type == "object" and all(.[]; type == "array")))
     and ((.launch.files // []) as $fs | ($fs | type == "array") and all($fs[]; type == "object"
-         and (.in == "cfg" or .in == "repo")
-         and (.path | type == "string" and test("^[A-Za-z0-9._/-]{1,200}$") and (startswith("/") | not) and ((split("/") | index("..")) == null))
+         and (.in == "cfg" or .in == "repo" or .in == "cfg2")
+         and (.path | type == "string" and (gsub("@RIG_PROJECT@"; "p") | test("^[A-Za-z0-9._/-]{1,200}$"))
+              and (startswith("/") | not) and ((split("/") | index("..")) == null))
          and (.text | type == "string") and ((.exec // false) | type == "boolean")))
     and (if has("capS") then (.capS | type == "number" and . == floor and . >= 60 and . <= 5400) else true end)
     and (if has("timing") then (.timing | type == "boolean") else true end)
@@ -252,19 +254,27 @@ cmd_setup() {
       customApiKeyResponses: {approved: [$tail], rejected: []},
       projects: {($repo): {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true,
                            projectOnboardingSeenCount: 5, allowedTools: []}}}' > "$H/cfg/.claude.json"
-  # A scenario's launch.files (W0), last, so a file may stand in for anything above: each under cfg/ or repo/, by a path
-  # check_launch already held to relative and `..`-free; mode 0755 when `exec` is true.
-  if [[ -n ${SCEN-} ]] && jq -e '(.launch.files // []) | length > 0' "$SCEN" >/dev/null 2>&1; then
-    local i n in path dest
-    n=$(jq '.launch.files | length' "$SCEN")
-    for (( i = 0; i < n; i++ )); do
-      in=$(jq -r --argjson i "$i" '.launch.files[$i].in' "$SCEN"); path=$(jq -r --argjson i "$i" '.launch.files[$i].path' "$SCEN")
-      case $in in cfg) dest=$H/cfg/$path ;; repo) dest=$R/repo/$path ;; *) die "launch.files[$i]: in must be cfg or repo" ;; esac
-      mkdir -p "$(dirname "$dest")"
-      jq --argjson i "$i" '.launch.files[$i].text' "$SCEN" | launch_subst "$R" | jq -j . > "$dest"
-      if jq -e --argjson i "$i" '.launch.files[$i].exec == true' "$SCEN" >/dev/null; then chmod 0755 "$dest"; fi
-    done
-  fi
+  # A scenario's launch.files (W0), last, so a file may stand in for anything above. `cfg2` files wait for swapConfig.
+  if [[ -n ${SCEN-} ]]; then apply_launch_files "$R" cfg "$H/cfg"; apply_launch_files "$R" repo "$R/repo"; fi
+}
+# The launch.files entries whose `in` is <in>, written under <base>: each by a path check_launch already held to relative
+# and `..`-free, `@RIG_PROJECT@` in it replaced by the project directory name Claude Code derives from the fixture repo
+# (every character but a letter or a digit as `-`); mode 0755 when `exec` is true.
+apply_launch_files() {
+  local R=$1 want=$2 base=$3 i n in path dest project
+  jq -e '(.launch.files // []) | length > 0' "$SCEN" >/dev/null 2>&1 || return 0
+  project=$(printf '%s' "$R/repo" | sed 's/[^A-Za-z0-9]/-/g')
+  n=$(jq '.launch.files | length' "$SCEN")
+  for (( i = 0; i < n; i++ )); do
+    in=$(jq -r --argjson i "$i" '.launch.files[$i].in' "$SCEN")
+    [[ $in == "$want" ]] || continue
+    path=$(jq -r --argjson i "$i" '.launch.files[$i].path' "$SCEN")
+    dest=$base/${path//@RIG_PROJECT@/$project}
+    mkdir -p "$(dirname "$dest")"
+    jq --argjson i "$i" '.launch.files[$i].text' "$SCEN" | launch_subst "$R" | jq -j . > "$dest"
+    if jq -e --argjson i "$i" '.launch.files[$i].exec == true' "$SCEN" >/dev/null; then chmod 0755 "$dest"; fi
+  done
+  return 0
 }
 
 # ── run ─────────────────────────────────────────────────────────────────────────────
@@ -350,11 +360,11 @@ snapshot() {   # <name>: the admin records and the .claude/worktrees entries, at
   { ls -A "$RUN_R/repo/.git/worktrees" 2>/dev/null || true; } > "$d/admin-records"
   { ls -A "$RUN_R/repo/.claude/worktrees" 2>/dev/null || true; } > "$d/worktrees"
 }
-sessions_snap() {   # <name>: Claude Code's live-session records and the transcript names, at this instant (W0-05)
+sessions_snap() {   # <name>: Claude Code's live-session records, and each transcript's name and size in bytes, at this instant (W0-05)
   local d=$RUN_R/snapshots/$1
   mkdir -p "$d/sessions"
   cp "$CFG"/sessions/*.json "$d/sessions/" 2>/dev/null || true
-  { cd "$CFG/projects" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.jsonl' -type f | sed 's|^\./||' | sort || true; } > "$d/transcripts"
+  { cd "$CFG/projects" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.jsonl' -type f -printf '%P\t%s\n' | sort || true; } > "$d/transcripts"
 }
 run_steps() {
   local step verb sid pid i=0 t0 mode
@@ -377,7 +387,8 @@ run_steps() {
                     fi ;;
       sleep)        sleep "$(jq -r .sleep <<<"$step")" ;;
       kill9)        if pid=$(claude_pid); then kill -9 "$pid"; else note "kill9: no pid"; fi ;;
-      swapConfig)   mkdir -p "$RUN_H/cfg2"; cp -a "$RUN_H/cfg/." "$RUN_H/cfg2/"; CFG=$RUN_H/cfg2 ;;
+      swapConfig)   mkdir -p "$RUN_H/cfg2"; cp -a "$RUN_H/cfg/." "$RUN_H/cfg2/"; CFG=$RUN_H/cfg2
+                    if [[ -n ${SCEN-} ]]; then apply_launch_files "$RUN_R" cfg2 "$RUN_H/cfg2"; fi ;;
       relaunch)     mode=$(jq -r 'if .relaunch == true then "resume" else .relaunch.mode end' <<<"$step")
                     if [[ $mode == fresh ]]; then
                       T "$SOCK" respawn-pane -k -t "$SESSION" bash -c "$(launch_cmd)"
@@ -387,6 +398,7 @@ run_steps() {
                     else note "relaunch: no session id captured"; fi ;;
       snapshot)     snapshot "$(jq -r .snapshot <<<"$step")" ;;
       sessionsSnap) sessions_snap "$(jq -r .sessionsSnap <<<"$step")" ;;
+      paneSnap)     mkdir -p "$RUN_R/snapshots/$(jq -r .paneSnap <<<"$step")"; pane > "$RUN_R/snapshots/$(jq -r .paneSnap <<<"$step")/pane" ;;
       *)            note "unknown step verb $verb" ;;
     esac
   done < <(jq -c '.steps[]' "$SCEN")

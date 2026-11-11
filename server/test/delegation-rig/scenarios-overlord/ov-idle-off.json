@@ -1,0 +1,102 @@
+{
+  "scenario": "ov-idle-off",
+  "covers": [
+    "W0-14"
+  ],
+  "requests": true,
+  "timing": true,
+  "capS": 5400,
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson"
+    },
+    "settings": {
+      "idleCompaction": false,
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 i1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "i1"
+      ],
+      "timeoutS": 90
+    },
+    {
+      "sleep": 3900
+    },
+    {
+      "type": "w0 i2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "i2"
+      ],
+      "timeoutS": 90
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "settleS": 3,
+  "entries": [
+    {
+      "label": "i1",
+      "match": {
+        "kind": "tools",
+        "lastUser": "w0 i1"
+      },
+      "text": "W0-I1",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "i2",
+      "match": {
+        "kind": "tools",
+        "lastUser": "w0 i2"
+      },
+      "text": "W0-I2"
+    }
+  ],
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  }
+}
