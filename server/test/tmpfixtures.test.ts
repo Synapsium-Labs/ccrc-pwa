@@ -137,8 +137,9 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
     'ccrc-install-landing.test.ts',
     'ccrc-install-role.test.ts',
     'ccrc-install-codex.test.ts',
-    'ccrc-install-graphify.test.ts', 'ccrc-doctor-core.test.ts', 'ccrc-doctor-fleet.test.ts',
-    'ccrc-doctor-exposure.test.ts', 'ccrc-doctor-codex.test.ts',
+    'ccrc-install-graphify.test.ts', 'ccrc-doctor-core.test.ts', 'ccrc-doctor-core-state.test.ts', 'ccrc-doctor-core-auth.test.ts',
+    'ccrc-doctor-fleet.test.ts', 'ccrc-doctor-exposure.test.ts', 'ccrc-doctor-codex.test.ts', 'ccrc-doctor-codex-fix.test.ts',
+    'ccrc-doctor-codex-host.test.ts', 'ccrc-doctor-codex-direct.test.ts',
   ])('%s opts in, at its top level, outside any comment', (file) => {
     const src = readFileSync(path.join(__dirname, file), 'utf8').split('\n');
     expect(src.filter((l) => l === 'removeTmpFixturesEachTest();'),
@@ -161,8 +162,9 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
     'ccrc-install-landing.test.ts',
     'ccrc-install-role.test.ts',
     'ccrc-install-codex.test.ts',
-    'ccrc-install-graphify.test.ts', 'ccrc-doctor-core.test.ts', 'ccrc-doctor-fleet.test.ts',
-    'ccrc-doctor-exposure.test.ts', 'ccrc-doctor-codex.test.ts',
+    'ccrc-install-graphify.test.ts', 'ccrc-doctor-core.test.ts', 'ccrc-doctor-core-state.test.ts', 'ccrc-doctor-core-auth.test.ts',
+    'ccrc-doctor-fleet.test.ts', 'ccrc-doctor-exposure.test.ts', 'ccrc-doctor-codex.test.ts', 'ccrc-doctor-codex-fix.test.ts',
+    'ccrc-doctor-codex-host.test.ts', 'ccrc-doctor-codex-direct.test.ts',
   ])('%s runs no test concurrently', (file) => {
     const code = readFileSync(path.join(__dirname, file), 'utf8').split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));

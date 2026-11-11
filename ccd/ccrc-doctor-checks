@@ -8255,7 +8255,7 @@ _dr_cx_stats_read() {   # <id> <filter> [jq args...] — sets DRX_STATS_DIR, DRX
 # A NAME AS THE DOCTOR PRINTS ONE: each named variable keeps its value when it
 # matches `name_re`, else it becomes `unrecognised`. `name_re` is stats.py's
 # NAME_RE, the bound the bridge writes every name under, in the same pattern
-# text (ccrc-doctor-codex.test.ts pins the two equal), matched under LC_ALL=C
+# text (ccrc-doctor-codex-direct.test.ts pins the two equal), matched under LC_ALL=C
 # so a range never reaches past ASCII (under a UTF-8 locale bash's `[A-Za-z]`
 # accepts letters such as `ë`, measured).
 _dr_cx_bound() {   # <variable name>...
@@ -8287,7 +8287,7 @@ _dr_cx_bound() {   # <variable name>...
 # stats.py's READ_MAX and listing at most `families` times `names_max` + 1
 # names (known.KNOWN's families, each NAMES_MAX names and `overflow`; READ_MAX,
 # NAMES_MAX and the family count are pinned equal to the doctor's own by
-# ccrc-doctor-codex.test.ts), which is every file a real `Stats` writes. It is
+# ccrc-doctor-codex-direct.test.ts), which is every file a real `Stats` writes. It is
 # not stats.py's `_load`, and the known differences are all files no `Stats`
 # writes, only a hand-edited or foreign one. Stricter than the bridge: a file
 # of this lane with no `unexplained` object, or with more names than a bridge
