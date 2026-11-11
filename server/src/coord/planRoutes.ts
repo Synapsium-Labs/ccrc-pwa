@@ -24,7 +24,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { BindingRow, PlanStorePort, StoredPlan } from './planStore.js';
 import {
   diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPut, parsePlanTicketAdd, parsePlanTicketMove,
-  planCallerVerdict,
+  planCallerVerdict, ticketIsHeld,
 } from './planPolicy.js';
 import { NO_PLAN_CHANGES } from './planStore.js';
 
@@ -323,6 +323,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const found = ticketOf(stored, m.ticket);
     if (found === undefined) return { refuse: 'unknown-ticket', detail: `no ticket ${m.ticket}` };
     const { ticket } = found;
+    if (ticketIsHeld(ticket)) return { refuse: 'plan-runs-open', detail: `ticket ${m.ticket} is held by run ${ticket.runId ?? '?'}: it moves or drops once that run ends` };
     if (ticket.state !== 'open') return { refuse: 'plan-bad-body', detail: `ticket ${m.ticket} is ${ticket.state}: only an open ticket moves or drops` };
     if (m.drop !== undefined) {
       const dropUnfit = textRefusal(coord, [[ticket.project, m.drop.why]]);
@@ -366,7 +367,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (epic.state !== 'dropped') {
       const epicUnfit = textRefusal(coord, [[epic.project, parsed.drop.why]]);
       if (epicUnfit !== null) return epicUnfit;
-      if (epic.tickets.some((t) => t.state === 'started')) return { refuse: 'plan-bad-body', detail: 'a ticket of this epic has a run working' };
+      if (epic.tickets.some(ticketIsHeld)) return { refuse: 'plan-runs-open', detail: 'a run of this programme holds a ticket of this epic' };
       const why = mask(parsed.drop.why);
       const changes = NO_PLAN_CHANGES();
       changes.epics.drop.push({ id: epic.id, why });

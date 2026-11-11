@@ -1,7 +1,7 @@
 import { isPositiveDecimalSafeInteger, isRegistryId, shapeProgramSlug } from '../../../shared/api.js';
 import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../../shared/plan.js';
-import { epicAdmitsRun, epicForWave } from './planPolicy.js';
+import { epicAdmitsRun, epicForWave, ticketIsHeld } from './planPolicy.js';
 import type { OpenRunTicket } from './planStore.js';
 
 /**
@@ -410,7 +410,7 @@ const GATES = [
       return undefined;
     }
     const t = p.ticket(c.b.ticket);
-    if (t === null || t.state === 'done' || t.state === 'dropped' || t.state === 'started' || t.runId !== null) {
+    if (t === null || t.state === 'done' || t.state === 'dropped' || ticketIsHeld(t)) {
       return { refused: 'ticket-unavailable' };
     }
     if (t.epicId !== epicId) return { refused: 'wave-epic-mismatch' };

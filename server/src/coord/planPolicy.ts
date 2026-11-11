@@ -354,6 +354,11 @@ export function programmeEnd(f: {
  *  both ask this. */
 export const epicAdmitsRun = (state: EpicState): boolean => state !== 'dropped';
 
+/** THE one definition of a ticket a run holds: `started`, or `open` with a `runId` (a `planned` run attaches its ticket at
+ *  `runs open` and starts it only at dispatch). `runs open` refuses it `ticket-unavailable`; `plan ticket-move` and
+ *  `plan epic-drop` refuse it `plan-runs-open`, so a planned run never dispatches into a moved or dropped ticket. */
+export const ticketIsHeld = (t: { state: TicketState; runId: number | null }): boolean => t.state === 'started' || t.runId !== null;
+
 /** The epic a wave's runs belong to: the first epic, in the order given, that lists the wave and is not dropped. */
 export function epicForWave(epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number): number | null {
   return epics.find((e) => epicAdmitsRun(e.state) && e.waves.includes(wave))?.id ?? null;

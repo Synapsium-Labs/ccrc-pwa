@@ -225,6 +225,46 @@ describe('plan tickets and epics', () => {
     expect(errorOf(await send('/api/programmes/prog-a/plan/epics/drop', { epic: 'nope', why: 'x' }))).toBe('unknown-epic');
   });
 
+  describe('a ticket a run holds stays where the run put it', () => {
+    const TWO = { home: 'project-a', epics: [epic('e1', [1], { tickets: [{ key: 't1', kind: 'work', title: 't' }] }), epic('e2', [2])] };
+    /** Opens a planned run on wave 1 holding t1 (`open`, runId set: what `runs open` leaves until dispatch). */
+    const hold = (): number => {
+      const e1 = plan.planOf('prog-a').epics[0]!;
+      const r = coord.openRun({ program: 'prog-a', title: 'w', project: 'project-a', wave: 1, waveOf: 2, claimedBy: 'coord-a', homeProject: 'project-a',
+        ticket: { kind: 'existing', id: e1.tickets[0]!.id, epicId: e1.id, reproject: null } });
+      if (!('id' in r)) throw new Error('open refused');
+      expect(plan.planOf('prog-a').epics[0]!.tickets[0]).toMatchObject({ state: 'open', runId: r.id });
+      return r.id;
+    };
+
+    it('ticket-move and its drop refuse a ticket a planned run holds, plan-runs-open, and change nothing', async () => {
+      await put(TWO);
+      hold();
+      const moved = await send('/api/programmes/prog-a/plan/tickets/move', { ticket: 't1', epic: 'e2' });
+      expect([moved.statusCode, errorOf(moved)]).toEqual([409, 'plan-runs-open']);
+      const dropped = await send('/api/programmes/prog-a/plan/tickets/move', { ticket: 't1', drop: { why: 'cut' } });
+      expect([dropped.statusCode, errorOf(dropped)]).toEqual([409, 'plan-runs-open']);
+      expect(plan.planOf('prog-a').epics.map((e) => e.tickets.map((t) => [t.key, t.state]))).toEqual([[['t1', 'open']], []]);
+    });
+
+    it('a done ticket still answers plan-bad-body', async () => {
+      await put(TWO);
+      plan.updateTicket(plan.planOf('prog-a').epics[0]!.tickets[0]!.id, { state: 'done' }, 5);
+      expect(errorOf(await send('/api/programmes/prog-a/plan/tickets/move', { ticket: 't1', epic: 'e2' }))).toBe('plan-bad-body');
+    });
+
+    it('epic-drop refuses an epic whose ticket a planned run holds, or a started one, plan-runs-open, and drops nothing', async () => {
+      await put(TWO);
+      const runId = hold();
+      const held = await send('/api/programmes/prog-a/plan/epics/drop', { epic: 'e1', why: 'cut' });
+      expect([held.statusCode, errorOf(held)]).toEqual([409, 'plan-runs-open']);
+      coord.db.prepare("UPDATE plan_tickets SET state = 'started' WHERE runId = ?").run(runId);
+      const started = await send('/api/programmes/prog-a/plan/epics/drop', { epic: 'e1', why: 'cut' });
+      expect([started.statusCode, errorOf(started)]).toEqual([409, 'plan-runs-open']);
+      expect(plan.planOf('prog-a').epics[0]!.state).toBe('planned');
+    });
+  });
+
   it('text that leaves for Linear is masked where it is stored', async () => {
     const secret = `sk-${'a'.repeat(40)}`;
     await put({ home: 'project-a', epics: [epic('e1', [1], { title: `has ${secret}` })] });

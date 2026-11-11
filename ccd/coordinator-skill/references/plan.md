@@ -56,7 +56,8 @@ Marks a checkpoint met, with exactly one piece of evidence: a pull request, an i
 JSON
 ```
 
-Refusals: `not-plan-owner`, `unknown-checkpoint`, `plan-bad-body`.
+Refusals: `not-plan-owner`, `unknown-checkpoint`, `plan-bad-body` (a dropped checkpoint, or a key two epics share
+with no `epic` named) and `linear-text-public` (a path).
 
 ## plan ticket-add
 
@@ -74,7 +75,8 @@ Refusals: `not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `plan-bad-body
 
 ## plan ticket-move
 
-Moves a ticket to another epic, checkpoint or project, or drops it with a reason. A drop moves nothing.
+Moves a ticket to another epic, checkpoint or project, or drops it with a reason. A drop moves nothing. A ticket a run
+holds (`started`, or attached to a run not yet dispatched) stays put until that run ends.
 
 ```bash
 "$API" plan ticket-move <slug> --json - <<JSON
@@ -82,12 +84,14 @@ Moves a ticket to another epic, checkpoint or project, or drops it with a reason
 JSON
 ```
 
-Refusals: `not-plan-owner`, `unknown-ticket`, `unknown-epic`, `dropped-needs-reason`, `ticket-workspace-mismatch`,
-`plan-closed`.
+Refusals: `not-plan-owner`, `unknown-ticket`, `unknown-epic`, `unknown-checkpoint`, `plan-runs-open` (a run holds the
+ticket), `plan-bad-body` (a done or dropped ticket), `dropped-needs-reason`, `ticket-workspace-mismatch`,
+`linear-text-public` (the ticket's text judged by the project it moves to) and `plan-closed`.
 
 ## plan epic-drop
 
-Drops an epic with a reason. An epic with a run open on one of its tickets is refused `plan-runs-open`.
+Drops an epic with a reason. An epic with a run holding one of its tickets (working, or opened and not yet
+dispatched) is refused `plan-runs-open`.
 
 ```bash
 "$API" plan epic-drop <slug> --json - <<JSON
@@ -95,7 +99,8 @@ Drops an epic with a reason. An epic with a run open on one of its tickets is re
 JSON
 ```
 
-Refusals: `not-plan-owner`, `unknown-epic`, `dropped-needs-reason`, `plan-runs-open`.
+Refusals: `not-plan-owner`, `unknown-epic`, `dropped-needs-reason`, `plan-runs-open`, `linear-text-public` and
+`plan-closed`.
 
 ## plan close
 
@@ -108,7 +113,8 @@ is never one. After it, `runs open` is refused `plan-closed`.
 JSON
 ```
 
-Refusals: `not-plan-owner`, `plan-bad-body`, `dropped-needs-reason`.
+Refusals: `not-plan-owner`, `plan-runs-open` (a run of the programme has not ended; close after it), `plan-closed` (the
+plan was already closed), `plan-bad-body`, `dropped-needs-reason` and `linear-text-public` (the reason).
 
 Every `plan` verb is refused `no-plan-door` by the client when the server is older than the plan verbs, and `unavailable`
 when the box has no plan store.
