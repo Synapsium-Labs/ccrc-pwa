@@ -6,12 +6,16 @@
 // `shared/claudeBuildTrust.ts`'s; this file only acts on it.
 //
 // NO VERDICT IS NOT A FAILURE. A box that is not there, a runner that is not built, a throw or an answer off its shape keeps
-// the build `queued`, its attempt stamped, so it is sent again after the spacing. Only a verdict the reader accepted moves
-// the row, and a `fail` raises ONE push notice opening Settings, keyed by build and attempt (`hasNotice`, read before the
+// the build `queued`, its retry clock stamped, so it is tried again after the spacing. ONLY A JOB THAT WENT OUT IS AN
+// ATTEMPT: a throw, an off-shape answer or `unanswered` counts one; `no-test-box` and `no-runner` sent nothing, so they count
+// none and the row records why (`notSent`), which the console says instead of "sent N times". Only a verdict the reader
+// accepted moves the row, and a `fail` raises ONE push notice opening Settings, keyed by build and attempt (`hasNotice`, read before the
 // write), so a restart never repeats it and an operator's re-capture that fails again raises its own.
 //
 // `watch.ts` owns one of these and calls `sweep()` from its tick beside the roll, never awaited.
-import { BUILD_CAPTURE_OUTPUT_MAX, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds, type BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
+import {
+  BUILD_CAPTURE_OUTPUT_MAX, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds, type BuildCaptureJob, type BuildCaptureNotSent,
+} from '../../shared/claudeBuildTrust.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import { notify, type NoticeDeps } from './notice.js';
 import type { TestboxBlock } from './testbox.js';
@@ -19,9 +23,9 @@ import type { TestboxBlock } from './testbox.js';
 /** The lane's clock: once a minute. A new build is sent on the first pass after a session runs it. */
 export const BUILD_CAPTURE_SWEEP_MS = 60_000;
 
-/** Why the transport sent nothing it could judge. `no-test-box`: no box answers. `no-runner`: the box has no capture
- *  runner. `unanswered`: the job went out and no answer came back. */
-export type BuildCaptureUnavailable = 'no-test-box' | 'no-runner' | 'unanswered';
+/** Why the transport brought back nothing it could judge. `no-test-box`: no box answers, and nothing was sent. `no-runner`:
+ *  the box has no capture runner, and nothing was sent. `unanswered`: the job went out and no answer came back. */
+export type BuildCaptureUnavailable = BuildCaptureNotSent | 'unanswered';
 
 /** What the transport answers: the runner's answer, unread (the lane reads it through `readBuildCaptureResult`), or why
  *  there is none. */
@@ -36,7 +40,8 @@ export interface BuildCaptureTransport {
 
 /** The production adapter. It reads the test box lane's block: `no-test-box` while no box answers (no block yet, `off`,
  *  `down`, `unreachable`), and `no-runner` otherwise, because the box-side capture runner is the plan's open item. It
- *  sends nothing, so nothing is judged: every new build stays `queued` until the runner lands. */
+ *  sends nothing, so nothing is judged and no attempt is counted: every new build stays `queued`, its row saying why, and
+ *  the test box card says no build can be captured (`captureBlockedBy`) until the runner lands. */
 export function testboxCaptureTransport(block: () => TestboxBlock | null): BuildCaptureTransport {
   return {
     capture: async () => {
@@ -89,9 +94,11 @@ export class BuildCaptureLane {
     const transport = d.buildCapture;
     const build = transport === undefined ? null : nextCaptureJob(records, at);
     if (transport === undefined || build === null) return;
-    if (!coord.markClaudeBuildAttempt(build, at)) return;
+    // One pass at a time (`inflight`), so the try is stamped after the answer: it says whether a job actually went out.
     let answer: BuildCaptureAnswer;
     try { answer = await transport.capture({ build }); } catch { answer = { kind: 'unavailable', why: 'unanswered' }; }
+    const sentNothing = answer.kind === 'unavailable' && answer.why !== 'unanswered' ? answer.why : null;
+    if (!coord.markClaudeBuildAttempt(build, at, sentNothing ?? 'sent')) return;
     if (answer.kind === 'unavailable') return;
     const result = readBuildCaptureResult(answer.result, build);
     if (result === null) {

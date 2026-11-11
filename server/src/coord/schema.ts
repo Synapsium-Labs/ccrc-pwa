@@ -2680,8 +2680,9 @@ export const MIGRATIONS: readonly string[] = [
   // D-8289 (plan 2026-11-11-new-build-capture, the operator's ruling SH-1): `claude_builds`, the trusted set of Claude Code
   // builds as data. ONE ROW PER BUILD: where it came from (`rig`, the 2026-10-18 rig record seeded here; `fleet`, a build a
   // session ran), its capture (`queued`, `pass`, `fail`, CHECKed: an unknown token is no verdict any reader could trust),
-  // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs sent and the last one's
-  // time, the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
+  // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
+  // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
+  // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
   // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
   // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
   //
@@ -2699,6 +2700,7 @@ export const MIGRATIONS: readonly string[] = [
     seenAt        INTEGER NOT NULL,
     attempts      INTEGER NOT NULL DEFAULT 0,
     lastAttemptAt INTEGER,
+    notSent       TEXT    CHECK (notSent IS NULL OR notSent IN ('no-test-box', 'no-runner')),
     verdictAt     INTEGER,
     output        TEXT
   );

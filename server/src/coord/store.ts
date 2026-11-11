@@ -27,7 +27,7 @@ import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkingAll, linkingOf, recordReading, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
-import type { BuildCaptureResult, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
+import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
@@ -5883,8 +5883,8 @@ export class CoordStore {
   claudeBuilds(): ClaudeBuildRecord[] { return builds.claudeBuildRecords(this.db); }
   /** One `queued` row per build that has none; answers the builds recorded. */
   noteClaudeBuildsSeen(seen: readonly string[], now: number): string[] { return builds.noteClaudeBuildsSeen(this.db, seen, now); }
-  /** A capture job is going out for a `queued` build. */
-  markClaudeBuildAttempt(build: string, now: number): boolean { return builds.markClaudeBuildAttempt(this.db, build, now); }
+  /** The queue tried a `queued` build: a job went out, or why none could. */
+  markClaudeBuildAttempt(build: string, now: number, tried: BuildCaptureTry): boolean { return builds.markClaudeBuildAttempt(this.db, build, now, tried); }
   /** A capture's verdict, on a `queued` row only. */
   recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
   /** The operator's **Capture again** on a failed build. */

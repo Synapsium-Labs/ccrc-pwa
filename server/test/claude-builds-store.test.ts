@@ -39,6 +39,7 @@ describe('claude_builds is one new entry, seeded with the rig record (D-8289)', 
     expect(raw.prepare('SELECT build, source, capture, cwd FROM claude_builds ORDER BY build').all()).toEqual(
       RIG.map((build) => ({ build, source: 'rig', capture: 'pass', cwd: 1 })));
     expect(() => raw.prepare("INSERT INTO claude_builds (build, source, capture, seenAt) VALUES ('2.1.400', 'fleet', 'maybe', 1)").run()).toThrow();
+    expect(() => raw.prepare("INSERT INTO claude_builds (build, source, capture, seenAt, notSent) VALUES ('2.1.400', 'fleet', 'queued', 1, 'unanswered')").run()).toThrow();
     raw.close();
   });
 });
@@ -56,16 +57,16 @@ describe('the record\'s writers (D-8289)', () => {
     expect(c.noteClaudeBuildsSeen(['2.1.320', '2.1.302'], 100)).toEqual(['2.1.320']);
     expect(c.noteClaudeBuildsSeen(['2.1.320'], 200)).toEqual([]);
     expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toEqual({
-      build: '2.1.320', source: 'fleet', capture: 'queued', cwd: false, seenAt: 100, attempts: 0, lastAttemptAt: null, verdictAt: null, output: null,
+      build: '2.1.320', source: 'fleet', capture: 'queued', cwd: false, seenAt: 100, attempts: 0, lastAttemptAt: null, notSent: null, verdictAt: null, output: null,
     });
     expect(c.claudeBuilds().find((r) => r.build === '2.1.302')?.source).toBe('rig');
   });
 
-  it('an attempt is stamped only on a queued row, and a verdict lands only on one', () => {
+  it('a try is stamped only on a queued row, and a verdict lands only on one', () => {
     const c = store();
     c.noteClaudeBuildsSeen(['2.1.320'], 100);
-    expect(c.markClaudeBuildAttempt('2.1.302', 150)).toBe(false);
-    expect(c.markClaudeBuildAttempt('2.1.320', 150)).toBe(true);
+    expect(c.markClaudeBuildAttempt('2.1.302', 150, 'sent')).toBe(false);
+    expect(c.markClaudeBuildAttempt('2.1.320', 150, 'sent')).toBe(true);
     expect(c.recordClaudeBuildVerdict({ build: '2.1.320', pass: true, cwd: true, output: 'ok' }, 160)).toBe(true);
     expect(c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'late' }, 170)).toBe(false);
     expect(c.recordClaudeBuildVerdict({ build: '2.1.302', pass: false, cwd: false, output: 'x' }, 170)).toBe(false);
@@ -73,15 +74,26 @@ describe('the record\'s writers (D-8289)', () => {
     expect(buildTrustOf(c.claudeBuilds(), '2.1.320')).toEqual({ kind: 'trusted', cwd: true });
   });
 
+  it('a try that sent nothing stamps the retry clock and why, and counts no attempt; a job that goes out clears the why', () => {
+    const c = store();
+    c.noteClaudeBuildsSeen(['2.1.320'], 100);
+    expect(c.markClaudeBuildAttempt('2.1.320', 150, 'no-runner')).toBe(true);
+    expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toMatchObject({ attempts: 0, lastAttemptAt: 150, notSent: 'no-runner' });
+    expect(c.markClaudeBuildAttempt('2.1.320', 160, 'no-test-box')).toBe(true);
+    expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toMatchObject({ attempts: 0, lastAttemptAt: 160, notSent: 'no-test-box' });
+    expect(c.markClaudeBuildAttempt('2.1.320', 170, 'sent')).toBe(true);
+    expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toMatchObject({ attempts: 1, lastAttemptAt: 170, notSent: null });
+  });
+
   it('requeueClaudeBuild re-queues a failed row only: an unknown build and a row without a failure are refused', () => {
     const c = store();
     c.noteClaudeBuildsSeen(['2.1.320'], 100);
     expect(c.requeueClaudeBuild('2.1.320')).toBe('not-failed');
     expect(c.requeueClaudeBuild('2.1.399')).toBe('unknown-build');
-    c.markClaudeBuildAttempt('2.1.320', 150);
+    c.markClaudeBuildAttempt('2.1.320', 150, 'sent');
     c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'replay: 1 failed' }, 160);
     expect(buildTrustOf(c.claudeBuilds(), '2.1.320')).toEqual({ kind: 'untrusted', reason: 'capture-failed' });
     expect(c.requeueClaudeBuild('2.1.320')).toBe('queued');
-    expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toMatchObject({ capture: 'queued', lastAttemptAt: null, verdictAt: null, output: null, attempts: 1 });
+    expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toMatchObject({ capture: 'queued', lastAttemptAt: null, notSent: null, verdictAt: null, output: null, attempts: 1 });
   });
 });

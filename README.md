@@ -7217,8 +7217,10 @@ once the test box has captured its hook and status-file output and the replay te
 data, `claude_builds` in coord.db: one row per build, seeded with the four builds the 2026-10-18 rig record proved
 (2.1.296 and 2.1.300 to 2.1.302). Every build a session on the fleet runs gets a row, queued for its capture; this covers a
 new build and every build already live. Once a minute the server sends one capture job, newest build first, over the test
-box connection. A build whose job got no verdict is sent again after an hour. A failed capture stays untrusted and pushes
-one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
+box connection. A build whose job got no verdict is sent again after an hour. Only a job that actually went out counts as
+an attempt: while no test box answers, or the box has no capture runner, the queue still tries each build hourly but sends
+nothing, so the row counts no attempt and records why, and the card says that no build can be captured yet instead of
+"sent N times". A failed capture stays untrusted and pushes one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
 `trust` naming why (`not-captured`, `capture-queued`, `capture-failed`, `unread` or `record-unreadable`). The card lists
 every build with its verdict, under the rest at every width. A failed build carries its replay output behind a disclosure
 and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box-side capture runner is not built yet

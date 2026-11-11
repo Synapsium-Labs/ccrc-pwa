@@ -11,7 +11,7 @@ import {
   BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, testboxCaptureTransport, type BuildCaptureAnswer, type BuildCaptureTransport,
 } from '../src/buildCaptureLane.js';
 import type { TestboxBlock } from '../src/testbox.js';
-import { BUILD_CAPTURE_RETRY_MS, buildTrustOf, type BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_RETRY_MS, buildTrustOf, captureBlockedBy, type BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
 import type { NotifyEvent } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -107,13 +107,13 @@ describe('the capture queue (D-8289)', () => {
     expect(s.notices).toHaveLength(2);
   });
 
-  it('no verdict (the box unavailable, a throw, an answer off its shape) keeps the build queued and waits the retry spacing', async () => {
-    const answers: (BuildCaptureAnswer | 'throw')[] = [{ kind: 'unavailable', why: 'no-runner' }, 'throw', { kind: 'answered', result: { build: '2.1.320', pass: 'yes' } }];
+  it('no verdict (a throw, an answer off its shape) keeps the build queued, counts the job sent, and waits the retry spacing', async () => {
+    const answers: (BuildCaptureAnswer | 'throw')[] = ['throw', { kind: 'answered', result: { build: '2.1.320', pass: 'yes' } }, { kind: 'unavailable', why: 'unanswered' }];
     const t = fake(() => { const a = answers.shift(); if (a === 'throw' || a === undefined) throw new Error('link down'); return a; });
     const s = await setup(t);
     for (let i = 0; i < 3; i++) {
       await s.lane.sweep(['2.1.320']);
-      expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'queued', attempts: i + 1 });
+      expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'queued', attempts: i + 1, notSent: null, lastAttemptAt: s.now() });
       s.tick(BUILD_CAPTURE_SWEEP_MS);
       await s.lane.sweep(['2.1.320']);
       expect(t.jobs, 'inside the retry spacing').toHaveLength(i + 1);
@@ -121,6 +121,33 @@ describe('the capture queue (D-8289)', () => {
     }
     expect(buildTrustOf(s.coord.claudeBuilds(), '2.1.320')).toEqual({ kind: 'untrusted', reason: 'capture-queued' });
     expect(s.notices, 'no verdict is not a failure').toHaveLength(0);
+  });
+
+  it('a transport that sends nothing (no test box, no runner) counts no attempt: it stamps the retry clock and says why', async () => {
+    const t = fake(() => ({ kind: 'unavailable', why: 'no-runner' }));
+    const s = await setup(t);
+    await s.lane.sweep(['2.1.320']);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'queued', attempts: 0, lastAttemptAt: s.now(), notSent: 'no-runner' });
+    s.tick(BUILD_CAPTURE_SWEEP_MS);
+    await s.lane.sweep(['2.1.320']);
+    expect(t.jobs, 'the retry clock still spaces the tries').toHaveLength(1);
+    s.tick(BUILD_CAPTURE_RETRY_MS);
+    t.capture = async (job) => { t.jobs.push(job.build); return pass(job); };
+    await s.lane.sweep(['2.1.320']);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'pass', attempts: 1, notSent: null });
+  });
+
+  it('a day on the production transport with no runner: every build says it was not sent, and none counts a job', async () => {
+    let block: TestboxBlock | null = null;
+    const s = await setup(testboxCaptureTransport(() => block));
+    block = { state: 'ok', reasons: [], summary: 'ok', switch: 'on', at: 1, host: null, box: null, cells: [], counts: null };
+    for (let m = 0; m < 24 * 60; m++) { await s.lane.sweep(['2.1.318', '2.1.320']); s.tick(BUILD_CAPTURE_SWEEP_MS); }
+    for (const b of ['2.1.318', '2.1.320']) expect(row(s.coord, b)).toMatchObject({ capture: 'queued', attempts: 0, notSent: 'no-runner' });
+    expect(captureBlockedBy(s.coord.claudeBuilds())).toBe('no-runner');
+    block = null;
+    s.tick(BUILD_CAPTURE_RETRY_MS);
+    await s.lane.sweep(['2.1.318', '2.1.320']);
+    expect(captureBlockedBy(s.coord.claudeBuilds())).toBe('no-test-box');
   });
 });
 

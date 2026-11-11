@@ -54,19 +54,30 @@ within about a day. Today child approvals trust a fixed list of four builds, so 
    sessions, beside the roll. Every well-formed build a session runs that has no row gets one (`source: fleet`,
    `queued`). This covers both a new build (D-8276's signal) and every build already live (the backfill). One job is
    out at a time, newest build first. A build whose last job got no verdict waits `BUILD_CAPTURE_RETRY_MS` (one hour)
-   before it is sent again, so a new build is captured on the first pass the box can take it, well within a day.
+   before it is sent again, so a new build is captured within an hour of the box being able to take it, well within a day.
+   Only a job that actually went out is an attempt (`attempts`). A try the transport answers `no-test-box` or `no-runner`
+   sent nothing: it stamps the retry clock (`lastAttemptAt`) and records why (`notSent`), and counts no attempt, so the
+   card never says "sent 24 times" for a job that was never sent.
 5. **The transport** is a port, `BuildCaptureTransport`. The job goes over the existing test box connection, and the
    answer is a verdict (read through `readBuildCaptureResult`) or `unavailable` with a reason. A verdict updates the row.
    A failure stays untrusted and raises one `coord` notice (push, opening Settings), keyed by build and attempt so a
    restart never repeats it. Tests use a fake transport, and no Claude Code runs anywhere in this work. The production
    adapter (`testboxCaptureTransport`) reads the test box lane's block. It answers `no-test-box` while no box answers,
    and `no-runner` otherwise, until the box-side runner lands (Open). So nothing becomes untrusted that is trusted
-   today.
+   today. `captureBlockedBy(records)` reads the queued build tried last: when it sent nothing, the console says no build
+   can be captured yet and why, so the operator is not left waiting on a capture that cannot happen.
 6. **The console.** Settings › Automation › Test box lists every build: its verdict in words, where the row came from,
    and for a failure, the replay output behind a disclosure and a **Capture again** control
    (`POST /api/testbox/builds/capture`, session-gated, the operator's act). The list is one column of short rows that
    wrap, so phone (390), laptop (1280) and wide (1920) share one layout. `GET /api/testbox/builds` is the read, also
    session-gated.
+
+## Two PRs
+
+`server/src/coord/questions.ts` is a W3-owned file, and `consolidation-path-guard.test.ts` refuses a diff that touches one
+beside a `pwa/` path. So the work lands as two PRs: the server PR (this plan, the record, the queue, the routes, approvals
+reading the record, the README) and, stacked on it, the PWA PR (`TestBoxBuilds`, its `api.ts` entries, the CSS and the
+browser test). The PWA PR is rebased onto `main` once the server PR merges, so its own diff is `pwa/` alone.
 
 ## Tasks
 

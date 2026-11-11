@@ -22,6 +22,14 @@ export const CLAUDE_BUILD_CAPTURES: readonly ClaudeBuildCapture[] = Object.keys(
 export type ClaudeBuildSource = 'rig' | 'fleet';
 export const CLAUDE_BUILD_SOURCE_MAP: Record<ClaudeBuildSource, true> = { rig: true, fleet: true };
 
+/** Why the queue's last try at a build sent no job. `no-test-box`: no box answers. `no-runner`: the box has no capture
+ *  runner. A job that went out and got no answer is not one of these: it was sent, and counts as an attempt. */
+export type BuildCaptureNotSent = 'no-test-box' | 'no-runner';
+export const BUILD_CAPTURE_NOT_SENT_MAP: Record<BuildCaptureNotSent, true> = { 'no-test-box': true, 'no-runner': true };
+
+/** What the queue's try at a build did: a job went out (`sent`, answered or not), or none could (why). */
+export type BuildCaptureTry = 'sent' | BuildCaptureNotSent;
+
 /** One build's row, as `CoordStore.claudeBuilds` reads it and `GET /api/testbox/builds` serves it. */
 export interface ClaudeBuildRecord {
   readonly build: string;
@@ -31,9 +39,12 @@ export interface ClaudeBuildRecord {
   readonly cwd: boolean;
   /** When the row was recorded (ms since the epoch; 0 for a rig seed). */
   readonly seenAt: number;
-  /** How many capture jobs were sent for the build. */
+  /** How many capture jobs actually went out to the test box for the build. A try that sent nothing is not counted. */
   readonly attempts: number;
+  /** When the queue last tried the build, sent or not: the retry clock. */
   readonly lastAttemptAt: number | null;
+  /** Why that last try sent nothing; null when it sent a job, or before any try. */
+  readonly notSent: BuildCaptureNotSent | null;
   readonly verdictAt: number | null;
   /** The replay output's tail, at most {@link BUILD_CAPTURE_OUTPUT_MAX} characters; null before a verdict. */
   readonly output: string | null;
@@ -93,12 +104,24 @@ export function unrecordedBuilds(records: readonly ClaudeBuildRecord[], seen: re
   return [...out].sort(newestFirst);
 }
 
-/** The build to send next, or null: the newest `queued` build never sent, or last sent at least
+/** The build to send next, or null: the newest `queued` build never tried, or last tried at least
  *  {@link BUILD_CAPTURE_RETRY_MS} before `now`. */
 export function nextCaptureJob(records: readonly ClaudeBuildRecord[], now: number): string | null {
   const due = records.filter((r) => r.capture === 'queued' && isClaudeVersion(r.build)
     && (r.lastAttemptAt === null || now - r.lastAttemptAt >= BUILD_CAPTURE_RETRY_MS));
   return due.map((r) => r.build).sort(newestFirst)[0] ?? null;
+}
+
+/** Why the queue cannot capture anything right now, read from the record alone: the queued build it tried last sent
+ *  nothing, for want of a box or of a runner. Null when no queued build was tried, or the last try sent a job. The console
+ *  says it, so the operator is never left waiting on a capture that cannot happen. */
+export function captureBlockedBy(records: readonly ClaudeBuildRecord[]): BuildCaptureNotSent | null {
+  let last: ClaudeBuildRecord | null = null;
+  for (const r of records) {
+    if (r.capture !== 'queued' || r.lastAttemptAt === null) continue;
+    if (last === null || r.lastAttemptAt > (last.lastAttemptAt ?? 0)) last = r;
+  }
+  return last?.notSent ?? null;
 }
 
 // ── the job and its answer ───────────────────────────────────────────────────────────────────────────────────────
@@ -149,10 +172,11 @@ export function readClaudeBuildRecords(v: unknown): ClaudeBuildRecord[] | null {
     const r = x as Record<string, unknown>;
     if (!isClaudeVersion(r['build']) || !has(CLAUDE_BUILD_SOURCE_MAP, r['source']) || !has(CLAUDE_BUILD_CAPTURE_MAP, r['capture'])
       || typeof r['cwd'] !== 'boolean' || !isCount(r['seenAt']) || !isCount(r['attempts']) || !isStamp(r['lastAttemptAt'])
-      || !isStamp(r['verdictAt']) || !(r['output'] === null || typeof r['output'] === 'string')) return null;
+      || !isStamp(r['verdictAt']) || !(r['output'] === null || typeof r['output'] === 'string')
+      || !(r['notSent'] === null || has(BUILD_CAPTURE_NOT_SENT_MAP, r['notSent']))) return null;
     out.push({
       build: r['build'], source: r['source'], capture: r['capture'], cwd: r['cwd'], seenAt: r['seenAt'], attempts: r['attempts'],
-      lastAttemptAt: r['lastAttemptAt'], verdictAt: r['verdictAt'], output: r['output'] as string | null,
+      lastAttemptAt: r['lastAttemptAt'], notSent: r['notSent'] as BuildCaptureNotSent | null, verdictAt: r['verdictAt'], output: r['output'] as string | null,
     });
   }
   return out;

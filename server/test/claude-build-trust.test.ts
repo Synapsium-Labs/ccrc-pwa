@@ -4,11 +4,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILD_CAPTURE_OUTPUT_MAX, BUILD_CAPTURE_RETRY_MS, BUILD_UNTRUSTED_REASONS, buildTrustOf, buildUntrustedSentence,
-  nextCaptureJob, readBuildCaptureResult, readClaudeBuildRecords, unrecordedBuilds, type ClaudeBuildRecord,
+  captureBlockedBy, nextCaptureJob, readBuildCaptureResult, readClaudeBuildRecords, unrecordedBuilds, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 
 const rec = (build: string, over: Partial<ClaudeBuildRecord> = {}): ClaudeBuildRecord => ({
-  build, source: 'fleet', capture: 'queued', cwd: false, seenAt: 1, attempts: 0, lastAttemptAt: null, verdictAt: null, output: null, ...over,
+  build, source: 'fleet', capture: 'queued', cwd: false, seenAt: 1, attempts: 0, lastAttemptAt: null, notSent: null, verdictAt: null, output: null, ...over,
 });
 
 describe('buildTrustOf: a build is trusted only when its capture passed (D-8289)', () => {
@@ -66,6 +66,25 @@ describe('the queue\'s two choices (D-8289)', () => {
   });
 });
 
+describe('captureBlockedBy: why the queue cannot send anything, from the record alone (D-8289)', () => {
+  it('the queued build tried last says it: not sent for want of a box or a runner, or null once a job went out', () => {
+    expect(captureBlockedBy([rec('2.1.320')]), 'never tried').toBeNull();
+    expect(captureBlockedBy([rec('2.1.320', { lastAttemptAt: 5, notSent: 'no-runner' })])).toBe('no-runner');
+    expect(captureBlockedBy([
+      rec('2.1.320', { lastAttemptAt: 5, notSent: 'no-runner' }),
+      rec('2.1.318', { lastAttemptAt: 9, notSent: 'no-test-box' }),
+    ]), 'the latest try wins').toBe('no-test-box');
+    expect(captureBlockedBy([
+      rec('2.1.320', { lastAttemptAt: 5, notSent: 'no-runner' }),
+      rec('2.1.318', { lastAttemptAt: 9, attempts: 1 }),
+    ]), 'a later job that went out clears it').toBeNull();
+    expect(captureBlockedBy([
+      rec('2.1.302', { capture: 'pass', lastAttemptAt: 99 }),
+      rec('2.1.320', { lastAttemptAt: 5, notSent: 'no-runner' }),
+    ]), 'a verdict row is not a try').toBe('no-runner');
+  });
+});
+
 describe('readBuildCaptureResult: the capture answer\'s one reader (D-8289)', () => {
   const good = { build: '2.1.320', pass: true, cwd: true, output: 'replay: 12 passed' };
 
@@ -98,6 +117,9 @@ describe('readClaudeBuildRecords: the wire list\'s one reader (D-8289)', () => {
     expect(readClaudeBuildRecords(rows)).toEqual(rows);
     expect(readClaudeBuildRecords([...rows, { ...rec('2.1.321'), capture: 'maybe' }])).toBeNull();
     expect(readClaudeBuildRecords([{ ...rec('2.1.321'), source: 'elsewhere' }])).toBeNull();
+    expect(readClaudeBuildRecords([rec('2.1.321', { lastAttemptAt: 5, notSent: 'no-runner' })])?.[0]?.notSent).toBe('no-runner');
+    expect(readClaudeBuildRecords([{ ...rec('2.1.321'), notSent: 'unanswered' }]), 'a job that went out is not a not-sent').toBeNull();
+    expect(readClaudeBuildRecords([{ ...rec('2.1.321'), notSent: undefined }])).toBeNull();
     expect(readClaudeBuildRecords('x')).toBeNull();
   });
 });
