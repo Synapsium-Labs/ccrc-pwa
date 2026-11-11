@@ -154,6 +154,29 @@ describe('runs attach to tickets (D-8181)', () => {
     expect(ticketsOf(w)).toHaveLength(1);
   });
 
+  it('a failed run\'s auto ticket is taken by the next open of its wave, so no orphan holds the epic open', async () => {
+    const w = await world();
+    await declare(w, { home: 'project-a', epics: [epic('e1', [1], { checkpoints: [] })] });
+    const a = (await open(w)).json() as { id: number };
+    for (const to of ['dispatched', 'failed'] as const) expect(w.coord.advance(a.id, to, 'test').ok, to).toBe(true);
+    expect(ticketsOf(w).map((t) => [t.key, t.state, t.runId])).toEqual([[`run-${a.id}`, 'open', null]]);
+    const b = await open(w, { ...OPEN, project: 'project-b', title: 'Wave one again' });
+    expect(b.statusCode, b.body).toBe(200);
+    const bid = (b.json() as { id: number }).id;
+    expect(ticketsOf(w).map((t) => [t.key, t.state, t.runId, t.project, t.title])).toEqual([[`run-${a.id}`, 'open', bid, 'project-b', 'Wave one again']]);
+    for (const to of ['dispatched', 'closing', 'done'] as const) expect(w.coord.advance(bid, to, 'test').ok, to).toBe(true);
+    expect(w.plan.planOf('prog-a').epics[0]!.state).toBe('done');
+  });
+
+  it('a failed run\'s auto ticket is not taken by another wave of the same epic', async () => {
+    const w = await world();
+    await declare(w, { home: 'project-a', epics: [epic('e1', [1, 2], { checkpoints: [] })] });
+    const a = (await open(w)).json() as { id: number };
+    expect(w.coord.advance(a.id, 'failed', 'test').ok).toBe(true);
+    const b = (await open(w, { ...OPEN, wave: 2 })).json() as { id: number };
+    expect(ticketsOf(w).map((t) => [t.key, t.runId])).toEqual([[`run-${a.id}`, null], [`run-${b.id}`, b.id]]);
+  });
+
   it('a retried open that names its ticket is answered too', async () => {
     const w = await world();
     await declare(w, { home: 'project-a', epics: [epic('e1', [1], { tickets: [{ key: 't1', kind: 'work', title: 'T' }] })] });

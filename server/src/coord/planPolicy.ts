@@ -20,6 +20,12 @@ export function epicIsDone(
   return checkpoints.some((c) => c.state === 'met') || tickets.some((t) => t.state === 'done');
 }
 
+/** The key of the ticket ccrc makes for a run opened with no `ticket` (`run-<runId>`). The prefix is reserved: a plan verb
+ *  never takes a new ticket whose key starts with it, so an auto ticket's key cannot already be taken when its run opens. */
+export const AUTO_TICKET_PREFIX = 'run-';
+export const autoTicketKey = (runId: number): string => `${AUTO_TICKET_PREFIX}${runId}`;
+export const isAutoTicketKey = (key: string): boolean => key.startsWith(AUTO_TICKET_PREFIX);
+
 // ── Parsing ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 type Bad = { ok: false; word: 'plan-bad-body' | 'plan-too-large'; detail: string };

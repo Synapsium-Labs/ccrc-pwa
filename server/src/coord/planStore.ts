@@ -13,7 +13,7 @@ import {
   type BindingKind, type BindingState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
   type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
-import { epicAdmitsRun, epicIsDone } from './planPolicy.js';
+import { AUTO_TICKET_PREFIX, autoTicketKey, epicAdmitsRun, epicIsDone } from './planPolicy.js';
 import { tx } from './tx.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -337,12 +337,13 @@ export function markCheckpointMet(db: DatabaseSync, checkpointId: number, eviden
 // ── Runs and tickets ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Inside `openRun`'s transaction: re-check the plan facts (the plan open, the epic live, a named ticket `open` with no
- *  run), then insert the auto ticket (key `run-<runId>`, derived again on a retry) or re-project the named one, and attach
- *  it only when `runs.ticketId IS NULL`, so a retried open attaches nothing twice. */
+ *  run), then take the wave's orphaned auto ticket (one a failed run of the same wave left `open`), else insert the auto
+ *  ticket (key `run-<runId>`, derived again on a retry), or re-project the named one, and attach it only when
+ *  `runs.ticketId IS NULL`, so a retried open attaches nothing twice. */
 export function attachTicketInTx(
   db: DatabaseSync, runId: number, ticket: OpenRunTicket, now: number,
 ): { ok: true } | { ok: false; refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable' } {
-  const run = db.prepare('SELECT program, ticketId FROM runs WHERE id = ?').get(runId) as { program: string; ticketId: number | null } | undefined;
+  const run = db.prepare('SELECT program, wave, ticketId FROM runs WHERE id = ?').get(runId) as { program: string; wave: number; ticketId: number | null } | undefined;
   if (run === undefined) return { ok: false, refused: 'wave-epic-mismatch' };
   if (run.ticketId !== null) return { ok: true };
   if (planEndOf(db, run.program) !== null) return { ok: false, refused: 'plan-closed' };
@@ -366,10 +367,23 @@ export function attachTicketInTx(
     ticketId = t.id;
   } else {
     reopenEpic();
-    const res = db.prepare(
-      "INSERT INTO plan_tickets (program, project, epicId, checkpointId, key, kind, title, body, source, state, runId) VALUES (?, ?, ?, NULL, ?, 'work', ?, '', 'plan', 'open', ?)",
-    ).run(run.program, ticket.project, ticket.epicId, `run-${runId}`, ticket.title, runId);
-    ticketId = Number(res.lastInsertRowid);
+    // A failed run returns its auto ticket to `open` with no run; the next open of the same wave with no ticket takes that
+    // ticket (re-projected and re-titled to this run) rather than minting another, so a retried wave leaves no orphan
+    // `open` ticket that would keep the epic from settling. An auto ticket's key is reserved (`isAutoTicketKey`), so only
+    // ccrc's own tickets match.
+    const orphan = db.prepare(
+      "SELECT t.id AS id FROM plan_tickets t WHERE t.program = ? AND t.epicId = ? AND t.state = 'open' AND t.runId IS NULL "
+      + 'AND substr(t.key, 1, ?) = ? AND EXISTS (SELECT 1 FROM runs r WHERE r.ticketId = t.id AND r.wave = ?) ORDER BY t.id LIMIT 1',
+    ).get(run.program, ticket.epicId, AUTO_TICKET_PREFIX.length, AUTO_TICKET_PREFIX, run.wave) as { id: number } | undefined;
+    if (orphan !== undefined) {
+      db.prepare('UPDATE plan_tickets SET runId = ?, project = ?, title = ? WHERE id = ?').run(runId, ticket.project, ticket.title, orphan.id);
+      ticketId = orphan.id;
+    } else {
+      const res = db.prepare(
+        "INSERT INTO plan_tickets (program, project, epicId, checkpointId, key, kind, title, body, source, state, runId) VALUES (?, ?, ?, NULL, ?, 'work', ?, '', 'plan', 'open', ?)",
+      ).run(run.program, ticket.project, ticket.epicId, autoTicketKey(runId), ticket.title, runId);
+      ticketId = Number(res.lastInsertRowid);
+    }
   }
   db.prepare('UPDATE runs SET ticketId = ? WHERE id = ? AND ticketId IS NULL').run(ticketId, runId);
   markSyncDueInTx(db, run.program, now);
