@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { verdictFor } from '../../ccd/approval-verify.mjs';
-import { APPROVAL_CWD_TRUSTED, APPROVAL_REFUSALS_LOG, APPROVAL_SIGNING_KEY_FILE, SECRET_MASK } from '../../shared/api.js';
+import { APPROVAL_REFUSALS_LOG, APPROVAL_SIGNING_KEY_FILE, SECRET_MASK } from '../../shared/api.js';
 import { SecretMasker, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
 import { Bus } from '../src/bus.js';
 import { buildServer } from '../src/server.js';
@@ -89,14 +89,28 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
     expect(approvalCount(f.coord)).toBe(0);
   });
 
-  it('a version not in APPROVAL_HOOK_VERSIONS is refused, nothing minted', async () => {
+  it('a build with no passed capture is refused with its reason, nothing minted (D-8289)', async () => {
     f = await approvalsFixture();
     f.seed(PARENT, 'project-a');
     f.seed(CHILD, 'project-a', '2.1.299');
     f.child(CHILD, f.run(PARENT, CHILD));
     const { res } = await ask(f);
-    expect(res.json()).toMatchObject({ error: 'version-unverified' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'version-unverified', trust: 'not-captured' });
     expect(approvalCount(f.coord)).toBe(0);
+  });
+
+  it('a build the queue captured and passed is trusted: the same request mints (D-8289)', async () => {
+    f = await approvalsFixture();
+    f.seed(PARENT, 'project-a');
+    f.seed(CHILD, 'project-a', '2.1.330');
+    f.child(CHILD, f.run(PARENT, CHILD));
+    expect((await ask(f)).res.json()).toMatchObject({ error: 'version-unverified', trust: 'not-captured' });
+    f.coord.noteClaudeBuildsSeen(['2.1.330'], 1);
+    expect((await ask(f)).res.json()).toMatchObject({ error: 'version-unverified', trust: 'capture-queued' });
+    f.coord.recordClaudeBuildVerdict({ build: '2.1.330', pass: true, cwd: true, output: 'replay: 40 passed' }, 2);
+    expect((await ask(f)).res.statusCode).toBe(201);
+    expect(approvalCount(f.coord)).toBe(1);
   });
 
   it('no .deny-settings, one naming another digest, or no bash pin: deny-not-engaged, nothing minted', async () => {
@@ -418,22 +432,15 @@ describe('the working directory reaches the classifier only on a trusted version
     expect((await f.rule(id, PARENT, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
   });
 
-  it('on a version in APPROVAL_HOOK_VERSIONS but not APPROVAL_CWD_TRUSTED, a subagent\'s relative rm -rf build escalates; the literal absolute target is still ordinary', async () => {
-    const trusted = APPROVAL_CWD_TRUSTED as string[];
-    const at = trusted.indexOf('2.1.302');
-    expect(at).toBeGreaterThanOrEqual(0);
-    trusted.splice(at, 1);
-    try {
-      f = await standardFixture();
-      const rel = await ask(f, hookInput({ agentId: 'a0000000000000001', command: 'rm -rf build' }));
-      expect(rel.res.json()).toEqual({ id: rel.id, waitS: 180 });
-      expect(rowOf(f, rel.id).class).toBe('escalate');
-      expect((await f.rule(rel.id, PARENT, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
-      const abs = await ask(f, hookInput({ agentId: 'a0000000000000002', command: `rm -rf ${workdirOf(CHILD)}/build` }));
-      expect(rowOf(f, abs.id).class).toBe('ordinary');
-    } finally {
-      trusted.splice(at, 0, '2.1.302');
-    }
+  it('on a build whose passed capture did not prove the cwd, a subagent\'s relative rm -rf build escalates; the literal absolute target is still ordinary (D-8289)', async () => {
+    f = await standardFixture();
+    f.coord.db.prepare("UPDATE claude_builds SET cwd = 0 WHERE build = '2.1.302'").run();
+    const rel = await ask(f, hookInput({ agentId: 'a0000000000000001', command: 'rm -rf build' }));
+    expect(rel.res.json()).toEqual({ id: rel.id, waitS: 180 });
+    expect(rowOf(f, rel.id).class).toBe('escalate');
+    expect((await f.rule(rel.id, PARENT, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
+    const abs = await ask(f, hookInput({ agentId: 'a0000000000000002', command: `rm -rf ${workdirOf(CHILD)}/build` }));
+    expect(rowOf(f, abs.id).class).toBe('ordinary');
   });
 });
 

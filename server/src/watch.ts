@@ -95,6 +95,7 @@ import { ProjectWalkCache, listProjects } from './lifecycle.js';
 import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
+import { BuildCaptureLane } from './buildCaptureLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
@@ -1079,6 +1080,8 @@ export class FleetWatcher {
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
   readonly testboxLane = new TestboxLane(() => this.deps);
+  /** D-8289: the capture queue: a row per build the fleet runs, and one capture job at a time to the test box. */
+  private readonly buildCaptureLane = new BuildCaptureLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
   /** Each node's last box-settings read (D-6916): read inside the inventory run, served by `GET /api/updates` through `boxSettingsHeld()`. */
   private readonly boxSettingsLane = new BoxSettingsLane();
@@ -2976,6 +2979,8 @@ export class FleetWatcher {
       if (this.primed) void this.sweepSleep(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-7452: the automatic coordinator roll, at hibernation's clock, never awaited, gated on `primed` the same way.
       if (this.primed) void this.sweepRoll(sessions, records, registryRead.names)?.catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-8289: the capture queue, on THIS tick's builds (D-8276's newest-build signal and every live build). Own clock, never awaited.
+      void this.buildCaptureLane.sweep(sessions.map((s) => s.version));
       if (this.primed) void this.sweepStaleArchive(records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       // A due beat that lands on a pass still running is skipped by the row and still spends its slot, as it always did.

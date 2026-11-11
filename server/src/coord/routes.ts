@@ -140,7 +140,7 @@ import {
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalView,
 } from '../../../shared/api.js';
-import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { planStorePort } from './planStore.js';
 import { planFactsOf } from './planRunFacts.js';
@@ -2285,6 +2285,33 @@ export function registerCoordRoutes(
       return refuseRoute(reply, refusal.error, { detail: refusal.detail });
     }
     return reply.code(200).send({ ok: r.reply.outcome === 'sent', ...r.reply });
+  });
+
+  /** D-8289: Settings › Automation › Test box's build list (`GET`, the record as `CoordStore.claudeBuilds` reads it) and the
+   *  operator's **Capture again** (`POST`, `{build}` and nothing else: a FAILED build goes back to the queue, which sends it on
+   *  its next pass). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
+   *  read is `unavailable`, never an empty list. */
+  const buildsAnswer = (reply: FastifyReply, coord: NonNullable<typeof deps.coord>): FastifyReply => {
+    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds() }); } catch (err) {
+      return refuseRoute(reply, 'unavailable', { detail: `the build record could not be read (${err instanceof Error ? err.message : String(err)})` });
+    }
+  };
+  app.get('/api/testbox/builds', async (_req, reply) => (deps.coord ? buildsAnswer(reply, deps.coord) : notConfigured(reply)));
+  app.post('/api/testbox/builds/capture', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { build?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'build' || !isClaudeVersion(body.build)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {build}, a Claude Code build such as 2.1.302' });
+    }
+    const r = deps.coord.requeueClaudeBuild(body.build);
+    if (r === 'unknown-build') return refuseRoute(reply, 'not-found', { detail: `no build ${body.build} is recorded` });
+    if (r === 'not-failed') return refuseRoute(reply, 'conflict', { detail: `build ${body.build} has not failed its capture` });
+    if (deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'Claude Code build sent to capture again', runId: null,
+        body: `build ${body.build} is queued for its capture again; by ${actor}` }, 'record-only', { degraded: 'capture re-queued, feed archive degraded' });
+    }
+    return buildsAnswer(reply, deps.coord);
   });
 
   /** `GET`/`POST /api/coord/caps` — the coordination cap becomes an
@@ -4449,7 +4476,7 @@ export function registerCoordRoutes(
       case 'internal': return refuseRoute(reply, 'internal', { detail: v.detail });
       case 'not-a-child': return refuseRoute(reply, 'not-a-child');
       case 'deny-not-engaged': return refuseRoute(reply, 'deny-not-engaged');
-      case 'version-unverified': return refuseRoute(reply, 'version-unverified', { detail: v.detail });
+      case 'version-unverified': return refuseRoute(reply, 'version-unverified', { detail: v.detail, trust: v.trust });
       case 'digest-mismatch': return refuseRoute(reply, 'digest-mismatch');
       case 'run-unreadable': return refuseRoute(reply, 'run-unreadable', { detail: v.detail });
       // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.

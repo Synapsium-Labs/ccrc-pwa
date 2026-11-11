@@ -46,6 +46,7 @@ import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
+import { testboxCaptureTransport } from './buildCaptureLane.js';
 import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
@@ -326,6 +327,8 @@ deps.accountAudit = accountAudit;
 const testboxAudit = new TestboxAudit(coord.db);
 deps.testboxAudit = testboxAudit;
 deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
+// D-8289: the capture queue's transport, over the test box lane's connection (`watcher.testboxLane`).
+deps.buildCapture = testboxCaptureTransport(() => watcher.testboxLane.block());
 // The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);

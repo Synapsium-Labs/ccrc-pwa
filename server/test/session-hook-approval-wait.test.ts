@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  APPROVAL_HOOK_STOP_STATES, APPROVAL_HOOK_WAIT_S, APPROVAL_HOOK_VERSIONS, APPROVAL_CWD_TRUSTED, approvalDigestBytes,
+  APPROVAL_HOOK_STOP_STATES, APPROVAL_HOOK_WAIT_S, approvalDigestBytes,
 } from '../../shared/api.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -185,11 +185,7 @@ describe('the shared constants\' bash copies', () => {
     expect(timeout).toBe(600);
     expect(APPROVAL_HOOK_WAIT_S).toBeLessThan(timeout);
   });
-  it('APPROVAL_CWD_TRUSTED never admits a version APPROVAL_HOOK_VERSIONS leaves out; 2.1.299 is in neither', () => {
-    for (const v of APPROVAL_CWD_TRUSTED) expect(APPROVAL_HOOK_VERSIONS).toContain(v);
-    expect(APPROVAL_HOOK_VERSIONS).not.toContain('2.1.299');
-    expect(APPROVAL_CWD_TRUSTED).not.toContain('2.1.299');
-  });
+  // D-8289: the trusted builds and their cwd are data now (`claude_builds`); `claude-builds-store.test.ts` pins the rig seed.
 });
 
 describe('the digest: APPROVAL_DIGEST_JQ is held equal to approvalDigestBytes over digest-corpus.json', () => {
