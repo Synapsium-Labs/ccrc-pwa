@@ -1,0 +1,7 @@
+CE EXM-none: 7 of 259 inputs get no word: the console reports its events, the answer is not from a push or a bulk Seen, and none of the three things `examined` needs happened. The plain case is one of them: the operator opens the item, reads the brief and taps the recommended option
+CE EXM-none: 1 of those are a blind-sample answer with the Overlord's chat text on screen: "examined at most", and no word when none of the three things happened
+CE EXM-order: 178 inputs match more than one bullet and the text gives no order: `blind` and `examined` in 7; `blind` and `examined` and `glanced` in 21; `blind` and `glanced` in 3; `examined` and `glanced` in 147. A tap from a push that picks another option is a disagreement: read as `glanced` it drops out of every count
+CE BRF-order: briefRevealMode: `blind-sample` and `on-tap` both match 95 of 192 inputs (the server sampled a row that is O3, a start, thin, disputed or under the fatigue rule) and the text gives no order. `on-tap` shows the recommendation after a tap, before the answer; `blind-sample` only after it
+note tripwireDue: the text gives no answer for a `reopenIf` predicate that cannot be measured; `reviewBy` bounds the wait
+note fatigueSignals reads five signals and names a line for two of them (the gap, the glanced share)
+== answerExamined, briefRevealMode: domain 259 and 192 inputs; counterexamples 4; checks passed 0

@@ -1,0 +1,52 @@
+| scenario | switch=value | states | transitions | secs | violated |
+|---|---|---|---|---|---|
+| core | (defaults) | 94966 | 345638 | 2.8 | - |
+| push | (defaults) | 8746 | 29492 | 0.2 | - |
+| pause | (defaults) | 7465 | 25271 | 0.3 | - |
+| race | (defaults) | 1888 | 6831 | 0.1 | - |
+| renewal | (defaults) | 508800 | 1778920 | 13.1 | - |
+| asks | (defaults) | 4304 | 14394 | 0.1 | - |
+| grants | (defaults) | 134691 | 462582 | 3.3 | - |
+| value | (defaults) | 264 | 709 | 0.0 | - |
+| lineage | (defaults) | 424 | 977 | 0.0 | - |
+| nohold | (defaults) | 35684 | 148271 | 1.2 | - |
+| deadpush | (defaults) | 812 | 2287 | 0.0 | - |
+| restore | (defaults) | 4563 | 13002 | 0.1 | - |
+| genmachine | (defaults) | 674982 | 2214248 | 12.6 | - |
+| rebind | (defaults) | 40745 | 119611 | 0.9 | - |
+| readiness | (defaults) | 336549 | 1292292 | 11.1 | - |
+| core | RAISE_TXN=split | 117740 | 426777 | 3.4 | D1 I9 |
+| core | OUTCOME_REACH_TXN=outcome-first | 167286 | 587322 | 4.8 | D1 I1 I9 |
+| core | OUTCOME_REACH_TXN=reach-first | 531446 | 2343195 | 18.9 | - |
+| asks | OUTCOME_AT=done | 33036 | 124448 | 0.8 | X2 |
+| asks | REV_BUMP_AT=settle | 4304 | 13798 | 0.1 | X1 |
+| asks | REFUSED_SETTLE=none | 4400 | 14786 | 0.1 | D1 I1 |
+| race | STALE_OPERATOR_TAP=stands | 3166 | 9665 | 0.1 | I3 X1 |
+| genmachine | CARD_DOOR_SKIPS=literal | 155925 | 491041 | 2.6 | D2 |
+| renewal | CARD_LISTS_HOLDS=False | 508800 | 1778920 | 13.0 | I8 |
+| renewal | CARD_CAP=1 | 508800 | 1778920 | 12.9 | I8 |
+| pause | PAUSE_REACH=brief-only | 6299 | 21416 | 0.2 | D1 I1 |
+| grants | STAGING_REACHES=False | 104851 | 344840 | 2.4 | D1 I1 |
+| core | ANSWER_CHECKS_DEADLINE=False | 96598 | 353670 | 2.9 | - |
+| core | DOORS_BEFORE_BOOT_PASS=True | 96510 | 360752 | 2.9 | - |
+| push | RETRY_AT_RUNTIME=False | 7474 | 23902 | 0.2 | D3 |
+| nohold | NONBLOCKING_PUSH=push | 49444 | 213549 | 1.7 | I9 |
+| nohold | NONBLOCKING_PUSH=none | 35684 | 148271 | 1.2 | I2 |
+| genmachine | START_WHILE_DOWN=lost-oldkey | 810105 | 2829303 | 16.1 | I5 |
+| genmachine | START_WHILE_DOWN=lost-nokey | 806895 | 2810374 | 16.2 | - |
+| genmachine | CHECKPOINTED_TIMEOUT=active | 674982 | 2214248 | 12.8 | - |
+| genmachine | FAILED_RENEWAL_RETURNS=active | 854034 | 2805733 | 16.1 | X4 |
+| renewal | FAILED_RENEWAL_RETURNS=active | 513252 | 1789995 | 12.9 | X4 X5 |
+| readiness | NO_PROOF_WORD=previous | 359356 | 1398543 | 12.4 | - |
+| lineage | REINHERIT=replace | 370 | 857 | 0.0 | I6 |
+| lineage | OP_CLASS_REMOVALS=1 | 844 | 2157 | 0.0 | I6 |
+| value | STATE_A_FACT_AUTH=entry | 248 | 702 | 0.0 | I4 |
+| core | BOOT_UNMEASURED_RELEASES=False | 108596 | 395234 | 3.2 | - |
+| deadpush | I9_SCOPE=all | 812 | 2287 | 0.0 | I9 |
+| restore | WITNESS_LAG=True | 9237 | 27562 | 0.1 | I7t |
+| core | late answer after a gap | 121284 | 484989 | 4.3 | I1 |
+| asks | outcome at done, revision at settle | 8424 | 27928 | 0.2 | X1 X2 |
+| core | the text as written (every literal reading) | 100046 | 376240 | 3.1 | D1 I1 |
+
+total 265.7s
+python3 check.py --matrix  264.53s user 0.95s system 99% cpu 4:25.75 total

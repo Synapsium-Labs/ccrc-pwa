@@ -1,0 +1,4 @@
+CE PUSH-none: blocking-now, not verified: no answer in 16 inputs. Table 4.2a says when the urgency is accepted, not what the escalate door does with one it does not accept
+CE PUSH-clash: batchable; no briefing time; budget spent: two rules, two answers in 4 inputs: "nothing defers a push past its limit" pushes it now, and a spent budget "lets through" only a verified `blocking-now` and a `blocking-by` at its limit
+note with no briefing time set, a `batchable` push goes out now in 6 inputs where a `blocking-by` push still inside its limit waits (quiet hours, "away until" or a spent budget), e.g. ('no briefing time', 'budget left', 'quiet hours or away', 'console closed')
+== pushAdmission: domain 80 inputs; counterexamples 2; checks passed 0
