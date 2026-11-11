@@ -867,6 +867,10 @@ describe('the coordinator skill: linkage', () => {
       // how to arm the lane that closes its own runs.
       'GET /api/coord/run-close',
       'POST /api/coord/run-close',
+      // D-8274 (R-6): the Shadow lanes card, the operator's one switch of each shadow lane (the roster card first), session-gated:
+      // no coordinator's door, and no coordinator is told how to arm a lane in its own name (the spec forbids the skills it).
+      'GET /api/coord/lane-arm',
+      'POST /api/coord/lane-arm',
       // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
       // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
       // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the
@@ -2001,6 +2005,13 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // never fires for it; the convention, this row and the door's sign-in rule are what hold. The verb and the route alike.
     expect(`${allSkillText}\nPOST /api/coord/delegation-adopt\n`, 'CONTROL: a planted mention is seen').toContain('delegation-adopt');
     expect(allSkillText).not.toContain('delegation-adopt');
+  });
+
+  it('never names the Shadow lanes door — a door that would tell a coordinator how to arm a shadow lane in the operator\'s name (D-8274)', () => {
+    // Spec 2026-10-28 R-6: "the coordinator, worker and reviewer skills are forbidden to name the route". EXEMPT above only
+    // PERMITS the omission; this is what FORBIDS the mention.
+    expect(`${allSkillText}\nPOST /api/coord/lane-arm\n`, 'CONTROL: a planted mention is seen').toContain('/api/coord/lane-arm');
+    expect(allSkillText).not.toContain('/api/coord/lane-arm');
   });
 
   it('never names the roll-idle settings door — a door that would tell a coordinator how to turn off its own roll onto the current release (D-7453)', () => {

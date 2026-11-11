@@ -8,6 +8,7 @@ import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequ
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
+import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
@@ -965,6 +966,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  could not be read may still have moved the switch. */
     setDelegationAdopt: (body: DelegationAdoptRequest) =>
       postJsonOr<DelegationAdoptView | 'unreadable'>('/api/coord/delegation-adopt', 'unreadable', body),
+    /** `GET /api/coord/lane-arm` (D-8274; spec 2026-10-28 R-6): Settings › Automation › Shadow lanes, every shadow lane's row.
+     *  The card reads it through `useLaneArmView`, whose `asLaneArmView` is the wire guard. 501 `not-configured` and an older
+     *  server's 404 read as not available. Session-gated when armed, open dark; no box token. */
+    laneArm: (opts?: ReadOpts) => getJson<LaneArmView>('/api/coord/lane-arm', opts),
+    /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
+     *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
+     *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
+     *  the choice. */
+    setLaneArm: (body: LaneArmRequest) => postJsonOr<LaneArmView | 'unreadable'>('/api/coord/lane-arm', 'unreadable', body),
     /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>
