@@ -69,6 +69,15 @@ describe('casesDue', () => {
     expect(casesDue({ rows, programOf: progs([1], 'prog-a'), newestCaseAt: new Map(), now: NOW })).toEqual([]);
     expect(caseRunIds(rows)).toEqual([]);
   });
+  it('an episode whose rows tie on at takes the lowest eventId, in either order', () => {
+    const tie = [row(21, 1, FROM + 5, 'quiet', 9, 1), row(22, 1, FROM + 5, 'quiet', 9, 2)];
+    const others = [row(31, 2, FROM + 6, 'quiet'), row(32, 3, FROM + 7, 'quiet')];
+    for (const rows of [[...tie, ...others], [...[...tie].reverse(), ...others]]) {
+      const due = casesDue({ rows, programOf: progs([1, 2, 3], 'prog-a'), newestCaseAt: new Map(), now: NOW });
+      expect(due).toHaveLength(1);
+      expect(due[0]!.evidence).toEqual([21, 31, 32]);
+    }
+  });
   it('caseRunIds names each run of a parseable row once, ascending', () => {
     const rows = [row(1, 7, NOW, 'quiet'), row(2, 3, NOW, 'dead'), row(3, 7, NOW, 'dead'), { eventId: 4, runId: 1, at: NOW, detail: null }];
     expect(caseRunIds(rows)).toEqual([3, 7]);
@@ -139,7 +148,7 @@ describe('the whole domain', () => {
   it('matches the oracle on every input', () => {
     for (const { input } of cases) expect(casesDue(input)).toEqual(oracle(input));
   });
-  it('is monotone: less evidence never adds a signature, and an unreadable row changes nothing', () => {
+  it('is monotone over this grid (one row per episode; run_events is append-only): less evidence never adds a signature, and an unreadable row changes nothing', () => {
     const sigs = (i: CasesInput): Set<string> => new Set(casesDue(i).map((d) => d.signature));
     for (const { input } of cases) {
       const base = sigs(input);
