@@ -101,6 +101,7 @@ describe('ccrc doctor: path measures the PATH a session gets', () => {
     expect(code).toBe(2);
     expect(remedy, 'a remedy that cannot reach a session').not.toMatch(/export PATH|\.profile.*then log in/);
     expect(remedy).toContain(sys);
+    expect(remedy, 'a session started before D-8050 gets the folder on its next restart (D-8333)').toContain('restart also gives it');
   });
 
   it('counts only the sessions that lack it, and never a pane that is not a session', () => {
@@ -211,21 +212,39 @@ describe('ccrc doctor: path measures the PATH a session gets', () => {
     expect(remedy).toMatch(/^ {2}remedy: run: ccrc install/);
   });
 
-  it('from the user manager the same PASS speaks of a session to come, not a count of live ones', () => {
-    const home = healthy('ccrc-doctor-spath-names-manager-'); installCommands(home);
-    const sys = systemBin();
-    for (const c of ['ccrc', 'ccd', 'ccrc-api']) writeFileSync(join(sys, c), '#!/bin/sh\n', { mode: 0o755 });
-    writeFileSync(join(home, 'fixture-manager-env'), `PATH=${sys}\n`);
-    expect(check(home, 'path').line).toMatch(/^PASS path: every session resolves ccrc, ccd, ccrc-api .*and a session started now would run without it on PATH$/);
-  });
-
-  it('with no live session, reads the user manager\'s PATH, which a supervised session inherits', () => {
+  it('with no live session, a session to come gets the folder from ccd\'s launch line, so the user manager\'s PATH lacking it passes (D-8333)', () => {
     const home = healthy('ccrc-doctor-spath-manager-'); installCommands(home);
     const sys = systemBin();
     writeFileSync(join(home, 'fixture-manager-env'), `HOME=${home}\nLANG=C\nPATH=${sys}:/usr/bin\n`);
-    const { line, remedy } = check(home, 'path');
-    expect(line).toMatch(/^WARN path: a session started now would run without \$HOME\/\.local\/bin on PATH/);
-    expect(remedy).toContain(sys);
+    const { line, code } = check(home, 'path');
+    expect(line).toMatch(/^PASS path: every session has \$HOME\/\.local\/bin on PATH \(read from the user manager/);
+    expect(line).toContain('launch line');
+    expect(code).toBe(0);
+  });
+
+  it('with no live session, graphify-path reads the PATH a session started now gets, the folder included (D-8333)', () => {
+    const home = healthy('ccrc-doctor-sgfx-manager-'); plantEngine(home);
+    const sys = systemBin();
+    writeFileSync(join(home, 'fixture-manager-env'), `PATH=${sys}:/usr/bin\n`);
+    const { line, code } = check(home, 'graphify-path');
+    expect(line).toMatch(/^PASS graphify-path: /);
+    expect(code).toBe(0);
+  });
+
+  it('doctor\'s session to come is the PATH ccd\'s launch step really makes, from any manager PATH (D-8333)', () => {
+    const home = healthy('ccrc-doctor-spath-step-');
+    const step = /^SESSION_PANE_PATH=(\$'.*')$/m.exec(readFileSync(join(REPO, 'ccd', 'ccd'), 'utf8'))?.[1];
+    expect(step, 'ccd defines its launch step').toBeTruthy();
+    const bin = localBin(home);
+    for (const p of ['/usr/bin:/bin', `${bin}:/usr/bin`, `/usr/bin:${bin}`, `/opt${bin}:/usr/bin`, '']) {
+      const ccd = spawnSync(BASH, ['-c', `eval "S=${'$'}{1}"; eval "$S /usr/bin/printenv PATH"`, 'x', step ?? ''],
+        { env: { HOME: home, PATH: p }, encoding: 'utf8' });
+      const want = ccd.stdout.trim();
+      expect(want, ccd.stderr).toContain(bin);
+      const r = spawnSyncGroup(BASH, ['-c', `. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n_dr_spawn_path "$1"`, 'x', p],
+        { env: doctorEnv(home), encoding: 'utf8', timeout: 60_000 });
+      expect(r.stdout, `${p}: ${r.stderr}`).toBe(want);
+    }
   });
 
   it('a pane whose environment cannot be read is not a measurement: the manager answers instead', () => {
