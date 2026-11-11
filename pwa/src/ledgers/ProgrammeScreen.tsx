@@ -281,7 +281,8 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers 
                                                    removeSecret={secrets?.remove ?? removeStoredSecret}
                                                    {...(secrets?.stepUpDeps === undefined ? {} : { stepUpDeps: secrets.stepUpDeps })} />} />
         </div>
-        <ProgrammeRunsSection view={runsView} sessions={fleetSessions} fleetFrameSeen={fleetFrameSeen} runsHeard={runs !== null} />
+        <ProgrammeRunsSection view={runsView} sessions={fleetSessions} fleetFrameSeen={fleetFrameSeen} runsHeard={runs !== null}
+          quietMs={stallQuietMs} />
       </div>
     </div>
   );

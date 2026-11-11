@@ -3070,6 +3070,14 @@ button.proj-card-pool::before {
 .run-row .run-resumed {
   font-size: var(--fs-2xs); color: var(--ink-tertiary);
 }
+/* D-8285 (#119): the worker heartbeat, `workerSeenNote`'s words ("last seen 5m ago"). `.run-when`'s ink and numerals: a
+   fact about the run, not an alarm. Quiet past the stall watch's quiet time, it takes `.run-warn`'s amber
+   (`--status-attention-text`, already priced on this ground) and the word "quiet" says it a second time, so it is never
+   read out of colour alone. Wraps whole at every width; no --glow, no animation (runs are not living panes). */
+.run-row .run-seen {
+  font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+}
+.run-row .run-seen[data-quiet="true"] { color: var(--status-attention-text); }
 /* Child-reclamation wave 5 (spec §5.9): what became of a finished run's CHILD
    workspace. Scoped under `.run-row`, which is self-grounded (background and
    colour both set), so these inherit the recovered ground `.run-row .run-kind`

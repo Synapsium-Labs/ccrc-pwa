@@ -52,7 +52,9 @@ const STUCK_RUNS = [
   run(1601, { state: 'planned', kind: 'review', reviews: 1501, sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('review-of-closed', 'target-closed', 30 * DAY, { at: NOW + 20 * H, armed: false }) }),
   run(1602, { program: 'prog-d', programTitle: 'Programme D', state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('overtaken', null, 28 * DAY) }),
   run(1603, { program: 'prog-d', programTitle: 'Programme D', wave: 3, state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('overtaken', null, 12 * DAY) }),
-  run(1604, { program: 'prog-e', programTitle: 'Programme E', stuck: stuckOf('owner-gone', 'coordinator-archived', 49 * DAY) }),
+  // D-8285: its worker heartbeat rides into the run page's header.
+  run(1604, { program: 'prog-e', programTitle: 'Programme E', stuck: stuckOf('owner-gone', 'coordinator-archived', 49 * DAY),
+    workerLastSeen: NOW - 3 * H, workerLastTurn: { state: 'done', startedAt: NOW - 4 * H, endedAt: NOW - 3 * H } }),
   run(1605, { program: 'prog-f', programTitle: 'Programme F', state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('owner-gone', 'coordinator-gone', 5 * H) }),
   run(1606, { program: 'prog-g', programTitle: 'Programme G', state: 'planned', dispatchStartedAt: NOW - 8 * DAY, dispatchedAt: null, stuck: stuckOf('start-never-landed', null, 8 * DAY) }),
   run(1607, { program: 'prog-h', programTitle: 'Programme H', state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('never-started', null, 23 * DAY) }),
@@ -345,8 +347,13 @@ for (const width of MATRIX.widths) {
               const dt = fact.querySelector('dt')!.getBoundingClientRect();
               const dd = fact.querySelector('dd')!.getBoundingClientRect();
               const wide = [...document.querySelectorAll<HTMLElement>('.rd-fact dd')].filter((d) => d.scrollWidth > d.clientWidth + 1).length;
-              return { sameLine: Math.abs(dt.top - dd.top) < 6, wide, page: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+              const seen = document.querySelector<HTMLElement>('.rd-head .rd-seen');
+              const sr = seen?.getBoundingClientRect() ?? null;
+              return { sameLine: Math.abs(dt.top - dd.top) < 6, wide, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                seen: seen?.textContent ?? null, seenInside: sr !== null && sr.left >= -1 && sr.right <= innerWidth + 1 };
             });
+            expect(m.seen, 'the header draws the heartbeat (D-8285)').toBe('last seen 3h ago');
+            expect(m.seenInside, 'inside the window').toBe(true);
             expect(m.sameLine, want === 'narrow' ? 'label over value' : 'label beside value').toBe(want !== 'narrow');
             expect(m.wide, 'no fact runs past its box').toBe(0);
             expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
