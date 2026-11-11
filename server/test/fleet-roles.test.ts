@@ -1,0 +1,26 @@
+import { describe, expect, it } from 'vitest';
+import { FLEET_ROLES, FLEET_ROLE_NAMES, type FleetRoleRow } from '../../shared/fleetRoles.js';
+
+describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
+  it("names the seven roles in Table 3.3.9a's order", () => {
+    expect(FLEET_ROLE_NAMES).toEqual(['overlord', 'auditor', 'replay', 'worker', 'reviewer', 'coordinator', 'plain']);
+  });
+  it('long-lived is the table: overlord and coordinator only', () => {
+    expect(FLEET_ROLE_NAMES.filter((r) => FLEET_ROLES[r].longLived)).toEqual(['overlord', 'coordinator']);
+  });
+  it("today's view: worker, reviewer, auditor and replay are children; the rest coordinators", () => {
+    expect(FLEET_ROLE_NAMES.filter((r) => FLEET_ROLES[r].sessionRole === 'child'))
+      .toEqual(['auditor', 'replay', 'worker', 'reviewer']);
+  });
+  it('every column that waits for a later piece is null on every row', () => {
+    for (const r of FLEET_ROLE_NAMES) {
+      const { launchProfile, cardRenderer, compactInstructions, probeSet } = FLEET_ROLES[r];
+      expect([launchProfile, cardRenderer, compactInstructions, probeSet]).toEqual([null, null, null, null]);
+    }
+  });
+  it('a row must carry every column (a compile-time pin, read by the test typecheck)', () => {
+    // @ts-expect-error a row with no sessionRole is not a FleetRoleRow
+    const partial: FleetRoleRow = { longLived: false, launchProfile: null, cardRenderer: null, compactInstructions: null, probeSet: null };
+    expect(partial.longLived).toBe(false);
+  });
+});
