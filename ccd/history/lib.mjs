@@ -8958,6 +8958,8 @@ function resolveInIndex(t, index) {
 export function matchRef(ref, file, graph) {
   if (ref.outside) return ref.path === file ? 'outside' : null;
   if (ref.path === file) return 'exact';
+  // R3: an absolute (outside) query is matched only by an outside ref of that exact path, never by suffix.
+  if (file.startsWith('/')) return null;
   const p = ref.path;
   if (p === '' || p.startsWith('/') || p.split('/').includes('..')) return null;
   if (!file.endsWith(`/${p}`)) return null;

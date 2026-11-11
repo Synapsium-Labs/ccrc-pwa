@@ -40,15 +40,13 @@ function run(stored: Stored[], query: string, roots: string[], graph: Graph | nu
   return touchedRows(matches);
 }
 
-/** Section 3.5 step 1's file select, verbatim, then the matching; the files that come back as exact. */
-function matchedFiles(db: DatabaseSync, file: string): string[] {
+/** Section 3.5 step 1's file select, verbatim: the raw values it returns (the select itself, before any matching). */
+function selectedValues(db: DatabaseSync, file: string): string[] {
   const base = file.slice(file.lastIndexOf('/') + 1);
   const rows = db.prepare(
     "SELECT node_id, kind, value, origin FROM node_refs WHERE kind IN ('path','path:symbol','test') AND value LIKE ? ESCAPE '\\'",
   ).all(`%${likeEscape(base)}%`) as { node_id: string; kind: string; value: string; origin: string }[];
-  return rows
-    .map((r) => splitStoredRef(r.kind, r.value).path)
-    .filter((p) => matchRef({ path: p, outside: false }, file, null) === 'exact');
+  return rows.map((r) => r.value);
 }
 
 describe('touched deciders', () => {
@@ -77,13 +75,14 @@ describe('touched deciders', () => {
     expect(touchedQuery(arg)).toEqual(want);
   });
 
-  it('TC3 ranking: newest first, a tie by node id, a missing time last', () => {
+  it('TC3 ranking: newest first, a tie by node id, a missing time last, origin never ranked', () => {
+    const ref = (origin: string) => [{ kind: 'path', value: 'a.ts', origin }];
     const rows = [
-      { nodeId: 'n-b', latestMs: 200 },
-      { nodeId: 'n-z', latestMs: 300 },
-      { nodeId: 'n-a', latestMs: 200 },
-      { nodeId: 'n-x', latestMs: 100 },
-      { nodeId: 'n-n', latestMs: null },
+      { nodeId: 'n-b', latestMs: 200, refs: ref('tool_use') },
+      { nodeId: 'n-z', latestMs: 300, refs: ref('model') },
+      { nodeId: 'n-a', latestMs: 200, refs: ref('model') },
+      { nodeId: 'n-x', latestMs: 100, refs: ref('tool_use') },
+      { nodeId: 'n-n', latestMs: null, refs: ref('tool_use') },
     ];
     expect(rankTouched(rows).map((r) => r.nodeId)).toEqual(['n-z', 'n-a', 'n-b', 'n-x', 'n-n']);
     expect(rows[0].nodeId).toBe('n-b');
@@ -105,6 +104,13 @@ describe('touched deciders', () => {
     expect(run(stored, 'x.mjs', ['/root'], graphOf(['x.mjs']))).toEqual([]);
     expect(run(stored, 'src/elsewhere/x.mjs', ['/root'], null)).toEqual([]);
     expect(matchRef({ path: '/elsewhere/x.mjs', outside: true }, 'elsewhere/x.mjs', graphOf(['elsewhere/x.mjs']))).toBeNull();
+  });
+
+  it('R3 an absolute query is matched by no relative ref, with or without a graph', () => {
+    const rel = { path: 'x/y.mjs', outside: false };
+    expect(matchRef(rel, '/elsewhere/x/y.mjs', null)).toBeNull();
+    expect(matchRef(rel, '/elsewhere/x/y.mjs', graphOf(['/elsewhere/x/y.mjs']))).toBeNull();
+    expect(matchRef({ path: '/elsewhere/x/y.mjs', outside: true }, '/elsewhere/x/y.mjs', null)).toBe('outside');
   });
 
   it('TC12 line suffix is kept as the line, not in the path', () => {
@@ -189,9 +195,9 @@ describe('touched deciders', () => {
     const ins = db.prepare('INSERT INTO node_refs VALUES (?, ?, ?, ?)');
     ins.run('n1', 'path', 'src/foo_bar.ts', 'tool_use');
     ins.run('n2', 'path', 'src/fooXbar.ts', 'tool_use');
+    expect(selectedValues(db, 'src/foo_bar.ts')).toEqual(['src/foo_bar.ts']);   // a stored src/fooXbar.ts is not a candidate
     expect(likeEscape('foo_bar.ts')).toBe('foo\\_bar.ts');
     expect(likeEscape('a%b\\c')).toBe('a\\%b\\\\c');
-    expect(matchedFiles(db, 'src/foo_bar.ts')).toEqual(['src/foo_bar.ts']);   // a stored src/fooXbar.ts is not a candidate
     db.close();
   });
 });
