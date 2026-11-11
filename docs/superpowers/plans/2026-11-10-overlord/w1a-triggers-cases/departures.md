@@ -12,8 +12,14 @@ because the ledger guard refuses an edit to it from a work branch.
   consumed that episode, so it counted again, and an episode that began more than 14 days ago counted as "in 14 days".
   The pass now reads from `caseReadFrom(now)`, two windows back (`practiceCases.ts`), so every episode's earliest row is
   in the decider's input; the decider still counts only episodes that began inside the window. The read is the same
-  statement with a lower bound, so the M17d plan is unchanged. Residual: an episode whose rows span more than 14 days
-  can still be counted again; one episode's stall rungs span hours.
+  statement with a lower bound, so the M17d plan is unchanged.
+  Residual, recorded and not closed: one episode's rows can span days, so it can still be counted a second time. Two
+  ways reach it. A shadow rung counts as done only while its delivery stays shadow (`coord/stall.ts#rungDoneAt`), so
+  arming the live marker, the wave-2 marker or a Settings level re-sends that rung live under the same key, whenever the
+  operator arms it. And the wave-1 ladder keeps one key until the worker mails, with its second and third rungs due only
+  once the worker is idle again (`coord/stall.ts#stallWaveOneLadder`). A shadow first rung at T0, a case at T0 + 1 h and
+  a live re-send at T0 + 20 d are counted again by a pass at T0 + 29 d, whose read starts at T0 + 1 d. In shadow that is a
+  wrong count, not a wrong act.
 
 ## Rulings within the plan
 
@@ -21,7 +27,8 @@ because the ledger guard refuses an edit to it from a work branch.
   the push, so `practice_cases` is entry 57 (`user_version` 56 to 57). Another piece took 56 first: the branch absorbed
   `main` a second time, on its own conflict, and renumbered the entry and nothing else. Two older migration tests name
   every later entry (`coord-calls-store.test.ts`'s replay of the later entries, `run-close-switch.test.ts`'s step back to
-  version 53), as `lane_arm_settings` did for itself; each now names `practice_cases` too.
+  version 53), as `lane_arm_settings` did for itself; they were red on this branch from its first `practice_cases` entry
+  until each named `practice_cases` too.
 - **The time ports merged mid-wave.** The branch absorbed `main` once, as a merge, on the coordinator's licence, so the
   lane takes its wall clock from `Deps.time.clock.wall()`. The lane's new files, and the role table's
   (`server/src/roleOf.ts`, `shared/fleetRoles.ts`), joined `TIME_PORT_FILES` in
@@ -34,3 +41,18 @@ because the ledger guard refuses an edit to it from a work branch.
   The plan did not name that guard.
 - **The lane-schedule census.** `lane-schedule.test.ts`'s count of monotonic rows rose from 39 to 40 with the new row.
 - `MUTANT_SETS` is not on `main`; the simulator piece registers `practiceCases.ts`.
+
+## Fix round 1 (review run 1793)
+
+- **One occurrence per run, arm and key stays (F1).** The spec keys an occurrence so (§10.5). An arm whose key is per
+  delivery (`mail-stuck`, `coord-deaf`) or moves with each wait (the quiet ladder) can therefore count one stall more
+  than once; `practice-cases.test.ts` pins it as the known width, and it is an open question for the cases going live.
+- **An episode later than the lane's clock is not counted yet (F3).** The stall sweep stamps its rows with its own clock
+  and the lane reads `Deps.time`, so a row can be later than the pass's `now`. `casesDue` now counts an episode only once
+  `now` reaches it, so a case's `openedAt` is never below its evidence and the next pass finds that evidence consumed.
+  The store's compare-and-set is unchanged.
+- **A run the lane cannot read is warned and answered (F5).** It still lowers the count, as Review Focus 5 allows, but
+  the pass warns once and answers `unread: 'runs'`, so a failed read never reads as a fully read pass. An absent run is
+  left out without a warning.
+- **The missing reds (F4).** Two signatures fed in descending order pin both sorts, an absent run pins the run filter,
+  and a `tick()` test pins the lane's dispatch.
