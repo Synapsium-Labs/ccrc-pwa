@@ -8,7 +8,7 @@
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
-  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type ProgrammePendingClose, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type FleetSession, type RunHealth, type RunItemTally, type ProgrammePendingClose, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
 import { formatAge, formatElapsed } from './formatReset';
 import { closeWords } from './closeWords';
 import { STUCK_HEADING, closeWhen } from './stuckWords';
@@ -81,7 +81,34 @@ export const runItems = (run: { items?: RunItemTally }): RunItemTally =>
  *  ledger nothing has settled yet, which is a real and useful fact, and only
  *  a ledger that does not exist gets the dash. */
 export const itemTallyLabel = (items: RunItemTally): string =>
-  items.total === 0 ? '—' : `${items.done}/${items.total}`;
+  items.total === 0 ? '—' : `${items.done}/${items.total} settled`;
+
+/** D-8292 (#119): what the tally counts, for its `title`; null beside the dash, which counts nothing. "settled" rides
+ *  the label because `done` is the coordinator's ack count (D-5914, `RunSummary.items`): a wave in progress reads `0/5`
+ *  however far its branch has moved, and a bare `0/5` beside a busy branch was read as a run with no work. */
+export const itemTallyTitle = (items: RunItemTally): string | null =>
+  items.total === 0 ? null
+    : `${items.done} of the ${items.total} items this wave declared that the coordinator has settled. ` +
+      'An item is settled after a verified advance, so this is not commits and not branch progress.';
+
+/** The worker branch's commit count beside the tally (D-8292). */
+export interface BranchCommitsNote { readonly word: string; readonly title: string }
+
+/** The ONE reader of the worker's `pr.ahead` on a run row. It draws only a positive count from the worker session's own
+ *  PR read, on an open run whose session names the run's branch: `ahead` coerces an unmeasured branch to 0 (`phaseFor`),
+ *  so 0 says nothing, and another branch's count, or a live count on a closed run's record, would be a claim about
+ *  something else. A derived fact, and the title says where it came from; it never moves the tally. */
+export function branchCommitsNote(run: RunSummary, session: FleetSession | null): BranchCommitsNote | null {
+  if (session === null || session.pr === null || runClosedAt(run) !== null) return null;
+  if (run.branch !== null && session.branch !== run.branch) return null;
+  const n = session.pr.ahead;
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  return {
+    word: `${n} ${n === 1 ? 'commit' : 'commits'}`,
+    title: `${n} ${n === 1 ? 'commit' : 'commits'} on the worker's branch past its base, from the latest pull request read. ` +
+      'These are commits, not settled items: the count beside them is what the coordinator has settled.',
+  };
+}
 
 /** Tolerant read of `RunSummary.closedAt`. `undefined` degrades to `null`
  *  (never-finished, i.e. active) rather than surviving as a value that is
