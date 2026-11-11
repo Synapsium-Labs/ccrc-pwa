@@ -340,7 +340,8 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
     const open = { ok: true as const, siblings: [{ id: 1 } as never] };
     const port = (o: { worker?: typeof idle; claimant?: typeof idle; abandonRefusal?: () => never }) => ({
       bindingsOf: () => ({ worker: () => o.worker ?? idle, claimant: () => o.claimant ?? idle }),
-      abandonRefusal: o.abandonRefusal ?? (() => null), abandon: async () => ({ ok: true }) as never });
+      abandonRefusal: o.abandonRefusal ?? (() => null), abandon: async () => ({ ok: true }) as never,
+      moveClaims: async () => { throw new Error('moveClaims is not part of this census'); } });
     const decided = [
       await decideArchive(null, 's', flags, m({ turn: 'unmeasured' })),
       await decideArchive(null, 's', flags, m({ turn: 'busy' })),

@@ -45,6 +45,8 @@ const port = (o: { worker?: OpenSiblingsResult; claimed?: OpenSiblingsResult;
       return o.refuse?.[runId]
         ?? { ok: true, id: runId, state: 'failed', released: true, childReclaim: 'not-queued' } as CloseOutcome;
     },
+    // D-8199's claims step is not exercised by these rows; reaching it is a test bug.
+    moveClaims: async () => { throw new Error('moveClaims is not part of this fake'); },
   };
   return { p, seen };
 };
