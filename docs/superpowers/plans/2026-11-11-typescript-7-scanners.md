@@ -51,7 +51,9 @@ list of test names is byte-identical (`diff` empty). The D-5853 guard was red fi
 
 - pwa's typecheck (and its `npm run build`) now resolves `typescript-api` from `server/node_modules`, as it already
   resolves ui's imports from `ui/node_modules`. Every install lane that builds pwa installs server first
-  (`install.sh`, `deploy/build-release.sh`, CI's shared install) or runs from a developer checkout.
+  (`install.sh`, `deploy/build-release.sh`, `deploy/deploy.sh`'s server lane, CI's shared install);
+  deploy.sh's lane did not, and now does. `server/test/ci-pipeline.test.ts` pins the order for every tracked
+  script, as it already did for ui.
 - KNOWN WIDTH: a pull request that only bumps the pin (server's `package.json` and lock) does not run the pwa suite;
   the merge queue does.
 - Not done here: jsdom 30's `^22.22.2` Node range against pwa's `engines` floor (`>=22.16.0`), the ticket's tidy item.
