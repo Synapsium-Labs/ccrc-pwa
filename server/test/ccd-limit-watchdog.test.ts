@@ -58,11 +58,11 @@ const fullFleet = (): void => {
   limits('claude', 100, 10, { fiveResetAt: T0 + 10000 }); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
 };
 
-const limitRow = (at: number): string => JSON.stringify({
+const limitRow = (at: number, resetsAt = at + 9000): string => JSON.stringify({
   parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: `b${at}`, timestamp: iso(at),
   message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: "You've hit your session limit · resets 9:10pm (UTC)" }] },
   isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429,
-  quotaLimits: { status: 'rejected', resetsAt: at + 9000, rateLimitType: 'five_hour' },
+  quotaLimits: { status: 'rejected', resetsAt, rateLimitType: 'five_hour' },
 });
 const turn = (at: number): string => JSON.stringify({
   type: 'assistant', uuid: `a${at}`, timestamp: iso(at),
@@ -687,12 +687,56 @@ describe('no account has room: ccd chooses "Wait until reset" itself (D-8173 rul
     expect(dispatches()).toEqual([]);
   });
 
-  it('the operator\'s tap on an automatic choice keeps it automatic', () => {
+  it('the operator\'s tap on an automatic choice pins it: the next pass with room elsewhere moves nothing', () => {
     seed(); fullFleet();
     pass(BANNER, T0); pass(BANNER, T0 + 300);
     expect(h.sh(`_limitwait_choose ${ID}; echo rc=$?`)).toMatch(/rc=0$/);
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0 + 300} reset=${T0 + 10000} account=claude sign=banner choice=wait at=${T0 + 300}`);
+    expect(lines('limit-wait')).toEqual([
+      expect.stringMatching(/limit-wait lane-a-project-a: choice=wait account=claude sign=banner by=auto$/),
+      expect.stringMatching(/limit-wait lane-a-project-a: choice=wait pinned by operator \(was by=auto\) account=claude sign=banner$/),
+    ]);
+    limits('claude-b', 20, 20);
+    pass(BANNER, T0 + 360); pass(BANNER, T0 + 900);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('an automatic choice never overwrites a choice that stands, and a chooser other than auto is refused', () => {
+    seed(); fullFleet();
+    pass(BANNER, T0); pass(BANNER, T0 + 300);
+    expect(h.sh(`_limitwait_choose ${ID} auto; echo rc=$?`)).toMatch(/rc=0$/);
     expect(field(ID, 'limitwait')).toMatch(/ choice=wait at=1900000300 by=auto$/);
+    h.sh(`_limitwait_choose ${ID}`);
+    expect(h.sh(`_limitwait_choose ${ID} auto; echo rc=$?`)).toMatch(/rc=0$/);
+    expect(field(ID, 'limitwait')).toMatch(/ choice=wait at=1900000300$/);
     expect(h.sh(`_limitwait_choose ${ID} other; echo rc=$?`)).toMatch(/rc=1$/);
+  });
+
+  it('a transcript reset that already passed at the first no-room pass is kept, and the same pass restarts in place', () => {
+    seed(); processStatus();
+    limits('claude', 10, 10); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
+    writeTranscript([turn(T0 - 600), limitRow(T0, T0 + 180)]);
+    h.sh(`_reg_set ${ID} limitsign "${T0} transcript"`);   // the sign began at the row; this pass is the first past N minutes
+    pass(PROMPT, T0 + 420, '', {}, T0 - 3600);
+    expect(lines('watchdog-noroom')).toHaveLength(1);
+    expect(lines('limit-wait')).toEqual([expect.stringMatching(/limit-wait lane-a-project-a: choice=wait account=claude sign=transcript by=auto$/)]);
+    expect(lines('watchdog-resume')).toEqual([expect.stringMatching(/watchdog-resume lane-a-project-a: claude after reset$/)]);
+    expect(field(ID, 'limitwait')).toMatch(new RegExp(`^state=closed since=${T0 + 420} reset=${T0 + 180} account=claude sign=transcript choice=wait at=${T0 + 420} by=auto end=resume until=\\d+$`));
+    expect(detached()).toHaveLength(1);
+    expect(dispatches()).toEqual([]);
+    expect(field(ID, 'stranded')).toBeNull();
+  });
+
+  it('a passed transcript reset on an account that is still full restarts nothing: it waits, stranded, for room', () => {
+    seed(); processStatus();
+    limits('claude', 10, 100); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
+    writeTranscript([turn(T0 - 600), limitRow(T0, T0 + 180)]);
+    h.sh(`_reg_set ${ID} limitsign "${T0} transcript"`);
+    pass(PROMPT, T0 + 420, '', {}, T0 - 3600);
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0 + 420} reset=${T0 + 180} account=claude sign=transcript choice=wait at=${T0 + 420} by=auto`);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(detached()).toEqual([]);
+    expect(field(ID, 'stranded')).toMatch(/no account has measured room/);
   });
 });
 

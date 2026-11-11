@@ -47,16 +47,18 @@ const record = async (io: FleetIO = localIO): Promise<SessionRecord> => {
 };
 
 describe('limitWaitOf reads the one line, strictly', () => {
-  it('an open record gives its since, reset, account and whether the operator chose to wait', () => {
-    expect(limitWaitOf({ ok: true, content: OPEN })).toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: false });
+  it('an open record gives its since, reset, account, whether a wait stands and who chose it', () => {
+    expect(limitWaitOf({ ok: true, content: OPEN }))
+      .toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: false, waitingBy: null });
     expect(limitWaitOf({ ok: true, content: `${OPEN} choice=wait at=1784500100` }))
-      .toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: true });    // D-8173 ruling (a): ccd's own choice where no account has room reads the same.
+      .toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: true, waitingBy: 'operator' });
+    // D-8173 ruling (a): ccd's own choice where no account has room is a wait too, but not the operator's pin.
     expect(limitWaitOf({ ok: true, content: `${OPEN} choice=wait at=1784500100 by=auto` }))
-      .toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: true });
+      .toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: true, waitingBy: 'auto' });
   });
   it('a reset of `-` is null', () => {
     expect(limitWaitOf({ ok: true, content: 'state=open since=1784500000 reset=- account=lane-a sign=pane' }))
-      .toEqual({ since: 1784500000, reset: null, account: 'lane-a', waiting: false });
+      .toEqual({ since: 1784500000, reset: null, account: 'lane-a', waiting: false, waitingBy: null });
   });
   it('a trailing newline is the file\'s own', () => {
     expect(limitWaitOf({ ok: true, content: `${OPEN}\n` })).toMatchObject({ account: 'lane-a' });
@@ -92,7 +94,7 @@ describe('the registry record carries it', () => {
   it('a row with no file carries no field; an open record carries it', async () => {
     expect((await record()).limitWait).toBeUndefined();
     field('limitwait', OPEN);
-    expect((await record()).limitWait).toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: false });
+    expect((await record()).limitWait).toEqual({ since: 1784500000, reset: 1784590000, account: 'lane-a', waiting: false, waitingBy: null });
     field('limitwait', `${OPEN} choice=wait at=1784500100`);
     expect((await record()).limitWait).toMatchObject({ waiting: true });
   });
@@ -136,9 +138,11 @@ describe('the fleet frame carries it', () => {
     expect((await fleet()).find((s) => s.id === ID)?.limitWait).toBeNull();
     field('limitwait', OPEN);
     expect((await fleet()).find((s) => s.id === ID)?.limitWait)
-      .toEqual({ since: 1784500000_000, reset: 1784590000_000, account: 'lane-a', waiting: false });
+      .toEqual({ since: 1784500000_000, reset: 1784590000_000, account: 'lane-a', waiting: false, waitingBy: null });
     field('limitwait', `${OPEN} choice=wait at=1784500100`);
-    expect((await fleet()).find((s) => s.id === ID)?.limitWait).toMatchObject({ waiting: true });
+    expect((await fleet()).find((s) => s.id === ID)?.limitWait).toMatchObject({ waiting: true, waitingBy: 'operator' });
+    field('limitwait', `${OPEN} choice=wait at=1784500100 by=auto`);
+    expect((await fleet()).find((s) => s.id === ID)?.limitWait).toMatchObject({ waiting: true, waitingBy: 'auto' });
     field('limitwait', `${OPEN.replace('state=open', 'state=closed')} end=swap until=1784500500`);
     expect((await fleet()).find((s) => s.id === ID)?.limitWait).toBeNull();
   });
@@ -157,6 +161,21 @@ describe('the fleet frame carries it', () => {
     expect(reviveFleetSession(older)?.limitWait).toBeNull();
     expect(reviveFleetSession({ ...wire, limitWait: { since: 'x' } })?.limitWait).toBeNull();
     expect(reviveFleetSession({ ...wire, limitWait: 'waiting' })?.limitWait).toBeNull();
+  });
+
+  it('revives who chose the wait; an older server\'s value without `waitingBy` reads the operator\'s when waiting', async () => {
+    field('limitwait', `${OPEN} choice=wait at=1784500100 by=auto`);
+    const s = (await fleet()).find((x) => x.id === ID)!;
+    const wire = JSON.parse(JSON.stringify(s)) as Record<string, unknown>;
+    expect(reviveFleetSession(wire)?.limitWait).toMatchObject({ waiting: true, waitingBy: 'auto' });
+    const lw = wire['limitWait'] as Record<string, unknown>;
+    const { waitingBy: _by, ...olderLw } = lw;
+    expect(reviveFleetSession({ ...wire, limitWait: olderLw })?.limitWait).toMatchObject({ waiting: true, waitingBy: 'operator' });
+    expect(reviveFleetSession({ ...wire, limitWait: { ...olderLw, waiting: false } })?.limitWait).toMatchObject({ waiting: false, waitingBy: null });
+    // A chooser this build cannot read, or one that contradicts `waiting`, is no row rather than a half-drawn one.
+    expect(reviveFleetSession({ ...wire, limitWait: { ...lw, waitingBy: 'robot' } })?.limitWait).toBeNull();
+    expect(reviveFleetSession({ ...wire, limitWait: { ...lw, waiting: false } })?.limitWait).toBeNull();
+    expect(reviveFleetSession({ ...wire, limitWait: { ...lw, waitingBy: null } })?.limitWait).toBeNull();
   });
 });
 

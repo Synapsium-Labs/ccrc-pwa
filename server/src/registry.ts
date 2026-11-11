@@ -438,7 +438,7 @@ export interface SessionRecord {
   browserMcp?: BrowserMcpApplied;
   /**
    * `$REG/<id>.limitwait` — the limit watchdog's "no account has measured room" record (D-8123), the Waiting on you item's
-   * source: `state=open since=<epoch> reset=<epoch|-> account=<w> sign=<sign>[ choice=wait at=<epoch>]`, epoch SECONDS here
+   * source: `state=open since=<epoch> reset=<epoch|-> account=<w> sign=<sign>[ choice=wait at=<epoch>[ by=auto]]`, epoch SECONDS here
    * (the frame converts to ms, as for `stranded`). Read only when listed, THREE-VALUED like `.stranded`: an item, `null`
    * (listed and measured: closed, empty or malformed, so no item), or `'unreadable'` (listed, its bytes did not come back:
    * not an item, because `since`, `reset` and `account` are unknown, and not clean, so the row cache cannot stretch one
@@ -447,8 +447,11 @@ export interface SessionRecord {
   limitWait?: LimitWaitMark | 'unreadable' | null;
 }
 
-/** The OPEN limitwait record, as the registry reads it (epoch seconds). `waiting`: the operator chose "Wait until reset". */
-export interface LimitWaitMark { since: number; reset: number | null; account: string; waiting: boolean }
+/** The OPEN limitwait record, as the registry reads it (epoch seconds). `waiting`: a "Wait until reset" choice stands.
+ *  `waitingBy` says whose (null when none stands): `'operator'`, the operator's own tap, a pin that nothing moves before the
+ *  reset; `'auto'` (` by=auto`), ccd's own choice where no account had room (D-8173 ruling (a)), which is not a pin: the
+ *  watchdog still moves the session if an account gets room, and the operator's tap turns it into `'operator'`. */
+export interface LimitWaitMark { since: number; reset: number | null; account: string; waiting: boolean; waitingBy: 'operator' | 'auto' | null }
 
 /**
  * The accessor an identity-sensitive consumer must go through to read
@@ -687,14 +690,15 @@ export function browserMcpOf(read: MeasuredRead | null): BrowserMcpApplied | nul
 /** `$REG/<id>.limitwait`'s ONE reader (D-8123): `null` for an unlisted field, one that vanished between the listing and the read, a closed record, an empty one or one that does
  *  not match the whole line grammar ccd writes (a torn or hand-edited record is matched, never evaluated); `'unreadable'` for a
  *  listed field whose bytes did not come back. The grammar is `_limitwait_open`'s and `_limitwait_choose`'s (` by=auto`: ccd chose the wait
- *  itself, D-8173 ruling (a); it reads `waiting` the same). */
-const LIMIT_WAIT_LINE = /^state=open since=([0-9]{1,12}) reset=([0-9]{1,12}|-) account=([A-Za-z0-9._-]+) sign=(?:pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12}(?: by=auto)?)?$/;
+ *  itself, D-8173 ruling (a); it reads `waiting` with `waitingBy: 'auto'`, and a choice without it is the operator's). */
+const LIMIT_WAIT_LINE = /^state=open since=([0-9]{1,12}) reset=([0-9]{1,12}|-) account=([A-Za-z0-9._-]+) sign=(?:pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12}( by=auto)?)?$/;
 export function limitWaitOf(read: MeasuredRead | null): LimitWaitMark | null | 'unreadable' {
   if (read === null) return null;
   if (!read.ok) return read.reason === 'absent' ? null : 'unreadable';   // listed, then gone before the read: no record
   const m = LIMIT_WAIT_LINE.exec(read.content.replace(/\n$/, ''));
   if (m === null) return null;
-  return { since: Number(m[1]), reset: m[2] === '-' ? null : Number(m[2]), account: m[3]!, waiting: m[4] !== undefined };
+  const waitingBy = m[4] === undefined ? null : m[5] === undefined ? 'operator' : 'auto';
+  return { since: Number(m[1]), reset: m[2] === '-' ? null : Number(m[2]), account: m[3]!, waiting: waitingBy !== null, waitingBy };
 }
 
 /** `$REG/<id>.childshell`'s ONE reader (plan Task 15, D-5391), the same three readings. */

@@ -326,7 +326,7 @@ describe('the spec one tap away on the combined list', () => {
 describe('a session on a usage limit with no account to take it', () => {
   const stuck = (id: string, over: object = {}) => fleetSession({
     id, title: `Worker ${id}`, wrapper: 'lane-a', home: 'lane-a',
-    limitWait: { since: NOW - 12 * MIN, reset: null, account: 'lane-a', waiting: false, ...over },
+    limitWait: { since: NOW - 12 * MIN, reset: null, account: 'lane-a', waiting: false, waitingBy: null, ...over },
   });
 
   it('draws one row with both controls, in the combined list, and counts it in the summary', () => {

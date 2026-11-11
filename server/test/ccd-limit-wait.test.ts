@@ -63,6 +63,18 @@ describe('ccd limit-wait records the operator\'s choice on an open record', () =
     expect(record()).toBe(`${OPEN} choice=wait at=${T0}`);
   });
 
+  it('a tap on ccd\'s own choice (` by=auto`, D-8173) makes it the operator\'s pin: the time stays, the chooser goes', () => {
+    seed(); put(`${OPEN} choice=wait at=${T0 - 60} by=auto`);
+    const out = wait(ID);
+    expect(out).toMatch(new RegExp(`^limit-wait: ${ID} waits until the limit resets; the watchdog moves nothing`));
+    expect(out).toMatch(/rc=0$/);
+    expect(record()).toBe(`${OPEN} choice=wait at=${T0 - 60}`);
+    expect(swapLog().split('\n').filter((l) => / limit-wait /.test(l))).toEqual([
+      expect.stringMatching(new RegExp(`limit-wait ${ID}: choice=wait pinned by operator \\(was by=auto\\) account=claude sign=menu$`))]);
+    wait(ID, T0 + 30);   // a second tap: already the operator's, nothing changes
+    expect(record()).toBe(`${OPEN} choice=wait at=${T0 - 60}`);
+  });
+
   it('logs the choice in swap.log, once', () => {
     seed(); put(OPEN);
     wait(ID, T0); wait(ID, T0 + 5);

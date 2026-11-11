@@ -300,12 +300,14 @@ describe('the summary pills count the groups the list draws', () => {
 describe('limitRows (a session on a limit with no account to take it)', () => {
   const stuck = (id: string, over: object = {}) => fleetSession({
     id, title: `Title of ${id}`,
-    limitWait: { since: NOW - 10 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, ...over },
+    limitWait: { since: NOW - 10 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, waitingBy: null, ...over },
   });
   it('lists exactly the sessions whose limitWait is not null, oldest first', () => {
     const rows = limitRows([stuck('s-b', { since: NOW - MIN }), fleetSession({ id: 's-none' }), stuck('s-a', { since: NOW - 30 * MIN })]);
     expect(rows.map((r) => r.sessionId)).toEqual(['s-a', 's-b']);
-    expect(rows[0]).toMatchObject({ title: 'Title of s-a', since: NOW - 30 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, program: null });
+    expect(rows[0]).toMatchObject({ title: 'Title of s-a', since: NOW - 30 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, waitingBy: null, program: null });
+    // Who chose the wait rides along (D-8173): ccrc's own is not the operator's pin, and the row words it differently.
+    expect(limitRows([stuck('s-c', { waiting: true, waitingBy: 'auto' })])[0]).toMatchObject({ waiting: true, waitingBy: 'auto' });
   });
   it('files a row under its programme as a question is (the run it is bound to)', () => {
     const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 's-a' })];

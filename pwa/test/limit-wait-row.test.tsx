@@ -25,7 +25,7 @@ const AT_15 = (() => { const d = new Date(NOW); d.setHours(15, 0, 0, 0); return 
 
 const stuck = (limitWait: Partial<NonNullable<FleetSession['limitWait']>> = {}): FleetSession => fleetSession({
   id: 'project-a-w1', wrapper: 'claude', home: 'claude', project: 'project-a', title: 'The review worker',
-  limitWait: { since: NOW - 12 * MIN, reset: AT_15, account: 'claude', waiting: false, ...limitWait },
+  limitWait: { since: NOW - 12 * MIN, reset: AT_15, account: 'claude', waiting: false, waitingBy: null, ...limitWait },
 });
 const rowOf = (s: FleetSession): LimitRow => limitRows([s])[0]!;
 
@@ -178,9 +178,9 @@ describe('Wait until reset', () => {
     expect(await screen.findByText(/moved on its own|limit has cleared/i)).toBeTruthy();
   });
 
-  it('waiting: true reads "Waiting until 15:00", has no wait control, and keeps Swap to…', () => {
+  it('the operator\'s wait reads "Waiting until 15:00", has no wait control, and keeps Swap to…', () => {
     setUsage(nothingHasRoom());
-    mount(stuck({ waiting: true }));
+    mount(stuck({ waiting: true, waitingBy: 'operator' }));
     const row = screen.getByTestId('limit-wait-row');
     expect(row.textContent).toContain('Waiting until 15:00');
     expect(screen.queryByRole('button', { name: /wait until/i })).toBeNull();
@@ -188,8 +188,39 @@ describe('Wait until reset', () => {
   });
 
   it('waiting with no reset says it without a clock', () => {
-    mount(stuck({ waiting: true, reset: null }));
+    mount(stuck({ waiting: true, waitingBy: 'operator', reset: null }));
     expect(screen.getByTestId('limit-wait-row').textContent).toContain('Waiting until the limit resets');
+  });
+});
+
+describe('ccrc\'s own wait (D-8173 ruling (a): no account had room, so ccrc chose it; not a pin)', () => {
+  it('says ccrc is waiting and may still move it, and keeps both Swap to… and the wait control', () => {
+    setUsage(nothingHasRoom());
+    mount(stuck({ waiting: true, waitingBy: 'auto' }));
+    const row = screen.getByTestId('limit-wait-row');
+    expect(row.textContent).toContain('ccrc is waiting until 15:00 (or moves it if an account gets room)');
+    expect(row.textContent).not.toContain('Waiting until 15:00');
+    expect(row.getAttribute('data-waiting-by')).toBe('auto');
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['No account has room yet', 'Wait until reset at 15:00']);
+  });
+
+  it('the wait control\'s confirm says it keeps the session on this account until the reset, then pins it', async () => {
+    setUsage(nothingHasRoom());
+    const wait = vi.spyOn(api, 'limitWait').mockResolvedValue(undefined);
+    mount(stuck({ waiting: true, waitingBy: 'auto' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Wait until reset at 15:00' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toMatch(/keeps it on this account until the reset/i);
+    expect(dialog.textContent).toMatch(/even if another account gets room/i);
+    expect(wait).not.toHaveBeenCalled();
+    fireEvent.click(document.querySelector('.qc-actions .btn-primary') as HTMLElement);
+    await waitFor(() => expect(wait).toHaveBeenCalledWith('project-a-w1'));
+  });
+
+  it('the operator\'s wait is its pin: no wait control, the plain "Waiting until" words', () => {
+    mount(stuck({ waiting: true, waitingBy: 'operator' }));
+    expect(screen.getByTestId('limit-wait-row').getAttribute('data-waiting-by')).toBe('operator');
+    expect(screen.queryByRole('button', { name: /wait until/i })).toBeNull();
   });
 });
 

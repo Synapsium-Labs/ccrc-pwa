@@ -5,8 +5,8 @@
 // drawn inside the row, the row's words and pills clear 4.5:1 on the ground they are drawn on, and "Swap to…" opens the swap
 // sheet narrowed to the account with room.
 //
-// The fixture is two sessions on a limit (one still to choose, one that chose to wait) and two accounts: the one they are on is
-// at its ceiling and `lane-b` has room. Names are neutral on purpose: the repository is public.
+// The fixture is three sessions on a limit (one still to choose, one the operator pinned to wait, one ccrc chose to wait for
+// because no account had room, D-8173) and the accounts: the one they are on is at its ceiling and `lane-b` has room. Names are neutral on purpose: the repository is public.
 //
 //   CCRC_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/limit-wait-row.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -20,12 +20,16 @@ const NOW = Date.now();
 const MIN = 60_000;
 const RESET = NOW + 3 * 60 * MIN;
 
-const stuck = (id: string, title: string, waiting: boolean): object => fleetSession({
+const stuck = (id: string, title: string, waitingBy: 'operator' | 'auto' | null, since = NOW - 12 * MIN): object => fleetSession({
   id, title, project: 'project-a', wrapper: 'lane-a', home: 'lane-a', workdir: `/w/project-a/${id}`, workspace: id,
-  statusUpdatedAt: NOW - MIN, bucketSince: NOW - 12 * MIN, started: true,
-  limitWait: { since: NOW - 12 * MIN, reset: RESET, account: 'lane-a', waiting },
+  statusUpdatedAt: NOW - MIN, bucketSince: since, started: true,
+  limitWait: { since, reset: RESET, account: 'lane-a', waiting: waitingBy !== null, waitingBy },
 });
-const SESSIONS = [stuck('project-a-w1', 'Review worker', false), stuck('project-a-w2', 'Cleanup worker with a rather long title that must wrap on a phone', true)];
+const SESSIONS = [
+  stuck('project-a-w1', 'Review worker', null),
+  stuck('project-a-w2', 'Cleanup worker with a rather long title that must wrap on a phone', 'operator'),
+  stuck('project-a-w3', 'Docs worker', 'auto', NOW - 11 * MIN),
+];
 
 const usage = (wrapper: string, five: number, seven: number): object => ({
   wrapper, five, seven, ts: NOW / 1000, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
@@ -121,12 +125,15 @@ describe.each(SKINS)('the usage-limit row in %s', (skin) => {
           if (shots !== undefined && shots !== '') await page.screenshot({ path: `${shots}/limit-wait-${skin}-${theme}-${width}.png`, fullPage: true });
           expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 'sideways scroll').toBe(0);
           const m = await page.evaluate(measure);
-          expect(m.rows.map((r) => r.session)).toEqual(['project-a-w1', 'project-a-w2']);
+          expect(m.rows.map((r) => r.session)).toEqual(['project-a-w1', 'project-a-w2', 'project-a-w3']);
           // The first row still has to choose: both controls. The second chose to wait: its wait control is words, and Swap to… stays.
           expect(m.rows[0]!.controls).toEqual(['Swap to…', expect.stringMatching(/^Wait until reset at \d{2}:\d{2}/)]);
           expect(m.rows[1]!.controls.length).toBe(2);
           expect(m.rows[1]!.controls[0]).toBe('Swap to…');
           expect(m.rows[1]!.controls[1]).toMatch(/^Waiting until \d{2}:\d{2}/);
+          // ccrc's own wait (not a pin): its words, and the wait control stays so the operator can pin it. Same at every width.
+          expect(m.rows[2]!.controls).toEqual(['Swap to…', expect.stringMatching(/^ccrc is waiting until \d{2}:\d{2}.* \(or moves it if an account gets room\)$/),
+            expect.stringMatching(/^Wait until reset at \d{2}:\d{2}/)]);
           for (const r of m.rows) {
             expect(r.inside, `${r.session}: the controls sit inside the row`).toBe(true);
             for (const w of r.ratios) expect(w.ratio, `${r.session}: "${w.what}"`).toBeGreaterThanOrEqual(4.5);

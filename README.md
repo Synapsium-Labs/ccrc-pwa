@@ -6924,10 +6924,13 @@ typed) and `idleCompaction` on (no account or session setting can switch it off)
 With auto-continue off, Claude Code does not resume a session by itself at a usage limit's reset, so the limit watchdog
 does: when a stopped session has no account with room and its limit states a reset, `ccd` chooses Wait until reset
 itself (the record reads `choice=wait by=auto`) and restarts the session in place on its own account once the reset has
-passed and that account reads room again. An automatic wait is not a pin: if another account gets room first, the
-watchdog moves the session there. The operator's own Wait until reset (the Waiting on you row, or `ccd limit-wait`) is a
-pin: nothing moves the session until the reset. A limit with no stated reset stays the operator's to decide. The
-five-hour near-reset wait never opens any more, so every near-reset block swaps.
+passed and that account reads room again. A reset the transcript's limit row states counts even when it has already passed
+by the time the watchdog first finds no room: the same pass then restarts the session, if its own account reads room. An
+automatic wait is not a pin: if another account gets room first, the watchdog moves the session there. The Waiting on you
+row says "ccrc is waiting until HH:MM (or moves it if an account gets room)" and keeps its Wait until reset control. The
+operator's own Wait until reset (that control, or `ccd limit-wait`) is a pin, including a tap on an automatic wait, which
+then loses `by=auto`: nothing moves the session until the reset. A limit with no stated reset stays the operator's to
+decide. The five-hour near-reset wait never opens any more, so every near-reset block swaps.
 - **Settings › Automation › Browser tools** shows the box default, the server list and how many running sessions use a
   browser. `ccrc doctor`'s `browser-mcp` check counts the Claude Code processes that run a configured browser server
   against the sessions whose last spawn applied `on`, and warns when more run one than asked for.
