@@ -298,6 +298,45 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     });
   }, 120_000);
 
+  it('412 x 915: the frame does not move when the row becomes the one bar at ready (refinement (f))', async () => {
+    // Every animation frame from the page's start records the head's kind and the reader iframe's top whenever either
+    // changes, so the row's last top over a mounted frame (before ready) and the one bar's first top (at ready) are
+    // both seen, however short "Formatting…" is.
+    const app = await openView({ ...PHONE, skin: REFINED });
+    try {
+      const { page } = app;
+      await page.addInitScript(() => {
+        const w = window as unknown as { __swap: { head: string; top: number; formatting: boolean }[] };
+        w.__swap = [];
+        const tick = (): void => {
+          const head = document.querySelector('.docs-head');
+          const frame = document.querySelector('.docs-reader iframe');
+          if (head !== null && frame !== null) {
+            const kind = head.classList.contains('docs-one-bar') ? 'one-bar' : head.classList.contains('docs-compact') ? 'compact' : 'other';
+            const top = frame.getBoundingClientRect().top;
+            const last = w.__swap[w.__swap.length - 1];
+            if (last === undefined || last.head !== kind || last.top !== top) {
+              w.__swap.push({ head: kind, top, formatting: document.querySelector('.doc-formatting') !== null });
+            }
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      await page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`, { waitUntil: 'load' });
+      await page.waitForSelector('.docs-head.docs-one-bar', { timeout: 90_000 });
+      const samples = await page.evaluate(() => (window as unknown as { __swap: { head: string; top: number; formatting: boolean }[] }).__swap);
+      console.log(`L11-FIGURE refined 412x915 swap ${JSON.stringify(samples)}`);
+      const before = samples.filter((s) => s.head === 'compact').at(-1);
+      const after = samples.find((s) => s.head === 'one-bar');
+      expect(before, 'option 1\'s row was drawn over the mounted frame before ready').toBeDefined();
+      expect(after, 'the one bar was drawn').toBeDefined();
+      expect(Math.abs(after!.top - before!.top), 'the frame\'s top at the swap').toBeLessThanOrEqual(0.5);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
   it('412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it', async () => {
     await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
       await oneBar(page);
