@@ -628,7 +628,10 @@ describe('ccrc settings: _upd_url_origin', () => {
       'https://deploy:\\/s3cret@mirror.example.invalid/r', 'deploy:/s3cret@mirror.example.invalid/r', 'deploy:\\s3cret@mirror.example.invalid/r',
       'user=x:pw@mirror.example.invalid/r', 'deploy://s3cret@mirror.example.invalid/r', 'ftp://mirror.example.invalid/r',
       // Review 1403 F1: a scheme AFTER a userinfo is not http(s) either; before the fix the first two printed `ftp://h`.
-      'user:pw@ftp://h/r', 'tok@ftp://h', 'user:pw@ftp://mirror.example.invalid/r', 'tok@ftp://mirror.example.invalid']) {
+      'user:pw@ftp://h/r', 'tok@ftp://h', 'user:pw@ftp://mirror.example.invalid/r', 'tok@ftp://mirror.example.invalid',
+      // D-8342: a raw '?' or '#' before the last '@'. The redactor withholds what follows a scheme URL's first '?' or '#', '@'
+      // and all, so without the raw rule the first two would print `https://deploy:pw`.
+      'https://deploy:pw?x@mirror.example.invalid/r', 'https://deploy:pw#x@mirror.example.invalid/r', 'deploy:pw?x@mirror.example.invalid/r']) {
       expect(rc(u), JSON.stringify(u)).toEqual({ code: 1, out: '' });
     }
     // An ordinary userinfo keeps its host, a value with no '@' is untouched, and the scheme's case is kept.
@@ -647,6 +650,7 @@ describe('ccrc settings: a release base whose userinfo survives the redaction re
   it.each([
     'https://deploy:s3cr/et@mirror.example.invalid/r',
     'https://deploy:pw?x@m.example/r',
+    'https://deploy:pw#x@m.example/r',
     'tok/abc@m',
     'https://u:pw@host:99/p@q',
     'https://u:p@[::1]:8080/x?y=z@w#f',

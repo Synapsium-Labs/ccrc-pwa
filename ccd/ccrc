@@ -2866,14 +2866,17 @@ EOF
 # echo). `ccd/ccd-update-sync`, another executable, carries a generated copy of
 # this function (`shared/hook-helpers.mjs`'s log-line region) and redacts at its
 # own `say`, with `bare-host`.
-# OUT OF SCOPE: this function masks only those two, a URL's userinfo and this
-# box's home directory. A query-string secret (`?token=…`, `&key=…`), a
+# D-8342 adds a third: a scheme URL's query and fragment (`https://h/r?token=…#…`
+# reads `https://h/r?[withheld]`; the rule's own comment has the shapes).
+# OUT OF SCOPE: this function masks only those three. A query-string secret
+# outside a scheme URL (`host/r?token=…`, `&key=…` alone), a
 # bearer token (`Authorization: Bearer …`) and curl's credential flags
 # (`-u` / `--user` / `--proxy-user user:pass`) pass through it whole; a line that
 # may carry one needs its own masking before it reaches here. KNOWN LIMITS
 # (D-7564, the corpus's `known-limit` rows): a scheme-less userinfo inside a
-# query string or a path (`https://h/x?proxy=user:secret@host`,
-# `dir/user:secret@host`), a raw '#', '?' or '/' inside a password
+# query string with no scheme URL around it or inside a path
+# (`GET /p?u=user:secret@host:8443`, `dir/user:secret@host`; inside a scheme
+# URL's query it goes with the query, D-8342), a raw '#', '?' or '/' inside a password
 # (`user:pa#ss@host`), a token-only userinfo before a bare host while more
 # text follows (`--proxy=tok@host refused`, an empty port's `tok@h: refused`
 # too), one before a port that a letter, '-', '_' or '~' follows, or a run of
@@ -2951,6 +2954,16 @@ _upd_redact() {
     local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
     while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   fi
+  # D-8342, in both modes: a scheme URL's query and fragment can carry a token (`?token=…`), so what follows its first '?' or
+  # '#' goes, to the token's end (whitespace, '"', '<', '>' or a backtick, none of which a URL holds raw); the '?' or '#' stays
+  # and `[withheld]` follows it, so `https://h/r?token=x#f` reads `https://h/r?[withheld]`. A scheme is a letter, then
+  # letters, digits, '+', '.' or '-', then ':' and one or more '/', each maybe after a '\' (as the userinfo rules read one),
+  # and it starts where no such character stands before it (`KEY=https://…` keeps its `KEY=`). Text that is no scheme URL
+  # keeps every '?' and '#' (prose's `release?`, `#2`, `mailto:a@b?x`, a scheme-less `host/r?x`). The walk passes each mask
+  # once and keeps the text before it, so a second pass over its own output changes nothing.
+  local qre='(^|[^A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:(\\?/)+[^?#[:space:]"<>`]*)([?#])[^[:space:]"<>`]*' qout="" qm=""
+  while [[ "$s" =~ $qre ]]; do qm="${BASH_REMATCH[0]}"; qout+="${s%%"$qm"*}${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[4]}[withheld]"; s="${s#*"$qm"}"; done
+  s="$qout$s"
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
   # `~ser2/f` (a PREFIX match with no boundary check at all), and a
@@ -3024,7 +3037,9 @@ _upd_redact() {
 # '//' (`deploy://s3cret@m`) cannot be told from a scheme, and would show its user name as one (less, never more: a mirror on
 # another scheme shows `custom` alone). These rules on the raw value close the shapes `_upd_redact`'s KNOWN LIMITS name for a
 # release base: a raw '/' (or a JSON '\/') in the userinfo, and a userinfo inside a path or a query, by the '/' rule; a raw '?'
-# or '#' there by the '@' check below (no rule of the redactor drops that '@'); and the limits whose text follows the host
+# or '#' there by the same rule, which takes '?' and '#' too (D-8342: the redactor now withholds what follows a scheme URL's
+# first '?' or '#', '@' and all, so the '@' check below no longer sees that '@'; a query or a fragment that holds an '@'
+# shows no host, less, never more); and the limits whose text follows the host
 # (`tok@host refused`, `tok@host:8443-x retrying`, `tok@2130706433:80 x`) by the whitespace rule, or, written as one token, by
 # the '@' check (D-7873).
 # rc 0 otherwise, printing the origin (empty for an empty value).
@@ -3032,7 +3047,7 @@ _upd_url_origin() {
   local s="${1:-}" sre='^[A-Za-z][A-Za-z0-9+.-]*://' hre='^[Hh][Tt][Tt][Pp][Ss]?://$' scheme="" bre='[[:space:]"'"'"'<(`]' LC_ALL=C
   if [[ "$s" =~ $bre ]]; then return 1; fi
   if [[ "$s" =~ $sre ]]; then [[ "${BASH_REMATCH[0]}" =~ $hre ]] || return 1; s="${s#"${BASH_REMATCH[0]}"}"; fi
-  case "$s" in *[/\\=]*@*) return 1 ;; esac
+  case "$s" in *[/\\=?#]*@*) return 1 ;; esac
   s="$(_upd_redact "${1:-}")"
   if [[ "$s" =~ $sre ]]; then scheme="${BASH_REMATCH[0]}"; [[ "$scheme" =~ $hre ]] || return 1; s="${s#"$scheme"}"; fi
   case "$s" in *@*) return 1 ;; esac
@@ -23748,6 +23763,17 @@ _upd_release_base() {
   _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" "${1:-}" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
   printf '%s' "$KNOB"
 }
+# `_upd_base_ok <base>` — D-8342: the release paths (`/download/<tag>/…`, `/latest/download/…`) are appended to the base, so
+# a base holding a '?' or a '#' would build a URL whose paths sit inside its query or fragment, one no release host serves.
+# rc 1 refuses it and sets KNOB_WHY, the sentence a caller dies with or reports, naming the variable and never the value (a
+# query can carry a token); rc 0 otherwise. Asked where a release path is first built from the base, before any fetch:
+# `_upd_resolve` and `_upd_asset_listed`. install.sh's release arm refuses the same base in the same words.
+_upd_base_ok() {
+  case "${1:-}" in
+    *'?'*|*'#'*) KNOB_WHY="CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it"; return 1 ;;
+  esac
+  return 0
+}
 
 # `_upd_validate_timeout <name> <default> [what] [max]` — ONE validator for
 # every CCRC_RELEASE_* knob (review fix round 1 M5): curl reads
@@ -23820,6 +23846,7 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   # Called in this shell, never `$(…)`, so KNOB_WHY reaches the die: the report's detail then says why (the file, the key, the
   # line, never a value), and its own line is silenced, the die's saying it once. A node fault, never `provenance: ` (F8, F9).
   _upd_release_base >/dev/null 2>&1 && base="$KNOB" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"
+  _upd_base_ok "$base" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"   # D-8342, before any fetch or staging dir
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
   # UPD_STAGE_PARENT: set only by the test box's tools unit, which stages under its own <tools> (TB6, D-7408).
@@ -24857,7 +24884,7 @@ _upd_restore_copy() {
 
 # `_upd_asset_listed <tag> <asset>` — 0 the release carries it; 1 it does not,
 # MEASURED: the host answered 404; 2 unmeasured — anything else; 3 the release
-# base could not be read (`_upd_release_base`'s own stderr line says why, KNOB_WHY
+# base could not be read or holds a query or a fragment (`_upd_base_ok`, D-8342; a stderr line says why, KNOB_WHY
 # holds it for the caller's report, F8, and no host was asked: a word of its own, since a caller's rc-2 sentence blames
 # curl and the host, wave 24, D-6594). Two callers:
 # arm 2 asks for the previous release's bundle, `rollback` (Task 7) for
@@ -24902,6 +24929,7 @@ _upd_asset_listed() {
     "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
   # Read before the curl, outside its `2>/dev/null`, so the reader's line reaches the operator.
   local b; _upd_release_base >/dev/null && b="$KNOB" || return 3   # in this shell, so the caller has KNOB_WHY
+  _upd_base_ok "$b" || { echo "$PROG: $KNOB_WHY" >&2; return 3; }   # D-8342: refused like an unreadable base, no host asked
   code="$(curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o /dev/null -w '%{http_code}' "$b/download/$1/$2" 2>/dev/null)" || rc=$?

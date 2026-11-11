@@ -875,8 +875,9 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
   });
 
   // ── the base URL's userinfo is never printed ──────────────────────────────
-  // Redaction here is the updater's: it masks a URL's userinfo (and the home directory). A query or a fragment is
-  // NOT masked, by the operator's ruling, so no row here asks it: such a base is refused before it could print.
+  // Redaction here is the updater's: it masks a URL's userinfo, a scheme URL's query and fragment (D-8342) and the home
+  // directory. A base holding a query or a fragment is refused before it could print (the rows below this block), so the
+  // query mask is asked by the redactor pin further down, not by a run.
   const userinfoBase = (home: string): { CCRC_RELEASE_BASE_URL: string } =>
     ({ CCRC_RELEASE_BASE_URL: `local://user:pass@${home}/releases` });
 
@@ -917,8 +918,9 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
   // ── a base URL holding a query or a fragment is refused ───────────────────
   // The release paths are appended to the base, so a `?` or a `#` swallows them, and a query can carry a token: the
   // sentence names the variable, never the value. The fixture release is there, so nothing else refuses first.
-  for (const [mark, tail] of [['?', '?token=s3cret'], ['#', '#s3cret']] as const) {
-    it(`a base URL holding a ${mark} is refused before anything is fetched or staged, its value printed nowhere`, () => {
+  // D-8342 adds the two shortest shapes, `?x=1` and `#f`, the updater's rows' own (ccrc-update-phases.test.ts).
+  for (const [mark, tail] of [['?', '?token=s3cret'], ['#', '#s3cret'], ['?', '?x=1'], ['#', '#f']] as const) {
+    it(`a base URL holding a ${mark} (${tail}) is refused before anything is fetched or staged, its value printed nowhere`, () => {
       const home = mkTmp('install-sh-release-base-');
       const root = fixtureRoot(home, REAL_FLOOR_RANGE);
       plantReleaseTools(home);
@@ -927,7 +929,7 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
       expect(r.code, `stderr: ${r.stderr}`).toBe(1);
       expect(r.stderr).toBe('install.sh: CCRC_RELEASE_BASE_URL holds a query or a fragment, '
         + 'so the release paths cannot be appended to it — refusing\n');
-      expect(allLines(r).filter((l) => /s3cret/.test(l)), 'a line carries the value').toEqual([]);
+      expect(allLines(r).filter((l) => l.includes(tail) || /s3cret/.test(l)), 'a line carries the value').toEqual([]);
       expect(readLog(home, 'curl-argv'), 'a fetch ran').toEqual([]);
       expect(filesUnder(join(home, 'tmp')), 'a staging directory was made').toEqual([]);
       expect(existsSync(join(home, 'ccrc-argv'))).toBe(false);
@@ -1176,6 +1178,11 @@ describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
     // And the pin is not vacuous: the userinfo shape is really masked by both.
     const masked = runRedactor(mine!, '_inst_redact', [Buffer.from(EIGHT[1]!)], fixtureHome).toString().replace(/\0$/, '');
     expect(masked).toBe('https://example.invalid/releases');
+    // D-8342: and so are the query and the fragment, alone and after a userinfo, each '?' or '#' kept.
+    const qf = runRedactor(mine!, '_inst_redact', [EIGHT[2]!, EIGHT[3]!, EIGHT[4]!].map((x) => Buffer.from(x)), fixtureHome)
+      .toString().split('\0').slice(0, 3);
+    expect(qf).toEqual(['https://example.invalid/releases?[withheld]', 'https://example.invalid/releases#[withheld]',
+      'https://example.invalid/releases?[withheld]']);
   });
 
   // Held equal by OUTPUT, not by text. install.sh's `--release` runs before its own bash version refusal, so the copy
