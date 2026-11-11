@@ -1,15 +1,16 @@
 // The Overlord's W0 spike (plan docs/superpowers/plans/2026-11-10-overlord/w0-spike.md, Tasks 2 and 3): the capture
 // rig learns a launch profile, and gains four dependency-free stubs. Hermetic: no row starts Claude Code, names the
-// real HOME, or touches any tmux server. The helpers are this file's own, in the shape of delegation-rig.test.ts's
-// (whose helpers are not exported).
+// real HOME, or touches any tmux server; the run-time verbs are run from rig.sh's own text with tmux stubbed. The
+// helpers are this file's own, in the shape of delegation-rig.test.ts's (whose helpers are not exported).
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 
 const RIG = path.resolve(__dirname, 'delegation-rig');
+const LINUX = process.platform === 'linux';
 const RIGSH = path.join(RIG, 'rig.sh');
 
 const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } => {
@@ -34,6 +35,23 @@ function firstEnvName(): string {
   if (n === undefined) throw new Error('rig.sh defines no RIG_LAUNCH_ENV list');
   return n;
 }
+/** The text of rig.sh's own top-level definitions named here (a function, through its closing `}` line, or a `NAME=`
+ *  line), so a row runs them without the case dispatch at its foot. */
+function rigText(...names: string[]): string {
+  const lines = fs.readFileSync(RIGSH, 'utf8').split('\n');
+  return names.map((n) => {
+    const i = lines.findIndex((l) => l.startsWith(`${n}() {`) || l.startsWith(`${n}=`));
+    if (i < 0) throw new Error(`rig.sh defines no ${n}`);
+    const first = lines[i] as string;
+    if (!first.startsWith(`${n}() {`) || first.trimEnd().endsWith('}')) return first;
+    const j = lines.indexOf('}', i);
+    if (j < i) throw new Error(`rig.sh's ${n} does not close`);
+    return lines.slice(i, j + 1).join('\n');
+  }).join('\n');
+}
+const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+/** The bypass spellings a scenario of the delegation corpus may never carry (the corpus test reads them too). */
+const BYPASS_RE = /skip-permissions|bypassPermissions/;
 /** A fixture HOME holding one executable "installed" build, as delegation-rig.test.ts's versionsHome makes it. */
 function versionsHome(version: string): string {
   const home = mkTmp('ccrc-dlg-home-');
@@ -57,13 +75,22 @@ function launchLine(launch: object, top: object = {}): string {
 describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
   it('check-scenario accepts a launch block whose flags and env names are on the lists', () => {
     const f = scen('scenarios-overlord', 'ok', [{ waitReady: 60 }],
-      { launch: { args: ['--setting-sources', 'project'], env: { [firstEnvName()]: 'x' } }, capS: 600, requests: true });
+      { launch: { args: ['--setting-sources', 'project', '--strict-mcp-config', '--model=opus', '--disable-slash-commands'],
+        env: { [firstEnvName()]: 'x' } }, capS: 600, requests: true, mainMarker: 'You are (an interactive agent|Claude Code)' });
     expect(rigsh(['check-scenario', f]).status).toBe(0);
   }, 60_000);
 
   it.each([
     ['a flag off the list', { launch: { args: ['--no-such-flag'] } }],
     ['a value with no flag before it', { launch: { args: ['project'] } }],
+    ['a value after a flag that takes none (F4)', { launch: { args: ['--strict-mcp-config', 'update'] } }],
+    ['a second value after a flag (F4)', { launch: { args: ['--model', 'opus', 'install'] } }],
+    ['a value after a --flag=value spelling (F4)', { launch: { args: ['--model=opus', 'update'] } }],
+    ['a value spelled onto a flag that takes none (F4)', { launch: { args: ['--strict-mcp-config=update'] } }],
+    ['a flag that takes a value, last (F4)', { launch: { args: ['--model'] } }],
+    ['a flag that takes a value, followed by a flag (F4)', { launch: { args: ['--model', '--strict-mcp-config'] } }],
+    ['a mainMarker that is not a string (F2)', { mainMarker: 7 }],
+    ['a mainMarker of two lines (F2)', { mainMarker: 'a\nb' }],
     ['a reserved env name', { launch: { env: { HOME: '/x' } } }],
     ['an ANTHROPIC_ name', { launch: { env: { ANTHROPIC_BASE_URL: 'http://x' } } }],
     ['an env name off the list', { launch: { env: { NOT_ON_THE_LIST: 'x' } } }],
@@ -85,19 +112,71 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(rigsh(['check-scenario', f]).status).toBe(0);
   }, 60_000);
 
+  // D-8203's exception is the rig's own rule, not only the corpus test's (F3): a bypass anywhere in the scenario's text, in a
+  // flag, a --settings value or a file the scenario writes, passes only for a file in the rig's own scenarios-overlord.
+  const SETTINGS_BYPASS = '{"permissions":{"defaultMode":"bypassPermissions"}}';
   it.each([
     ['the flag', { launch: { args: ['--dangerously-skip-permissions'] } }],
     ['the permission mode', { launch: { args: ['--permission-mode', 'bypassPermissions'] } }],
+    ['the permission mode in one argument', { launch: { args: ['--permission-mode=bypassPermissions'] } }],
     ['the settings mode', { launch: { settings: { permissions: { defaultMode: 'bypassPermissions' } } } }],
-  ])('a bypass by %s passes in scenarios-overlord and is refused in scenarios', (_w, top) => {
-    expect(rigsh(['check-scenario', scen('scenarios-overlord', 'b', [{ waitReady: 60 }], top)]).status).toBe(0);
-    expect(rigsh(['check-scenario', scen('scenarios', 'b', [{ waitReady: 60 }], top)]).status).toBe(2);
+    ['an inline --settings value', { launch: { args: ['--settings', SETTINGS_BYPASS] } }],
+    ['a settings file the scenario writes', { launch: { args: ['--settings', '@RIG_REPO@/.w0/p.json'],
+      files: [{ in: 'repo', path: '.w0/p.json', text: SETTINGS_BYPASS }] } }],
+    ['an overwrite of the fixture\'s settings', { launch: { files: [{ in: 'cfg', path: 'settings.json', text: SETTINGS_BYPASS }] } }],
+  ])('a bypass by %s is refused outside the rig\'s own scenarios-overlord, whatever the directory is called (F3)', (_w, top) => {
+    for (const dir of ['scenarios', 'scenarios-overlord', 'server/test/delegation-rig/scenarios-overlord'])
+      expect(rigsh(['check-scenario', scen(dir, 'b', [{ waitReady: 60 }], top)]).status, dir).toBe(2);
+  }, 60_000);
+
+  it('a bypass spelled through a JSON escape is refused too: the check reads the parsed strings (F3)', () => {
+    const f = scen('scenarios-overlord', 'esc', [{ waitReady: 60 }], { launch: { args: ['--permission-mode', 'BYPASS'] } });
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('BYPASS', 'bypass\\u0050ermissions'));
+    expect(fs.readFileSync(f, 'utf8')).not.toMatch(BYPASS_RE);
+    expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  it('the committed ov-door, which carries a bypass, passes where it sits and through a link to it; a copy elsewhere is refused (F3)', () => {
+    const door = path.join(RIG, 'scenarios-overlord', 'ov-door.json');
+    expect(fs.readFileSync(door, 'utf8'), 'the premise: ov-door carries a bypass').toMatch(BYPASS_RE);
+    expect(rigsh(['check-scenario', door]).status).toBe(0);
+    const d = path.join(mkTmp('ccrc-dlg-w0-'), 'server/test/delegation-rig/scenarios-overlord');
+    fs.mkdirSync(d, { recursive: true });
+    fs.copyFileSync(door, path.join(d, 'ov-door.json'));
+    expect(rigsh(['check-scenario', path.join(d, 'ov-door.json')]).status, 'a copy').toBe(2);
+    fs.symlinkSync(door, path.join(d, 'link.json'));
+    expect(rigsh(['check-scenario', path.join(d, 'link.json')]).status, 'a link to the committed file is that file').toBe(0);
   }, 60_000);
 
   it('no file in the delegation corpus names a bypass flag', () => {
     for (const f of fs.readdirSync(path.join(RIG, 'scenarios')))
-      expect(fs.readFileSync(path.join(RIG, 'scenarios', f), 'utf8')).not.toMatch(/skip-permissions|bypassPermissions/);
+      expect(fs.readFileSync(path.join(RIG, 'scenarios', f), 'utf8')).not.toMatch(BYPASS_RE);
   });
+
+  it('every committed scenarios-overlord file passes check-scenario and names both main-thread prompt shapes in mainMarker (F2)', () => {
+    const dir = path.join(RIG, 'scenarios-overlord');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    expect(files.length).toBeGreaterThan(20);
+    for (const f of files) {
+      expect(rigsh(['check-scenario', path.join(dir, f)]).status, f).toBe(0);
+      const marker: unknown = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')).mainMarker;
+      expect(typeof marker, f).toBe('string');
+      // The opening of the main thread's system prompt before 2.1.322 and on it (results note, Task 4).
+      for (const shape of ['You are an interactive agent', 'You are an agent working with the user'])
+        expect(new RegExp(marker as string).test(shape), `${f}: ${shape}`).toBe(true);
+    }
+  }, 600_000);
+
+  it('the config-load scenarios approve the tail of the key rig_key makes, so a change to it fails here, not as a dialog mid-run (F16)', () => {
+    const key = spawnSyncGroup('bash', ['-c', `${rigText('rig_key')}\nrig_key`], { encoding: 'utf8', timeout: 60_000 }).stdout;
+    expect(key).toMatch(/^sk-ant-api03-/);
+    for (const f of ['ov-config-load.json', 'ov-config-load-pinned.json']) {
+      const s = JSON.parse(fs.readFileSync(path.join(RIG, 'scenarios-overlord', f), 'utf8'));
+      const cj = (s.launch.files as Array<{ path: string; text: string }>).find((x) => x.path === '.claude.json');
+      expect(cj, f).toBeDefined();
+      expect(JSON.parse(cj!.text).customApiKeyResponses.approved, f).toEqual([key.slice(-20)]);
+    }
+  }, 60_000);
 
   it('launch_cmd quotes a launch value and substitutes only the five placeholders', () => {
     const line = launchLine({ args: ['--settings', '@RIG_CFG@/p.json; touch x'], env: { [firstEnvName()]: 'a b; touch y' } });
@@ -150,12 +229,119 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(rigsh(['check-scenario', f]).status).toBe(0);
   }, 60_000);
 
+  it('print-launch bounds the binary by the scenario\'s capS, and by 1200 s without one (F10)', () => {
+    expect(launchLine({ args: ['--strict-mcp-config'] }, { capS: 600 })).toMatch(/timeout -k 10 600 /);
+    expect(launchLine({ args: ['--strict-mcp-config'] })).toMatch(/timeout -k 10 1200 /);
+  }, 60_000);
+
   it('the usage names print-launch, and the header still ends on its last line', () => {
     const r = rigsh(['bogus']);
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('rig.sh print-launch <version> <scenario.json> <root>');
     expect(r.stderr).toContain('(and a box with no /proc, where that cannot be measured, keeps them)');
     expect(r.stderr).not.toContain('set -euo pipefail');
+  }, 60_000);
+});
+
+/** rig.sh's own run_steps and run_opts, and what they call, cut from its text and run under its own strictness in `cwd`,
+ *  with tmux, the pane, the ready wait, the session id and the launch line stubbed (T appends its argv to
+ *  <root>/tmux-calls; pane prints W0-PANE-TEXT; current_sid prints sid-w0; launch_cmd prints LAUNCH and its arguments).
+ *  `scenario` is the run's SCEN; `cfg` names files to place under the run's config first. After the steps the script
+ *  prints the working directory, CFG and the run options. Nothing starts a process but bash, jq and the coreutils. */
+function runSteps(scenario: object, cfgFiles: Record<string, string> = {}): { status: number | null; stderr: string; root: string; out: Record<string, string> } {
+  const root = fs.realpathSync(mkTmp('ccrc-dlg-steps-'));
+  const cwd = fs.realpathSync(mkTmp('ccrc-dlg-cwd-'));
+  for (const [rel, text] of Object.entries(cfgFiles)) {
+    fs.mkdirSync(path.dirname(path.join(root, 'fixhome/cfg', rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, 'fixhome/cfg', rel), text);
+  }
+  fs.mkdirSync(path.join(root, 'fixhome/cfg'), { recursive: true });
+  const scenFile = path.join(root, 'scenario.json');
+  fs.writeFileSync(scenFile, JSON.stringify({ entries: [], ...scenario }));
+  const script = ['set -euo pipefail', `HERE=${shq(RIG)}`,
+    rigText('SESSION', 'RUN_CAP_S', 'launch_subst', 'apply_launch_files', 'timing', 'note', 'snapshot', 'sessions_snap', 'run_opts', 'run_steps'),
+    'T() { printf \'%s\\n\' "$*" >> "$RUN_R/tmux-calls"; }', 'pane() { printf \'W0-PANE-TEXT\\n\'; }', 'wait_ready() { return 0; }',
+    'current_sid() { printf sid-w0; }', 'launch_cmd() { printf LAUNCH; printf \' %s\' "$@"; }',
+    `RUN_R=${shq(root)} RUN_H=${shq(path.join(root, 'fixhome'))} CFG=${shq(path.join(root, 'fixhome/cfg'))} SCEN=${shq(scenFile)} SOCK=dlgx`,
+    'run_opts', 'run_steps',
+    'printf \'cwd=%s\\ncfg=%s\\ntiming=%s\\nrequests=%s\\ncap=%s\\n\' "$(pwd -P)" "$CFG" "$TIMING" "$REQUESTS" "$RUN_CAP_S"'].join('\n');
+  const r = spawnSyncGroup('bash', ['-c', script], { encoding: 'utf8', cwd, env: { ...process.env }, timeout: 60_000 });
+  const out = Object.fromEntries(r.stdout.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  if (r.status === 0) expect(out.cwd, 'the steps leave the working directory where it was (F5)').toBe(cwd);
+  return { status: r.status, stderr: r.stderr, root, out };
+}
+const readIn = (root: string, rel: string): string => fs.readFileSync(path.join(root, rel), 'utf8');
+
+describe('rig.sh\'s run-time verbs, run from its own text with tmux stubbed (F5, F10)', () => {
+  it('run_opts reads capS, timing and requests; without them the cap is 1200 and both switches are off', () => {
+    expect(runSteps({ steps: [], capS: 600, timing: true, requests: true }).out).toMatchObject({ timing: '1', requests: '1', cap: '600' });
+    expect(runSteps({ steps: [] }).out).toMatchObject({ timing: '0', requests: '0', cap: '1200' });
+  }, 60_000);
+
+  // `date +%s%3N` is GNU date's (the rig's step timer); the rig's timed runs are Linux's.
+  it.skipIf(!LINUX)('timing: true writes each step\'s start and waitReady\'s elapsed milliseconds to the run\'s own timing file, never to notes', () => {
+    const on = runSteps({ steps: [{ waitReady: 5 }, { sleep: 0 }], timing: true });
+    expect(on.status, on.stderr).toBe(0);
+    const lines = readIn(on.root, 'timing').trim().split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^step 1 waitReady start \d{13}$/);
+    expect(lines[1]).toMatch(/^step 1 waitReady elapsed \d+$/);
+    expect(lines[2]).toMatch(/^step 2 sleep start \d{13}$/);
+    expect(fs.existsSync(path.join(on.root, 'notes')), 'no notes line').toBe(false);
+    const off = runSteps({ steps: [{ waitReady: 5 }, { sleep: 0 }] });
+    expect(off.status, off.stderr).toBe(0);
+    expect(fs.existsSync(path.join(off.root, 'timing')), 'no timing file without timing: true').toBe(false);
+  }, 60_000);
+
+  it('paneSnap writes the pane\'s text to snapshots/<name>/pane', () => {
+    const r = runSteps({ steps: [{ paneSnap: 'after-model' }] });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readIn(r.root, 'snapshots/after-model/pane')).toBe('W0-PANE-TEXT\n');
+  }, 60_000);
+
+  it('sessionsSnap copies the live-session records and lists each transcript with its size in bytes, and leaves the working directory alone (F5)', () => {
+    const r = runSteps({ steps: [{ sessionsSnap: 'before' }] },
+      { 'sessions/4242.json': '{"sessionId":"s-1"}', 'projects/p-a/s-1.jsonl': '12345', 'projects/p-a/s-1/subagents/a.jsonl': 'x' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readIn(r.root, 'snapshots/before/sessions/4242.json')).toBe('{"sessionId":"s-1"}');
+    expect(readIn(r.root, 'snapshots/before/transcripts')).toBe('p-a/s-1.jsonl\t5\n');
+  }, 60_000);
+
+  it('swapConfig copies the config to cfg2, writes the cfg2 launch files there, and moves CFG to it', () => {
+    const r = runSteps({ steps: [{ swapConfig: true }], launch: { files: [{ in: 'cfg2', path: 'CLAUDE.md', text: 'W0-CFG2 @RIG_REPO@' },
+      { in: 'cfg', path: 'NOT-HERE.md', text: 'x' }] } }, { 'settings.json': '{"a":1}' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readIn(r.root, 'fixhome/cfg2/settings.json')).toBe('{"a":1}');
+    expect(readIn(r.root, 'fixhome/cfg2/CLAUDE.md')).toBe(`W0-CFG2 ${r.root}/repo`);
+    expect(fs.existsSync(path.join(r.root, 'fixhome/cfg2/NOT-HERE.md')), 'a cfg file is setup\'s, not the swap\'s').toBe(false);
+    expect(r.out.cfg).toBe(path.join(r.root, 'fixhome/cfg2'));
+  }, 60_000);
+
+  it('relaunch respawns the pane: true resumes the session, fork adds --fork-session, fresh names no session', () => {
+    const r = runSteps({ steps: [{ relaunch: true }, { relaunch: { mode: 'fork' } }, { relaunch: { mode: 'fresh' } }] });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readIn(r.root, 'tmux-calls').trim().split('\n')).toEqual([
+      'dlgx respawn-pane -k -t cc-rig-hookcap bash -c LAUNCH --resume sid-w0',
+      'dlgx respawn-pane -k -t cc-rig-hookcap bash -c LAUNCH --resume sid-w0 --fork-session',
+      'dlgx respawn-pane -k -t cc-rig-hookcap bash -c LAUNCH',
+    ]);
+  }, 60_000);
+
+  it('collect copies the run\'s timing file, the mock\'s request dumps and the stubs\' logs into the bundle', () => {
+    const root = fs.realpathSync(mkTmp('ccrc-dlg-collect-'));
+    const out = path.join(mkTmp('ccrc-dlg-collect-out-'), 'bundle');
+    for (const [rel, text] of [['timing', 'step 1 waitReady start 1\n'], ['reqs/0001-main.json', '{"n":1}'], ['logs/emit.ndjson', '{}\n']] as const) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), text);
+    }
+    const script = ['set -euo pipefail', rigText('g', 'collect'), 'curl() { return 7; }',
+      `RUN_R=${shq(root)} RUN_H=${shq(path.join(root, 'fixhome'))} VER=2.1.0 VERSIONS=/nonexistent SCEN=/x/ov-t.json PORT=0`,
+      `collect ${shq(out)}`].join('\n');
+    const r = spawnSyncGroup('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env }, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(out, 'timing'), 'utf8')).toBe('step 1 waitReady start 1\n');
+    expect(fs.readFileSync(path.join(out, 'reqs/0001-main.json'), 'utf8')).toBe('{"n":1}');
+    expect(fs.readFileSync(path.join(out, 'logs/emit.ndjson'), 'utf8')).toBe('{}\n');
   }, 60_000);
 });
 
@@ -248,28 +434,67 @@ describe('the rig\'s W0 stubs (W0 Task 3)', () => {
   }, 60_000);
 });
 
-describe('mockapi.mjs: a padded reply, for W0\'s renewal-time transcripts (W0 Task 5)', () => {
+/** Start mockapi.mjs on `script`, with the outer MOCK_LOG, MOCK_REQDIR and MOCK_MAIN_MARKER removed and `extra` added, run
+ *  `fn` with its base URL, and kill it. */
+async function withMock<T>(script: object, fn: (url: string) => Promise<T>, extra: NodeJS.ProcessEnv = {}): Promise<T> {
+  const file = path.join(mkTmp('ccrc-dlg-mock-'), 'script.json');
+  fs.writeFileSync(file, JSON.stringify(script));
+  const base: NodeJS.ProcessEnv = { ...process.env };
+  delete base.MOCK_LOG; delete base.MOCK_REQDIR; delete base.MOCK_MAIN_MARKER;
+  const child = spawn(process.execPath, [path.join(RIG, 'mockapi.mjs')],
+    { env: { ...base, MOCK_PORT: '0', MOCK_SCRIPT: file, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    const port = await new Promise<string>((resolve, reject) => {
+      let out = '';
+      const t = setTimeout(() => reject(new Error('mock did not start')), 10_000);
+      child.stdout!.on('data', (b: Buffer) => { out += b.toString(); const m = /listening 127\.0\.0\.1:(\d+)/.exec(out); if (m) { clearTimeout(t); resolve(m[1] as string); } });
+    });
+    return await fn(`http://127.0.0.1:${port}`);
+  } finally { child.kill('SIGKILL'); }
+}
+/** One streamed request offering a tool, under `system`: the status, and the text deltas in order. */
+async function ask(url: string, system: string): Promise<{ status: number; deltas: string[] }> {
+  const r = await fetch(`${url}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ stream: true, model: 'm', tools: [{ name: 'Bash' }], system, messages: [{ role: 'user', content: 'x' }] }) });
+  const body = await r.text();
+  if (r.status !== 200) return { status: r.status, deltas: [] };
+  return { status: r.status, deltas: body.split('\n\n').filter((b) => b.includes('text_delta'))
+    .map((b) => JSON.parse(b.slice(b.indexOf('data: ') + 6)).delta.text as string) };
+}
+// The opening of the main thread's system prompt before 2.1.322, and on it (results note, Task 4).
+const MAIN_OLD = 'You are an interactive agent that helps users.';
+const MAIN_NEW = 'You are an agent working with the user toward their goals.';
+
+describe('mockapi.mjs: W0\'s padded reply and main-thread marker (W0 Task 5; F2, F16)', () => {
   it('appends exactly `pad` filler characters to an entry\'s text and streams it in `chunk_chars` pieces', async () => {
-    const dir = mkTmp('ccrc-dlg-pad-');
-    const file = path.join(dir, 'script.json');
-    fs.writeFileSync(file, JSON.stringify({ entries: [{ match: 'any', text: 'W0-PAD', pad: 1000, chunk_chars: 100, chunk_ms: 0 }] }));
-    const env: NodeJS.ProcessEnv = { ...process.env, MOCK_PORT: '0', MOCK_SCRIPT: file };
-    delete env.MOCK_LOG; delete env.MOCK_REQDIR;
-    const { spawn } = await import('node:child_process');
-    const child = spawn(process.execPath, [path.join(RIG, 'mockapi.mjs')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-    try {
-      const port = await new Promise<string>((resolve, reject) => {
-        let out = '';
-        const t = setTimeout(() => reject(new Error('mock did not start')), 10_000);
-        child.stdout!.on('data', (b: Buffer) => { out += b.toString(); const m = /listening 127\.0\.0\.1:(\d+)/.exec(out); if (m) { clearTimeout(t); resolve(m[1] as string); } });
-      });
-      const r = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stream: true, model: 'm', tools: [{ name: 'Bash' }], system: 'You are an interactive agent', messages: [{ role: 'user', content: 'x' }] }) });
-      const deltas = (await r.text()).split('\n\n').filter((b) => b.includes('text_delta'))
-        .map((b) => JSON.parse(b.slice(b.indexOf('data: ') + 6)).delta.text as string);
-      expect(deltas.join('').length).toBe('W0-PAD'.length + 1000);
-      expect(deltas.join('').startsWith('W0-PAD')).toBe(true);
-      expect(deltas).toHaveLength(Math.ceil(1006 / 100));
-    } finally { child.kill('SIGKILL'); }
+    const { deltas } = await withMock({ entries: [{ match: 'any', text: 'W0-PAD', pad: 1000, chunk_chars: 100, chunk_ms: 0 }] }, (u) => ask(u, MAIN_OLD));
+    expect(deltas.join('').length).toBe('W0-PAD'.length + 1000);
+    expect(deltas.join('').startsWith('W0-PAD')).toBe(true);
+    expect(deltas).toHaveLength(Math.ceil(1006 / 100));
+  }, 60_000);
+
+  it.each([
+    ['a chunk_chars that is not a number', { text: 'W0', chunk_chars: 'x' }],
+    ['a chunk_chars that is not an integer', { text: 'W0', chunk_chars: 2.5 }],
+    ['a pad that is not a whole number', { text: 'W0', pad: -3 }],
+    ['a pad on a blocks entry, which would drop it', { blocks: [{ text: 'W0' }], pad: 100 }],
+  ])('refuses %s: HTTP 500, never a silently short reply (F16)', async (_w, entry) => {
+    const { status } = await withMock({ entries: [{ match: 'any', chunk_ms: 0, ...entry }] }, (u) => ask(u, MAIN_OLD));
+    expect(status).toBe(500);
+  }, 60_000);
+
+  it.each([0, -1])('refuses a chunk_chars of %i at once, before it loops (F16)', async (n) => {
+    const { status } = await withMock({ entries: [{ match: 'any', text: 'W0', chunk_chars: n, chunk_ms: 0 }] }, (u) => ask(u, MAIN_OLD));
+    expect(status).toBe(500);
+  }, 60_000);
+
+  it('a script\'s mainMarker decides the main thread, over MOCK_MAIN_MARKER and the default (F2)', async () => {
+    const entries = [{ label: 'm', text: 'W0-MAIN', chunk_ms: 0 }];
+    const marker = 'You are (an interactive agent|an agent working with the user)';
+    expect((await withMock({ entries }, (u) => ask(u, MAIN_NEW))).deltas.join(''), 'the default misses the new shape').toBe('(mock default reply)');
+    expect((await withMock({ entries, mainMarker: marker }, (u) => ask(u, MAIN_NEW))).deltas.join('')).toBe('W0-MAIN');
+    expect((await withMock({ entries, mainMarker: marker }, (u) => ask(u, MAIN_NEW), { MOCK_MAIN_MARKER: 'nothing matches this' }))
+      .deltas.join(''), 'the script wins over MOCK_MAIN_MARKER').toBe('W0-MAIN');
+    expect((await withMock({ entries, mainMarker: marker }, (u) => ask(u, MAIN_OLD))).deltas.join('')).toBe('W0-MAIN');
   }, 60_000);
 });

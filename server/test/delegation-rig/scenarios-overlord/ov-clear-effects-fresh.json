@@ -3,6 +3,7 @@
   "covers": [
     "W0-08"
   ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
   "requests": true,
   "timing": true,
   "capS": 900,

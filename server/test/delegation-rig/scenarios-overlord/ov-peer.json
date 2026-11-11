@@ -10,6 +10,7 @@
   "covers": [
     "W0-17"
   ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
   "launch": {
     "env": {
       "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson"

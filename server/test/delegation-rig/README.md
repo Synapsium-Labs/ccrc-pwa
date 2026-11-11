@@ -20,13 +20,19 @@ subagent metadata — measured per installed binary, so the delegation broker (s
 - `scenarios-overlord/*.json` and `stubs/` — the Overlord's W0 spike (plan
   `docs/superpowers/plans/2026-11-10-overlord/w0-spike.md`; results in
   `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`). These scenarios measure the launch ccd makes, so
-  they may carry a permission bypass (D-8203); `check-scenario` refuses one anywhere else, and a test holds the
-  delegation corpus bypass-free. `recapture.sh` and `rig.sh all` never run them; each is run by hand, one at a time,
-  with `rig.sh run <version> <file> <out-dir>`, and nothing from a run is committed: the results note holds the
-  facts. **Run the set again whenever the fleet's model class advances, and on a new Claude Code build before a W1
-  piece relies on a row it measured** (spec 2026-11-09 §3.3: "W0 and the probes measure it again").
+  they may carry a permission bypass (D-8203). `check-scenario` refuses a bypass spelled anywhere in a scenario (a
+  flag, a `--settings` value, a file the scenario writes, any string or key once JSON escapes are decoded) unless the
+  file itself sits in this directory's own `scenarios-overlord/` (by its physical path, so a directory merely called
+  that does not count), and a test holds the delegation corpus bypass-free. `recapture.sh` and `rig.sh all` never run
+  them; each is run by hand, one at a time, with `rig.sh run <version> <file> <out-dir>`, and nothing from a run is
+  committed: the results note holds the facts. **Run the set again whenever the fleet's model class advances, and on a
+  new Claude Code build before a W1 piece relies on a row it measured** (spec 2026-11-09 §3.3: "W0 and the probes
+  measure it again"). Each scenario carries its own `mainMarker` (below), so the re-run needs no environment: 2.1.322's
+  main-thread prompt no longer opens with the mock's default marker, and without it the mock files main requests as a
+  subagent's and every label times out.
   A scenario may carry, at its top level (all optional; a scenario without them runs exactly as before):
-  - `launch.args` — flags from `RIG_LAUNCH_FLAGS` only, each value after its flag;
+  - `launch.args` — flags from `RIG_LAUNCH_FLAGS` only: one of `RIG_LAUNCH_BARE_FLAGS` alone, or any other with
+    exactly one value (the next argument, or `--flag=value`), so no positional argument or subcommand rides a launch;
   - `launch.env` — names from `RIG_LAUNCH_ENV` only (`PATH`, `HOME`, `TMPDIR`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_*`
     refused, here and in `launch.settings.env`);
   - `launch.settings` — merged over the fixture's `settings.json` with jq's `*`, each `hooks.<event>` array appended so
@@ -38,11 +44,18 @@ subagent metadata — measured per installed binary, so the delegation broker (s
     args, env values, settings strings and file texts;
   - `capS` (60 to 5400, the run's cap in place of 1200), `timing: true` (each step's start and `waitReady`'s elapsed
     milliseconds, in the bundle's `timing` file; never in `notes`, which `build-matrix.mjs` reads as failures) and
-    `requests: true` (every request the mock answers, in the bundle's `reqs/`).
+    `requests: true` (every request the mock answers, in the bundle's `reqs/`);
+  - `mainMarker` — the regex the mock reads a main-thread request by (its script's own key, over `MOCK_MAIN_MARKER`
+    and the default); every `scenarios-overlord` file carries
+    `You are (an interactive agent|an agent working with the user|Claude Code)`, which a test holds.
   Steps gain `relaunch` `{"mode":"fresh"}` (no `--resume`) and `{"mode":"fork"}` (`--resume <sid> --fork-session`)
   beside `true`, `paneSnap: <name>` (the pane's text, for a dialog), and `sessionsSnap: <name>` (Claude Code's `sessions/*.json`, and each transcript's name and size, at
   that instant). `rig.sh print-launch <version> <scenario> <root>` prints the launch line a run would type, after the same
   setup, and starts nothing.
+  **Known limits.** The env names in `launch.settings.env` are a deny-list, not an allow-list: beside the reserved names
+  above, any name passes there (`HTTPS_PROXY`, `NODE_OPTIONS` and the like), and the bypass check reads spellings, so a
+  bypass assembled at run time (a script a file writes, say) passes it. Both guard against accidents in a committed
+  scenario, which review reads; neither is a wall.
 - `recapture.sh` — the corpus's one re-capture script: the steps below, in order (spec §8.2).
 - `sanitize.mjs` — raw run bundles → `server/test/fixtures/delegation/<version>/<scenario>.json`, fail-closed on any
   residue of a real path, user or host.

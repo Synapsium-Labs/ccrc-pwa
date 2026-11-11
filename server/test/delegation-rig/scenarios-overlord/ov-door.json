@@ -11,6 +11,7 @@
     "W0-15",
     "W0-16"
   ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
   "launch": {
     "args": [
       "--setting-sources",

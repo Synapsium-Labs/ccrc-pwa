@@ -10,12 +10,13 @@
 //   MOCK_LOG     optional: one line per request is appended here
 //   MOCK_REQDIR  optional: each request body is dumped here as NNNN-<kind>.json
 //
-// Script shape: { "entries": [entry, ...], "default": entry, "sideDefault": entry } (or a bare
-// array of entries). Any other top-level key (a scenario's "steps", "covers", ...) is ignored.
+// Script shape: { "entries": [entry, ...], "default": entry, "sideDefault": entry, "mainMarker": regex } (or a
+// bare array of entries). Any other top-level key (a scenario's "steps", "covers", ...) is ignored.
 // An entry is consumed by the first request it MATCHES, in list order, unless "repeat": true.
-// Request kinds: main = the interactive loop (system prompt carries MOCK_MAIN_MARKER, default
-//   "You are an interactive agent"); sub = offered tools and stamped `cc_is_subagent=true`, or
-//   offered tools without the main marker; side = offered NO tools.
+// Request kinds: main = the interactive loop (system prompt carries the main marker: the script's
+//   "mainMarker", else MOCK_MAIN_MARKER, else "You are an interactive agent"; W0's scenarios carry their
+//   own, since 2.1.322's prompt opens differently); sub = offered tools and stamped `cc_is_subagent=true`,
+//   or offered tools without the main marker; side = offered NO tools.
 //   "match": "main" | "sub" | "side" | "tools" (main or sub) | "any", or an object
 //   { kind, model, system, lastUser, tool, hasToolResult } — regexes for model/system/lastUser;
 //   lastUser is the last user message minus <system-reminder> blocks, a tool_result rendered as
@@ -25,8 +26,10 @@
 //   plus optional "label", "hang_ms" (N<0 never answers), "headers", "usage", "stop_reason",
 //   "chunk_ms", "stall_ms", "repeat", and (W0) "pad": N filler characters appended to the text (lines of
 //   `w0 pad ` words), with "chunk_chars": the text delta size (default 12), so a run can grow a transcript to a
-//   measured size without a megabyte scenario file. `nameAny` picks the first name the request offers (else the
-//   first listed). A header VALUE of the form `$NOW+<s>` is sent as the epoch second <s> from now.
+//   measured size without a megabyte scenario file. `pad` is a whole number and never on a "blocks" entry, and
+//   `chunk_chars` a positive integer: an entry that breaks either is answered HTTP 500 and logged, never a short
+//   reply. `nameAny` picks the first name the request offers (else the first listed). A header VALUE of the form
+//   `$NOW+<s>` is sent as the epoch second <s> from now.
 // Fallbacks: "default" for main and sub (else text "(mock default reply)"); "sideDefault" for side
 //   (else JSON synthesised from the request's json_schema, or "Rig session").
 // Control: GET /__rig/state -> { script, entries, consumed, consumedLabels, requests };
@@ -43,6 +46,7 @@ const LOG = process.env.MOCK_LOG || '';
 const REQDIR = process.env.MOCK_REQDIR || '';
 if (REQDIR !== '') fs.mkdirSync(REQDIR, { recursive: true });
 
+const DEFAULT_MARKER = new RegExp(process.env.MOCK_MAIN_MARKER || 'You are an interactive agent');
 let scriptHash = null;
 let consumed = new Set();
 const consumedLabels = [];
@@ -59,7 +63,11 @@ function loadScript() {
   let j;
   try { j = JSON.parse(raw); } catch (e) { log(`SCRIPT parse error: ${e.message}`); j = []; }
   if (Array.isArray(j)) j = { entries: j };
-  return { entries: j.entries || [], def: j.default, sideDef: j.sideDefault };
+  let marker = DEFAULT_MARKER;
+  if (typeof j.mainMarker === 'string') {
+    try { marker = new RegExp(j.mainMarker); } catch (e) { log(`SCRIPT mainMarker is no regex (${e.message}): the env's or the default is used`); }
+  }
+  return { entries: j.entries || [], def: j.default, sideDef: j.sideDefault, marker };
 }
 
 function systemText(body) {
@@ -89,11 +97,10 @@ function userPrompt(body) {
   }
   return parts.join(' ');
 }
-const MAIN_MARKER = new RegExp(process.env.MOCK_MAIN_MARKER || 'You are an interactive agent');
-function classify(body) {
+function classify(body, marker) {
   const tools = (body.tools || []).map((t) => t.name);
   const sys = systemText(body);
-  const kind = tools.length === 0 ? 'side' : /cc_is_subagent=true/.test(sys) ? 'sub' : MAIN_MARKER.test(sys) ? 'main' : 'sub';
+  const kind = tools.length === 0 ? 'side' : /cc_is_subagent=true/.test(sys) ? 'sub' : marker.test(sys) ? 'main' : 'sub';
   return { kind, tools, sys };
 }
 function schemaOf(body) {
@@ -127,8 +134,8 @@ function matches(entry, req) {
   }
   return true;
 }
-function pick(req) {
-  const { entries, def, sideDef } = loadScript();
+function pick(req, script) {
+  const { entries, def, sideDef } = script;
   for (let i = 0; i < entries.length; i += 1) {
     if (consumed.has(i)) continue;
     if (matches(entries[i], req)) {
@@ -178,6 +185,13 @@ function resolveHeaders(h) {
   return out;
 }
 function chunks(s, n = 12) { const out = []; for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n)); return out.length ? out : ['']; }
+/** Why W0's `pad` or `chunk_chars` on this entry cannot be honoured, or '' (a bad chunk_chars would loop or drop the text). */
+function entryProblem(entry) {
+  if (entry.chunk_chars !== undefined && !(Number.isInteger(entry.chunk_chars) && entry.chunk_chars > 0)) return 'chunk_chars must be a positive integer';
+  if (entry.pad !== undefined && !(Number.isInteger(entry.pad) && entry.pad >= 0)) return 'pad must be a whole number';
+  if (entry.pad !== undefined && entry.blocks) return 'pad is never on a blocks entry, which would drop it';
+  return '';
+}
 
 async function answer(res, req, entry) {
   if (entry.hang_ms !== undefined) {
@@ -185,6 +199,13 @@ async function answer(res, req, entry) {
     await sleep(entry.hang_ms);
   }
   const extra = resolveHeaders(entry.headers);
+  const problem = entryProblem(entry);
+  if (problem !== '') {
+    log(`  #${req.n} MOCK SCRIPT ERROR: ${problem}`);
+    res.writeHead(500, { 'content-type': 'application/json', 'request-id': `req_rig${req.n}` });
+    res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: `mock script: ${problem}` } }));
+    return;
+  }
   if (entry.status && entry.status >= 400) {
     const type = { 401: 'authentication_error', 429: 'rate_limit_error', 529: 'overloaded_error', 500: 'api_error' }[entry.status] || 'api_error';
     res.writeHead(entry.status, { 'content-type': 'application/json', 'request-id': `req_rig${req.n}`, ...extra });
@@ -257,9 +278,10 @@ const server = http.createServer((rq, res) => {
         return;
       }
       if (rq.method === 'POST' && url.pathname === '/v1/messages') {
-        const { kind, tools, sys } = classify(body);
+        const script = loadScript();
+        const { kind, tools, sys } = classify(body, script.marker);
         const req = { n, body, kind, tools, sys };
-        const { entry, label } = pick(req);
+        const { entry, label } = pick(req, script);
         log(`#${n} MESSAGES kind=${kind} tools=${tools.length} -> ${label}${entry.label ? ` (${entry.label})` : ''} prompt="${userPrompt(body).replace(/\s+/g, ' ').slice(0, 100)}"`);
         if (REQDIR !== '') fs.writeFileSync(path.join(REQDIR, `${String(n).padStart(4, '0')}-${kind}.json`), JSON.stringify({ n, url: rq.url, kind, picked: label, body }, null, 1));
         await answer(res, req, entry);

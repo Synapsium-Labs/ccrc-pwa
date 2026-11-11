@@ -14,9 +14,10 @@
 #   rig.sh run <version> <scenario.json> <out-dir>   one run; a raw bundle lands in <out-dir>
 #   rig.sh print-launch <version> <scenario.json> <root>   set up <root> as a run would, then print the pane's
 #                                    launch line (port 0) without starting anything: the launch block's proof
-#                                    A scenario may carry `launch` {args, env, settings, files}, `capS`, `timing`
-#                                    and `requests` (README.md); flags and env names only from RIG_LAUNCH_FLAGS
-#                                    and RIG_LAUNCH_ENV; a permission bypass only under scenarios-overlord/
+#                                    A scenario may carry `launch` {args, env, settings, files}, `capS`, `timing`,
+#                                    `requests` and `mainMarker` (README.md); flags and env names only from
+#                                    RIG_LAUNCH_FLAGS and RIG_LAUNCH_ENV; a permission bypass only in this rig's
+#                                    own scenarios-overlord/
 #   rig.sh all <raw-root> [<version>...]   reap, then every installed version (or only those named, each checked
 #                                    first) x every scenario -> <raw-root>/<v>/<s>/, then <raw-root>/.done; exit 1 if any run failed
 #   rig.sh versions [<version>...]   the versions `all` would cover, one per line: every installed one, or the ones named
@@ -38,6 +39,8 @@ VERBS='waitReady type keys waitLabels probeLabels answerDialog sleep kill9 swapC
 # The Overlord's W0 launch block (plan 2026-11-10-overlord/w0-spike.md, Task 2): the ONLY flags a scenario's launch.args may
 # carry, and the ONLY env names its launch.env may set. Each flag is in Claude Code's CLI reference (W0 Task 1 Step 2).
 RIG_LAUNCH_FLAGS='--setting-sources --settings --mcp-config --strict-mcp-config --agents --allowedTools --disallowedTools --permission-mode --dangerously-skip-permissions --model --tools --autocompact --append-system-prompt --disable-slash-commands'
+# Of those, the ones that take no value (CLI reference, W0 Task 1); every other one takes exactly one, the next argument.
+RIG_LAUNCH_BARE_FLAGS='--strict-mcp-config --dangerously-skip-permissions --disable-slash-commands'
 RIG_LAUNCH_ENV='RIG_EMIT_LOG RIG_STATUS_LOG DOOR_LOG DOOR_NONCE CLAUDE_CODE_DISABLE_AUTO_MEMORY CLAUDE_CODE_FORK_SUBAGENT CLAUDE_CODE_DISABLE_AGENT_VIEW CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_AUTOCOMPACT_PCT_OVERRIDE DISABLE_AUTO_COMPACT CLAUDE_CODE_DISABLE_CRON CLAUDE_CODE_DISABLE_BACKGROUND_TASKS CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK'
 RUN_CAP_S=1200
 
@@ -161,21 +164,34 @@ check_scenario() {
   check_launch "$f" || return 1
   return 0
 }
-# The W0 launch block (README.md): every flag on RIG_LAUNCH_FLAGS (a `--flag=value` spelling by its name) and every value
-# after a flag; every env name on RIG_LAUNCH_ENV and none reserved, in launch.env or in launch.settings.env (either would
-# point the binary away from the mock or the fixture); file paths relative, with no `..` segment; capS 60 to 5400. A
-# permission bypass (the flag, the mode, or the settings' default mode) only in a file under scenarios-overlord/ (D-8203):
-# the delegation corpus measures ccrc's granted launch and stays bypass-free.
+# The W0 launch block (README.md): launch.args parse as flags from RIG_LAUNCH_FLAGS, each either bare (one of
+# RIG_LAUNCH_BARE_FLAGS, never with a value) or with exactly one value (the next argument, which is no flag, or a
+# `--flag=value` spelling), so no positional argument or subcommand rides a launch; every env name on RIG_LAUNCH_ENV and
+# none reserved, in launch.env or in launch.settings.env (either would point the binary away from the mock or the
+# fixture); file paths relative, with no `..` segment; capS 60 to 5400; mainMarker a one-line string. A permission bypass,
+# spelled anywhere in the scenario (a flag, a --settings value, a file it writes, any string or key once JSON escapes are
+# decoded), only in a file whose physical directory is this rig's own scenarios-overlord/ (D-8203): the delegation corpus
+# measures ccrc's granted launch and stays bypass-free. The env names are a deny-list, not an allow-list: launch.settings.env
+# may set any other name (README.md, "known limits").
 RESERVED_ENV_RE='^(PATH|HOME|TMPDIR|CLAUDE_CONFIG_DIR|ANTHROPIC_.*)$'
+BYPASS_RE='bypass[-_ ]?permissions|dangerously[-_ ]?skip[-_ ]?permissions'
 check_launch() {
-  local f=$1 dir
-  jq -e --arg flags "$RIG_LAUNCH_FLAGS" --arg envs "$RIG_LAUNCH_ENV" --arg reserved "$RESERVED_ENV_RE" '
+  local f=$1 dir own
+  jq -e --arg flags "$RIG_LAUNCH_FLAGS" --arg bare "$RIG_LAUNCH_BARE_FLAGS" --arg envs "$RIG_LAUNCH_ENV" --arg reserved "$RESERVED_ENV_RE" '
     def line: type == "string" and (test("[\n\r]") | not);
-    ($flags | split(" ")) as $F | ($envs | split(" ")) as $E
-    | (if has("launch") then (.launch | type == "object" and ((keys - ["args", "env", "settings", "files"]) == [])) else true end)
+    ($flags | split(" ")) as $F | ($bare | split(" ")) as $B | ($envs | split(" ")) as $E
+    | def flag($x): ($x | startswith("-"));
+      def name($x): ($x | split("=") | .[0]);
+      def bare($x): (name($x) as $n | any($B[]; . == $n));
+    (if has("launch") then (.launch | type == "object" and ((keys - ["args", "env", "settings", "files"]) == [])) else true end)
     and ((.launch.args // []) as $a | ($a | type == "array") and all($a[]; line)
          and ([range(0; $a | length) as $i | $a[$i] as $x
-               | if ($x | startswith("-")) then ($x | split("=") | .[0]) as $n | any($F[]; . == $n) else $i > 0 end] | all))
+               | if flag($x) then
+                   (name($x) as $n | any($F[]; . == $n))
+                   and (if ($x | contains("=")) then (bare($x) | not)
+                        elif bare($x) then true
+                        else ($i + 1 < ($a | length)) and (flag($a[$i + 1]) | not) end)
+                 else ($i > 0) and flag($a[$i - 1]) and ($a[$i - 1] | contains("=") | not) and (bare($a[$i - 1]) | not) end] | all))
     and ((.launch.env // {}) as $e | ($e | type == "object")
          and all($e | to_entries[]; (.value | line) and (.key as $k | any($E[]; . == $k)) and (.key | test($reserved) | not)))
     and ((.launch.settings // {}) | type == "object"
@@ -189,13 +205,14 @@ check_launch() {
     and (if has("capS") then (.capS | type == "number" and . == floor and . >= 60 and . <= 5400) else true end)
     and (if has("timing") then (.timing | type == "boolean") else true end)
     and (if has("requests") then (.requests | type == "boolean") else true end)
+    and (if has("mainMarker") then (.mainMarker | line and length >= 1 and length <= 200) else true end)
   ' "$f" >/dev/null 2>&1 || return 1
-  if jq -e '((.launch.args // []) as $a
-              | any($a[]; . == "--dangerously-skip-permissions" or . == "--permission-mode=bypassPermissions")
-                or any(range(0; ($a | length) - 1); $a[.] == "--permission-mode" and $a[. + 1] == "bypassPermissions"))
-            or ((try .launch.settings.permissions.defaultMode catch null) == "bypassPermissions")' "$f" >/dev/null 2>&1; then
-    dir=$(cd "$(dirname "$f")" && pwd -P) || return 1
-    [[ ${dir##*/} == scenarios-overlord ]] || return 1
+  if jq -e --arg re "$BYPASS_RE" 'any(.. | (strings, (objects | keys[])); test($re; "i"))' "$f" >/dev/null 2>&1; then
+    # The file itself, through any link to it, must sit in this rig's own directory; a directory merely CALLED so is not.
+    f=$(readlink -f -- "$f") || return 1
+    dir=$(cd -P -- "$(dirname -- "$f")" && pwd) || return 1
+    own=$(cd -P -- "$HERE/scenarios-overlord" && pwd) || return 1
+    [[ $dir == "$own" ]] || return 1
   fi
   return 0
 }
@@ -278,7 +295,7 @@ apply_launch_files() {
 }
 
 # ── run ─────────────────────────────────────────────────────────────────────────────
-VER="" SCEN="" RUN_R="" RUN_H="" SOCK="" CFG="" PORT="" MOCK_PID="" OUT_DIR="" COLLECTED=0 TIMING=0
+VER="" SCEN="" RUN_R="" RUN_H="" SOCK="" CFG="" PORT="" MOCK_PID="" OUT_DIR="" COLLECTED=0 TIMING=0 REQUESTS=0
 LAUNCH_ARGS=() LAUNCH_ENV=()
 # The scenario's checked launch.args and launch.env (as NAME=value), placeholders replaced for this run root. A scenario
 # with no launch block leaves both empty, so its launch line is byte-identical to the one before the block existed.
@@ -286,6 +303,13 @@ load_launch() {
   LAUNCH_ARGS=(); LAUNCH_ENV=()
   mapfile -t LAUNCH_ARGS < <(jq '.launch.args // []' "$SCEN" | launch_subst "$RUN_R" | jq -r '.[]')
   mapfile -t LAUNCH_ENV < <(jq '.launch.env // {}' "$SCEN" | launch_subst "$RUN_R" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+}
+# The scenario's run options (README.md): `capS` in place of RUN_CAP_S's 1200, and the `timing` and `requests` switches.
+run_opts() {
+  RUN_CAP_S=$(jq -r --argjson d "$RUN_CAP_S" '.capS // $d' "$SCEN")
+  TIMING=0; REQUESTS=0
+  if jq -e '.timing == true' "$SCEN" >/dev/null; then TIMING=1; fi
+  if jq -e '.requests == true' "$SCEN" >/dev/null; then REQUESTS=1; fi
 }
 # W0's `timing: true`: each step's start and waitReady's elapsed milliseconds, in their OWN file. Not `note`: the notes file
 # is the run's failure-and-outcome channel that build-matrix.mjs reads, and a timing line there would read as a failure.
@@ -364,7 +388,8 @@ sessions_snap() {   # <name>: Claude Code's live-session records, and each trans
   local d=$RUN_R/snapshots/$1
   mkdir -p "$d/sessions"
   cp "$CFG"/sessions/*.json "$d/sessions/" 2>/dev/null || true
-  { cd "$CFG/projects" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.jsonl' -type f -printf '%P\t%s\n' | sort || true; } > "$d/transcripts"
+  # A subshell, so the cd never moves the run's own working directory (later steps and collect may name relative paths).
+  ( cd "$CFG/projects" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.jsonl' -type f -printf '%P\t%s\n' | sort || true ) > "$d/transcripts"
 }
 run_steps() {
   local step verb sid pid i=0 t0 mode
@@ -524,11 +549,10 @@ cmd_run() {
   trap 'exit 130' INT TERM HUP
   printf '%s\n' "$$" > "$RUN_R/.owner"
   cmd_setup "$RUN_R" "$VER"
-  RUN_CAP_S=$(jq -r --argjson d "$RUN_CAP_S" '.capS // $d' "$SCEN")
-  if jq -e '.timing == true' "$SCEN" >/dev/null; then TIMING=1; fi
+  run_opts
   load_launch
   if jq -e 'has("launch")' "$SCEN" >/dev/null; then mkdir -p "$RUN_R/logs"; fi
-  if jq -e '.requests == true' "$SCEN" >/dev/null; then
+  if (( REQUESTS )); then
     mkdir -p "$RUN_R/reqs"
     MOCK_REQDIR=$RUN_R/reqs MOCK_PORT=0 MOCK_SCRIPT=$SCEN MOCK_LOG=$RUN_R/mock.log node "$HERE/mockapi.mjs" > "$RUN_R/mock.out" 2>&1 &
   else
@@ -555,7 +579,7 @@ cmd_print_launch() {
   check_scenario "$SCEN" || die "scenario '$SCEN' is malformed (rig.sh check-scenario names the rule)"
   cmd_setup "$R" "$VER"
   RUN_R=$R; RUN_H=$R/fixhome; CFG=$RUN_H/cfg; PORT=0
-  RUN_CAP_S=$(jq -r --argjson d "$RUN_CAP_S" '.capS // $d' "$SCEN")
+  run_opts
   load_launch
   launch_cmd
   echo
@@ -627,5 +651,5 @@ case ${1-} in
   all)            shift; cmd_all "$@" ;;
   versions)       shift; pick_versions "$@"; if (( ${#VERS[@]} )); then printf '%s\n' "${VERS[@]}"; fi ;;
   reap)           cmd_reap ;;
-  *)              sed -n '2,28p' "$0" >&2; exit 2 ;;
+  *)              sed -n '2,29p' "$0" >&2; exit 2 ;;
 esac
