@@ -93,10 +93,30 @@ describe('PROFILES', () => {
       linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
       linuxFast: { targetMs: 120_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
       macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
-      macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
+      macosFull: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 1.2 },
       trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6, budgetMs: 2_700_000 },
       traceRebuild: { targetMs: 2_400_000, min: 1, max: 24, workers: 2, defaultMs: 5000, scale: 6 },
     });
+  });
+});
+
+describe('macosFull: the daily full suite fits the macOS job timeout (D-8265)', () => {
+  // The daily runs of 2026-11-08 to 11-10 planned 4 shards and every one ran 46-53 minutes of `Test` against
+  // macos.yml's 55-minute timeout, so most were cancelled. Measured on those runs, a file's macOS time over its Linux
+  // time (the same commit's testtimes): 1.20 over all four shards' files, 1.56 on the shard of the heaviest files.
+  const TIMEOUT_MS = 55 * 60_000;
+  const SETUP_MS = 10 * 60_000; // checkout, Homebrew, npm ci, and the spread of a variable runner
+  const WORST_RATIO = 1.56;
+  // About the suite of 2026-11-09: 1,420 files and 368 minutes of Linux file time.
+  const files = Array.from({ length: 1420 }, (_, i) => `server/test/m${String(i).padStart(4, '0')}.test.ts`);
+  const durations = Object.fromEntries(files.map((f) => [f, 15_550]));
+
+  it('plans 8 shards, each inside the timeout at the worst measured macOS ratio', () => {
+    const plan = planShards(files, durations, PROFILES.macosFull);
+    expect(plan).toHaveLength(8);
+    const longest = Math.max(...plan.map((s) => s.files.reduce((sum, f) => sum + durations[f], 0) / s.workers));
+    expect(longest * WORST_RATIO + SETUP_MS).toBeLessThan(TIMEOUT_MS);
+    expect(plan.flatMap((s) => s.files).sort()).toEqual([...files].sort());
   });
 });
 
