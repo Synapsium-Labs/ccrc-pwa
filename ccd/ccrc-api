@@ -276,6 +276,7 @@ _tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server);
     || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
   TMX_SOCK="$s"
 }
+# shellcheck disable=SC2120  # the home is optional: every caller today asks for the running user's own (D-8270)
 _tmx_argv() {   # [home] -> TMX, the argv every fleet tmux call starts with
   if _tmx_sock "$@"; then TMX=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
   else TMX=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi

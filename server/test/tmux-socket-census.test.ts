@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bashCode, rawBashTmux, rawTsTmux, type Site } from './tmuxSocketCensus.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import { TMUX_REFUSE_SH, TMUX_SOCKET_FILE, TMUX_SOCKET_NAME_RE } from '../../shared/tmux-target.js';
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -186,15 +187,14 @@ describe('D-8270 — no raw tmux spawn in TypeScript or JavaScript: every one go
   });
 
   it('the two executors that can run a tmux request route it: the server\'s realRunner and the agent\'s exec', () => {
-    const exec = read('server/src/exec.ts');
-    const runner = exec.slice(exec.indexOf('export const realRunner'), exec.indexOf('export const realRunner') + 600);
+    const runner = sourceOfSymbol('server/src/exec.ts', 'realRunner');
     expect(runner).toContain('tmuxRoute(cmd, args, hostTmuxSocket)');
     expect(runner).toContain('execFile(routed.file, [...routed.args]');
     const agent = read('agent/src/server.ts');
     expect(agent).toContain('tmuxRoute(req.cmd, req.args, () => fleetTmuxSocket(ctx.cfg.home))');
     expect(agent).toContain('runExec(resolveSpawnCmd(routed.file, ctx.cfg.home), [...routed.args]');
     // And the two drawers spawn through the lookup.
-    expect(read('server/src/pty.ts')).toContain("tmuxCommand(hostTmuxSocket(), ['attach', '-t', tmuxTarget(id)])");
+    expect(sourceOfSymbol('server/src/pty.ts', 'attachPty')).toContain("tmuxCommand(hostTmuxSocket(), ['attach', '-t', tmuxTarget(id)])");
     expect(read('agent/src/pty.ts')).toContain("tmuxCommand(fleetTmuxSocket(), ['attach', '-t', tmuxTarget(sessionId)])");
   });
 });
