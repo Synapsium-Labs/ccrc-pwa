@@ -83,11 +83,17 @@ describe('time and chance come through the ports in new Overlord and continuity 
     ['AbortSignal?.timeout(5)', 'AbortSignal.timeout'],
     ["import { hrtime } from 'node:process';", 'node:process'], ["import * as p from 'node:process';", 'node:process'],
     ["import proc from 'node:process';", 'node:process'],
+    ['global.process.hrtime()', 'process.hrtime'], ['global.Math.random()', 'Math.random'],
+    ['(process).hrtime()', 'process.hrtime'], ['(Math).random()', 'Math.random'], ['process!.hrtime()', 'process.hrtime'],
+    ['(globalThis.AbortSignal)!.timeout(5)', 'AbortSignal.timeout'],
   ];
   const GREEN = ['new Date(ms).toISOString()', 'Date.parse(s)', 'Date.UTC(2026, 0, 1)', 'let d: Date | null = null;',
     'clock.wall()', 'scheduler.after(5, f)', 'entropy.uuid()', 'setImmediate(f)', 'if (x instanceof Date) f(x);',
     "import process from 'node:process';\nconst home = process.env.HOME;", "import type { hrtime } from 'node:process';",
-    'const o = { random: 1, timeout: 2 }; o.random;'];
+    'const o = { random: 1, timeout: 2 }; o.random;',
+    "import { timeout as t } from './x.js';\nt();", "import { random as pick } from './rng.js';\npick();",
+    "import { uptime as up } from './sys.js';\nup();", "import { type hrtime } from 'node:process';",
+    'const r = process.random();', 'foo.process.hrtime()', 'f(process).hrtime()'];
 
   it.each(RED)('CONTROL: %s is ambient (%s)', (code, what) => {
     expect(ambientUses('fixture.ts', code).map((u) => u.what)).toContain(what);
@@ -141,11 +147,14 @@ describe('SQL never reads the clock or chance (spec §11.5)', () => {
     'SELECT unixepoch() FROM t', 'SELECT id FROM t ORDER BY random()', 'INSERT INTO t (k) VALUES (randomblob(16))',
     'INSERT INTO t (at) VALUES (datetime())', "SELECT strftime('%s') FROM t", 'SELECT date() FROM t',
     'SELECT time( ) FROM t', 'SELECT julianday() FROM t', "SELECT unixepoch('subsec') FROM t",
-    "SELECT datetime( 'subsecond' ) FROM t", "SELECT strftime('%s','subsec') FROM t"])(
+    "SELECT datetime( 'subsecond' ) FROM t", "SELECT strftime('%s','subsec') FROM t",
+    "SELECT datetime('subsec','localtime') FROM t", "SELECT unixepoch('subsec', '+1 day') FROM t",
+    "SELECT strftime('%s','subsec','utc') FROM t", "SELECT date('subsec', 'start of month') FROM t",
+    "SELECT unixepoch('subsec', ?) FROM t"])(
     'CONTROL: %s reads one', (sql) => expect(SQL_CLOCK.test(sql)).toBe(true));
   it.each(['UPDATE t SET at = ? WHERE id = ?', 'SELECT now_ms FROM t', 'SELECT datetime(at, \'unixepoch\') FROM t',
     "SELECT strftime('%s', at) FROM t", 'SELECT date(at) FROM t', "SELECT unixepoch(at, 'subsec') FROM t",
-    "SELECT strftime('%s', at, 'subsec') FROM t"])('CONTROL: %s reads none',
+    "SELECT strftime('%s', at, 'subsec') FROM t", "SELECT unixepoch('+1 day','subsec') FROM t"])('CONTROL: %s reads none',
     (sql) => expect(SQL_CLOCK.test(sql)).toBe(false));
   it('no statement in server/src', () => {
     const hits = walkSrc({ roots: ['server/src'], min: 150 })
