@@ -68,10 +68,12 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
 const HISTORY_DIR = join(REPO, 'ccd', 'history');
 
-// lib stays free of I/O: its one import besides node:crypto is an L0 file that imports nothing (W4 addendum P10, the shared arm;
-// the coordinator's ruling in fix round 4, review 1735 F1).
-const LIB_IMPORTS = ['node:crypto', '../../shared/workflow-ids.mjs'];
+// lib stays free of I/O: its imports besides node:crypto are L0 files that import nothing (W4 addendum P10, the shared arm;
+// the coordinator's ruling in fix round 4, review 1735 F1). D-5867 (C1l PR 2; the history coordinator's ack, which names R11)
+// adds the second: `shared/redact.mjs`, the one redaction rule table, which builds BASE_RULES and CONTEXT_RULES.
+const LIB_IMPORTS = ['node:crypto', '../../shared/workflow-ids.mjs', '../../shared/redact.mjs'];
 const SHARED_IDS = join(REPO, 'shared', 'workflow-ids.mjs');
+const SHARED_REDACT = join(REPO, 'shared', 'redact.mjs');
 // Module level (not the ring describe's own), so the import case above it reads the same row (review 1737 A7).
 /** L3 never imports an outer ring and only L4 may reach `../compact-card.mjs`; store.mjs is the sole node:sqlite importer. */
 const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {
@@ -90,16 +92,18 @@ const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => 
   'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
 };
 
-describe('lib.mjs is L1: its import block is node:crypto and the shared run-id grammar, nothing else (spec §6.4, §13; W4 addendum P10)', () => {
+describe('lib.mjs is L1: its import block is node:crypto, the shared run-id grammar and the shared redactor, nothing else (spec §6.4, §13; W4 addendum P10; D-5867)', () => {
   const src = readFileSync(LIB, 'utf8');
 
-  it('imports exactly node:crypto and the shared run-id grammar — no fs, no sqlite, no child_process, nothing that imports them', () => {
+  it('imports exactly node:crypto, the shared run-id grammar and the shared redactor — no fs, no sqlite, no child_process, nothing that imports them', () => {
     const specs = specsOf(src);
     // Non-vacuity: a reader that matched nothing would pass every ring.
     expect(specs.length, 'the import scan matched nothing').toBeGreaterThan(0);
     expect([...specs].sort()).toEqual([...LIB_IMPORTS].sort());
-    expect(specsOf(readFileSync(SHARED_IDS, 'utf8'))).toEqual([]);   // the L0 file imports nothing
-    expect(otherDoors(readFileSync(SHARED_IDS, 'utf8'))).toEqual([]);
+    for (const l0 of [SHARED_IDS, SHARED_REDACT]) {
+      expect(specsOf(readFileSync(l0, 'utf8')), `${l0} imports nothing`).toEqual([]);   // an L0 file imports nothing
+      expect(otherDoors(readFileSync(l0, 'utf8')), `${l0} reaches no module by another door`).toEqual([]);
+    }
   });
 
   it('CONTROL (review 1735 F1): a second shared import reds both pins', () => {
@@ -6146,12 +6150,15 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
     const dir = mkTmp('ccrc-history-f2r5-');
     const copy = join(dir, 'lib-instrumented.mjs');
     const EXPORTS = 'export { isUnicode61Token, unicode61Fold, isDroppedMark };';
-    // The copy lives in a temp dir where lib's relative `../../shared/workflow-ids.mjs` does not resolve, so that ONE specifier is
-    // rewritten to the shared file's absolute URL (W4 addendum P10); CONTROL: the rewrite replaced exactly one specifier.
-    const SHARED_SPEC = "'../../shared/workflow-ids.mjs'";
-    const libBytes = readFileSync(LIB, 'utf8');
-    expect(libBytes.split(SHARED_SPEC).length - 1, 'CONTROL: lib names the shared run-id file in exactly one specifier').toBe(1);
-    writeFileSync(copy, `${libBytes.replace(SHARED_SPEC, JSON.stringify(pathToFileURL(SHARED_IDS).href))}\n${EXPORTS}\n`);
+    // The copy lives in a temp dir where lib's relative `../../shared/` specifiers do not resolve, so each is rewritten to the
+    // shared file's absolute URL (W4 addendum P10; D-5867 adds the redactor's); CONTROL: each is named in exactly one specifier.
+    const SHARED_SPECS: Array<[string, string]> = [["'../../shared/workflow-ids.mjs'", SHARED_IDS], ["'../../shared/redact.mjs'", SHARED_REDACT]];
+    let libBytes = readFileSync(LIB, 'utf8');
+    for (const [spec, file] of SHARED_SPECS) {
+      expect(libBytes.split(spec).length - 1, `CONTROL: lib names ${spec} in exactly one specifier`).toBe(1);
+      libBytes = libBytes.replace(spec, JSON.stringify(pathToFileURL(file).href));
+    }
+    writeFileSync(copy, `${libBytes}\n${EXPORTS}\n`);
     const h = await import(/* @vite-ignore */ `${pathToFileURL(copy).href}?f2r5=${process.pid}-${Date.now()}`) as {
       isUnicode61Token: (cp: number) => boolean; unicode61Fold: (cp: number) => number; isDroppedMark: (cp: number) => boolean;
     };
