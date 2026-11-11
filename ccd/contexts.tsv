@@ -620,6 +620,9 @@ _ws_reclaim_main_line_refuse	C4
 _ws_reclaim_branch_state	C4
 _ws_reclaim_tip_read	C4
 _ws_reclaim_head_unborn	C4
+_ws_index_lock_state	C4
+_ws_stale_lock_doc	C4
+_ws_stale_lock_meas	C4
 _ws_reclaim_gitdir_own	C4
 _ws_reclaim_foreign_clean	C4
 _ws_reclaim_logs_readable	C4

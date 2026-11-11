@@ -12,10 +12,11 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import {
-  CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, makeChild, plantTmux,
-  wideDigitLocale, type Child, type LadderAnswer,
+  CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, lockProbe, makeChild,
+  plantIndexLock, plantTmux, wideDigitLocale, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { holdProc } from './pathUsersFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-ladder-'); });
@@ -1379,7 +1380,9 @@ describe('rung 6 defers a held index lock; rung 8 keeps `tree-unreadable` for a 
     fs.writeFileSync(lock, '');
     const busy = evalOf(h);
     expect(busy.verdict).toBe('tree-busy');
-    expect(busy.detail).toBe(`a git command holds the index lock of ${wt} (${lock})`);
+    // D-5945: a lock just written is young, whatever else it is — the sentence says which rule held it.
+    expect(busy.detail.startsWith(`a git command holds the index lock of ${wt} (${lock}) — it was written `), busy.detail).toBe(true);
+    expect(busy.detail).toMatch(/ — it was written \d+s ago, within the 21600s a git command may hold it$/);
     expect(evalOf(h, { defer: 1 }).verdict, 'a bounded deferral — the ceiling passes it').toBe('reclaimable');
     fs.rmSync(lock);
     expect(evalOf(h).verdict).toBe('reclaimable');
@@ -1569,7 +1572,7 @@ describe('rung 6’s parity for a NESTED same-repository checkout — a held ind
     fs.writeFileSync(lock, '');
     const busy = evalOf(h);
     expect(busy.verdict, busy.detail).toBe('tree-busy');
-    expect(busy.detail).toBe(`a git command holds the index lock of the nested checkout at ${inner} (${lock})`);
+    expect(busy.detail.startsWith(`a git command holds the index lock of the nested checkout at ${inner} (${lock}) — it was written `), busy.detail).toBe(true);
     expect(busy.token).toBe('');
     const deferred = evalOf(h, { defer: 1 });
     expect(deferred.verdict, deferred.detail).toBe('reclaimable');
@@ -2257,3 +2260,81 @@ it('a child whose workdir leaf is a link refuses containment-unproven whatever o
   leafLink(evalOf(h), 'a resolvable leaf link beside a projected row');
   expect(fs.readdirSync(path.join(vault, 'quiet-basin')), 'the tree behind the link stands').toContain('f1.txt');
 }, 90_000);
+
+// D-5945 (#318 item 2; spec 2026-10-20 §2.4), shipped under D-8286: the reclaim ladder is the expiry's (one shared
+// `_ws_reclaim_ladder`), so rung 6's stale-lock rule reads the same here, for the child's own tree and for the nested
+// checkout's twin: a regular, empty, old, unheld lock passes and is named; anything else stays `tree-busy`.
+describe('rung 6 — a stale index.lock in the child, and in a nested checkout, passes named (D-5945)', () => {
+  const HOURS7 = 7 * 3600;
+  const staleOf = (pre: string): string =>
+    h.sh(`${CHILD_STUBS} ${pre} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null; printf '%s' "$RECLAIM_STALE_LOCKS"`);
+  const nestedOf = (): { wt: string; inner: string } => {
+    const { wt, main } = makeChild(h);
+    const inner = path.join(wt, 'inner');
+    h.git(main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    return { wt, inner };
+  };
+
+  it('the child’s own stale lock: reclaimable, named, and its token differs from the lock-free tree’s', () => {
+    const { wt } = makeChild(h);
+    const clean = evalOf(h).token;
+    const lock = plantIndexLock(h, wt, HOURS7);
+    const r = evalOf(h, { pre: lockProbe(0) });
+    expect(r.verdict, r.detail).toBe('reclaimable');
+    expect(r.token).not.toBe(clean);
+    expect(staleOf(lockProbe(0))).toBe(lock);
+  }, 60_000);
+
+  it('the nested checkout’s stale lock follows the same rule: reclaimable and named', () => {
+    const { inner } = nestedOf();
+    const lock = plantIndexLock(h, inner, HOURS7);
+    const r = evalOf(h, { pre: lockProbe(0) });
+    expect(r.verdict, r.detail).toBe('reclaimable');
+    expect(staleOf(lockProbe(0))).toBe(lock);
+  }, 60_000);
+
+  it('the nested checkout’s old lock held by a process, or non-empty, is tree-busy; an unrunnable probe is unmeasured', () => {
+    const { inner } = nestedOf();
+    const lock = plantIndexLock(h, inner, HOURS7);
+    const held = evalOf(h, { pre: lockProbe(1) });
+    expect(held.verdict, held.detail).toBe('tree-busy');
+    expect(held.detail).toBe(`a git command holds the index lock of the nested checkout at ${inner} (${lock}) — process 4242 holds it open`);
+    expect(evalOf(h, { pre: lockProbe(2) }).verdict).toBe('unmeasured');
+    plantIndexLock(h, inner, HOURS7, 'DIRC');
+    expect(evalOf(h, { pre: lockProbe(0) }).verdict).toBe('tree-busy');
+  }, 60_000);
+
+  it('ws-audit --reclaim names both stale locks, in rung order, beside its token', () => {
+    const { wt, inner } = nestedOf();
+    const own = plantIndexLock(h, wt, HOURS7);
+    const nested = plantIndexLock(h, inner, HOURS7);
+    const a = h.run(`${CHILD_STUBS} ${lockProbe(0)} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+    expect(a.code, a.stderr).toBe(0);
+    const doc = JSON.parse(a.stdout) as Record<string, unknown>;
+    expect(doc['verdict']).toBe('reclaimable');
+    expect(doc['staleLock']).toEqual([own, nested]);
+  }, 60_000);
+
+  it.skipIf(process.platform !== 'linux')('on Linux, the REAL probe: a process holding the lock open makes it tree-busy; once it exits, stale', () => {
+    const { wt } = makeChild(h);
+    const lock = plantIndexLock(h, wt, HOURS7);
+    const p = holdProc({ cwd: h.home, holdOpen: lock });
+    try {
+      const busy = evalOf(h);
+      expect(busy.verdict, busy.detail).toBe('tree-busy');
+      expect(busy.detail).toContain(`process ${p.pid} holds ${fs.realpathSync(lock)} open`);
+    } finally { p.stop(); }
+    const t = Math.floor(Date.now() / 1000) - HOURS7;
+    fs.utimesSync(lock, t, t);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('reclaimable');
+  }, 60_000);
+
+  it.skipIf(process.platform !== 'darwin')('on Darwin, the REAL probe cannot be asked: a stale-shaped lock is unmeasured, never stale', () => {
+    const { wt } = makeChild(h);
+    plantIndexLock(h, wt, HOURS7);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain('this box is Darwin');
+  }, 60_000);
+});
