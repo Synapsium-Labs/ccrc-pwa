@@ -17,15 +17,15 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The seams of the four follow-ups closed: 29 restatements brought into line, the door gate order completed | #2542 | merged |
 | spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | merged |
 | spec | The operator's approval, the rulings on the review's fifteen questions, R16 and R17 (H40 to H45) | #2605 | merged |
-| W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | run 1774; plan `w0-spike.md` | open |
+| W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | run 1774, #2632; plan `w0-spike.md` | review 1783: no critical finding; fix round 1 sent 2026-11-11 |
 | W0b | The spike, Tasks 8 to 11 (fleet reads, the subject, account facts, the quiz baseline), then Task 12 for both halves | plan `w0-spike.md` | waits for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | Each role skill's contract moved first, behind a notice that tells a session how to see a cut | #2555 (supersedes #2530) | merged |
 | spec | The operator's ruling on the ratchet's scope | #2556 | merged |
 | W1a, foundations | The coordinator skill made lean: its procedures in reference files, the wave lifecycle one file per step | #2557, #2558 and #2560 (the tests, first); #2559 | merged |
 | W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
-| W1a, foundations | Ports for time and chance | run 1776, #2623; plan `w1a-time-ports.md` | review 1780: no critical finding; fix round 1 sent 2026-11-11 |
-| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775, #2624; plan `w1a-roles.md` | wave-done verified 2026-11-11; under review (run 1781) |
+| W1a, foundations | Ports for time and chance | run 1776, #2623; plan `w1a-time-ports.md` | review 1782: fix round 1 closed its findings; fix round 2 sent |
+| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775, #2624; plan `w1a-roles.md` | review 1781: nothing confirmed; fix round 1 sent 2026-11-11 |
 | W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | after the role table merges, and after #2606 |
 | W1a, foundations | The simulator's skeleton and the first model | plan `w1a-simulator.md` | after the time ports merge; its Task 6 after W0a's Task 7 |
 | W1a, the machine | Generations, the receipt and renewal for every long-lived role; the anchor and the card; notes; probes; launch profiles | not planned yet | waits for W0's measurements |
@@ -96,8 +96,9 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   issued (2026-11-11), for the time ports: the SQL clock pattern also catches SQLite's date functions called with no
   time value, the ambient scan also sees `AbortSignal.timeout` and the timers modules, and the fake refuses re-entry.
   D-8235 and D-8236 are the role table's two (the table's runtime guard, and the stall pin's one more import). Its
-  third departure, deviations-in-a-note, is the process rule in the next bullet and takes no number. Fifteen numbers of
-  the block remain unwritten.
+  third departure, deviations-in-a-note, is the process rule in the next bullet and takes no number. D-8237 to D-8239
+  are W0a's three, all of method: the rig tooling beyond the files Task 2 named, the scenario arms split one
+  environment to a run, and the force arm pinning its setting sources. Twelve numbers of the block remain unwritten.
 - **Review 1780 on the time ports (2026-11-11), at 65415597a.** Panel verdict: no critical finding. One important
   finding was kept by two of three refuters: the ambient scan missed the `globalThis.`, `?.` and `node:process` forms.
   Six minor findings and five observations; one raised-important finding (a zero-delay re-arm hangs the fake's
@@ -106,8 +107,24 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   one). Ruled: fix the important finding and four minors (a refused draw consumes no draw, `'subsec'`, a red row for
   the alias map, an L1 pin for the rules file); record two minors as known gaps; drop the deferred item on the system
   adapter's header, which states the spec's own classification. The additions fall under D-8232 and D-8233.
-- **A work branch cannot edit an existing plan file** (2026-11-11, measured on #2623): the ledger-guard CI step
-  refuses it. So a worker writes its departures, its rulings within the plan and its deferred minors in a new note
+- **Review 1781 on the role table (2026-11-11), at 16efd101a.** Panel verdict: nothing confirmed at any lens (34
+  agents, 9 advisory survivors, 13 refuted); thirteen mutations each turned their test red, and the characterization
+  pins are green at the move and view commits. Ruled: key the Task 5 pin on the symbol, as the carried constraint
+  says, rather than number a departure for reading the whole file; narrow one pin's title; add a line to the note.
+- **Review 1782 on the time ports' fix round (2026-11-11), at b4a8fb9c9.** The first round's five fixed findings are
+  closed, each measured by mutation. One important regression came with the round: the import-alias map took in any
+  helper named like a clock or chance member, so an aliased import of one read as ambient (latent, no hit in the
+  tree). Five minors: two unpinned guards, `'subsec'` with modifiers, the note's wording, and more recorded gaps.
+  Ruled: fix all six in a second, last round. The index's wording of D-8232 and D-8233 is corrected here to match.
+- **Review 1783 on W0a (2026-11-11), at 3465cf67c.** No critical finding; 12 important and 5 minor, most of them
+  rows or spec paragraphs that claim more than their committed scenario shows (the D-6798 conflict rested on an
+  uncommitted run), plus four rig holes: the bypass scope was a spelling check, a positional argument could ride a
+  launch, a `cd` leaked out of a snapshot, and the mock's main-request marker lived outside the tree. The refute pass
+  was reduced: the reviewer verified six findings itself and left the rest unrefuted. Ruled: one fix round. Re-measure
+  the D-6798 row from a committed scenario, close the rig holes with tests, word every row as what the tree reproduces,
+  and keep design consequences out of the spec's "As measured" paragraphs.
+- **A work branch cannot edit an existing plan file** (2026-11-11, measured on #2623) unless its commit carries a
+  Ledger-Edit trailer, as W0a's did: the ledger-guard CI step refuses it. So a worker writes its departures, its rulings within the plan and its deferred minors in a new note
   beside its plan (the time ports' is `2026-11-10-overlord/w1a-time-ports/departures.md`), and this coordinator folds
   the departures into the plan and the index on a ledger PR. Later briefs say so.
 - **The spec was verified in four rounds.** The first model covers the hold, readiness, generation and push machines:

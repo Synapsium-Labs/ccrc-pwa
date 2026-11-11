@@ -770,15 +770,20 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
   whole-branch review measured on `node:sqlite` that `datetime()`, `date()`, `time()`, `julianday()` and
   `strftime('<format>')` with no time value all answer the current time, and the pinned pattern let every one of them
   through. `SQL_CLOCK` now also matches those functions called with no argument, `strftime` with a format alone, and
-  any of them given `'subsec'` or `'subsecond'` as the only time value (review 1780's F3).
+  any of them given `'subsec'` or `'subsecond'` as the only time value, modifiers after it included (the first and
+  second reviews).
   Called with a time value (`datetime(at, 'unixepoch')`, `strftime('%s', at)`, `date(at)`) they still pass. Today's
   count in `server/src` stays zero, so D-8224's repo-wide scope holds.
 - **D-8233, ambient-scan-sees-abort-timeouts-and-timer-modules, tightening** — `ambientUses` also reports
   `AbortSignal.timeout(…)` (a timer, and the usual way to bound a `fetch`), and any value import of `node:timers` or
   `node:timers/promises`, by its specifier. A name list cannot catch the second: `scheduler.wait` from
   `node:timers/promises` shares its name with the `Scheduler` port. After review 1780 (F1), the `process`, `Math` and
-  `AbortSignal` arms also accept a `globalThis.` prefix and optional chaining, and a value import of `node:process` is
-  reported by its specifier. An alias of `process`, bracket access and destructuring are recorded gaps.
+  `AbortSignal` arms also accept a `globalThis.` or `global.` prefix, optional chaining, a non-null `!` and a
+  parenthesised object, and a value import of `node:process` is reported by its specifier, except a default import
+  bound as `process`, whose reads the member arm sees. The import-alias map takes only the global names, so an aliased
+  import of a helper named `timeout`, `random`, `uptime` or `hrtime` is not ambient. An alias of `process`, bracket
+  access, destructuring, `require` and a dynamic import of `node:process`, and a `typeof` in type position are recorded
+  gaps.
 - **D-8234, fake-refuses-re-entry, shape** — `fakeTime`'s `advance` and `restart` throw `RangeError` when a scheduled
   call calls them. Without it, a firing call that re-entered them moved mono backwards, or counted a restart's wall gap
   twice, and nothing reported it. The simulator piece models a restart as a step it takes between calls, never as a
