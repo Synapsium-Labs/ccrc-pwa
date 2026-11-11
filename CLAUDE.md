@@ -206,7 +206,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
   the arbiter, but only for a file it RAN: a pull request runs its selection, so first check that the PR's `select
   tests` summary lists the file. If it is not listed, the arbiter is the daily run's `test (server)` or a
-  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). A flake that CI ran and passed
+  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). **Dispatch it ONCE per accepted
+  tip** — after review, never per push or fix round (D-8266: about 51 such runs in four days cost ~23k
+  runner-minutes). First cancel a superseded one on the same branch (`gh run list --workflow ci.yml --branch <branch>
+  --event workflow_dispatch --status in_progress`, then `gh run cancel <id>`). Read ONLY its Linux legs as the
+  arbiter: a dispatched full run calls the macOS legs, which are advisory and off the merge path (operator rulings
+  2026-10-28 and 2026-11-02), so its `full-suite` can be red on macOS alone. A flake that CI ran and passed
   is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
   re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
   2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
