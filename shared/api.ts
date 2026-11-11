@@ -7401,6 +7401,26 @@ export interface RunSummary {
    *  sends no `lastMoveAt`, so nothing reads as stalled. Declared here, not on that member, so the frame's line in the
    *  union does not move a cited line below it. */
   lastMoveAt?: number | null;
+
+  /** D-8285: the worker's heartbeat, the `at` of the newest main-thread event its turn marker (`$REG/<id>.turn.json`)
+   *  records: a prompt, a Stop, a failure or a restart. It is read by the stall watch's own marker read, once a sweep per
+   *  open run's worker (`workerSeenOf`, `server/src/coord/workerSeen.ts`), so it adds no read and no loop. A tool call
+   *  inside a turn moves no marker, so during a long turn it is the turn's start: read it beside `workerLastTurn`.
+   *  ADDITIVE and OPTIONAL; `FLEET_PROTO` is not bumped. Absent before the first sweep, after a restart, while the stall
+   *  watch is disabled, and when the marker could not be read (absent, foreign, stale, malformed or unmeasured): absence
+   *  says "not measured", never "dead". Its stale threshold is `stallQuietMs`, as for `lastMoveAt`. Read it ONLY through
+   *  `workerSeenNote` (`pwa/src/fleet/runWords.ts`). */
+  workerLastSeen?: number;
+  /** D-8285: the worker's last turn as the same marker read records it, present exactly when `workerLastSeen` is. */
+  workerLastTurn?: RunWorkerTurn;
+}
+
+/** D-8285: a run worker's last turn, from its turn marker: `working` (a turn open since `startedAt`), `done` (its last Stop
+ *  at `endedAt`) or `failed` (a turn that ended on a StopFailure at `endedAt`). Either time is null when the marker has none. */
+export interface RunWorkerTurn {
+  readonly state: 'working' | 'done' | 'failed';
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
 }
 
 /** `GET /api/runs`'s paged answer: `nextBefore` asks for the next page of older terminal runs and is absent when none remain. */

@@ -31,7 +31,7 @@ import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
 import { parseRunFind } from './runFind.js';
 import { runRecordTrail } from './runRecord.js';
-import { withLastMoves, withVerdicts } from './runWire.js';
+import { withLastMoves, withVerdicts, withWorkerSeen } from './runWire.js';
 import { createRunVerdicts } from './runVerdicts.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
@@ -3051,9 +3051,9 @@ export function registerCoordRoutes(
    * chip that could not be read is not a reason to hide the runs.
    */
   /** D-8071: the stuck verdict's fields on a `RunSummary` answer, from the watcher's one reader (`withVerdicts`). A server with
-   *  no watcher, or a reader not yet filled, stamps nothing. */
+   *  no watcher, or a reader not yet filled, stamps nothing. D-8285: the worker heartbeat rides with them (`withWorkerSeen`). */
   const stampVerdicts = (summaries: RunSummary[]): RunSummary[] =>
-    watcher === undefined ? summaries : withVerdicts(watcher.runVerdicts, summaries);
+    watcher === undefined ? summaries : withWorkerSeen(watcher.workerSeen, withVerdicts(watcher.runVerdicts, summaries));
 
   /** D-8071 (spec §11.2): `lastMoveAt` on a `RunSummary` answer, as the runs frame carries it (`withLastMoves`, ONE read). A read
    *  that fails leaves every run without the field and logs once, so the board still ships. */

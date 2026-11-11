@@ -161,8 +161,9 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts, withWorkerSeen } from './coord/runWire.js';
 import { createRunVerdicts, type RunVerdicts } from './coord/runVerdicts.js';
+import { createWorkerSeen, workerSeenOf, type WorkerSeen, type WorkerSeenBoard } from './coord/workerSeen.js';
 import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { createRunCloseMemory, isRunCloseWarning, runClosePass } from './coord/runCloseLane.js';
@@ -1336,6 +1337,9 @@ export class FleetWatcher {
   /** The stuck verdict's one in-memory reader (D-8071; spec 2026-11-04 §7, A45). `sweepRunStuck` is its one writer; the runs
    *  frame, its cold start and the run routes read it (`withVerdicts`), and the abandon arm reads the run's reason from it. */
   readonly runVerdicts: RunVerdicts = createRunVerdicts();
+  /** D-8285: the worker heartbeat (`coord/workerSeen.ts`). The stall sweep's own marker read is its one writer; the run
+   *  answers `withVerdicts` stamps read it (`withWorkerSeen`). */
+  readonly workerSeen: WorkerSeenBoard = createWorkerSeen();
   private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
   private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
   /** The breaker's memory: the members it holds with every first-dead instant they have carried, released only on evidence
@@ -3049,7 +3053,8 @@ export class FleetWatcher {
       // ARCH-61 (#796): `childIds`, decided through `childrenOf` against this tick's reading of the fleet's sessions.
       // D-7334: each run's last move, in one read for the frame; a failed read leaves the field off (`withLastMoves`).
       // D-8071: the stuck verdict's fields, from the one in-memory reader (`withVerdicts`); an empty reader stamps nothing.
-      runs = withVerdicts(this.runVerdicts, withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`)));
+      // D-8285: the worker heartbeat, from the stall sweep's board (`withWorkerSeen`); an empty board stamps nothing.
+      runs = withWorkerSeen(this.workerSeen, withVerdicts(this.runVerdicts, withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`))));
     }
     catch (err) {
       console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
@@ -6628,7 +6633,8 @@ export class FleetWatcher {
       // then decides the mode the verdicts judge, and when mail-stuck's busy idle start begins (D-4024).
       const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));
       const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
-      if (arming.disabled) return;
+      // D-8285: a disabled watch reads no marker, so the heartbeat is cleared rather than left to age into a false quiet.
+      if (arming.disabled) { this.workerSeen.replace(new Map()); return; }
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<WatcherCoordPort['stallCandidates']>;
       try {
@@ -6655,13 +6661,15 @@ export class FleetWatcher {
       const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
       const judged = new Set([...workerIds, ...coordinators.map((c) => c.sessionId)]);
       this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
+      const seen = new Map<number, WorkerSeen>();
       for (const subject of workers) {
         try {
-          await this.judgeStall(store, subject, sessions, tick, arming, paused, now, r.quietMs);
+          await this.judgeStall(store, subject, sessions, tick, arming, paused, now, r.quietMs, seen);
         } catch (err) {
           console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
       }
+      this.workerSeen.replace(seen);
       for (const c of coordinators) {
         try {
           await this.judgeStallCoordinator(store, c, sessions, tick, arming, paused, now);
@@ -6767,7 +6775,7 @@ export class FleetWatcher {
    *  quiet time (stall watch settings §7), set on the run verdict's input; the session verdicts use fixed constants. */
   private async judgeStall(
     store: WatcherCoordPort, subject: StallSubject, sessions: readonly FleetSession[], tick: StallTick,
-    arming: StallArming, paused: boolean, now: number, quietMs: number,
+    arming: StallArming, paused: boolean, now: number, quietMs: number, seen: Map<number, WorkerSeen>,
   ): Promise<void> {
     const primary = subject.primary;
     const id = primary.sessionId;
@@ -6791,6 +6799,9 @@ export class FleetWatcher {
       lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
       mark = await this.stallMarkRead(id, ident, lr);
       this.stallMarkClock(id, ident, mark, now);
+      // D-8285: the same read is the heartbeat of every open run on this worker.
+      const ws = workerSeenOf(mark);
+      if (ws !== null) for (const run of subject.runs) seen.set(run.id, ws);
       raw = ident.ok
         ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
         : STALL_RAW_UNMEASURED;
