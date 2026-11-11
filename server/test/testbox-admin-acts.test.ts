@@ -952,7 +952,8 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin disc
     expect(all[1]).toContain('authorized_keys');
     expect(all[1]).toContain('mktemp');
     expect(all[1]).toContain('mv -f');
-    expect(all[1]).toMatch(/ sh root$/);
+    // the login user, then the mode `all`: every line of ccrc's, and any line holding ccrc's own key (D-8337)
+    expect(all[1]).toMatch(/ sh root all /);
     // an unpair that fails still takes the access line out (root-capable, and a box that cannot unpair is the very one that must not
     // keep it), and says the box side did not finish so the operator finishes it by hand
     const g = fixture({}, WITH(['--unpair', '1', 'ccrc-testbox-install: failed: cannot stop the test service\\n']));

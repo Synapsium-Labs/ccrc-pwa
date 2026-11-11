@@ -154,11 +154,13 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin key-rotate (D-8337)', () => {
     expect(derived[1]).toBe(newB64);
     expect(statSync(h.key).mode & 0o777).toBe(0o600);
     expect(readFileSync(`${h.key}.pub`, 'utf8').trim().endsWith(' ccrc-testbox-admin')).toBe(true);
-    // three box calls: the append as the old key, the login as the new key, the removal as the new key
-    expect(asKeys(h)).toEqual([oldB64, newB64, newB64]);
+    // four box calls: the append as the old key, the login as the new key, the removal as the new key, and the old key alone,
+    // refused: the proof that the line it rode on is gone
+    expect(asKeys(h)).toEqual([oldB64, newB64, newB64, null]);
     expect(identities(h)[0]).toBe(h.key);
     expect(identities(h)[2]).toBe(h.key);
     expect(identities(h)[1]).not.toBe(h.key);
+    expect(identities(h)[3]).not.toBe(h.key);
     // the box holds the new line once, not the old, and the operator's other line as it was
     expect(ccrcLines(h)).toEqual([String(a['line'])]);
     expect(akLines(h)).toContain(OTHER_LINE);
@@ -177,9 +179,10 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin key-rotate (D-8337)', () => {
     connected(h, 'deploy');
     expect(json(verb(h, 'key-rotate'))['ok']).toBe(true);
     const cmds = sshCalls(h).map((c) => c.filter((l) => !l.startsWith('as ')).slice(-1)[0]!);
-    expect(cmds).toHaveLength(3);
+    expect(cmds).toHaveLength(4);
     for (const c of cmds) expect(c.startsWith('sudo -n -- ')).toBe(true);
     expect(cmds[1]).toBe('sudo -n -- true');
+    expect(cmds[3]).toBe('sudo -n -- true');
     expect(sshCalls(h).every((c) => c.includes('deploy@10.0.0.9'))).toBe(true);
   });
 
@@ -400,5 +403,185 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK)('key-rotate and key-revoke wait for n
       expect(readFileSync(h.key).equals(before), sub).toBe(true);
       expect(calls(h), sub).toEqual([]);
     }
+  });
+});
+
+describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK)('a killed key act leaves no private key behind (D-8337)', () => {
+  const keyDirs = (h: Home): string[] => readdirSync(join(h.home, '.ccrc')).filter((n) => n.startsWith('key.') || n.startsWith('pushkey.'));
+
+  it('a rotate SIGKILLed at its new-key login leaves its temp directory; the next rotate removes it, and its line on the box', () => {
+    const h = fixture();
+    connected(h);
+    const oldB64 = pubB64(`${h.key}.pub`);
+    // the second box call is step (2), the login with the new key alone: the box's fake SIGKILLs the verb there (an OOM kill)
+    h.env['FAKE_BOX_KILL_AT'] = '2';
+    const r = verb(h, 'key-rotate');
+    expect(r.out).toBe('');
+    // what the kill leaves: the private half of a key the box already trusts, and its line
+    const left = keyDirs(h);
+    expect(left).toHaveLength(1);
+    expect(existsSync(join(h.home, '.ccrc', left[0]!, 'k'))).toBe(true);
+    expect(ccrcLines(h)).toHaveLength(2);
+    expect(pubB64(`${h.key}.pub`)).toBe(oldB64);
+    delete h.env['FAKE_BOX_KILL_AT'];
+    const a = json(verb(h, 'key-rotate'));
+    expect(a['ok']).toBe(true);
+    expect(keyDirs(h)).toEqual([]);
+    expect(ccrcLines(h)).toEqual([String(a['line'])]);
+    expect(readFileSync(h.lg, 'utf8')).toContain('removed 1 private temp directories an interrupted act left');
+  });
+
+  it('after a killed rotate, a revoke that cannot reach the box still removes the left private key', () => {
+    const h = fixture();
+    connected(h);
+    h.env['FAKE_BOX_KILL_AT'] = '2';
+    verb(h, 'key-rotate');
+    expect(keyDirs(h)).toHaveLength(1);
+    delete h.env['FAKE_BOX_KILL_AT'];
+    h.env['FAKE_BOX_DOWN_FROM'] = '1';
+    const b64 = pubB64(`${h.key}.pub`);
+    expect(json(verb(h, 'key-revoke'))).toEqual({ ok: false, code: 'revoked-box-skipped', line: `ssh-ed25519 ${b64} ccrc-testbox-admin` });
+    expect(keyDirs(h)).toEqual([]);
+    expect(existsSync(h.key)).toBe(false);
+  });
+
+  it('key sweeps them too (key.* and pushkey.*), and never follows a link out of ~/.ccrc', () => {
+    const h = fixture();
+    const outside = join(h.home, 'outside');
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'keep'), 'x');
+    for (const d of ['key.AbCd1234', 'pushkey.EfGh5678']) {
+      mkdirSync(join(h.home, '.ccrc', d), { mode: 0o700 });
+      writeFileSync(join(h.home, '.ccrc', d, 'k'), 'private', { mode: 0o600 });
+    }
+    symlinkSync(outside, join(h.home, '.ccrc', 'key.Link0000'));
+    expect(json(verb(h, 'key', `--address=${ADDR}`))['ok']).toBe(true);
+    expect(keyDirs(h)).toEqual(['key.Link0000']);
+    expect(readFileSync(join(outside, 'keep'), 'utf8')).toBe('x');
+  });
+
+  it('a busy act sweeps nothing: the lock\'s holder may still be using its directory', () => {
+    for (const sub of ['key-rotate', 'key-revoke']) {
+      const h = fixture();
+      connected(h);
+      mkdirSync(join(h.home, '.ccrc', 'key.Live0000'), { mode: 0o700 });
+      const r = sh(h, SRC + `exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; _tba_main ${sub} --from pwa`, [VERB]);
+      expect(json(r), sub).toEqual({ ok: false, code: 'busy' });
+      expect(keyDirs(h), sub).toEqual(['key.Live0000']);
+    }
+  });
+});
+
+describe.skipIf(!HAS_KEYGEN)('a TERM during the switch never leaves a mismatched pair (D-8337)', () => {
+  it('the parent ignores TERM while it renames the pair: the run finishes with the new private and public halves together', () => {
+    const h = fixture();
+    connected(h);
+    const oldB64 = pubB64(`${h.key}.pub`);
+    // `mv` on PATH: at the second rename (the public half into place) it sends TERM to the verb's own shell, as the agent's
+    // time bound does, and gives that shell's EXIT chain time to run before the rename itself
+    writeFileSync(join(h.home, 'fakes', 'mv'), [
+      '#!/bin/bash',
+      'last="${*: -1}"',
+      'if [ -n "${FAKE_TERM_PID:-}" ] && [[ "$last" == */testbox-admin.key.pub ]]; then kill -TERM "$FAKE_TERM_PID"; sleep 0.5; fi',
+      'exec /bin/mv "$@"',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const r = sh(h, SRC + 'export FAKE_TERM_PID=$$; _tba_main key-rotate --from pwa', [VERB]);
+    const a = json(r);
+    expect(a['ok'], r.out + r.err).toBe(true);
+    const newB64 = pubB64(`${h.key}.pub`);
+    expect(newB64).not.toBe(oldB64);
+    const derived = spawnSync('ssh-keygen', ['-y', '-f', h.key], { encoding: 'utf8' }).stdout.trim().split(' ');
+    expect(derived[1]).toBe(newB64);
+    expect(ccrcLines(h)).toEqual([String(a['line'])]);
+    expect(tempDirs(h)).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_KEYGEN)('a line is removed by the key it holds, not only by its comment (D-8337)', () => {
+  /** The ways an operator's paste can differ from the line ccrc gave, all of which sshd still takes. */
+  const variants = (line: string, b64: string): Record<string, string> => ({
+    'a CRLF': `${line}\r`,
+    'a trailing space': `${line} `,
+    'a trailing tab and CR': `${line}\t\r`,
+    'an edited comment': line.replace(/ ccrc-testbox-admin$/, ' root@box'),
+    'no options and no comment': `ssh-ed25519 ${b64}`,
+  });
+
+  it('rotate removes the old key\'s line in every variant, and answers ok', () => {
+    const probe = fixture();
+    const line0 = connected(probe);
+    for (const [name, v] of Object.entries(variants(line0, pubB64(`${probe.key}.pub`)))) {
+      const h = fixture();
+      const line = connected(h);
+      const oldB64 = pubB64(`${h.key}.pub`);
+      const pasted = variants(line, oldB64)[name]!;
+      expect(v.length).toBeGreaterThan(0);
+      writeFileSync(h.ak, `${OTHER_LINE}\n${pasted}\n`, { mode: 0o600 });
+      const a = json(verb(h, 'key-rotate'));
+      expect(a['ok'], name).toBe(true);
+      expect(akLines(h).some((l) => l.includes(oldB64)), name).toBe(false);
+      expect(akLines(h), name).toEqual([OTHER_LINE, String(a['line'])]);
+    }
+  });
+
+  it('revoke and disconnect remove ccrc\'s line in every variant, and the operator\'s other line stays', () => {
+    const probe = fixture();
+    const line0 = connected(probe);
+    for (const sub of ['key-revoke', 'disconnect']) {
+      for (const name of Object.keys(variants(line0, pubB64(`${probe.key}.pub`)))) {
+        const h = fixture();
+        const line = connected(h);
+        const b64 = pubB64(`${h.key}.pub`);
+        writeFileSync(h.ak, `${OTHER_LINE}\n${variants(line, b64)[name]!}\n`, { mode: 0o600 });
+        expect(json(verb(h, sub, '--from', 'pwa')), `${sub}: ${name}`).toEqual({ ok: true });
+        expect(akLines(h), `${sub}: ${name}`).toEqual([OTHER_LINE]);
+      }
+    }
+  });
+
+  it('a ccrc line with trailing space or CR that holds ANOTHER key (an orphan) goes too, on rotate and revoke alike', () => {
+    for (const sub of ['key-rotate', 'key-revoke']) {
+      const h = fixture();
+      connected(h);
+      const stale = join(h.home, 'stale');
+      expect(spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'ccrc-testbox-admin', '-f', stale]).status).toBe(0);
+      const staleB64 = pubB64(`${stale}.pub`);
+      writeFileSync(h.ak, `${readFileSync(h.ak, 'utf8')}from="${SRC_ADDR}",restrict ssh-ed25519 ${staleB64} ccrc-testbox-admin \r\n`);
+      const a = json(verb(h, sub));
+      expect(a['ok'], sub).toBe(true);
+      expect(akLines(h).some((l) => l.includes(staleB64)), sub).toBe(false);
+    }
+  });
+
+  it('an old key the box still takes after its line was removed (another AuthorizedKeysFile) is old-line-kept, never ok', () => {
+    const h = fixture();
+    const line = connected(h);
+    const oldB64 = pubB64(`${h.key}.pub`);
+    const ak2 = join(h.home, 'box', 'authorized_keys2');
+    writeFileSync(ak2, `${line}\n`, { mode: 0o600 });
+    h.env['FAKE_BOX_AK2'] = ak2;
+    const r = verb(h, 'key-rotate');
+    expect(json(r)).toEqual({ ok: false, code: 'old-line-kept', line: `ssh-ed25519 ${oldB64} ccrc-testbox-admin` });
+    // the switch is done, the line ccrc could see is gone, and the old key's last login was let in
+    expect(pubB64(`${h.key}.pub`)).not.toBe(oldB64);
+    expect(akLines(h).some((l) => l.includes(oldB64))).toBe(false);
+    expect(asKeys(h)[3]).toBe(oldB64);
+    expect(readFileSync(ak2, 'utf8')).toBe(`${line}\n`);
+    expect(tempDirs(h)).toEqual([]);
+    expect(readFileSync(h.lg, 'utf8')).toContain('the old key still logs in');
+  });
+
+  it('a revoked key the box still takes after its line was removed is revoked-unpair-failed with its words, never ok', () => {
+    const h = fixture();
+    const line = connected(h);
+    const b64 = pubB64(`${h.key}.pub`);
+    const ak2 = join(h.home, 'box', 'authorized_keys2');
+    writeFileSync(ak2, `${line}\n`, { mode: 0o600 });
+    h.env['FAKE_BOX_AK2'] = ak2;
+    expect(json(verb(h, 'key-revoke'))).toEqual({ ok: false, code: 'revoked-unpair-failed', line: `ssh-ed25519 ${b64} ccrc-testbox-admin` });
+    expect(existsSync(h.key)).toBe(false);
+    expect(ccrcLines(h)).toEqual([]);
+    expect(readFileSync(h.lg, 'utf8')).toContain('the access key still logs in after its line was removed');
   });
 });

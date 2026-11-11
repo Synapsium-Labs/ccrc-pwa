@@ -6,8 +6,11 @@
 #           that key is on a line of $FAKE_BOX_HOME/.ssh/authorized_keys and, with FAKE_BOX_TRUST set, also in that file (a
 #           box whose sshd refuses a listed key, as a `from=` it does not match does). A key it does not let in is
 #           `Permission denied`, exit 255. FAKE_BOX_DOWN_FROM=<n>: from the n-th ssh call on, the box does not answer (exit
-#           255, a timeout). FAKE_BOX_FAIL_RE: a command that matches it exits 1 on the box and changes nothing. Any other
-#           command runs, as the box's shell would read it, with `getent` and `sudo` below first on PATH.
+#           255, a timeout). FAKE_BOX_FAIL_RE: a command that matches it exits 1 on the box and changes nothing. FAKE_BOX_AK2:
+#           a second authorized keys file (sshd's AuthorizedKeysFile can name two) whose keys the box lets in too, and which no
+#           ccrc edit touches. FAKE_BOX_KILL_AT=<n>: the n-th ssh call SIGKILLs its caller (the verb's shell: an OOM kill or
+#           a hard reset mid-act, which no EXIT trap survives) and fails. Any other command runs, as the box's shell would
+#           read it, with `getent` and `sudo` below first on PATH.
 #   getent: `getent passwd <user>` names FAKE_BOX_HOME as the user's home.
 #   sudo:   drops `-n` and `--`, then runs the rest.
 #   ip:     prints FAKE_IP_OUT.
@@ -34,13 +37,17 @@ cmd="${*: -1}"
 count="$FAKE_BOX_HOME/.ssh-calls"
 n=$(( $(cat "$count" 2>/dev/null || echo 0) + 1 ))
 echo "$n" >"$count"
+if [ -n "${FAKE_BOX_KILL_AT:-}" ] && [ "$n" = "$FAKE_BOX_KILL_AT" ]; then
+  kill -9 "$PPID"
+  exit 255
+fi
 if [ -n "${FAKE_BOX_DOWN_FROM:-}" ] && [ "$n" -ge "$FAKE_BOX_DOWN_FROM" ]; then
   echo "ssh: connect to host box port 22: Connection timed out" >&2
   exit 255
 fi
 pub="$(ssh-keygen -y -f "$idf" 2>/dev/null | awk '{print $2}')"
 listed() { awk -v k="$1" '{ for (i = 1; i <= NF; i++) if ($i == k) f = 1 } END { exit !f }' "$2" 2>/dev/null; }
-if [ -z "$pub" ] || ! listed "$pub" "$FAKE_BOX_HOME/.ssh/authorized_keys" \
+if [ -z "$pub" ] || { ! listed "$pub" "$FAKE_BOX_HOME/.ssh/authorized_keys" && ! listed "$pub" "${FAKE_BOX_AK2:-/dev/null}"; } \
    || { [ -n "${FAKE_BOX_TRUST:-}" ] && ! listed "$pub" "$FAKE_BOX_TRUST"; }; then
   echo "root@box: Permission denied (publickey)." >&2
   exit 255

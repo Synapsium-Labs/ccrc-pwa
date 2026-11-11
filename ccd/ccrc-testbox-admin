@@ -50,6 +50,7 @@ TBA_HERE="$(cd "${TBA_HERE%/*}" && pwd)"
 PROG="ccrc testbox-admin"
 
 TBA_DIR="$HOME/.ccrc"
+TBA_LOCK_HELD=0   # 1 once `_tba_lock` holds the lock in this shell (never taken from the environment)
 TBA_STATE="$TBA_DIR/testbox-admin.state"
 TBA_LOCK="$TBA_DIR/testbox-admin.lock"
 TBA_KEY="$TBA_DIR/testbox-admin.key"
@@ -415,6 +416,7 @@ _tba_lock() {
   [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") 2>/dev/null || return 2
   { exec {TBA_LOCK_FD}>>"$TBA_LOCK"; } 2>/dev/null || return 2
   flock -n "$TBA_LOCK_FD" || { exec {TBA_LOCK_FD}>&-; return 1; }
+  TBA_LOCK_HELD=1
 }
 
 # <sub> -> 0 iff it detaches. `settings-box` always does: the apply reads the box, writes its file, runs the installer's
@@ -777,6 +779,7 @@ _tba_run_key() {
   local lrc=0
   _tba_lock || lrc=$?
   if [ "$lrc" = 1 ]; then _tba_refuse busy; return 0; fi
+  _tba_sweep_keytmp
   if [ -e "$TBA_KEY" ] || [ -L "$TBA_KEY" ]; then
     _tba_pub_parts || { _tba_refuse foreign-key; return 0; }
     _tba_pair_ok || { _tba_refuse foreign-key; return 0; }
@@ -817,6 +820,19 @@ _tba_run_key() {
 }
 # A path to remove when the shell exits (a temp directory the verb made).
 _tba_rm_on_exit() { _exit_add "rm -rf -- $(printf '%q' "$1")"; }
+# `_tba_sweep_keytmp` — the private temp directories a killed act left behind (`key.*` from key and key-rotate, `pushkey.*` from
+# Connect's push key) removed (D-8337). The EXIT chain removes them on any normal end, TERM included, but an OOM kill, a SIGKILL or
+# a hard reset skips it, and a left `key.*` can hold a private key the box already trusts. Only while THIS shell holds the lock:
+# then no live act has a temp directory there. A host without flock (the lock not held) sweeps nothing.
+_tba_sweep_keytmp() {
+  local d n=0
+  [ "$TBA_LOCK_HELD" = 1 ] || return 0
+  for d in "$TBA_DIR"/key.* "$TBA_DIR"/pushkey.*; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    rm -rf -- "$d" && n=$((n + 1))
+  done
+  [ "$n" = 0 ] || _tba_log "removed $n private temp directories an interrupted act left"
+}
 
 # probe — the fingerprint the box presents now. Never writes the pin.
 _tba_run_probe() {
@@ -2096,7 +2112,7 @@ _tba_run_disconnect() {
 # removal of the line did not finish). rc 1 (said on stderr) only when the switch could not be lowered or the state file written.
 # Disconnect answers from the three; key-revoke (D-8337) runs the same body and then deletes the key pair.
 _tba_disconnect_body() {
-  local tokf="" keyf="" skipped=0 unpaired=1 hasbox=0 hand=0 key inst
+  local tokf="" keyf="" skipped=0 unpaired=1 hasbox=0 hand=0 key inst own=""
   TBA_DX_HASBOX=0; TBA_DX_SKIPPED=0; TBA_DX_UNPAIRED=1
   # An unmeasurable ccrc.env counts as naming the keys: nothing is removed that might be the operator's.
   for key in "${TBA_PAIRING_KEYS[@]}"; do _tba_ccrc_env_names "$key" && hand=1; done
@@ -2122,12 +2138,21 @@ _tba_disconnect_body() {
         esac
       fi
       if [ "$skipped" = 0 ]; then
-        _tba_cx_out sh -c 'set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; [ -f "$f" ] || exit 0; t=$(mktemp "$h/.ssh/.ccrc-ak.XXXXXXXX"); cp -p -- "$f" "$t"; { grep -v -e " ccrc-testbox-admin\$" "$f" || [ $? -eq 1 ]; } >"$t"; mv -f -- "$t" "$f"' sh "$TBA_LOGIN"
+        # Every line of ccrc's (its comment the last word, trailing spaces or a CR aside) and any line holding ccrc's own key,
+        # whatever its comment (D-8337): a pasted line with a CRLF or an edited comment still lets that key in.
+        if _tba_pub_parts && _tba_pair_ok; then own="$TBA_PUB_B64"; fi
+        _tba_cx_out sh -c "$TBA_AK_DROP" sh "$TBA_LOGIN" all "" "$TBA_AK_DROP_AWK" "$own"
         case "$CX_RC" in
           0) ;;
           97|255) skipped=1 ;;
           *) _tba_log "disconnect: the access line could not be removed (rc $CX_RC)"; unpaired=0 ;;
         esac
+        # key-revoke asks for proof: the key it is about to delete must no longer log in. A box that still takes it (a line in
+        # another AuthorizedKeysFile, say) is a box side that did not finish.
+        if [ "$skipped" = 0 ] && [ "$unpaired" = 1 ] && [ "${TBA_DX_VERIFY:-0}" = 1 ] && [ -n "$own" ]; then
+          _tba_cx_out true
+          if [ "$CX_RC" = 0 ]; then _tba_log "disconnect: the access key still logs in after its line was removed"; unpaired=0; fi
+        fi
       fi
     else
       skipped=1
@@ -2150,19 +2175,22 @@ _tba_disconnect_body() {
 }
 
 # ── key-rotate and key-revoke (D-8337) ─────────────────────────────────────────────────────────────────────────────────
-# The access key's two credential acts, both short (the agent's 60 s bound holds four waits for the box at TBA_PARENT_CAP), both
+# The access key's two credential acts, both short (the agent's 60 s bound holds five waits for the box at TBA_PARENT_CAP), both
 # under the lock, both behind the step-up the contract names. The private halves never leave this host: the new pair is made by
 # ssh-keygen in a 0700 temp directory under ~/.ccrc and renamed into place; an answer, the log, the state and the box only ever see
 # public key words.
 #
 # The box-side edits of the login user's authorized_keys, each by a temp beside the file (`cp -p`, so its owner and mode stay) and
-# a rename, as Disconnect's removal is. `$1` is the login user. ADD appends `$2` (the new line) unless a line already holds `$3`
-# (its key), so a retried append never doubles it. DROP rewrites the file through the awk program `$4`: with `$2` = drop it takes
-# out ccrc's lines (ccrc's comment as the last word) that hold the key `$3`; with `$2` = keep it takes out every one of ccrc's
-# lines that does NOT hold `$3`, so a line an interrupted rotate left goes too. Any other line is never touched.
+# a rename. `$1` is the login user. ADD appends `$2` (the new line) unless a line already holds `$3` (its key), so a retried append
+# never doubles it. DROP rewrites the file through the awk program `$4`, with `$5` an old key (or empty). A line is ccrc's when its
+# last word is ccrc's comment once trailing spaces, tabs and a CR are trimmed (sshd lets a pasted CRLF or trailing-space line in);
+# a line HOLDS a key when one of its words is exactly that key's base64. With `$2` = drop it takes out every line holding the key
+# `$3` (the new key a refused rotate made: only ccrc has it); with `$2` = keep it takes out every one of ccrc's lines that does not
+# hold `$3`, so a line an interrupted rotate left goes too, and every line holding the old key `$5` whatever its comment; with
+# `$2` = all (Disconnect, key-revoke) it takes out every one of ccrc's lines and every line holding `$5`. No other line is touched.
 TBA_AK_ADD='set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; [ -f "$f" ] || exit 3; if awk -v k="$3" '"'"'{ for (i = 1; i <= NF; i++) if ($i == k) f = 1 } END { exit !f }'"'"' "$f"; then exit 0; fi; t=$(mktemp "$h/.ssh/.ccrc-ak-add.XXXXXXXX"); cp -p -- "$f" "$t"; { awk 1 "$f"; printf "%s\n" "$2"; } >"$t"; mv -f -- "$t" "$f"'
-TBA_AK_DROP='set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; [ -f "$f" ] || exit 0; t=$(mktemp "$h/.ssh/.ccrc-ak.XXXXXXXX"); cp -p -- "$f" "$t"; awk -v m="$2" -v k="$3" "$4" "$f" >"$t"; mv -f -- "$t" "$f"'
-TBA_AK_DROP_AWK='{ n = split($0, w, /[ \t]+/); if (n > 0 && w[n] == "ccrc-testbox-admin") { hit = 0; for (i = 1; i < n; i++) if (w[i] == k) hit = 1; if ((m == "drop" && hit) || (m == "keep" && !hit)) next } print }'
+TBA_AK_DROP='set -e; h=$(getent passwd "$1" | cut -d: -f6); f=$h/.ssh/authorized_keys; [ -f "$f" ] || exit 0; t=$(mktemp "$h/.ssh/.ccrc-ak.XXXXXXXX"); cp -p -- "$f" "$t"; awk -v m="$2" -v k="$3" -v o="${5-}" "$4" "$f" >"$t"; mv -f -- "$t" "$f"'
+TBA_AK_DROP_AWK='{ s = $0; sub(/[ \t\r]+$/, "", s); n = split(s, w, /[ \t]+/); hold = 0; old = 0; for (i = 1; i <= n; i++) { if (k != "" && w[i] == k) hold = 1; if (o != "" && w[i] == o) old = 1 } ours = (n > 0 && w[n] == "ccrc-testbox-admin"); if ((m == "drop" && hold) || (m == "keep" && (old || (ours && !hold))) || (m == "all" && (ours || old))) next; print }'
 
 # `_tba_key_ours` -> rc 0 iff the access key is ccrc's own pair (TBA_PUB_TYPE/TBA_PUB_B64 set); else TBA_CODE no-access-key (no
 # key at all) or foreign-key (a key this verb did not make, or a public half that does not name the private one).
@@ -2175,11 +2203,14 @@ _tba_key_ours() {
 # old key; (2) the new key logs in ALONE (IdentitiesOnly, the same sudo prefix as every act); (3) a refusal there takes the new line
 # out again with the old key and deletes the new pair, so the old key stays in place and still works (`new-key-refused`); (4) only
 # then the stored pair is switched; (5) with the new key, every line of ccrc's that is not the new key comes out. A failure at (5)
-# leaves ccrc on the new key and answers `old-line-kept` with the old key's public words, for the operator to remove by hand.
+# leaves ccrc on the new key and answers `old-line-kept` with the old key's public words, for the operator to remove by hand; so
+# does (6) the old key still logging in after (5) said its line was gone (a line (5) cannot see, such as one in another
+# AuthorizedKeysFile). The old pair is kept for (6) in the temp directory, which the EXIT chain or the next act's sweep removes.
 # Needs a recorded connection, ccrc's own pair and a pinned host key the box still presents.
 _tba_run_key-rotate() {
-  local src dir oldb64 newline newb64 rc
+  local src dir oldb64 newline newb64 rc old=""
   _tba_short_lock || return 0
+  _tba_sweep_keytmp
   _tba_conn || { _tba_refuse "$TBA_CODE"; return 0; }
   _tba_key_ours || { _tba_refuse "$TBA_CODE"; return 0; }
   oldb64="$TBA_PUB_B64"
@@ -2212,25 +2243,42 @@ _tba_run_key-rotate() {
   TBA_SSH_IDENTITY="$dir/k" _tba_cx_out true
   if [ "$CX_RC" != 0 ]; then
     # (3) out again, with the old key; the old pair was never touched
-    _tba_cx_out sh -c "$TBA_AK_DROP" sh "$TBA_LOGIN" drop "$newb64" "$TBA_AK_DROP_AWK"
+    _tba_cx_out sh -c "$TBA_AK_DROP" sh "$TBA_LOGIN" drop "$newb64" "$TBA_AK_DROP_AWK" ""
     [ "$CX_RC" = 0 ] || _tba_log "key-rotate: the new line could not be taken out again (rc $CX_RC); its private half is deleted"
     rm -rf -- "$dir"
     _tba_log "key-rotate: the box did not take the new key; the old key is kept"
     _tba_refuse new-key-refused; return 0
   fi
-  # (4) the switch: two renames in this directory, which no TERM, INT or HUP stops halfway
-  if ! ( trap '' TERM INT HUP; mv -f -- "$dir/k" "$TBA_KEY" && mv -f -- "$dir/k.pub" "$TBA_KEY.pub" ); then
-    rm -rf -- "$dir"; echo "$PROG: cannot place the new access key" >&2; return 1
+  # the old pair, kept for (6): a second name for the same file, which the rename below does not touch
+  if ln -- "$TBA_KEY" "$dir/old" 2>/dev/null || cp -p -- "$TBA_KEY" "$dir/old" 2>/dev/null; then old="$dir/old"; fi
+  # (4) the switch: two renames, which no TERM, INT or HUP stops halfway. The PARENT ignores them (a subshell would not do: the
+  # parent's EXIT chain would `rm -rf $dir` between the two and leave the new private half with the old public half). An ignored
+  # signal is dropped, not queued; the agent's SIGKILL after its grace still ends a run that overstays.
+  trap '' TERM INT HUP
+  if ! { mv -f -- "$dir/k" "$TBA_KEY" && mv -f -- "$dir/k.pub" "$TBA_KEY.pub"; }; then
+    trap - TERM INT HUP; rm -rf -- "$dir"; echo "$PROG: cannot place the new access key" >&2; return 1
   fi
-  rm -rf -- "$dir"
+  trap - TERM INT HUP
   _tba_pub_parts || :   # the access line below is the NEW key's
-  # (5) the old line (and any other of ccrc's but the new one), with the new key
-  _tba_cx_out sh -c "$TBA_AK_DROP" sh "$TBA_LOGIN" keep "$newb64" "$TBA_AK_DROP_AWK"
+  # (5) the old line (and any other of ccrc's but the new one, and any line holding the old key), with the new key
+  _tba_cx_out sh -c "$TBA_AK_DROP" sh "$TBA_LOGIN" keep "$newb64" "$TBA_AK_DROP_AWK" "$oldb64"
   if [ "$CX_RC" != 0 ]; then
+    rm -rf -- "$dir"
     _tba_log "key-rotate: the access key was rotated; the old line could not be removed (rc $CX_RC)"
     printf '{"ok":false,"code":"old-line-kept","line":"ssh-ed25519 %s %s"}\n' "$oldb64" "$TBA_KEY_COMMENT"
     return 0
   fi
+  # (6) the old key, alone, must now be refused
+  if [ -n "$old" ]; then
+    TBA_SSH_IDENTITY="$old" _tba_cx_out true
+    if [ "$CX_RC" = 0 ]; then
+      rm -rf -- "$dir"
+      _tba_log "key-rotate: the access key was rotated; the old key still logs in"
+      printf '{"ok":false,"code":"old-line-kept","line":"ssh-ed25519 %s %s"}\n' "$oldb64" "$TBA_KEY_COMMENT"
+      return 0
+    fi
+  fi
+  rm -rf -- "$dir"
   _tba_log "key-rotate: the access key was rotated"
   _tba_ok "\"line\":\"$(_tba_access_line_json "$src")\""
 }
@@ -2242,9 +2290,10 @@ _tba_run_key-rotate() {
 _tba_run_key-revoke() {
   local words
   _tba_short_lock || return 0
+  _tba_sweep_keytmp
   _tba_key_ours || { _tba_refuse "$TBA_CODE"; return 0; }
   words="$TBA_PUB_TYPE $TBA_PUB_B64 $TBA_KEY_COMMENT"
-  _tba_disconnect_body || return 1
+  TBA_DX_VERIFY=1 _tba_disconnect_body || return 1
   rm -f -- "$TBA_KEY" "$TBA_KEY.pub" || { echo "$PROG: cannot delete the access key" >&2; return 1; }
   if [ -e "$TBA_KEY" ] || [ -e "$TBA_KEY.pub" ]; then echo "$PROG: cannot delete the access key" >&2; return 1; fi
   _tba_log "key-revoke: the access key was deleted"

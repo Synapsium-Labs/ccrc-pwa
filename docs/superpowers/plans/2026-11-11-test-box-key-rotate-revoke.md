@@ -24,12 +24,23 @@ host.
   2. logs in with the NEW key only (`IdentitiesOnly`, the same sudo prefix as every act);
   3. on failure takes the new line out again with the old key, deletes the new pair and answers `new-key-refused`: the old
      key stays in place and still works;
-  4. on success switches the stored pair (two renames, with TERM, INT and HUP ignored between them);
+  4. on success switches the stored pair (two renames, with TERM, INT and HUP ignored by the verb's own shell between them,
+     so its exit chain cannot delete the temp directory halfway and leave the new private half with the old public half);
   5. with the new key, removes every line carrying ccrc's comment that is not the new key (so a line left by an earlier
-     interrupted rotate goes too); a failure here answers `old-line-kept` with the old key's public words.
+     interrupted rotate goes too) and every line holding the old key's base64, whatever its comment; ccrc's comment is
+     read after trailing spaces, tabs and a CR are trimmed, since sshd takes a pasted CRLF line. A failure here answers
+     `old-line-kept` with the old key's public words;
+  6. logs in with the OLD key alone: a box that still takes it (a line in another AuthorizedKeysFile) answers
+     `old-line-kept` too, never ok.
   `key-revoke` runs Disconnect's body (switch off, the box's unpair, ccrc's access lines out, the fleet side cleaned, the
-  connection forgotten) and then deletes the key pair whatever the box did. When the box side was skipped or did not finish
-  it answers `revoked-box-skipped` / `revoked-unpair-failed` with the revoked key's public words.
+  connection forgotten) and then deletes the key pair whatever the box did. Disconnect's removal takes out every ccrc line
+  (trimmed as above) and every line holding ccrc's own key; for key-revoke it then checks that the key no longer logs in.
+  When the box side was skipped or did not finish, or the key still logs in, it answers `revoked-box-skipped` /
+  `revoked-unpair-failed` with the revoked key's public words, and the card tells the operator to remove EVERY line ending
+  in `ccrc-testbox-admin` (an interrupted act may have left another key's), not only the one shown.
+  `key`, `key-rotate` and `key-revoke`, once they hold the lock, remove any `key.*` or `pushkey.*` temp directory in
+  `~/.ccrc`: a SIGKILL, an OOM kill or a hard reset skips the exit chain that would, and a rotate killed after its append
+  leaves a private key the box already trusts. Only under the lock, so no live act's directory is touched.
 - **Route** (`server/src/testboxAdmin.ts`): `resultOf` gives `key-rotate` its new public line; `decisionOf` lets a
   `TESTBOX_LINE_CODES` refusal carry `line`. The ledger row is the route's usual short-act row (closed act, outcome and code;
   no key material: the table has no field that could take it).
@@ -51,5 +62,6 @@ never printed, logged, put in the state file, an answer, a ledger row or a webso
   fleet and the server move together on a rollout.
 - Revoke is offered on the connected card only. A pair Disconnect kept is revoked by connecting and revoking, or (later) a
   control on the connect flow; the status does not yet say whether a key exists.
-- The worst case of a rotate is four bounded waits for the box (the host key scan, the append, the new login, the old
-  line's removal) at ten seconds each outside a unit: inside the agent's sixty-second bound for a short sub.
+- The worst case of a rotate is five bounded waits for the box (the host key scan, the append, the new login, the old
+  line's removal, the old key's refused login) at ten seconds each outside a unit: inside the agent's sixty-second bound for
+  a short sub. The fifth runs only after the removal reached the box.
