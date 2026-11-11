@@ -2086,13 +2086,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   watcher?.useStopDoneSerialiser?.(coordRoutes);
   // The plan verbs (Linear hierarchy design §4.3, D-8181) in a file of their own, after `registerCoordRoutes` so their writes take
   // its handle's `serial`: one mutex holds a plan write and a run's open apart. The follow-up verb's own-epic check reads the
-  // caller's open run, and that run's ticket's epic, from the plan port.
+  // caller's open run (the binding's one view, `bindingsOf(...).worker()`, ARCH-42), and that run's ticket's epic, from the
+  // plan port.
   registerPlanRoutes(app, {
     coord: deps.coord, plan: deps.plan, serial: coordRoutes.serial, mailToken: () => deps.mailToken ?? null,
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     sessionAuth, authEnabled: deps.cfg.authEnabled, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
     runOfSession: (id) => {
-      const open = deps.coord?.openRunsForSession(id);
+      const open = deps.coord?.bindingsOf(id).worker();
       const run = open?.ok === true ? open.siblings[0] : undefined;
       return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
     },
