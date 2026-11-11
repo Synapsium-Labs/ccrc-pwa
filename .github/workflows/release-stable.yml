@@ -72,14 +72,17 @@ jobs:
   # called ci.yml's own jobs carry their deadlines. Its permissions are the
   # ceiling for every job in the called run, so they are what ci.yml's jobs
   # ask for — read access to Actions included, which select needs to find
-  # the newest trusted map and durations (main-artifact.mjs); a called job
-  # asking for more than this grants fails the run before it starts.
+  # the newest trusted map and durations (main-artifact.mjs), plus the one
+  # read grant build-pwa's provenance step asks for (ci.yml's census); a called
+  # job asking for more than this grants fails the run before it starts, the
+  # gate included (ci-pipeline.test.ts derives the grant from every called job).
   full:
     needs: gate
     if: needs.gate.outputs.found == 'false'
     permissions:
       contents: read
       actions: read
+      attestations: read
     uses: ./.github/workflows/ci.yml
     with:
       mode: full
