@@ -208,6 +208,9 @@ describe('every test that builds a FleetWatcher quiets it, or is exempt with its
     expect(quiets(`const t = watcherTeardown(); el.classList.remove('x'); ${tracked}`), 'an unrelated .remove(').toBe(false);
     expect(quiets(`const t = watcherTeardown(); afterEach(() => list.remove(home)); ${tracked}`), 'another handle removed, whose name ends in the teardown\'s').toBe(false);
     expect(quiets(`let teardown = watcherTeardown(); afterEach(() => teardown.remove(home)); ${tracked}`), 'a let binding removed').toBe(true);
+    // Review 1740 F1 (Task C20, D-8187): a `.` or a `$` before the name makes it a member or a longer name, not the binding.
+    expect(quiets(`const t = watcherTeardown(); afterEach(() => obj.t.remove(home)); ${tracked}`), 'a member named like the teardown').toBe(false);
+    expect(quiets(`const t = watcherTeardown(); afterEach(() => $t.remove(home)); ${tracked}`), 'a $-prefixed name ending in the teardown\'s').toBe(false);
   });
 
   it('EXEMPT only shrinks: every entry still builds a watcher and still quiets none, and its size is pinned', () => {

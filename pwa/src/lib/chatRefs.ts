@@ -36,9 +36,9 @@ export interface ChatRefContext {
 }
 
 /** Whether session `sessionId` claims an open run (`claimedRunsOf`, the coordinator-side reader: `claimedBy`, not closed by
- *  `isRunClosed`) whose project's repository is not `homeRepo` (Task C21, rule 3b). A run whose project has no `named` repository,
- *  one `repoKey` cannot read, or that no project row names, counts as elsewhere, and so does every claimed open run before the console has read its projects (`projects === null`): what cannot
- *  be shown to be home is not home. */
+ *  `isRunClosed`) whose project's repository is not `homeRepo` (Task C21, rule 3b). A run whose project has no `named`
+ *  repository, one `repoKey` cannot read, or that no project row names, counts as elsewhere, and so does every claimed open
+ *  run before the console has read its projects (`projects === null`): what cannot be shown to be home is not home. */
 export function claimsRunElsewhere(
   sessionId: string,
   homeRepo: string | null,
