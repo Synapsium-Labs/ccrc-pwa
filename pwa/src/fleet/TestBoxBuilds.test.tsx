@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ClaudeBuildRecord } from '../../../shared/claudeBuildTrust';
 import { TESTBOX_BUILDS_TEXT, TestBoxBuilds, buildVerdict } from './TestBoxBuilds';
+import { TESTBOX_UNANSWERED } from './testboxFailure';
 
 const T = TESTBOX_BUILDS_TEXT;
 const rec = (build: string, over: Partial<ClaudeBuildRecord> = {}): ClaudeBuildRecord => ({
@@ -36,7 +37,9 @@ describe('the build list (D-8289)', () => {
     render(<TestBoxBuilds band="laptop" />);
     await settle();
     const list = screen.getByRole('list', { name: T.title });
-    expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-build'))).toEqual(['2.1.321', '2.1.320', '2.1.310', '2.1.302']);
+    // The newest trusted build stays in the list; the older one is folded (below), still drawn in its row.
+    expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-build'))).toEqual(['2.1.321', '2.1.320', '2.1.310']);
+    expect(document.querySelector('[data-testbox="builds-older"]')).toContainElement(rowOf('2.1.302'));
     expect(rowOf('2.1.302')).toHaveTextContent(T.trusted);
     expect(rowOf('2.1.302')).toHaveTextContent(T.rig);
     expect(rowOf('2.1.310')).toHaveTextContent(T.trustedNoCwd);
@@ -83,6 +86,75 @@ describe('the build list (D-8289)', () => {
     expect(rowOf('2.1.321')).toHaveTextContent(T.failed);
   });
 
+  it('a capture that gets no answer (the fetch rejects) says so in the answer tone, never the raw error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+      if (String(url).endsWith('/capture')) throw new TypeError('Failed to fetch');
+      return json({ ok: true, claudeBuilds: BUILDS });
+    }));
+    render(<TestBoxBuilds band="laptop" />);
+    await settle();
+    fireEvent.click(within(rowOf('2.1.321')).getByRole('button', { name: T.again }));
+    await settle();
+    const said = screen.getByText(TESTBOX_UNANSWERED);
+    expect(said).not.toHaveClass('settings-catalogue--amber');
+    expect(screen.queryByText(/Failed to fetch/)).toBeNull();
+  });
+
+  it('a Capture again that lands clears the could-not-be-read note with the fresh list', async () => {
+    let reads = 0;
+    let captures = 0;
+    stub((url) => {
+      if (url.endsWith('/capture')) {
+        captures += 1;
+        return captures === 1
+          ? json({ ok: false, error: 'conflict', detail: 'not now' }, 409)
+          : json({ ok: true, claudeBuilds: [rec('2.1.321', { attempts: 1 }), ...BUILDS.slice(1)] });
+      }
+      reads += 1;
+      return reads === 1 ? json({ ok: true, claudeBuilds: BUILDS }) : json({ ok: true, claudeBuilds: 'garbled' });
+    });
+    render(<TestBoxBuilds band="laptop" />);
+    await settle();
+    fireEvent.click(within(rowOf('2.1.321')).getByRole('button', { name: T.again }));
+    await settle();
+    await settle();
+    expect(screen.getByText(T.unread)).toBeInTheDocument();
+    fireEvent.click(within(rowOf('2.1.321')).getByRole('button', { name: T.again }));
+    await settle();
+    expect(screen.getByText(T.queuedAgain)).toBeInTheDocument();
+    expect(screen.queryByText(T.unread)).toBeNull();
+  });
+
+  it('older trusted builds fold behind one closed disclosure; the newest trusted and every untrusted build stay out', async () => {
+    const many = [
+      rec('2.1.330', { lastAttemptAt: 9, notSent: 'no-runner' }),
+      rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, output: 'x' }),
+      rec('2.1.320', { attempts: 2 }),
+      rec('2.1.312', { capture: 'pass', cwd: true, attempts: 1 }),
+      rec('2.1.310', { capture: 'pass', cwd: false, attempts: 1 }),
+      rec('2.1.302', { source: 'rig', capture: 'pass', cwd: true, seenAt: 0, verdictAt: 0 }),
+    ];
+    stub(() => json({ ok: true, claudeBuilds: many }));
+    render(<TestBoxBuilds band="phone" />);
+    await settle();
+    const list = screen.getByRole('list', { name: T.title });
+    expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-build'))).toEqual(['2.1.330', '2.1.321', '2.1.320', '2.1.312']);
+    const fold = document.querySelector<HTMLDetailsElement>('[data-testbox="builds-older"]')!;
+    expect(fold).not.toBeNull();
+    expect(fold.open).toBe(false);
+    expect(within(fold).getByText(T.older(2))).toBeInTheDocument();
+    expect([...fold.querySelectorAll('[data-build]')].map((e) => e.getAttribute('data-build'))).toEqual(['2.1.310', '2.1.302']);
+    expect(list.contains(fold)).toBe(false);
+  });
+
+  it('one trusted build folds nothing', async () => {
+    stub(() => json({ ok: true, claudeBuilds: BUILDS.slice(0, 3) }));
+    render(<TestBoxBuilds band="laptop" />);
+    await settle();
+    expect(document.querySelector('[data-testbox="builds-older"]')).toBeNull();
+    expect(T.older(1)).toBe('Show 1 older trusted build');
+  });
+
   it('a read the wire reader refuses says so, never an empty list', async () => {
     stub(() => json({ ok: true, claudeBuilds: [{ build: '2.1.321', capture: 'maybe' }] }));
     render(<TestBoxBuilds band="laptop" />);
@@ -102,18 +174,34 @@ describe('the build list (D-8289)', () => {
     render(<TestBoxBuilds band="phone" />);
     await settle();
     for (const b of ['2.1.330', '2.1.329']) {
-      expect(rowOf(b)).toHaveTextContent(T.notSent['no-runner']);
+      // The card says why once; each row says only that it was not sent.
+      expect(rowOf(b)).toHaveTextContent(T.notSentSaid);
+      expect(rowOf(b)).not.toHaveTextContent(T.notSent['no-runner']);
       expect(rowOf(b)).not.toHaveTextContent(/sent \d+ time/);
     }
     expect(buildVerdict(blocked[0]!)).toEqual({ text: T.notSent['no-runner'], amber: true });
+    expect(buildVerdict(blocked[0]!, 'no-runner')).toEqual({ text: T.notSentSaid, amber: true });
+    expect(document.querySelectorAll('[data-testbox="builds-blocked"]')).toHaveLength(1);
     expect(document.querySelector('[data-testbox="builds-blocked"]')).toHaveTextContent(T.blocked['no-runner']);
+  });
+
+  it('a row not sent for a reason the card does not say keeps its own reason', async () => {
+    stub(() => json({ ok: true, claudeBuilds: [
+      rec('2.1.330', { lastAttemptAt: 9, notSent: 'no-runner' }), rec('2.1.329', { lastAttemptAt: 5, notSent: 'no-test-box' }),
+    ] }));
+    render(<TestBoxBuilds band="laptop" />);
+    await settle();
+    expect(rowOf('2.1.330')).toHaveTextContent(T.notSentSaid);
+    expect(rowOf('2.1.330')).not.toHaveTextContent(T.notSent['no-runner']);
+    expect(rowOf('2.1.329')).toHaveTextContent(T.notSent['no-test-box']);
   });
 
   it('no test box answering is said the same way; a queue that sends its jobs shows no such note', async () => {
     stub(() => json({ ok: true, claudeBuilds: [rec('2.1.330', { lastAttemptAt: 9, notSent: 'no-test-box' })] }));
     render(<TestBoxBuilds band="laptop" />);
     await settle();
-    expect(rowOf('2.1.330')).toHaveTextContent(T.notSent['no-test-box']);
+    expect(rowOf('2.1.330')).toHaveTextContent(T.notSentSaid);
+    expect(rowOf('2.1.330')).not.toHaveTextContent(T.notSent['no-test-box']);
     expect(document.querySelector('[data-testbox="builds-blocked"]')).toHaveTextContent(T.blocked['no-test-box']);
     cleanup();
     stub(() => json({ ok: true, claudeBuilds: BUILDS }));

@@ -217,7 +217,8 @@
 .testbox-build { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
 .testbox-build-head { margin: 0; overflow-wrap: anywhere; }
 .testbox-build-name { font-family: var(--family-mono); font-weight: var(--weight-medium); }
-.testbox-build-output { min-width: 0; }
+.testbox-build-output, .testbox-builds-older { min-width: 0; }
+.testbox-builds-older > .testbox-build-list { margin-top: calc(var(--pad-card) / 2); }
 .testbox-card:not([data-band='phone']) .testbox-build-again { justify-self: start; }
 .testbox-build-log {
   margin: calc(var(--pad-card) / 4) 0 0; max-height: 16em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;

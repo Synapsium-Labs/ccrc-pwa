@@ -2,7 +2,8 @@
 // and wide widths. `src/fleet/TestBoxBuilds.test.tsx` holds the list's behaviour in jsdom; this file holds what only an engine
 // can say: every row sits inside the card, the replay output wraps inside its block once its disclosure opens (a long line
 // never pushes the card or the page sideways), Capture again is as wide as its row on a phone and its own width otherwise,
-// and it posts `{build}` only.
+// and it posts `{build}` only. The older trusted builds are folded on load (only the newest trusted one shows), and once
+// their disclosure opens every folded row sits inside the card too.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd, no test box, no Claude Code. Run: `( cd pwa &&
 // CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
@@ -35,8 +36,12 @@ const BUILDS: ClaudeBuildRecord[] = [
   rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, output: `replay: 39 passed, 1 failed\n${LONG_LINE}` }),
   // Tried with no capture runner on the box: the row says it was not sent, and the card says no build can be captured.
   rec('2.1.320', { lastAttemptAt: 5, notSent: 'no-runner' }),
+  rec('2.1.312', { capture: 'pass', cwd: true, attempts: 1 }),
+  // The two older trusted builds fold behind `Show 2 older trusted builds`.
+  rec('2.1.310', { capture: 'pass', cwd: false, attempts: 1 }),
   rec('2.1.302', { source: 'rig', capture: 'pass', cwd: true, seenAt: 0, verdictAt: 0 }),
 ];
+const SHOWN = ['2.1.321', '2.1.320', '2.1.312'];
 const BLOCK = {
   state: 'off', reasons: [], summary: 'off', switch: 'off', at: Date.now(), host: null, box: null, cells: [], counts: null,
 };
@@ -77,6 +82,8 @@ interface Measured {
   pageClientWidth: number;
   card: Box;
   rows: Box[];
+  shownBuilds: string[];
+  fold: Box | null;
   failedRow: Box;
   blocked: Box | null;
   button: Box | null;
@@ -101,7 +108,10 @@ const measure = (el: Element): Measured => {
     pageScrollWidth: document.documentElement.scrollWidth,
     pageClientWidth: document.documentElement.clientWidth,
     card: box(el),
-    rows: [...list.querySelectorAll('[data-build]')].map(box),
+    rows: [...list.querySelectorAll('[data-build]')].filter((e) => e.checkVisibility({ contentVisibilityAuto: true })).map(box),
+    shownBuilds: [...list.querySelectorAll('[data-build]')].filter((e) => e.checkVisibility({ contentVisibilityAuto: true }))
+      .map((e) => e.getAttribute('data-build') ?? ''),
+    fold: shown(list.querySelector('[data-testbox="builds-older"]')),
     failedRow: box(failed),
     blocked: shown(list.querySelector('[data-testbox="builds-blocked"]')),
     button: shown(failed.querySelector('[data-testbox="capture-again"]')),
@@ -127,9 +137,14 @@ describe('Settings › Automation › Test box › Claude Code builds at phone, 
       try {
         await page.goto(server!.origin + '/settings/automation');
         const section = page.getByRole('region', { name: TITLE });
-        await expect.poll(() => section.locator('[data-build]').count(), { timeout: 20_000 }).toBe(3);
+        await expect.poll(() => section.locator('[data-build]').count(), { timeout: 20_000 }).toBe(BUILDS.length);
         const m = await section.evaluate(measure);
-        expect(m.rows).toHaveLength(3);
+        expect(m.shownBuilds, 'the card shows the untrusted builds and the newest trusted one, the rest folded').toEqual(SHOWN);
+        expect(m.rows).toHaveLength(SHOWN.length);
+        expect(m.fold, 'the older trusted builds have their disclosure').not.toBeNull();
+        expect(m.fold!.right, 'the fold runs past the card').toBeLessThanOrEqual(m.card.right + 0.5);
+        expect(await section.getByText(T.notSent['no-runner']).count(), 'a not-sent row repeats the card\'s reason').toBe(0);
+        expect(await section.getByText(T.notSentSaid).count(), 'the not-sent row says it was not sent').toBe(1);
         for (const r of m.rows) {
           expect(r.left, 'a row starts outside the card').toBeGreaterThanOrEqual(m.card.left - 0.5);
           expect(r.right, 'a row runs past the card').toBeLessThanOrEqual(m.card.right + 0.5);
@@ -146,7 +161,13 @@ describe('Settings › Automation › Test box › Claude Code builds at phone, 
         }
 
         await section.getByText(T.output).click();
+        await section.getByText(T.older(2)).click();
         const opened = await section.evaluate(measure);
+        expect(opened.rows, 'every folded row shows once the fold opens').toHaveLength(BUILDS.length);
+        for (const r of opened.rows) {
+          expect(r.left, 'a folded row starts outside the card').toBeGreaterThanOrEqual(opened.card.left - 0.5);
+          expect(r.right, 'a folded row runs past the card').toBeLessThanOrEqual(opened.card.right + 0.5);
+        }
         const shots = process.env.CCRC_SHOTS;
         if (shots) await section.screenshot({ path: path.join(shots, `testbox-builds-${view.band}-${view.width}.png`) });
         expect(opened.log, 'the output shows once its disclosure opens').not.toBeNull();

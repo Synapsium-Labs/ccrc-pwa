@@ -6,8 +6,17 @@
 // list.
 //
 // NOTHING SENT IS SAID AS SUCH. A build the queue tried while no test box answered, or while the box had no capture runner,
-// says it was not sent and why (the row's `notSent`), never "sent N times"; and when the queued build tried last sent
-// nothing (`captureBlockedBy`), the card says no build can be captured yet, so the operator is not left waiting on it.
+// says it was not sent (the row's `notSent`), never "sent N times"; and when the queued build tried last sent nothing
+// (`captureBlockedBy`), the card says once, above the list, that no build can be captured yet and why, so the operator is not
+// left waiting on it. A row whose reason is that one says only that it was not sent; a row not sent for another reason says
+// its own.
+//
+// THE CARD IS A GLANCE. The list shows the builds that matter: every untrusted one (failed, waiting, not sent) and the newest
+// trusted one. Older trusted builds fold behind one disclosure (`Show N older trusted builds`), closed on every mount and
+// remembered nowhere.
+//
+// A FAILED WRITE has one reader, the card's (`testboxFailure`): the server's refusal in the refusal tone, and no answer at
+// all (the fetch rejected) as `No answer from the server` in the answer tone.
 //
 // ONE LAYOUT AT EVERY WIDTH. Each build is one short row that wraps: the build and its verdict on one line, where it came
 // from under it, and for a failure the output (pre-wrapped, so a long line never pushes the card sideways) and the button
@@ -16,11 +25,13 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, elapsedWords, useNow } from '@ccrc/ui';
 import { captureBlockedBy, readClaudeBuildRecords, type BuildCaptureNotSent, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust';
-import { ApiError, api, apiErrorText } from '../lib/api';
+import { compareClaudeVersions } from '../../../shared/claudeVersion';
+import { api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import { isRecord } from '../lib/wire';
 import { ResultLine, SETTINGS_AMBER_NOTE, UNCONFIRMED_TEXT, useResultLine } from './settingsText';
 import type { TestboxBand } from './TestBoxSection';
+import { testboxFailure } from './testboxFailure';
 
 /** How often the list is read again while the card is open: the queue's own pass is once a minute. */
 export const TESTBOX_BUILDS_POLL_MS = 60_000;
@@ -37,6 +48,8 @@ export const TESTBOX_BUILDS_TEXT = {
     'no-test-box': 'Waiting for its capture: not sent, no test box answers',
     'no-runner': 'Waiting for its capture: not sent, the test box has no capture runner',
   } satisfies Record<BuildCaptureNotSent, string>,
+  /** A not-sent row whose reason the card already says above the list. */
+  notSentSaid: 'Waiting for its capture: not sent',
   blocked: {
     'no-test-box': 'No test box answers, so no build can be captured: the builds waiting here stay untrusted until one does.',
     'no-runner': 'The test box has no capture runner yet, so no build can be captured: the builds waiting here stay untrusted until it has one.',
@@ -51,22 +64,30 @@ export const TESTBOX_BUILDS_TEXT = {
   queuedAgain: 'Queued again: the test box gets it on the next pass.',
   unread: 'The build list could not be read.',
   empty: 'No build is recorded yet.',
+  older: (n: number) => `Show ${n} older trusted ${n === 1 ? 'build' : 'builds'}`,
+  olderList: 'Older trusted builds',
 } as const;
 
 const T = TESTBOX_BUILDS_TEXT;
 
-/** A row's verdict in words, and whether it is the amber one. */
-export function buildVerdict(r: ClaudeBuildRecord): { readonly text: string; readonly amber: boolean } {
+/** A row's verdict in words, and whether it is the amber one. `said` is the not-sent reason the card already says above the
+ *  list (`captureBlockedBy`): a row with that reason does not say it again. */
+export function buildVerdict(r: ClaudeBuildRecord, said: BuildCaptureNotSent | null = null): { readonly text: string; readonly amber: boolean } {
   if (r.capture === 'pass') return { text: r.cwd ? T.trusted : T.trustedNoCwd, amber: false };
   if (r.capture === 'fail') return { text: T.failed, amber: true };
-  if (r.notSent !== null) return { text: T.notSent[r.notSent], amber: true };
+  if (r.notSent !== null) return { text: r.notSent === said ? T.notSentSaid : T.notSent[r.notSent], amber: true };
   return { text: r.attempts === 0 ? T.queued : T.queuedSent(r.attempts), amber: false };
 }
 
-/** A refusal's words: the server's detail, else the client's one reading of the error. */
-function refusalWords(err: unknown): string {
-  const body = err instanceof ApiError && isRecord(err.body) ? err.body : {};
-  return typeof body.detail === 'string' && body.detail.trim() !== '' ? body.detail.trim() : apiErrorText(err);
+/** The builds the card shows at a glance (every untrusted one and the newest trusted one), and the older trusted ones it
+ *  folds, each in the list's own order. */
+export function foldBuilds(builds: readonly ClaudeBuildRecord[]): { readonly shown: ClaudeBuildRecord[]; readonly older: ClaudeBuildRecord[] } {
+  const newestTrusted = builds.filter((r) => r.capture === 'pass')
+    .reduce<ClaudeBuildRecord | null>((best, r) => (best === null || compareClaudeVersions(r.build, best.build) > 0 ? r : best), null);
+  return {
+    shown: builds.filter((r) => r.capture !== 'pass' || r === newestTrusted),
+    older: builds.filter((r) => r.capture === 'pass' && r !== newestTrusted),
+  };
 }
 
 export function TestBoxBuilds({ band }: { band: TestboxBand }): ReactNode {
@@ -87,6 +108,7 @@ export function TestBoxBuilds({ band }: { band: TestboxBand }): ReactNode {
   });
 
   const blocked = builds === null ? null : captureBlockedBy(builds);
+  const fold = builds === null ? null : foldBuilds(builds);
 
   const again = (build: string): void => {
     if (sending !== null) return;
@@ -99,11 +121,38 @@ export function TestBoxBuilds({ band }: { band: TestboxBand }): ReactNode {
           if (read === null) { line.say(UNCONFIRMED_TEXT); reload(); return; }
           supersede();
           setBuilds(read);
+          setFailed(false);
           line.say(T.queuedAgain);
         },
-        (err: unknown) => { line.say(refusalWords(err), 'refusal'); reload(); },
+        (err: unknown) => { const f = testboxFailure(err); line.say(f.text, f.tone); reload(); },
       )
       .finally(() => { setSending(null); });
+  };
+
+  const row = (r: ClaudeBuildRecord): ReactNode => {
+    const v = buildVerdict(r, blocked);
+    return (
+      <li key={r.build} className="testbox-build" data-build={r.build} data-capture={r.capture}>
+        <p className="testbox-build-head">
+          <span className="testbox-build-name">{r.build}</span>
+          {' '}
+          <span className={v.amber ? 'testbox-build-verdict settings-catalogue--amber' : 'testbox-build-verdict'}>{v.text}</span>
+        </p>
+        <p className="settings-note">{r.source === 'rig' ? T.rig : T.seen(elapsedWords(Math.max(0, now - r.seenAt)))}</p>
+        {r.capture === 'fail' && (
+          <>
+            <details className="testbox-build-output">
+              <summary className="settings-note">{T.output}</summary>
+              <pre className="testbox-build-log">{r.output === null || r.output === '' ? T.noOutput : r.output}</pre>
+            </details>
+            <Button variant="ghost" size={band === 'phone' ? 'full' : 'fit'} className="testbox-build-again" disabled={sending !== null}
+              onClick={() => again(r.build)} data-testbox="capture-again">
+              {sending === r.build ? T.sending : T.again}
+            </Button>
+          </>
+        )}
+      </li>
+    );
   };
 
   return (
@@ -113,34 +162,14 @@ export function TestBoxBuilds({ band }: { band: TestboxBand }): ReactNode {
       {failed && <p className={SETTINGS_AMBER_NOTE} data-testbox="builds-unread">{T.unread}</p>}
       {blocked !== null && <p className={SETTINGS_AMBER_NOTE} data-testbox="builds-blocked">{T.blocked[blocked]}</p>}
       {builds !== null && builds.length === 0 && <p className="settings-note">{T.empty}</p>}
-      {builds !== null && builds.length > 0 && (
-        <ul className="testbox-build-list" aria-label={T.title}>
-          {builds.map((r) => {
-            const v = buildVerdict(r);
-            return (
-              <li key={r.build} className="testbox-build" data-build={r.build} data-capture={r.capture}>
-                <p className="testbox-build-head">
-                  <span className="testbox-build-name">{r.build}</span>
-                  {' '}
-                  <span className={v.amber ? 'testbox-build-verdict settings-catalogue--amber' : 'testbox-build-verdict'}>{v.text}</span>
-                </p>
-                <p className="settings-note">{r.source === 'rig' ? T.rig : T.seen(elapsedWords(Math.max(0, now - r.seenAt)))}</p>
-                {r.capture === 'fail' && (
-                  <>
-                    <details className="testbox-build-output">
-                      <summary className="settings-note">{T.output}</summary>
-                      <pre className="testbox-build-log">{r.output === null || r.output === '' ? T.noOutput : r.output}</pre>
-                    </details>
-                    <Button variant="ghost" size={band === 'phone' ? 'full' : 'fit'} className="testbox-build-again" disabled={sending !== null}
-                      onClick={() => again(r.build)} data-testbox="capture-again">
-                      {sending === r.build ? T.sending : T.again}
-                    </Button>
-                  </>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+      {fold !== null && fold.shown.length > 0 && (
+        <ul className="testbox-build-list" aria-label={T.title}>{fold.shown.map(row)}</ul>
+      )}
+      {fold !== null && fold.older.length > 0 && (
+        <details className="testbox-builds-older" data-testbox="builds-older">
+          <summary className="settings-note">{T.older(fold.older.length)}</summary>
+          <ul className="testbox-build-list" aria-label={T.olderList}>{fold.older.map(row)}</ul>
+        </details>
       )}
       <ResultLine line={line.line} />
     </div>
