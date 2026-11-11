@@ -137,7 +137,12 @@ export function coordBlockedDay(mod: CoordBlockedModule): Scenario<CoordBlockedE
           line('mail', String(id), 'queued', 'worker');
         }
         if (change && next !== word) {
+          const idleWord = (w: Word): boolean => w === 'idle' || w === 'idle-blocked';
+          const wasIdle = idleWord(word);
           word = next; stamp = now;
+          // A turn ends on idle and idle-blocked, so the Stop hook leaves a done mark; waiting keeps the turn open (the
+          // doc of stallCoordBusySince: the turn's own start carries across busy and waiting), so its mark stays.
+          if (idleWord(word) && !wasIdle) mark = markOf('done', now);
           if (word === 'busy-turn') mark = markOf('working', now);
           else if (word === 'busy-background') mark = markOf('done', now);
           line('word', COORD, word, 'coordinator');
@@ -210,6 +215,6 @@ function rungNeverFalls(lines: readonly SequenceLine[]): Violation | null {
 }
 
 export const COORD_BLOCKED_INVARIANTS: readonly Invariant[] = [
-  { name: 'CB-reach', says: 'a mail held past the threshold reaches the operator within one sweep, unless the link is unmeasured', check: reach },
+  { name: 'CB-reach', says: 'a mail held past the threshold reaches the operator within one sweep, unless the link is unmeasured; the clock stops while the server is down and restarts at its boot', check: reach },
   { name: 'CB-rung-never-falls', says: 'between two boots, inside one open episode, no rung-1 verdict follows a rung-2 one', check: rungNeverFalls },
 ];
