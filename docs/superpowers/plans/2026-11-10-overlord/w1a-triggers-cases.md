@@ -556,6 +556,14 @@ The programme's run (1774) minted these numbers on 2026-11-11. They are defined 
   `eventId` and `runId`, and resolves programmes through `CoordStore.run`. No second read of `run_events` is added.
 - **D-8231, no-case-switch** — No operator switch in W1a. The lane writes only its own table and acts on nothing; shadow
   is structural (no review code exists, and the import pin keeps mail, push and feed out of the lane).
+- **D-8241, case-read-looks-back-two-windows, correction** — the pass read `stallObservationsSince(caseWindowFrom(now))`.
+  `casesDue` takes an episode's time from its earliest row in its input, so when an episode's first rung slid out of
+  the 14-day window while a later rung stayed inside, the episode took the later rung's time; an episode a case had
+  already consumed then counted again, and one that began more than 14 days ago counted as "in 14 days". The pass reads
+  from `caseReadFrom(now)`, two windows back (`practiceCases.ts`), so every episode's earliest row is in the decider's
+  input, and the decider still counts only episodes that began inside the window. The read is the same statement with
+  a lower bound, so the M17d plan is unchanged. Residual: an episode whose rows span more than 14 days can still count
+  again; one episode's stall rungs span hours.
 
 **Settled by the spec's later edition, so no longer deviations:** one occurrence is one episode
 (one run, one arm, one key), live or shadow; "two programmes" is read inside the 14 days; a case consumes its
