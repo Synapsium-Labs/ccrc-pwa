@@ -111,6 +111,8 @@ export const isLinearItemAction = (a: ItemAction | null): a is LinearItemAction 
  *  minted the child, and `sessionId` the child. The operator's `act` releases the review's report: the child reclaim sweep
  *  stops keeping the workspace for that run, and the ordinary reclaim takes it, pinning its work first. There is no `decline`:
  *  the coordinator keeps a report it still cites by withdrawing the item inside its hold. */
+/** The release-review action's verb, the one spelling a store query binds (D-8293). */
+export const RELEASE_REVIEW_VERB = 'release-review' as const;
 export interface ReleaseReviewAction { verb: 'release-review'; runId: number; reviewRunId: number; sessionId: string }
 /** The `end-run` action, and the one place its verb is spelled for the readers that ask which action an item carries. */
 export type EndRunAction = Extract<ItemAction, { verb: 'end-run' }>;
