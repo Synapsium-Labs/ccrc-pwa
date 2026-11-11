@@ -385,8 +385,9 @@ def _media_type(headers: Mapping[str, str]) -> str:
     return "content-type:" + value.split(";", 1)[0].strip().lower()
 
 
-# The log line of an upstream answer whose body is not what the route's answers carry (`log_upstream_page`): its media
-# type, as a token. A type or subtype outside this shape is logged as `unrecognised`, never as received.
+# The log line of an upstream answer that is not the backend's own, judged by its media type (`is_upstream_page`,
+# `log_upstream_page`): that media type, as a token. A type or subtype outside this shape is logged as
+# `unrecognised`, never as received.
 _PAGE_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9.+_-]{0,31}/[a-z0-9][a-z0-9.+_-]{0,31}$")
 _MEDIA_PREFIX = "content-type:"
 _MEDIA_STREAM = _MEDIA_PREFIX + "text/event-stream"
