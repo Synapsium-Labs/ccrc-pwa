@@ -624,6 +624,39 @@ the real notices are unmeasured from the history, so W0-12's conservative branch
 journals a model change too). A count of quotes is not a count of events, so no weekly rate of real notices is
 recorded.
 
+## The replay quiz's baseline (Task 11: W0-28), ruled 2026-11-11
+
+**Asked first (Step 1).** W0b mailed the history programme's coordinator, as §3.3.9 says (each fix extends its owner),
+naming the unresolved decision (what M13 compares against) and the minimum relevant evidence its ledger's carried
+constraints require: one quiz over live coordinator families, recall on, no A/B window. Its answer, from that ledger,
+the W2 live runbook and `deploy/history-replay.mjs` on `main`:
+- **(A), a reduced run now, conflicts** with that programme's current rulings in three ways: the runbook's quiz sits
+  inside a release-frozen window (acts 6 to 28), while fleet deploys continue under the history cohort's ruling; the
+  driver's code check does not yet cover the shared redaction module, a history pull request before any record; and a
+  reduced run would manufacture W2's signed records, which the 2026-11-02 skip ruling forbids unless the operator
+  expressly resumes the study. A reduced run also cannot skip the pilot or part 2 without a code change: the quiz arms
+  always run both recall arms side by side.
+- **(B) conflicts with nothing it can read**, under four conditions (below).
+
+**The ruling (Step 2): B** (the operator, programme item 168; D-8207 applies as written). **M13's baseline is the first
+run of W1a's weekly quiz lane, taken before any W1a arm is armed.** W0b runs no quiz, so there is no score or spend to
+record here.
+
+**Conditions on the W1a piece that takes the baseline** (the history coordinator's, carried by the ruling):
+1. it reads the history store read-only, and no session runs a writing form of `ccrc history`;
+2. it writes no history marker (recall-off, steer, agents-on, headless-on or any other); markers are the operator's;
+3. it mails the history programme's coordinator before any reuse of that programme's quiz files
+   (`deploy/history-replay.mjs`, `deploy/history-gate.mjs` or the quiz builder), and runs the driver by the operator's
+   hand, as the driver requires;
+4. the baseline is never written up as a W2 result, a PASS or a measured benefit of recall.
+
+**What that first run must write down** (the minimum the history coordinator named, so "above baseline" compares like
+with like): one quiz over live coordinator families, with recall on and no A/B window, using the same questions, judge,
+judge model and scoring as the lane M13 later reads; the frozen question list's sha; the number of questions and of
+families; the score with its interval; the ccrc release and Claude Code builds; and whether the history programme's W3
+steering and W4 agents-on were armed on the families and node measured at the time (the safest baseline is taken after
+W4 is armed on that node, or with both states named, so a later rise is not credited to the Overlord).
+
 ## Rows waiting for W0b
 
 W0-20 (nudge-and-read against typed text), W0-21 (a swap with a stand-in renewal), W0-22 (a continuity record per
