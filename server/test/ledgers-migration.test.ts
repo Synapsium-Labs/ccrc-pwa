@@ -94,7 +94,7 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
       ['pr', 'INTEGER', 0, null, 0], ['mergedAt', 'INTEGER', 0, null, 0]]);
     const programs = colsOf(db, 'programs');
     // The definition of done is a later entry's column (D-8126; its own pin is the describe below).
-    // The plan model's six columns come after it (D-8181, migration 55; its own pin is plan-store.test.ts).
+    // The plan model's six columns come after it (D-8181, migration 58; its own pin is plan-store.test.ts).
     expect(programs.slice(-10, -6)).toEqual([
       ['specPath', 'TEXT', 0, null, 0], ['inShort', 'TEXT', 0, null, 0], ['inShortAt', 'INTEGER', 0, null, 0],
       ['doneWhen', 'TEXT', 0, null, 0]]);

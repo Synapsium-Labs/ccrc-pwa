@@ -13,7 +13,7 @@ describe('the plan vocabulary has one home (D-8181)', () => {
 
   it('LINEAR_SYNC_PROGRAMME is spelled once', () => {
     expect(holders(decl('LINEAR_SYNC_PROGRAMME'))).toEqual(['shared/plan.ts']);
-    // The one other spelling is migration 55's frozen SQL, which seeds the reserved row (a migration cannot import a constant).
+    // The one other spelling is migration 58's frozen SQL, which seeds the reserved row (a migration cannot import a constant).
     expect(holders(/'linear-sync'/)).toEqual(['server/src/coord/schema.ts', 'shared/plan.ts']);
   });
 

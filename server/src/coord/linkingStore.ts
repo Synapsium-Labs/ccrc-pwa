@@ -40,7 +40,7 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
     && row.template !== null
     ? { state: 'measured', visibility: row.visibility, slug: row.slug, template: row.template, at: measured.at }
     : measured;
-  // D-8181: the hierarchy settings come from their own columns (migration 55); a project with no row reads the defaults.
+  // D-8181: the hierarchy settings come from their own columns (migration 58); a project with no row reads the defaults.
   return {
     teamKey, override, measured, mode: linkingMode(override, ruled),
     initiatives: row?.initiatives === 'off' ? 'off' : 'on', linearOwner: row?.linearOwner ?? null, ownsTeam: row?.ownsTeam === 1,
