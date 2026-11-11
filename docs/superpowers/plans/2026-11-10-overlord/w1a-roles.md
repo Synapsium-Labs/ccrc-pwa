@@ -464,20 +464,21 @@ ternary body: "goes through roleOf" and "the old two-word derivation" go red.
 
 ## Deviations found
 
-The programme mints the real numbers when its run opens; until then each entry is named `D-TBD-<slug>`.
+The programme's run (1774) minted these numbers on 2026-11-11. They are defined in the programme's index plan,
+`docs/superpowers/plans/2026-11-10-overlord.md`; each entry here gives the whole decision, after its number and old slug.
 
-- **D-TBD-role-columns-deferred.** Four of the spec's five columns ship typed `null`; Task 2's column table says which
+- **D-8209, role-columns-deferred** — Four of the spec's five columns ship typed `null`; Task 2's column table says which
   piece fills each and why.
-- **D-TBD-sessionroleof-moves.** `sessionRoleOf` moves from `shared/api.ts` (L0) to `server/src/roleOf.ts` (L1, C3),
+- **D-8210, sessionroleof-moves** — `sessionRoleOf` moves from `shared/api.ts` (L0) to `server/src/roleOf.ts` (L1, C3),
   because an L0 file cannot call the L1 reader. No PWA or agent file imports it (measured).
-- **D-TBD-child-axis-facts.** The fleet frame still measures only `.child` for `FleetSession.role`. Claim and intent
+- **D-8211, child-axis-facts** — The fleet frame still measures only `.child` for `FleetSession.role`. Claim and intent
   are passed as `unmeasured`, not read, so `FleetSession.role` keeps its two words and its D-5301 contract. No wire
   field is added; the renewal lane builds full facts server-side when it lands.
-- **D-TBD-run-relations-not-roles.** `StallSessionRole` (`server/src/coord/stall.ts`), `stuckCause`'s `role`
+- **D-8212, run-relations-not-roles** — `StallSessionRole` (`server/src/coord/stall.ts`), `stuckCause`'s `role`
   (`server/src/coord/runStuck.ts`) and `RequeueRole` (`server/src/coord/store.ts`) stay. Each names a session's
   relation to one run that a lane is judging, not what the session is. That is a recorded "legitimately different"
   reason; they are not views of `roleOf`.
-- **D-TBD-hook-role-card.** `ccd/session-hook.sh#_hook_role_card` keeps reading `.child` existence itself. It runs in
+- **D-8213, hook-role-card** — `ccd/session-hook.sh#_hook_role_card` keeps reading `.child` existence itself. It runs in
   another process and language and cannot call `roleOf`; the card door piece replaces it.
 
 **Settled by the spec's later edition, so no longer deviations:** the undecided answer and its two
@@ -488,8 +489,8 @@ tree's rule against an overloaded null at a seam.
 ## Where things stand
 
 **Needed before it starts:**
-- The spec merged at `docs/superpowers/specs/2026-11-09-overlord-design.md`, and the programme's W1a run open, so the
-  `D-TBD` entries get numbers.
+- The spec merged at `docs/superpowers/specs/2026-11-09-overlord-design.md`, and the programme's run open (it is: run 1774
+  minted this plan's numbers on 2026-11-11).
 - The files claimed by the peer protocol (§3.3.9, last bullet): `shared/api.ts`, `server/src/fleet.ts`,
   `server/src/coord/stall.ts`, `server/src/coord/rollTarget.ts`, the architecture spec's context table and
   `server/test/single-definition/ask-digest.test.ts`.

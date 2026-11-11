@@ -422,16 +422,17 @@ git commit -m "test(skills): every shipped skill file capped at its size at merg
 
 ## Deviations found
 
-The programme mints real numbers when its run opens; each `D-TBD-<slug>` below is replaced by one before anything
-lands. The corpus (every `.md` under `ccd/*-skill/`) and growth against the merge-base are §11.3's own words, so they
+The programme's run (1774) minted these numbers on 2026-11-11. They are defined in the programme's index plan,
+`docs/superpowers/plans/2026-11-10-overlord.md`; each entry here gives the whole decision, after its number and old slug.
+The corpus (every `.md` under `ccd/*-skill/`) and growth against the merge-base are §11.3's own words, so they
 are not deviations.
 
-- **D-TBD-skill-ratchet-pinned-by-count.** "Pinned" is read from the `SKILL.md` text, not from the pin arrays, which
+- **D-8218, skill-ratchet-pinned-by-count** — "Pinned" is read from the `SKILL.md` text, not from the pin arrays, which
   are literals inside three test files. It leans on each pin suite's `1..N` check, so it counts only in a `SKILL.md`
   whose base already has clauses: a first contract, with no suite behind it yet, earns nothing.
-- **D-TBD-skill-ratchet-no-base.** Without `origin/main`, only R1 and R2 run, with a printed notice, as
+- **D-8219, skill-ratchet-no-base** — Without `origin/main`, only R1 and R2 run, with a printed notice, as
   `citations.test.ts` does. CI always has `origin/main`, so the merge queue never skips R3 to R5.
-- **D-TBD-skill-ratchet-stale-cap.** A cap that names no skill file fails (R1), where the shellcheck ratchet only
+- **D-8220, skill-ratchet-stale-cap** — A cap that names no skill file fails (R1), where the shellcheck ratchet only
   prints it, so a renamed or deleted file cannot leave a cap standing for a later file at its old path.
 
 **Settled by the spec's later edition, so no longer deviations:** a clause's bytes are the UTF-8

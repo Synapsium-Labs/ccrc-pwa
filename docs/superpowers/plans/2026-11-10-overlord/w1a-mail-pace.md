@@ -388,9 +388,10 @@ it('no source names a retired pace constant, in code or prose', () => {
 
 ## Deviations found
 
-The programme mints the real numbers when its run opens; until then each entry is named by slug.
+The programme's run (1774) minted these numbers on 2026-11-11. They are defined in the programme's index plan,
+`docs/superpowers/plans/2026-11-10-overlord.md`; each entry here gives the whole decision, after its number and old slug.
 
-- **D-TBD-mail-pace-key-worker** (naming): until `FLEET_ROLES` exists, the `'worker'` key is the row every session
+- **D-8208, mail-pace-key-worker, naming** — until `FLEET_ROLES` exists, the `'worker'` key is the row every session
   that is not an open claimant reads today, plain sessions and reviewers included, as the spec's "a worker's pace"
   says. Both keys are `FLEET_ROLES` members, so the role table only adds rows.
 

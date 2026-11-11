@@ -48,7 +48,7 @@ later, as Table 11.7b's simulator row says).
   `server/test/`. Eight are one text up to hex case and digit separators; RB-PAR's reorders the same operations. Both
   spellings compute the same sequence (measured for seeds `0x5eed`, `1` and `0x6268`). The time-ports piece adds the
   one exported copy, in `server/test/fakeTime.ts`, and leaves the nine in place: their move onto it is this plan's
-  (D-TBD-one-mulberry32).
+  (D-8225).
 - **The ports for time and chance come from the time-ports piece, merged first.** Today's `main` has no `Clock`,
   `Scheduler` or `Entropy`; its only clock shape is `server/src/laneRunner.ts#LaneClocks`, which that piece replaces
   with `Clock`. This plan imports what it exports and defines none of it again:
@@ -164,7 +164,7 @@ later, as Table 11.7b's simulator row says).
 import { describe, it, expect } from 'vitest';
 import { mulberry32 } from '../fakeTime.js';
 
-describe('the one mulberry32 (D-TBD-one-mulberry32)', () => {
+describe('the one mulberry32 (D-8225)', () => {
   it('draws the sequence the nine suites drew (pinned on the old copies)', () => {
     const a = mulberry32(0x5eed);
     expect([a(), a(), a(), a()]).toEqual([0.7100320369936526, 0.286336648510769, 0.9519026265479624, 0.10175976227037609]);
@@ -768,21 +768,22 @@ describe.skipIf(PY === null)('the Overlord model (§11.7, the first model)', () 
 
 ## Deviations found
 
-The programme mints real numbers when its run opens; until then each entry is named by its slug.
+The programme's run (1774) minted these numbers on 2026-11-11. They are defined in the programme's index plan,
+`docs/superpowers/plans/2026-11-10-overlord.md`; each entry here gives the whole decision, after its number and old slug.
 
-- **D-TBD-sim-line-is-sequence-line.** The simulator records lines in `overlord_sequence`'s shape (§10.4), not a
+- **D-8214, sim-line-is-sequence-line** — The simulator records lines in `overlord_sequence`'s shape (§10.4), not a
   free-form event log, so a predicate written for the simulator runs unchanged in the W1 monitor.
-- **D-TBD-model-stays-python.** §11.7 recommends a dependency-free explorer and names no language. The model is kept in Python's
+- **D-8215, model-stays-python** — §11.7 recommends a dependency-free explorer and names no language. The model is kept in Python's
   standard library, run by `python3 -I -B` from a vitest test, as the tree already does for other Python. No toolchain
   or dependency is added. Porting it to TypeScript would rewrite about 1 900 lines for no new check.
-- **D-TBD-mutation-runner-in-tree.** §11.7 recommends "a mutation runner". The plan writes a small TypeScript runner
+- **D-8216, mutation-runner-in-tree** — §11.7 recommends "a mutation runner". The plan writes a small TypeScript runner
   with `mutation-run.py`'s contract (textual mutants, `old` exactly once, a baseline first) instead of adding Stryker.
   Its mutants are listed by hand per decider, so the score is over a chosen set, not over every operator.
-- **D-TBD-mutation-floors-every-run.** Table 11.7b says "Daily". The floor test costs a few seconds (Task 5 Step 3
+- **D-8217, mutation-floors-every-run** — Table 11.7b says "Daily". The floor test costs a few seconds (Task 5 Step 3
   measures it, and the PR records the figure), so it runs wherever the suite selects it (a pull request whose change
   reaches it, the merge queue and the daily run). A daily-only job would need a `.github/` change. When a later set
   grows heavy, it moves behind an env gate and a daily job then.
-- **D-TBD-one-mulberry32.** The nine test copies of `mulberry32` move onto the one the time-ports piece exports from
+- **The simulator side of D-8225** (one-mulberry32, defined in `w1a-time-ports.md`): The nine test copies of `mulberry32` move onto the one the time-ports piece exports from
   `server/test/fakeTime.ts` (the same slug there), so the simulator's chance is not a tenth. The move changes imports
   only.
 

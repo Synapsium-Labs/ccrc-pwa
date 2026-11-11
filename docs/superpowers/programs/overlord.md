@@ -1,6 +1,6 @@
 # Program: overlord
 
-Spec: `docs/superpowers/specs/2026-11-09-overlord-design.md` (the hardened edition, H1 to H39)
+Spec: `docs/superpowers/specs/2026-11-09-overlord-design.md` (approved by the operator on 2026-11-10: H1 to H45, R1 to R17; on `main` since #2605)
 Plans: `docs/superpowers/plans/2026-11-10-overlord/`, one file per piece, listed under Waves
 Research: `docs/superpowers/research/2026-11-10-overlord-model-check/` (two model checks of the spec's machines)
 Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
@@ -16,18 +16,20 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The third round's fixes: 80 findings from an audit of every decider table and a model of accounts, privacy and joint faults; I13 | #2539 | merged |
 | spec | The seams of the four follow-ups closed: 29 restatements brought into line, the door gate order completed | #2542 | merged |
 | spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | merged |
-| W0 | The spike: measure what the design depends on. Changes nothing that runs | plan `w0-spike.md` | planned. Tasks 1 to 7 need no setup. Tasks 8 to 11 wait for the operator's setup item |
+| spec | The operator's approval, the rulings on the review's fifteen questions, R16 and R17 (H40 to H45) | #2605 | merged |
+| W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | run 1774; plan `w0-spike.md` | open |
+| W0b | The spike, Tasks 8 to 11 (fleet reads, the subject, account facts, the quiz baseline), then Task 12 for both halves | plan `w0-spike.md` | waits for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | Each role skill's contract moved first, behind a notice that tells a session how to see a cut | #2555 (supersedes #2530) | merged |
 | spec | The operator's ruling on the ratchet's scope | #2556 | merged |
 | W1a, foundations | The coordinator skill made lean: its procedures in reference files, the wave lifecycle one file per step | #2557, #2558 and #2560 (the tests, first); #2559 | merged |
 | W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
-| W1a, foundations | Ports for time and chance | plan `w1a-time-ports.md` | planned |
-| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | plan `w1a-roles.md` | planned |
-| W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | planned |
-| W1a, foundations | The simulator's skeleton and the first model | plan `w1a-simulator.md` | planned |
+| W1a, foundations | Ports for time and chance | run 1776; plan `w1a-time-ports.md` | open |
+| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775; plan `w1a-roles.md` | open |
+| W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | after the role table merges, and after #2606 |
+| W1a, foundations | The simulator's skeleton and the first model | plan `w1a-simulator.md` | after the time ports merge; its Task 6 after W0a's Task 7 |
 | W1a, the machine | Generations, the receipt and renewal for every long-lived role; the anchor and the card; notes; probes; launch profiles | not planned yet | waits for W0's measurements |
-| W1 | Designate and talk | not planned yet | waits for W1a, for D-8126, and for the operator's rulings |
+| W1 | Designate and talk | not planned yet | waits for W1a and for D-8126's build (#2487 merged; its build #2606 is open) |
 | W2 | Route and follow up | not planned yet | follows W1 |
 | W3 | Brief first, then answer first (two steps) | not planned yet | follows W2 |
 | W4 | Learn | not planned yet | follows W3 |
@@ -37,9 +39,25 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 
 ## Decisions & deviations
 
-- **The spec stays a draft until the operator rules.** Fifteen rulings wait on the operator. They are listed in the
-  spec under "Waiting on you" and tracked in #2514. The spec is written as if each proposed answer holds. W0 needs
-  none of them.
+- **The operator approved the spec on 2026-11-10** (#2605): the calls C1 to C60 and H1 to H39, the rulings on the
+  review's fifteen questions, and two new rulings, R16 and R17, which add H40 to H45 (§6.9). They change nothing in
+  the W0 or W1a plans; they bite from W1 and W3.
+- **The operator handed the first wave to this coordinator on 2026-11-11** (W0 and the four W1a foundations left),
+  approved the order below the same day, and gave the coordinator autonomy for 24 hours. The split install is parked
+  (Later in the spec). W1 onward is out of scope until D-8126's build lands.
+- **The order (2026-11-11).** W0a, the role table and the time ports run first, in parallel, on three workers: they
+  share no file. The trigger table and case lane follows the role table, because both edit `stall.ts`'s import block
+  and two of this programme's claims must not overlap, and it follows #2606, because both add a `coord.db` migration
+  and the slot is measured again before merge. The simulator follows the time ports (it imports their fake), and its
+  Task 6 follows W0a's Task 7 (it moves W0's model under the test tree). W0b waits for the operator's setup item.
+- **Routing (2026-11-11).** Every piece is the matrix's "worker executing a spec'd plan" row: Opus · high, Sonnet ·
+  high subagents, workflows off, `compact 40`. Each piece's PR gets a review run on the held-out panel.
+- **W0's open questions (2026-11-11).** Questions 3, 4, 6, 7 and 8 take the plan's recommendation as this
+  coordinator's call: two runs (W0a, W0b), reuse the continuity spike's scratch accounts now that its loan has ended,
+  the model stays as it is, captures are not committed as fixtures, and the `scenarios-overlord/` set is the
+  re-measurement on a class advance. Questions 1 (the rig's bypass exception) and 2 (the replay baseline) are the
+  operator's, raised as items; question 5 (lanes) is in the setup item, and ruling 6 now allows another provider's
+  lane as a fallback, so the operator may name one.
 - **A plan's gap is closed in the spec, not recorded as a deviation.** Each plan was reviewed by reading the spec as
   its builder would. Where the spec left a choice open, #2533 settles it in the text, and the plan's placeholder
   entry was removed. That took the plans from 47 placeholder deviations to 31. What remains is a decision of the
@@ -68,9 +86,13 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   references of its own.
 - **A clause shorter is not a clause better.** The long clauses of the coordinator contract carry rules, and the
   sentences that read like rationale are pinned by tests on purpose. They were left as they are.
-- **No D-numbers are defined yet.** The spec defines none, and the plans name each recorded decision
-  `D-TBD-<slug>`. The programme mints real numbers through the ledger door when its run opens, and replaces each
-  slug in the same act. Until then the plans cannot merge: `server/test/dtbd.test.ts` fails on a concrete slug.
+- **The deviation block (minted 2026-11-11 at run 1774's open) is fifty numbers from D-8202.** D-8202 to D-8231 are
+  the plans' 30 recorded decisions. They are defined in the index plan, `docs/superpowers/plans/2026-11-10-overlord.md`,
+  because the deviation guard reads definitions from the top level of `docs/superpowers/plans/` only; each piece's plan
+  gives the whole entry with its old slug in brackets. D-8225 (one-mulberry32) belongs to the time-ports plan, and the
+  simulator plan cites it. The twenty numbers after D-8231 stay unwritten until a departure needs one: a worker names
+  a departure it finds by a plain-words slug in its wave-done, and this coordinator issues the next free number and
+  defines it in the index plan on this ledger PR before the worker's PR merges.
 - **The spec was verified in four rounds.** The first model covers the hold, readiness, generation and push machines:
   1.86 million states over 15 scenarios, 24 readings the text had left unsettled, and one design fault. #2529 writes
   each settled reading into the spec. The second covers authority, restore, requests, commands, the push budget and
@@ -104,8 +126,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 - **The operator's directions to the hardening review** are recorded in the spec's §2: built to run in containers; a
   decision model for the yes-or-no questions code cannot decide; accounts reserved for the Overlord and never
   fenced off, with auto memory off for every role.
-- **The spec supersedes rev 8.** The programme's workspace branch still holds rev 8. When it next takes `main`, it
-  takes `main`'s copy of the spec file.
+- **The spec supersedes rev 8.** The coordinator's workspace branch takes `main`'s copy of the spec file whole.
 
 ## Carried constraints
 
@@ -130,20 +151,15 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 
 - **Where to start.** Read the spec's "In short", §14 (the build order) and "Where things stand". Then read the plan
   of the piece you take. Each plan is self-contained.
-- **What can start now.** W0's Tasks 1 to 7, and every W1a foundation. They do not depend on each other, except
-  that the role table follows the mail-pace table (it widens `MAIL_PACE`'s key), and the simulator follows the ports
-  for time and chance.
+- **Running now (2026-11-11).** W0a (run 1774), the role table (run 1775) and the time ports (run 1776), one worker
+  each. Their claims are placed by each worker before its first edit, through the peer protocol (§3.3.9).
+- **Next.** The trigger table and case lane once the role table and #2606 have merged; the simulator once the time
+  ports have merged (its Task 6 once W0a's Task 7 is done); W0b once the operator answers the setup item.
 - **What was built before the programme's run opened.** The mail-pace table (#2528), each role skill's contract moved
   first (#2555), and the lean coordinator skill (#2557, #2558, #2560, #2559), with the cap on each `SKILL.md` behind
-  it. Each touches only its own files and changes nothing that runs, so each went up as a pull request of its own.
-- **What waits for the run.** The role table, the ports for time and chance, the simulator and the case lane touch
-  files that other programmes edit (`shared/api.ts`, `server/src/fleet.ts`, `server/src/coord/stall.ts`, the test
-  tree's shared helpers, a `coord.db` migration slot). The spec has the wave claim those files through the peer
-  protocol first (§3.3.9). So they start when the programme's run is open, its claims are placed, and its deviation
-  block is minted.
-- **What must not start.** W1 and later. They wait for D-8126 and for the operator's rulings.
-- **What the operator owes.** The fifteen open rulings (#2514), and W0's setup
-  item for Tasks 8 to 11: scratch accounts, a scratch project, a subject session and the consent list, as the W0 plan
-  sets out.
+  it.
+- **What must not start.** W1 and later. They wait for W1a and for D-8126's build (#2606).
+- **What the operator owes.** W0's setup item for Tasks 8 to 11, and W0's questions 1 and 2. The reserved accounts
+  are named in Settings once W1's reservation rule is live.
 - **What to report.** Each piece ends with its pull request merged through the queue, its plan's "Deviations found"
   filled in, and this ledger's row updated on a `ledger/overlord` branch.

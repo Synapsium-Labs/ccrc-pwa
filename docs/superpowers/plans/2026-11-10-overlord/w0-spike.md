@@ -285,7 +285,7 @@ git commit -m "docs(overlord): W0 Task 1, the read pass: platform rows, prior me
   The test reads both from the source and never restates them.
 - A bypass (`--dangerously-skip-permissions`; `--permission-mode` followed by `bypassPermissions`; or
   `launch.settings.permissions.defaultMode` set to `bypassPermissions`) is accepted only when the basename of the
-  scenario file's directory is `scenarios-overlord` (D-TBD-w0-rig-bypass).
+  scenario file's directory is `scenarios-overlord` (D-8203).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -653,7 +653,7 @@ git commit -m "docs(overlord): W0 Task 8, fleet reads: restarts, rolls, the conf
   recall on, no A/B window.
 - [ ] **Step 2:** Put two options to the operator, with that coordinator's answer: (A) a reduced run now, through the
   runbook's quiz acts under the operator's hand, with a spend cap; (B) the baseline is the first run of W1a's weekly
-  quiz lane, taken before any W1a arm is armed. Recommended: B (D-TBD-w0-quiz-baseline-deferred).
+  quiz lane, taken before any W1a arm is armed. Recommended: B (D-8207).
 - [ ] **Step 3: Record the ruling** and, for A, the score and spend. Commit.
 
 ### Task 12: The as-measured lines, the PR and the wave-done
@@ -679,22 +679,22 @@ git commit -m "docs(overlord): W0's as-measured lines in the spec"
 
 ## Deviations found
 
-The programme mints real numbers when its run opens, and each `D-TBD-<slug>` below is replaced by its number before
-this plan lands (`dtbd.test.ts` reds on a concrete slug in any tracked file).
+The programme's run (1774) minted these numbers on 2026-11-11. They are defined in the programme's index plan,
+`docs/superpowers/plans/2026-11-10-overlord.md`; each entry here gives the whole decision, after its number and old slug.
 
-- **D-TBD-w0-rig-not-kit** (method): the platform rows are measured with the delegation broker's rig against a mock
+- **D-8202, w0-rig-not-kit, method** — the platform rows are measured with the delegation broker's rig against a mock
   API, not on a lent account. It extends the tree's one harness for driving the binary, costs no spend and is
   deterministic. Only what needs a real model or a real swap uses the subject.
-- **D-TBD-w0-rig-bypass** (safety): the rig's "never a permission bypass" rule gains one exception, scenarios under
+- **D-8203, w0-rig-bypass, safety** — the rig's "never a permission bypass" rule gains one exception, scenarios under
   `scenarios-overlord/`, because the launch being measured is ccd's bypass launch. The delegation corpus stays
   bypass-free, and a test holds it.
-- **D-TBD-w0-listed-order-is-w1** (scope): "whether the swap honours the listed account order" cannot be measured,
+- **D-8204, w0-listed-order-is-w1, scope** — "whether the swap honours the listed account order" cannot be measured,
   because no listed order exists. W0 characterises today's pick (W0-25), and the order is W1's (C56).
-- **D-TBD-w0-flagged-switch-emulated** (method): a flagged request cannot be caused on purpose. The rig emulates its
+- **D-8205, w0-flagged-switch-emulated, method** — a flagged request cannot be caused on purpose. The rig emulates its
   documented refusal, and the fleet's history counts the real ones.
-- **D-TBD-w0-inbox-socket-docs-only** (method): the inbox socket is judged from documentation only. No undocumented
+- **D-8206, w0-inbox-socket-docs-only, method** — the inbox socket is judged from documentation only. No undocumented
   interface is probed.
-- **D-TBD-w0-quiz-baseline-deferred** (scope, if ruled B): §3.3.9 C52 says W0 runs the replay quiz once as the
+- **D-8207, w0-quiz-baseline-deferred, scope, if ruled B** — §3.3.9 C52 says W0 runs the replay quiz once as the
   baseline; under B, M13's baseline is the first run of W1a's quiz lane instead.
 
 **Settled by the spec's later edition, so no longer deviations:** W0 changes nothing that runs,

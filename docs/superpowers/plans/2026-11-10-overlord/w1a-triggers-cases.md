@@ -203,7 +203,7 @@ export function signatureText(s: TriggerSignature): string;        // `${s.kind}
 export function parseSignature(text: string): TriggerSignature | null;  // the one reader; null for anything else
 ```
 
-The kind word is `stall-arm`, not `stall`: the quoted `'stall'` has one home (D-TBD-trigger-kind-stall-arm).
+The kind word is `stall-arm`, not `stall`: the quoted `'stall'` has one home (D-8229).
 
 - [ ] **Step 1: Write the failing test** (`server/test/practice-triggers.test.ts`):
 
@@ -340,7 +340,7 @@ it('caseRunIds names each run of a parseable row once, ascending', ...);
 ### Task 4: The observation read names its event and its run
 
 An intended behaviour change of a pinned read, so a commit of its own. It extends the one window read over
-`run_events` rather than adding a second (D-TBD-one-observation-window-read).
+`run_events` rather than adding a second (D-8230).
 
 **Files:**
 - Modify: `server/src/coord/stallsettings.ts#StallObservationRow` (add `eventId`, `runId`) and the parameter type of
@@ -544,17 +544,17 @@ other answer leaves the run out, which can only lower what is counted); `casesDu
 
 ## Deviations found
 
-The programme mints real numbers when its run opens (`POST /api/ledger/deviations`); until then each entry is a
-`D-TBD-<slug>`, and none lands in a commit (Global Constraints).
+The programme's run (1774) minted these numbers on 2026-11-11. They are defined in the programme's index plan,
+`docs/superpowers/plans/2026-11-10-overlord.md`; each entry here gives the whole decision, after its number and old slug.
 
-- **D-TBD-arm-vocabulary-to-l0.** The stall arms' one definition moves from `server/src/coord/stall.ts` (L1) to
+- **D-8228, arm-vocabulary-to-l0** — The stall arms' one definition moves from `server/src/coord/stall.ts` (L1) to
   `shared/stall-watch.ts` (L0), because the spec's L0 trigger table must derive its first rows from them and L0 cannot
   import L1. `stall.ts` re-exports; `stall-vocabulary.test.ts`'s allowed imports gain `shared/stall-watch.js`.
-- **D-TBD-trigger-kind-stall-arm.** The kind word is `stall-arm`. The quoted `'stall'` is the sent detail head and has
+- **D-8229, trigger-kind-stall-arm** — The kind word is `stall-arm`. The quoted `'stall'` is the sent detail head and has
   one home, `stall.ts` (`update-stall.test.ts`).
-- **D-TBD-one-observation-window-read.** The lane reads through `CoordStore.stallObservationsSince`, extended with
+- **D-8230, one-observation-window-read** — The lane reads through `CoordStore.stallObservationsSince`, extended with
   `eventId` and `runId`, and resolves programmes through `CoordStore.run`. No second read of `run_events` is added.
-- **D-TBD-no-case-switch.** No operator switch in W1a. The lane writes only its own table and acts on nothing; shadow
+- **D-8231, no-case-switch** — No operator switch in W1a. The lane writes only its own table and acts on nothing; shadow
   is structural (no review code exists, and the import pin keeps mail, push and feed out of the lane).
 
 **Settled by the spec's later edition, so no longer deviations:** one occurrence is one episode

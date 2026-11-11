@@ -316,7 +316,7 @@ export function fakeTime(opts?: { wallMs?: number; monoMs?: number; seed?: numbe
 
 ```ts
 /** A seeded PRNG: draws in [0, 1). Copied verbatim from `server/test/docs-grammar.test.ts#mulberry32`, one of nine
- *  local copies in the test tree today; this is the first exported one (D-TBD-one-mulberry32). */
+ *  local copies in the test tree today; this is the first exported one (D-8225). */
 export function mulberry32(seed: number): () => number;
 ```
 
@@ -638,7 +638,7 @@ const THE_ADAPTER = 'server/src/time/system.ts';
 - [ ] **Step 1: Measure.** On the base, run
   `grep -rniE "current_(timestamp|date|time)|unixepoch|randomblob|random\(\)|'now'" server/src`
   and read each hit: only SQL text counts. Expected: no SQL; the `'now'` hits are TypeScript `Pick<…, 'now'>` keys. If
-  SQL hits exist, scope the SQL block to `TIME_PORT_SCOPE` instead and record it under D-TBD-sql-clock-repo-wide.
+  SQL hits exist, scope the SQL block to `TIME_PORT_SCOPE` instead and record it under D-8224.
 - [ ] **Step 2: Write the failing tests** in `time-ports.test.ts`:
 
 ```ts
@@ -742,26 +742,27 @@ Mechanical: mostly. Judgement: the `context` classification of `Date` in `ambien
 
 ## Deviations found
 
-The programme mints real numbers when its run opens; until then each entry keeps its `D-TBD-<slug>` name.
+The programme's run (1774) minted these numbers on 2026-11-11. They are defined in the programme's index plan,
+`docs/superpowers/plans/2026-11-10-overlord.md`; each entry here gives the whole decision, after its number and old slug.
 
-- **D-TBD-lane-clocks-is-clock** (consolidation): `laneRunner.ts`'s `LaneClocks` is deleted and `LaneRunner` takes
+- **D-8221, lane-clocks-is-clock, consolidation** — `laneRunner.ts`'s `LaneClocks` is deleted and `LaneRunner` takes
   `Clock`: one definition of the two-clock shape. A type change only; `lane-schedule.test.ts` and
   `disk-retention-beats.test.ts` run unedited.
-- **D-TBD-scheduler-is-one-shot** (shape): `Scheduler` has `after` only. A cadence is a `LANE_SCHEDULE` row run by
+- **D-8222, scheduler-is-one-shot, shape** — `Scheduler` has `after` only. A cadence is a `LANE_SCHEDULE` row run by
   `LaneRunner`, and a deadline is a column read through `Clock`, so a repeating timer here would be a second lane
   mechanism.
-- **D-TBD-time-bounds** (values the spec does not pin): `TIMER_MAX_MS` 2,147,483,647 (Node's ceiling, refused rather
+- **D-8223, time-bounds, values the spec does not pin** — `TIMER_MAX_MS` 2,147,483,647 (Node's ceiling, refused rather
   than clamped to 1 ms); `ENTROPY_MIN_BYTES` 16 and `ENTROPY_MAX_BYTES` 1024; `ENTROPY_MAX_BOUND` 2^32.
-- **D-TBD-sql-clock-repo-wide** (tightening): "SQL never reads the clock" is held over all of `server/src`, because
+- **D-8224, sql-clock-repo-wide, tightening** — "SQL never reads the clock" is held over all of `server/src`, because
   today's count is zero (measured in Task 6 Step 1). Chance in SQL (`random()`, `randomblob`) is held with it.
-- **D-TBD-one-mulberry32** (consolidation): the test tree holds nine local copies of `mulberry32` today
+- **D-8225, one-mulberry32, consolidation** — the test tree holds nine local copies of `mulberry32` today
   (`docs-grammar`, `child-reclaim-sweep-policy`, `child-reclaim-sweep`, `child-reclaim-persistent-tier`,
   `delegation-recovery`, `delegation-model`, `delegation-correlation`, `delegation-correlation-cost`,
   `delegation-correlation-bound`). The fake does not add a tenth: `server/test/fakeTime.ts` exports one, copied
   verbatim, and the move of the nine onto it is the simulator piece's characterized move.
-- **D-TBD-deps-time-required** (shape): `Deps.time` is required, so the composition root cannot omit it. About 95
+- **D-8226, deps-time-required, shape** — `Deps.time` is required, so the composition root cannot omit it. About 95
   type-checked `Deps` literals in about 34 test files gain the field; literals that spread `testDeps` get it from there.
-- **D-TBD-two-monotonic-readers** (open consolidation): `Deps.monotonicMs` (a test seam, unset in production) and
+- **D-8227, two-monotonic-readers, open consolidation** — `Deps.monotonicMs` (a test seam, unset in production) and
   `Deps.time.clock.mono` both carry the monotonic clock until the first is folded into the second. This is not a
   "legitimately different" pair: it is one fact with two carriers, kept only because folding it rewrites the watcher's
   lane wiring and the 36 test files that set `monotonicMs` (33 call `withFakeClock`). See the fourth question below.
