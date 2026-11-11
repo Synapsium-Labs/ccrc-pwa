@@ -204,19 +204,25 @@ function reach(lines: readonly SequenceLine[]): Violation | null {
 
 /** CB-rung-never-falls: between two boots, while mail stays held, no rung-1 verdict follows a rung-2 one. The episode is
  *  the lane's own `held some` .. `held none` stretch, the held mail the lane reads itself, never the episode the decider
- *  hands back: a decider that never returns an episode would otherwise switch this invariant off. */
+ *  hands back: a decider that never returns an episode would otherwise switch this invariant off. Its key, which the
+ *  message names, is the decider's: the queue time of the oldest mail held when the stretch opens. */
 function rungNeverFalls(lines: readonly SequenceLine[]): Violation | null {
-  let since = 0;
+  const queued = new Map<string, number>();
+  let key = 0;
   let open = false;
   let sawTwo = false;
   for (const l of lines) {
-    if (l.kind === 'server' && l.id === 'boot') { open = false; sawTwo = false; }
-    else if (l.kind === 'held' && l.state === 'some') { open = true; sawTwo = false; since = l.at; }
+    if (l.kind === 'mail' && l.state === 'queued') queued.set(l.id, l.at);
+    else if (l.kind === 'mail' && l.state === 'delivered') queued.delete(l.id);
+    else if (l.kind === 'server' && l.id === 'boot') { open = false; sawTwo = false; }
+    else if (l.kind === 'held' && l.state === 'some') {
+      open = true; sawTwo = false; key = queued.size > 0 ? Math.min(...queued.values()) : l.at;
+    }
     else if (l.kind === 'held' && l.state === 'none') { open = false; sawTwo = false; }
     else if (l.kind === 'verdict' && open) {
       if (l.state === 'rung-2') sawTwo = true;
       else if (l.state === 'rung-1' && sawTwo) {
-        return { invariant: 'CB-rung-never-falls', seq: l.seq, message: `mail held since ${since} pushed a lower rung after rung 2` };
+        return { invariant: 'CB-rung-never-falls', seq: l.seq, message: `episode ${key} pushed a lower rung after rung 2` };
       }
     }
   }

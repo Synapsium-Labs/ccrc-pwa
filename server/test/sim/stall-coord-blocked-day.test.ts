@@ -66,6 +66,36 @@ describe('the coord-blocked arm over a seeded day (Overlord W1a worked example, 
     expect(byName('CB-reach').check(late(half, COORD_BLOCKED_HELD_MS + STALL_SWEEP_MS))).toBeNull();
     expect(byName('CB-reach').check(late(half, COORD_BLOCKED_HELD_MS + 2 * STALL_SWEEP_MS))?.invariant).toBe('CB-reach');
   });
+  it('CONTROL: CB-reach counts the sweeps from the last boot, and from the first line before any boot', () => {
+    const R = COORD_BLOCKED_HELD_MS;
+    const M = STALL_SWEEP_MS;
+    // A boot half a sweep off the minute moves every later sweep: mail queued on the minute falls due between two, so
+    // its push is due at the next sweep, half a sweep after the threshold.
+    const rebooted = seqOf([['server', 'boot', 'up', 'sim', 0], ['server', 'crash', 'down', 'sim', 10 * M],
+      ['server', 'boot', 'up', 'sim', 10 * M + M / 2], ['mail', '1', 'queued', 'worker', 11 * M],
+      ['held', C, 'some', 'stalls', 11 * M + M / 2], ['verdict', C, 'rung-1', 'stalls', 11 * M + R + M / 2],
+      ['push', String(11 * M), 'rung-1', 'stalls', 11 * M + R + M / 2]]);
+    expect(byName('CB-reach').check(rebooted)).toBeNull();
+    // With no boot line the phase is the first line's time: a mail queued there falls due on a sweep, so a push half
+    // a sweep later is late.
+    const unbooted = seqOf([['mail', '1', 'queued', 'worker', M / 2], ['held', C, 'some', 'stalls', M / 2],
+      ['verdict', C, 'rung-1', 'stalls', R + M], ['push', String(M / 2), 'rung-1', 'stalls', R + M]]);
+    expect(byName('CB-reach').check(unbooted)?.invariant).toBe('CB-reach');
+  });
+  it('CONTROL: CB-rung-never-falls resets at a boot, at a release and at a new held stretch, each on its own', () => {
+    const held: Row = ['held', C, 'some', 'stalls', 0];
+    const two: Row = ['verdict', C, 'rung-2', 'stalls', 60_000];
+    const one: Row = ['verdict', C, 'rung-1', 'stalls', 180_000];
+    const inv = byName('CB-rung-never-falls');
+    expect(inv.check(seqOf([held, two, ['server', 'boot', 'up', 'sim', 120_000], one]))).toBeNull();
+    expect(inv.check(seqOf([held, two, ['held', C, 'none', 'stalls', 120_000], one]))).toBeNull();
+    expect(inv.check(seqOf([held, two, ['held', C, 'some', 'stalls', 120_000], one]))).toBeNull();
+  });
+  it('CONTROL: CB-rung-never-falls names the episode by its oldest held mail\'s queue time', () => {
+    const lines = seqOf([['mail', '1', 'queued', 'worker', 0], ['mail', '2', 'queued', 'worker', 300_000],
+      ['held', C, 'some', 'stalls', 360_000], ['verdict', C, 'rung-2', 'stalls', 420_000], ['verdict', C, 'rung-1', 'stalls', 480_000]]);
+    expect(byName('CB-rung-never-falls').check(lines)?.message).toBe(`episode ${START} pushed a lower rung after rung 2`);
+  });
   it('CONTROL: CB-rung-never-falls goes red on rung-2 then rung-1 while mail stays held, and not across a boot or a release', () => {
     // The stretch is the lane's held lines; no episode line is needed, so a decider that returns none cannot hide a fall.
     const held: Row = ['held', C, 'some', 'stalls', 0];

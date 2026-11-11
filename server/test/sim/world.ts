@@ -26,8 +26,7 @@ export class SimWorld {
   // throw becomes the fake's warning, the re-arm stops and simulate fails on the warning.
   private readonly maxCalls: number;
   private calls = 0;
-  // Every promise a scheduled call returned and that has not settled yet, so that settle() can wait for them. The fake
-  // records a rejection in a `.catch` it attaches after the call returns, so the rejection lands one microtask later.
+  // Every promise a scheduled call returned and that has not settled yet, so that settle() can wait for them.
   private readonly unsettled = new Set<Promise<unknown>>();
 
   constructor(opts: { readonly wallMs: number; readonly seed: number; readonly maxCalls?: number }) {
@@ -67,13 +66,18 @@ export class SimWorld {
     };
   }
 
-  /** Waits, on microtasks only, until every promise a scheduled call returned has settled, or until `SETTLE_TURNS`
-   *  turns have passed (a promise waiting on a timer the run never reached stays pending), and one turn more so that
-   *  the fake's own `.catch` has recorded a rejection. It never yields to a timer or to I/O, so nothing outside the
-   *  scenario runs while the ambient sources are stubbed. */
+  /** Waits, on microtasks only, until every promise a scheduled call returned has settled, and throws if any is still
+   *  pending after `SETTLE_TURNS` turns (one waiting on a timer the run never reached, or on more turns than the bound),
+   *  so a run never passes with a call unfinished. The world's `drop` and the fake's `.catch` react to the same promise
+   *  back to back, so by the turn that sees it settled the fake has recorded its rejection. It never yields to a timer
+   *  or to I/O, so no timer or I/O outside the scenario runs while the ambient sources are stubbed; a microtask queued
+   *  before the run may still run inside it. */
   async settle(): Promise<void> {
     for (let turn = 0; this.unsettled.size > 0 && turn < SETTLE_TURNS; turn++) await Promise.resolve();
-    await Promise.resolve();
+    const n = this.unsettled.size;
+    if (n > 0) {
+      throw new Error(`SimWorld.settle: ${n} promise${n === 1 ? '' : 's'} a scheduled call returned still pending after SETTLE_TURNS (${SETTLE_TURNS}) microtask turns`);
+    }
   }
 
   /** Registers a boot routine and runs it now; each boot after a crash runs every routine again. */

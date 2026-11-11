@@ -69,11 +69,23 @@ describe('simulate and the seed-replay convention', () => {
     const bad = { ...coin, setup: (ctx: SimContext<CoinEdge>) => { ctx.world.server.scheduler.after(1, fn); } };
     await expect(simulate(bad, 1, [])).rejects.toThrow('scenario coin, seed 1: ccrc-server: a scheduled call failed: later');
   });
+  it('a scheduled call still pending after the settle bound fails the run, never passes it', async () => {
+    const slow = async (): Promise<void> => { for (let i = 0; i < 10_005; i++) await null; throw new Error('later'); };
+    const bad = { ...coin, setup: (ctx: SimContext<CoinEdge>) => { ctx.world.server.scheduler.after(1, slow); } };
+    await expect(simulate(bad, 1, [])).rejects.toThrow(/1 promise .*still pending after SETTLE_TURNS/);
+  });
   it('a timer that re-arms at 0 ms fails the run at the budget, instead of hanging', async () => {
     const loop = { ...coin, setup: (ctx: SimContext<CoinEdge>) => {
       const again = (): void => { ctx.world.envAfter(0, again); };
       ctx.world.envAfter(0, again); } };
     await expect(simulate(loop, 1, [])).rejects.toThrow(/scheduled calls/);
+  });
+  it('a second simulate while one is in flight is refused, and the real functions are back after both', async () => {
+    const saved = { now: Date.now, perf: performance.now, random: Math.random, st: globalThis.setTimeout };
+    const both = await Promise.allSettled([simulate(coin, 1, []), simulate(coin, 2, [])]);
+    expect(both.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    expect(String((both[1] as PromiseRejectedResult).reason)).toMatch(/already in flight/);
+    expect([Date.now, performance.now, Math.random, globalThis.setTimeout]).toEqual([saved.now, saved.perf, saved.random, saved.st]);
   });
   it('the real functions are back after a run, a failed one included', async () => {
     const g = globalThis;

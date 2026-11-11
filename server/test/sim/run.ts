@@ -30,8 +30,14 @@ export interface SimResult<E extends string> {
   readonly violations: readonly Violation[];
 }
 
-/** Replaces the six ambient time and randomness sources with throwers; returns the restore. */
+// True while one simulate holds the stubs. A second run in flight would save the first's throwers as the real functions
+// and restore them last, so it is refused instead.
+let stubbed = false;
+
+/** Replaces the six ambient time and randomness sources with throwers; returns the restore. Refuses while another run
+ *  holds them. */
 function stubAmbient(): () => void {
+  if (stubbed) throw new Error('simulate: another run is already in flight; run seeds one after another');
   const g = globalThis as unknown as Record<string, unknown>;
   const saved = {
     dateNow: Date.now, perfNow: performance.now, random: Math.random,
@@ -39,6 +45,7 @@ function stubAmbient(): () => void {
   };
   const refuse = (name: string) => (): never => { throw new Error(`ambient ${name} inside the simulator`); };
   const restore = (): void => {
+    stubbed = false;
     Date.now = saved.dateNow; performance.now = saved.perfNow; Math.random = saved.random;
     g.setTimeout = saved.setTimeout; g.setInterval = saved.setInterval; g.setImmediate = saved.setImmediate;
   };
@@ -50,12 +57,14 @@ function stubAmbient(): () => void {
     g.setInterval = refuse('setInterval');
     g.setImmediate = refuse('setImmediate');
   } catch (err) { restore(); throw err; }
+  stubbed = true;
   return restore;
 }
 
 /** Runs one seed. Async because a scheduled call may return a promise: after the last timer, `world.settle()` waits on
- *  microtasks for those promises, so a rejection is the fake's warning before the check, and the ambient sources stay
- *  stubbed until then. A continuation after an `await` still runs only after the whole `runUntil`, at the run's end
+ *  microtasks for those promises (and throws if one is still pending at its bound), so a rejection is the fake's
+ *  warning before the check, and the ambient sources stay stubbed until then. One run at a time: a second while one is
+ *  in flight throws. A continuation after an `await` still runs only after the whole `runUntil`, at the run's end
  *  time: a lane that awaits between its own steps is not interleaved with the timers (see the departures note). */
 export async function simulate<E extends string>(s: Scenario<E>, seed: number, inv: readonly Invariant[]): Promise<SimResult<E>> {
   const restore = stubAmbient();
