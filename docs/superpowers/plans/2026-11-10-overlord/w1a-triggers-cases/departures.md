@@ -19,7 +19,9 @@ because the ledger guard refuses an edit to it from a work branch.
 
 - **The migration slot moved.** The plan named entry 49; `main` stood at 55 when Task 5 was written, and at 56 before
   the push, so `practice_cases` is entry 57 (`user_version` 56 to 57). Another piece took 56 first: the branch absorbed
-  `main` a second time, on its own conflict, and renumbered the entry and nothing else.
+  `main` a second time, on its own conflict, and renumbered the entry and nothing else. Two older migration tests name
+  every later entry (`coord-calls-store.test.ts`'s replay of the later entries, `run-close-switch.test.ts`'s step back to
+  version 53), as `lane_arm_settings` did for itself; each now names `practice_cases` too.
 - **The time ports merged mid-wave.** The branch absorbed `main` once, as a merge, on the coordinator's licence, so the
   lane takes its wall clock from `Deps.time.clock.wall()`. The lane's new files, and the role table's
   (`server/src/roleOf.ts`, `shared/fleetRoles.ts`), joined `TIME_PORT_FILES` in
