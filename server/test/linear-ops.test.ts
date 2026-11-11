@@ -1214,7 +1214,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(0);
     expect(b.fx.rate.take({ lane: 'request', slot: SLOT, calls: 25 }).ok).toBe(true);
-    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 425 }).ok).toBe(true);
+    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 350 }).ok).toBe(true);
   });
 
   it('a team miss and a name miss are two jobs of the one queue, one slot at a time', async () => {
