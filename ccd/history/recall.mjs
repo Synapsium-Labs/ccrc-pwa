@@ -2139,7 +2139,9 @@ const TOUCHED_NODE_COLS = ['node_id', 'session_pk', 'epoch_seq', 'kind', 'gist',
 /** A root's graph, or null: the file absent, over GRAPH_MAX_BYTES, malformed or with no nodes or links all read as "no graph". */
 function touchedGraphOf(root) {
   try {
-    return loadGraph(xjoin(root, 'graphify-out', 'graph.json'), GRAPH_MAX_BYTES);
+    const g = loadGraph(xjoin(root, 'graphify-out', 'graph.json'), GRAPH_MAX_BYTES);
+    // Ruling R11: a graph that loads with no file at all (no node carries a source_file) is "no graph", as failure row 28's "no nodes".
+    return g.files.size === 0 ? null : g;
   } catch {
     return null;
   }
@@ -2191,7 +2193,11 @@ export function runTouched(rc, a) {
   // The scope's roots: each confirmed in-scope epoch's launch directory, and which epoch's root a node belongs to.
   const epochRoot = new Map();
   const rootSet = new Set();
-  for (const e of db.prepare('SELECT session_pk, seq, cwd, cwd_real FROM epochs WHERE confirmed_ms IS NOT NULL AND session_pk IN (SELECT value FROM json_each(?))').all(sessionJson)) {
+  const epochRows = db.prepare('SELECT session_pk, seq, cc_session_uuid, cwd, cwd_real FROM epochs WHERE confirmed_ms IS NOT NULL AND session_pk IN (SELECT value FROM json_each(?))').all(sessionJson);
+  // W2-D35: under an as-of cut an epoch shows iff the cut leaves one of its transcripts a row; null with no cut shows them all.
+  const shownEpochs = cutVisibleEpochs(rc, epochRows.map((e) => e.cc_session_uuid));
+  for (const e of epochRows) {
+    if (shownEpochs !== null && !shownEpochs.has(e.cc_session_uuid)) continue;
     const root = e.cwd_real ?? e.cwd;
     epochRoot.set(`${e.session_pk}:${e.seq}`, typeof root === 'string' && root !== '' ? root : null);
     if (typeof root === 'string' && root !== '') rootSet.add(root);
@@ -2224,6 +2230,7 @@ export function runTouched(rc, a) {
   const candidates = [];
   let capped = false;
   for (const [sql, pattern] of selects) {
+    if (capped) break;   // the cap is reached: the remaining selects add nothing the answer would keep
     for (const r of db.prepare(sql).all(pattern, limit)) {
       const key = `${r.node_id}\0${r.kind}\0${r.value}`;
       if (seen.has(key)) continue;
@@ -2238,8 +2245,12 @@ export function runTouched(rc, a) {
   if (candidates.length > 0) {
     const cols = selectColumns(rc.version, 'nodes', TOUCHED_NODE_COLS, rc.schema, 'n');
     const ids = JSON.stringify([...new Set(candidates.map((c) => c.node_id))]);
-    for (const n of db.prepare(`SELECT ${cols}${agentColumn(rc, 'n.transcript_pk')} FROM nodes n
-      WHERE n.node_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))${mainOnlyAnd(rc, 'n.transcript_pk')}`).all(ids, sessionJson)) {
+    const found = db.prepare(`SELECT ${cols}${agentColumn(rc, 'n.transcript_pk')} FROM nodes n
+      WHERE n.node_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))${mainOnlyAnd(rc, 'n.transcript_pk')}`).all(ids, sessionJson);
+    // W2-D36: a node the as-of cut hides is absent, never listed.
+    const hidden = cutHiddenNodes(rc, found.map((n) => n.node_id));
+    for (const n of found) {
+      if (hidden.has(n.node_id)) continue;
       if (epochRoot.has(`${n.session_pk}:${n.epoch_seq}`)) nodeById.set(n.node_id, n);
     }
   }
@@ -2266,7 +2277,10 @@ export function runTouched(rc, a) {
       done.add(key);
       matches.push({ ...base, file: `${root ?? ''}\0${file}`, fileName: file, match });
     };
+    // A path:symbol candidate of a path-symbol query must also carry its symbol; a path or test ref to the file matches on the path.
+    const symbolOk = q.kind !== 'path-symbol' || c.kind !== 'path:symbol' || xlib.symbolMatches(sp, q.symbol);
     for (const w of wantFiles) {
+      if (!symbolOk) break;
       if (w.root !== null && w.root !== root) continue;
       const m = xlib.matchRef(norm, w.file, graphAt(root));
       if (m !== null) add(w.file, m);
@@ -2282,7 +2296,7 @@ export function runTouched(rc, a) {
   const rowText = (r) => {
     const f = family.get(r.sessionPk);
     const refs = [...r.refs].sort((x, y) => (x.kind < y.kind ? -1 : x.kind > y.kind ? 1 : x.value < y.value ? -1 : x.value > y.value ? 1 : 0))
-      .map((x) => `${x.kind}/${x.origin}${x.line === null ? '' : ` line ${x.line}`}${x.symbol === null ? '' : ` symbol ${tok(x.symbol)}`}`).join(', ');
+      .map((x) => `${tok(x.kind)}/${tok(x.origin)}${x.line === null ? '' : ` line ${x.line}`}${x.symbol === null ? '' : ` symbol ${tok(x.symbol)}`}`).join(', ');
     const g = touchedGist(rc, r.gist);
     const id = idShown(rc, r.nodeId);
     const body = g === null ? '(no gist)' : recallEnvelope({ src: 'node', id, ts: r.earliestMs, role: r.nodeKind, text: g });
@@ -2312,7 +2326,7 @@ export function runTouched(rc, a) {
       family: f === undefined ? null : { ccrcId: idShown(rc, f.ccrcId), generation: idShown(rc, f.generation) },
       match: r.match,
       refs: r.refs.map((x) => ({ kind: x.kind, value: redactForDisplay(x.value, rc.pairIdx), origin: x.origin, line: x.line, symbol: x.symbol === null ? null : redactForDisplay(x.symbol, rc.pairIdx) })),
-      gist: touchedGist(rc, r.gist), agentId: r.agentId === '' ? null : idShown(rc, r.agentId), file: r.fileName,
+      gist: touchedGist(rc, r.gist), agentId: r.agentId === '' ? null : idShown(rc, r.agentId), file: redactForDisplay(r.fileName, rc.pairIdx),
     };
   });
   const nextFor = (n) => (n === 0 ? null : ['describe', idShown(rc, limited[0].nodeId), ...rc.scopeArgs]);

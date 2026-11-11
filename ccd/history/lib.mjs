@@ -10067,14 +10067,14 @@ const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 
 /** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
  *  child, regex-worker.mjs): the shared context above plus the verb's own statements. All are v1 tables today;
  *  a version that adds a table a verb needs adds it here, in the same PR (an as-of cut reads memberships and boundaries
- *  through asOfHiddenNodesSql's CTEs, so grep, expand and tree list both). blobs_fts is a virtual table the sweep
+ *  through asOfHiddenNodesSql's CTEs, so grep, expand, tree and touched list both). blobs_fts is a virtual table the sweep
  *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
 export const VERB_TABLES = Object.freeze({
   grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships', 'boundaries']),
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
   expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships', 'boundaries']),
   tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships', 'boundaries']),
-  touched: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs']),
+  touched: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'memberships', 'boundaries']),
 });
 
 /** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this

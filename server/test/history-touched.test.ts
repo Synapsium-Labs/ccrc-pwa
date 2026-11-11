@@ -8,7 +8,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, runSweep, runCli, withPane, seedFamily, type HistoryBox } from './historyHelpers.js';
-import { userRow, assistantRow, type Row } from './historyFixtures.js';
+import { userRow, assistantRow, boundaryRow, summaryRow, type Row } from './historyFixtures.js';
+import { LANE_ROSTER } from './historyAgentFixtures.js';
 import { mkTmp } from './tmpHelpers.js';
 import { GRAPH_MAX_BYTES } from '../../ccd/compact-card.mjs';
 import {
@@ -217,7 +218,7 @@ describe('touched deciders', () => {
 // tables through a writer handle that is closed before the CLI runs; every case names its own files and symbols, so a case's
 // answer is its own. The CLI runs against the fixture HOME only.
 describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb (Task 4B)', () => {
-  const ID = 'claude-a-demo';
+  const ID = 'lane-a-demo';
   const PROJECT = 'demo';
   const TA = 'a1a1a1a1-1111-4111-8111-111111111111';
   const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
@@ -238,6 +239,17 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
       rows.push(userRow({ uuid: rid(2 * i - 1), ts: iso(2 * i - 1), sessionId: TA, cwd, text: `fixture question ${i}` }));
       rows.push(assistantRow({ uuid: rid(2 * i), ts: iso(2 * i), sessionId: TA, cwd, text: `Fixture answer ${i}.`, requestId: `req_${i}`, msgId: `msg_${i}` }));
     }
+    // Two manual compactions, so the store holds two boundaries (the as-of cut case plants nodes on them).
+    for (let c = 1; c <= 2; c += 1) {
+      const base = { sessionId: TA, cwd };
+      const [u, a, x, b, sm] = [1, 2, 3, 4, 5].map((i) => rid(100 * c + i));
+      rows.push(userRow({ ...base, uuid: u!, ts: iso(50 * c), text: `fixture request ${c}` }));
+      rows.push(assistantRow({ ...base, uuid: a!, ts: iso(50 * c + 1), text: `Fixture answer ${c}.`, requestId: `req_c_${c}`, msgId: `msg_c_${c}` }));
+      rows.push(userRow({ ...base, uuid: x!, ts: iso(50 * c + 2), text: `fixture follow-up ${c}` }));
+      rows.push(boundaryRow({ ...base, uuid: b!, ts: iso(50 * c + 3), trigger: 'manual', headUuid: x!, anchorUuid: sm!, tailUuid: x!, allUuids: [x!] }));
+      rows.push(summaryRow({ ...base, uuid: sm!, ts: iso(50 * c + 4), text: ['This session is being continued from a previous conversation. The summary below covers the earlier portion.',
+        '<summary>', '1. Primary Request and Intent:', `   Fixture request ${c}.`, '8. Current Work:', `   Wrote part ${c}.`, '9. Optional Next Step:', '   Continue.', '</summary>'].join('\n') }));
+    }
     return rows;
   }
   function withDb<T>(fn: (db: DatabaseSync) => T): T {
@@ -246,15 +258,15 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
   }
   let nodeSeq = 0;
   /** A native leaf of the family's epoch with its refs; `agentTranscript` puts it on a subagent's transcript. */
-  function plant(id: string, o: { latest?: number; gist?: string | null; refs?: Array<[string, string, string?]>; tpk?: number } = {}): string {
+  function plant(id: string, o: { latest?: number; gist?: string | null; refs?: Array<[string, string, string?]>; tpk?: number; boundary?: number } = {}): string {
     nodeSeq += 1;
     const latest = o.latest ?? T0 + nodeSeq * 1000;
     withDb((db) => {
       db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
         summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
         directive_flag, capped, parser_version, created_ms)
-        VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`)
-        .run(id, ids.session_pk, ids.seq, o.tpk ?? ids.tpk, o.gist === undefined ? `Gist of ${id}. Second sentence.` : o.gist, latest - 500, latest, Date.now());
+        VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', ?, NULL, NULL, ?, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`)
+        .run(id, ids.session_pk, ids.seq, o.tpk ?? ids.tpk, o.gist === undefined ? `Gist of ${id}. Second sentence.` : o.gist, o.boundary ?? null, latest - 500, latest, Date.now());
       const ins = db.prepare('INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
       db.exec('BEGIN');
       for (const [kind, value, origin] of o.refs ?? []) ins.run(id, kind, value, origin ?? 'tool_use');
@@ -281,7 +293,7 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
 
   beforeAll(() => {
     root = mkTmp('ccrc-hist-touched-root-');
-    box = makeHistoryBox('ccrc-hist-touched-');
+    box = makeHistoryBox('ccrc-hist-touched-', { roster: LANE_ROSTER });
     const sw = runSweep(box);
     expect(sw.code, sw.stderr).toBe(0);
     seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(root) });
@@ -521,6 +533,71 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
   it.todo('TC20 the ordered cap (P13): held until Task 4C\'s p95 measurement settles it');
   it.todo('TC23 order: under the ordered cap the newest of 10,001 symbol candidates is listed first (held with TC20)');
 
+  it('P8 a path-symbol query tests its symbol: a path:symbol ref of another symbol is not listed, the same symbol and a plain path ref are', () => {
+    plant('Lt31a', { refs: [['path:symbol', 'ccd/tc31.mjs:otherSym']] });
+    plant('Lt31b', { refs: [['path:symbol', 'ccd/tc31.mjs:fooBar']] });
+    plant('Lt31c', { refs: [['path', 'ccd/tc31.mjs']] });
+    const r = touchedJson(['ccd/tc31.mjs:fooBar']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(items(r).map((i) => i['nodeId']).sort()).toEqual(['Lt31b', 'Lt31c']);
+    expect(items(touchedJson(['ccd/tc31.mjs'])).map((i) => i['nodeId']).sort(), 'CONTROL: the path query lists all three').toEqual(['Lt31a', 'Lt31b', 'Lt31c']);
+  }, HEAVY);
+
+  it('W2-D36 the as-of cut: a node the cut hides is absent, and the same query without the cut lists it', () => {
+    const b = withDb((db) => db.prepare('SELECT e.entry_id AS id, e.uuid AS uuid FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id ORDER BY b.ord').all() as unknown as Array<{ id: number; uuid: string }>);
+    expect(b.length, 'CONTROL: the store holds two boundaries').toBe(2);
+    plant('Lt30vis', { boundary: Number(b[0]!.id), refs: [['path', 'ccd/tc30.mjs']] });
+    plant('Lt30hid', { boundary: Number(b[1]!.id), refs: [['path', 'ccd/tc30.mjs']] });
+    expect(items(touchedJson(['ccd/tc30.mjs'])).map((i) => i['nodeId']).sort(), 'CONTROL: without a cut both are listed').toEqual(['Lt30hid', 'Lt30vis']);
+    const storeId = fs.readFileSync(path.join(box.root, 'store.id'), 'utf8').trim();
+    fs.writeFileSync(path.join(box.root, 'headless-on'), `store ${storeId}\n${ID} ${G1}\n`, { mode: 0o600 });
+    const cut = runCli(box, ['touched', 'ccd/tc30.mjs', '--json'], { env: { CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: b[0]!.uuid } });
+    expect(cut.code, `${cut.stderr}${cut.stdout}`).toBe(0);
+    expect(items(cut).map((i) => i['nodeId'])).toEqual(['Lt30vis']);
+  }, HEAVY);
+
+  it('a graph with no nodes answers as no graph (R11, failure row 28)', () => {
+    plant('Lt32n1', { refs: [['path', 'lib/tc32.mjs']] });
+    plantGraph([]);
+    const r = touched(['lib/tc32.mjs']);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(headers(r)).toEqual(['touched lib/tc32.mjs (no graph)']);
+  }, HEAVY);
+
+  it('a gist and a ref value holding a secret-shaped string print redacted, in the human page and in --json', () => {
+    const SECRET = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+    plant('Lt41n1', { gist: `Leaked ${SECRET} in the log. Second sentence.`, refs: [['path:symbol', `sec/${SECRET}.mjs:tc41sym`], ['path', 'ccd/tc41.mjs']] });
+    for (const arg of ['tc41sym', 'ccd/tc41.mjs']) {
+      const h = touched([arg]);
+      const j = touchedJson([arg]);
+      expect(h.code, `${h.stderr}${h.stdout}`).toBe(0);
+      expect(h.stdout, `human ${arg}`).not.toContain(SECRET);
+      expect(j.stdout, `json ${arg}`).not.toContain(SECRET);
+      expect(j.stdout).toContain('[redacted]');
+    }
+  }, HEAVY);
+
+  it('the 20,000-character cap: the human page and the --json envelope each stay within it, and a cut prints (+k not shown)', () => {
+    for (let i = 1; i <= 100; i += 1) {
+      plant(`Lt42n${String(i).padStart(3, '0')}`, {
+        latest: T0 + 500_000 + i * 1000,
+        gist: `Long gist number ${i} ${'word '.repeat(40)}`,
+        refs: [1, 2, 3, 4].map((k) => ['path:symbol', `ccd/tc42.mjs:symbolNumber${k}WithAVeryLongName${'x'.repeat(40)}`, 'tool_use'] as [string, string, string?]),
+      });
+    }
+    const h = touched(['ccd/tc42.mjs', '--limit', '100']);
+    const j = touchedJson(['ccd/tc42.mjs', '--limit', '100']);
+    expect(h.code, `${h.stderr}`).toBe(0);
+    expect(h.stdout.length).toBeLessThanOrEqual(20_000);
+    expect(j.stdout.length).toBeLessThanOrEqual(20_000);
+    const shown = Number(j.json?.['shown']);
+    expect(shown, 'the page was cut').toBeLessThan(100);
+    expect(j.json?.['total']).toBe(100);
+    expect(rowLines(h).length).toBeLessThan(100);
+    expect(h.stdout).toMatch(/\(\+\d+ not shown\)/);
+    expect(items(j)).toHaveLength(shown);
+  }, HEAVY);
+
   it('a sample answer: the text and JSON forms agree on the rows, and the human form ends with shown, next and the disclosure', () => {
     plant('Lt99n1', { latest: T0 + 70_000, gist: 'Fixed the parser. It was slow.', refs: [['path', 'ccd/tc99.mjs:10-20'], ['test', `${root}/ccd/tc99.mjs`, 'model']] });
     const r = touched(['ccd/tc99.mjs']);
@@ -551,15 +628,15 @@ describe.skipIf(process.platform === 'darwin')('touched, spawned: the read verb 
       const r = runCli(b, verb === 'tree' ? ['tree', '--json'] : ['touched', 'ccd/x.mjs', '--json'], { env: withPane(b, ID) });
       return [r.code, r.json?.['reason']];
     };
-    const fresh = makeHistoryBox('ccrc-hist-touched-exit-a-');
+    const fresh = makeHistoryBox('ccrc-hist-touched-exit-a-', { roster: LANE_ROSTER });
     expect(ask(fresh, 'touched')).toEqual(ask(fresh, 'tree'));
     expect(ask(fresh, 'touched')[0]).toBe(6);
-    const zero = makeHistoryBox('ccrc-hist-touched-exit-b-');
+    const zero = makeHistoryBox('ccrc-hist-touched-exit-b-', { roster: LANE_ROSTER });
     fs.mkdirSync(path.join(zero.root, 'db'), { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(zero.root, 'db', 'history.db'), '', { mode: 0o600 });
     expect(ask(zero, 'touched')).toEqual(ask(zero, 'tree'));
     expect(ask(zero, 'touched')).toEqual([5, 'store-zero-byte']);
-    const server = makeHistoryBox('ccrc-hist-touched-exit-c-', { role: 'server' });
+    const server = makeHistoryBox('ccrc-hist-touched-exit-c-', { role: 'server', roster: LANE_ROSTER });
     expect(ask(server, 'touched')).toEqual(ask(server, 'tree'));
     expect(ask(server, 'touched')[0]).toBe(9);
   }, HEAVY);
