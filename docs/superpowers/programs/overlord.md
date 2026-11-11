@@ -24,7 +24,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The operator's ruling on the ratchet's scope | #2556 | merged |
 | W1a, foundations | The coordinator skill made lean: its procedures in reference files, the wave lifecycle one file per step | #2557, #2558 and #2560 (the tests, first); #2559 | merged |
 | W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
-| W1a, foundations | Ports for time and chance | run 1776; plan `w1a-time-ports.md` | open |
+| W1a, foundations | Ports for time and chance | run 1776, #2623; plan `w1a-time-ports.md` | wave-done verified 2026-11-11; under review (run 1780) |
 | W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775; plan `w1a-roles.md` | open |
 | W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | after the role table merges, and after #2606 |
 | W1a, foundations | The simulator's skeleton and the first model | plan `w1a-simulator.md` | after the time ports merge; its Task 6 after W0a's Task 7 |
@@ -90,9 +90,16 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   the plans' 30 recorded decisions. They are defined in the index plan, `docs/superpowers/plans/2026-11-10-overlord.md`,
   because the deviation guard reads definitions from the top level of `docs/superpowers/plans/` only; each piece's plan
   gives the whole entry with its old slug in brackets. D-8225 (one-mulberry32) belongs to the time-ports plan, and the
-  simulator plan cites it. The twenty numbers after D-8231 stay unwritten until a departure needs one: a worker names
-  a departure it finds by a plain-words slug in its wave-done, and this coordinator issues the next free number and
-  defines it in the index plan on this ledger PR before the worker's PR merges.
+  simulator plan cites it. The numbers after those stay unwritten until a departure needs one: a worker names a
+  departure it finds by a plain-words slug in its wave-done, and this coordinator issues the next free number and
+  defines it in the index plan on a ledger PR before the worker's PR merges. D-8232 to D-8234 are the first three so
+  issued (2026-11-11), for the time ports: the SQL clock pattern also catches SQLite's date functions called with no
+  time value, the ambient scan also sees `AbortSignal.timeout` and the timers modules, and the fake refuses re-entry.
+  Seventeen numbers of the block remain unwritten.
+- **A work branch cannot edit an existing plan file** (2026-11-11, measured on #2623): the ledger-guard CI step
+  refuses it. So a worker writes its departures, its rulings within the plan and its deferred minors in a new note
+  beside its plan (the time ports' is `2026-11-10-overlord/w1a-time-ports/departures.md`), and this coordinator folds
+  the departures into the plan and the index on a ledger PR. Later briefs say so.
 - **The spec was verified in four rounds.** The first model covers the hold, readiness, generation and push machines:
   1.86 million states over 15 scenarios, 24 readings the text had left unsettled, and one design fault. #2529 writes
   each settled reading into the spec. The second covers authority, restore, requests, commands, the push budget and
