@@ -14,7 +14,9 @@ the index plan, `docs/superpowers/plans/2026-11-10-overlord.md`.
   `../roleOf.js`. `server/test/stall-vocabulary.test.ts` admitted value imports only from `shared/api.ts`, plus
   `stallWatchSays` from `../sessionReading.js`, so it went red. The pin now admits `sessionRoleOf` from `../roleOf.js`.
   The import must stand alone, on one exact line, by the same rule the pin applies to `stallWatchSays`: both are L1 files
-  that import only L0. The stall lane still cannot read the role table or call `roleOf` itself.
+  that import only L0. The stall lane still cannot read the role table or call `roleOf` itself. The same commit
+  (2d2972166) also rewrites one sentence of `stall.ts`'s module docstring, the one that lists its permitted value
+  imports, so that it names `sessionRoleOf` from `../roleOf.js`. The code change in `stall.ts` is the one import.
 - **deviations-in-a-note** — The brief asked for these entries in the plan's own "Deviations found" section. The ledger
   guard refuses a feature pull request that modifies an existing file under `docs/superpowers/plans/`, so they are in
   this new note instead.
