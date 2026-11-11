@@ -27,7 +27,7 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | W1a, foundations | Ports for time and chance | #2623; plan `w1a-time-ports.md` | merged |
 | W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | #2624; plan `w1a-roles.md` | merged |
 | W1a, foundations | The trigger table and the case lane, in shadow | run 1785, #2644; plan `w1a-triggers-cases.md` | wave-done verified 2026-11-11; under review (run 1793) |
-| W1a, foundations | The simulator's skeleton and the first model | run 1788; plan `w1a-simulator.md` | open (dispatched 2026-11-11); its Task 6 after #2632 merges |
+| W1a, foundations | The simulator's skeleton and the first model | run 1788, #2649; plan `w1a-simulator.md` | open: Tasks 1 to 6 done, waiting on its fast run |
 | W1a, the machine | Generations, the receipt and renewal for every long-lived role; the anchor and the card; notes; probes; launch profiles | not planned yet | waits for W0's measurements |
 | W1 | Designate and talk | not planned yet | waits for W1a (D-8126's build, #2606, merged 2026-11-11) |
 | W2 | Route and follow up | not planned yet | follows W1 |
@@ -100,7 +100,8 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   are W0a's three, all of method: the rig tooling beyond the files Task 2 named, the scenario arms split one
   environment to a run, and the force arm pinning its setting sources. D-8240 is the simulator's: the reach
   invariant's clock stops while the server is down. D-8241 is the trigger table's: the case read looks back two
-  windows, so a consumed episode never counts again. Ten numbers of the block remain unwritten.
+  windows, so a consumed episode never counts again. D-8242 is the simulator's second: its world bounds the scheduled
+  calls, so a zero-delay re-arm fails instead of hanging. Nine numbers of the block remain unwritten.
 - **Review 1780 on the time ports (2026-11-11), at 65415597a.** Panel verdict: no critical finding. One important
   finding was kept by two of three refuters: the ambient scan missed the `globalThis.`, `?.` and `node:process` forms.
   Six minor findings and five observations; one raised-important finding (a zero-delay re-arm hangs the fake's
