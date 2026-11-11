@@ -27,18 +27,22 @@ export const LINEAR_QUOTA = { requestsPerHour: 2_500, complexityPerHour: 3_000_0
 
 /** Who may start a call, each its own bucket in each slot. `proxy`: the session proxy routes. `request`: the calls a
  *  cookie-gated request starts (the title lookups and the legacy Check again), which a local caller reaches with no
- *  token while the sign-in gate is unarmed. `floor`: ccrc's background refreshes and the account-gated key acts. */
-export const LINEAR_RATE_LANES = ['proxy', 'request', 'floor'] as const;
+ *  token while the sign-in gate is unarmed. `floor`: ccrc's background refreshes and the account-gated key acts.
+ *  `sync`: the plan sync's writes and the drift pass (D-8180). `migration`: the one-time hierarchy migration's
+ *  writes, a smaller share than the sync's and the sessions' (D-8180). */
+export const LINEAR_RATE_LANES = ['proxy', 'request', 'floor', 'sync', 'migration'] as const;
 export type LinearRateLane = (typeof LINEAR_RATE_LANES)[number];
 
 /** A slot's calls an hour: 2,000 of the user's 2,500, so 500 are left to the user's own use of Linear. */
 export const LINEAR_SLOT_CALLS_PER_HOUR = 2_000;
 
-/** The slot's 2,000 as three lanes that NEVER BORROW from each other: no amount of proxy traffic takes the titles or
+/** The slot's 2,000 as five lanes that NEVER BORROW from each other: no amount of proxy traffic takes the titles or
  *  the Check again away, and no amount of tokenless traffic to the cookie routes takes the proxy's lane or the floor. */
-export const LINEAR_LANE_CALLS_PER_HOUR: Readonly<Record<LinearRateLane, number>> = { proxy: 1_700, request: 100, floor: 200 };
+export const LINEAR_LANE_CALLS_PER_HOUR: Readonly<Record<LinearRateLane, number>> = {
+  proxy: 1_400, request: 100, floor: 200, sync: 200, migration: 100,
+};
 
-/** After a restart each lane starts at this share of its size (425, 25 and 50), so a crash loop cannot spend an
+/** After a restart each lane starts at this share of its size (350, 25, 50, 50 and 25), so a crash loop cannot spend an
  *  hour's quota in a minute. */
 export const LINEAR_RESTART_SHARE = 0.25;
 

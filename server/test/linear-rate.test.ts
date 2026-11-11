@@ -74,8 +74,8 @@ describe('the budgets, held against LINEAR_QUOTA (spec §1.2a, §6.7)', () => {
     expect(LINEAR_QUOTA.requestsPerHour - LINEAR_SLOT_CALLS_PER_HOUR).toBeGreaterThanOrEqual(500);
   });
 
-  it('the proxy lane, the request lane and the floor are 1,700, 100 and 200, and sum to the slot', () => {
-    expect(LINEAR_LANE_CALLS_PER_HOUR).toEqual({ proxy: 1_700, request: 100, floor: 200 });
+  it('the five lanes are 1,400, 100, 200, 200 and 100, and sum to the slot', () => {
+    expect(LINEAR_LANE_CALLS_PER_HOUR).toEqual({ proxy: 1_400, request: 100, floor: 200, sync: 200, migration: 100 });
     const sum = Object.values(LINEAR_LANE_CALLS_PER_HOUR).reduce((a, b) => a + b, 0);
     expect(sum).toBe(LINEAR_SLOT_CALLS_PER_HOUR);
   });
@@ -85,16 +85,33 @@ describe('the budgets, held against LINEAR_QUOTA (spec §1.2a, §6.7)', () => {
     expect(LINEAR_SESSION_BUDGET.callsPerHour).toBeLessThan(LINEAR_SLOT_CALLS_PER_HOUR / 10);
   });
 
-  it('after a restart each lane starts at a quarter: 425, 25 and 50, so 500 for the slot', () => {
+  it('after a restart each lane starts at a quarter: 350, 25, 50, 50 and 25, so 500 for the slot', () => {
     expect(LINEAR_RESTART_SHARE).toBe(0.25);
     const { rate } = clocked();
     const got = {
       proxy: drain(rate, { lane: 'proxy', slot: SLOT_A, calls: 1 }).n,
       request: drain(rate, { lane: 'request', slot: SLOT_A, calls: 1 }).n,
       floor: drain(rate, { lane: 'floor', slot: SLOT_A, calls: 1 }).n,
+      sync: drain(rate, { lane: 'sync', slot: SLOT_A, calls: 1 }).n,
+      migration: drain(rate, { lane: 'migration', slot: SLOT_A, calls: 1 }).n,
     };
-    expect(got).toEqual({ proxy: 425, request: 25, floor: 50 });
-    expect(got.proxy + got.request + got.floor).toBe(500);
+    expect(got).toEqual({ proxy: 350, request: 25, floor: 50, sync: 50, migration: 25 });
+    expect(Object.values(got).reduce((a, b) => a + b, 0)).toBe(500);
+  });
+});
+
+describe('the sync and migration lanes (D-8180)', () => {
+  it('the five lanes sum to the slot', () => {
+    expect(Object.values(LINEAR_LANE_CALLS_PER_HOUR).reduce((a, b) => a + b, 0)).toBe(LINEAR_SLOT_CALLS_PER_HOUR);
+  });
+  it('a spent migration lane never takes from sync or proxy', () => {
+    const { rate } = clocked();
+    drain(rate, { lane: 'migration', slot: SLOT_A, calls: 1 });
+    expect(rate.take({ lane: 'sync', slot: SLOT_A, calls: 1 }).ok).toBe(true);
+    expect(rate.take({ lane: 'proxy', slot: SLOT_A, calls: 1 }).ok).toBe(true);
+  });
+  it('the migration lane is the smallest write lane', () => {
+    expect(LINEAR_LANE_CALLS_PER_HOUR.migration).toBeLessThan(LINEAR_LANE_CALLS_PER_HOUR.sync);
   });
 });
 
@@ -104,20 +121,20 @@ describe('the lanes (spec §6.7)', () => {
     const spent = drain(rate, { lane: 'request', slot: SLOT_A, calls: 1 });
     expect(spent.n).toBe(25);
     expect(spent.stop).toEqual({ ok: false, detail: 'workspace', retryAfterS: 36 });
-    expect(drain(rate, { lane: 'proxy', slot: SLOT_A, calls: 1 }).n).toBe(425);
+    expect(drain(rate, { lane: 'proxy', slot: SLOT_A, calls: 1 }).n).toBe(350);
     expect(drain(rate, { lane: 'floor', slot: SLOT_A, calls: 1 }).n).toBe(50);
     // And the proxy lane, once empty, takes nothing from the request lane as it refills.
     expect(rate.take({ lane: 'request', slot: SLOT_A, calls: 1 }).ok).toBe(false);
   });
 
-  it('each lane refills evenly, and never past its size: 1,700 an hour for the proxy lane', () => {
+  it('each lane refills evenly, and never past its size: 1,400 an hour for the proxy lane', () => {
     const { rate, clock } = clocked();
     drain(rate, { lane: 'request', slot: SLOT_A, calls: 1 });
     clock.now += 36_000;   // 100 an hour is one call every 36 seconds
     expect(drain(rate, { lane: 'request', slot: SLOT_A, calls: 1 }).n).toBe(1);
     clock.now += 2 * HOUR;
     expect(drain(rate, { lane: 'request', slot: SLOT_A, calls: 1 }).n).toBe(100);
-    expect(drain(rate, { lane: 'proxy', slot: SLOT_A, calls: 1 }).n).toBe(1_700);
+    expect(drain(rate, { lane: 'proxy', slot: SLOT_A, calls: 1 }).n).toBe(1_400);
     expect(drain(rate, { lane: 'floor', slot: SLOT_A, calls: 1 }).n).toBe(200);
   });
 
@@ -200,7 +217,7 @@ describe('the per-session bucket (spec §6.7: fairness, not a wall)', () => {
     const { rate } = clocked();
     let n = 0;
     for (let s = 0; s < 30; s += 1) n += drain(rate, proxyAs(`neighbour-${s}`)).n;
-    expect(n).toBe(425);
+    expect(n).toBe(350);
     expect(drain(rate, { lane: 'request', slot: SLOT_A, calls: 1 }).n).toBe(25);
     expect(drain(rate, { lane: 'floor', slot: SLOT_A, calls: 1 }).n).toBe(50);
   });
@@ -364,13 +381,13 @@ describe('tokenless callers of the cookie routes spend only the request lane (sp
     expect(r.calls.n).toBe(25);
     // A background refresh's floor and the proxy's lane are untouched.
     expect(drain(r.rate, { lane: 'floor', slot: LEGACY_SLOT, calls: 1 }).n).toBe(50);
-    expect(drain(r.rate, { lane: 'proxy', slot: LEGACY_SLOT, calls: 1 }).n).toBe(425);
+    expect(drain(r.rate, { lane: 'proxy', slot: LEGACY_SLOT, calls: 1 }).n).toBe(350);
   });
 
-  it('twenty sessions spending the proxy lane leave a title lookup and a Check again running', async () => {
+  it('seventeen sessions spending the proxy lane leave a title lookup and a Check again running', async () => {
     const r = await rig();
-    for (let s = 0; s < 20; s += 1) drain(r.rate, { lane: 'proxy', slot: LEGACY_SLOT, calls: 1, session: { id: `session-${s}`, write: false } });
-    expect(r.rate.take({ lane: 'proxy', slot: LEGACY_SLOT, calls: 1 }).ok).toBe(true);   // 400 of 425 spent
+    for (let s = 0; s < 17; s += 1) drain(r.rate, { lane: 'proxy', slot: LEGACY_SLOT, calls: 1, session: { id: `session-${s}`, write: false } });
+    expect(r.rate.take({ lane: 'proxy', slot: LEGACY_SLOT, calls: 1 }).ok).toBe(true);   // 340 of 350 spent
     expect(body(await resolve(r))).toMatchObject({ source: 'linear' });
     r.answer(viewerOk());
     expect((await check(r)).statusCode).toBe(200);
@@ -537,8 +554,8 @@ describe('the proxy spends the slot\'s proxy lane, keyed by the attributed sessi
     expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['Issue', 'DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers']);
   }, 120_000);
 
-  it('twenty sessions spending the proxy lane leave the legacy slot\'s title lookups and Check again running', async () => {
-    const ids = Array.from({ length: 20 }, (_, i) => `project-a-session-${i}`);
+  it('seventeen sessions spending the proxy lane leave the legacy slot\'s title lookups and Check again running', async () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `project-a-session-${i}`);
     proxy = await proxyRig({ sessions: ids, clock: () => T0 });
     await seedLegacy(proxy.ccrcDir, 'b', { learned: true });
     for (const id of ids) {
@@ -586,8 +603,8 @@ describe('the proxy spends the slot\'s proxy lane, keyed by the attributed sessi
     proxy = await proxyRig({ via: 'direct', clock: () => clock.now, respond: (c) => (c.op === 'ResolveIssue' ? { body: { data: { issue: null } } } : null) });
     await seedSlot(proxy.ccrcDir, 'a');
     expect(body(await proxy.call('comment', { ref: 'AAA-12' }))['error']).toBe('not-found');
-    // One call was made; the second is back in the lane: 425 at the restart, less the one.
-    expect(drain(proxy.fx.rate, { lane: 'proxy', slot: { source: 'file', id: WS.a.id }, calls: 1 }).n).toBe(424);
+    // One call was made; the second is back in the lane: 350 at the restart, less the one.
+    expect(drain(proxy.fx.rate, { lane: 'proxy', slot: { source: 'file', id: WS.a.id }, calls: 1 }).n).toBe(349);
   });
 });
 
