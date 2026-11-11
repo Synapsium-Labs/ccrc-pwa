@@ -4,7 +4,8 @@
  * rules, in words: a file's context is the row that names the file itself (a file row, which may use `*` inside one
  * path segment); a file no file row names takes the row of the directory it sits under (a `dir/**` row); directory
  * rows do not nest; two file rows never name one file. Paths are relative to the package's `src/`. The contexts are
- * ARCH-34's vocabulary (`CCD_CONTEXTS`), the same ten the `ccd/contexts.tsv` manifest uses.
+ * ARCH-34's vocabulary (`CCD_CONTEXTS`), the one the `ccd/contexts.tsv` manifest uses; an id may have two digits
+ * (C10, D-8272), and `CCD_ONLY_CONTEXTS` take no row here.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -28,9 +29,9 @@ export function parseContextTable(spec: string): ContextRow[] {
   if (a < 0 || b < a) throw new Error('the spec has no ring-context-map block');
   const out: ContextRow[] = [];
   for (const line of spec.slice(a + MARK_START.length, b).split('\n')) {
-    if (!/^\|\s*(?:C\d|K)\b/.test(line)) continue;
+    if (!/^\|\s*(?:C\d+|K)\b/.test(line)) continue;
     const cells = line.split('|').slice(1, -1).map((c) => c.trim());
-    const id = /^(C\d|K)\b/.exec(cells[0] ?? '')![1]! as CcdContext;
+    const id = /^(C\d+|K)\b/.exec(cells[0] ?? '')![1]! as CcdContext;
     if (!(CCD_CONTEXTS as readonly string[]).includes(id)) throw new Error(`context table: unknown context ${id}`);
     if (cells.length !== 3) throw new Error(`context table: ${id} has ${cells.length} cells, expected 3`);
     (['server', 'pwa'] as const).forEach((pkg, i) => {
