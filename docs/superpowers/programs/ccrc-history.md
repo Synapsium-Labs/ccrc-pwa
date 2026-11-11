@@ -2501,7 +2501,7 @@ them.
     and the body, for private names, hosts and home paths, and runs `deviation-refs` after `git fetch origin main`
     before each push.
   - Every coordinator mail and dispatch is sent only when its scan reads 0, checked in the same command.
-  - Linear tickets go to team CCRC-PWA (CCRCP). Every title and description is scanned before saving. After filing,
+  - Linear tickets go to the operator's ccrc team. Every title and description is scanned before saving. After filing,
     `gh issue list` is checked for a public mirror.
   - The ledger names no Linear URL or ticket id.
   - A D-number that has been issued but not yet defined on main is described by count in tracked text, never named.

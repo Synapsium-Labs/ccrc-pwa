@@ -2096,7 +2096,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const run = open?.ok === true ? open.siblings[0] : undefined;
       return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
     },
-    now: () => Date.now(),
+    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys,
   });
 
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.

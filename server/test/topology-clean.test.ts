@@ -53,21 +53,26 @@ import {
   CANARY, EXEMPTIONS, MODES, PRIVATE_NAMES, entriesOf, entryKey, entryOf, hitsIn, maskText, pairHits,
 } from './private-names.mjs';
 import {
-  EXAMPLE_SESSION_ID, PUBLIC_TEXT_CLASSES, TRACKER_CLASS_NAME, trackerIdClass, type PublicTextClass,
+  EXAMPLE_SESSION_ID, PUBLIC_TEXT_CLASSES, privateTrackerKeysOf, publicTextClassesFor, type PublicTextClass,
 } from '../src/linking/publicTextClasses.js';
 
 /** The private tracker keys whose ticket ids this public tree may not carry
  *  (D-5878, CLAUDE.md's "This repository is public" rule): a reader cannot
  *  open a private ticket, so its id is a dead pointer that also maps the
  *  private workspace. The tracker syncs each ticket to a GitHub issue, and the
- *  tree refers to ccrc work by that `#n`. A key joins here once the tree
- *  measures zero ids under it. THIS TREE's keys, so they stay in this suite:
- *  the runtime class list builds the tracker class with none (D-8181), and the
- *  suite swaps in the class built with these. */
-const PRIVATE_TRACKER_KEYS: readonly string[] = ['CCRCP'];
-/** The classes the walk applies: the runtime list, with the tracker class built over this tree's keys. */
-const TREE_CLASSES: readonly PublicTextClass[] = PUBLIC_TEXT_CLASSES.map((cls) =>
-  cls.name === TRACKER_CLASS_NAME ? trackerIdClass(PRIVATE_TRACKER_KEYS) : cls);
+ *  tree refers to ccrc work by that `#n`. No key is spelled here (D-8181): the
+ *  keys are the installer's, read from the same setting the server reads,
+ *  `CCRC_PRIVATE_TRACKER_KEYS` (`privateTrackerKeysOf`), so an operator's run of
+ *  this suite scans for that operator's keys. `FIXTURE_TRACKER_KEY` is a neutral
+ *  stand-in the class's own rows below assert, and the tree measures zero ids
+ *  under it too. */
+const FIXTURE_TRACKER_KEY = 'ACME';
+const PRIVATE_TRACKER_KEYS: readonly string[] = [
+  FIXTURE_TRACKER_KEY,
+  ...privateTrackerKeysOf(process.env.CCRC_PRIVATE_TRACKER_KEYS).keys.filter((k) => k !== FIXTURE_TRACKER_KEY),
+];
+/** The classes the walk applies: the runtime list, with the tracker class built over those keys. */
+const TREE_CLASSES: readonly PublicTextClass[] = publicTextClassesFor(PRIVATE_TRACKER_KEYS);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
@@ -395,11 +400,11 @@ const FIXTURES: Record<string, { catches: string[]; passes: string[] }> = {
   'private tracker id': {
     catches: [
       ...PRIVATE_TRACKER_KEYS.map((k) => `${k}-1`),
-      `${PRIVATE_TRACKER_KEYS[0]!}-12345`,
-      `${PRIVATE_TRACKER_KEYS[0]!.toLowerCase()}-120`,
+      `${FIXTURE_TRACKER_KEY}-12345`,
+      `${FIXTURE_TRACKER_KEY.toLowerCase()}-120`,
       ['linear.app', 'some-workspace'].join('/'),
     ],
-    passes: [...PRIVATE_TRACKER_KEYS, `${PRIVATE_TRACKER_KEYS[0]!}-`, `${PRIVATE_TRACKER_KEYS[0]!}-n`,
+    passes: [...PRIVATE_TRACKER_KEYS, `${FIXTURE_TRACKER_KEY}-`, `${FIXTURE_TRACKER_KEY}-n`,
       'D-5878', 'ARCH-21', 'OA-2', 'SHA-256', 'UTF-8', 'CVE-2024-3094', 'GitHub #548', 'linear.app',
       'https://linear.app/'],
   },

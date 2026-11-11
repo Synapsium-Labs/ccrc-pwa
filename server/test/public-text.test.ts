@@ -12,12 +12,16 @@ import { planStorePort, type PlanStorePort } from '../src/coord/planStore.js';
 import { registerPlanRoutes, type PlanRouteOpts } from '../src/coord/planRoutes.js';
 import { publicTextVerdict } from '../src/linking/policy.js';
 import * as publicTextClasses from '../src/linking/publicTextClasses.js';
-import { PUBLIC_TEXT_CLASSES } from '../src/linking/publicTextClasses.js';
+import { PUBLIC_TEXT_CLASSES, privateTrackerKeysOf, publicTextClassesFor } from '../src/linking/publicTextClasses.js';
+import { loadConfig } from '../src/config.js';
+import { seedRoster } from './helpers.js';
 import { CANARY } from './private-names.mjs';
 import type { GateDecision } from '../src/auth/gate.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const EMAIL = ['person', '@', 'acme', '.', 'pro'].join('');
+/** A neutral fake tracker key: no installer's key is spelled in this tree. */
+const FAKE_KEY = 'ACME';
 
 describe('publicTextVerdict', () => {
   it('a public project\'s ticket title naming KEY-123 is refused with ids', () => {
@@ -57,14 +61,42 @@ describe('publicTextVerdict', () => {
     expect(publicTextVerdict(`before\n${CANARY}\nafter`, null, 'public').ok).toBe(false);
   });
 
-  it('the runtime check carries no installer\'s own tracker key: a project\'s team key is the only tracker id it refuses', () => {
-    // this tree's private key, assembled so the topology walk does not read it here
-    const key = ['CC', 'RCP'].join('');
+  it('the runtime check carries no installer\'s own tracker key: with none configured, a project\'s team key is the only tracker id it refuses', () => {
     expect(Object.keys(publicTextClasses)).not.toContain('PRIVATE_TRACKER_KEYS');
-    expect(publicTextVerdict(`see ${key}-12`, null, 'public')).toEqual({ ok: true });
-    expect(publicTextVerdict(`see ${key}-12`, key, 'public')).toMatchObject({ ok: false, class: 'tracker id' });
+    expect(publicTextVerdict(`see ${FAKE_KEY}-12`, null, 'public')).toEqual({ ok: true });
+    expect(publicTextVerdict(`see ${FAKE_KEY}-12`, FAKE_KEY, 'public')).toMatchObject({ ok: false, class: 'tracker id' });
     // a link into a tracker's workspace is still refused, whoever's it is
     expect(publicTextVerdict(`see ${['linear.app', 'some-workspace'].join('/')}`, null, 'public')).toMatchObject({ ok: false, class: 'private tracker id' });
+  });
+
+  it('an installer\'s private tracker keys are refused in a public text, in either case, and pass a private one', () => {
+    expect(publicTextVerdict(`see ${FAKE_KEY}-12`, null, 'public', [FAKE_KEY])).toEqual({ ok: false, word: 'linear-text-public', class: 'private tracker id' });
+    expect(publicTextVerdict(`see ${FAKE_KEY.toLowerCase()}-12`, null, 'public', [FAKE_KEY]).ok).toBe(false);
+    expect(publicTextVerdict(`the ${FAKE_KEY} board`, null, 'public', [FAKE_KEY])).toEqual({ ok: true });
+    expect(publicTextVerdict(`see ${FAKE_KEY}-12`, null, 'private', [FAKE_KEY])).toEqual({ ok: true });
+  });
+
+  it('CCRC_PRIVATE_TRACKER_KEYS reads as comma-separated keys, uppercased and once; empty by default; a misshapen entry is left out', () => {
+    expect(privateTrackerKeysOf(undefined)).toEqual({ keys: [], refused: [] });
+    expect(privateTrackerKeysOf('')).toEqual({ keys: [], refused: [] });
+    expect(privateTrackerKeysOf(` ${FAKE_KEY.toLowerCase()} , ZED,${FAKE_KEY},, `)).toEqual({ keys: [FAKE_KEY, 'ZED'], refused: [] });
+    expect(privateTrackerKeysOf('9X, A-B, OK')).toEqual({ keys: ['OK'], refused: ['9X', 'A-B'] });
+  });
+
+  it('the server\'s config carries the setting, empty when unset', () => {
+    const home = mkTmp('ccrc-public-text-cfg-');
+    seedRoster(home);
+    try {
+      expect(loadConfig({ CCRC_HOME: home }).privateTrackerKeys).toEqual([]);
+      expect(loadConfig({ CCRC_HOME: home, CCRC_PRIVATE_TRACKER_KEYS: `${FAKE_KEY},ZED` }).privateTrackerKeys).toEqual([FAKE_KEY, 'ZED']);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it('the classes built over keys swap only the tracker class', () => {
+    expect(publicTextClassesFor([])).toBe(PUBLIC_TEXT_CLASSES);
+    const built = publicTextClassesFor([FAKE_KEY]);
+    expect(built.map((c) => c.name)).toEqual(PUBLIC_TEXT_CLASSES.map((c) => c.name));
+    expect(built.filter((c, i) => c !== PUBLIC_TEXT_CLASSES[i]).map((c) => c.name)).toEqual(['private tracker id']);
   });
 
   it('publicTextClasses.ts holds no catches list', () => {
@@ -156,6 +188,26 @@ describe('the plan verbs check public text', () => {
     const close = await send('/api/programmes/prog-a/plan/close', { outcome: 'done', why: 'KEY-5 shipped' });
     expect(errorOf(close)).toBe('linear-text-public');
     expect(plan.planEndOf('prog-a')).toBeNull();
+  });
+
+  it('the routes refuse an installer\'s private tracker key handed in through privateTrackerKeys', async () => {
+    const withKeys = Fastify();
+    registerPlanRoutes(withKeys, {
+      coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }),
+      sessionAuth: () => NO, authEnabled: false, readLinearStore: async () => ({ kind: 'unreadable', code: 'ENOENT' }),
+      runOfSession: () => null, now: () => 1_000, privateTrackerKeys: [FAKE_KEY],
+    });
+    await withKeys.ready();
+    try {
+      setTeam('project-a', 'KEY', 'public');
+      const body = { home: 'project-a', epics: [epic('e1', [1], { summary: `see ${FAKE_KEY}-4` })] };
+      const res = await withKeys.inject({
+        method: 'POST', url: '/api/programmes/prog-a/plan?byId=coord-a&byUuid=u-coord-a', payload: body, headers: { 'x-ccrc-mail-token': TOKEN },
+      });
+      expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
+      expect(res.body).toContain('private tracker id');
+      expect((await put(body)).statusCode).toBe(200);
+    } finally { await withKeys.close(); }
   });
 
   it('a ticket is judged by its own project, not the epic\'s', async () => {

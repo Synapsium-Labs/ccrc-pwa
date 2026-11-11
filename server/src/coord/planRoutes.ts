@@ -47,6 +47,8 @@ export interface PlanRouteOpts {
   /** The run a session holds, with its epic: the follow-up verb's own-epic check. */
   runOfSession: (id: string) => { program: string; epicId: number | null } | null;
   now: () => number;
+  /** The installer's private tracker keys (`CcrcConfig.privateTrackerKeys`), refused in every public plan text; absent: none. */
+  privateTrackerKeys?: readonly string[];
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -168,7 +170,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     for (const [project, text] of texts) {
       if (text === undefined || text === '') continue;
       const l = coord.linkingOf(project);
-      const v = publicTextVerdict(text, l.teamKey, l.mode);
+      const v = publicTextVerdict(text, l.teamKey, l.mode, opts.privateTrackerKeys);
       if (!v.ok) return { refuse: v.word, detail: v.ids === undefined ? v.class : `${v.class}: ${v.ids.join(', ')}` };
     }
     return null;

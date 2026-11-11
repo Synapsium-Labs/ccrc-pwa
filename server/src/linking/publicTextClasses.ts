@@ -7,6 +7,7 @@
 // in a scanned file, would turn the suite red on its own fixtures. The `catches` and `passes` of each class stay in
 // that test, keyed by `name`, and its liveness rows assert each class through this module.
 import { PRIVATE_NAMES, hitsIn, maskText, pairHits } from '../../../shared/private-names.mjs';
+import { LINEAR_TEAM_KEY_SHAPE } from '../../../shared/linear.js';
 
 /** One forbidden class. Exactly one of `pattern` and `match` is set. */
 export interface PublicTextClass {
@@ -60,10 +61,11 @@ export const TRACKER_CLASS_NAME = 'private tracker id';
 /** The tracker class over `keys`: a ticket id under any key, case-insensitively (the tracker's suggested branch names
  *  spell the id in lowercase, and a branch name pasted into a doc points at the same ticket), or a link into a
  *  tracker's workspace. The bare key, a D-number, an ARCH-NN audit id and a GitHub `#n` stay legal. The keys are the
- *  CALLER's: this tree's own private keys (D-5878) live in `topology-clean.test.ts`, which builds its class with them,
- *  and the runtime list below passes none, because one operator's private key is no rule for another installer's plan
- *  text (the Linear hierarchy plan's "reusable by any installer" constraint, D-8181). At runtime a project's own team
- *  key is the tracker id `publicTextVerdict` refuses (`trackerIdsIn`). A named list, never the general
+ *  INSTALLER's, never this code's (the Linear hierarchy plan's "reusable by any installer" constraint, D-8181): the
+ *  setting `CCRC_PRIVATE_TRACKER_KEYS` (`privateTrackerKeysOf`, empty by default) names them, the server builds its
+ *  class with them (`publicTextClassesFor`), and `topology-clean.test.ts` reads the same setting for the tree scan, with
+ *  a neutral fixture key for its own rows. The list below is built with none. At runtime a project's own team key is
+ *  also the tracker id `publicTextVerdict` refuses (`trackerIdsIn`). A named list, never the general
  *  `[A-Z]{2,10}-[0-9]+` shape: measured on 2026-10-19 that shape matched 2822 tokens in 409 tracked files that are no
  *  tracker's (UTF-8, SHA-256, AGPL-3, ARCH-21, OA-2, D-numbers' cousins). */
 export function trackerIdClass(keys: readonly string[]): PublicTextClass {
@@ -73,6 +75,21 @@ export function trackerIdClass(keys: readonly string[]): PublicTextClass {
     pattern: new RegExp(keys.length === 0 ? link : `\\b(?:${keys.join('|')})-[0-9]+\\b|${link}`, 'gi'),
     why: 'a private tracker ticket id or link is a pointer no reader of this public tree can open — refer to ccrc work by its GitHub #n, which the tracker syncs',
   };
+}
+
+/** `CCRC_PRIVATE_TRACKER_KEYS` read (D-8181): comma-separated tracker keys whose ticket ids no public text may carry,
+ *  each uppercased and kept once. Unset or empty is none. An entry outside the tracker's key shape (`LINEAR_TEAM_KEY_SHAPE`)
+ *  is left out and returned in `refused`, so the caller can say so. */
+export function privateTrackerKeysOf(raw: string | undefined): { keys: string[]; refused: string[] } {
+  const keys: string[] = [];
+  const refused: string[] = [];
+  for (const part of (raw ?? '').split(',')) {
+    const k = part.trim().toUpperCase();
+    if (k === '') continue;
+    if (!LINEAR_TEAM_KEY_SHAPE.test(k)) refused.push(part.trim());
+    else if (!keys.includes(k)) keys.push(k);
+  }
+  return { keys, refused };
 }
 
 /** The classes, in the ratchet's order. Later classes APPEND: the table is the whole registration surface. */
@@ -204,3 +221,9 @@ export const PUBLIC_TEXT_CLASSES: readonly PublicTextClass[] = [
   // D-5878, built with no key here: see `trackerIdClass`.
   trackerIdClass([]),
 ];
+
+/** The classes with the tracker class built over `keys` (an installer's private tracker keys); no keys: the list as it is. */
+export function publicTextClassesFor(keys: readonly string[]): readonly PublicTextClass[] {
+  if (keys.length === 0) return PUBLIC_TEXT_CLASSES;
+  return PUBLIC_TEXT_CLASSES.map((cls) => (cls.name === TRACKER_CLASS_NAME ? trackerIdClass(keys) : cls));
+}

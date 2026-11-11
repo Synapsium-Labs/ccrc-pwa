@@ -2,7 +2,7 @@
 // else. A private repository carries the ticket id; a public or unmeasured one never does.
 import { LINEAR_TEAM_KEY_SHAPE } from '../../../shared/linear.js';
 import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
-import { PUBLIC_TEXT_CLASSES } from './publicTextClasses.js';
+import { publicTextClassesFor } from './publicTextClasses.js';
 
 /** A visibility reading is kept this long before the sweep takes another. */
 export const VISIBILITY_MAX_AGE_MS = 24 * 3_600_000;
@@ -91,14 +91,15 @@ const TEXT_FILE = 'plan-text';
  *  one (unmeasured is treated as public, as `linkingMode` does everywhere) is refused if it names one of the team's
  *  tracker ids (`trackerIdsIn`, the ids listed) or any topology class matches (the class named). A hashed hit names its
  *  class and `#h8`, never the text; the sentence the operator sees is the word's fixed one. Each line is read alone and each
- *  consecutive pair as a phrase broken across a line, as the tree scan reads a file. */
-export function publicTextVerdict(text: string, teamKey: string | null, mode: LinkingMode):
+ *  consecutive pair as a phrase broken across a line, as the tree scan reads a file. `privateKeys` are the installer's
+ *  private tracker keys (`CCRC_PRIVATE_TRACKER_KEYS`), whose ids the tracker class refuses besides the team's own. */
+export function publicTextVerdict(text: string, teamKey: string | null, mode: LinkingMode, privateKeys: readonly string[] = []):
   { ok: true } | { ok: false; word: 'linear-text-public'; class: string; ids?: string[] } {
   if (mode === 'private') return { ok: true };
   const ids = trackerIdsIn(text, teamKey);
   if (ids.length > 0) return { ok: false, word: 'linear-text-public', class: 'tracker id', ids };
   const lines = text.split('\n');
-  for (const cls of PUBLIC_TEXT_CLASSES) {
+  for (const cls of publicTextClassesFor(privateKeys)) {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
       if (cls.skipLine?.(line, TEXT_FILE)) continue;
