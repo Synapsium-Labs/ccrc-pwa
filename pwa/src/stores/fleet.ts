@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type DelegationProjectionWire, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, isAccountPoolsUnavailableReason, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type DelegationProjectionWire, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, loadWaitingSnapshot, saveFleetSnapshot, saveWaitingSnapshot, snapshotRefused, type WaitingSnapshot } from '../lib/offline';
 import { authLost } from '../lib/auth';
@@ -312,7 +312,7 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     if (typeof pools !== 'object' || pools === null || Array.isArray(pools)) return null;
     const outer = pools as {
       listed?: unknown; enforcement?: unknown; byProject?: unknown;
-      epoch?: unknown; observedEpoch?: unknown; accountPools?: unknown;
+      epoch?: unknown; observedEpoch?: unknown; accountPools?: unknown; accountPoolsReason?: unknown;
     };
     // D-6048 (ARCH-12): the shared guard, derived from the type, so a new member is accepted here too.
     const validEnforcement = isPoolsEnforcement(outer.enforcement);
@@ -324,6 +324,9 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     // consumer (`AccountsScreen`'s account-pool chip, below). Optional, like
     // `epoch`/`observedEpoch`: an older server simply omits it.
     const validAccountPools = outer.accountPools === undefined || isPoolsEnforcement(outer.accountPools);
+    // D-8283: the reason beside `accountPools`, gated the same way through its own shared guard.
+    const validAccountPoolsReason = outer.accountPoolsReason === undefined
+      || isAccountPoolsUnavailableReason(outer.accountPoolsReason);
     const validByProject = typeof outer.byProject === 'object'
       && outer.byProject !== null
       && !Array.isArray(outer.byProject);
@@ -344,7 +347,7 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
       || outer.observedEpoch === null
       || typeof outer.observedEpoch === 'number';
     if (
-      validEnforcement && validEpoch && validObservedEpoch && validAccountPools
+      validEnforcement && validEpoch && validObservedEpoch && validAccountPools && validAccountPoolsReason
       && (outer.listed === false || (outer.listed === true && validByProject))
     ) {
       return m as FleetMsg;

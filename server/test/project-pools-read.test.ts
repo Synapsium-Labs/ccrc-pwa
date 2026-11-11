@@ -14,7 +14,7 @@ import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import {
-  POOLS_DIR_NAME, accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry,
+  POOLS_DIR_NAME, accountPoolsEnforcement, accountPoolsUnavailableReason, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry,
   readProjectPools, readProjectPoolsWithRoot,
 } from '../src/pools.js';
 import { ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from '../src/ccdargv.js';
@@ -645,6 +645,38 @@ describe('accountPoolsEnforcement — the same three-state shape, off the accoun
   });
 });
 
+// D-8283. `unavailable` has two causes with two remedies, and the PWA must name the right one: a ccd with no account
+// side (redeploy it), or a current ccd on a box with no pool-sync timer (the single-box install, where ccd places by the
+// roster's declared pool). Only a measured `unavailable` has a reason.
+describe('accountPoolsUnavailableReason — why account pools are not applied, only when they are not', () => {
+  it('no account-pools token is ccd-predates', () => {
+    expect(accountPoolsUnavailableReason(['swap', 'start'])).toBe('ccd-predates');
+  });
+
+  it('the token with the timer measured absent is no-pool-sync: the single-box install', () => {
+    expect(accountPoolsUnavailableReason([ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, 'swap'])).toBe('no-pool-sync');
+  });
+
+  it('the token with the timer installed has no reason: the fleet install', () => {
+    expect(accountPoolsUnavailableReason([ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP, 'swap'])).toBeUndefined();
+  });
+
+  it('no evidence has no reason: null caps, or a token with neither timer word', () => {
+    expect(accountPoolsUnavailableReason(null)).toBeUndefined();
+    expect(accountPoolsUnavailableReason([ACCOUNT_POOLS_CAP, 'swap'])).toBeUndefined();
+  });
+
+  it('is defined exactly where accountPoolsEnforcement answers unavailable', () => {
+    const lists: (readonly string[] | null)[] = [
+      null, [], ['swap'], [ACCOUNT_POOLS_CAP], [ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP],
+      [ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP], [POOL_SYNC_ABSENT_CAP],
+    ];
+    for (const caps of lists) {
+      expect(accountPoolsUnavailableReason(caps) !== undefined).toBe(accountPoolsEnforcement(caps) === 'unavailable');
+    }
+  });
+});
+
 describe('poolsWire', () => {
   it('carries the map as a plain object when listed, and the enforcement either way', async () => {
     tag('demo', 'pool-a');
@@ -719,6 +751,19 @@ describe('poolsWire', () => {
     expect(wire).toEqual({
       listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5, accountPools: 'enforced',
     });
+  });
+
+  // D-8283: the reason rides beside accountPools, omitted when undefined, on both arms.
+  it('omits accountPoolsReason when none is passed, and carries it on both wire arms when given', () => {
+    expect(Object.hasOwn(poolsWire({ listed: false }, 'unknown', undefined, undefined, 'enforced'), 'accountPoolsReason'))
+      .toBe(false);
+    expect(poolsWire({ listed: false }, 'unknown', undefined, undefined, 'unavailable', 'no-pool-sync')).toEqual({
+      listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: 'no-pool-sync',
+    });
+    expect(poolsWire({ listed: true, tags: new Map() }, 'enforced', undefined, undefined, 'unavailable', 'ccd-predates'))
+      .toEqual({
+        listed: true, byProject: {}, enforcement: 'enforced', accountPools: 'unavailable', accountPoolsReason: 'ccd-predates',
+      });
   });
 });
 

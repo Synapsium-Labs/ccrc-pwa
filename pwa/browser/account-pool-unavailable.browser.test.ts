@@ -1,11 +1,13 @@
 // The dimmed account pool chip at every width (D-8015): a box with no pool-sync timer answers `accountPools: 'unavailable'`,
-// and the existing chip and the sheet's note must reach the operator on it. Sixteen cells: phone 360 and 390, laptop 1280
+// and the existing chip and the sheet's note must reach the operator on it. That box is the single-box install, so the
+// frame carries `accountPoolsReason: 'no-pool-sync'` and the chip says the tag is not applied here and why (D-8283), the
+// longest of its texts and so the one that must fit. Sixteen cells: phone 360 and 390, laptop 1280
 // and wide 1920, both skins, light and dark. The chip stays a real control, so each cell also opens the sheet it leads to.
 // `account-pool-chip.test.tsx` holds the other direction, where no frame timing can make its answer true by accident.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
-import { ACCOUNT_POOL_UNAVAILABLE_TEXT } from '../src/screens/AccountsScreen';
+import { ACCOUNT_POOL_NO_SYNC_TEXT } from '../src/screens/AccountsScreen';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
@@ -33,7 +35,7 @@ const FIXTURE: AppFixture = {
   },
   fleetFrames: [
     { type: 'fleet', sessions: [] },
-    { type: 'pools', pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable' } },
+    { type: 'pools', pools: { listed: false, enforcement: 'enforced', accountPools: 'unavailable', accountPoolsReason: 'no-pool-sync' } },
   ],
 };
 
@@ -59,7 +61,7 @@ const go = (page: Page, to: string): Promise<void> => page.evaluate((path) => {
   dispatchEvent(new PopStateEvent('popstate'));
 }, to);
 
-describe('accountPools: unavailable dims the chip and the sheet says so (D-8015)', () => {
+describe('accountPools: unavailable on a single-box install dims the chip and the sheet says why (D-8015, D-8283)', () => {
   for (const view of VIEWS) {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
@@ -83,8 +85,8 @@ describe('accountPools: unavailable dims the chip and the sheet says so (D-8015)
         }, CHIP);
         expect(m.skin).toBe(view.skin);
         expect(m.theme).toBe(view.theme);
-        expect(m.title).toBe(ACCOUNT_POOL_UNAVAILABLE_TEXT);
-        expect(m.label).toContain(ACCOUNT_POOL_UNAVAILABLE_TEXT);
+        expect(m.title).toBe(ACCOUNT_POOL_NO_SYNC_TEXT);
+        expect(m.label).toContain(ACCOUNT_POOL_NO_SYNC_TEXT);
         expect(m.tag, 'still a control').toBe('BUTTON');
         expect(m.disabled).toBe(false);
         expect(m.inView, 'the chip inside the viewport').toBe(true);
@@ -92,7 +94,13 @@ describe('accountPools: unavailable dims the chip and the sheet says so (D-8015)
 
         await page.locator(CHIP).click();
         await page.locator(NOTICE).waitFor({ timeout: 10_000 });
-        expect(await page.locator(NOTICE).textContent()).toMatch(/nothing on the fleet enforces it yet/);
+        expect(await page.locator(NOTICE).textContent()).toMatch(/Not applied on this install: it has no pool-sync timer/);
+        const notice = await page.locator(NOTICE).evaluate((el) => {
+          const b = el.getBoundingClientRect();
+          return { inView: b.left >= 0 && b.right <= innerWidth, overflow: el.scrollWidth - el.clientWidth };
+        });
+        expect(notice.inView, 'the notice inside the viewport').toBe(true);
+        expect(notice.overflow, 'the notice wraps, never scrolls sideways').toBeLessThanOrEqual(0);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

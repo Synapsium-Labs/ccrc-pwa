@@ -2432,7 +2432,7 @@ export type ProjectPoolsWire =
       /** Whether the fleet's `ccd` honours ACCOUNT pools — the same three-state
        *  version-skew channel as `enforcement`, sourced from `_acct_pool_state`'s
        *  presence in `ccd caps`. ABSENT on an older server, which reads `unknown`. */
-      accountPools?: PoolsEnforcement;
+      accountPools?: PoolsEnforcement; accountPoolsReason?: AccountPoolsUnavailableReason; // reason: D-8283, file foot
       /** T9-R2: the control plane's current account-pool epoch
        *  (`CoordStore.poolEpoch()`, `server/src/coord/store.ts`; the same
        *  number `GET /api/pools/epoch` answers), carried on THIS frame
@@ -2461,7 +2461,7 @@ export type ProjectPoolsWire =
   | {
       listed: false; enforcement: PoolsEnforcement;
       /** See the `listed: true` arm's `accountPools` — same field, same fold. */
-      accountPools?: PoolsEnforcement;
+      accountPools?: PoolsEnforcement; accountPoolsReason?: AccountPoolsUnavailableReason;
       /** See the `listed: true` arm's `epoch` — same field, same fold. */
       epoch?: number;
       /** See the `listed: true` arm's `observedEpoch` — same field, same
@@ -14266,3 +14266,19 @@ export interface TestboxAdminResult {
 export interface TestboxAdminAnswer { ok: true; status: TestboxAdminStatus; events: TestboxEventRow[] }
 /** `POST /api/testbox/admin/:sub`: the status RE-READ after the act, the ten newest rows, and what the act may say. */
 export interface TestboxAdminActAnswer extends TestboxAdminAnswer { result: TestboxAdminResult }
+
+/** D-8283: why `ProjectPoolsWire.accountPools` reads `unavailable`, sent beside it and only then. `ccd-predates`: the
+ *  fleet's ccd has no account side (no `account-pools` cap), and redeploying it is the remedy. `no-pool-sync`: ccd is
+ *  current, but the box has no pool-sync timer, so no projection ever arrives and ccd places by the pool the roster
+ *  declares. That is every single-box install (`--role both` or `--role server`) and any macOS box, since only a Linux
+ *  `--role fleet` install arms the timer. ABSENT from an older server, and the reader then names no cause. APPENDED at the
+ *  foot for wave 8's reason above. */
+export type AccountPoolsUnavailableReason = 'ccd-predates' | 'no-pool-sync';
+const ACCOUNT_POOLS_UNAVAILABLE_REASON_MAP: Record<AccountPoolsUnavailableReason, true> = {
+  'ccd-predates': true, 'no-pool-sync': true,
+};
+export const ACCOUNT_POOLS_UNAVAILABLE_REASONS: readonly AccountPoolsUnavailableReason[] =
+  Object.keys(ACCOUNT_POOLS_UNAVAILABLE_REASON_MAP) as AccountPoolsUnavailableReason[];
+export function isAccountPoolsUnavailableReason(v: unknown): v is AccountPoolsUnavailableReason {
+  return typeof v === 'string' && (ACCOUNT_POOLS_UNAVAILABLE_REASONS as readonly string[]).includes(v);
+}

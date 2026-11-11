@@ -18,7 +18,7 @@ import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
 import { CLASSES, MODELS_PUSH_MAX, modelsPushDecision, type ModelClass } from '../../shared/models.js';
 import {
-  accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
+  accountPoolsEnforcement, accountPoolsUnavailableReason, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
@@ -1306,6 +1306,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // `account-pools` capability token Task 2 added to `cmd_caps`, read
         // the way `poolsEnforcement` already reads the project-pool verb.
         accountPoolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
+        // D-8283: why it is `unavailable`, so a single-box install is not told its ccd is old.
+        accountPoolsUnavailableReason(deps.fleetState?.ccdVerbs ?? null),
       ),
     };
   });

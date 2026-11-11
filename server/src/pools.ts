@@ -5,7 +5,9 @@ import type { FleetIO } from './io.js';
 import { ACCOUNT_POOLS_CAP, CCD_ARGV, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import { parseObservedEpochDoc, POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
-import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
+import type {
+  AccountPoolsUnavailableReason, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire,
+} from '../../shared/api.js';
 
 /**
  * L3 — the server's view of the fleet box's project pool tags.
@@ -347,6 +349,20 @@ export function accountPoolsEnforcement(ccdVerbs: readonly string[] | null): Poo
 }
 
 /**
+ * Why `accountPoolsEnforcement` answers `unavailable` (D-8283), and `undefined` whenever it does not. The two causes
+ * need two different sentences: a ccd with no `account-pools` token is older than account pools (`ccd-predates`), while
+ * a current ccd on a box with no pool-sync timer (`no-pool-sync`) is the single-box install. There ccd still applies the
+ * roster's declared pool, and a central tag set from the PWA is recorded but never reaches ccd. Read off the same
+ * tokens, in the same order, as `accountPoolsEnforcement`, so the two cannot disagree on when a reason exists.
+ */
+export function accountPoolsUnavailableReason(
+  ccdVerbs: readonly string[] | null,
+): AccountPoolsUnavailableReason | undefined {
+  if (accountPoolsEnforcement(ccdVerbs) !== 'unavailable' || ccdVerbs === null) return undefined;
+  return ccdVerbs.includes(ACCOUNT_POOLS_CAP) ? 'no-pool-sync' : 'ccd-predates';
+}
+
+/**
  * The account-pool epoch (`CoordStore.poolEpoch().epoch`), degraded exactly
  * the way `readAccountPoolEdges()` (`server.ts`) degrades its own
  * `coord.accountPoolEdges()` read (F1, pre-merge gate).
@@ -483,11 +499,14 @@ export function poolsWire(
   epoch?: number,
   observedEpoch?: number | null,
   accountPools?: PoolsEnforcement,
+  accountPoolsReason?: AccountPoolsUnavailableReason,
 ): ProjectPoolsWire {
   const staleness = {
     ...(epoch !== undefined ? { epoch } : {}),
     ...(observedEpoch !== undefined ? { observedEpoch } : {}),
     ...(accountPools !== undefined ? { accountPools } : {}),
+    // D-8283: `accountPoolsUnavailableReason`'s answer, omitted when undefined like the three keys above.
+    ...(accountPoolsReason !== undefined ? { accountPoolsReason } : {}),
   };
   return read.listed
     ? { listed: true, byProject: Object.fromEntries(read.tags), enforcement, ...staleness }
