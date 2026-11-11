@@ -109,15 +109,16 @@ describe('a failing store', () => {
     const r = await casesPass({ coord: over(s, { stallObservationsSince: () => ({ ok: false, detail: 'x' }) }), now: () => T });
     expect(r).toEqual({ opened: 0, superseded: 0, unread: 'observations' });
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: cases: /);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual(['ccrc-server: cases: observations read failed: x']);
     expect(cases(s)).toEqual([]);
   });
 
   it('(b) a case read that fails gives unread cases and opens nothing', async () => {
     const s = seed();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const r = await casesPass({ coord: over(s, { practiceCaseNewest: () => ({ ok: false, detail: 'x' }) }), now: () => T });
     expect(r).toEqual({ opened: 0, superseded: 0, unread: 'cases' });
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual(['ccrc-server: cases: cases read failed: x']);
     expect(cases(s)).toEqual([]);
   });
 
