@@ -1,10 +1,12 @@
 // The share each tick-diet differential file runs (D-6767): which per-locale blocks of `ccdTickDietRunner.ts`'s
 // `registerLocaleRows` a file registers. `ccd-tick-diet-equivalence.test.ts` once ran every block under `C` in one
 // file, 638 s on a CI runner, and the planner never splits a file; it is now `-static` (the locale-free E0, E1, E2, E4
-// and the static censuses) and one file per entry below: `-rows` (E3, E5 to E8, E10) and `-route` (E9, whose one batch
-// is most of the old file's time and, being one `describe` block with one `beforeAll`, is as small as a split by
-// `describe` gets). Measured in a Linux container on a loaded laptop: `-rows` 3 to 5 min, `-route` 4.5 to 6.5 min. The
-// blocks are the runner's and keep their titles, so a full test name is the one it was before the split.
+// and the static censuses) and one file per entry below: `-limits` (E5, E7), `-registry` (E3, E6, E8, E10) and `-route`
+// (E9, whose one batch is most of the old file's time and, being one `describe` block with one `beforeAll`, is as small
+// as a split by `describe` gets). Measured in a Linux container on a loaded laptop: `-route` 4.5 to 6.5 min. `-limits`
+// and `-registry` were one file, `-rows`, of 3 to 5 min (231 s on a CI runner) that still ran past the trace job's
+// 1560 s budget under `strace -f`, so it is split the way the UTF-8 rows are. The blocks are the runner's and keep their
+// titles, so a full test name is the one it was before the split.
 //
 // The same rows under the UTF-8 locale, once `ccd-tick-diet-equivalence-utf8.test.ts` at 10.5 minutes, split the same
 // way into `-utf8-limits` (E5, E7), `-utf8-registry` (E3, E6, E8, E10) and `-utf8-route` (E9), one file per entry of
@@ -17,7 +19,8 @@ import { LOCALES, registerLocaleRows } from './ccdTickDietRunner.js';
 
 /** The per-locale blocks (E3, E5 to E10) of the runner, by the file part that runs them under `C`. */
 export const TICK_DIET_C_PARTS = {
-  rows: ['E3', 'E5', 'E6', 'E7', 'E8', 'E10'],
+  limits: ['E5', 'E7'],
+  registry: ['E3', 'E6', 'E8', 'E10'],
   route: ['E9'],
 } as const;
 

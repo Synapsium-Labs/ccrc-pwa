@@ -1737,7 +1737,7 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  RAISED BY ONE AGAIN, on every platform (landing order wave 3b, Task 3): `land-probe`
  *  SKIPs - `healthy()` writes no `~/.ccrc/landing/<project>.conf`, so no project is
  *  opted in to the conflict radar and there is nothing to measure (it SKIPs on macOS
- *  and on a server-role box too). The `land-probe` describe in `ccrc-doctor-core.test.ts`
+ *  and on a server-role box too). The `land-probe` describe in `ccrc-doctor-core-state.test.ts`
  *  plants a conf and its files where the check answers. Measured the same way: with the
  *  check in the table and this `+ 1` absent, every `(N skipped)` pin that reads this
  *  constant reds.

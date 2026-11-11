@@ -233,7 +233,7 @@ describe('C8b characterization: the both arm and the no-role skip keep their own
 });
 
 // Step 0's census of the rows that source the check table WITHOUT ccrc (`grep -l CHECKS_SRC`, each `.` line read): of
-// the checks this series touches, two are reached that way — `_check_update-sync` (ccrc-doctor-core.test.ts) and
+// the checks this series touches, two are reached that way — `_check_update-sync` (ccrc-doctor-core-state.test.ts) and
 // `_dr_codex_usage_box` (ccrc-doctor-codex.test.ts), each stopping in its own loaded guard before any bound. Their
 // whole output is held here, byte for byte, so a bound computed before those guards (or at source time) is red.
 describe('C8b characterization: the table sourced without ccrc', () => {

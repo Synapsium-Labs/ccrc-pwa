@@ -1266,7 +1266,7 @@ export function rawHomeMeasuredCalls(src: string): string[] {
 /** Registers the seven per-locale blocks (E3, E5 to E10) for ONE entry of `LOCALES`. Each keeps its
  *  `describe.each(…)` form, called on a one-element array, so a full test name is the one it was when a single file
  *  ran both locales (`… under 'C' (…)` and `… under 'the UTF-8 locale' (…)`).
- *  `ccd-tick-diet-equivalence-rows` and `-route.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
+ *  `ccd-tick-diet-equivalence-limits`, `-registry` and `-route.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
  *  the blocks to register (`'E3'`, `'E5'`, …); a file that runs a share of a locale's rows passes its share, so the blocks
  *  split across files by `describe` with every title unchanged (D-6767). Omitted, every block is registered. */
 export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readonly string[]): void {
