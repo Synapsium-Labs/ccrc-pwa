@@ -17,19 +17,19 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | spec | The seams of the four follow-ups closed: 29 restatements brought into line, the door gate order completed | #2542 | merged |
 | spec | The fourth round's fixes: 32 findings in the evidence behind trust, the decision model and the judges; I14 to I16; what each kind of trust takes to earn | #2543 | merged |
 | spec | The operator's approval, the rulings on the review's fifteen questions, R16 and R17 (H40 to H45) | #2605 | merged |
-| W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | run 1774, #2632; plan `w0-spike.md` | review 1783: no critical finding; fix round 1 sent 2026-11-11 |
+| W0a | The spike, Tasks 1 to 7: the rig's scenarios and stand-ins, and the first model re-run on the approved edition. Changes nothing that runs | run 1774, #2632; plan `w0-spike.md` | review 1787: nothing blocking; fix round 2 sent 2026-11-11 |
 | W0b | The spike, Tasks 8 to 11 (fleet reads, the subject, account facts, the quiz baseline), then Task 12 for both halves | plan `w0-spike.md` | waits for the operator's setup item |
 | W1a, foundations | The mail-pace table | #2528; plan `w1a-mail-pace.md` | merged |
 | W1a, foundations | Each role skill's contract moved first, behind a notice that tells a session how to see a cut | #2555 (supersedes #2530) | merged |
 | spec | The operator's ruling on the ratchet's scope | #2556 | merged |
 | W1a, foundations | The coordinator skill made lean: its procedures in reference files, the wave lifecycle one file per step | #2557, #2558 and #2560 (the tests, first); #2559 | merged |
 | W1a, foundations | The cap on each `SKILL.md`, and each contract held inside what a compaction keeps | #2565; plan `w1a-skill-ratchet.md` | merged |
-| W1a, foundations | Ports for time and chance | run 1776, #2623; plan `w1a-time-ports.md` | review 1782: fix round 1 closed its findings; fix round 2 sent |
-| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | run 1775, #2624; plan `w1a-roles.md` | review 1781: nothing confirmed; fix round 1 sent 2026-11-11 |
-| W1a, foundations | The trigger table and the case lane, in shadow | plan `w1a-triggers-cases.md` | after the role table merges, and after #2606 |
-| W1a, foundations | The simulator's skeleton and the first model | plan `w1a-simulator.md` | after the time ports merge; its Task 6 after W0a's Task 7 |
+| W1a, foundations | Ports for time and chance | #2623; plan `w1a-time-ports.md` | merged |
+| W1a, foundations | One role vocabulary: `FLEET_ROLES` and `roleOf` | #2624; plan `w1a-roles.md` | merged |
+| W1a, foundations | The trigger table and the case lane, in shadow | run 1785; plan `w1a-triggers-cases.md` | open (dispatched 2026-11-11) |
+| W1a, foundations | The simulator's skeleton and the first model | run 1788; plan `w1a-simulator.md` | open (dispatched 2026-11-11); its Task 6 after #2632 merges |
 | W1a, the machine | Generations, the receipt and renewal for every long-lived role; the anchor and the card; notes; probes; launch profiles | not planned yet | waits for W0's measurements |
-| W1 | Designate and talk | not planned yet | waits for W1a and for D-8126's build (#2487 merged; its build #2606 is open) |
+| W1 | Designate and talk | not planned yet | waits for W1a (D-8126's build, #2606, merged 2026-11-11) |
 | W2 | Route and follow up | not planned yet | follows W1 |
 | W3 | Brief first, then answer first (two steps) | not planned yet | follows W2 |
 | W4 | Learn | not planned yet | follows W3 |
@@ -123,6 +123,27 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
   was reduced: the reviewer verified six findings itself and left the rest unrefuted. Ruled: one fix round. Re-measure
   the D-6798 row from a committed scenario, close the rig holes with tests, word every row as what the tree reproduces,
   and keep design consequences out of the spec's "As measured" paragraphs.
+- **Review 1784 on the role table's fix round (2026-11-11), at 26aa56730.** Nothing confirmed; five advisory
+  findings. The pin is keyed on the symbol and red under its mutations. Ruled: accept. A branch-only commit id in the
+  piece's note and the pin's move to the symbol (the carried constraint's own form) need no change. A member-call
+  width and a missing positive control on one pin are recorded here as known widths. #2624 merged at 26aa56730.
+- **Review 1786 on the time ports' second fix round (2026-11-11), at 3d4c2b2b6.** Four minor findings and nothing
+  blocking: four SQL rows unpinned (named and numbered parameters after `'subsec'`), and three forms unrecorded (a
+  cast, a global reached through another global, a non-literal modifier). This round's reviewer measured the
+  three-file range by mutation itself instead of running the panel; the first two rounds ran it. Ruled: accept, and
+  carry the four rows and three gaps to the simulator piece's brief. #2623 merged at 3d4c2b2b6.
+- **Review 1787 on W0a's fix round (2026-11-11), at c12025181.** Every first-round item closed or mostly closed;
+  nothing blocking. Three important: a bypass nested one JSON level deeper still passed the rig's check from outside
+  `scenarios-overlord/`, and two spec sentences still claimed more than was measured. Eight minors. The refute pass
+  was partial and the spec lens stopped unfinished; the report says so. Ruled: one last fix round, which closes the
+  nested route with a recursive scan and a raw-text backstop, and takes five of the minors.
+- **Neither the role table nor the time ports added the role table's files to `TIME_PORT_FILES`,** because each
+  landed without the other. The trigger table's piece adds them, beside its own files.
+- **Open for the stall code's owner (2026-11-11, the simulator plan's question 2).** After a restart, a re-opened
+  coord-blocked episode can push rung 1 after a rung 2, because the run-less push latch is in memory (D-3751).
+  `stall.ts` documents "pushes it once more", not a lower push. The simulator's worked example states the rung never
+  falls between boots, and counts the re-opened edge. Whether a lower push is intended is not this programme's to
+  decide; a fix, if any, is a change of its own.
 - **A work branch cannot edit an existing plan file** (2026-11-11, measured on #2623) unless its commit carries a
   Ledger-Edit trailer, as W0a's did: the ledger-guard CI step refuses it. So a worker writes its departures, its rulings within the plan and its deferred minors in a new note
   beside its plan (the time ports' is `2026-11-10-overlord/w1a-time-ports/departures.md`), and this coordinator folds
@@ -189,14 +210,15 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 
 - **Where to start.** Read the spec's "In short", §14 (the build order) and "Where things stand". Then read the plan
   of the piece you take. Each plan is self-contained.
-- **Running now (2026-11-11).** W0a (run 1774), the role table (run 1775) and the time ports (run 1776), one worker
-  each. Their claims are placed by each worker before its first edit, through the peer protocol (§3.3.9).
-- **Next.** The trigger table and case lane once the role table and #2606 have merged; the simulator once the time
-  ports have merged (its Task 6 once W0a's Task 7 is done); W0b once the operator answers the setup item.
+- **Running now (2026-11-11).** W0a (run 1774, its last fix round), the trigger table and case lane (run 1785) and
+  the simulator (run 1788), one worker each. Their claims are placed by each worker before its first edit, through
+  the peer protocol (§3.3.9). The role table (#2624) and the time ports (#2623) have merged.
+- **Next.** The simulator's Task 6 once W0a's #2632 merges; W0b once the operator answers the setup item. Then W1a's
+  machine pieces, planned from W0's measurements.
 - **What was built before the programme's run opened.** The mail-pace table (#2528), each role skill's contract moved
   first (#2555), and the lean coordinator skill (#2557, #2558, #2560, #2559), with the cap on each `SKILL.md` behind
   it.
-- **What must not start.** W1 and later. They wait for W1a and for D-8126's build (#2606).
+- **What must not start.** W1 and later. They wait for W1a (D-8126's build, #2606, has merged).
 - **What the operator owes.** W0's setup item for Tasks 8 to 11, and W0's questions 1 and 2. The reserved accounts
   are named in Settings once W1's reservation rule is live.
 - **What to report.** Each piece ends with its pull request merged through the queue, its plan's "Deviations found"
