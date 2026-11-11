@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, sixty-four rows, and nothing else; the
+#   * The route comes from ROUTES below, sixty-five rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -34,6 +34,8 @@
 # OUTPUT. stdout is the response body and exactly one newline. stderr ends in
 # `http <code>` today; set `CCRC_API_STATUS=line` to keep it once a later release
 # stops writing it by default. Exit 0 whenever a response arrived, 3 when none did.
+# ONE VERB PRINTS PLAIN TEXT: `mail inbox` (D-6780) prints each unacked mail and
+# what it did with it, not a JSON body, writes no status line, and needs `jq`.
 #
 # `server/test/ccrc-api-closed.test.ts` pins those as standing tests, because a
 # property this load-bearing must be a mechanism and not a docstring.
@@ -89,7 +91,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Sixty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Sixty-five rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -141,6 +143,9 @@ declare -A ROUTES=(
   # corpora at every call site instead.
   [mail.fetch]='GET|/api/mail/{id}|yes|-'
   [mail.ack]='POST|/api/mail/{id}/ack|yes|-'
+  # `mail inbox` (D-6780): the caller's own unacked deliveries, read with the pane's pair in the query, then one
+  # `mail.ack` request per printed entry, through the row above. It takes no argument; see `cmd_inbox`.
+  [mail.inbox]='GET|/api/mail/inbox|no|-'
   [peers.list]='GET|/api/peers|no|of,project'
   [lifecycle.list]='GET|/api/lifecycle|no|session'
   [claims.list]='GET|/api/claims|no|project,all'
@@ -318,6 +323,8 @@ usage() {
     done
     printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
+    printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
+    printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
   } >&2
 }
@@ -469,6 +476,173 @@ parse_intent() {
   INTENT_BODY="{\"action\":\"$action\",\"byId\":\"$DERIVED_ID\",\"byUuid\":\"$DERIVED_UUID\"}"
 }
 
+# ONE RUN, MANY REQUESTS (D-6780). Every request this client sends goes through `send_request`: the one-request rows
+# send one, and `mail inbox` sends its read and then one ack per printed entry. So the function NEVER EXITS, NEVER
+# CLEARS `TOKEN` and NEVER SETS A TRAP: `main` owns the run's one temp file (`REQ_OUT`), its one EXIT trap and the one
+# token clear after the verb's last request. A per-request trap would replace the last one and leave every earlier
+# file behind, a cleared token would send every later ack unauthenticated, and an exit would end an inbox run at the
+# first ack that got no response, with every later printed entry unreported.
+#
+# It answers with `REQ_CODE` (the HTTP status), `REQ_RC` (curl's exit status) and the body in `$REQ_OUT`, which is
+# emptied first because curl creates no output for an empty body and the last request's would still be there. It
+# returns 0 for an answer and 3 for none; a one-request row turns the 3 into `transport_exit`.
+REQ_OUT=''
+REQ_CODE=''
+REQ_RC=0
+send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an answer, 3 = no response
+  local method="$1" url="$2" body="$3" code
+  : > "$REQ_OUT"
+  # `-f` is never used, on purpose and for the same reason both corpora say so:
+  # it prints nothing on a 4xx and exits 22, and the body is the whole protocol —
+  # every refusal these routes send arrives as a 4xx JSON body.
+  local -a args=(-sS -K - -m 30 -o "$REQ_OUT" -w '%{http_code}' -X "$method")
+  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data-binary "$body")
+
+  # THE TOKEN RIDES CURL'S STDIN, NEVER ITS ARGV (R16): a `-H` value is readable
+  # in every process listing on the box (`ps`, /proc/<pid>/cmdline) for the life
+  # of the call. `-K -` reads the header from a config line on stdin, the
+  # spelling ccd-pool-sync and ccd-update-sync ship. stdin is free here because
+  # `--json -` was read into $body in `main`, before the first request.
+  code=$(printf 'header = "x-ccrc-mail-token: %s"\n' "$TOKEN" \
+    | curl "${args[@]}" "$url" 2>/dev/null)
+  REQ_RC=$?
+  REQ_CODE="$code"
+  (( REQ_RC == 0 )) && [[ -n "$code" && "$code" != '000' ]] && return 0
+  return 3
+}
+
+# NOT an answer. The one case that exits non-zero — and it still speaks the
+# same envelope, so a caller never has to parse a second shape to find out.
+transport_exit() {
+  printf '{"ok":false,"error":"transport","detail":"no response from the server (curl rc %s)"}\n' "$REQ_RC"
+  printf '%s: no response from the server\n' "$SELF" >&2
+  exit 3
+}
+
+# The body ends in exactly one newline: a session's shell tool shows both
+# streams together, and a body with none ran into the status line (`}http 200`).
+# Empty prints nothing; one already ending in a newline gets no second.
+print_body() {
+  cat "$REQ_OUT"
+  [[ -s "$REQ_OUT" && -n "$(tail -c 1 "$REQ_OUT")" ]] && printf '\n'
+  return 0
+}
+
+INBOX_BARE='inbox: stdout is a pipe or /dev/null, so nothing was acked; run ~/.local/bin/ccrc-api mail inbox bare (no pipe, no redirect, no head or tail)'
+INBOX_LINE=''
+INBOX_DONE=0
+
+# One ack of the inbox loop, through the `mail.ack` row's own template and today's attribution: the body is the pane's
+# pair, both held to SAFE_RE by `derive_identity`, so no quote can break out of it. Sets INBOX_LINE (the outcome line)
+# and INBOX_DONE (1 when this request acked the delivery). A transport failure is that entry's line, never an exit.
+inbox_ack() {   # delivery id
+  local id="$1" tmpl ans
+  INBOX_DONE=0
+  IFS='|' read -r _ tmpl _ _ <<< "${ROUTES[mail.ack]}"
+  if ! send_request POST "$SERVER_URL${tmpl/\{id\}/$id}" "{\"fromId\":\"$DERIVED_ID\",\"fromUuid\":\"$DERIVED_UUID\"}"; then
+    INBOX_LINE="inbox: delivery $id is NOT acked (transport); it will be shown again"
+    return 0
+  fi
+  ans=$(jq -r 'def one: tostring | gsub("[\\r\\n\\t]"; " ");
+    if .ok == true and .parked == true then "parked \(.lastError // "no reason given" | one)"
+    elif .ok == true and .already == true then "already"
+    elif .ok == true then "acked"
+    else "no \(.error // "" | one)" end' "$REQ_OUT" 2>/dev/null) || ans='no '
+  [[ "$REQ_CODE" == '200' ]] || ans="no ${ans#no }"
+  [[ "$ans" == 'no ' ]] && ans="no http $REQ_CODE"
+  case "$ans" in
+    acked) INBOX_DONE=1; INBOX_LINE="inbox: acked delivery $id" ;;
+    already) INBOX_LINE="inbox: delivery $id was already acked" ;;
+    parked\ *) INBOX_LINE="inbox: delivery $id was closed before this ack (${ans#parked }); nothing is owed" ;;
+    *) INBOX_LINE="inbox: delivery $id is NOT acked (${ans#no }); it will be shown again" ;;
+  esac
+}
+
+# `mail inbox` (D-6780, spec 2026-10-24 §3.5): read this pane's inbox once, print each entry, and ack each one only
+# after its write succeeded. Identity is the pane's (`main` ran `derive_identity` and put the pair in the read's query);
+# no flag selects another session. NEVER call it inside $( ): it prints, refuses and exits.
+#
+# WHERE STDOUT GOES IS DECIDED BEFORE THE READ. fd 1 on `/dev/null` or on a pipe (`| tail`, `| jq`, `$( )`) makes the
+# run SHOW-ONLY: every entry is printed and none is acked, and the first and last lines say to run it bare, so `| head`
+# keeps one and `| tail` the other. The Claude Code Bash tool's own capture is a regular file shared with fd 2, never
+# a FIFO (measured, spec §1.2), so a bare run there acks; a socket (Node's piped stdio) is no shell pipeline and acks.
+# A redirect to a file acks too: it looks exactly like the tool's capture. That is the residual spec §4 names, and
+# the footer lists every acked delivery for `mail fetch`.
+#
+# NOTHING IS ACKED WHOSE WRITE FAILED: a failed write (`>&-`, a full disk) stops the loop, that entry and every later
+# one stay unacked, and the failure is named on stderr. A failed ack is that entry's line and the loop goes on. Exit 0
+# when the read answered, whatever happened to the acks; 3 when the read got no response.
+cmd_inbox() {   # url of the read
+  local show_only=0 shape remaining abandoned n i id printed=0 nacked=0 acked=''
+  [[ /dev/stdout -ef /dev/null || -p /dev/stdout ]] && show_only=1
+
+  if ! send_request GET "$1" ''; then TOKEN=""; transport_exit; fi
+  (( show_only )) && printf '%s\n' "$INBOX_BARE"
+  if [[ "$REQ_CODE" != '200' ]]; then
+    TOKEN=""
+    print_body
+    printf 'inbox: the server did not serve the inbox (http %s); if it predates mail inbox, read with mail list, fetch and ack\n' "$REQ_CODE"
+    (( show_only )) && printf '%s\n' "$INBOX_BARE"
+    exit 0
+  fi
+
+  # The answer's shape, checked whole before anything is printed or acked: ids are positive integers and every text
+  # is a string with no NUL, so the NUL-separated read below splits exactly where the entries do.
+  shape=$(jq -r 'if (.ok == true and (.deliveries | type) == "array"
+        and (.remaining | type) == "number" and (.abandoned | type) == "number"
+        and all(.deliveries[]; type == "object" and (.deliveryId | type) == "number" and .deliveryId >= 1
+          and .deliveryId == (.deliveryId | floor) and (.text | type) == "string" and (.text | contains("\u0000") | not)))
+      then "\(.remaining) \(.abandoned) \(.deliveries | length)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  local -a ids=() texts=()
+  if [[ "$shape" =~ ^([0123456789]+)\ ([0123456789]+)\ ([0123456789]+)$ ]]; then
+    remaining="${BASH_REMATCH[1]}"; abandoned="${BASH_REMATCH[2]}"; n="${BASH_REMATCH[3]}"
+    # Read whole before the first ack: each ack's answer is written over this same temp file.
+    mapfile -t ids < <(jq -r '.deliveries[].deliveryId' "$REQ_OUT" 2>/dev/null)
+    mapfile -d '' texts < <(jq -j '.deliveries[] | .text, "\u0000"' "$REQ_OUT" 2>/dev/null)
+  fi
+  if [[ "$shape" == 'bad' || "${#ids[@]}" != "${n:-x}" || "${#texts[@]}" != "${n:-x}" ]]; then
+    TOKEN=""
+    print_body
+    printf 'inbox: the answer is not an inbox; nothing was acked\n'
+    (( show_only )) && printf '%s\n' "$INBOX_BARE"
+    exit 0
+  fi
+
+  for (( i = 0; i < n; i++ )); do
+    id="${ids[i]}"
+    [[ "$id" =~ ^[0123456789]+$ ]] || break
+    if ! printf '%s\n' "${texts[i]}"; then
+      printf '%s: inbox: could not write delivery %s to stdout; it and every later delivery stay unacked\n' "$SELF" "$id" >&2
+      break
+    fi
+    printed=$(( printed + 1 ))
+    (( show_only )) && continue
+    inbox_ack "$id"
+    (( INBOX_DONE )) && { nacked=$(( nacked + 1 )); acked+=" $id"; }
+    if ! printf '%s\n' "$INBOX_LINE"; then
+      printf '%s: inbox: could not write after delivery %s; every later delivery stays unacked\n' "$SELF" "$id" >&2
+      break
+    fi
+  done
+  TOKEN=""
+
+  if (( printed < n )); then
+    # The loop stopped on a failed write: stdout cannot be trusted with the footer, so the acked list goes to stderr.
+    [[ -z "$acked" ]] || printf '%s: inbox: acked deliveries%s; read them again with ~/.local/bin/ccrc-api mail fetch <delivery>\n' "$SELF" "$acked" >&2
+    exit 0
+  fi
+  if (( n == 0 )); then
+    printf 'inbox: no unacked mail\n'
+  else
+    printf 'inbox: %s printed, %s acked\n' "$printed" "$nacked"
+    [[ -z "$acked" ]] || printf 'inbox: acked deliveries%s; if any of their text did not reach you, read it again with ~/.local/bin/ccrc-api mail fetch <delivery>\n' "$acked"
+  fi
+  (( remaining == 0 )) || printf 'inbox: %s more unacked; run mail inbox again\n' "$remaining"
+  (( abandoned == 0 )) || printf 'inbox: %s abandoned deliveries are not shown; mail list --to %s lists them\n' "$abandoned" "$DERIVED_ID"
+  (( show_only == 0 )) || printf '%s\n' "$INBOX_BARE"
+  exit 0
+}
+
 main() {
   (( $# >= 1 )) || { usage; refuse 'no-verb' 'no group given'; }
 
@@ -493,6 +667,12 @@ main() {
     parse_intent "$@"
     id="$INTENT_ID"; intent_body="$INTENT_BODY"
     set --
+  elif [[ "$key" == 'mail.inbox' ]]; then
+    # `mail inbox` takes NOTHING (D-6780): no id, no flag, no `--to`. A session reads its own inbox, the pane's.
+    (( $# == 0 )) || refuse 'bad-args' "mail inbox takes no argument: $1"
+    command -v jq >/dev/null 2>&1 \
+      || refuse 'no-jq' 'mail inbox reads the inbox answer with jq, and jq is not on PATH; nothing was read or acked'
+    derive_identity
   elif [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
 
   if [[ "$needs" == 'yes' ]]; then
@@ -666,6 +846,8 @@ main() {
     derive_identity
     query="fromId=$DERIVED_ID&fromUuid=$DERIVED_UUID"
   fi
+  # `mail inbox` reads with the pair its argument check derived (D-6780), the `approvals show` shape.
+  [[ "$key" != 'mail.inbox' ]] || query="fromId=$DERIVED_ID&fromUuid=$DERIVED_UUID"
 
   # Every Linear row (D-7669, #1444) carries the pane's identity, GETs and POSTs alike, and it rides the QUERY, after
   # the declared keys, the way `approvals show` builds `fromId`/`fromUuid`. THIS BLOCK NEVER READS OR EDITS THE BODY:
@@ -794,49 +976,29 @@ main() {
   path="${tmpl/\{id\}/$id}"
   url="$SERVER_URL$path${query:+?$query}"
 
-  local out code
   # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
   # none (install.sh:54 measured it) — and this file cannot source ccd's
   # platform block, so the template is spelled locally, unconditionally, the
   # same shape install.sh uses. GNU mktemp honours the template identically.
-  out=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
+  # ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
+  # each request, and `send_request` never arms one of its own.
+  REQ_OUT=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
   # shellcheck disable=SC2064
-  trap "rm -f '$out'" EXIT
+  trap "rm -f '$REQ_OUT'" EXIT
 
-  # `-f` is never used, on purpose and for the same reason both corpora say so:
-  # it prints nothing on a 4xx and exits 22, and the body is the whole protocol —
-  # every refusal these routes send arrives as a 4xx JSON body.
-  local -a args=(-sS -K - -m 30 -o "$out" -w '%{http_code}' -X "$method")
-  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data-binary "$body")
+  [[ "$key" != 'mail.inbox' ]] || cmd_inbox "$url"
 
-  # THE TOKEN RIDES CURL'S STDIN, NEVER ITS ARGV (R16): a `-H` value is readable
-  # in every process listing on the box (`ps`, /proc/<pid>/cmdline) for the life
-  # of the call. `-K -` reads the header from a config line on stdin, the
-  # spelling ccd-pool-sync and ccd-update-sync ship. stdin is free here because
-  # `--json -` was read into $body above, before this line.
-  code=$(printf 'header = "x-ccrc-mail-token: %s"\n' "$TOKEN" \
-    | curl "${args[@]}" "$url" 2>/dev/null)
-  local rc=$?
+  local rc=0
+  send_request "$method" "$url" "$body" || rc=$?
   TOKEN=""
+  (( rc == 0 )) || transport_exit
 
-  if (( rc != 0 )) || [[ -z "$code" || "$code" == '000' ]]; then
-    # NOT an answer. The one case that exits non-zero — and it still speaks the
-    # same envelope, so a caller never has to parse a second shape to find out.
-    printf '{"ok":false,"error":"transport","detail":"no response from the server (curl rc %s)"}\n' "$rc"
-    printf '%s: no response from the server\n' "$SELF" >&2
-    exit 3
-  fi
-
-  cat "$out"
-  # The body ends in exactly one newline: a session's shell tool shows both
-  # streams together, and a body with none ran into the status line (`}http 200`).
-  # Empty prints nothing; one already ending in a newline gets no second.
-  [[ -s "$out" && -n "$(tail -c 1 "$out")" ]] && printf '\n'
+  print_body
   # `CCRC_API_STATUS=line` is the caller's spelling for "keep this line". It is
   # an environment variable, not a flag, because an older client refuses an
   # unknown flag and ignores an unknown variable. Today the line is written
   # whatever it says; a later release stops writing it by default.
-  printf 'http %s\n' "$code" >&2
+  printf 'http %s\n' "$REQ_CODE" >&2
   # An HTTP response happened, so this succeeded — whatever the status says. A
   # 4xx is an ANSWER here, and a client that exited non-zero on one would rebuild
   # the `curl -f` trap for its callers.

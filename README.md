@@ -4105,13 +4105,24 @@ host or path: the address comes from `~/.ccrc/agent.env`'s `CCRC_SERVER_URL`
 token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
-`mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
+`mail list|send|fetch|ack|inbox`, `peers list`, `lifecycle list`,
 `claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
 `asks list|answer|release`, `goals show` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
+
+**`ccrc-api mail inbox` reads a session's mail in one call** (D-6780). It takes no argument: the identity is the
+pane's, as `whoami` derives it. It reads `GET /api/mail/inbox` once, prints each unacked delivery addressed to this
+session (oldest first, rendered and masked by the server, with no `ack:` lines), and acks each entry through
+`POST /api/mail/:id/ack` only after its write succeeded, so a failed write leaves that entry and every later one
+unacked. Its stdout is plain text, not JSON, it writes no `http <code>` line, and it needs `jq`. Run it bare: no pipe,
+no redirect, no `head` or `tail`. When stdout is a pipe or `/dev/null` it prints everything, acks nothing and says to
+run it bare on its first and last lines; a redirect to a file still acks, because it looks like the Claude Code Bash
+tool's own capture, and the footer names every acked delivery for `mail fetch <delivery>`. A failed ack is that entry's
+`NOT acked` line and the next entry is still acked. It exits 0 when the read answered and 3 when it got no response;
+an older server's answer prints a hint to read with `mail list`, `fetch` and `ack`, which stay the fallback.
 
 **`goals show <slug>` reads a programme's goals** (`GET /api/programmes/:slug/goals`, behind the
 `goals-read-v1` server capability). The route takes either credential: a live console session or the box token, so a
