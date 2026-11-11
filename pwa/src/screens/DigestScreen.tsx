@@ -8,17 +8,23 @@
 //
 // Every text a line carries was redacted by the server when it built the digest. It is the children's words, shown
 // as text and never as markup.
+//
+// Under the decisions, the "Out of step" section (D-5923, `DigestDrift.tsx`): the drift findings open at the window's
+// end, drawn only when the answer carries some, and never counted as a decision.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import {
   DIGEST_CORRECTION_MAX_CHARS,
-  type DigestAnswer, type DigestCorrectAnswer, type DigestCorrectBody, type DigestLine, type DigestLineKind,
+  type DigestAnswer, type DigestCorrectAnswer, type DigestCorrectBody, type DigestLine, type DigestLineKind, type DriftLine,
 } from '../../../shared/api';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { isCount, isNum, isRecord } from '../lib/wire';
 import { digestKey, forget, peek, put } from '../lib/screenCache';
 import { doorMark } from '../command/door';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { DigestDrift } from './DigestDrift';
 import './digest.css';
 
 const DAY_MS = 86_400_000;
@@ -27,6 +33,24 @@ const DAY_MS = 86_400_000;
 export const DIGEST_KIND_WORD: Record<DigestLineKind, string> = {
   answer: 'answered', allow: 'allowed', deny: 'denied', 'hand-over': 'handed over', lapse: 'lapsed', 'big-call': 'called',
 };
+
+const isDriftLine = (d: unknown): d is DriftLine => {
+  if (!isRecord(d)) return false;
+  return typeof d['key'] === 'string' && typeof d['kind'] === 'string' && typeof d['subject'] === 'string'
+    && typeof d['detail'] === 'string' && isNum(d['ageMs']) && d['ageMs'] >= 0
+    && (d['sessionId'] === null || typeof d['sessionId'] === 'string')
+    && (d['runId'] === null || Number.isSafeInteger(d['runId']));
+};
+
+/** The drift section's wire guard (D-5923): the field as sent, or undefined when it is absent or anything in it is not
+ *  the shape this build reads, so a malformed field drops the section and never the digest. A kind this build does not
+ *  know passes (it reads as the fallback word); a count must be a whole number, an age finite. */
+function asDigestDrift(raw: unknown): DigestAnswer['drift'] {
+  if (!isRecord(raw) || !isRecord(raw['totals']) || !Object.values(raw['totals']).every(isCount)) return undefined;
+  const lines = raw['lines'];
+  if (!Array.isArray(lines) || !lines.every(isDriftLine)) return undefined;
+  return raw as DigestAnswer['drift'];
+}
 
 /** The wire guard: an answer this build can render, or null. */
 export function asDigestAnswer(raw: unknown): DigestAnswer | null {
@@ -38,7 +62,9 @@ export function asDigestAnswer(raw: unknown): DigestAnswer | null {
     && (l.rowKind === 'ask' || l.rowKind === 'approval') && typeof l.id === 'number'
     && typeof l.kind === 'string' && l.kind in DIGEST_KIND_WORD && typeof l.at === 'number'
     && typeof l.coordinator === 'string' && typeof l.childId === 'string' && typeof l.text === 'string');
-  return { ...(d as DigestAnswer), lines };
+  const { drift: _drift, ...rest } = d as DigestAnswer;
+  const drift = asDigestDrift(d.drift);
+  return { ...rest, lines, ...(drift === undefined ? {} : { drift }) };
 }
 
 /** `hh:mm UTC`: the digest's window is a UTC day, so its times are said in UTC too. */
@@ -147,8 +173,8 @@ function forgetDay(day: string): void {
   if (asDigestAnswer(peek(digestKey(null))?.raw)?.day === day) forget(digestKey(null));
 }
 
-export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT }: {
-  day: string | null; load?: Load; correct?: Correct;
+export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT, store = useFleetStore }: {
+  day: string | null; load?: Load; correct?: Correct; store?: FleetStore;
 }): ReactNode {
   // An empty `?day=` reads as the default day, as no `?day=` does.
   const day = asked === '' ? null : asked;
@@ -247,6 +273,9 @@ export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT }: {
                 <DigestRow key={`${l.rowKind}-${l.id}`} line={l} correct={correct} onCorrected={corrected} />
               ))}
             </ul>
+          )}
+          {shown.drift !== undefined && shown.drift.lines.length > 0 && (
+            <DigestDrift drift={shown.drift} until={utcClock(shown.toMs)} store={store} />
           )}
           {state === 'error' && error !== null && <p className="digest-error" role="alert">{error}</p>}
         </>
