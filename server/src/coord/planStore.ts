@@ -350,17 +350,22 @@ export function attachTicketInTx(
   if (epic === null || epic.program !== run.program || !epicAdmitsRun(epic.state)) {
     return { ok: false, refused: 'wave-epic-mismatch' };
   }
-  // A settled epic that lists the wave takes the run and is live again; it settles afresh when this run's ticket closes.
-  if (epic.state === 'done') db.prepare("UPDATE plan_epics SET state = 'active', doneAt = NULL WHERE id = ? AND state = 'done'").run(epic.id);
+  // A settled epic that lists the wave takes the run and is live again (reopened only once every refusal is behind us, since a
+  // refusal is returned and the transaction commits); it settles afresh when this run's ticket closes.
+  const reopenEpic = (): void => {
+    if (epic.state === 'done') db.prepare("UPDATE plan_epics SET state = 'active', doneAt = NULL WHERE id = ? AND state = 'done'").run(epic.id);
+  };
   let ticketId: number;
   if (ticket.kind === 'existing') {
     const t = ticketById(db, ticket.id);
     if (t === null || t.program !== run.program) return { ok: false, refused: 'ticket-unavailable' };
     if (t.epicId !== ticket.epicId) return { ok: false, refused: 'wave-epic-mismatch' };
     if (t.state !== 'open' || t.runId !== null) return { ok: false, refused: 'ticket-unavailable' };
+    reopenEpic();
     db.prepare('UPDATE plan_tickets SET runId = ?, project = COALESCE(?, project) WHERE id = ?').run(runId, ticket.reproject, t.id);
     ticketId = t.id;
   } else {
+    reopenEpic();
     const res = db.prepare(
       "INSERT INTO plan_tickets (program, project, epicId, checkpointId, key, kind, title, body, source, state, runId) VALUES (?, ?, ?, NULL, ?, 'work', ?, '', 'plan', 'open', ?)",
     ).run(run.program, ticket.project, ticket.epicId, `run-${runId}`, ticket.title, runId);
