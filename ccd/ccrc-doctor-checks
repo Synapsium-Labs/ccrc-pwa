@@ -9703,6 +9703,7 @@ _bt_value_file() {
   if [ -L "$p" ] || [ ! -f "$p" ]; then BT_TF=not-regular; return 0; fi
   BT_TF_MODE="$(_plat_mode -- "$p" 2>/dev/null)" || BT_TF_MODE=""
   if [ ! -r "$p" ]; then BT_TF=unreadable; return 0; fi
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   BT_TF=no-value
   # One pass, the way `extractToken` reads: strip FIRST (ASCII whitespace and the `_BT_UNI_WS` set, so the answer never
   # depends on what `[[:space:]]` covers in the running locale), and only then tell a blank or `#` line apart. The first
@@ -10253,6 +10254,7 @@ _check_server-caps() {
       _dr_skip server-caps "this box records CCRC_ROLE=server, so it hosts no sessions and runs no session hook to gate"
       return 3 ;;
     fleet)
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       writer_unit=ccd-update-sync.timer
       if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file "$writer_unit")" ]; then
         _dr_skip server-caps "ccd-update-sync.timer is not installed on this box, so nothing here records the server's words and the session hook's gated arms stay off (only a --role fleet install places it, and macOS ships no systemd timer)"

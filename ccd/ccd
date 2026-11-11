@@ -3613,6 +3613,7 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     # separately above), a directory, a FIFO. ccd never writes through it and
     # never replaces it, so no compaction settles and no wait ends this — the
     # remedy is a human removing the object, which is why it carries a token.
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     [[ -f "$lock" && ! -L "$lock" ]] || { COMPACT_LOCK_WHY=lock-path-occupied; return 1; }
   elif _compact_lock_vanished "$id"; then
     # REFUSE BEFORE THE MINT: nothing has been created yet, so the refusal owns
@@ -3631,6 +3632,7 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     # folded in here because the acquire cannot tell them apart, not because
     # they share a remedy (r6 R5-M2). A wait frees neither, so this one
     # carries a token too.
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) \
       || { COMPACT_LOCK_WHY=lock-source-refused; return 1; }
     [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
@@ -3668,6 +3670,7 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     #     STATE, never an act, so the token's remedy is worded to the state and
     #     enumerates the `$REG` causes as the usual ones alone.
     if [[ ! -f "$lock" || -L "$lock" ]]; then
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       if [ -e "$lock" ] || [ -L "$lock" ]; then COMPACT_LOCK_WHY=lock-path-occupied
       else COMPACT_LOCK_WHY=lock-publish-failed
       fi
@@ -5634,6 +5637,7 @@ PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository
 # all. It meets the rule `CCD_DISK_FLOOR_GB` states for an override: it names a
 # GitHub label, never a path, so it cannot aim a command at another tree.
 # `labels`/`closedAt` above are what it is read from (and when the PR landed).
+# shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
 PR_LANDED_LABEL_DEFAULT=landed-in-train
 # NAMED ONCE, spent in two places — the head-filtered row window that carries it
 # in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
@@ -11666,6 +11670,7 @@ _pr_bind_facts() {   # id main [rows-head-branch] -> 0, the binding's shell-side
   # the four pinned cases of that shape keep their behaviour untouched.
   if (( registered == 0 )) && [[ -n "$wthead" && -n "$tip" && "$wthead" != "$branch" ]]; then
     echo "pr-state: the registry says $branch, git's worktree record for $workdir says $wthead — PR state not measured for $id (reconcile with: ccd ws-rename --session $id --branch $wthead)" >&2
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     BIND_REFUSAL=branch-drift
     return 1
   fi
@@ -13876,6 +13881,7 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
     if [[ -n "$mb" ]]; then
       a=$(git -C "$main" diff --binary "$mb" "$tip" -- 2>/dev/null | git -C "$main" patch-id --stable | cut -d' ' -f1)
       b=$(git -C "$main" diff --binary "$Pm" "$M"   -- 2>/dev/null | git -C "$main" patch-id --stable | cut -d' ' -f1)
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       [[ -n "$a" && "$a" == "$b" ]] && { _WS_PROOF=patch-id; return 0; }
     fi
   fi
@@ -17317,6 +17323,7 @@ _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked fil
   local out errf err rc
   # Assume the worst before measuring, so no path out of this function can
   # forget to set it.
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   GC_DIRTY_STATE=tree-unreadable; GC_DIRTY_WHY=''
   # `git status` failing means unreadable, corrupt, or not a worktree at all —
   # NOT clean. Swallowing the exit code and testing an empty string would report
@@ -20573,6 +20580,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   if [[ -z "$narrow" ]]; then
     # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
     # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=pane; return 1; }; HARD_BLOCK_VIA=pane; return 0; }
     # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
     # arm below the transcript deliberately: a banner Claude Code is rendering on
@@ -20587,6 +20595,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     # the conversation.
     _pane_limit_capture_to cap "$id" "$pane"
     _pane_limit_menu "$cap" && menu=1
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     _pane_limit_banner "$cap" && { _pane_carried_in "$id" banner "$cap" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=banner; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
     grep -q "esc to interrupt" <<<"$pane" && { HARD_BLOCK_NO=running; return 1; }
   fi
@@ -20607,6 +20616,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   fi
   # D-6180: a fresh scan names a carried-in row. On a narrow pane a silent transcript is `unmeasurable`, not `negative`:
   # nothing on screen was read, so "not blocked" is not a measured answer (D-8123).
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; [[ -n "$narrow" ]] && HARD_BLOCK_NO=unmeasurable; (( lrc == 3 )) && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=carried-in; }; return 1; }
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
@@ -22414,7 +22424,9 @@ _pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 w
   local id="$1" prc pane
   KS_PANE=""; KS_WHY=""; KS_DETAIL=""
   pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); prc=$?
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$prc" == 0 ]] || { KS_WHY=pane-unreadable; KS_DETAIL="tmux capture-pane rc=$prc"; return 1; }
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ -n "$pane" ]] || { KS_WHY=pane-blank; KS_DETAIL="tmux capture-pane rc=0, empty capture"; return 1; }
   _pane_auto_continue_armed "$pane" && { KS_WHY=auto-continue; KS_DETAIL="Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 1; }
   KS_PANE="$pane"
@@ -22443,9 +22455,11 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # §6.3 exists to refuse, reached through code wave 2 never saw. The guard belongs in the
   # body that carries the phrase, which is also what `ccd-reader-standdown.test.ts`'s
   # POPULATION census requires: a phrase-carrying function guards itself.
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   _pane_measurable "$id" || { KS_WHY=pane-narrow; KS_DETAIL="pane is under ${READER_MIN_COLS} cols; a wrapped phrase reads as idle (§6.3)"; return 1; }
   _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
   echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
@@ -22504,6 +22518,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
   # `=~ ^[0-9]+$` (was `-n`) is also the D-299 guard on the operand the next line evaluates.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$sua" =~ ^[0-9]+$ ]] || { KS_WHY=quiet-unmeasured; KS_DETAIL="no statusUpdatedAt in $sf${ctxnote:+, $ctxnote}"; return 1; }
   [[ $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] \
     || { KS_WHY=not-quiet; KS_DETAIL="$ctxnote"; return 1; }
@@ -29253,6 +29268,7 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
           mode="link: via-mount"
         else
           [[ -e "$dst" ]] && rm -rf "$dst"
+          # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
           CARRY_ROUTE=root-failed
         fi
       fi
@@ -30779,6 +30795,7 @@ _standdown_probe() {
     _reg_get_to sw "$id" lastswap
     { [[ "$sw" =~ ^[0-9]+$ && "$out" =~ ^[0-9]+$ ]] && (( 10#$sw > 10#$out )) && ! _never_came_up "$id" "$born"; } || rc=0
   fi
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   case "$rc" in 0) STANDDOWN_EV=transcript ;; 3) STANDDOWN_EV=carried-in ;; esac
   _reg_set "$id" standdownprobe "$now $STANDDOWN_EV" 2>/dev/null || true
   return 0
@@ -43376,6 +43393,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
     fi
   fi
   if [[ "${REAP_VERDICT-}" == collectable && "$token" != "${REAP_TOKEN-}" ]]; then
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     REAP_VERDICT=state-changed
     REAP_DETAIL="nothing was moved: $id changed since the audit that minted the token (expected ${REAP_TOKEN-}, was given $token)"
   fi
@@ -47730,16 +47748,21 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
 # Where the load looks for a hashing tool when the one `_plat_sha256` selects is not on PATH, in order. Absolute, fixed, never
 # from the environment: these are the platforms' standard locations (GNU coreutils, perl's shasum, BSD/macOS sha256).
 __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_SHA256=stamp-at-install
 # THE TRAIN-PROOF LIBRARY'S PIN (D-7463): the SHA-256 of ccd/lib/train-proof.sh, the second library the load reads, checks
 # and evaluates (after disk-retention.sh). A placeholder here, rendered by ccd/ccd-entry-install.py from exactly one line, as
 # the pin above is.
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_TRAIN_SHA256=stamp-at-install
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_LEASE_SHA256=stamp-at-install
 # THE DOCS REDACTOR'S PINS (D-7077, OA-C11 (a)): the SHA-256 of `shared/redact.mjs` and `shared/redact-cli.mjs`, installed beside
 # this body. Placeholders here, rendered by ccd/ccd-entry-install.py from exactly one line each, as the library pin is. Read only by
 # `_docs_redact_cli` and `_docs_front`; written only here (the census in ccd-lib-load.test.ts).
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_REDACT_SHA256=stamp-at-install
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_REDACT_CLI_SHA256=stamp-at-install
 # WHAT THE LOAD DECIDED, PUBLISHED (D-7125). `_ccd_lib_load` is the one writer of these two: `__CCD_LAYOUT` is `source` (the
 # source checkout's arm) or `installed` (the digest checked), and `__CCD_HASH_CMD` the hashing command it chose. The docs front

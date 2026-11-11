@@ -86,6 +86,7 @@ _ws_orphan_rung() {   # dirty|head|secrets|nested path -> 0 passes; 1 refuses (_
     head)
       _WS_ORPHAN_BRANCH=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null) || _WS_ORPHAN_BRANCH=''
       _WS_ORPHAN_HEAD=$(git -C "$p" rev-parse --verify --quiet HEAD 2>/dev/null) || _WS_ORPHAN_HEAD=''
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       [[ -n "$_WS_ORPHAN_BRANCH" && "$_WS_ORPHAN_HEAD" =~ ^[0-9a-f]{40,64}$ ]] \
         || { _WS_ORPHAN_WORD=head-unreadable; _WS_ORPHAN_WHY="HEAD of $p could not be read"; return 1; } ;;
     secrets)   # the same ignored-set rule `ws-gc --prune` asks, output discarded: the word is the answer here

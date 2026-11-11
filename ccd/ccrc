@@ -1586,6 +1586,7 @@ _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MO
     return 1
   fi
   if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     MODELS_LOCK_ERR=bad-account-id
     MODELS_LOCK_WHY="'$id' is not an account id, so no lane-files lock is built from it. Nothing was written."
     return 2
@@ -1598,6 +1599,7 @@ _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MO
   if [ "$auto" -eq 1 ]; then
     # The automatic advance never runs unserialised: a box that cannot lock refuses, it does not degrade.
     if ! command -v flock >/dev/null 2>&1 || { [ ! -d "$d" ] && ! command -v mkdir >/dev/null 2>&1; }; then
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       MODELS_LOCK_ERR=lock-unwritable
       MODELS_LOCK_WHY="the lane-files lock cannot be taken here (no flock on PATH, or no lock directory yet and no mkdir to make one), so the automatic advance of lane $id does not run unserialised. Nothing was written."
       return 1
@@ -1642,6 +1644,7 @@ _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MO
   fi
   umask "$um"
   if [ -n "$why" ]; then
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     MODELS_LOCK_ERR=lock-unwritable
     MODELS_LOCK_WHY="$why, so this change to lane $id's model files cannot be serialised against another writer. Fix it, then re-run. Nothing was written."
     return 1
@@ -1663,6 +1666,7 @@ _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MO
   fi
   if [ "$frc" -ne 0 ]; then
     exec {fd}>&-   # never held and never published, so this is no release
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     MODELS_LOCK_ERR=lock-busy
     MODELS_LOCK_WHY="another writer has held lane $id's model files ($p) for ${bound}s without finishing: an hourly refresh, or another 'ccrc models $id' change. Re-run once it has ended. Nothing was written."
     return 1
@@ -1739,7 +1743,7 @@ _models_node_locked() {   # <id> <op> [--k v…]
     if [ "$auto" -eq 1 ]; then
       case "$MODELS_LOCK_ERR" in
         lock-busy|lock-unwritable|install-incomplete|budget-deferred|bad-account-id) word="$MODELS_LOCK_ERR" ;;
-        *) word=lock-unwritable ;;
+        *) word='lock-unwritable' ;;
       esac
       printf '{"ok":false,"error":"%s"}\n' "$word"
     else
@@ -12106,11 +12110,13 @@ _models_litellm_codex() {   # <accountId> -> 0 codex, 1 not codex, 2 the roster 
   MODELS_CODEX_UNTOLD=''; MODELS_CODEX_UNTOLD_RC=0
   # D-4046: an ABSENT roster is its own answer, 3, never 2 (undecidable) and never 1 (not codex): each reader decides.
   # A dangling link is there and cannot be read, so it still goes to `_codex_lanes` and answers 2.
-  roster="$(_models_roster_path)"; { [ -e "$roster" ] || [ -L "$roster" ]; } || { MODELS_CODEX_UNTOLD=roster-absent; MODELS_CODEX_UNTOLD_RC=1; return 3; }
+  roster="$(_models_roster_path)"; { [ -e "$roster" ] || [ -L "$roster" ]; } || { MODELS_CODEX_UNTOLD='roster-absent'; MODELS_CODEX_UNTOLD_RC=1; return 3; }
   ids="$(_codex_lanes)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     MODELS_CODEX_UNTOLD_RC="$rc"
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     MODELS_CODEX_UNTOLD=roster-invalid
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     [ "$rc" -eq 2 ] && MODELS_CODEX_UNTOLD=missing-dependency
     return 2
   fi
@@ -12442,6 +12448,7 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the codex
        esac
        # Any other answer: the roster `_codex_lanes` just read could not be read
        # again, so it cannot say after all. Refused below as `roster-invalid`.
+       # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
        MODELS_CODEX_UNTOLD=roster-invalid; MODELS_CODEX_UNTOLD_RC="$member" ;;
     3) _models_refuse roster-absent 1 "\$HOME/.ccrc/accounts.json does not exist, so no lane's LiteLLM config can be rendered. Run 'ccrc install' — it seeds one and never overwrites an existing one." ;;
   esac
@@ -14356,6 +14363,7 @@ _codex_tier_measure() {   # <id> <tier>
   # read as a stranger.
   [ -n "$pid" ] && return 4
   if [ "$lrc" -eq 2 ]; then CX_TIER_WHY=listener-unresponsive; return 2; fi
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   if [ "$unit_live" -eq 1 ]; then CX_TIER_WHY=unit-unproven; return 2; fi
   return 1
 }
@@ -14892,6 +14900,7 @@ _codex_foreign_what() {   # <id> <tier>
   port="$(_codex_tier_port "$tier")" || port='?'
   [ "$tier" = litellm ] && label=LiteLLM
   if [ "${CX_TIER_WHY:-}" = listener-other-process ]; then
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     CX_FOREIGN_CODE=port-foreign
     CX_FOREIGN_WHAT="port $port ($id's $tier tier) is held by a process that is not this lane's $label: pid ${CX_TIER_PID:-?} is this lane's by its command line, and another process holds the port's listening socket"
     CX_FOREIGN_FIX="Stop whatever holds port $port, or give $id other ports in ~/.ccrc/accounts.json."
@@ -14902,6 +14911,7 @@ _codex_foreign_what() {   # <id> <tier>
   # second read of the manager, which could disagree with the first and
   # turn "identity unproven, retry" into "its identity check failed".
   if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     CX_FOREIGN_CODE=unit-foreign
     if unit="$(_codex_unit "$id" "$tier" 2>/dev/null)"; then
       CX_FOREIGN_WHAT="the unit $unit is active, but its identity as $id's $tier tier is unproven: a unit of that name is live with no process that proves this lane, and port $port does not answer"
@@ -14915,12 +14925,14 @@ _codex_foreign_what() {   # <id> <tier>
   if unit="$(_codex_unit "$id" "$tier")" && _svc_have_user_manager; then
     case "$(_svc_is_active "$unit")" in
       active|activating|deactivating|reloading|refreshing)
+        # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
         CX_FOREIGN_CODE=unit-foreign
         CX_FOREIGN_WHAT="the unit $unit is active but is not $id's $tier tier: its MainPID's command line does not prove this lane"
         CX_FOREIGN_FIX="If another tool runs a lane under this name, stop that lane with that tool first."
         return 0 ;;
     esac
   fi
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   CX_FOREIGN_CODE=port-foreign
   if [ "$why" = listener-other-mode ] && ! _codex_tier_is_other_mode --mate-now "$id" "$tier" >/dev/null; then why=listener-unidentified; fi
   case "$why" in
@@ -14929,6 +14941,7 @@ _codex_foreign_what() {   # <id> <tier>
     listener-other-mode)
       # The shared port answers as this lane's mate, its OTHER front tier
       # (`--mate`), proven just now (`--mate-now` above: the closing round, C1).
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       CX_FOREIGN_CODE=retired-tier-running
       CX_FOREIGN_WHAT="port $port ($id's $tier tier) answers as $id's $(_codex_tier_is_other_mode --mate "$tier"), the tier of the lane's other mode, so $id's $tier tier is not what holds it"
       CX_FOREIGN_FIX="'ccrc codex stop $id' stops every tier of the lane, in either mode; then start it again."
@@ -28800,6 +28813,7 @@ _uninst_codex() {   # [<the role ccrc.env records>]
     if [ "$lanes_rc" -eq 0 ]; then
       [ -z "$lanes" ] || mapfile -t ids <<<"$lanes"
     elif [ "$lanes_rc" -eq 2 ]; then
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       roster=missing-jq
     else
       roster=unreadable
