@@ -36,12 +36,12 @@ within about a day. Today child approvals trust a fixed list of four builds, so 
 
 ## Design (the smallest one)
 
-1. **The record.** Migration 58 adds `claude_builds`: one row per build. The columns are the build, its `source`
-   (`rig` or `fleet`), its `capture` (`queued`, `pass` or `fail`), whether the capture proved a PermissionRequest's `cwd`
-   follows the shell (`cwd`), when the row was first recorded, how many capture jobs were sent and when the last one
-   went, when the verdict landed, and the replay output's tail. The migration seeds the four rig builds as `pass` with
-   `cwd`, so they stay trusted as they were. The two constants are deleted. The writers are `CoordStore` methods over
-   `coord/claudeBuildsStore.ts`.
+1. **The record.** Migration 60 adds `claude_builds` (slots 58 and 59 went first, to `practice_cases` and the plan
+   model): one row per build. The columns are the build, its `source` (`rig` or `fleet`), its `capture` (`queued`,
+   `pass` or `fail`), whether the capture proved a PermissionRequest's `cwd` follows the shell (`cwd`), when the row
+   was first recorded, how many capture jobs were sent and when the last one went, when the verdict landed, and the
+   replay output's tail. The migration seeds the four rig builds as `pass` with `cwd`, so they stay trusted as they
+   were. The two constants are deleted. The writers are `CoordStore` methods over `coord/claudeBuildsStore.ts`.
 2. **The decider** (`shared/claudeBuildTrust.ts`, L0) holds `buildTrustOf(records, version)`. It answers `trusted` with
    its `cwd`, or `untrusted` with one of five reasons: `unread` (no version), `record-unreadable`, `not-captured`,
    `capture-queued` or `capture-failed`. The same file holds the queue's two pure choices, `unrecordedBuilds` and
@@ -87,7 +87,7 @@ browser test). The PWA PR is rebased onto `main` once the server PR merges, so i
   pass, fail and its notice, unavailable), `testbox-builds-route` (the read and the operator's re-capture), and the
   approvals rows (an uncaptured build is refused with `trust`, a captured one passes, a `pass` without `cwd` gives the
   classifier no `cwd`).
-- [x] T3. `shared/claudeBuildTrust.ts`, migration 58, `coord/claudeBuildsStore.ts` and its `CoordStore` methods,
+- [x] T3. `shared/claudeBuildTrust.ts`, migration 60, `coord/claudeBuildsStore.ts` and its `CoordStore` methods,
   `buildCaptureLane.ts` with the port and the adapter, the watcher's call, the two routes, and approvals reading the record.
 - [x] T4. PWA: `TestBoxBuilds.tsx`, its words and its jsdom test, mounted in the test box card, and
   `browser/testbox-builds.browser.test.ts`, which measures the list at 390, 1280 and 1920.
