@@ -2999,7 +2999,8 @@ button.proj-card-pool::before {
 }
 .run-row .run-crossing-glyph { color: var(--ink-tertiary); }
 .run-row .run-kind-glyph { color: var(--ink-tertiary); }
-.run-row .run-tally, .run-row .run-when {
+/* D-8292: the worker branch's commit count sits beside the tally in the tally's own ink: a fact, never an alarm. */
+.run-row .run-tally, .run-row .run-commits, .run-row .run-when {
   font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
 /* Task 3 (spawn visibility): the dispatch window and the wedge. Scoped under

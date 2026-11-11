@@ -124,7 +124,7 @@ import {
 // `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
 import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
-import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
+import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
 import { LIFECYCLE_PARK_ERRORS, REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
@@ -7442,6 +7442,34 @@ export class CoordStore {
     ).all(BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, since, BRIEF_NOTICE_DETAIL) as unknown as
       (Omit<UnlandedBrief, 'retried'> & { retried: number })[];
     return rows.map((r) => ({ ...r, retried: Number(r.retried) === 1 }));
+  }
+
+  /** D-8292 (#119): every run at `dispatched` whose worker has TAKEN its wave brief moves to `working`, in one
+   *  transaction (`briefwatch.ts`'s `BRIEF_TAKEN_START_PREFIX` says why). Taken is the brief watch's word: a delivery of
+   *  a mail naming the run, with the brief's subject, addressed to the run's own session, that reached `ingestedAt` or
+   *  was acked. The sender is not read, so a brief the coordinator sent by hand after a refused `/clear` counts too.
+   *  The earliest such delivery is the one named. The move goes through `advanceInner`, the one state writer, as
+   *  `'sweep'`; the SELECT and the writes share the transaction, so a run the coordinator moved in between is never
+   *  read as `dispatched`. Answers the runs it moved, for the sweep's log line. */
+  startRunsOnTakenBrief(): { runId: number; deliveryId: number; how: BriefTakenHow }[] {
+    const from: RunState = 'dispatched';
+    return tx(this.db, () => {
+      const rows = this.db.prepare(
+        'SELECT r.id AS runId, MIN(d.id) AS deliveryId FROM runs r ' +
+        'JOIN mail m ON m.runId = r.id JOIN mail_deliveries d ON d.mailId = m.id ' +
+        "WHERE r.state = ? AND m.subject = ? AND d.toId = r.sessionId AND (d.ingestedAt IS NOT NULL OR d.state = 'acked') " +
+        'GROUP BY r.id ORDER BY r.id',
+      ).all(from, WAVE_BRIEF_SUBJECT) as unknown as { runId: number; deliveryId: number }[];
+      const started: { runId: number; deliveryId: number; how: BriefTakenHow }[] = [];
+      for (const row of rows) {
+        const d = this.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?').get(row.deliveryId) as
+          { ingestedAt: number | null } | undefined;
+        const how: BriefTakenHow = d?.ingestedAt != null ? 'ingested' : 'acked';
+        const adv = this.advanceInner(row.runId, 'working', 'sweep', briefTakenStartDetail(row.deliveryId, how));
+        if (adv.ok) started.push({ runId: row.runId, deliveryId: row.deliveryId, how });
+      }
+      return started;
+    });
   }
 
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;

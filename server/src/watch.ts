@@ -7913,6 +7913,12 @@ export class FleetWatcher {
     const projects = new Set(records.map((r) => r.project));
     const sessionProjects = new Map(records.map((r) => [r.id, r.project] as const));
     this.reviveParked(store, records, now, sessionProjects, projects);
+    // D-8292 (#119): a run whose worker took its wave brief (ingested or acked) moves `dispatched -> working`. Before the
+    // empty-queue return, so a brief acked through the route with nothing else outstanding still starts its run; an
+    // ingest edge sampled further down this pass starts it on the next one. A store-only act: no read, no fleet act.
+    for (const s of store.startRunsOnTakenBrief()) {
+      console.log(`ccrc-server: run ${s.runId} working: its worker took its wave brief (delivery ${s.deliveryId}, ${s.how})`);
+    }
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);

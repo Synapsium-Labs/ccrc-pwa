@@ -30,7 +30,7 @@ import { runSpendLine } from '../fleet/runSpendWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, childReclaimTitle, coordinatorOf, crossingNote, dispatchStalledTitle,
-  dispatchWindow, itemTallyLabel, anyDispatchPending, runWaitLine,
+  dispatchWindow, itemTallyLabel, itemTallyTitle, branchCommitsNote, anyDispatchPending, runWaitLine,
   isRunClosed, programsWithOpenRun, resumeNote, resumeShown, runHomeProject, runItems, runKindChip, runRowName, runState, runStateWord, runWarnings, workerOf,
   workerSeenNote,
 } from '../fleet/runWords';
@@ -141,6 +141,7 @@ function Header({ run, worker, nowMs, quietMs }: {
   const graphReads = worker === null ? null : graphReadCount(worker);
   const waitLine = runWaitLine(run, nowMs);
   const seen = workerSeenNote(run, nowMs, quietMs);
+  const commits = branchCommitsNote(run, worker);
   return (
     <header className="rd-head">
       <p className="rd-kind-word">{run.kind === 'review' ? 'review' : 'work'}</p>
@@ -159,7 +160,8 @@ function Header({ run, worker, nowMs, quietMs }: {
         {kind !== null && (
           <span className="rd-kind" title={kind.title}><span aria-hidden="true">{kind.glyph}</span>{kind.word}</span>
         )}
-        <span className="rd-tally">{itemTallyLabel(runItems(run))}</span>
+        <span className="rd-tally" title={itemTallyTitle(runItems(run)) ?? undefined}>{itemTallyLabel(runItems(run))}</span>
+        {commits !== null && <span className="rd-commits" title={commits.title}>{commits.word}</span>}
         <span className="rd-when">{run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}</span>
         {seen !== null && <span className="rd-seen" data-quiet={String(seen.quiet)} title={seen.title}>{seen.word}</span>}
       </p>
