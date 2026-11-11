@@ -21,7 +21,7 @@
 // `NodeItem` is their consumer, and `pwa/test/halt-banner.test.tsx` asserts
 // the re-export is the SAME binding as the one in `fleet/updateAck` — the
 // point of that assertion is the identity, not which file carries it.
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   CatalogueErrorReason, CatalogueState, NodeWire, ReleaseSourceWire, ReleaseWire, UpdateChannel,
@@ -421,11 +421,21 @@ function MoveButton({ disabled, onClick, children, describedBy, tone = 'move' }:
   disabled: boolean;
   onClick: () => void;
   children: ReactNode;
+  /** The one halt line's id, passed only while a halt gates this control (Install, Update all, a node's Update). */
   describedBy?: string;
   tone?: 'move' | 'danger';
 }): ReactNode {
+  const ref = useRef<HTMLButtonElement>(null);
+  // Residue R30 (D-8340): a background poll that brings a halt disables this control, and a browser drops the focus of
+  // a disabled control to <body>. Keyed on the halt (its line's id arrives with it), the focus moves first to that
+  // line, which says why the control waits and where the Ack is (`HaltLine`, focusable from script). A layout effect,
+  // so the move lands in the commit that disables, before the browser's focus fix-up.
+  useLayoutEffect(() => {
+    if (!disabled || describedBy === undefined || document.activeElement !== ref.current) return;
+    document.getElementById(describedBy)?.focus();
+  }, [disabled, describedBy]);
   return (
-    <Button variant={tone === 'danger' ? 'danger-ghost' : 'ghost'} size="fit" className="settings-move"
+    <Button ref={ref} variant={tone === 'danger' ? 'danger-ghost' : 'ghost'} size="fit" className="settings-move"
             disabled={disabled} aria-describedby={describedBy} onClick={onClick}>
       {children}
     </Button>
@@ -480,8 +490,9 @@ export function haltLineText(nodes: readonly NodeWire[], w: ReleaseWindow): stri
   return `${halted} Clear it with Ack ${which}, under Nodes, after you have fixed what made it fail.`;
 }
 
+/** Focusable from script only (`tabIndex={-1}`): a control the halt disables hands it the focus (R30, D-8340). */
 export function HaltLine({ id, text }: { id: string; text: string }): ReactNode {
-  return <p className="settings-release-refused" id={id}>{text}</p>;
+  return <p className="settings-release-refused" id={id} tabIndex={-1}>{text}</p>;
 }
 
 /** Wave 8 item C's blocked line. Defined beside the rollback sheet since D-5611, which says it too; re-exported so this

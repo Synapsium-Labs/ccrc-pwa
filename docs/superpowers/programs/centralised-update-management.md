@@ -7353,11 +7353,13 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
     with `onAcked=vi.fn()`, unlike the shipped props. Its pre-existing siblings (`:1545-1546`, the Step 6 count) need
     the same correction.
 - **R28 (wave 19, Reading 11; for a PWA wave).** When the last halting row's Ack lands, the next poll unmounts the
-  whole halt banner and focus falls to `<body>`.
+  whole halt banner and focus falls to `<body>`. **Fixed by D-8340 (2026-11-11):** the focus goes to the landmark that
+  is shown.
 - **R29 (wave 19, Reading 14; the stable path).** The heir-guard case in `update-store-nodes.test.ts` can red by load at
   20 s on the shipped body too, the same class as B5.
 - **R30 (wave 19, Reading 16; for a PWA wave).** A background poll that brings a halt disables a focused Install or
-  Update, and focus drops to `<body>`. The fix shape is a layout effect keyed on the halted flag.
+  Update, and focus drops to `<body>`. The fix shape is a layout effect keyed on the halted flag. **Fixed by D-8340
+  (2026-11-11):** the focus moves to the one halt line.
 - **R31 (wave 15, review 510 F1; the docs PR).** The wave-15 plan's Tech Stack (plan:37) says node `>=22.13.0`; every
   package declares `>=22.16.0`, pinned by `node-floor.test.ts`. Also from wave 15's own review:
   `server/test/coord-prhistory.test.ts:41` cites `ccd/ccd:881-884` for unrelated behaviour, a citation already stale
@@ -7368,7 +7370,7 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
 - **R33 (wave 19, review 511; the docs PR and a later store fold).** (a) `rowHalts`' docstring could name
   `isHaltingUpdate`; the consent allowed the body only. (b) `server/test/update-inventory.test.ts:415-416`: B5's comment
   names `expired()`, but the deciding path is `deadline.race`'s null (`server/src/pools.ts:65-66`). **(b) in #937
-  (2026-10-20).** (a) stays for the store fold.
+  (2026-10-20).** (a) stays for the store fold. **(a) by D-8340 (2026-11-11).**
 - **R34 (wave 16, review 512 F2; wave 17).** `^[0-9]{1,4}$` accepts non-ASCII decimal digits under a UTF-8 locale, in
   `deploy/deploy.sh`'s KEEP check and in `ccd/ccrc`'s `_keep_ok`. `agent/test/deploy-verify.test.ts` D1c pins the two
   as equal. `deploy.sh` fails safe; `_keep_ok`'s caller then fails `10#$keep`. Fix both at once (`[0123456789]`, or
