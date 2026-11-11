@@ -3,6 +3,10 @@
 // share no rule (the URL-userinfo rule is two ids because the egress rule masks to the last `@` and the docs rule
 // stops at the first), `redact` is idempotent per profile, and the module is browser-safe. The byte pins are
 // `redact.test.ts`'s (the egress corpus, the docs corpus, the cross-profile rows) and `docs-parity.test.ts`'s.
+// PR 2 (the history coordinator's ack, which names R11): the two history profiles, `history-base` (R11's base, the rev 3.6
+// rules) and `history-v2` (the widened rules), list their rule ids like every profile, differ in one id (the named value),
+// and `historyRules` builds each into the rule set `ccd/history/lib.mjs` reads, byte for byte the sets lib built before the
+// move (`fixtures/history/context-rules.json`, captured by `history-redact-profiles.test.ts`'s characterization pin).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -10,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseFile } from './scan/parse.js';
 import { DOCS_REDACT_RULES } from '../../shared/docs.js';
 import { credentialMaskSource } from '../../shared/api.js';
-import { PROFILES, RULE_IDS, docsRuleRows, redact, redactCount } from '../../shared/redact.js';
+import { PROFILES, RULE_IDS, docsRuleRows, historyRules, redact, redactCount, type RedactProfile } from '../../shared/redact.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MODULE = path.resolve(here, '..', '..', 'shared', 'redact.mjs');
@@ -19,6 +23,11 @@ const CORPUS: { input: string; output: string }[] =
   JSON.parse(readFileSync(path.join(here, 'fixtures/approvals/redact-corpus.json'), 'utf8'));
 const FIXTURE: { docs: [string, string, string][] } =
   JSON.parse(readFileSync(path.join(here, 'fixtures/redact/profiles.json'), 'utf8'));
+/** The profiles `redact` runs as text steps; the two history profiles are rule sets `historyRules` builds. */
+const TEXT_PROFILES: readonly RedactProfile[] = ['egress', 'docs', 'linear-egress'];
+type RuleDump = Record<string, boolean | [string, string]>;
+const HISTORY_SETS: Record<'BASE_RULES' | 'CONTEXT_RULES', { field: RuleDump; final: RuleDump }> =
+  JSON.parse(readFileSync(path.join(here, 'fixtures/history/context-rules.json'), 'utf8'));
 
 describe('shared/redact.mjs: profiles list their rule ids explicitly (D-5867)', () => {
   it('the egress profile is these rule ids, in this order', () => {
@@ -39,8 +48,30 @@ describe('shared/redact.mjs: profiles list their rule ids explicitly (D-5867)', 
       'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
     ]);
   });
-  it('there are three profiles: egress, docs and linear-egress (#1444)', () => {
-    expect(Object.keys(PROFILES).sort()).toEqual(['docs', 'egress', 'linear-egress']);
+  it('there are five profiles: egress, docs, linear-egress (#1444) and the two history profiles (PR 2)', () => {
+    expect(Object.keys(PROFILES).sort()).toEqual(['docs', 'egress', 'history-base', 'history-v2', 'linear-egress']);
+  });
+  it('the history-base profile is these rule ids, in this order: R11\'s base, the rev 3.6 rules', () => {
+    expect([...PROFILES['history-base']]).toEqual([
+      'history-json', 'history-named-head', 'history-named-tail', 'history-named-value-v1', 'history-bearer',
+      'history-mail-token', 'history-bearer-sticky', 'history-mail-token-sticky', 'history-query',
+    ]);
+  });
+  it('the history-v2 profile is these rule ids, in this order: the widened rules', () => {
+    expect([...PROFILES['history-v2']]).toEqual([
+      'history-json', 'history-named-head', 'history-named-tail', 'history-named-value', 'history-bearer',
+      'history-mail-token', 'history-bearer-sticky', 'history-mail-token-sticky', 'history-query',
+    ]);
+  });
+  it('the two history profiles differ in one rule, the named value: v1\'s class in the base, the widened one in v2', () => {
+    const base = PROFILES['history-base'];
+    const v2 = PROFILES['history-v2'];
+    expect(base.filter((id) => !v2.includes(id))).toEqual(['history-named-value-v1']);
+    expect(v2.filter((id) => !base.includes(id))).toEqual(['history-named-value']);
+  });
+  it('the history profiles share no rule with a text profile', () => {
+    const text = new Set(TEXT_PROFILES.flatMap((p) => PROFILES[p]));
+    for (const p of ['history-base', 'history-v2'] as const) expect(PROFILES[p].filter((id) => text.has(id)), p).toEqual([]);
   });
   it('linear-egress runs no command-line rule: no token-segments, no flag rule, no program-scoped rule (#1444)', () => {
     const prose = new Set(PROFILES['linear-egress']);
@@ -73,6 +104,31 @@ describe('shared/redact.mjs: profiles list their rule ids explicitly (D-5867)', 
   });
 });
 
+describe('historyRules(profile): the rule sets ccd/history/lib.mjs reads (D-5867, PR 2)', () => {
+  /** A rule set as the fixture holds it: each key in order, a regular expression as `[source, flags]`. */
+  const dump = (form: object): RuleDump => Object.fromEntries(Object.entries(form)
+    .map(([k, v]) => [k, v instanceof RegExp ? [v.source, v.flags] : v as boolean]));
+  it('history-base is BASE_RULES and history-v2 is CONTEXT_RULES, byte for byte, as lib built them before the move', () => {
+    for (const [profile, name] of [['history-base', 'BASE_RULES'], ['history-v2', 'CONTEXT_RULES']] as const) {
+      const set = historyRules(profile);
+      expect(Object.keys(set), profile).toEqual(['field', 'final']);
+      expect(dump(set.field), `${profile} field`).toEqual(HISTORY_SETS[name].field);
+      expect(dump(set.final), `${profile} final`).toEqual(HISTORY_SETS[name].final);
+    }
+  });
+  it('a rule set is frozen, each form carries its `final`, and every call builds fresh expressions (no shared lastIndex)', () => {
+    const a = historyRules('history-v2');
+    const b = historyRules('history-v2');
+    expect(Object.isFrozen(a) && Object.isFrozen(a.field) && Object.isFrozen(a.final)).toBe(true);
+    expect([a.field.final, a.final.final]).toEqual([false, true]);
+    expect(a.field.json).not.toBe(b.field.json);
+  });
+  it('a text profile, and an unknown one, is not a history rule set', () => {
+    expect(() => historyRules('docs' as never)).toThrow(/history profile/);
+    expect(() => historyRules('history-index' as never)).toThrow(/history profile/);
+  });
+});
+
 describe('redact(profile, text): the entry point (D-5867)', () => {
   it('is idempotent per profile', () => {
     for (const r of CORPUS) expect(redact('egress', redact('egress', r.input, SHAPES), SHAPES), r.input).toBe(r.output);
@@ -89,6 +145,10 @@ describe('redact(profile, text): the entry point (D-5867)', () => {
   });
   it('an unknown profile throws', () => {
     expect(() => redact('history-index' as never, 'x')).toThrow(/profile/);
+  });
+  it('a history profile is a rule set, not text steps: redact and redactCount refuse it', () => {
+    expect(() => redact('history-v2' as never, 'x')).toThrow(/historyRules/);
+    expect(() => redactCount('history-base' as never, 'x')).toThrow(/historyRules/);
   });
 });
 
@@ -109,21 +169,21 @@ describe('shared/redact.mjs is browser-safe: the PWA bundles shared/docs.ts, whi
   });
   it('the redactor is browser-safe: importing it runs nothing but the table', async () => {
     const mod = await import('../../shared/redact.mjs');
-    expect(Object.keys(mod).sort()).toEqual(['EGRESS_MASK', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'redact', 'redactCount']);
+    expect(Object.keys(mod).sort()).toEqual(['EGRESS_MASK', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'historyRules', 'redact', 'redactCount']);
   });
 });
 
 describe('redactCount(profile, text): the same steps as redact, and the number of spans they replaced (#1444)', () => {
   const inputs = (): string[] => [...CORPUS.map((r) => r.input), ...FIXTURE.docs.map(([, input]) => input)];
   it('its text is redact\'s, on every corpus row, in every profile', () => {
-    for (const profile of Object.keys(PROFILES) as (keyof typeof PROFILES)[]) {
+    for (const profile of TEXT_PROFILES) {
       const shapes = profile === 'docs' ? undefined : SHAPES;
       const differ = inputs().filter((s) => redactCount(profile, s, shapes).text !== redact(profile, s, shapes));
       expect(differ, profile).toEqual([]);
     }
   });
   it('masked is zero exactly when nothing was replaced, on every corpus row, in every profile', () => {
-    for (const profile of Object.keys(PROFILES) as (keyof typeof PROFILES)[]) {
+    for (const profile of TEXT_PROFILES) {
       const shapes = profile === 'docs' ? undefined : SHAPES;
       for (const s of inputs()) {
         const r = redactCount(profile, s, shapes);

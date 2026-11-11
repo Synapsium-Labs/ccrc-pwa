@@ -395,12 +395,12 @@ describe('redactRuleTables: modules that spell redaction rule patterns of their 
     expect(redactRuleTables(tree)).toEqual(['ccd/history/three.mjs', 'server/src/two.ts', 'shared/one.mjs']);
   });
 
-  it('REAL: finds shared/redact.mjs and the history redactor, and no TypeScript table', async () => {
+  it('REAL: finds shared/redact.mjs, not the history redactor (PR 2 moved its rules there), and no TypeScript table', async () => {
     const { redactRuleTables } = await import('./consolidationCensus.js');
     const tables = redactRuleTables();
     console.log(`census redactRuleTables: ${tables.length}\n${tables.map((t) => `  ${t}`).join('\n')}`);
     expect(tables).toContain('shared/redact.mjs');
-    expect(tables).toContain('ccd/history/lib.mjs');
+    expect(tables).not.toContain('ccd/history/lib.mjs');
     expect(tables.filter((t) => /\.tsx?$/.test(t))).toEqual([]);
   });
 });
