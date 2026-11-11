@@ -8,7 +8,7 @@ subagent metadata — measured per installed binary, so the delegation broker (s
 - `rig.sh` — runs one binary against the mock in a PRIVATE tmux server (`tmux -L dlg… -f /dev/null`) and a FIXTURE
   HOME under a `ccrc-dlg-rig.*` root, with ccrc's own hook registered by ccrc's own installer in a session named
   `cc-rig-hookcap`. It never names the real HOME (except to find the binary) or the default tmux server, and
-  grants tools through `permissions.allow` — never a permission bypass.
+  grants tools through `permissions.allow` — never a permission bypass, except in `scenarios-overlord/` (below).
 - `scenarios/*.json` — one per measured situation; `covers` names the spec §8.1 questions. An `answerDialog` step
   presses Enter, which takes the dialog's default option, once its text is on the pane, and notes
   `dialog answered: <text>`; a dialog whose text does not appear within the step's timeout is a failure note,
@@ -17,6 +17,30 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   from the pane on 2.1.280 and 2.1.289 only (the note names the dialog, never the option). What is measured after
   it: the session ends (SessionEnd `prompt_input_exit`), the agent emits no SubagentStop, and its tree is left,
   locked.
+- `scenarios-overlord/*.json` and `stubs/` — the Overlord's W0 spike (plan
+  `docs/superpowers/plans/2026-11-10-overlord/w0-spike.md`; results in
+  `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`). These scenarios measure the launch ccd makes, so
+  they may carry a permission bypass (D-8203); `check-scenario` refuses one anywhere else, and a test holds the
+  delegation corpus bypass-free. `recapture.sh` and `rig.sh all` never run them; each is run by hand, one at a time,
+  with `rig.sh run <version> <file> <out-dir>`, and nothing from a run is committed: the results note holds the
+  facts. **Run the set again whenever the fleet's model class advances, and on a new Claude Code build before a W1
+  piece relies on a row it measured** (spec 2026-11-09 §3.3: "W0 and the probes measure it again").
+  A scenario may carry, at its top level (all optional; a scenario without them runs exactly as before):
+  - `launch.args` — flags from `RIG_LAUNCH_FLAGS` only, each value after its flag;
+  - `launch.env` — names from `RIG_LAUNCH_ENV` only (`PATH`, `HOME`, `TMPDIR`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_*`
+    refused, here and in `launch.settings.env`);
+  - `launch.settings` — merged over the fixture's `settings.json` with jq's `*`, each `hooks.<event>` array appended so
+    ccrc's own hook stays;
+  - `launch.files` — `[{in: "cfg"|"repo", path, text, exec?}]`, written under the fixture config or the fixture repo;
+  - placeholders `@RIG_ROOT@`, `@RIG_HOME@`, `@RIG_CFG@`, `@RIG_REPO@` and `@RIG_STUBS@`, replaced literally in
+    args, env values, settings strings and file texts;
+  - `capS` (60 to 5400, the run's cap in place of 1200), `timing: true` (each step's start and `waitReady`'s elapsed
+    milliseconds, in the bundle's `timing` file; never in `notes`, which `build-matrix.mjs` reads as failures) and
+    `requests: true` (every request the mock answers, in the bundle's `reqs/`).
+  Steps gain `relaunch` `{"mode":"fresh"}` (no `--resume`) and `{"mode":"fork"}` (`--resume <sid> --fork-session`)
+  beside `true`, and `sessionsSnap: <name>` (Claude Code's `sessions/*.json` and the transcript names, at that
+  instant). `rig.sh print-launch <version> <scenario> <root>` prints the launch line a run would type, after the same
+  setup, and starts nothing.
 - `recapture.sh` — the corpus's one re-capture script: the steps below, in order (spec §8.2).
 - `sanitize.mjs` — raw run bundles → `server/test/fixtures/delegation/<version>/<scenario>.json`, fail-closed on any
   residue of a real path, user or host.
