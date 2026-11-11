@@ -18,7 +18,7 @@ is left unedited.
   goes red if the crash is applied first). The `server crash` line is one only
   the simulator can write, since a live server writes nothing as it dies, so the W1 monitor, which sees only boots,
   must restart the clock at a boot line and cannot apply the down rule.
-- **sim-world-bounds-scheduled-calls, addition.** This is the worker's own addition; no plan offered it. The world holds
+- **D-8242, sim-world-bounds-scheduled-calls, addition.** This is the worker's own addition; no plan offered it. The world holds
   a budget of scheduled calls (`SimWorld`'s `maxCalls`, 200 000 by default), so a zero-delay re-arm fails instead of
   hanging: past the budget the call is not made, the fake records a warning, the re-arm stops and `simulate` throws. The
   fake is untouched. `Scenario` has no field for the budget, since no scenario needs one: a scenario that needs more
