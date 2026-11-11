@@ -41,6 +41,8 @@ import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync,
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
+import type { ExecKind } from '../../shared/roster.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 import { IS_DARWIN } from './platformFixtures.js';
@@ -364,7 +366,7 @@ export interface RosterEntry {
   id: string;
   configDirSuffix?: string;
   exec: {
-    kind: 'upstream' | 'generated' | 'external' | 'codex';
+    kind: ExecKind;
     secretsFile?: string;
     // The two provider fields the roster model carries. `writeRoster` spreads
     // the entry, so nothing else in this file changes — but a fixture writing a
@@ -1736,7 +1738,7 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  RAISED BY ONE AGAIN, on every platform (landing order wave 3b, Task 3): `land-probe`
  *  SKIPs - `healthy()` writes no `~/.ccrc/landing/<project>.conf`, so no project is
  *  opted in to the conflict radar and there is nothing to measure (it SKIPs on macOS
- *  and on a server-role box too). The `land-probe` describe in `ccrc-doctor-core.test.ts`
+ *  and on a server-role box too). The `land-probe` describe in `ccrc-doctor-core-state.test.ts`
  *  plants a conf and its files where the check answers. Measured the same way: with the
  *  check in the table and this `+ 1` absent, every `(N skipped)` pin that reads this
  *  constant reds.
@@ -1970,7 +1972,7 @@ export function installDoctorHooks(): void {
   // own message, not every case in the file.
   beforeAll(() => {
     try { compiledSecretJs(); } catch { /* the first case that plants an auth module builds it again and reports why it could not */ }
-  }, 120_000);
+  }, scaled(120_000));
   afterEach(async () => { for (const h of codexHomes.splice(0)) await killLaneProcesses(h); });
 }
 

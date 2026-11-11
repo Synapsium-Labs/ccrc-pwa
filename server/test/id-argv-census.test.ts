@@ -514,6 +514,8 @@ const GATE_FILES = [
   'coord/siblingRead.ts',
   // coord/radar.ts (D-7479): a probe head's `id` is vetted by the predicate before it can match a registry row.
   'coord/radar.ts',
+  // coord/archiveDoor.ts (D-8199): a claims choice's `heir` is vetted by the predicate before the hand-over reads its row.
+  'coord/archiveDoor.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;

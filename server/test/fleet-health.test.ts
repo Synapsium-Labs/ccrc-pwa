@@ -29,6 +29,7 @@ import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import type { NodeMeasurement } from '../src/coord/store.js';
+import { fakeTime } from './fakeTime.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -45,7 +46,7 @@ function remoteDeps(
   const home = mkTmp('ccrc-');
   seedRoster(home);
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote', ...env });
-  return { cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath, queue: new KeyedQueue() };
+  return { cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath, queue: new KeyedQueue(), time: fakeTime().ports };
 }
 
 // A COMPLETE FleetSession — the fixture was eight fields short of the type it

@@ -1,0 +1,26 @@
+ok  refusal words: every word a door refuses or answers with outside §11.6 has a row in Table 11.6 (38 words used)
+ok  refusal words: each of the 57 rows of Table 11.6 is used outside §11.6
+ok  refusal words: the ten words of Table 5.5b name doors that Table 11.6 names too
+CE VOC-refusal-door: `practice-contradicts`: Table 11.6 gives it to "The practice door"; Table 9.7b has the practice lane write it, as the reason on an entry it retires after the replay. The door has already accepted the entry as `proposed`
+CE VOC-outcome: Table 11.5 restates the `overlordOutcome` list and leaves out `returned`, `withdrawn`; §6.1 lists 10 values
+CE VOC-outcome: Table 11.6's `released:<cause>` row lists the causes and leaves out `deaf`; §6.1 and Table 6.7c ("`deaf` on one row (`deaf`)") have it
+ok  Table 6.7c's bracketed causes are the seven of §6.1: ['bypassed', 'class-raised', 'deaf', 'disarmed', 'engagement', 'grant-ended', 'rung']
+ok  every act a row of Table 11.1e names in backticks is a kind of Table 7.1a (13 names; strays: [])
+CE VOC-act: lines 3430, 3914, 3918 say the Overlord raises an item (Restart and Reassign controls; a suggestion to retire). Table 7.1a has no kind that raises one: `escalate` and `attach-brief` act on a row that exists, and the item-raise lane refuses it `overlord-uses-its-doors`
+CE VOC-act: §10.5 has the Overlord write a case's review. `practice_cases` has one writer, the case lane, Table 11.1e has no door that takes a review, and Table 7.1a has no kind for it
+ok  compensators: relay, the answers (and the effects they carry), start and re-kick each name one; `deploy` is refused at every rung
+ok  every `not-ready:<word>` written out names a readiness word: ['saturated']
+ok  Table 6.7c gives every readiness word but `ready` a row (missing: [])
+ok  the five states between `active` and the next `active` are listed the same way in Table 6.4a and at gate 9
+ok  capability words: each of the 13 words of Table 11.1d is named once in Table 14, in the wave Table 11.1d gives it
+ok  three uses of a capability word in prose name the wave Table 11.1d gives
+CE VOC-wave: Table 11.1a ships "the witness epoch, with the heads of the authority journal and the act journal" in W1; the act journal ships in W2, so W1 has no such head to send
+ok  doors: each of the 18 `/api/overlord` paths in the text has a row in Table 11.1e (missing: [])
+CE VOC-stepup: §7.2 names "a session-gated operator door with a step-up: `POST /api/overlord/grants`, and `DELETE` to revoke". Table 11.2's step-up list has a grant, a grant leaving shadow and a renewal, and no revoke; §11.2 says lowering never needs a step-up. One place puts the revoke behind the step-up, the other does not
+CE VOC-stepup: §3.7: a decision-model refit that eases a gate "is an authority change" and "needs the operator's tap". Table 11.2's step-up list names arming a row and not that tap, and Table 11.1e has no row for it
+ok  measures: M1 to M32 are each one row of Table 12, in order
+ok  measures: 24 of the 32 are cited outside Table 12, and no citation names a number outside M1 to M32
+CE VOC-measure: "M1 shows prompts as a large share of what still reaches the operator": M1 counts "items and asks that reach the operator", read from `operator_items`, `asks`, `overlord_acts` and `answerExamined`. A child's permission prompt is an approval, a third channel (Table 6.1a), so M1 cannot show its share
+CE VOC-measure: §6.8 counts "holds, acts, model tokens, decision-model calls and pushes" per programme in M29; M29's row counts "holds, acts, tokens and pushes" and no decision-model calls
+CE VOC-measure: §3.8: "A read with no turn behind it is counted (M32)". M32's row counts "reads per door per day against the 28-day median" and says nothing of a read with no turn behind it
+== closed vocabularies: domain 57 refusal words; 10 outcome values and 7 causes; 33 act kinds; 14 readiness words; 13 capability words; 18 paths; 32 measures; counterexamples 11; checks passed 14

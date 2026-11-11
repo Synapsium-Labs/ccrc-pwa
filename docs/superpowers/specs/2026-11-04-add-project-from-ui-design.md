@@ -178,7 +178,7 @@ The verb is `ccd project-add --name <n> (--url <u> | --empty)`.
 ## 7. Rejected
 
 - **Running `git` from the server or agent directly.** `git` and `gh` are forbidden commands, and the agent's exec surface is closed.
-- **Creating an empty project with a local bare origin under `~/.ccrc`.** It invents a fake remote that PRs and the landing train cannot use.
+- **Creating an empty project with a local bare origin under `~/.ccrc`.** It invents a fake remote that PRs and the landing train cannot use. *Superseded by D-8193 (`docs/superpowers/plans/2026-11-10-empty-project-born-ready.md`): an Empty project now gets a local bare origin, so it takes workspaces; pull requests still need a GitHub remote.*
 - **A capability token.** The verb's name in `ccd caps` is enough. `verbRow` refuses on an older ccd once caps are measured.
 
 ## 8. Verification

@@ -259,7 +259,7 @@ describe('Replace token by paste (spec §9)', () => {
     // The live session keeps the old token until it restarts: one tap, stop then ensure.
     fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
     await waitFor(() => expect(ensure).toHaveBeenCalledWith('lane-c:p-one'));
-    expect(client.stop).toHaveBeenCalledWith('lane-c:p-one');
+    expect(client.stop).toHaveBeenCalledWith('lane-c:p-one', { restart: true });
     expect(client.stop.mock.invocationCallOrder[0]!).toBeLessThan(ensure.mock.invocationCallOrder[0]!);
     expect(await screen.findByText('restarted')).toBeInTheDocument();
 

@@ -45,7 +45,7 @@ describe('vocabulary', () => {
   });
 
   it('exports the bounds with the plan\'s values', () => {
-    expect(CLEARED_WINDOW_MS).toBe(7 * 24 * 3600 * 1000);
+    expect(CLEARED_WINDOW_MS).toBe(48 * 3600 * 1000); // D-8194: was seven days
     expect(SOON_LABEL_MAX).toBe(40);
     expect(ITEM_TITLE_MAX).toBe(140);
     expect(ITEM_TEXT_MAX).toBe(2000);

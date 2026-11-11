@@ -15,6 +15,7 @@ import type { SpawnPty } from './pty.js';
 import type { SecretMasker } from './accounts/mask.js';
 import type { FleetIdentityCell } from './fleetidentity.js';
 import type { KeyedQueue } from './inject/queue.js';
+import type { TimePorts } from './time/ports.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import type { Viewers } from './viewer.js';
@@ -99,6 +100,12 @@ export interface Deps {
    *  absent field with a local fallback is exactly how a second queue gets
    *  built with every suite green. */
   queue: KeyedQueue;
+  /** The process's one set of time ports (Overlord spec §11.5): its clock, one-shot scheduler and chance, built once
+   *  by `index.ts` from `time/system.ts` and handed on here; a test hands `fakeTime().ports`. Required, so the
+   *  composition root cannot omit it (D-8226). Nothing reads it yet; new Overlord and continuity code takes its time
+   *  and chance from here, never ambiently. `monotonicMs` below carries the monotonic clock too until it is folded
+   *  into `time.clock` (D-8227). */
+  time: TimePorts;
   /** Override for tests; defaults to `fleetstate.ts`'s `defaultCachePath()`. */
   stateCachePath?: string;
   /** Web Push — present only when VAPID keys are configured. */

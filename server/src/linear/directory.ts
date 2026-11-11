@@ -52,6 +52,8 @@ export class LinearDirectory implements LinearDirectoryRead {
         labels: Object.freeze([...entries.labels]),
         projects: Object.freeze([...entries.projects]),
         users: Object.freeze([...entries.users]),
+        projectStatuses: Object.freeze([...entries.projectStatuses]),
+        initiatives: entries.initiatives,
       }),
     });
   }

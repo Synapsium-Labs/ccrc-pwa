@@ -43,12 +43,17 @@ const registrations = (): Reg[] => {
   return out;
 };
 
+/** Coordination routes whose handlers live in a lane file of their own (growth-checked `coord/routes.ts` cannot take them),
+ *  registered from `registerCoordRoutes` with its own gate and sender check. Named, so a stray is still a stray. */
+const OWN_FILE_ROUTES = new Set(['coord/coordCallsRoute.ts POST /api/coord/programmes/:slug/calls']);
+
 const isCoord = (p: string): boolean => COORD_PREFIXES.some((pre) => p.startsWith(pre));
 
 describe('all coordination routes live in coord/routes.ts (D17)', () => {
   it('no file but coord/routes.ts (and the review-rounds door) registers a coordination path', () => {
     const strays = registrations()
-      .filter((r) => isCoord(r.routePath) && !COORD_ROUTE_FILES.includes(r.file))
+      .filter((r) => isCoord(r.routePath) && !COORD_ROUTE_FILES.includes(r.file)
+        && !OWN_FILE_ROUTES.has(`${r.file} ${r.verb.toUpperCase()} ${r.routePath}`))
       .map((r) => `${r.file}: app.${r.verb}('${r.routePath}')`);
     expect(strays, 'coordinator-skill.test.ts scans coord/routes.ts ONLY — a route here is ' +
       'named nowhere').toEqual([]);

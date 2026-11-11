@@ -175,6 +175,17 @@ export type ExecSpec =
     bridge: CodexBridgeMode; upstream: CodexUpstream;
   };
 
+/** `exec.kind`'s closed set: the ONE definition (D-8192), in the order every refusal names the kinds. TypeScript
+ *  readers import it, or `ExecKind`; `shared/roster-json.mjs`, the bare-Node validator that cannot import
+ *  TypeScript, keeps the one mirror, pinned equal IN ORDER by `server/test/roster-exec-parity.test.ts`, and
+ *  `server/test/single-definition/exec-kinds.test.ts` refuses a third list. `ExecSpec`'s arms are the shapes; the
+ *  pin below holds the two to the same kinds at compile time. */
+export const EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
+export type ExecKind = (typeof EXEC_KINDS)[number];
+const EXEC_KINDS_ARE_EXEC_SPEC_KINDS: [ExecKind] extends [ExecSpec['kind']]
+  ? ([ExecSpec['kind']] extends [ExecKind] ? true : never) : never = true;
+void EXEC_KINDS_ARE_EXEC_SPEC_KINDS;
+
 /** One account, as validated by `parseRoster`. */
 export interface AccountDef {
   /** A filename under `~/.local/bin/<id>`, a bash `case` pattern, and a
@@ -488,7 +499,11 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *  a caller that never went through this parser). */
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
-const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
+const EXEC_KIND_SET: ReadonlySet<string> = new Set(EXEC_KINDS);
+/** The kinds as the refusals below name them, each quoted, comma-joined, the last after "or": built from
+ *  `EXEC_KINDS`, never retyped (D-8192). */
+const EXEC_KINDS_SAID =
+  `${EXEC_KINDS.slice(0, -1).map((k) => JSON.stringify(k)).join(', ')} or ${JSON.stringify(EXEC_KINDS[EXEC_KINDS.length - 1])}`;
 /** `AccountDef['telemetry']`'s values, keyed by the union so the two cannot drift here, and an object rather than
  *  an array so it is not read as a restatement of the provider ids (`single-definition.test.ts`). The bare-Node
  *  mirror (`shared/roster-json.mjs`) declares the same keys and `roster-exec-parity.test.ts` compares them (D-5753). */
@@ -746,19 +761,17 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
   if (!isPlainObject(raw)) {
     throw new RosterError(
       `account "${id}" has a missing or invalid "exec".`,
-      `Set "exec" for account "${id}" in ${ROSTER_PATH} to an object with a "kind" of ` +
-        '"upstream", "generated", "external" or "codex".',
+      `Set "exec" for account "${id}" in ${ROSTER_PATH} to an object with a "kind" of ${EXEC_KINDS_SAID}.`,
     );
   }
   const kind = raw['kind'];
-  if (typeof kind !== 'string' || !EXEC_KINDS.has(kind)) {
+  if (typeof kind !== 'string' || !EXEC_KIND_SET.has(kind)) {
     throw new RosterError(
-      `account "${id}" has an invalid exec.kind ${JSON.stringify(kind)}: it must be ` +
-        '"upstream", "generated", "external" or "codex".',
-      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated", "external" or "codex".`,
+      `account "${id}" has an invalid exec.kind ${JSON.stringify(kind)}: it must be ${EXEC_KINDS_SAID}.`,
+      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to ${EXEC_KINDS_SAID}.`,
     );
   }
-  warnUnknownKeys(raw, EXEC_KEYS[kind as ExecSpec['kind']], `on account "${id}"'s exec`);
+  warnUnknownKeys(raw, EXEC_KEYS[kind as ExecKind], `on account "${id}"'s exec`);
 
   // HOISTED out of the `generated` arm (D-1857). This is the one change in this
   // wave that is not absence-permitting: `{kind:'upstream', secretsFile:'../x'}`

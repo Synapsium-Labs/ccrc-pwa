@@ -22,6 +22,7 @@ import { askKey } from '../src/askkey.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-f';
 
@@ -74,7 +75,7 @@ async function makeApp(
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue(),
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       ...(opts.mailToken !== undefined ? { mailToken: opts.mailToken } : {}) },
     bus,
   );
@@ -533,7 +534,7 @@ describe('write routes', () => {
     const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
 
@@ -551,7 +552,7 @@ describe('write routes', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
 
@@ -1406,7 +1407,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
-        queue: new KeyedQueue() },
+        queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/stop' });
@@ -1425,7 +1426,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
-        queue: new KeyedQueue() },
+        queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/archive' });
@@ -1449,7 +1450,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports }, new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
     expect(res.statusCode).toBe(404);
@@ -1474,7 +1475,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const unlistable: FleetIO = { ...localIO, readdir: async () => null };
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unlistable, queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unlistable, queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
@@ -1492,7 +1493,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const run: Runner = async (_c, args) => { calls.push([...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports }, new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${id}/stop` });
     expect(res.statusCode).toBe(200);

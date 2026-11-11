@@ -309,7 +309,9 @@ export class LinearRefresher {
       labels: LinearDirectoryEntries['labels'][number][];
       projects: LinearDirectoryEntries['projects'][number][];
       users: LinearDirectoryEntries['users'][number][];
-    } = { viewerId: null, states: [], labels: [], projects: [], users: [] };
+      projectStatuses: LinearDirectoryEntries['projectStatuses'][number][];
+      initiatives: LinearDirectoryEntries['initiatives'];
+    } = { viewerId: null, states: [], labels: [], projects: [], users: [], projectStatuses: [], initiatives: 'unknown' };
     let digest: string | null = null;
     const startedAt = this.now();
     for (const kind of LINEAR_DIRECTORY_COLLECTIONS) {

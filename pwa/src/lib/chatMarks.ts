@@ -274,7 +274,8 @@ function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
  *  characters (`10`, `v0.0.1003`, `no-op`, `docs/no.md` are each one word; review 1592 F3). */
 const NEGATION_TOKEN = /([.!?;,:](?=\s|$)|\n)|[\p{L}\p{M}\p{N}_]+(?:[.\-/][\p{L}\p{M}\p{N}_]+)*/gu;
 /** The number words a count of zero may be "of" ("passed: 0 of twelve"; review 1601 F2), the plurals of ten, a hundred
- *  and a thousand among them ("failed: 0 of hundreds", review 1722 F5; "failed: 0 of tens of cases", review 1723 F2). */
+ *  and a thousand among them ("failed: 0 of hundreds", review 1722 F5; "failed: 0 of tens of cases", review 1723
+ *  F2). */
 const NUMBER_WORDS = [
   'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen',
   'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty',
@@ -287,7 +288,8 @@ const NUMBER_WORDS = [
 const ZERO_COUNT_AFTER = new RegExp(
   '\\s*:\\s*(?:0|zero|none)(?:'
     // A number word ends at a word end, a combining mark included as in NEGATION_TOKEN: "ten" is not the start of
-    // "tenants" (review 1689 A4), nor "hundreds" of "hundreds" and U+0301 (review 1723 N6).
+    // "tenants" (review 1689 A4), nor is "hundreds" the start of "hundreds" followed by a U+0301 combining acute
+    // accent (review 1723 N6).
     + `\\s+(?:out\\s+)?of\\s+(?:\\p{N}|(?:${NUMBER_WORDS.join('|')})(?![\\p{L}\\p{M}\\p{N}_]))`
     + '|[^\\S\\n]*\\(\\s*(?:out\\s+)?of\\s+\\p{N}'
     + '|[^\\S\\n]*\\/[^\\S\\n]*\\p{N}'

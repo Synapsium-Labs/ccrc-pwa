@@ -18,6 +18,11 @@
 // server would refuse (review 1466 F5, F6). This is not the chat's Markdown renderer (`lib/markdown.tsx`): item text is plain
 // text, and its link set is an allow-list with a rewrite of its own, so it is a different decision, not a second copy of that
 // one (`pl10-linkruns-not-chat-markdown`).
+//
+// ITEM REFERENCES (D-8194). A coordinator names other items in an item's text: "item 129", "item #12", "items 12 and 13".
+// `itemRefsIn` finds them, and `linkRuns` draws each number as a link to that item's page when the caller's `itemHref`
+// answers one (the number is an item the page has heard, or one the server read back), and as text otherwise. They are found
+// in the text between the other links only, so a number inside an address is never one.
 import type { RunSummary } from '../../../shared/api';
 import { isSpecPath, linkCandidates, linksDocumentOutside, type GoalsView } from '../../../shared/ledgers';
 import { docHref } from '../docs/docsLinks';
@@ -70,9 +75,45 @@ function linkOf(text: string, homeProject: string | null): LinkRun | null {
   return href === null ? null : { kind: 'link', text, href, external: false };
 }
 
+/** One reference to an item in a text (D-8194): where it starts, its words as written ("item 129", "Item #12", or a later number
+ *  of a list, "13"), and the item's id. */
+export interface ItemRef { readonly start: number; readonly text: string; readonly id: number }
+
+/** "item N", "items N", with an optional `#`: the head of a reference. The number has no leading zero and no word glued to it. */
+const REF_HEAD = /\b(items?)\s+(#?[1-9]\d{0,15})(?!\w)/gi;
+/** A later number of the same list: ", 5", ", and 6", " and 6", " or 6", " & 6". */
+const REF_MORE = /(\s*,\s*(?:(?:and|or)\s+|&\s*)?|\s+(?:and|or)\s+|\s*&\s*)(#?[1-9]\d{0,15})(?!\w)/iy;
+const refId = (digits: string): number | null => {
+  const n = Number(digits.replace('#', ''));
+  return Number.isSafeInteger(n) ? n : null;
+};
+
+/** Every reference to an item in a text, in order (D-8194). The first number of a reference carries its word ("items 12"),
+ *  each later number of the same list is its own ("13"). */
+export function itemRefsIn(text: string): readonly ItemRef[] {
+  const out: ItemRef[] = [];
+  for (const m of text.matchAll(REF_HEAD)) {
+    const id = refId(m[2]!);
+    if (id !== null) out.push({ start: m.index, text: m[0], id });
+    REF_MORE.lastIndex = m.index + m[0].length;
+    for (let more = REF_MORE.exec(text); more !== null; more = REF_MORE.exec(text)) {
+      const next = refId(more[2]!);
+      if (next !== null) out.push({ start: more.index + more[1]!.length, text: more[2]!, id: next });
+    }
+  }
+  return out;
+}
+
+/** The items several texts name, each once, in the order first named (D-8194). */
+export function itemRefIds(texts: readonly string[]): number[] {
+  return [...new Set(texts.flatMap((t) => itemRefsIn(t).map((r) => r.id)))];
+}
+
 /** An item's text as runs of text and links, in order; the runs' texts put together are the text, and no two text runs are
- *  adjacent. `homeProject` is the programme's home project, where a document path opens; null, a document path stays text. */
-export function linkRuns(text: string, homeProject: string | null): readonly LinkRun[] {
+ *  adjacent. `homeProject` is the programme's home project, where a document path opens; null, a document path stays text.
+ *  `itemHref` answers the page of an item a reference names, or null for a number that is no item (D-8194); absent, every
+ *  reference stays text. */
+export function linkRuns(text: string, homeProject: string | null, itemHref?: (id: number) => string | null): readonly LinkRun[] {
   const out: LinkRun[] = [];
   const pushText = (t: string): void => {
     if (t === '') return;
@@ -80,14 +121,27 @@ export function linkRuns(text: string, homeProject: string | null): readonly Lin
     if (last?.kind === 'text') out[out.length - 1] = { kind: 'text', text: last.text + t };
     else out.push({ kind: 'text', text: t });
   };
+  // The words between two links, with the item references in them drawn as links where `itemHref` answers one.
+  const pushWords = (t: string): void => {
+    if (itemHref === undefined) { pushText(t); return; }
+    let from = 0;
+    for (const ref of itemRefsIn(t)) {
+      const href = itemHref(ref.id);
+      if (href === null) continue;
+      pushText(t.slice(from, ref.start));
+      out.push({ kind: 'link', text: ref.text, href, external: false });
+      from = ref.start + ref.text.length;
+    }
+    pushText(t.slice(from));
+  };
   let at = 0;
   for (const { start, text: candidate } of linkCandidates(text)) {
     const link = linkOf(candidate, homeProject);
     if (link === null) continue;
-    pushText(text.slice(at, start));
+    pushWords(text.slice(at, start));
     out.push(link);
     at = start + candidate.length;
   }
-  pushText(text.slice(at));
+  pushWords(text.slice(at));
   return out;
 }

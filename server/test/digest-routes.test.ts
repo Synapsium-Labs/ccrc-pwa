@@ -4,8 +4,11 @@
 // Both are session-gated when armed and carry no box token. The fixture is the approvals lane's (a fixture HOME, a
 // real store, the real server); neutral ids only.
 import { describe, it, expect, afterEach } from 'vitest';
+import { Bus } from '../src/bus.js';
+import { buildServer } from '../src/server.js';
 import { approvalsFixture, CHILD, PARENT, type Approvals } from './approvalsHarness.js';
 import { DIGEST_CORRECTION_MAX_CHARS, type DigestAnswer } from '../../shared/api.js';
+import type { NewCall } from '../src/coord/coordCalls.js';
 
 let f: Approvals | undefined;
 afterEach(async () => { if (f) await f.close(); f = undefined; });
@@ -103,6 +106,69 @@ describe('GET /api/digest?day= (spec §10)', () => {
     const d = (await f.app.inject({ method: 'GET', url: '/api/digest' })).json() as DigestAnswer;
     expect(d.toMs).toBeLessThanOrEqual(Date.now());
     expect(d.toMs).toBeGreaterThan(Date.now() - 86_400_000);
+  });
+});
+
+const callOf = (cls: NewCall['class']): NewCall => cls === 'block'
+  ? { class: 'block', runId: null, question: null, options: null, chosen: 'waiting on disk', why: 'full', reversible: true, wakeOn: 'disk' }
+  : { class: cls, runId: null, question: 'Which store?', options: ['sqlite', 'postgres'], chosen: 'sqlite', why: 'one box', reversible: true, wakeOn: null };
+const overturned = (fx: Approvals, id: number): { overturnedAt: number | null; overturnNote: string | null } =>
+  fx.coord.db.prepare('SELECT overturnedAt, overturnNote FROM coordinator_calls WHERE id = ?').get(id) as never;
+
+describe('POST /api/digest/correct on a call row (D-8126)', () => {
+  it('mails the coordinator, overturns the call in the same transaction, and the digest reads corrected', async () => {
+    f = await approvalsFixture();
+    const id = f.coord.insertCall('prog-a', PARENT, callOf('big'), null, at(0));
+    const res = await correct(f, { rowKind: 'call', id, text: 'Use postgres here.' });
+    expect(res.statusCode).toBe(200);
+    expect(mails(f)).toEqual([{ fromId: 'operator', toId: PARENT, kind: 'finding', subject: `Operator correction on call ${id}`, body: 'Use postgres here.' }]);
+    expect(overturned(f, id)).toEqual({ overturnedAt: expect.any(Number), overturnNote: 'Use postgres here.' });
+    const d = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${DAY}` })).json() as DigestAnswer;
+    expect(d.lines).toMatchObject([{ rowKind: 'call', id, kind: 'big-call', corrected: true }]);
+    expect(d.totals.calls).toBe(1);
+  });
+
+  it('a routine or a block row is 409 not-coordinator and nothing is written', async () => {
+    f = await approvalsFixture();
+    for (const cls of ['routine', 'block'] as const) {
+      const id = f.coord.insertCall('prog-a', PARENT, callOf(cls), null, at(0));
+      const res = await correct(f, { rowKind: 'call', id, text: 'No.' });
+      expect(res.statusCode, cls).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'not-coordinator' });
+      expect(overturned(f, id).overturnedAt).toBeNull();
+    }
+    expect(mails(f)).toEqual([]);
+  });
+
+  it('a corrected call tells the live Waiting frame to re-read; an ask correction does not', async () => {
+    f = await approvalsFixture();
+    const bus = new Bus();
+    const app = await buildServer(f.deps, bus);
+    try {
+      let waiting = 0;
+      bus.on('waiting', () => { waiting += 1; });
+      const id = f.coord.insertCall('prog-a', PARENT, callOf('big'), null, at(0));
+      const res = await app.inject({ method: 'POST', url: '/api/digest/correct', payload: { rowKind: 'call', id, text: 'Use postgres here.' } });
+      expect(res.statusCode).toBe(200);
+      expect(waiting).toBe(1);
+      const q = ask(f, at(1));
+      answer(f, q, PARENT, at(2));
+      const res2 = await app.inject({ method: 'POST', url: '/api/digest/correct', payload: { rowKind: 'ask', id: q, text: 'No.' } });
+      expect(res2.statusCode).toBe(200);
+      expect(waiting).toBe(1);
+    } finally { await app.close(); }
+  });
+
+  it('an unknown call is 404 unknown-call; a second correction before the first is read is 409 duplicate', async () => {
+    f = await approvalsFixture();
+    expect((await correct(f, { rowKind: 'call', id: 999, text: 'x' })).json()).toEqual({ ok: false, error: 'unknown-call' });
+    const id = f.coord.insertCall('prog-a', PARENT, callOf('big'), null, at(0));
+    expect((await correct(f, { rowKind: 'call', id, text: 'One.' })).statusCode).toBe(200);
+    const again = await correct(f, { rowKind: 'call', id, text: 'Two.' });
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toEqual({ ok: false, error: 'duplicate' });
+    expect(mails(f)).toHaveLength(1);
+    expect(overturned(f, id).overturnNote).toBe('One.');
   });
 });
 

@@ -267,7 +267,7 @@ describe('the attic pins', () => {
 });
 
 describe('the only commit ccd writes', () => {
-  it('is one `commit-tree` line, inside _ws_reclaim_commit_tree — no `git commit` at all — whose only callers are the WIP commit and the reflog keep; and _ws_wip_commit is called only from _ws_reclaim_pin, the nested rescue and the orphan verb’s nested pin', () => {
+  it('is one `commit-tree` line, inside _ws_reclaim_commit_tree — no `git commit` at all — whose only callers are the WIP commit, the reflog keep and an empty project’s root commit; and _ws_wip_commit is called only from _ws_reclaim_pin, the nested rescue and the orphan verb’s nested pin', () => {
     // ONE writer, so ONE identity: the reflog keep (`_ws_reclaim_keep_reflogs`)
     // writes through the WIP commit's own helper, never a second copy of it.
     const src = ccdSource();
@@ -283,7 +283,10 @@ describe('the only commit ccd writes', () => {
       if (!/^\s*#/.test(l) && /_ws_reclaim_commit_tree "/.test(l)) callers.push(fn);
     }
     // The WIP commit calls it twice — its index commit, then the WIP itself.
-    expect(callers, 'the commit writer’s call sites, by enclosing function').toEqual(['_ws_wip_commit', '_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
+    // D-8193: `_project_origin_seed` writes an empty project's root commit (the
+    // empty tree, so no work tree content) through the same writer and identity.
+    expect(callers, 'the commit writer’s call sites, by enclosing function')
+      .toEqual(['_project_origin_seed', '_ws_wip_commit', '_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
     const pinBody = src.slice(src.indexOf('_ws_reclaim_pin() {'), src.indexOf('_ws_reclaim_secrets_json() {'));
     const calls = (s: string): number => [...s.matchAll(/^[^#\n]*_ws_wip_commit "/gm)].length;
     // D-6632: the nested rescue (`_ws_nested_rescue`, which `_ws_reclaim_pin` and `ccd scratch-rescue` both reach) is the one other caller.

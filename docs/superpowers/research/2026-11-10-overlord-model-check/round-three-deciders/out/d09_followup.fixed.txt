@@ -1,0 +1,4 @@
+ok  total: 144 inputs, every due clock ends in a nudge or in needs-you
+ok  monotonic: a lower rung or engagement never turns a nudge or a move into silence
+ok  the reasons are tested in a stated order
+== followUpDue (with the proposed edits): domain 144 inputs; 15 pairs of reasons; counterexamples 0; checks passed 3

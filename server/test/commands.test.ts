@@ -13,6 +13,7 @@ import { seedRoster, testDeps } from './helpers.js';
 import { seedRow } from './idGateFixture.js';
 import { countingIO } from './countingIO.js';
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
+import { fakeTime } from './fakeTime.js';
 
 describe('parseSkillListing', () => {
   it('parses "- name: desc" lines, keeping plugin:skill names', () => {
@@ -51,7 +52,7 @@ describe('GET /api/sessions/:id/commands', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { builtins: { name: string }[]; skills: { name: string }[] };
@@ -93,7 +94,7 @@ describe('GET /api/sessions/:id/commands', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { skills: { name: string }[] };
@@ -163,7 +164,7 @@ describe('GET /api/sessions/:id/commands', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { skills: { name: string }[] };
@@ -199,7 +200,7 @@ describe('GET /api/sessions/:id/commands', () => {
     writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify({ attachment: { type: 'skill_listing', isInitial: true, content } }) + '\n');
     const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { skills: unknown[] }).skills).toEqual([
@@ -218,7 +219,7 @@ describe('GET /api/sessions/:id/commands', () => {
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports });
     const res = await app.inject({ method: 'GET', url: '/api/sessions/nope/commands' });
     expect(res.statusCode).toBe(404);
     await app.close();

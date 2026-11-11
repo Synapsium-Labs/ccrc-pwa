@@ -71,3 +71,42 @@
 }
 .digest-correct-input::placeholder { color: var(--ink-tertiary); }
 .digest-correct-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); }
+
+/* The "Out of step" section (D-5923, `DigestDrift.tsx`): the drift findings open at the window's end, under the decisions.
+   Self-grounded on the page's ground like the screen, so the audit reads its heading, note and totals off it; each line
+   is grounded on --bg-surface like a decision row, and its inks are scoped under it. A line is a glance in one grid row
+   (kind, the ids it names, its age), the middle track minmax(0, 1fr) so a long id breaks inside the line at a 360 px
+   phone instead of pushing it sideways. A line with a target is a `ListRow` (the row height and tap floor are its); one
+   without is plain, and says why in a quiet word on a line of its own. Nothing is read out of colour. */
+.digest-drift {
+  display: grid; gap: var(--sp-2); min-width: 0; margin-top: var(--sp-3);
+  background: var(--bg-page); color: var(--ink-primary);
+}
+.digest-drift .digest-drift-title {
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-mono); color: var(--ink-primary);
+}
+.digest-drift .digest-drift-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
+.digest-drift .digest-drift-totals {
+  font-family: var(--family-mono); font-size: var(--fs-sm); color: var(--ink-primary); overflow-wrap: anywhere;
+}
+.digest-drift-list { display: grid; gap: var(--sp-1); min-width: 0; }
+.digest-drift-line {
+  min-width: 0; background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+}
+.digest-drift-line .digest-drift-open { padding: var(--sp-2); border-bottom-color: transparent; border-radius: var(--r-md); }
+.digest-drift-line .digest-drift-still { padding: var(--sp-2); }
+.digest-drift-glance {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-1) var(--sp-2); align-items: baseline; width: 100%; min-width: 0;
+}
+.digest-drift-line .digest-drift-kind {
+  font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); color: var(--ink-secondary); white-space: nowrap;
+}
+.digest-drift-line .digest-drift-subject {
+  min-width: 0; font-family: var(--family-mono); font-size: var(--fs-sm); color: var(--ink-primary); overflow-wrap: anywhere;
+}
+.digest-drift-line .digest-drift-age {
+  font-family: var(--family-mono); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+.digest-drift-line .digest-drift-why { grid-column: 1 / -1; font-size: var(--fs-2xs); color: var(--ink-secondary); }

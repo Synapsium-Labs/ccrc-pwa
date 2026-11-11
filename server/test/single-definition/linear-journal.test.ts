@@ -43,4 +43,16 @@ describe('the Linear write journal and the policy point each have one home (D-76
       expect(holders(decl(c)), c).toEqual(['server/src/linear/policyPoint.ts']);
     }
   });
+
+  // D-8180 (Linear hierarchy plan, Global Constraints: a row for each new list). The ccrc passes are one list beside
+  // the port; their actor is minted once, beside the journal it is written to; ccrc's own caller is declared once.
+  it('the ccrc passes, their actor and the server-internal caller each have one home', () => {
+    for (const c of ['LINEAR_CCRC_PASSES', 'CcrcPass']) expect(holders(decl(c)), c).toEqual(['server/src/linear/policy.ts']);
+    for (const c of ['CcrcActor', 'ccrcActor', 'isCcrcActor']) expect(holders(decl(c)), c).toEqual(['server/src/linear/journal.ts']);
+    for (const c of ['runCcrcOp', 'CcrcCallDeps', 'CcrcOpAsk', 'CcrcOpOutcome']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/linear/ccrcCall.ts']);
+    }
+    // The pass words are spelled once, in the list: no second list beside it.
+    expect(holders(/'plan-sync'[\s\S]*'drift-restore'|'drift-restore'[\s\S]*'put-back'/)).toEqual(['server/src/linear/policy.ts']);
+  });
 });

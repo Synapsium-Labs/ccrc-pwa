@@ -548,6 +548,13 @@ function suffixFreeClass(accounts, suffix, file) {
  *  then have an opinion about. `plan.models` arrives PARSED — `check-add`
  *  validated it (Task 23) so that no JSON parse lands in the writer, where a
  *  throw would exit with a stack trace and an empty stdout. */
+/** The mode a lane `add` makes starts in. It is a word of the roster's own set, checked as the file loads, so a set
+ *  that lost the word fails here and not in a row nobody can start. */
+const NEW_CODEX_LANE_BRIDGE = 'direct';
+if (!CODEX_BRIDGE_MODES.includes(NEW_CODEX_LANE_BRIDGE)) {
+  throw new Error(`account-op: a new codex lane's mode "${NEW_CODEX_LANE_BRIDGE}" is not one of CODEX_BRIDGE_MODES`);
+}
+
 function addedEntry(plan) {
   // A CODEX LANE (D-5519): ccrc's own launcher, its two ports and its authDir, and the telemetry its usage poller
   // publishes. It has no endpoint, no secrets file and no model map; `parseRoster` holds the row either way.
@@ -2759,8 +2766,12 @@ function main(argv) {
       models,
       placement,
       // Numbers, as the roster keeps them: `rosterAdmits` below judges what bash measured.
+      // A NEW LANE IS A `direct` LANE (the operator's ruling of 2026-11-10; codex-bridge Stage 4, Task 7), and the
+      // mode is WRITTEN: every reader resolves an absent `exec.bridge` to the first word of the set, so a row without
+      // the key is a `litellm` lane to this build and to any older one, and that meaning does not change.
       codex: codexLane
-        ? { proxyPort: Number(a['proxy-port']), litellmPort: Number(a['litellm-port']), authDir: a['auth-dir'] } : null,
+        ? { proxyPort: Number(a['proxy-port']), litellmPort: Number(a['litellm-port']), authDir: a['auth-dir'],
+          bridge: NEW_CODEX_LANE_BRIDGE } : null,
     };
 
     // ── THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT IT WRITES ────

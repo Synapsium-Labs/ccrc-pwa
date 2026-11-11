@@ -196,6 +196,17 @@ describe('OpenAI has no method step (spec §7.2 steps 1–4)', () => {
     expect(alertText()).toContain('Nothing was added');
     expect(alertText()).not.toContain(PLANTED);
   });
+
+  it('says a fleet host with no python3 for the lane cannot take it, and never names a runtime to build', async () => {
+    const b = fakeBox();
+    b.client.accountAdd.mockRejectedValue(refusal(409, 'lane-act-refused', { verbCode: 'codex-python-absent' }));
+    sheet(b);
+    await start();
+    expect(alertText()).toContain('no python3 at 3.9 or later');
+    expect(alertText()).toContain('Nothing was added');
+    expect(alertText()).not.toContain('ccgpt-runtime');
+    expect(alertText()).not.toContain(PLANTED);
+  });
 });
 
 describe("a folder an earlier lane left (spec §5, G20): Use what's there on a ChatGPT lane", () => {
@@ -493,7 +504,7 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
   const reauthClient = (b: Box): { [K in keyof ReauthClient]: Mock<ReauthClient[K]> } => ({
     accountAuthStart: b.sc.accountAuthStart, accountAuthStatus: b.sc.accountAuthStatus, accountAuthCode: b.sc.accountAuthCode, accountAuthCancel: b.sc.accountAuthCancel,
     accountCheck: b.client.accountCheck, accountSet: b.sc.accountSet, accountSignOut: b.sc.accountSignOut,
-    accountRevokeAck: vi.fn(async () => ({ ok: true as const })), stop: vi.fn<ReauthClient['stop']>(async () => {}),
+    accountRevokeAck: vi.fn(async () => ({ ok: true as const })), stop: vi.fn<ReauthClient['stop']>(async () => null),
   });
   const live: FleetSession = fleetSession({ id: 'lane-g:p-one', wrapper: 'lane-g', home: 'lane-g', project: 'p-one', title: 'one' });
   const reauth = (b: Box, freshUntil: number | null = Date.now() + 3_600_000): void => {

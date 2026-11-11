@@ -1,0 +1,160 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-statusline",
+  "covers": [
+    "W0-18"
+  ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "capS": 1200,
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "RIG_STATUS_LOG": "@RIG_ROOT@/logs/status.ndjson"
+    },
+    "settings": {
+      "statusLine": {
+        "type": "command",
+        "command": "node @RIG_STUBS@/statusline-capture.mjs"
+      },
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 l1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "l1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 l2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "l2"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sleep": 600
+    },
+    {
+      "type": "w0 l3"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "l3"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "l1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 l1$"
+      },
+      "text": "W0-L1",
+      "usage": {
+        "input_tokens": 50000,
+        "cache_read_input_tokens": 20000,
+        "cache_creation_input_tokens": 1000,
+        "output_tokens": 300
+      },
+      "headers": {
+        "anthropic-ratelimit-unified-status": "allowed",
+        "anthropic-ratelimit-unified-5h-utilization": "0.42",
+        "anthropic-ratelimit-unified-5h-reset": "$NOW+3600",
+        "anthropic-ratelimit-unified-7d-utilization": "0.17",
+        "anthropic-ratelimit-unified-7d-reset": "$NOW+86400",
+        "anthropic-ratelimit-unified-representative-claim": "five_hour"
+      }
+    },
+    {
+      "label": "l2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 l2$"
+      },
+      "text": "W0-L2",
+      "usage": {
+        "input_tokens": 60000,
+        "output_tokens": 400
+      },
+      "headers": {
+        "anthropic-ratelimit-unified-status": "allowed",
+        "anthropic-ratelimit-unified-5h-utilization": "0.42",
+        "anthropic-ratelimit-unified-5h-reset": "$NOW+3600",
+        "anthropic-ratelimit-unified-7d-utilization": "0.17",
+        "anthropic-ratelimit-unified-7d-reset": "$NOW+86400",
+        "anthropic-ratelimit-unified-representative-claim": "five_hour"
+      }
+    },
+    {
+      "label": "l3",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 l3$"
+      },
+      "text": "W0-L3",
+      "headers": {
+        "anthropic-ratelimit-unified-status": "allowed",
+        "anthropic-ratelimit-unified-5h-utilization": "0.42",
+        "anthropic-ratelimit-unified-5h-reset": "$NOW+3600",
+        "anthropic-ratelimit-unified-7d-utilization": "0.17",
+        "anthropic-ratelimit-unified-7d-reset": "$NOW+86400",
+        "anthropic-ratelimit-unified-representative-claim": "five_hour"
+      }
+    }
+  ]
+}

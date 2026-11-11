@@ -9,7 +9,10 @@
 // reads it (`readRegistryMeasured`), and hands the lane exactly what `tick()` hands it; (A2) and (A3) then unlist it, to
 // pin that no clock starts while the id is refused, and (E) and (E') to pin that none is kept: the lane drops a refused
 // subject's clocks. That `tick()` hands each lane `registryRead.refused` is pinned in `registry-refused-census.test.ts`.
-// Fakes and fixture HOMEs only: no live fleet, no real ccd, no real tmux.
+// Fakes and fixture HOMEs only: no live fleet, no real ccd, no real tmux, no real disk.
+// D-8269: the rig's watcher is quieted when its test ends (`quietAtTestEnd`, D-8140): its priming `tick()` fires writers
+// it never awaits (a delegation pass's compaction line among them), and one that logged after the file's last test failed
+// a merge-group shard whose every test passed ("Closing rpc while onUserConsoleLog was pending").
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -27,6 +30,7 @@ import { CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, type Divergence, type FleetSession }
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { storedRun } from './idGateFixture.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8269: nothing the rig's watcher fires outlives its test
 
 /** A redirect id (spec §2.1): ccd's loops would read it as a flag. Never the 256-character id: its `.uuid` basename
  *  is over 255 bytes, so it cannot be planted as a file at all. */
@@ -72,7 +76,9 @@ interface Rig {
 }
 
 /** A watcher primed on an EMPTY but listable registry (`mail-sweep.test.ts`'s order), with a counting io, a recording
- *  runner and a push spy. The rows are planted after priming, so the priming tick's lanes never see them. */
+ *  runner and a push spy. The rows are planted after priming, so the priming tick's lanes never see them. The io's disk
+ *  read is unmeasured: `localIO` measures the real home's filesystem, and a host over the disk alarm's warn line would
+ *  put a disk push in `sent` (D-8269). The watcher is quieted when the calling test ends (D-8269). */
 const rig = async (): Promise<Rig> => {
   const home = mkTmp('ccrc-tick-refused-');
   const reg = path.join(home, '.cc-sessions');
@@ -89,6 +95,7 @@ const rig = async (): Promise<Rig> => {
     statMeasured: async (p) => { touched.push(p); return localIO.statMeasured(p); },
     stat: async (p) => { touched.push(p); return localIO.stat(p); },
     lstatMeasured: async (p) => { touched.push(p); return localIO.lstatMeasured(p); },
+    statfsMeasured: async () => ({ ok: false, reason: 'unmeasured' }),
   };
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => { calls.push([...args]); return { ran: true, code: 1, stdout: '', stderr: '' }; };
@@ -98,7 +105,7 @@ const rig = async (): Promise<Rig> => {
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
   const bus = new Bus();
-  const w = new FleetWatcher(withFakeClock(deps), bus, 2000);
+  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), bus, 2000));
   await w.tick();
   return { home, reg, coord, w, deps, bus, touched, calls, sent };
 };

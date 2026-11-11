@@ -4,10 +4,11 @@
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
-import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
+import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
@@ -561,7 +562,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setAccountPools: (accountId: string, pools: string[]) =>
       postJson<{ ok: true; epoch: number; raced?: true; warning?: 'unknown-account' }>(
         `/api/pools/accounts/${encodeURIComponent(accountId)}`, { pools }),
-    stop: (id: string) => post(`${sid(id)}/stop`),
+    /** `POST /stop`. A plain stop sends no body, byte-identical to before; `body` carries D-8199's claims choice (the
+     *  answer to `coordinator-has-open-runs`) or `restart: true` (the stop half of a restart: the id is kept, nothing asked).
+     *  The 2xx answer is READ (`StopAnswer`: the claims moved, or that they could not be read); unreadable → `null`. */
+    stop: (id: string, body?: StopBody) => postRead<StopAnswer | null>(`${sid(id)}/stop`, null, body),
     /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
      *  Not a checkbox anywhere in the UI: it is what a
@@ -962,6 +966,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  could not be read may still have moved the switch. */
     setDelegationAdopt: (body: DelegationAdoptRequest) =>
       postJsonOr<DelegationAdoptView | 'unreadable'>('/api/coord/delegation-adopt', 'unreadable', body),
+    /** `GET /api/coord/lane-arm` (D-8274; spec 2026-10-28 R-6): Settings › Automation › Shadow lanes, every shadow lane's row.
+     *  The card reads it through `useLaneArmView`, whose `asLaneArmView` is the wire guard. 501 `not-configured` and an older
+     *  server's 404 read as not available. Session-gated when armed, open dark; no box token. */
+    laneArm: (opts?: ReadOpts) => getJson<LaneArmView>('/api/coord/lane-arm', opts),
+    /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
+     *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
+     *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
+     *  the choice. */
+    setLaneArm: (body: LaneArmRequest) => postJsonOr<LaneArmView | 'unreadable'>('/api/coord/lane-arm', 'unreadable', body),
     /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>
@@ -1007,10 +1020,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
-    /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last seven days, and
+    /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
     waiting: () => getJson<{ readonly ok: true; readonly waiting: WaitingView }>('/api/waiting'),
+    /** `GET /api/items/:id` (D-8194): one item by its id, whatever its state and however long ago it closed, so an item
+     *  opened by its number after it left the Recently cleared window still opens, read-only. `unknown-item` (404) for a number
+     *  no item has, or one the operator was never shown. Session-gated when armed. */
+    item: (id: number) => getJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}`),
     /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
      *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
      *  `ApiError` like every non-2xx, and the item is unchanged. */

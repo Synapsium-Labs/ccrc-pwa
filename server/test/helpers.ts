@@ -9,6 +9,7 @@ import { wireCmd } from '../src/remote/runner.js';
 import type { Deps } from '../src/server.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { mkTmp } from './tmpHelpers.js';
+import { fakeTime } from './fakeTime.js';
 // Re-exported from the leaf module so ccdWsHelpers.ts (and anything else that
 // only needs the roster) does not transitively pull in config.ts → shared/api.ts.
 export { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
@@ -66,5 +67,6 @@ export function testDeps(
   const guarded = guardRunner(run);
   seedRoster(home);
   const cfg = loadConfig({ CCRC_HOME: home });
-  return { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIOFor(cfg.home), queue: new KeyedQueue() };
+  return { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIOFor(cfg.home), queue: new KeyedQueue(),
+    time: fakeTime().ports };
 }

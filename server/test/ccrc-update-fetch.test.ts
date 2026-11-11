@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync, symlinkSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { TIME_SCALE, scaled } from './timeScale.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
 import { installVersionedTree } from './installTreeFixture.js';
@@ -244,7 +245,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       const iv = setInterval(() => {
         const m = /^(\d+)\n/.exec(out);
         if (m) { clearInterval(iv); resolve(Number(m[1])); }
-        else if (Date.now() - t0 > 10_000) { clearInterval(iv); reject(new Error('the fixture host never listened')); }
+        else if (Date.now() - t0 > scaled(10_000)) { clearInterval(iv); reject(new Error('the fixture host never listened')); }
       }, 20);
     });
     const stop = async (): Promise<number> => {
@@ -279,7 +280,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
-        { env, encoding: 'utf8', timeout: 20_000 });
+        { env, encoding: 'utf8', timeout: scaled(20_000) });
       const elapsedMs = Date.now() - t0;
       sent = await host.stop();
       expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
@@ -288,15 +289,16 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       // size bound would have ended it sooner), and not left trickling to
       // curl's own defaults or to this test's own kill.
       expect(elapsedMs, `took ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(1800);
-      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
-      // The host really was above the floor the whole time.
-      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThan(1500);
+      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(scaled(10_000));
+      // The host really was above the floor the whole time. The elapsed time is the whole run's, bash included, so
+      // under a slow environment's clock scale the floor is read on that scale too (D-8277).
+      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThan(1500 / TIME_SCALE);
       expect(r.stderr).toMatch(/curl: \(28\) Operation timed out after 2\d{3} milliseconds/);
       expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed 1048576 bytes\)/);
     } finally {
       await host.stop();
     }
-  }, 30_000);
+  }, scaled(30_000));
 
   // W6 Task 8A (review 173's F4b): the SIZE bound, measured. Until now it had
   // only the argv regex in the flag-set pin above, so a default raised to
@@ -328,19 +330,19 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
-        { env, encoding: 'utf8', timeout: 25_000 });
+        { env, encoding: 'utf8', timeout: scaled(25_000) });
       const elapsedMs = Date.now() - t0;
       expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       // Ended by the size bound: curl 63, quickly — and the 30 s total bound
       // (set high on purpose) is nowhere near.
       expect(r.stderr).toMatch(/curl: \(63\)/);
-      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(5_000);
+      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(scaled(5_000));
       expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(.*or did it time out after 30s \/ exceed 4096 bytes\)/);
     } finally {
       await host.stop();
     }
-  }, 40_000);
+  }, scaled(40_000));
 
   it('happy path on a VERSIONED box (W6 Task 2): v2.0.0 is placed in ~/ccrc-versions/v2.0.0, ~/ccrc flips to it, and v1.0.0\'s directory is byte-unchanged', () => {
     // The staged spine is the real one (FULL flavour), so this is the
@@ -1406,7 +1408,7 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${markerSha}\n`);
-  }, 40_000);
+  }, scaled(40_000));
 
   it('FULL flavour: an --allow-unsigned update writes `unsigned` on line 2 of the marker', () => {
     const home = freshUpdateBox('ccrc-update-prov-marker-unsigned-');
@@ -1416,7 +1418,7 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     const r = runUpdate(home, ['--allow-unsigned']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${markerSha}\nunsigned\n`);
-  }, 40_000);
+  }, scaled(40_000));
 
   it('verification runs AFTER sha256sum -c (a tampered tarball never reaches the verifier) and BEFORE tar -x (§18 "verification precedes extraction")', () => {
     const home = freshUpdateBox('ccrc-update-prov-order-');

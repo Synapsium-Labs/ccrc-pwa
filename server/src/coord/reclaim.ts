@@ -3,9 +3,9 @@ import type { SessionVerdict } from '../exec.js';
 import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
-import type { CoordStore } from './store.js';
+import type { CoordStore, OpenSibling } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
-import { isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
+import { CLAIMS_MOVE_REFUSALS, isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import { readSession, type SessionFacts } from '../sessionReading.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
 
@@ -282,6 +282,12 @@ export type ReclaimOutcome =
   // so the arm answers only the row that cannot be stamped.
   | { ok: false; kind: 'project-mismatch'; by?: string; detail?: string };
 
+/** `reclaimRun`'s options (D-8199). `displacing`: the claimant the operator is archiving or stopping and handing over
+ *  from — rung 4 (the claimant is dead) is not asked of that one id. Absent on the reclaim door, which asks it always. */
+export interface ReclaimOptions {
+  readonly displacing?: string;
+}
+
 /**
  * Hand a program's coordination to `to`, after PROVING the session holding it is
  * gone.
@@ -356,7 +362,7 @@ export type ReclaimOutcome =
  * body-supplied attribution would be a self-declared one.
  */
 export async function reclaimRun(
-  deps: ReclaimDeps, runId: number, to: string,
+  deps: ReclaimDeps, runId: number, to: string, opts: ReclaimOptions = {},
 ): Promise<ReclaimOutcome> {
   const now = Date.now();
   const read = deps.coord.run(runId);
@@ -454,11 +460,14 @@ export async function reclaimRun(
         detail: "the incoming coordinator's registry row records no project, so its project cannot be stamped" };
     }
     heirProject = heir.content;
-    const claimant = await measureClaimant(deps, from, now);
-    if (claimant.state === 'unmeasurable') {
+    // D-8199: rung 4 is skipped for exactly the claimant the operator is putting down (`displacing`): the archive and
+    // stop doors hand its programme over BEFORE they stop it, so it measures alive by construction, and the operator's
+    // own choice of heir is the consent this rung otherwise demands a death for. Every other rung still runs.
+    const claimant = opts.displacing === from ? null : await measureClaimant(deps, from, now);
+    if (claimant?.state === 'unmeasurable') {
       return { ok: false, kind: 'registry-unmeasurable', detail: claimant.why };
     }
-    if (claimant.state === 'alive') {
+    if (claimant?.state === 'alive') {
       return { ok: false, kind: 'claimant-alive', detail: claimant.why, by: from };
     }
   }
@@ -486,4 +495,104 @@ export async function reclaimRun(
   if (!committed.ok) return committed;
   return { ok: true, program: committed.program, runIds: committed.runIds,
     from: committed.from, to };
+}
+
+/** D-8199: what the operator chose for the open runs a session claims, when they archive or stop it. `release` leaves the
+ *  chair to nobody; `handover` gives it to `heir`, a live coordinator. Read off the body by `claimsChoiceOf`
+ *  (`archiveDoor.ts`). */
+export type ClaimsChoice = { readonly kind: 'release' } | { readonly kind: 'handover'; readonly heir: string };
+
+/** Why a move stopped, in words a sheet can show: a `ReclaimOutcome` refusal's kind with its evidence, or this door's own
+ *  `heir-is-this-session`, `heir-not-live`, `claimant-changed` and `threw`. */
+export interface ClaimsMoveRefusal { readonly kind: string; readonly detail?: string; readonly by?: string }
+
+export type ClaimsMoveOutcome =
+  | { readonly ok: true; readonly moved: readonly OpenSibling[] }
+  | { readonly ok: false; readonly moved: readonly OpenSibling[]; readonly notMoved: readonly OpenSibling[];
+      readonly refusal: ClaimsMoveRefusal };
+
+const refusalOfReclaim = (r: Extract<ReclaimOutcome, { ok: false }>): ClaimsMoveRefusal => ({
+  kind: r.kind,
+  ...('detail' in r && r.detail !== undefined ? { detail: r.detail } : {}),
+  ...('by' in r && r.by !== undefined ? { by: r.by } : {}),
+});
+
+/**
+ * D-8199: is the named heir a LIVE coordinator? `null` when it is; else why not. The opposite direction from
+ * `measureClaimant`'s: that ladder fails shut toward alive because it guards a displacement, while an heir must be
+ * PROVED live — its pane up, or hibernated (asleep, woken by mail or ensure) — so a gone pane whose lifecycle reads
+ * restarting or unsupervised is `heir-not-live`, and doubt (an unlisted registry, a row mid-write, tmux unasked) is
+ * `registry-unmeasurable`. One registry read and one tmux ask, through `claimantFacts` and `readSession`.
+ */
+async function heirLiveness(
+  deps: Pick<ReclaimDeps, 'io' | 'cfg' | 'tmux'>, heir: string, nowMs: number,
+): Promise<ClaimsMoveRefusal | null> {
+  const { facts, sv } = await claimantFacts(deps, heir, nowMs);
+  const r = readSession(facts);
+  switch (r.why) {
+    case 'paneLive': case 'hibernated': return null;
+    case 'rowAbsent': return { kind: 'unknown-session', detail: 'no registry row names that session' };
+    case 'badId': return { kind: 'bad-session', detail: 'the heir is not a registry id' };
+    case 'rowUnlistable': case 'rowUnassembled': case 'paneUnknown':
+      return { kind: 'registry-unmeasurable',
+        detail: r.why === 'paneUnknown' && sv !== null && sv.verdict === 'unknown' ? sv.detail : verdictOfFacts(heir, facts, sv).why };
+    case 'lifecycleDead': case 'lifecycleAlive': case 'lifecycleDoubt':
+      return { kind: CLAIMS_MOVE_REFUSALS.heirNotLive, detail: `its pane is gone (the lifecycle reads ${facts.lifecycle ?? 'nothing'})` };
+    default: {
+      const _x: never = r.why;
+      return _x;
+    }
+  }
+}
+
+/**
+ * D-8199: move the claims `from` holds on `claimed` (its open runs as claimant, read by the caller inside the coordination
+ * serialiser, where this runs too) as the operator chose, one programme at a time and in the order the runs came, through
+ * the one writer of the column, `CoordStore.reclaimProgram`, which journals a run event per row it rewrites. A RELEASE is
+ * that writer with no heir (`release:<from>`). A HAND-OVER is `reclaimRun`'s whole ladder with rung 4 lifted for `from`
+ * alone (`displacing`): the operator is putting `from` down, so it is alive by construction.
+ *
+ * The heir is proved before the first programme moves: never `from` itself, and live by `heirLiveness` (its pane up or
+ * hibernated). A refusal at a later programme answers what already moved, so the caller can say so; nothing here ends a
+ * run or stops a session.
+ */
+export async function moveClaims(
+  deps: ReclaimDeps, from: string, choice: ClaimsChoice, claimed: readonly OpenSibling[],
+): Promise<ClaimsMoveOutcome> {
+  const refuse = (moved: readonly OpenSibling[], refusal: ClaimsMoveRefusal): ClaimsMoveOutcome =>
+    ({ ok: false, moved, notMoved: claimed.filter((c) => !moved.includes(c)), refusal });
+  const now = Date.now();
+  if (choice.kind === 'handover') {
+    if (choice.heir === from) return refuse([], { kind: CLAIMS_MOVE_REFUSALS.heirIsThisSession });
+    const heir = await heirLiveness(deps, choice.heir, now);
+    if (heir !== null) return refuse([], heir);
+  }
+  // One move per programme: the writer rewrites a programme's every claimed row at once.
+  const programmes = new Map<string, OpenSibling[]>();
+  for (const run of claimed) programmes.set(run.program, [...(programmes.get(run.program) ?? []), run]);
+  const moved: OpenSibling[] = [];
+  for (const runs of programmes.values()) {
+    const first = runs[0]!;
+    try {
+      if (choice.kind === 'release') {
+        // The serialiser holds every claim writer, so this read and the write below see one claimant — asked anyway, so
+        // a release never leaves a chair somebody else holds.
+        const read = deps.coord.run(first.id);
+        const holder = read.ok ? read.run?.claimedBy ?? null : null;
+        if (holder !== from) {
+          return refuse(moved, read.ok ? { kind: CLAIMS_MOVE_REFUSALS.claimantChanged, ...(holder !== null ? { by: holder } : {}) }
+            : { kind: 'run-unreadable', detail: read.detail });
+        }
+        const r = deps.coord.reclaimProgram(first.id, null, now, null);
+        if (!r.ok) return refuse(moved, { kind: r.kind });
+      } else {
+        const r = await reclaimRun(deps, first.id, choice.heir, { displacing: from });
+        if (!r.ok) return refuse(moved, refusalOfReclaim(r));
+      }
+    } catch (e) {
+      return refuse(moved, { kind: 'threw', detail: e instanceof Error ? e.message : String(e) });
+    }
+    moved.push(...runs);
+  }
+  return { ok: true, moved };
 }

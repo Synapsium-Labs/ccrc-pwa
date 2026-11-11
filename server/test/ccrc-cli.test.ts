@@ -296,7 +296,7 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stderr).toContain('ccrc codex switch <id> litellm|direct');
     const other = runCcrcRaw(home, ['codex', 'flip', 'lane-a']);
     expect(other.code).toBe(2);
-    expect(other.stderr).toContain('it implements start, stop, status, login and switch.');
+    expect(other.stderr).toContain('it implements start, stop, status, login and switch, and runtime remove.');
     for (const argv of [['codex', 'switch', 'lane-a'], ['codex', 'switch', 'lane-a', 'bridge'],
       ['codex', 'switch', 'lane-a', 'direct', 'extra']]) {
       const u = runCcrcRaw(home, argv);

@@ -25,6 +25,7 @@ import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
+import type { RouteRefusal } from '../../shared/refusal.js';
 import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -129,9 +130,10 @@ import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from 
 import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
 import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
-  busyReadFailsClosed, decideArchive, frameRowVerdict, worktreeOf, type ArchiveMeasure,
-  type TurnVerdict,
+  busyReadFailsClosed, decideArchive, decideStopClaims, frameRowVerdict, stopFlags, worktreeOf, type ArchiveMeasure,
+  type ClaimsCoordPort, type TurnVerdict,
 } from './coord/archiveDoor.js';
+import { moveClaims } from './coord/reclaim.js';
 import { admitArchive } from './coord/archiveAdmission.js';
 import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
@@ -231,6 +233,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/items',
   // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).
   '/api/waiting', '/api/programmes/:slug/goals',
+  // One item by its id (D-8194): the same session-written title, reason, steps and history.
+  '/api/items/:id',
   // The stored-secrets read (the PL6 follow-up, programme item 9): no value, but each slot's asking item's title, which a session wrote.
   '/api/programmes/:slug/secrets',
 ]);
@@ -2584,6 +2588,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!parsed.ok) return refuseRoute(reply, parsed.why);
     const out = correctDigestRow(deps.coord, parsed.body);
     if (!out.ok) return refuseRoute(reply, out.why);
+    // Overturning a big call moves it out of the operator's open calls into the cleared ones, so the live Waiting frame
+    // re-reads (the Seen door and the call route do the same); an ask or approval correction changes no waiting view.
+    if (parsed.body.rowKind === 'call') bus.emit('waiting');
     const answer: DigestCorrectAnswer = { ok: true, mailId: out.mailId, deliveryId: out.deliveryId };
     return answer;
   });
@@ -2851,10 +2858,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */
-  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
-  const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
+  const ccd502 = (reply: FastifyReply, res: { stderr: string }, extra: Record<string, unknown> = {}) =>
+    reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr), ...extra });
+  const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv, extra: Record<string, unknown> = {}) => {
     const res = await deps.runCcd(argv);
-    return res.ok ? { ok: true } : ccd502(reply, res);
+    return res.ok ? { ok: true, ...extra } : ccd502(reply, res, extra);
   };
 
   /**
@@ -3564,6 +3572,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *  read the watcher's newest pane-scraped pieces through thunks at call time. */
   const turnReads = turnReadDeps(deps, watcher);
 
+  /** D-8199: the claims reads and the move, as the archive and stop doors hand them to their deciders — the binding read
+   *  and `reclaim.ts#moveClaims` over this server's store, registry and tmux. Called inside the coordination serialiser. */
+  const claimsPort = (coord: CoordStore, id: string): ClaimsCoordPort => ({
+    bindingsOf: (sid) => coord.bindingsOf(sid),
+    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, choice, claimed),
+  });
+
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
     // C0.3: one session's own row, not the whole registry.
@@ -3603,9 +3618,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return refuseRoute(reply, 'registry-unmeasurable');
     }
     const rec = read.record;
+    // D-8199: a session that claims open runs is asked what happens to them before it is stopped (`decideStopClaims`),
+    // on the coordination serialiser; a stop that is half of a restart (`restart`, the id is kept) asks nothing. The
+    // body is read after the identity gates, so a refused id or row moves nothing.
+    const flags = stopFlags(req.body);
+    if (flags === null) return refuseRoute(reply, 'bad-request');
+    const coord = deps.coord;
+    const claims = coord === undefined ? { ok: true as const, moved: null }
+      : await coordRoutes.serial(() => decideStopClaims(claimsPort(coord, id), id, flags));
+    if (!claims.ok) {
+      const { ok: _ok, error, ...extra } = claims.reply.body as { ok: false; error: RouteRefusal } & Record<string, unknown>;
+      return refuseRoute(reply, error, extra);
+    }
+    // `claimsUnreadable`: the store could not be read, so nothing was moved and the stop goes through regardless — the
+    // escape hatch never fails shut (`decideStopClaims`).
+    const movedSpread = { ...(claims.moved !== null ? { moved: claims.moved } : {}),
+      ...('claimsUnreadable' in claims && claims.claimsUnreadable !== undefined ? { claimsUnreadable: claims.claimsUnreadable } : {}) };
     // The argv is `stopArgvFor`'s (above), shared with the archive door: `--surface` and the two id shapes are argued
     // there.
-    return runCcdOr502(reply, stopArgvFor(id, rec, identity));
+    // A stop that failed after the claims moved says so (`moved`), as the archive door's answers do.
+    return runCcdOr502(reply, stopArgvFor(id, rec, identity), movedSpread);
   });
 
   // Attachment upload: stage the bytes under ~/.cc-clips/<id>/ and return the
@@ -4027,7 +4059,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const plan = coord === undefined
       ? await decideArchive(null, id, flags, measure)
       : await coordRoutes.withAbandon(coord, (abandon, abandonRefusal) => decideArchive({
-        bindingsOf: (sid) => coord.bindingsOf(sid),
+        ...claimsPort(coord, id),
         abandonRefusal,
         abandon,
       }, id, flags, measure));

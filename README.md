@@ -618,7 +618,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `config`, `auth`, `rc` | `ccrc.env` coherent for its fleet mode; the session gate and its passphrase file; this box's `--remote-control` setting |
 | `exposure`, `update-exposure`, `caddy`, `caddyfile`, `cert`, `name` | the exposure pieces ("Exposure", below) |
 | `wrappers`, `skills`, `accounts`, `credentials` | the roster against `~/.local/bin` (Claude Code's binary included); the ccrc skills in every home; declared credential files and provider env blocks (a Codex lane's may omit `ANTHROPIC_BASE_URL`, which its launcher exports, but may not name an endpoint other than its loopback shim); a token file for every account the health probe measures |
-| `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir`, then its `auth.json` through the auth library's non-secret status (signed in or not, `needs-signin`, `config-error`, another family's or an unreadable file) and the file's owner and mode; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
+| `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`), asked only when a lane of the roster runs in `litellm` mode (with none, the line reads `runtime not needed`); the roster row and its ports; `exec.authDir`, then its `auth.json` through the auth library's non-secret status (signed in or not, `needs-signin`, `config-error`, another family's or an unreadable file) and the file's owner and mode; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `transcript_work` | work kept inside Claude Code's transcript folders: every roster config dir's `projects/<slug>/` entries, and each session directory's, that are not the shapes Claude Code writes (a `<uuid>.jsonl` transcript, a `<uuid>/` session directory, `memory`; inside a session directory `subagents/`, `tool-results/`, `workflows/`), counted and sized as `du -sb` sizes them; a WARN over 1 GiB in all or 256 MiB in one entry names the five largest, and a walk past its 20 s bound, or one that cannot read a directory, is unmeasured, never a PASS. It deletes nothing. `GET /api/fleet/health`'s `disk.transcriptWork` carries the agent's count of the same tree, shown in Settings › Automation (D-7898) |
@@ -636,7 +636,8 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 the shipped tree's own installer — and measures them again; the second verdict is the one that counts (D-3113). Without the flag
 doctor writes nothing. Only a FAIL reaches a fixer, never a WARN. `wrappers` re-runs `ccrc wrappers` with no flag,
 which overwrites only a launcher whose ccrc marker still verifies. `codex` re-places a GPT-lane executable that is
-missing or differs, rebuilds a runtime its check refuses, re-renders a lane's stale `lane.json` or `litellm.yaml`
+missing or differs, rebuilds a runtime its check refuses (only when a lane runs in `litellm` mode), re-renders a
+lane's stale `lane.json` or `litellm.yaml`
 under the lane's lock, and — only when it replaced the shim, the auth library or the runtime — re-runs the install step that
 restarts a stale ccrc-owned tier; it never edits the roster, chooses a port, signs a lane in or enables a unit,
 so a usage timer that is not enabled is a WARN whose remedy is `ccrc install`.
@@ -1490,7 +1491,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the sixty-six machine lanes the
+liveness gate reads the shipped sha out of it), the sixty-seven machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -2005,9 +2006,9 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   names and nothing answers on, from `CCRC_ACCOUNT_CODEX_PORT_BASE` (default 14100), refusing `no-free-port`, and names
   a fresh folder, `exec.authDir: ".local/share/ccrc/codex/<id>-<six random hex digits>"`, refusing `authdir-occupied` if
   anything stands there. So a re-added id never meets an old lane's sign-in. The folder is only a name until the first
-  sign-in makes it. It refuses `codex-runtime-absent`, with nothing written, on a box with no Codex runtime, and builds
-  none: run `ccgpt-runtime build`, then add the lane again. `ccrc install` builds a runtime only for a lane the roster
-  already names, so the first ChatGPT lane on a box takes that step. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
+  sign-in makes it. The row carries `exec.bridge: "direct"`: a new lane runs on ccrc's own bridge under the system
+  `python3`, and an add neither needs nor builds a LiteLLM runtime. It refuses `codex-python-absent`, with nothing
+  written, on a box with no `python3` at 3.9 or later. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
   the next `ccrc install` or `ccrc update` enables `ccrc-codex-usage@<id>.timer`. The next step is `auth-start --method
   openai-login`, then `check` and `enable`.
   **The PWA runs the same steps** from Add account › OpenAI, with the sign-in page's link, its host and the device code on
@@ -2068,7 +2069,8 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   says what happened: `no-credential` (the sign-in is absent, expired, barred, unreadable or not private to this user;
   nothing was sent, or the library would not install it), `token-unverified` (a request went, and the provider refused
   it or did not answer), `codex-answer-unreadable` (the provider answered, but not with a model list this box can
-  read), `codex-runtime-absent` (run `ccrc install`, then sign in again), `codex-check-unrun` (the check could not
+  read), `codex-runtime-absent` (a `litellm` lane on a box with no runtime: run `ccrc install`, then sign in again),
+  `codex-check-unrun` (the check could not
   run here, which says nothing of the sign-in; `ccrc doctor` names what is missing) and `lane-credential-refused` (the
   lane's own `auth.json` is unreadable or another family's, so no sign-in can land on it; `ccrc doctor` names it). That
   last one is read before the device flow, so the operator approves no code, and again at the install. It means that
@@ -2299,9 +2301,9 @@ LiteLLM check. The canary goes through the bridge on the same port and accepts o
 anything else, a `litellm`-shaped answer included, is `unavailable` with no keyed request. A move is the registry and
 the lane's `settings.json` env block re-rendered, with no tier restart: the bridge reads no class and checks each
 request's model against the lane catalogue. The refresh still renders the lane's `litellm.yaml`, so a switch back to
-`litellm` finds it current, and on a `direct` lane that render never stops, restarts or starts a tier. The catalogue
-probe still runs on the LiteLLM runtime's interpreter, so a `direct` lane's auto-advance needs the runtime `ccrc
-install` builds, though the bridge itself does not.
+`litellm` finds it current, and on a `direct` lane that render never stops, restarts or starts a tier. A `direct`
+lane's catalogue probe runs under the system `python3`, as its bridge does, so its auto-advance needs no LiteLLM
+runtime.
 
 **Refusals, waits and a cut-short move.** A canary that the lane answers with an error (except the shim's 502 below), or
 with a 200 that ends, or passes its read cap, without text, is refused: the class stays where it is, the failure is
@@ -2387,7 +2389,7 @@ deletes an `authDir` under `.local/share/ccrc/codex/` unless told to keep it, a 
 ```
 
 ```bash
-ccrc install                      # accounts.sh, the wrapper, the Codex runtime and the lane's usage timer
+ccrc install                      # accounts.sh, the wrapper, the lane's usage timer, and the LiteLLM runtime for a litellm lane
 ccrc codex login <id>             # device-code sign-in through ccrc's auth library, into exec.authDir
 ccrc models <id> init codex       # seed the class registry — the launcher refuses a lane with no model class
 ccrc codex status <id> [--json]   # each tier: running, starting, stopped, foreign or unknown
@@ -2402,9 +2404,15 @@ a lane whose `settings.json` names no model, and then execs the roster's upstrea
 user service (under `nohup` on a box with no user manager), refuses a port or unit it cannot identify, and
 waits until the lane's tiers answer (both in `litellm` mode, the bridge in `direct` mode); `stop` stops only what it
 proves is this lane's and names anything else it leaves running. The runtime is an isolated LiteLLM venv under
-`~/.ccrc/runtime/codex/`, built by `ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs
+`~/.ccrc/runtime/codex/`, built by `ccrc install` when a `codex` lane of the roster runs in `litellm` mode
+(`ccgpt-runtime build`, which needs
 `python3` with `venv`; pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made
-current only after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
+current only after a behaviour probe passes; a failed build keeps the previous generation. Only a `litellm` lane runs
+on it. A `direct` lane's bridge, catalogue probe, usage poll and sign-in all run under the system `python3`, so a box
+whose lanes all run `direct` needs none: the install builds none there and leaves one that is there alone, the doctor
+asks for none, and `ccrc codex runtime remove` takes it off the box. That verb is refused, with nothing removed, while
+the roster records a lane in `litellm` mode, while it cannot tell, and while a LiteLLM or shim tier of any lane still
+runs. To run a lane in `litellm` mode again, build the runtime first, then switch the lane. Each generation also carries
 ccrc's one patch to LiteLLM (`ccgpt-runtime patch-source` prints it): when Codex streams no delta events for a
 tool call or a reply, it hands the finished arguments or text on, so parallel tool calls keep their input. The
 probe is its acceptance test, and `ccgpt-runtime check` reads `mutated` for a generation that has lost it.
@@ -2416,7 +2424,8 @@ Per-lane state lives in
 
 **One library owns the credential.** Exactly one ccrc program reads and writes `auth.json` in `exec.authDir`:
 the auth library `ccgpt-auth.py`, placed beside the shim. `ccrc codex login` is its device-code sign-in and needs
-no Codex runtime, though the check of a sign-in made through `auth-start` does; it writes nothing until the sign-in completes, so an abandoned one leaves the authDir as it was,
+no Codex runtime. The check of a sign-in made through `auth-start` needs one on a `litellm` lane only: a `direct`
+lane's is checked under the system `python3`. It writes nothing until the sign-in completes, so an abandoned one leaves the authDir as it was,
 and it never writes over another tool's credential file. The lane has one refresher, through the library's lock:
 its LiteLLM tier in `litellm` mode, its bridge in `direct` mode; every other reader only reads. Beside the
 credential the library keeps `auth.json.lock`,
@@ -3498,10 +3507,14 @@ session** sheet adds one in place too: its list opens with a **New project** row
 repository (or a new name nothing matches) offers **Clone owner/repo** (or **Create empty project**), which adds it
 and picks it in one tap. The fleet door's success toast carries **Start session**, which opens that sheet on the new
 project. It is
-`POST /api/projects` → `ccd project-add`, which clones or `git init`s a NEW directory under `~/projects` on the
-fleet box, never replacing an existing name; a private repository needs the fleet box user's own git credentials.
-An empty project takes sessions in its main checkout at once, but no workspace until it has a GitHub `origin`
-(`ws-add` needs `origin/HEAD`).
+`POST /api/projects` → `ccd project-add`, which clones a NEW directory under `~/projects` on the fleet box, never
+replacing an existing name; a private repository needs the fleet box user's own git credentials. An **Empty** project
+is born ready (D-8193): ccd makes a local bare origin, `<origins>/<name>.git`, seeds it with one empty commit on
+`main` and clones the project from it, so `origin/HEAD` is set and it takes sessions and workspaces at once.
+`<origins>` is `~/.cc-sessions/origins` unless the first line of `~/.ccrc/project-origins` names another absolute path
+(a file that names none is refused, never read as the default). A re-run adopts an origin of ccd's (a bare repository
+whose config says `ccd.emptyorigin = <name>`), and anything else at that path is refused before anything is touched.
+The origin lives on the fleet box, so a pull request needs a GitHub remote added later.
 
 ### A session (`/s/<id>`)
 
@@ -4467,15 +4480,24 @@ project's card, since board placement lasts while the workspace is held.
 **One Archive** (workspace lifecycle spec §5.2). Stop and archive are one feature. Every session's menu and its
 actions sheet offer **Archive**, and a session already put away offers **Restore** in its place. The confirm reads by
 case: an idle workspace goes offline and folds into Archived; a busy session asks first, because the turn in progress
-is lost; a main checkout is stopped and folds into Archived, and is never deleted; a coordinator with open runs offers
-only **End programme and archive** or **Cancel**, since pausing a programme is the coordinator pause switch.
+is lost; a main checkout is stopped and folds into Archived, and is never deleted; a coordinator with open runs lists
+them and asks what happens to them (D-8199): **Release runs** (they stay open and unclaimed, the programme goes on, and
+the next coordinator to open a run of it takes it), **Hand over** to a live coordinator of its project picked in the
+sheet, or **End programme** (every run abandoned). One tap picks, a second confirms, and nothing is ended unless the
+operator picks End programme; pausing a programme is the coordinator pause switch.
 `POST /api/sessions/:id/archive` runs every check it can make before anything it cannot undo: a turn in progress
 (`409 session-busy` unless `{interrupt:true}`; a main checkout's, whose stop refuses nothing, is read fail-closed —
 tmux unreachable or no readable live file is `409 status-unknown`, whatever the consents — and read again at the stop;
 a workspace's too when the programme is to end or `{interrupt:true}` is sent, before that end or stop), a worktree it
 can prove gone, a run naming the workspace as its worker (`409 run-open` unless `{force:true}`), a run it coordinates
-(`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}`), a store it cannot read (refused, fail-shut),
-and a run the abandon cannot move (one already `closing`: `409 programme-partly-ended`, nothing ended).
+(`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}` or a claims choice, `{runs:'release'}` or
+`{runs:'handover', heir}`), a store it cannot read (refused, fail-shut), and a run the abandon cannot move (one already
+`closing`: `409 programme-partly-ended`, nothing ended). A claims choice moves the claims instead of ending anything,
+after every check and before the stop and the archive: a release leaves every claimed row of the programme unclaimed
+and journals `release:<from>` on each; a hand-over goes through the reclaim writer (`reclaim:<from> -> <heir>`) once
+the heir is proved live and is not the session itself. A move that is refused answers `409 claims-not-moved`
+(`moved`, `notMoved`, `refusal`), with nothing stopped or archived, and every answer after a move, refusals and the
+`502` included, carries `moved: {to, runs}`, which the sheet says first, as it says `ended`.
 Then it ends the programme through the abandon door's own decision, stops (a main checkout, or with `interrupt`) and
 archives (a workspace). An abandon that still refuses at the act stops the door there, naming what it ended, with
 nothing stopped or archived. What only `ccd` can measure — its status read, the archive manifest and, in remote mode,
@@ -4488,7 +4510,13 @@ only**, disabled while tmux cannot be reached. Restore, in the actions sheet and
 `ws-restore` for a workspace (a merged-and-archived one included) and `ensure` for a main checkout, so a substrate
 fault disables a main checkout's. `Archived (N)` holds archived workspaces and stopped main checkouts
 (`inArchivedFold`), newest first; the Dead chip still counts a stopped main checkout, and the footer's archive list is
-still workspaces only. `ccd stop` and `POST /api/sessions/:id/stop` are unchanged. The refusal codes are
+still workspaces only. `ccd stop` is unchanged. `POST /api/sessions/:id/stop` asks the same question (D-8199): a
+session that claims open runs and sent no choice is refused `409 coordinator-has-open-runs` naming them, and the sheet
+asks Release or Hand over (never End programme) and repeats the stop with the choice; `claims-not-moved` returns it to
+the question with the reason, and a stop that fails otherwise stays on the sheet in the server's words. `{restart:true}`,
+the stop half of a restart (the session id is kept), asks nothing and moves nothing, and the swap route never asks. A
+coordination store the stop cannot read never blocks it: the stop is the escape hatch, so it goes through, moving
+nothing, and answers `{ok:true, claimsUnreadable}`. The refusal codes are
 `ARCHIVE_REFUSALS`, declared once in `shared/api.ts`. On the server box,
 `python3 deploy/measure-workspace-lifecycle.py [--db PATH] [--cache PATH] [--days N]` measures the Released and
 Archived rules from `coord.db` and `state-cache.json`, read-only: the rows it finds released (computed independently
@@ -5447,14 +5475,21 @@ for `VIEWER_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat 
 (`visible:false`, which leaves notifications as they were), and for that long after a server start every session counts
 as viewed.
 
-**The automatic coordinator roll (D-7452 to D-7454).** An idle coordinator is restarted onto the node's current ccrc
-release, its conversation resumed, so a new release or new skill text reaches it. It is **behind** when its Claude Code
-process started (the live file's `startedAt`) before the node's current install completed (`~/.ccrc/installed`'s
-modification time). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
+**The automatic roll (D-7452 to D-7454; D-8276).** An idle session is restarted onto the node's current ccrc
+release and the newest Claude Code build its lane reaches, its conversation resumed, so a new release, new skill text
+or a new build reaches it. Since the operator's ruling of 2026-11-10 (D-8276, reversing the 2026-10-29 coordinators-only rule) that
+is every idle session, whatever its role. It is **behind** when its Claude Code process started (the live file's
+`startedAt`) before the node's current install completed (`~/.ccrc/installed`'s modification time), or when a restart
+would move it onto a newer Claude Code build: it runs an older build than the fleet's newest AND than the newest an
+awake session on its own lane runs (`claudeBuildOf`'s `reach`, `shared/claudeVersion.ts`). A restart does not reach
+the fleet's newest build: the launcher picks the lane's own recorded build first (binary-lifecycle spec §2.2), so a
+session whose lane runs nothing newer is never rolled for the build, and a session already rolled for its lane's
+reach is not rolled for it again (in this server process). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
 `server/src/coord/rollTarget.ts`). It is skipped, by name, when hibernation is armed and will take it within 30 minutes
 (the wake brings the release), when its live status moved in the last 10 minutes (`compacting`), or when it carries
-`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). A session that is not a coordinator (an unreadable `.child` counts as
-a child) is never rolled. It picks the release up when it next starts for another reason. The act is a row of the
+`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). Under the
+`Coordinators only` setting a session that is not a coordinator (an unreadable `.child` counts as a child) is never
+rolled, and picks the release up when it next starts for another reason. The act is a row of the
 sleep executor (`server/src/rollLane.ts`) and ONE ccd verb, `ccd hibernate --roll` (D-7458): ccd re-measures, sleeps
 the session and wakes it at once, for at most one session a sweep, on the serialiser and the session's queue, behind
 the wake budget as an automatic wake, and only on a box whose `ccd caps` lists `hibernate-roll`. ccd's refusal (a draft
@@ -5464,8 +5499,11 @@ stamp put back), so mail or an open screen wakes it; a failed wake ccd cannot pu
 could not be written again) exits 5 (`roll-wake-unrestored`) and journals `not restored` with the session to check; a
 call cut short, never answered or with an unmeasured ending journals `outcome unknown` and names the session to check. Every skip is a `ccrc-server:
 roll-skip <id>: <reason>` line. **Settings › Automation › Roll idle sessions** (`GET`/`POST /api/coord/roll-idle`, one
-`roll_settings` row) is `Coordinators` (the default) or `Off`. `$REG/hibernate-disabled` stops it too. The Claude
-Code binary trigger comes with `ccd roll` (binary-lifecycle wave 2). `ccrc update`'s supervisor sweep is unchanged: it
+`roll_settings` row) is `Every idle session` (`all`, the default; the migration's seed, never written by an operator,
+reads as it), `Coordinators only` or `Off`, and the card counts the sessions behind the fleet's newest build,
+separating the ones a roll can move from the ones their lane holds. Each fleet card wears a quiet `cc .296 behind`
+marker while its session is behind (its title says whether a roll reaches a newer build), and the session header
+names every measured build. `$REG/hibernate-disabled` stops it too. `ccrc update`'s supervisor sweep is unchanged: it
 restarts supervisors, never Claude Code.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
@@ -6907,6 +6945,24 @@ session whether or not it ever opens a browser, so the box default is **off**:
 - **A running session keeps what it has** until its next spawn: a change waits for a restart, and nothing restarts a
   session for it. Hibernation ends the pane; with **Stop leftovers** on (Settings › Automation), it also stops the server
   processes a pane leaves behind.
+
+Three more keys ride the same one `--settings` at every spawn, on every lane, as fixed values with no setting (D-8173):
+`autoContinueAtUsageLimit` off (Claude Code never waits out a usage limit by itself, so `ccd` swaps the session to an
+account with room), `crossSessionInbound` refuse (a stray inbox message never opens an approval dialog; nudges stay
+typed) and `idleCompaction` on (no account or session setting can switch it off).
+With auto-continue off, Claude Code does not resume a session by itself at a usage limit's reset, so the limit watchdog
+does: when a stopped session has no account with room and its limit states a reset, `ccd` chooses Wait until reset
+itself (the record reads `choice=wait by=auto`) and restarts the session in place on its own account once the reset has
+passed and that account reads room again. A reset the transcript's limit row states counts even when it has already passed
+by the time the watchdog first finds no room: the same pass then restarts the session, if its own account reads room. An
+automatic wait is not a pin: if another account gets room first, the watchdog moves the session there. The Waiting on you
+row says "ccrc is waiting until HH:MM (or moves it if an account gets room)" and keeps its Wait until reset control. The
+operator's own Wait until reset (that control, or `ccd limit-wait`) is a pin, including a tap on an automatic wait, which
+then loses `by=auto`: nothing moves the session until the reset. The supervisor tick's rescue holds on that pin as the
+watchdog does, and a watchdog move already on its way backs off when the tap lands before it acts. A wait whose reset has
+passed while its account is still full reads "until <account> has room", never a past time. A limit with no stated
+reset stays the operator's to decide until a later watchdog pass finds its reset, which the open record then takes. The
+five-hour near-reset wait never opens any more, so every near-reset block swaps.
 - **Settings › Automation › Browser tools** shows the box default, the server list and how many running sessions use a
   browser. `ccrc doctor`'s `browser-mcp` check counts the Claude Code processes that run a configured browser server
   against the sessions whose last spawn applied `on`, and warns when more run one than asked for.
@@ -7566,7 +7622,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it: in Settings (Temp root collector) for the connected fleet node, or by `$REG/collect-lane-live` until that file's retirement is recorded |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
-| `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or `git init` an empty one on `main` with no commit; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
+| `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or, for `--empty`, make (or adopt) a local bare origin `<origins>/<name>.git` (`~/.cc-sessions/origins`, or the absolute path `~/.ccrc/project-origins` names) seeded with one empty commit on `main` and clone from it, so `ws-add` works at once (D-8193); refuses an origin path that is not ccd's; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |

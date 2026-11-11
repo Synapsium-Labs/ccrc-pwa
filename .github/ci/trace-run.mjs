@@ -18,15 +18,22 @@
 // has written the map (spec §5.4). A test that always fails under tracing (session-hook's timing budgets) would
 // otherwise turn every refresh that re-traces it red.
 //
+// Timing budgets are the usual reason a traced test fails (D-8277): tracing slows every fork, so a budget written for
+// an untraced run runs out. Every traced vitest therefore gets `CCRC_TIME_SCALE=TRACE_TIME_SCALE`, which
+// `server/vitest.config.ts` and `server/test/timeScale.ts` multiply every budget by. When a traced run still fails,
+// the tail of its own output is printed to the job log (`outputTail`), so the cause is read rather than guessed.
+//
 // A test that SKIPS some of its own cases when traced (`CCRC_TRACING=1`, below) exits 0 with a record too small
 // to trust — the skipped cases read nothing — which is the one unsafe direction (spec §5.2). Such a file is on
 // `SKIPS_UNDER_TRACE`, and every record of it is written `unknown` (final review FR-5), so rule 2 always selects
 // it. Its why is not a failure: testmap.mjs neither counts it as news nor warns on it.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { FAILED_UNDER_TRACE } from './testmap.mjs';
 import { parseTraceDirSplit } from './trace-to-deps.mjs';
 
 /** @typedef {import('./trace-to-deps.mjs').DepRecord} DepRecord */
@@ -38,6 +45,17 @@ const DEFAULT_TIMEOUT_SEC = 900;
 const KILL_AFTER_SEC = 30;
 const BASELINE_SERVER_REL = 'test/ci-baseline.test.ts';
 const ROOT_PID_SH = 'echo $$ > "$0"; exec "$@"';
+
+/** The clock scale every traced vitest gets as `CCRC_TIME_SCALE` (D-8277, `server/test/timeScale.ts`). Tracing costs
+ *  1.7 to 4.3 times wall-clock across the suite (ci.yml's trace-shard header), more for the bash-heavy files, since
+ *  `strace -f` follows every fork, and two traced files share a runner. A budget only bounds a hang, the per-file
+ *  `--timeout` still bounds the whole file, and a traced run's pass or fail is not a verdict (ci.yml), so the scale
+ *  is set well above the measured cost rather than at it. */
+export const TRACE_TIME_SCALE = 10;
+/** How much of a failed traced run's output the job log keeps: its last lines, each cut to a readable width. */
+const TAIL_LINES = 60;
+const TAIL_LINE_CHARS = 400;
+const TAIL_BYTES = 64 * 1024;
 
 /** Repo-relative test files that skip cases when traced — each reads `CCRC_TRACING` (a scan in
  *  `ci-trace-run.test.ts` keeps this list equal to the files that do). `ci-trace-run.test.ts` skips its real
@@ -92,12 +110,17 @@ export function tracedCommand(traceDir, pidFile) {
  * asynchronous fs can be submitted through the ring, and none of it would appear as a syscall strace can see.
  * `CCRC_TRACING=1` tells a test it is being traced — this module's own suite skips its nested-strace cases then,
  * since strace cannot attach under an outer strace; a file that reads it belongs on `SKIPS_UNDER_TRACE`.
+ * `CCRC_TIME_SCALE` scales every time budget the suite sets (D-8277): a file that reads it skips nothing, so it
+ * stays off that list.
  * @param {NodeJS.ProcessEnv} env
  * @param {string} listFile
  * @returns {NodeJS.ProcessEnv}
  */
 export function tracedEnv(env, listFile) {
-  return { ...env, CCRC_TEST_LIST: listFile, CI: 'true', UV_USE_IO_URING: '0', CCRC_TRACING: '1' };
+  return {
+    ...env, CCRC_TEST_LIST: listFile, CI: 'true', UV_USE_IO_URING: '0', CCRC_TRACING: '1',
+    CCRC_TIME_SCALE: String(TRACE_TIME_SCALE),
+  };
 }
 
 /** Runs `argv[0]` with the rest as args, under a `timeout --kill-after` wrapper, WITHOUT inheriting stdio.
@@ -116,10 +139,14 @@ export function tracedEnv(env, listFile) {
  *  `'close'`) hangs it until the case's own timeout; either half alone still passes, because either one
  *  suffices. Through `traceAll`, the leak fixture (a detached `sleep 300` with `stdio: 'inherit'`) returns
  *  inside its bound either way on this repo's `forks` pool, which gives the grandchild its worker's own stdio
- *  pipe rather than this function's. */
-export function runTraced(argv, opts) {
+ *  pipe rather than this function's.
+ *  @param {string[]} argv @param {import('node:child_process').SpawnOptions} opts @param {number} [logFd] */
+export function runTraced(argv, opts, logFd) {
   return new Promise((resolve) => {
-    const child = spawn(argv[0], argv.slice(1), { ...opts, stdio: 'ignore' });
+    // A log FILE, when given, takes stdout and stderr (D-8277): a file has no reader to wait on, so a descendant
+    // holding it open cannot hold this up the way a pipe could, and the 'exit' guard below is unchanged.
+    const stdio = logFd === undefined ? 'ignore' : ['ignore', logFd, logFd];
+    const child = spawn(argv[0], argv.slice(1), { ...opts, stdio });
     let settled = false;
     const finish = (result) => {
       if (settled) return;
@@ -163,12 +190,45 @@ export function recordOf(workDir, repoRoot, exit, timeoutSec) {
   return why ? { root, rest, unknown: true, why } : { root, rest, unknown: false };
 }
 
+/** The last `maxLines` lines of the file at `file` (read from its last 64 KiB), each cut to a readable width; `[]`
+ *  when it cannot be read. A run's own output, for the log only: it never reaches a record.
+ *  @param {string} file @param {number} [maxLines] @returns {string[]} */
+export function outputTail(file, maxLines = TAIL_LINES) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const size = fstatSync(fd).size;
+    const len = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.alloc(len);
+    readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString('utf8').replace(/\r/g, '').split('\n');
+    if (len < size) lines.shift(); // the first line was cut by the window
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+    return lines.slice(-maxLines).map((l) => (l.length > TAIL_LINE_CHARS ? `${l.slice(0, TAIL_LINE_CHARS)}…` : l));
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** The job-log block for a failed traced run: a group named for the file and its why, the tail's lines indented,
+ *  and workflow commands stopped around them with a one-off token, so a `::error` a test printed (vitest's
+ *  github-actions reporter does) is text here, never an annotation.
+ *  @param {string} file @param {string} why @param {string[]} tail @param {string} [token] @returns {string} */
+export function tailBlock(file, why, tail, token = randomBytes(16).toString('hex')) {
+  const body = tail.length > 0 ? tail.map((l) => `  | ${l}`) : ['  (no output)'];
+  return [`::group::trace-run: ${file}: ${why}: the last ${tail.length} line(s) of its output`, `::stop-commands::${token}`,
+    ...body, `::${token}::`, '::endgroup::', ''].join('\n');
+}
+
 /**
- * Traces one server-relative test file (or the baseline) and returns its split record.
+ * Traces one server-relative test file (or the baseline) and returns its split record, and the tail of its output
+ * when the run failed or timed out (`testmap.mjs`'s `FAILED_UNDER_TRACE`).
  * @param {string} repoRoot
  * @param {string} serverRelPath
  * @param {number} timeoutSec
- * @returns {Promise<SplitRecord>}
+ * @returns {Promise<{ record: SplitRecord, tail: string[] | null }>}
  */
 async function traceOne(repoRoot, serverRelPath, timeoutSec, killAfterSec) {
   const workDir = mkdtempSync(path.join(tmpdir(), 'ccrc-trace-'));
@@ -181,14 +241,22 @@ async function traceOne(repoRoot, serverRelPath, timeoutSec, killAfterSec) {
     'timeout', `--kill-after=${killAfterSec}`, String(timeoutSec),
     ...tracedCommand(traceDir, path.join(workDir, 'root.pid')),
   ];
-  const exit = await runTraced(argv, {
-    cwd: path.join(repoRoot, 'server'),
-    env: tracedEnv(process.env, listFile),
-  });
+  const logFile = path.join(workDir, 'output.log');
+  const logFd = openSync(logFile, 'w');
+  let exit;
+  try {
+    exit = await runTraced(argv, {
+      cwd: path.join(repoRoot, 'server'),
+      env: tracedEnv(process.env, listFile),
+    }, logFd);
+  } finally {
+    closeSync(logFd);
+  }
 
   const record = recordOf(workDir, repoRoot, exit, timeoutSec);
+  const tail = record.unknown && FAILED_UNDER_TRACE.test(record.why ?? '') ? outputTail(logFile) : null;
   rmSync(workDir, { recursive: true, force: true });
-  return record;
+  return { record, tail };
 }
 
 /** Runs `worker` over `items` with at most `concurrency` in flight at once.
@@ -212,8 +280,10 @@ export async function runPool(items, concurrency, worker) {
  * @param {string} repoRoot
  * @param {string[]} serverRelPaths server-relative paths, e.g. `test/bus.test.ts`
  * `baselineTimeoutSec` (default `timeoutSec`) bounds the baseline alone; `killAfterSec` (default 30) is the
- * `timeout --kill-after` grace; `skipsUnderTrace` (default `SKIPS_UNDER_TRACE`) names the files written unknown.
- * @param {{ jobs?: number, timeoutSec?: number, baselineTimeoutSec?: number, killAfterSec?: number, skipsUnderTrace?: string[] }} [options]
+ * `timeout --kill-after` grace; `skipsUnderTrace` (default `SKIPS_UNDER_TRACE`) names the files written unknown;
+ * `onFailure`, when given, is handed each traced file that failed or timed out, its why and its output's tail.
+ * @param {{ jobs?: number, timeoutSec?: number, baselineTimeoutSec?: number, killAfterSec?: number, skipsUnderTrace?: string[],
+ *   onFailure?: (file: string, why: string, tail: string[]) => void }} [options]
  * @returns {Promise<Records>}
  */
 export async function traceAll(repoRoot, serverRelPaths, options = {}) {
@@ -224,8 +294,9 @@ export async function traceAll(repoRoot, serverRelPaths, options = {}) {
   const baselineTimeoutSec = options.baselineTimeoutSec ?? timeoutSec;
   const killAfterSec = options.killAfterSec ?? KILL_AFTER_SEC;
 
-  const baselineResult = await traceOne(root, BASELINE_SERVER_REL, baselineTimeoutSec, killAfterSec);
+  const { record: baselineResult, tail: baselineTail } = await traceOne(root, BASELINE_SERVER_REL, baselineTimeoutSec, killAfterSec);
   if (baselineResult.unknown) {
+    if (baselineTail !== null) options.onFailure?.(`server/${BASELINE_SERVER_REL}`, baselineResult.why ?? '', baselineTail);
     throw new Error(`trace-run: baseline trace failed: ${baselineResult.why}`);
   }
   const baseline = { root: baselineResult.root, rest: baselineResult.rest };
@@ -234,7 +305,9 @@ export async function traceAll(repoRoot, serverRelPaths, options = {}) {
   const tests = {};
   await runPool(serverRelPaths, jobs, async (serverRelPath) => {
     const repoRelKey = path.posix.join('server', serverRelPath);
-    tests[repoRelKey] = markSkipsUnderTrace(repoRelKey, await traceOne(root, serverRelPath, timeoutSec, killAfterSec), skipsUnderTrace);
+    const { record, tail } = await traceOne(root, serverRelPath, timeoutSec, killAfterSec);
+    if (tail !== null) options.onFailure?.(repoRelKey, record.why ?? '', tail);
+    tests[repoRelKey] = markSkipsUnderTrace(repoRelKey, record, skipsUnderTrace);
   });
 
   return { format: 2, baseline, tests };
@@ -262,7 +335,11 @@ async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const serverRelPaths = readFileSync(opts.files, 'utf8')
     .split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-  const records = await traceAll(opts.repo, serverRelPaths, { jobs: opts.jobs, timeoutSec: opts.timeout, killAfterSec: opts.killAfter });
+  const records = await traceAll(opts.repo, serverRelPaths, {
+    jobs: opts.jobs, timeoutSec: opts.timeout, killAfterSec: opts.killAfter,
+    // The cause, for the log (D-8277): each failed run's own last lines, as it finishes.
+    onFailure: (file, why, tail) => process.stdout.write(tailBlock(file, why, tail)),
+  });
   writeFileSync(opts.out, JSON.stringify(records));
   // Named for the log only; map-build decides whether a failure is news (see the header).
   for (const [file, r] of Object.entries(records.tests)) {

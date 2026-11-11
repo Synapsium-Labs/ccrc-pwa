@@ -202,6 +202,8 @@ A server-side limit by role: every session can write, and the reviewer's read-on
 Linear features beyond the twelve verbs (cycles, documents, attachments, initiatives, webhooks). A screen for reading
 the journal (§16 Q3). Any change to claude.ai connectors, which the CLI cannot manage. OAuth applications.
 
+*Reversed for ccrc's own plan sync (D-8180): the initiatives non-goal above is lifted for the ccrc actor only, by `docs/superpowers/specs/2026-11-10-linear-hierarchy-design.md` §15 item 11. The twelve session verbs are unchanged.*
+
 **Anti-goals.** A raw GraphQL passthrough, or any verb that takes a query document. A session-side cache of a key or a
 token. An MCP server, which the operator ruled out on 2026-10-31. A second fetch path beside `callLinear`. A second key
 reader beside `readValueFile`. ccrc editing any account's MCP configuration.

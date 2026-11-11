@@ -387,7 +387,16 @@ describe('the client stays closed', () => {
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(63);
+    // `calls.record` (autonomy-default wave A3, D-8126) took it to sixty-four; it is the one body fill that REFUSES a caller's byId
+    // and byUuid, so it is counted by its own scan (`calls.record` below), not by the keyed fills' spelling.
+    expect(routeKeys().size).toBe(64);
+    // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
+    // refuses, then derives the pair from the pane, and fills nowhere else.
+    const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
+    expect(code.match(/if \[\[ "\$key" == 'calls\.record' \]\]; then/g) ?? []).toHaveLength(1);
+    expect(callFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(callFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
+    expect(callFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

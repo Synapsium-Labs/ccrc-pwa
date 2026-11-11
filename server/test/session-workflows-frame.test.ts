@@ -15,6 +15,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-a';
 const UUID = 'c'.repeat(36);
@@ -73,7 +74,7 @@ const runner = (opts: { gone?: boolean } = {}): Runner => async (_cmd, args) => 
 const open = (opts: { gone?: boolean } = {}): { stream: SessionStream; frames: SessionStreamMsg[] } => {
   const cfg = loadConfig({ CCRC_HOME: home });
   const run = runner(opts);
-  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
   const frames: SessionStreamMsg[] = [];
   return { stream: new SessionStream(deps, new Bus(), ID, (m) => frames.push(m)), frames };
 };

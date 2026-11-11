@@ -1,0 +1,111 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "scenario": "ov-peer",
+  "covers": [
+    "W0-17"
+  ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson"
+    },
+    "settings": {
+      "crossSessionInbound": "refuse",
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source --log-payload"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 r1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "r1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 r2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "r2",
+        "r2-done"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "r1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 r1$"
+      },
+      "text": "W0-R1"
+    },
+    {
+      "label": "r2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 r2$"
+      },
+      "tool_use": {
+        "name": "ToolSearch",
+        "input": {
+          "query": "select:SendMessage,ListAgents,TeamCreate",
+          "max_results": 5
+        }
+      }
+    },
+    {
+      "label": "r2-done",
+      "match": {
+        "kind": "main",
+        "hasToolResult": true
+      },
+      "text": "W0-R2-DONE"
+    }
+  ]
+}

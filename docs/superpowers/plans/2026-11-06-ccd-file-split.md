@@ -10,11 +10,12 @@
 
 **Spec:** the rulings in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` ("Rulings recorded for ARCH-02b") and O9 (a) in `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md`; the scope is issue #2006. There is no separate design spec: the design is the section below.
 
-**Status:** the operator ruled Q1 to Q8 on 2026-11-06 (D-8048). The answers close each question under Operator Rulings, at the end of this plan. Only Part A of Task 2, the two list fixes, starts now, in a PR of its own. Everything else waits for Task 0 (Q5).
+**Status:** the operator ruled Q1 to Q8 on 2026-11-06 (D-8048). The answers close each question under Operator Rulings, at the end of this plan. Only Part A of Task 2, the two list fixes, starts now, in a PR of its own. Everything else waits for Task 0 (Q5). On 2026-11-10 the operator added one context, C10 Session host, in the session-host report's ruling Q13 (`docs/superpowers/specs/2026-11-09-session-host-research.md`, §6.1 and §8 A4). Task 7 gives it a home and orders its PRs against slices 6, 9, 12 and 13 (D-8272).
 
 ## Ledger
 
 - **D-8048 (2026-11-06)** — `ccd-file-split-plan`: assemble `ccd/ccd` at install from fixed libraries, move functions in 19 pure slices, tighten the growth check, then repeat for `ccd/ccrc`. Measured at `4c677d328`.
+- **D-8272 (2026-11-11)** — `ccd-file-split-session-host`: the session-host ruling Q13 adds context C10 Session host to `ccd/contexts.tsv`, homed in `ccd/lib/sessionhost.sh` (Task 7). It owns hosting, observing and driving sessions behind the one `SessionHost` interface of the session-host report's §8 A4, and its PRs are ordered against slices 6, 9, 12 and 13.
 
 ## Global Constraints
 
@@ -599,7 +600,7 @@ Row order mixes size and heat on purpose: a 3,709-line slice with 4 hunks is che
 
 **Exit count per slice, computed at test time from `moveBase` and HEAD, and stored nowhere:** `ccd/ccd` functions = the base count minus the record's; `ccd/contexts.tsv` rows unchanged; `declare -F` count unchanged; `programDump` unchanged; spliced text unchanged apart from the one `__CCD_LIBS` line; `ccd (program)` delta 0; shellcheck group pin unchanged; no library over 6,000 lines.
 
-**Phase B exit:** 32 functions in `ccd/ccd`, all K rows plus `_ccd_lib_load` and `_roster_fp_to`: the table's 31, measured before Task 5, and `_ccd_hash_pick`; under 4,300 lines; 22 shell libraries in the table, every one measured by the growth check.
+**Phase B exit:** 32 functions in `ccd/ccd`, all K rows plus `_ccd_lib_load` and `_roster_fp_to`: the table's 31, measured before Task 5, and `_ccd_hash_pick`; under 4,300 lines; 22 shell libraries in the table, every one measured by the growth check. No C10 row is left in `ccd/ccd`, and `sessionhost.sh` is a 23rd library once it exists (Task 7, D-8272).
 
 ---
 
@@ -616,12 +617,44 @@ it('a function new in this diff is defined in a library when its context has one
   expect(homelessNewFunctions(base, head)).toEqual([]);
 });
 it('FIXTURE: a new C9 function in ccd/ccd reds; a new C4 function passes until ccd/lib/workspace.sh exists', () => {});
+it('FIXTURE: a new C10 function in ccd/ccd passes until ccd/lib/sessionhost.sh exists, then reds', () => {});   // D-8272
 it('no library exceeds CCD_LIB_MAX_LINES', () => { /* 6000, one constant, not per file */ });
 ```
 
-- [ ] **Step 2: Run to see them fail, implement `homelessNewFunctions(base: Tree, head: Tree): string[]`, run, commit.** `CCD_LIB_MAX_LINES` bounds one file and the program row bounds a PR, so a library cannot grow unmeasured. A context has a home once its catch-all library exists: C1 `accounts`, C2 `mutation`, C3 `conversation`, C4 `workspace`, C5 `coordination`, C7 `update`, C9 `docs`. A new function may then sit in any library of that context. K has no home and stays in the spine.
+- [ ] **Step 2: Run to see them fail, implement `homelessNewFunctions(base: Tree, head: Tree): string[]`, run, commit.** `CCD_LIB_MAX_LINES` bounds one file and the program row bounds a PR, so a library cannot grow unmeasured. A context has a home once its catch-all library exists: C1 `accounts`, C2 `mutation`, C3 `conversation`, C4 `workspace`, C5 `coordination`, C7 `update`, C9 `docs`, C10 `sessionhost`. A new function may then sit in any library of that context. K has no home and stays in the spine.
 
 Exit count: `homelessNewFunctions` = 0 on `main`.
+
+#### The Session host context (D-8272)
+
+The session-host ruling Q13 adds one context. `ccd/contexts.tsv` names it C10, and `CCD_CONTEXTS` holds it from D-8272 on. The 08-10 spec's ring-context-map table has no C10 row (`CCD_ONLY_CONTEXTS`): the server declares the `SessionHost` port at its consumer, C3 L2 (report §8 A4), and C10 is ccd's adapter for it.
+
+**What it owns:** hosting, observing and driving sessions, behind the one interface of the report's §8 A4.
+
+- `SessionHost.lifecycle` (HOST): `start`, `renew`, `stop`, `verdict` and `receipt`.
+- `SessionHost.observe` (OBSERVE): typed live facts. Each is a value, `unmeasured`, `stale` or `absent`, with when it was measured and whether an event or a pane fallback gave it.
+- `SessionHost.drive` (DRIVE): `deliver`, `clear`, `compact`, `answer` and `escape`. Each answers `done`, `queued-behind-turn` or `refused(reason)`.
+- Inside ccd: `host_verdict`; `host_send_keys` and `host_capture`, the only two functions that touch a pane; and `observe_gate`, which replaces `_pane_for_keystroke`, `_idle_for_keystroke` and `_swap_idle_gate`. `ccd caps` advertises each facet and operation, with `hibernate-fresh` staying the first word.
+
+**Its home, `ccd/lib/sessionhost.sh`.** No slice creates it: no function is C10 at D-8272, and the split tool moves none into it.
+
+- The first PR that adds a C10 function after Task 4 creates the library, as one more word in `__CCD_LIBS`. Before Task 4 a new library is the 26-file edit of #1897, so a C10 function that cannot wait sits in the spine with a C10 row until then.
+- Once the library exists, a new C10 function in the spine is red in `homelessNewFunctions`, and `CCD_LIB_MAX_LINES` bounds the file like any other library.
+- A function whose row changes to C10 moves into `sessionhost.sh` in the same PR, from the spine or from a slice's library. That changes behaviour, so it is a feature under the lane rule, never part of a slice. Each new cross-context edge goes into `ccd/contexts-edges.tsv` with its reason in the PR.
+
+**Order against slices 6, 9, 12 and 13.** These four slices hold the code the Session host takes over (report §4, "Relation to the file-split plan"). Two rules cover every case:
+
+1. **Ordered first means the slice waits only while that PR is open.** `preflight` already refuses a slice while an open PR has a hunk in its functions. When a slice is next, its lanes are live and no Session host PR overlaps it, the slice moves. The Session host PR then takes the functions from the library.
+2. **A Session host PR never waits for a slice.** If a slice moves while one is open, the PR is a feature caught by a move (Coexisting With Open Work) and remakes its edit in the library.
+
+| Slice | Library | What C10 takes from it | Order |
+|---|---|---|---|
+| 6 | `conversation-transcript` | Compaction and the limit banner: `_auto_compact_check`, `_compact_lock_*` and `_transcript_limit_banner` back `drive.compact` and observe's compaction and limit facts | Slice 6 first. The compaction work comes late in the harness order (report §5 steps 3, 6 and 7), so it takes these functions from `conversation-transcript.sh` |
+| 9 | `conversation` | The keystroke gates `_pane_for_keystroke` and `_idle_for_keystroke`, which become `observe_gate` (the report's ruling Q9: the copy-mode, width and draft checks in one shared check that logs each refusal). The `_route_type_*` typists stay C3 and type through `host_send_keys` behind the gate | The gate PR first. It is ruled now, and slice 9 must wait for the per-library lanes (Task 6) anyway |
+| 12 | `accounts-swap` | `_swap_idle_gate`, folded into `observe_gate`. The event-based limit sign (report §5 step 7) is a new C10 fact that `_auto_swap_check` reads; `_auto_swap_check` itself stays C1 | The same gate PR first, for the same reason. The step 7 PR comes after, and edits `_auto_swap_check` wherever it sits |
+| 13 | `accounts` | `cmd_account_pane`'s private tmux server (`-L ccrc-auth-<id>`). It goes through `host_target`, the one tmux lookup of the report's ruling Q8 (not this plan's Q8). The verb stays C1 | The report's Q8 lookup PR first, since it is ruled now and slice 13 is late in the table. If slice 13 has moved, the lookup PR edits `accounts.sh` |
+
+No other slice changes order, and slices 1 to 5, 7 and 8 move as planned. Slices 7 and 8 hold `_tmux_t`, `_tmux_at` and the spawn code. A Session host PR that takes any of them follows the same two rules.
 
 ### Task 8: Close the spine to waivers and both other routes, pay the debt (after Phase B)
 
@@ -762,5 +795,8 @@ The operator ruled all eight questions on 2026-11-06 (D-8048), each as recommend
 
 **Q8. May `ccd/ccd` lose the waiver door after Phase B?** Only a named PR in `growth-exemptions.json` could then pass `SPINE_LIMIT`.
 *Ruled: yes: close it, at 10 lines, with the operator's named exception only.* New code goes in a library. Task 8 is widened: it also turns off the new-file route for `ccd/ccd`, and limits the shrink route to changes where the program total does not grow.
+
+**Later ruling (2026-11-10, D-8272): does the harness layer get its own context?** This is the session-host report's question 13 (§4, "Relation to the file-split plan"). The plan gave a context a home only in a catch-all library of its own context, and Q8 caps the spine at 10 lines per PR. So the shared gates (`host_send_keys`, `host_capture` and `observe_gate`, with their tables) had no place to go.
+*Ruled: a Session host context.* One new context in `ccd/contexts.tsv`, C10, has a home library, `ccd/lib/sessionhost.sh`. It owns hosting, observing and driving behind the one `SessionHost` interface of the report's §8 A4, and its PRs are ordered against slices 6, 9, 12 and 13. Task 7 holds the home and the order.
 
 **For the record:** the second reason in issue #2006 is out of date and should be corrected there. `ccrc restamp` is refused for `ccd/ccd`, and the line-2 stamp no longer conflicts (#1525).

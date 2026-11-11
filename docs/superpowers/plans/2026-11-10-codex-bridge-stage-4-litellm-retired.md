@@ -75,8 +75,8 @@ Each has a recommendation. None blocks wave 4a's first tasks.
 2. **Each lane's watch verdict**, from Task 0's readings (runbook step R1). lane-a has no baseline of its own defined:
    it was switched six hours into lane-b's watch (the Stage 2 plan's record of the second lane's switch).
    Recommendation: judge both lanes on the criteria that need no baseline, and both together on the two that do.
-3. **New lanes start `direct`** (Task 7). Recommendation: yes, once the verdict is in. Until then `account add` keeps
-   writing a `litellm` lane.
+3. **New lanes start `direct`** (Task 7). **Ruled 2026-11-10: yes, always.** `account add` writes a `direct` lane,
+   and no longer waits for the watch verdict.
 4. **When the runtime leaves the fleet box** (R4). Recommendation: after the 4a build has run there for a week with
    the doctor green, the usage rows fresh and the hourly refresh clean.
 5. **The catalogue probe's identity.** The design's D27 has ccrc name itself on the backend route. The bridge and the
@@ -135,20 +135,36 @@ python3 -I deploy/measure-codex-watch.py --lane <id> --flip <UTC stamp> [--basel
   now. Stamps are `YYYY-MM-DDTHH:MM[:SS]Z`.
 - **What it reads, and nothing else.** `<home>/.ccrc/codex/<id>/lane.json` (the mode, the auth directory and the
   files' names), `bridge.stats.json`, the auth status file (never the credential), `<home>/.ccrc/logs/codex/<id>/
-  litellm.log`, and every `<home>/.claude*/projects/*/*.jsonl`. From a transcript row it reads `type`, `subtype`,
-  `timestamp`, `uuid`, `isSidechain`, `isApiErrorMessage`, `compactMetadata.trigger`, `message.id` and
-  `message.model`, never a row's text.
-- **What leaves.** Counts, rates, stamps, model names, and the names the bridge's drift counters already hold. No
-  session id, path, prompt or request id.
+  litellm.log`, the lane's advance and windows files under `<home>/.ccrc/models/`, and every
+  `<home>/.claude*/projects/**/*.jsonl`. From a transcript row it reads `type`, `subtype`, `timestamp`, `uuid`,
+  `isSidechain`, `isApiErrorMessage`, `version`, `compactMetadata.trigger`, `compactMetadata.preTokens`, `message.id`
+  and `message.model`, never a row's text.
+- **What leaves.** Counts, rates, stamps, model and class names, Claude Code version numbers, the status's state,
+  last error code and unsaved flag, the store's outcome names and its entry (state, reason, set-aside), each event's
+  kind, and the names the bridge's drift counters already hold. No session id, path, prompt or request id.
 - **The five criteria**, each `pass`, `fail` or `unmeasured` with its numbers, as the Stage 2 runbook's step 5 words
   them:
   1. `outcomes.emptyArguments` is 0.
-  2. The 5xx rate, `outcomes.5xx` over the sum of `routes.*.requests`, against the baseline's rate from
-     `litellm.log`. `client-gone` and `drain-cut` are shown and stay out of the rate.
-  3. The compaction rate in the baseline window against the watch window: automatic `compact_boundary` rows over
-     assistant calls, deduplicated by `message.id`, for rows a GPT model answered.
-  4. The credential: the status file's state, its last error code, and how long ago it last refreshed.
+  2. The 5xx rate, 5xx / (2xx + 5xx) on both sides: the stats file's outcomes against the `POST /v1/messages` lines
+     of `litellm.log`, query string stripped. `count_tokens` lines and 4xx are printed and stay out of both rates, as
+     do `client-gone` and `drain-cut`. It fails only when the watch's rate is higher and the exact one-sided
+     conditional binomial test gives p < 0.05. Both rates carry exact 95% intervals.
+  3. The compaction rate, on the main thread only, against a comparable baseline: the baseline is cut at the last
+     class advance or window change before the flip. Each model's baseline rate is weighted by the watch's calls,
+     and the reading fails only when the watch's boundaries exceed that expectation and the one-sided Poisson test
+     gives p < 0.05. A session that began before the cut is left out of the comparable baseline. A model counts only
+     when its own comparable baseline holds 5 sessions and 20 boundaries. It reads `unmeasured` when the compaction
+     point moved more than 10%, is missing on either side or rests on fewer than 20 baseline values, when the comparable
+     baseline holds fewer than 5 sessions or 20 boundaries, when any watch boundary falls on a model with no such
+     baseline, and when a model file cannot be read or may have lost an entry. The box scope, a paired reading and
+     the version mix are context.
+  4. The credential, in the auth library's own vocabulary. It fails when the library's `bars` refuses the status,
+     when the code is in `NEEDS_SIGNIN_CODES` or `CONFIG_ERROR_CODES`, with no credential, with an expired token, or
+     when the last refresh is older than half the token's life plus 900 s. Any other code is context.
   5. The drift counters: every family's `unexplained` list is empty.
+
+  Every window event goes in the report's `events`, and the store's cumulative `store:*` outcomes go beside the
+  bridge. The instrument's docstring holds the full rules.
 - **Unmeasured is never pass.** A file that is absent, unreadable or of another version, a log with no line the
   reader recognises, and a window with no assistant call each read `unmeasured`, with the reason.
 - **The baseline window is the operator's to choose.** The lanes' measured windows were applied on 2026-10-22, five
@@ -295,11 +311,12 @@ copy from the user site. The publisher has not imported it since Stage 1, and `-
 
 ### Task 7: a new lane starts `direct`
 
-Waits for ruling 3.
+Ruling 3 is made, so this is built.
 
 **Files:**
-- Modify: `deploy/account-op.mjs` (`addedEntry`), `ccd/ccrc` (`_acct_codex_pick`), `pwa/src/fleet/accountWords.ts`
-- Test: `server/test/account-ops.test.ts`, `server/test/ccrc-account-codex-add.test.ts`,
+- Modify: `deploy/account-op.mjs` (`check-add`'s plan), `ccd/ccrc` (`_acct_codex_pick`),
+  `pwa/src/fleet/accountWords.ts`, `README.md`
+- Test: `server/test/ccrc-account-codex-add.test.ts`, `server/test/ccrc-account.test.ts`,
   `pwa/test/chatgpt-sheet.test.tsx`
 
 **Interfaces:**
@@ -307,13 +324,15 @@ Waits for ruling 3.
   `_codex_python` where it asked for the runtime, and still draws two ports, because `exec.litellmPort` stays
   required.
 
-- [ ] **Step 1: Write the failing tests.** "a new codex row is written with bridge direct"; "add with no runtime and
-  a python3 at 3.9 succeeds"; "add with no usable python3 refuses `python-absent`"; the PWA's refusal words for the
-  new code.
-- [ ] **Step 2: Run them and see them fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run the tests and see them pass.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write the failing tests.** "a new codex row is written with bridge direct"; "add with no runtime and
+  a python3 at 3.9 succeeds"; "add with no usable python3 refuses `codex-python-absent`"; the PWA's refusal words for
+  the new code.
+- [x] **Step 2: Run them and see them fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run the tests and see them pass.**
+- [x] **Step 5: Commit.**
+
+The PWA keeps its words for `codex-runtime-absent`: a fleet host on an older build still answers it.
 
 ### Task 8: the README and the usage text say what is true
 
@@ -337,16 +356,22 @@ Waits for ruling 3.
 
 **Interfaces:**
 - Consumes: Task 4's `codex-modes` op, `_codex_tier_ours`.
-- Produces: `ccrc codex runtime remove` removes `~/.ccrc/runtime/codex` and each lane's `litellm.yaml` and its
-  `.prev`, keeps every log, and prints what it removed. It is refused, with nothing removed, as `lane-needs-runtime`
-  (naming each lane the roster resolves to `litellm`), `tier-running` (a LiteLLM or shim tier of any lane still
-  answers), or `modes-unreadable`. With no runtime on the box it answers `already` and exits 0. Its last line says
-  that a rollback to a build before wave 4a needs `ccgpt-runtime build`, which that build's `ccrc doctor --fix` runs.
+- Produces: `ccrc codex runtime remove` removes `~/.ccrc/runtime/codex` and nothing else, and says so in one line
+  that also says how to go back: `ccgpt-runtime build` before a switch to `litellm`, and after a rollback to a build
+  from before the runtime became optional, which that build's `ccrc doctor --fix` runs. It is refused, with nothing
+  removed, as `lane-needs-runtime` (naming each lane the roster resolves to `litellm`, with its switch),
+  `modes-unreadable`, `tier-running` (a LiteLLM or shim tier of any lane still runs, whatever the roster says) or
+  `tier-unmeasured`. With no runtime on the box it answers `already absent` and exits 0. It holds the roster
+  writers' lock while it asks and removes, so no switch records a lane back to `litellm` between them. A lane's
+  `litellm.yaml` stays: it is a pure render the hourly refresh keeps current, so a lane switched back after a
+  rebuild finds it there.
 
-- [ ] **Step 1: Write the failing tests**, one per refusal, the removal itself, `already`, and "uninstall and the
-  verb remove through one function".
+- [ ] **Step 1: Write the failing tests**, one per refusal, the removal itself with a bridge left serving,
+  `already absent`, the usage forms, and "the uninstall and the verb remove through one function".
 - [ ] **Step 2: Run them and see them fail.**
-- [ ] **Step 3: Implement.** The removal is `_uninst_codex`'s, moved into one function both call.
+- [ ] **Step 3: Implement.** The removal is `_uninst_codex`'s, moved into `_codex_runtime_rm`, and the roster
+  writers' lock is the switch's, moved into `_codex_roster_lock` (both in #2593, a move with no change in
+  behaviour), so the verb's own change stays under the growth limit on `ccd/ccrc`.
 - [ ] **Step 4: Run the tests and see them pass.**
 - [ ] **Step 5: Commit.**
 
@@ -361,7 +386,8 @@ line (Task 5).
 Nothing here is run by an agent unless the operator says so for that step.
 
 **R1. Take the watch's readings.** On the fleet box, for each lane, with the stamp of its switch from the Stage 2
-plan's records:
+plan's records. lane-b switched first (06:26:03Z) and lane-a six hours later (12:32:04Z), so each stamp is its own
+lane's:
 
 ```
 python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-b --flip 2026-10-27T06:26:03Z --baseline-since 2026-10-22T10:48:00Z
@@ -405,11 +431,19 @@ reported in the pull request that met it.
 
 ## Where things stand
 
-**Done:** Task 0 (#2572), Task 1 (#2569), Task 2 (#2586), Task 3 (#2573), Task 4 (#2575) and Task 6.
-In review: Task 5 (#2588) and Task 9 (#2593, then #2590).
+**Done:** Task 0 (#2572), Task 1 (#2569), Task 2 (#2586), Task 3 (#2573), Task 4 (#2575), Task 5 (#2588),
+Task 6 (#2595), Task 8 (the README) and Task 9 (#2593, #2590). Task 10 needed no change. The first release that
+carries all of it is the one cut from Task 9's merge.
 
-**Needs before it starts:** nothing else in wave 4a but Task 7's ruling. Task 7 waits for ruling 3. Wave 4b waits for wave
-4a on `main`. R1 to R5 are the operator's.
+**Task 0 was revised after its first live readings (2026-11-10).** Every failing reading came from the
+instrument's comparison, not from the lane. The 5xx rate counted `count_tokens` in the baseline only. The compaction
+rate compared a baseline taken mostly at the larger context window with a watch taken entirely at the smaller one.
+The credential failed on a stale upstream code. All three now measure like for like, and `unmeasured` still holds
+the stage.
+
+**Still to build:** wave 4c, which waits for R4. Task 7 is built: a new lane starts `direct`.
+
+**The operator's:** R1 to R5. R1 needs nothing but a build at or after v0.0.1076 on the fleet box.
 
 **Open questions for the operator:** the six rulings above, most important first: 2 (the verdict), 1 (the order of
 the stages), 3 (new lanes), 4 (when the runtime leaves).

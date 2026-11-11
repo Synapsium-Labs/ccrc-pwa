@@ -16,8 +16,17 @@ const row = (over: Record<string, unknown> = {}): string => JSON.stringify({
 describe('parseUsageSidecar', () => {
   it('reads a fresh row and derives the class from model.id', () => {
     expect(parseUsageSidecar(row(), NOW)).toEqual({ kind: 'reading', usage: {
-      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, cost: 1.25, stale: false,
+      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, cost: 1.25, cacheExpiresAt: null, stale: false,
     } });
+  });
+  // D-8267: the prompt cache's expiry (`prompt_cache.expires_at`, epoch seconds), the idle-compaction prediction's input.
+  it('carries cacheExpiresAt in the sidecar\'s own unit, and a row without one (an older hook) reads null', () => {
+    const r = parseUsageSidecar(row({ cacheExpiresAt: NOW + 3000 }), NOW);
+    expect(r.kind === 'reading' && r.usage.cacheExpiresAt).toBe(NOW + 3000);
+    const none = parseUsageSidecar(row(), NOW);
+    expect(none.kind === 'reading' && none.usage.cacheExpiresAt).toBeNull();
+    const str = parseUsageSidecar(row({ cacheExpiresAt: String(NOW + 3000) }), NOW);
+    expect(str.kind === 'reading' && str.usage.cacheExpiresAt).toBeNull();
   });
   it.each([
     ['claude-fable-5-1', 'fable'], ['claude-sonnet-5', 'sonnet'], ['claude-haiku-4-5-20251001', 'haiku'], ['gpt-6-astra', null],
@@ -35,7 +44,7 @@ describe('parseUsageSidecar', () => {
   it('nulls ride through as nulls; strings where numbers belong are nulls too', () => {
     const r = parseUsageSidecar(row({ effort: null, cost: null, ctxPct: '12' }), NOW);
     expect(r).toEqual({ kind: 'reading', usage: {
-      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: null, ctxPct: null, cost: null, stale: false,
+      ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: null, ctxPct: null, cost: null, cacheExpiresAt: null, stale: false,
     } });
   });
   it.each([

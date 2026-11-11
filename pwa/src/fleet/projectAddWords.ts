@@ -163,12 +163,12 @@ export function projectAddRefusalText(err: unknown, source: ProjectAddSource): s
   return `The project wasn't added (the server answered ${err.status}).`;
 }
 
-/** The success toast. An empty project can take a session in its main checkout at once, but no workspace until it has
- *  a GitHub `origin` (ccd's `ws-add` needs `origin/HEAD`), so its toast says both. Where to start that session is the
+/** The success toast. An empty project is born with a local origin on the fleet box (D-8193), so it takes sessions and
+ *  workspaces at once, but a pull request needs a GitHub remote; its toast says both. Where to start that session is the
  *  toast's own action (`PROJECT_ADD_TEXT.startSession`), or the new-session sheet the project was added from. */
 export function projectAddedText(name: string, source: ProjectAddSource): string {
   return source === 'empty'
-    ? `Added project ${name}. It can take a session now, and workspaces once it has a GitHub remote.`
+    ? `Added project ${name}. It takes sessions and workspaces now, and pull requests once it has a GitHub remote.`
     : `Added project ${name}`;
 }
 

@@ -29,6 +29,8 @@
 // `programme.specHref`), so this file still names no route. The item's what, why, steps and history are drawn through
 // `linkRuns`: an `https` address opens in a new tab with no opener, a console path and a repository document path (in the
 // programme's home project's Docs reader) open in the console, and anything else, `javascript:` and `data:` included, is text.
+// "item N", "items N and M" and "item #N" link to that item's page where the route's `itemHref` says the number is an item
+// (D-8194). A closed item (done, withdrawn, dismissed) opens read-only: its panel says it is closed and offers no act.
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QuickConfirm, RadioFieldset, TextInput, TextLink } from '@ccrc/ui';
@@ -50,7 +52,7 @@ import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWo
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
 import { ItemControls, useItemActs, type ItemActs } from './ItemActs';
-import { ageWords, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
+import { ageWords, closedItemWords, itemNumber, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
 export interface ItemViewProps {
@@ -91,6 +93,9 @@ export interface ItemViewProps {
   readonly sessions?: readonly FleetSession[] | null;
   /** Told when Abandon run or Keep the run landed: the item has closed, so the page steps back to its list. */
   readonly onActed?: () => void;
+  /** The page of an item a reference in the text names ("item 12"), or null for a number that is no item (D-8194). Absent, every
+   *  reference stays text. The route decides; this file names no route. */
+  readonly itemHref?: (id: number) => string | null;
 }
 
 /** Sends a secret item's value to its own route (`api.saveItemSecret`): the slot's state comes back, never the value. */
@@ -329,8 +334,8 @@ const ACT_WORD: Readonly<Record<ItemWire['history'][number]['act'], string>> = {
 /** Text with its links drawn as links (`linkRuns`, PL10): an outside page in a new tab with no opener, through `openExternal`,
  *  as every outside link of the console is (an installed app's own window must not navigate, review 1466 F10); a console or
  *  Docs path through the console's own navigation. The split is made once per text and home (review 1466 F9). */
-function Linked({ text, homeProject }: { text: string; homeProject: string | null }): ReactNode {
-  const runs = useMemo(() => linkRuns(text, homeProject), [text, homeProject]);
+function Linked({ text, homeProject, itemHref }: { text: string; homeProject: string | null; itemHref?: ((id: number) => string | null) | undefined }): ReactNode {
+  const runs = useMemo(() => linkRuns(text, homeProject, itemHref), [text, homeProject, itemHref]);
   return runs.map((r, i) => {
     if (r.kind === 'text') return <span key={i}>{r.text}</span>;
     return r.external
@@ -339,12 +344,14 @@ function Linked({ text, homeProject }: { text: string; homeProject: string | nul
   });
 }
 
-function History({ item, now, homeProject }: { item: ItemWire; now: number; homeProject: string | null }): ReactNode {
+function History({ item, now, homeProject, itemHref }: {
+  item: ItemWire; now: number; homeProject: string | null; itemHref?: ((id: number) => string | null) | undefined;
+}): ReactNode {
   return (
     <ul className="wi-history" aria-label="History">
       {item.history.map((h, i) => (
         <li key={`${h.at}:${h.act}:${i}`}>
-          {h.act === 'return' && h.note !== null ? <Linked text={`sent back: ${h.note}`} homeProject={homeProject} />
+          {h.act === 'return' && h.note !== null ? <Linked text={`sent back: ${h.note}`} homeProject={homeProject} itemHref={itemHref} />
             : h.act === 'raise' && h.actor === 'ccrc' ? RAISED_BY_CCRC : ACT_WORD[h.act]}
           {` · ${ageWords(h.at, now)}`}
         </li>
@@ -429,6 +436,8 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
 
   const open = item.state === 'open';
   const checking = item.state === 'checking';
+  // A closed item is read-only (D-8194): it says so, and nothing below offers an act on it.
+  const closed = closedItemWords(item.state);
   // An item with an action has its own controls (spec §10, §12.2): its act closes it, so it is never ticked or dismissed.
   const acting = (item.action ?? null) !== null;
   // A programme with no open run has no coordinator waiting for a tick: nothing is asked, and only Dismiss is offered.
@@ -440,6 +449,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   const notCurrent = !current && (mayTick || ended || secretOpen || removable);
   return (
     <section className="wi-card wi-act" aria-label="Your move">
+      {closed !== null && <p className="wi-status" data-closed={item.state}>{closed}</p>}
       {ended && <p className="wi-hint">{WAITS_ON_WORDS.ended}</p>}
       {mayTick && decide && (
         <>
@@ -508,7 +518,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   );
 }
 
-export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true, runs = null, sessions = null, onActed }: ItemViewProps): ReactNode {
+export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true, runs = null, sessions = null, onActed, itemHref }: ItemViewProps): ReactNode {
   const { acts, sheets } = useItemActs(sessions, onActed);
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
@@ -525,21 +535,25 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
       </div>
       <div className="wi-detail">
         <div className="wi-card">
-          <span className="wl-kind wi-kind">{KIND_WORD[item.kind]}</span>
-          <h1 className="wi-what"><Linked text={item.title} homeProject={home} /></h1>
+          {/* The kind chip and the item's number beside it (D-8194). */}
+          <span className="wi-tag">
+            <span className="wl-kind wi-kind">{KIND_WORD[item.kind]}</span>
+            <span className="wi-num">{itemNumber(item)}</span>
+          </span>
+          <h1 className="wi-what"><Linked text={item.title} homeProject={home} itemHref={itemHref} /></h1>
           <section>
             <h3 className="wi-h">Why</h3>
-            <p className="wi-text"><Linked text={item.why} homeProject={home} /></p>
+            <p className="wi-text"><Linked text={item.why} homeProject={home} itemHref={itemHref} /></p>
           </section>
           {item.how.length > 0 && (
             <section>
               <h3 className="wi-h">How</h3>
-              <ol className="wi-steps" aria-label="How">{item.how.map((s, i) => <li key={`${i}:${s}`}><Linked text={s} homeProject={home} /></li>)}</ol>
+              <ol className="wi-steps" aria-label="How">{item.how.map((s, i) => <li key={`${i}:${s}`}><Linked text={s} homeProject={home} itemHref={itemHref} /></li>)}</ol>
             </section>
           )}
           <section>
             <h3 className="wi-h">History</h3>
-            <History item={item} now={now} homeProject={home} />
+            <History item={item} now={now} homeProject={home} itemHref={itemHref} />
           </section>
         </div>
         <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss} current={current} runs={runs} acts={acts}

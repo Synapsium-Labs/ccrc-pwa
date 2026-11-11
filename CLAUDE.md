@@ -206,7 +206,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
   the arbiter, but only for a file it RAN: a pull request runs its selection, so first check that the PR's `select
   tests` summary lists the file. If it is not listed, the arbiter is the daily run's `test (server)` or a
-  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). A flake that CI ran and passed
+  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). **Dispatch it ONCE per accepted
+  tip** — after review, never per push or fix round (D-8266: about 51 such runs in four days cost ~23k
+  runner-minutes). First cancel a superseded one on the same branch (`gh run list --workflow ci.yml --branch <branch>
+  --event workflow_dispatch --status in_progress`, then `gh run cancel <id>`). Read ONLY its Linux legs as the
+  arbiter: a dispatched full run calls the macOS legs, which are advisory and off the merge path (operator rulings
+  2026-10-28 and 2026-11-02), so its `full-suite` can be red on macOS alone. A flake that CI ran and passed
   is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
   re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
   2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
@@ -532,7 +537,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/items/:id/return`, `POST /api/items/:id/withdraw`, `POST /api/items/:id/blocking`,
   `POST /api/programmes/:slug/spec`, `POST /api/programmes/:slug/modifications` and
   `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
-  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) all call
+  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) and the coordinator call record's one route
+  `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
+  for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`,
@@ -549,16 +556,17 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   operator's switch on abandoning a dispatch that never came back), `POST /api/coord/run-close` (D-8077, the operator's
   three-state control over the run-close lanes, which also refuses `on` while coordination is paused), `POST /api/coord/scope-sweep` (D-7994, the
   operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
-  operator's Settings row for the automatic coordinator roll), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
+  operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
   switch that arms a deliberate stop's pane-scope stop), `POST /api/coord/delegation-adopt` (D-8112, the operator's switch
-  on the delegation lane keeping a finished delegated worktree, which also refuses `on` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
+  on the delegation lane keeping a finished delegated worktree, which also refuses `on` while sign-in is dark), `POST /api/coord/lane-arm` (D-8274,
+  the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
   the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554),
   `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) and
   `POST /api/leases/:lease/operator-retain` and `POST /api/leases/:lease/resolve` (delegation wave 5 PR8, the operator's
   keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other fourteen are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other fifteen are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -572,10 +580,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
-  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
-  the operator and closing its item, the decline mailing the asker), `PUT /api/items/:id/secret` (plan PL6), and
+  the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
   `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four

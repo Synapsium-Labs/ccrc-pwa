@@ -415,6 +415,15 @@ fi
 #    people. Every failure below is silent on purpose — this runs on every
 #    render of every session and must never cost the status bar.
 #
+#    `cacheExpiresAt` (D-8267) is Claude Code's documented statusline field
+#    `prompt_cache.expires_at`: when the main conversation's cached prefix
+#    leaves its TTL, in epoch seconds, null while the last response reported no
+#    cache tokens, absent before the first response or on a build older than
+#    2.1.251 (both written null). The server predicts the idle compaction from
+#    it (`predictIdleCompactAt`) and falls back to the fixed estimate without
+#    it. A subagent's render has no `prompt_cache` of its own (the object
+#    counts the main conversation only), so its row carries null.
+#
 #    WHICH IS WHY THE tmux CALL IS BOUNDED. This is the first thing this hook
 #    has ever asked of tmux, and it runs on EVERY render of every session — a
 #    tmux CLIENT blocks waiting on the server, and an unreachable tmux server is
@@ -470,6 +479,7 @@ if [ -n "$ccd_id" ]; then
         effort: (.effort.level // null),
         ctxPct: (.context_window.used_percentage // null),
         cost: (.cost.total_cost_usd // null),
+        cacheExpiresAt: (.prompt_cache.expires_at | if type == "number" then . else null end),
         agent: (if $agent == "" then null else $agent end)
       }' 2>/dev/null)
     if [ -n "$usage_json" ]; then

@@ -24,6 +24,7 @@ import { PANE_SCOPE_STOP_TEXT } from './paneScopeStopWords';
 import { SCOPE_SWEEP_TEXT } from './scopeSweepWords';
 import { DELEGATION_ADOPT_TEXT } from './delegationAdoptWords';
 import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
+import { LANE_ARM_TEXT } from '../../../shared/lane-arm';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
 /** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
@@ -318,6 +319,10 @@ export const SETTINGS_CARDS = {
     collector: {
       scope: SETTINGS_SCOPE.fleet, title: COLLECT_SECTION_TEXT.title, purpose: COLLECT_SECTION_TEXT.purpose,
     },
+    /** D-8274 (spec 2026-10-28 R-6): the one switch of each lane that ships in shadow, after Temp root collector. */
+    shadowLanes: {
+      scope: SETTINGS_SCOPE.fleet, title: LANE_ARM_TEXT.title, purpose: LANE_ARM_TEXT.purpose,
+    },
     dispatch: {
       scope: SETTINGS_SCOPE.fleet, title: DISPATCH_ABANDON_TEXT.title, purpose: DISPATCH_ABANDON_TEXT.purpose,
     },
@@ -326,8 +331,8 @@ export const SETTINGS_CARDS = {
     },
     roll: {
       scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',
-      purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
-        + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
+      purpose: 'Restarts an idle session onto the current ccrc release and the newest Claude Code build, resuming its '
+        + 'conversation, once it has been quiet for 90 minutes. One session at a time, and never one that is working.',
     },
     /** D-8121: the browser MCP servers' box default and what the fleet's running sessions use, before Roll idle sessions. */
     browser: {

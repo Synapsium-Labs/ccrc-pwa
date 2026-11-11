@@ -33,6 +33,7 @@ import { GraphChip, LastSpawnChip } from './chips';
 import {
   PROGRAMME_BUDGET, cardFacts, heldWords, markers, shortenByToken, type Fact, type MarkerKey, type SessionFactSet,
 } from './sessionFacts';
+import { buildText } from './buildWords';
 import './fleet.css';
 
 /** Each marker's ink: the class of the cell it used to be, so fleet.css's existing colour rule paints it. */
@@ -52,6 +53,7 @@ const MARKER_CLASS: Record<MarkerKey, string> = {
   restarted: 'sess-restart',
   unreadable: 'sess-unmeasured',
   'off-pool': 'sess-offpool',
+  behind: 'sess-unmeasured',
 };
 
 /**
@@ -210,6 +212,8 @@ export function SessionMeta({
       )}
       {/* The read counter (R4) with the gate's suffix (R5, D-1613) — a measured zero is a finding. */}
       {f.graph !== null && <GraphChip reads={f.graph.reads} gated={f.graph.gated} />}
+      {/* D-8276: the Claude Code build of a session on the newest one (one behind says it in its marker below). */}
+      {f.build.kind === 'current' && <span className="sess-unmeasured" data-build="current">{buildText(f.build.build)}</span>}
       {/* The subagent tally, a disclosure: a REAL `<button>`; `aria-controls` only while the list exists. */}
       {subagentList !== null && subagentList.length > 0 && (
         <button

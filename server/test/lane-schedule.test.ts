@@ -388,16 +388,19 @@ describe('the eight coordination lanes (D-5862, PR 2)', () => {
     }
   });
 
-  it('runSync runs the body once the cadence has elapsed on the injected reading, stamps that reading, and answers whether it ran', () => {
-    const { runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
+  it('runSync runs the body once the cadence has elapsed on the row\'s clock, stamps that reading, and answers whether it ran', () => {
+    const { t, runner } = rig([row({ name: 'beat', cadenceMs: 100, clock: 'mono' })]);
     const fn = vi.fn();
-    expect(runner.runSync('beat', fn, 1_000), 'a first beat').toBe(true);
-    expect(runner.runSync('beat', fn, 1_099), 'a beat inside the cadence').toBe(false);
-    expect(runner.runSync('beat', fn, 1_100), 'a beat at the cadence').toBe(true);
+    t.mono = 1_000;
+    expect(runner.runSync('beat', fn), 'a first beat').toBe(true);
+    t.mono = 1_099;
+    expect(runner.runSync('beat', fn), 'a beat inside the cadence').toBe(false);
+    t.mono = 1_100;
+    expect(runner.runSync('beat', fn), 'a beat at the cadence').toBe(true);
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it('runSync with no reading takes the row\'s clock; a throw spends the slot and reaches the caller', () => {
+  it('runSync takes the row\'s clock; a throw spends the slot and reaches the caller', () => {
     const { t, runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
     const boom = vi.fn(() => { throw new Error('body failed'); });
     expect(() => runner.runSync('beat', boom)).toThrow('body failed');
@@ -407,17 +410,34 @@ describe('the eight coordination lanes (D-5862, PR 2)', () => {
     expect(boom).toHaveBeenCalledTimes(2);
   });
 
-  it('a startsDue row is due at an injected reading of 0, and a plain wall row (stamp 0) is not due before its cadence', () => {
-    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true }), row({ name: 'plain', cadenceMs: 100 })]);
-    expect(runner.runSync('due', () => {}, 0)).toBe(true);
-    expect(runner.runSync('plain', () => {}, 50)).toBe(false);
+  it('a startsDue row is due at a clock reading of 0, and a plain wall row (stamp 0) is not due before its cadence', () => {
+    const { t, runner } = rig([
+      row({ name: 'due', cadenceMs: 100, startsDue: true }), row({ name: 'plain', cadenceMs: 100 }),
+      row({ name: 'boot', cadenceMs: 100, clock: 'mono' }),
+    ]);
+    t.wall = 0;
+    expect(runner.runSync('due', () => {})).toBe(true);
+    t.wall = 50;
+    expect(runner.runSync('plain', () => {})).toBe(false);
+    t.mono = 0;
+    expect(runner.runSync('boot', () => {}), 'a monotonic row at its boot reading').toBe(true);
   });
 
-  it('kick returns a startsDue row to due at any reading', () => {
-    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true })]);
-    expect(runner.runSync('due', () => {}, 10_000)).toBe(true);
+  it('kick returns a row to due inside its cadence on the monotonic clock', () => {
+    const { t, runner } = rig([row({ name: 'due', cadenceMs: 100, clock: 'mono', startsDue: true })]);
+    t.mono = 10_000;
+    expect(runner.runSync('due', () => {})).toBe(true);
+    expect(runner.runSync('due', () => {}), 'a second beat at the same reading').toBe(false);
     runner.kick('due');
-    expect(runner.runSync('due', () => {}, 0)).toBe(true);
+    expect(runner.runSync('due', () => {})).toBe(true);
+  });
+
+  // D-8197: no caller hands in a clock reading. A synchronous lane is timed on its row's own clock (the monotonic one
+  // for all four synchronous lanes), never on a wall reading a caller took.
+  it('runSync and runLaneSync take no clock reading (D-8197)', () => {
+    expect(LaneRunner.prototype.runSync.length, 'runSync\'s parameters').toBe(2);
+    expect(sourceOfSymbol(path.join(SRC, 'laneRunner.ts'), 'LaneRunner.runSync')).not.toMatch(/\bnow\b/);
+    expect(sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.runLaneSync')).not.toMatch(/\bnow\b/);
   });
 });
 

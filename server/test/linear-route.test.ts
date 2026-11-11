@@ -527,7 +527,7 @@ describe('the background refresher (spec §4.3)', () => {
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(0);
     expect(b.fx.rate.take({ lane: 'request', slot: SLOT, calls: 25 }).ok).toBe(true);
-    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 425 }).ok).toBe(true);
+    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 350 }).ok).toBe(true);
   });
 
   it('reads the slot\'s key before each of its two pages, and stops when it changed, recording nothing', async () => {

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img" aria-label="The Orb asleep: its eye closed in a downward curve, with small letter Zs drifting up"><style>.md-hop{animation:md-up2 1.2s steps(1) infinite}
+.md-shake{animation:md-up1 .3s steps(1) infinite}
+.md-sob{animation:md-up1 .6s steps(1) infinite}
+.md-breathe{animation:md-up1 4s steps(1) infinite}
+.md-z1{animation:md-z1 2.4s steps(1) infinite}
+.md-z2{animation:md-z2 2.4s steps(1) infinite}
+.md-tear{animation:md-tear 1.2s steps(6) infinite}
+.md-tremble{animation:md-tremble .16s steps(1) infinite}
+.md-dart{animation:md-dart 1.6s steps(1) infinite}
+@keyframes md-tremble{0%{transform:translateX(0)}50%{transform:translateX(1px)}}
+@keyframes md-dart{0%{transform:translate(-3px,0)}25%{transform:translate(3px,0)}50%{transform:translate(-3px,0)}75%{transform:translate(0,0)}}
+@media (prefers-reduced-motion:reduce){.md-tremble,.md-dart{animation:none}}
+.md-look{animation:md-look 7s steps(1) infinite}
+.md-blink{transform-box:fill-box;transform-origin:50% 66.67%;animation:md-blink 5s steps(1) infinite}
+.md-dot{animation:md-dot 1.5s steps(1) infinite}
+.md-flash{animation:md-flash .8s steps(1) infinite}
+.md-sus{animation:md-sus 4s steps(1) infinite}
+.md-orbit{animation:md-orbit 1s steps(1) infinite}
+.md-sway{animation:md-tremble 1s steps(1) infinite}
+@keyframes md-look{0%{transform:translate(0,0)}30%{transform:translate(5px,0)}50%{transform:translate(-5px,0)}70%{transform:translate(0,0)}}
+@keyframes md-blink{0%{transform:scaleY(1)}96%{transform:scaleY(.25)}}
+@keyframes md-dot{0%{opacity:1}33%{opacity:.25}}
+@keyframes md-flash{0%{opacity:1}50%{opacity:.2}}
+@keyframes md-sus{0%{transform:translate(-5px,0)}50%{transform:translate(5px,0)}}
+@keyframes md-orbit{0%{transform:translate(3px,0)}12.5%{transform:translate(2px,2px)}25%{transform:translate(0,3px)}37.5%{transform:translate(-2px,2px)}50%{transform:translate(-3px,0)}62.5%{transform:translate(-2px,-2px)}75%{transform:translate(0,-3px)}87.5%{transform:translate(2px,-2px)}}
+.md-sadblink{opacity:0;animation:md-sadblink 4s steps(1) infinite}
+@keyframes md-sadblink{0%{opacity:0}88%{opacity:1}97%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.md-sadblink{animation:none}}
+.md-ponder{transform:translate(3px,-1px);animation:md-ponder 4s steps(1) infinite}
+.md-puzzle{transform:translate(2px,0);animation:md-puzzle 3s steps(1) infinite}
+@keyframes md-ponder{0%{transform:translate(3px,-1px)}45%{transform:translate(0,-1px)}50%{transform:translate(-3px,-1px)}95%{transform:translate(0,-1px)}}
+@keyframes md-puzzle{0%{transform:translate(4px,0)}40%{transform:translate(-4px,0)}80%{transform:translate(0,0)}}
+@media (prefers-reduced-motion:reduce){.md-look,.md-blink,.md-dot,.md-flash,.md-sus,.md-orbit,.md-sway,.md-ponder,.md-puzzle{animation:none}}
+.md-peek{opacity:0;animation:md-peek 9s steps(1) infinite}
+.md-doze{animation:md-doze 9s steps(1) infinite}
+.md-peeklook{animation:md-peeklook 9s steps(1) infinite}
+@keyframes md-peek{0%{opacity:0}60%{opacity:1}90%{opacity:0}}
+@keyframes md-doze{0%{opacity:1}60%{opacity:0}90%{opacity:1}}
+@keyframes md-peeklook{0%{transform:translate(-4px,0)}70%{transform:translate(4px,0)}80%{transform:translate(0,0)}}
+@media (prefers-reduced-motion:reduce){.md-peek,.md-doze{animation:none}}
+@keyframes md-up2{0%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes md-up1{0%{transform:translateY(0)}50%{transform:translateY(-1px)}}
+@keyframes md-z1{0%{opacity:1}66%{opacity:0}}
+@keyframes md-z2{0%{opacity:0}33%{opacity:1}}
+@keyframes md-tear{from{transform:translateY(0);opacity:1}to{transform:translateY(6px);opacity:0}}
+@media (prefers-reduced-motion:reduce){.md-hop,.md-shake,.md-sob,.md-breathe,.md-z1,.md-z2,.md-tear{animation:none}}</style><g class="md-breathe"><path fill="#45D67E" d="M2 7h2v1h-2zM28 7h2v1h-2zM2 8h2v1h-2zM11 8h10v1h-10zM28 8h2v1h-2zM2 9h3v1h-3zM9 9h14v1h-14zM27 9h3v1h-3zM3 10h3v1h-3zM8 10h16v1h-16zM26 10h3v1h-3zM4 11h24v1h-24zM5 12h22v3h-22zM4 15h24v10h-24zM5 25h22v2h-22zM6 27h20v1h-20zM7 28h18v1h-18zM8 29h16v1h-16zM9 30h14v1h-14zM11 31h10v1h-10z"></path><path fill="#F2B84B" d="M12 2h1v2h-1zM19 2h1v2h-1zM15 3h2v1h-2zM11 4h10v4h-10zM1 5h3v4h-3zM28 5h3v4h-3z"></path><path class="md-doze" fill="#0B0D0C" d="M6 17h1v1h-1zM25 17h1v1h-1zM6 18h2v1h-2zM24 18h2v1h-2zM7 19h3v1h-3zM22 19h3v1h-3zM8 20h5v1h-5zM19 20h5v1h-5zM10 21h12v1h-12zM13 22h6v1h-6z"></path><g class="md-peek"><path fill="#0B0D0C" fill-opacity="0.3" d="M13 13h6v1h-6zM11 14h2v1h-2zM19 14h2v1h-2zM9 15h2v1h-2zM21 15h2v1h-2zM8 16h1v1h-1zM23 16h1v1h-1zM7 17h1v1h-1zM24 17h1v1h-1zM6 18h1v1h-1zM25 18h1v1h-1z"></path><path fill="#ECF0EC" d="M13 14h6v1h-6zM11 15h10v1h-10zM9 16h14v1h-14zM8 17h16v1h-16zM7 18h18v1h-18zM6 19h20v2h-20zM7 21h18v1h-18zM8 22h16v1h-16zM9 23h14v1h-14zM11 24h10v1h-10zM13 25h6v1h-6z"></path><g class="md-peeklook"><path fill="#0B0D0C" d="M14 16h4v1h-4zM13 17h6v1h-6zM12 18h8v4h-8zM13 22h6v1h-6zM14 23h4v1h-4z"></path></g><path fill="#45D67E" d="M13 14h6v1h-6zM11 15h10v1h-10zM9 16h14v1h-14zM8 17h16v1h-16zM7 18h18v1h-18z"></path><path fill="#0B0D0C" fill-opacity="0.22" d="M13 14h6v1h-6zM11 15h10v1h-10zM9 16h14v1h-14zM8 17h16v1h-16zM7 18h18v1h-18z"></path></g></g><path class="md-z1" fill="#ECF0EC" d="M21 1h3v1h-3zM22 2h1v1h-1zM21 3h3v1h-3z"></path><path class="md-z2" fill="#ECF0EC" d="M25 0h4v1h-4zM27 1h1v1h-1zM26 2h1v1h-1zM25 3h4v1h-4z"></path></svg>

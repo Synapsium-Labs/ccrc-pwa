@@ -222,6 +222,8 @@ describe('the closed route table', () => {
     // The goals read (autonomy-default wave A2, D-8126): the pin, `doneWhen` and the open items, behind `goals-read-v1`.
     [['goals', 'show', 'prog-a'], 'GET', '/api/programmes/prog-a/goals'],
     // The thirteen Linear rows (D-7669, #1444; `link` since D-8141): every one derives the pane's identity into its query, so each runs in a pane.
+    // The coordinator's call record (autonomy-default wave A3, D-8126), behind `calls-v1`; it fills identity from the pane, so it runs in a pane.
+    [['calls', 'record', 'prog-a', '--json', '-'], 'POST', '/api/coord/programmes/prog-a/calls'],
     [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces'],
     [['linear', 'teams'], 'GET', '/api/linear/proxy/teams'],
     [['linear', 'issue', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12'],
@@ -242,9 +244,10 @@ describe('the closed route table', () => {
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
-      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'runs' && args[1] === 'review-rounds');
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'runs' && args[1] === 'review-rounds')
+      || args[0] === 'calls';
     if (paned) plantPane('demo-ws');
-    await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
+    await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.method).toBe(method);
     // Query strings are the caller's (`mail list --to x` appends one); the path
@@ -285,7 +288,8 @@ describe('the closed route table', () => {
     // Sixty-one since `runs.end-request` (D-8076, the runs rebuild's wave B6).
     // Sixty-two since `linking.show` (D-8147).
     // Sixty-three since `goals.show` (autonomy-default wave A2, D-8126).
-    expect(keys).toHaveLength(63);
+    // Sixty-four since `calls.record` (autonomy-default wave A3, D-8126).
+    expect(keys).toHaveLength(64);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -299,7 +303,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -464,6 +468,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
       ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],
       ['goals', 'merged', 'prog-a', '--json', '-'], ['goals', 'show', 'prog-a'],
+      ['calls', 'record', 'prog-a', '--json', '-'],
       ['linear', 'workspaces'], ['linear', 'teams', '--workspace', 'ws-a'], ['linear', 'issue', 'AAA-12'],
       ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
@@ -548,6 +553,113 @@ describe('goals show is gated on goals-read-v1 the way the claimant rows are gat
     writeCaps();
     const r = await run(['goals', 'show', '../x']);
     expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'bad-id']);
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('calls record fills identity from the pane, refuses a caller-named identity, and is gated on calls-v1 (D-8126)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const pane = { TMUX_PANE: '%7' };
+  const BODY = '{"class":"big","text":"which door?","options":["a","b"],"chosen":0,"why":"cheaper"}';
+  const record = (body: string, env: Record<string, string | undefined> = pane): Promise<Run> =>
+    run(['calls', 'record', 'prog-a', '--json', '-'], body, env);
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row is a POST by programme slug that takes an id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'calls.record');
+    expect(row).toBeDefined();
+    expect([row!.method, row!.path, row!.needsId, row!.query, row!.family])
+      .toEqual(['POST', '/api/coord/programmes/{id}/calls', true, [], null]);
+  });
+
+  it('the server advertises calls-v1', () => {
+    expect(SERVER_CAPS).toContain('calls-v1');
+  });
+
+  it('sends the body with the pane\'s pair added and the box token header', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await record(BODY);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/coord/programmes/prog-a/calls', TOKEN]);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ byId: 'demo-ws', byUuid: 'uuid-7', ...JSON.parse(BODY) });
+  });
+
+  it('refuses a body that names byId, whitespace and all, bad-body, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const b of ['{"byId":"someone-else","class":"routine"}', '{"class":"routine","byId" : ""}']) {
+      const r = await record(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses a body that names byUuid, bad-body, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await record('{"class":"routine","byUuid":"forged"}');
+    expect([r.status, errorOf(r)]).toEqual([2, 'bad-body']);
+    expect(seen).toEqual([]);
+  });
+
+  it('a call whose prose merely mentions byId is not refused', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await record('{"class":"routine","text":"does byId matter"}');
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('refuses no body, a non-object body, and a pane with no identity, each unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const none = await run(['calls', 'record', 'prog-a'], undefined, pane);
+    expect([none.status, errorOf(none)]).toEqual([2, 'no-body']);
+    for (const b of ['[]', '"x"']) {
+      const r = await record(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    const noPane = await record(BODY, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(noPane.status).not.toBe(0);
+    expect(noPane.stdout).toContain('no-pane');
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file without calls-v1 refuses unsupported, exit 2, and sends nothing', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'calls-v1'));
+    const r = await record(BODY);
+    expect([r.status, errorOf(r)]).toEqual([2, 'unsupported']);
+    writeCaps([]);
+    expect(errorOf(await record(BODY))).toBe('unsupported');
+    expect(seen).toEqual([]);
+  });
+
+  it('a current file listing the word, an absent file and a stale file all send', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    writeCaps();
+    await record(BODY);
+    fs.rmSync(capFile(), { force: true });
+    await record(BODY);
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'calls-v1'), nowS() - 181);
+    await record(BODY);
+    expect(seen.map((s) => s.url)).toEqual(Array(3).fill('/api/coord/programmes/prog-a/calls'));
+  });
+
+  it('the goals read\'s gate does not gate the call record, nor the call record\'s the goals read', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'));
+    await record(BODY);
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'calls-v1'));
+    await run(['goals', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/coord/programmes/prog-a/calls', '/api/programmes/prog-a/goals']);
+  });
+
+  it('an id that is not SAFE_RE-plain is refused bad-id and nothing is sent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['calls', 'record', '../x', '--json', '-'], BODY, pane);
+    expect([r.status, errorOf(r)]).toEqual([2, 'bad-id']);
     expect(seen).toEqual([]);
   });
 });

@@ -75,7 +75,7 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
     const res = await postOpen(w.app, { ...OPEN_BODY, claimedBy: id });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'claimedBy is not a registry id' });
-    expect((await getRuns(w.app)).json()).toEqual({ runs: [] });
+    expect((await getRuns(w.app)).json().runs).toEqual([]);
     expect(calls).toEqual([]);
   });
 
@@ -88,7 +88,7 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'sessionId is not a registry id' });
     expect(calls.filter((c) => c[0] === 'ws-hold')).toEqual([]);
-    expect((await getRuns(w.app)).json()).toEqual({ runs: [] });
+    expect((await getRuns(w.app)).json().runs).toEqual([]);
   });
 
   it.each(['-x', '--actor', '.', '.hidden'])('a work project beginning - or . answers 400 bad-request naming project: %s', async (project) => {
@@ -98,7 +98,7 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
     const res = await postOpen(w.app, { ...OPEN_BODY, project });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' });
-    expect((await getRuns(w.app)).json()).toEqual({ runs: [] });
+    expect((await getRuns(w.app)).json().runs).toEqual([]);
     expect(calls).toEqual([]);
   });
 
@@ -132,7 +132,7 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
     const res = await postOpen(w.app, { ...OPEN_BODY, claimedBy: ` ${CLAIMED_BY}` });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-session-id', detail: 'claimedBy is not a registry id' });
-    expect((await getRuns(w.app)).json()).toEqual({ runs: [] });
+    expect((await getRuns(w.app)).json().runs).toEqual([]);
   });
 
   it("a review open with a bad sessionId answers bad-session-id ahead of the review arm's checks", async () => {

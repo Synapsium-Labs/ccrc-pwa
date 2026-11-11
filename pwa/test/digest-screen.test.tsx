@@ -30,7 +30,7 @@ const LINES: DigestLine[] = [
 ];
 const DIGEST: DigestAnswer = {
   v: 1, day: '2026-10-18', hourUtc: 7, fromMs: Date.parse('2026-10-17T07:00:00Z'), toMs: Date.parse('2026-10-18T07:00:00Z'),
-  totals: { decisions: 6, answers: 2, allows: 1, denies: 1, handOvers: 1, lapses: 1, guardForbidden: 1 },
+  totals: { decisions: 6, answers: 2, allows: 1, denies: 1, handOvers: 1, lapses: 1, calls: 0, guardForbidden: 1 },
   byCoordinator: [{ coordinator: PARENT, decisions: 5 }, { coordinator: 'project-b-far-ridge', decisions: 1 }],
   lines: LINES, sentAt: Date.parse('2026-10-18T07:00:30Z'), pushed: true,
 };
@@ -80,7 +80,7 @@ describe('the digest screen (D-5300)', () => {
 
   it('an empty day says so, and a server with no coordination record says that', async () => {
     render(<DigestScreen day="2026-10-18" load={vi.fn().mockResolvedValue({ ...DIGEST, lines: [], byCoordinator: [],
-      totals: { ...DIGEST.totals, decisions: 0, answers: 0, allows: 0, denies: 0, handOvers: 0, lapses: 0, guardForbidden: 0 } })} />);
+      totals: { ...DIGEST.totals, decisions: 0, answers: 0, allows: 0, denies: 0, handOvers: 0, lapses: 0, calls: 0, guardForbidden: 0 } })} />);
     expect(await screen.findByText('Coordinators decided nothing in your name in this window.')).toBeInTheDocument();
     cleanup();
     render(<DigestScreen day={null} load={vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }))} />);
@@ -123,7 +123,7 @@ describe('the digest screen\'s helpers', () => {
   });
   it('times are UTC, and the totals leave out zeros', () => {
     expect(utcClock(Date.parse('2026-10-18T07:05:59Z'))).toBe('07:05 UTC');
-    expect(digestTotalsText({ ...DIGEST, totals: { decisions: 1, answers: 0, allows: 1, denies: 0, handOvers: 0, lapses: 0, guardForbidden: 0 } }))
+    expect(digestTotalsText({ ...DIGEST, totals: { decisions: 1, answers: 0, allows: 1, denies: 0, handOvers: 0, lapses: 0, calls: 0, guardForbidden: 0 } }))
       .toBe('1 decision · 1 allowed');
   });
 });

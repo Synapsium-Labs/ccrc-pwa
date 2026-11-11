@@ -1,0 +1,27 @@
+ok  Table 7.1a: 33 act kinds and the reads row x chat, advise, full: every cell reads allow, shadow, proposal or refuse
+ok  Table 7.1a: no kind is allowed at a lower rung and refused at a higher one
+CE ACT-off: the note door at `off`: §3.2 and §7.5 say it answers; the gate order skips steps 3, 4, 6, 8 and 9 for it, and step 10 has no cell for `off` in Table 7.1a, so it refuses `rung-below`
+ok  the note door at `chat`: answers
+ok  the note door at `advise`: answers
+ok  the note door at `full`: answers
+CE ACT-openreq: Table 7.1a gives `open-request` cells "for an operator message" only; §5.1 lets the Overlord open a request that cites none (`origin: overlord`), and no row gives that act a cell
+CE ACT-drop: `drop-request` reads "reversible, but reopening is a new request". §10.1: reversible means an overturn restores the before-state; §5.1: no move leaves `dropped`. By §10.1 that is compensable, and it names no compensator
+ok  overlordMayAct: 2816 inputs, each gets one answer under both encodings
+CE ACT-fig6: the prose answers `allow`, Figure 6 answers `ask-is-cheaper`: 96 inputs, e.g. [write-note; extra class none; cover none; identity strong enough; isolated; evidence strong; routine; askOrAct ask]
+CE ACT-fig6: the prose answers `allow`, Figure 6 answers `evidence-too-weak`: 64 inputs, e.g. [write-note; extra class none; cover none; identity strong enough; isolated; evidence weak; big; askOrAct act]
+CE ACT-fig6: the prose answers `ask-is-cheaper`, Figure 6 answers `allow`: 24 inputs, e.g. [answer, effect approve-spec; extra class none; cover command; identity strong enough; isolated; evidence strong; routine; askOrAct ask]
+CE ACT-fig6: the prose answers `evidence-too-weak`, Figure 6 answers `allow`: 48 inputs, e.g. [answer, effect approve-spec; extra class none; cover command; identity strong enough; isolated; evidence weak; routine; askOrAct act]
+CE ACT-fig6: the prose answers `identity-too-weak`, Figure 6 answers `allow`: 136 inputs, e.g. [write-note; extra class none; cover none; identity too weak; isolated; evidence strong; routine; askOrAct act]
+CE ACT-fig6: the prose answers `identity-too-weak`, Figure 6 answers `ask-is-cheaper`: 136 inputs, e.g. [write-note; extra class none; cover none; identity too weak; isolated; evidence strong; routine; askOrAct ask]
+CE ACT-fig6: the prose answers `identity-too-weak`, Figure 6 answers `evidence-too-weak`: 112 inputs, e.g. [write-note; extra class none; cover none; identity too weak; isolated; evidence weak; big; askOrAct act]
+CE ACT-fig6: the prose answers `operator-only`, Figure 6 answers `allow`: 160 inputs, e.g. [answer, class none; extra class {O2}; cover none; identity strong enough; isolated; evidence strong; routine; askOrAct act]
+CE ACT-fig6: the prose answers `operator-only`, Figure 6 answers `ask-is-cheaper`: 176 inputs, e.g. [answer, class none; extra class {O2}; cover none; identity strong enough; isolated; evidence strong; routine; askOrAct ask]
+CE ACT-fig6: the prose answers `operator-only`, Figure 6 answers `defer`: 4 inputs, e.g. [answer, effect approve-spec; extra class {O2}; cover grant; identity strong enough; isolated; evidence strong; routine; askOrAct act]
+CE ACT-fig6: the prose answers `operator-only`, Figure 6 answers `evidence-too-weak`: 224 inputs, e.g. [answer, class none; extra class {O2}; cover none; identity strong enough; isolated; evidence weak; big; askOrAct act]
+CE ACT-fig6: the prose answers `operator-only`, Figure 6 answers `identity-too-weak`: 128 inputs, e.g. [answer, effect approve-spec; extra class {O2}; cover grant; identity too weak; isolated; evidence strong; routine; askOrAct act]
+CE ACT-fig6: the prose answers `operator-only`, Figure 6 answers `server-not-isolated`: 64 inputs, e.g. [answer, effect approve-spec; extra class {O2}; cover grant; identity strong enough; shared-user, no opt-in; evidence strong; routine; askOrAct act]
+CE ACT-fig6: the prose answers `operator-only`, Figure 6 answers `staged`: 12 inputs, e.g. [answer, effect approve-spec; extra class {O2}; cover grant; identity strong enough; isolated; evidence strong; routine; askOrAct act]
+note day one, a relay at `advise`, no record in any cell: prose `allow`, Figure 6 `ask-is-cheaper`
+ok  prose: adding a class member never turns a refusal into an allow (1280 base inputs x 2 members)
+CE DM-drift: blind check made worse moves `defer` to `staged`: 2 input pairs, e.g. [answer, effect approve-spec; extra class none; cover grant; identity strong enough; isolated; evidence strong; routine; askOrAct act] with the blind check "armed, not a clear yes" -> "armed, then sent back to shadow by drift"
+== overlordMayAct, Table 7.1a, Figure 6, gate order: domain 2816 inputs; 33 act kinds and the reads row x 3 rungs; the note door x 4 rungs; counterexamples 18; checks passed 7

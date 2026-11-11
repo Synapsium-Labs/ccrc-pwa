@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync, l
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { describeLinux } from './platformFixtures.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 import { codexRoster, plantSystemd, killLaneProcesses, spawnListener, managerCalls, spineRunCalls, ccrcFunction, freeLanes, portAccepts, laneAnswer, plantLaneAuth, laneUnits, registerLaneCleanup, codexAuthDir, authDirOf, plantForeignUsage, externalCodexRow, plantExternalLauncher, EXTERNAL_LAUNCHER, doctorClasses, stateCallsNaming, type LanePorts } from './codexLaneFixture.js';
@@ -823,7 +824,7 @@ describe('ccrc install: the codex runtime step on a real spine (Plan 2b-2 Task 1
     // AN EXPLICIT BOUND (final review F4, Task 10 residue C3): two install spines plus doctorCode's.
     // Measured alone (one file, `-t`): 7.4 s at load average 12 (2026-09-28); its sibling below timed
     // out once at the 20 s default under load 40-80 (Task 10's gate).
-  }, 60_000);
+  }, scaled(60_000));
 
   it('a runtime whose probe FAILS degrades the install, never fails it, and the previous runtime stays current', async () => {
     const home = codexBox('ccrc-codex-steps-probe-fails-', await freeLanes(['codex-a']));
@@ -845,7 +846,7 @@ describe('ccrc install: the codex runtime step on a real spine (Plan 2b-2 Task 1
     // AN EXPLICIT BOUND (final review F4, Task 10 residue C3): two install spines plus doctorCode's.
     // Measured alone (one file, `-t`): 7.7 s at load average 12 (2026-09-28), 8.7 s at load 30 (the
     // final review), about 12 s at load 40-80, where it timed out once at the 20 s default (Task 10).
-  }, 60_000);
+  }, scaled(60_000));
 
   it('the stock venv python, which answers nothing, fails the probe: degraded, and no generation is left behind', async () => {
     // m-spine H5 at the spine: a runtime python that exits 0 for every argv
@@ -932,7 +933,7 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
     const ans = await laneAnswer(lane.proxyPort);   // Task 5's {status, type, body} (ruling R30)
     expect(ans?.type).toMatch(/^application\/json/);
     expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });
-  }, 180_000);
+  }, scaled(180_000));
 
   it('a rebuilt runtime restarts both tiers onto the NEW generation, because the build runs before the restart step', async () => {
     const { home, lane, units, py: oldPy } = await runningLane('ccrc-codex-tiers-rebuild-');
@@ -954,7 +955,7 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
     expect(ans?.type).toMatch(/^application\/json/);
     expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });
     expect(await portAccepts(lane.litellmPort)).toBe(true);
-  }, 180_000);
+  }, scaled(180_000));
 
   it('a rostered lane with no tier running is left lazy: nothing is stopped, started or listening', async () => {
     // This lane was never materialised: no `~/.ccrc/codex/codex-a/` exists
@@ -973,7 +974,7 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
     expect(stateChanges(home)).toEqual([]);
     expect(await portAccepts(lane!.proxyPort)).toBe(false);
     expect(await portAccepts(lane!.litellmPort)).toBe(false);
-  }, 120_000);
+  }, scaled(120_000));
 
   it('a foreign listener on the shim port is left running, and the transcript says so', async () => {
     // The OTHER repository's shim shape on this lane's shim port: `text/plain`
@@ -990,7 +991,7 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
     expect(stateChanges(home)).toEqual([]);
     expect(() => process.kill(foreign.pid, 0)).not.toThrow();
     expect(await portAccepts(lane!.proxyPort)).toBe(true);
-  }, 120_000);
+  }, scaled(120_000));
 
   it('a restart the user manager refuses is its own FAILED line, and the closing line names codex-tiers', async () => {
     const { home, lane, units } = await runningLane('ccrc-codex-tiers-refused-');
@@ -1003,7 +1004,7 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
     expect(r.stdout).toMatch(/^install: done — converged with \d+ degraded steps? \([^)]*\bcodex-tiers\b[^)]*\)$/m);
     expect(r.code).toBe(doctorCode(home));
     expect(await laneAnswer(lane.proxyPort)).toBeNull();
-  }, 180_000);
+  }, scaled(180_000));
 });
 
 // Codex bridge Stage 2, Task 11: `_inst_codex_lanes`, on a real spine. A lane.json rendered before the bridge has no
@@ -1055,7 +1056,7 @@ describeLinux('ccrc install: the codex lanes step on a real spine (codex bridge 
     expect(codexRows(d.stdout), d.stdout).not.toMatch(/^FAIL codex: /m);
     // The first install found it current and rendered nothing.
     expect(first.stdout).toMatch(/^install: codex lanes: 1 codex lane\(s\) — 0 re-rendered, 1 left as they were, 0 failed$/m);
-  }, 300_000);
+  }, scaled(300_000));
 });
 
 describeLinux('ccrc install: the codex usage converge on a real spine (Plan 3a Task 6)', () => {
@@ -1075,7 +1076,7 @@ describeLinux('ccrc install: the codex usage converge on a real spine (Plan 3a T
     runInstall(home);
     expect(usage(), 'a re-run did more than re-arm the same timer').toEqual([
       '--user enable --now ccrc-codex-usage@codex-a.timer', '--user enable --now ccrc-codex-usage@codex-a.timer']);
-  }, 60_000);
+  }, scaled(60_000));
 });
 
 describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step (Plan 3a Task 6; 2b-2 carry-forward 10)', () => {
@@ -1115,7 +1116,7 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
     }
     expect(seen.size, 'both roles together reach fewer degrading timer enables than the nine measured on main at 1f9fa22d')
       .toBeGreaterThanOrEqual(9);
-  }, 60_000);
+  }, scaled(60_000));
 
   it('every timer `_inst_enable` arms after ccd-cap-scopes goes through `_inst_enable_timer`, which counts its refusal', () => {
     const body = ccrcFunction('_inst_enable');
@@ -1209,7 +1210,7 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     expect(r.stdout).not.toMatch(CARD_REMEDY);
     expect(r.stdout).not.toMatch(/^FAIL /m);
     expectFleetBoxClasses(r.stdout, FLEET_BOX_CLASSES, 'a fresh fleet box\'s install');
-  }, 120_000);
+  }, scaled(120_000));
 
   it('box-token live shape: a provisioned fleet box keeps box-token PASS through two fleet installs and doctor (Plan 4)', () => {
     const home = fleetBox('ccrc-rehearsal-provisioned-', { fleetFiles: true });
@@ -1229,7 +1230,7 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     expect(d.stdout, 'doctor: the provisioned fleet arm did not PASS').toMatch(PROVISIONED_BOX_TOKEN);
     expect(d.stdout).not.toMatch(/^FAIL /m);
     expectFleetBoxClasses(d.stdout, provisioned, 'doctor');
-  }, 180_000);
+  }, scaled(180_000));
 
   it('the flip, in Plan 3b\'s order: only codex-a\'s ccrc instance is enabled, codex-b and its foreign timer are untouched, and doctor answers PASS for the lane', async () => {
     const home = fleetBox('ccrc-rehearsal-flip-', { systemd: true });
@@ -1259,7 +1260,7 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     const codexLines = d.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)).join('\n');
     expect(codexLines).toMatch(/codex-a/);
     expect(codexLines, 'doctor measured an external lane as a codex lane').not.toMatch(/codex-b/);
-  }, 300_000);
+  }, scaled(300_000));
 
   it('out of order: a flip made while the other repository\'s instance timer for that lane is still enabled withholds ccrc\'s enable, and doctor names the operator\'s own disable (ruling R6)', async () => {
     const home = fleetBox('ccrc-rehearsal-second-writer-');
@@ -1298,5 +1299,5 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     const again = runInstall(home, ['install', '--role', 'fleet'], READY);
     expect(usageEnables(home)).toEqual(['--user enable --now ccrc-codex-usage@codex-b.timer']);
     expect(again.stdout, 'the second-writer finding outlived the operator\'s disable').not.toMatch(/ccgpt-usage@codex-b\.timer/);
-  }, 240_000);
+  }, scaled(240_000));
 });

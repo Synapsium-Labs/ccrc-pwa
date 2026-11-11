@@ -54,6 +54,7 @@ import { HAVE_FLOCK, NODE_ID, boxEnv, laneBox } from './laneStateFixture.js';
 import { ATTEMPT, CODE, authBox, ccrcAuth, reapAll, scrollbacks, waitQuiet, waitState } from './authAttemptFixture.js';
 import { bootAgent, connectToAgent } from './remoteHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { fakeTime } from './fakeTime.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
 
@@ -252,7 +253,7 @@ async function openBox(arm: 'local' | 'agent', verb: 'real' | 'stub' = 'real'): 
   };
   const stubPty = (): PtyLike => ({ onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {} });
   const deps: Deps = {
-    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIOFor(cfg.home), queue: new KeyedQueue(),
+    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIOFor(cfg.home), queue: new KeyedQueue(), time: fakeTime().ports,
     coord, mailToken: BOX_TOKEN, spawnPty: stubPty, masker, accountAudit: audit, accountOps,
     fleetState: { ccdVerbs: ['account-v2', 'account-auth-v1'] } as unknown as FleetState,
     fleetIdentity: { current: () => ({ kind: 'known', connectionEpoch: 1, nodeId: NODE_ID, measuredAt: 0 }) } as unknown as FleetIdentityCell,

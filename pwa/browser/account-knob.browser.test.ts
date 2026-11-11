@@ -14,6 +14,11 @@
 // whole, beside the knob and above the reason; lane-a (on) and lane-l (off, no sessions) offer none; under a coarse
 // pointer it takes a 44px tap; and it opens the Move sessions sheet for lane-d, inside the viewport with no sideways
 // scroll, the bottom sheet below 900 and the centred dialog from 900.
+//
+// "Start new sessions here" (D-8195) in the same cells: every card draws it on its own row UNDER the knob's row, never
+// beside the knob, with its label and its sentence whole and inside the page column; lane-l (overflow only) reads off;
+// under a coarse pointer its switch takes a 44px tap (the `.acct-switch` census below counts both switches); and a tap on
+// lane-a's opens its confirm, inside the viewport with no sideways scroll, saying what changes.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
@@ -33,8 +38,8 @@ const acct = (wrapper: string, over: Record<string, unknown> = {}): Record<strin
   wrapper, five: 12, seven: 30, ts: nowSec - 60, fiveResetAt: null, sevenResetAt: null,
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
-const rostered = (id: string, hue: string): Record<string, unknown> => ({
-  id, label: id, hue, homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind: 'sign-in',
+const rostered = (id: string, hue: string, homeAble = true): Record<string, unknown> => ({
+  id, label: id, hue, homeAble, hidden: false, pool: null, provider: 'anthropic', kind: 'sign-in',
 });
 const FIXTURE: AppFixture = {
   api: {
@@ -42,7 +47,7 @@ const FIXTURE: AppFixture = {
     '/api/accounts': {
       accounts: [acct('lane-a'), acct('lane-d', { disabled: true }), acct('lane-l', { disabled: true })],
       projected: { wrapper: 'lane-a', score: 12 },
-      roster: [rostered('lane-a', 'cyan'), rostered('lane-d', 'blue'), rostered('lane-l', 'violet')],
+      roster: [rostered('lane-a', 'cyan'), rostered('lane-d', 'blue'), rostered('lane-l', 'violet', false)],
       lanes: {
         'lane-a': { state: { word: 'signed-in', source: 'checked 4m ago', at: now - 240_000 }, ready: true },
         'lane-d': { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'check-failed' },
@@ -104,6 +109,14 @@ interface Measured {
   readonly moves: Record<string, string[]>;
   readonly moveClipped: boolean;
   readonly moveAboveReason: boolean;
+  readonly homeRows: number;
+  readonly homeUnderKnob: boolean;
+  readonly homeAtLeft: boolean;
+  readonly homeOn: Record<string, string | null>;
+  readonly homeLabels: string[];
+  readonly homeStates: string[];
+  readonly homeClipped: string[];
+  readonly homeInsideBody: boolean;
 }
 
 interface SheetMeasured {
@@ -176,6 +189,25 @@ describe('the kill switch row at every width and skin (D-7732)', () => {
               const mv = knobD.querySelector<HTMLElement>('.acct-knob-move');
               return mv !== null && rect(mv).bottom <= rect(reasonD).top + 1;
             })(),
+            homeRows: document.querySelectorAll('.acct-home').length,
+            homeUnderKnob: ['lane-a', 'lane-d', 'lane-l'].every((id) => {
+              const k = card(id).querySelector('.acct-knob');
+              const h = card(id).querySelector('.acct-home');
+              return k !== null && h !== null && rect(h).top >= rect(k).bottom - 1;
+            }),
+            homeAtLeft: ['lane-a', 'lane-d', 'lane-l'].every((id) => {
+              const k = card(id).querySelector('.acct-knob');
+              const h = card(id).querySelector('.acct-home');
+              return k !== null && h !== null && Math.abs(rect(h).left - rect(k).left) <= 1;
+            }),
+            homeOn: Object.fromEntries(['lane-a', 'lane-d', 'lane-l'].map((id) => [id,
+              card(id).querySelector('.acct-home .acct-switch')?.getAttribute('aria-checked') ?? null])),
+            homeLabels: [...document.querySelectorAll<HTMLElement>('.acct-home-label')].map((l) => l.textContent ?? ''),
+            homeStates: [...document.querySelectorAll<HTMLElement>('.acct-home-state')].map((l) => l.textContent ?? ''),
+            homeClipped: [...document.querySelectorAll<HTMLElement>('.acct-home-label, .acct-home-state')]
+              .filter((l) => l.scrollWidth > l.clientWidth + 1).map((l) => l.textContent ?? ''),
+            homeInsideBody: [...document.querySelectorAll('.acct-home')].every((k) => rect(k).right <= rect(body).right + 0.5
+              && rect(k).left >= rect(body).left - 0.5),
           };
         });
         expect([m.skin, m.theme], 'the cell draws the skin and theme it names').toEqual([view.skin, view.theme]);
@@ -201,6 +233,41 @@ describe('the kill switch row at every width and skin (D-7732)', () => {
         });
         expect(m.moveClipped, 'Move shows whole').toBe(false);
         expect(m.moveAboveReason, 'Move sits on the knob row, the reason beneath it').toBe(true);
+        expect(m.homeRows, 'every card draws Start new sessions here').toBe(3);
+        expect(m.homeUnderKnob, 'its row sits under the knob row, never beside the knob').toBe(true);
+        expect(m.homeAtLeft, 'its row starts at the knob row\'s left edge').toBe(true);
+        expect(m.homeOn, 'drawn as the roster has it').toEqual({ 'lane-a': 'true', 'lane-d': 'true', 'lane-l': 'false' });
+        expect(m.homeLabels).toEqual(['Start new sessions here', 'Start new sessions here', 'Start new sessions here']);
+        expect(m.homeStates).toEqual(['New sessions can start on it.', 'New sessions can start on it.',
+          'Overflow only: new sessions start on other accounts.']);
+        expect(m.homeClipped, 'its words show whole').toEqual([]);
+        expect(m.homeInsideBody, 'its row stays inside the page column').toBe(true);
+
+        // One tap opens its confirm, which says what changes, at every width.
+        await page.locator(".accounts-row[data-lane='lane-a'] .acct-home .acct-switch").click();
+        await page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 10_000 });
+        const hm = await page.evaluate(async () => {
+          const panel = document.querySelector<HTMLElement>('.sheet-panel')!;
+          await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => undefined)));
+          const r = panel.getBoundingClientRect();
+          return {
+            title: panel.querySelector('.sheet-title')?.textContent ?? '',
+            consequence: panel.querySelector('.qc-consequence')?.textContent ?? '',
+            docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            inViewport: r.left >= -0.5 && r.right <= innerWidth + 0.5,
+            smallTargets: matchMedia('(pointer: coarse)').matches
+              ? [...document.querySelectorAll<HTMLElement>('.qc-actions button')].filter((b) => b.getBoundingClientRect().height < 44)
+                .map((b) => b.textContent ?? '')
+              : [],
+          };
+        });
+        expect(hm.title).toBe('Stop new sessions on lane-a?');
+        expect(hm.consequence).toBe('New sessions will not start on lane-a; running sessions stay.');
+        expect(hm.docOverflow, 'no horizontal page scroll with the confirm open').toBeLessThanOrEqual(0);
+        expect(hm.inViewport, 'the confirm sits inside the viewport').toBe(true);
+        expect(hm.smallTargets, '44px answers on a coarse pointer').toEqual([]);
+        await page.locator('.qc-actions').getByRole('button', { name: 'Cancel' }).click();
+        await page.locator('.sheet-panel[data-state="open"]').waitFor({ state: 'detached', timeout: 10_000 });
 
         // It opens the Move sessions sheet for lane-d.
         await page.locator(".accounts-row[data-lane='lane-d'] .acct-knob-move").click();

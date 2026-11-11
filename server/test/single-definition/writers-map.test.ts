@@ -459,3 +459,59 @@ describe(CAPS_PIN, () => {
     ]);
   });
 });
+
+// THE COORDINATOR CALL RECORD (D-8126, migration 55). Its table has one writer per column, all in `coordCallsStore.ts`:
+// `insertCall` the only INSERT, `markCallSeen` the only writer of `seenAt`, `overturnCallTx` of `overturnedAt` and
+// `overturnNote`, `markBlockWoken` of `wokenAt`. MAY ONLY SHRINK: a statement from another function, or a SET naming one
+// of these columns elsewhere, reds here. KNOWN WIDTH: a statement split from its verb across string pieces is not seen.
+describe('coordinator_calls: one writer per column, every write in coordCallsStore.ts', () => {
+  const writes = (files: readonly string[]): Record<string, string[]> => {
+    const out: Record<string, Set<string>> = {};
+    const verb = /(INSERT(?:\s+OR\s+\w+)?\s+INTO\s+coordinator_calls\b|UPDATE\s+coordinator_calls\s+SET\s+([^'"`]*?)\s+WHERE|DELETE\s+FROM\s+coordinator_calls\b)/g;
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
+      if (!text.includes('coordinator_calls')) continue;
+      const syms = parseFile(f).symbols;
+      for (const m of text.matchAll(verb)) {
+        const at = m.index!;
+        const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        const who = `${rel(f)}#${inner?.name ?? '(module)'}`;
+        const keys = m[2] === undefined
+          ? [m[1]!.startsWith('DELETE') ? 'DELETE' : 'INSERT']
+          : [...m[2].matchAll(/(\w+)\s*=/g)].map((c) => c[1]!);
+        for (const k of keys) (out[k] ??= new Set()).add(who);
+      }
+    }
+    return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, [...s].sort()]));
+  };
+
+  it('CONTROL: an INSERT, a SET column and a DELETE are each found, and a SELECT is not', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-calls-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        'export function ins(): void { db.prepare(`INSERT INTO coordinator_calls (a) VALUES (1)`); }',
+        "export function upd(): void { db.prepare('UPDATE coordinator_calls SET seenAt = ? WHERE id = ?'); }",
+        "export function del(): void { db.prepare('DELETE FROM coordinator_calls'); }",
+        "export function sel(): void { db.prepare('SELECT * FROM coordinator_calls'); }",
+      ].join('\n'));
+      const w = writes([f]);
+      expect(Object.keys(w)).toEqual(['DELETE', 'INSERT', 'seenAt']);
+      expect(Object.values(w).flat().map((s) => s.replace(/^.*#/, ''))).toEqual(['del', 'ins', 'upd']);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('each column\'s writer, by name', () => {
+    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
+    const F = 'server/src/coord/coordCallsStore.ts#';
+    expect(writes(files)).toEqual({
+      INSERT: [`${F}insertCall`],
+      overturnNote: [`${F}overturnCallTx`],
+      overturnedAt: [`${F}overturnCallTx`],
+      seenAt: [`${F}markCallSeen`],
+      wokenAt: [`${F}markBlockWoken`],
+    });
+  });
+});

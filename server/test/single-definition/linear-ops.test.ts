@@ -41,4 +41,35 @@ describe('the Linear operation table has one home (D-7669)', () => {
     expect(holders(/\bnew LinearDirectory\(/)).toEqual(['server/src/linear/refresher.ts']);
     expect(holders(decl('LINEAR_DIRECTORY_REFRESH_MS'))).toEqual(['server/src/linear/refresher.ts']);
   });
+
+  // D-8180 (Linear hierarchy plan, Global Constraints: a row for each new list). The hierarchy documents, the ccrc
+  // provenance line and the shared grammars in linear/ops.ts; the ccrc operation table and its journal-op list in
+  // linear/hierarchyOps.ts, which holds no GraphQL and no grammar of its own.
+  it('the hierarchy documents, the ccrc provenance line and the grammars are declared once, in linear/ops.ts', () => {
+    for (const c of ['LINEAR_HIERARCHY_DOCUMENTS', 'LINEAR_CCRC_PROVENANCE_LINE', 'LINEAR_IDENTIFIER_SHAPE', 'isLinearIdentifier',
+      'LINEAR_STATE_TYPE_SHAPE', 'isLinearStateType', 'statusOfType', 'readLinearProjectStatusesPage']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/linear/ops.ts']);
+    }
+  });
+
+  it('the ccrc operation table and its journal-op list are declared once, in linear/hierarchyOps.ts', () => {
+    for (const c of ['LINEAR_CCRC_OPS', 'LINEAR_CCRC_JOURNAL_OPS', 'LinearCcrcJournalOp', 'CcrcOpName', 'CcrcOpRow', 'CcrcOpInput',
+      'CcrcShaped', 'withCcrcProvenance', 'readInitiativesProbe']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/linear/hierarchyOps.ts']);
+    }
+  });
+
+  it("the ccrc provenance line's words are written once", () => {
+    expect(holders(/kept by ccrc from its plan/)).toEqual(['server/src/linear/ops.ts']);
+  });
+
+  it('the identifier, team-key and status-type grammars are each spelled once', () => {
+    // CONTROL: the patterns see the grammar's text.
+    expect(/-\[0-9\]\{1,9\}\$/.test('/^[A-Za-z][A-Za-z0-9_]{0,15}-[0-9]{1,9}$/')).toBe(true);
+    expect(/\[A-Za-z0-9_?\]\{0,15\}\$|\[A-Z0-9_?\]\{0,15\}\$/.test('/^[A-Za-z][A-Za-z0-9]{0,15}$/')).toBe(true);
+    expect(/\[a-z_?\]\{1,32\}/.test('/^[a-z]{1,32}$/')).toBe(true);
+    expect(holders(/-\[0-9\]\{1,9\}\$/)).toEqual(['server/src/linear/ops.ts']);
+    expect(holders(/\[A-Za-z0-9_?\]\{0,15\}\$|\[A-Z0-9_?\]\{0,15\}\$/)).toEqual(['shared/linear.ts']);
+    expect(holders(/\[a-z_?\]\{1,32\}/)).toEqual(['server/src/linear/ops.ts']);
+  });
 });

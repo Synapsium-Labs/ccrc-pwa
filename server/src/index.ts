@@ -21,6 +21,7 @@ import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
 import { Viewers } from './viewer.js';
 import { KeyedQueue } from './inject/queue.js';
+import { systemTimePorts } from './time/system.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -165,6 +166,10 @@ const collectLane: CollectLaneDeps = {
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
 // call only against itself.
 const queue = new KeyedQueue();
+// The process's ONE set of time ports (Overlord spec §11.5), built here beside the queue for the same reason: both
+// modes and every consumer get the same object, through `Deps.time`. Nothing else builds the system adapters
+// (`single-definition/time-ports.test.ts`).
+const time = systemTimePorts();
 
 // The one agent connection, hoisted out of the remote arm so the `ready`
 // hook below can reach it once the watcher exists. Null in local mode.
@@ -183,7 +188,7 @@ if (cfg.fleetMode === 'remote') {
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
     cfg, perf, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
-    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, viewers, queue, mailToken, coord,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, viewers, queue, time, mailToken, coord,
     poolEdgeLog,
     catalogue,
     updateIntentLog,
@@ -248,7 +253,7 @@ if (cfg.fleetMode === 'remote') {
   const localFleetIdentity = new FleetIdentityCell();
   deps = {
     cfg, perf, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIOFor(cfg.home),
-    spawnPty: attachPty, push, notifyLog, viewers, queue, mailToken, coord,
+    spawnPty: attachPty, push, notifyLog, viewers, queue, time, mailToken, coord,
     poolEdgeLog,
     catalogue,
     updateIntentLog,

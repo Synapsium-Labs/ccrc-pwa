@@ -225,6 +225,7 @@ export type SendFailureGate = 'stash-failed' | 'stash-occupied';
 export function decideSendFailure(
   d: DueFacts, error: string, now: number,
 ): { readonly gate: SendFailureGate | null; readonly action: DeliveryAction } {
+  // FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this hold goes once that pin is watched working live; it is kept until then.
   if (error === 'auto-continue-armed') {
     return { gate: null, action: { kind: 'hold', why: error, until: now + MAIL_ARMED_HOLD_MS, tellSender: d.lastError !== error } };
   }

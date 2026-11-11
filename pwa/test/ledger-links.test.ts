@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { RunSummary } from '../../shared/api';
 import type { GoalsView } from '../../shared/ledgers';
 import { docHref } from '../src/docs/docsLinks';
-import { homeProjectOf, linkRuns, programmeSpecHref, specHref, type LinkRun } from '../src/ledgers/ledgerLinks';
+import { homeProjectOf, itemRefIds, itemRefsIn, linkRuns, programmeSpecHref, specHref, type LinkRun } from '../src/ledgers/ledgerLinks';
 
 const HOME = 'project-a';
 const links = (runs: readonly LinkRun[]) => runs.filter((r) => r.kind === 'link');
@@ -202,5 +202,52 @@ describe('the Docs reader address of a document and of a programme spec', () => 
     expect(programmeSpecHref('n', g, runs)).toBeNull();
     expect(programmeSpecHref('q', g, runs)).toBeNull();
     expect(programmeSpecHref('z', g, runs)).toBeNull();
+  });
+});
+
+// D-8194: "item 129", "items 12 and 13" and "item #12" in an item's text name other items; each number that is a real item (the
+// caller's `itemHref` answers its page) becomes a link to that item's page, and any other number stays text.
+describe('item references in item text (D-8194)', () => {
+  const KNOWN = new Set([4, 5, 6, 12, 13, 129]);
+  const href = (id: number): string | null => (KNOWN.has(id) ? `/waiting/${id}` : null);
+
+  it('finds "item N", "item #N" and every number of "items N and M", in order, case-insensitively', () => {
+    expect(itemRefsIn('see item 129, then Item #12; also items 4, 5 and 6 or ITEMS #12 & 13').map((r) => [r.text, r.id])).toEqual([
+      ['item 129', 129], ['Item #12', 12], ['items 4', 4], ['5', 5], ['6', 6], ['ITEMS #12', 12], ['13', 13],
+    ]);
+  });
+
+  it('a number glued to a word, a word that only ends in item, zero and a leading zero are no reference', () => {
+    expect(itemRefsIn('item 12a subitem 3 item 0 item 012 item-12 item')).toEqual([]);
+  });
+
+  it('a known item\'s number is a link to its page; the text is kept as written', () => {
+    expect(linkRuns('Waits on item 129 first.', HOME, href)).toEqual([
+      { kind: 'text', text: 'Waits on ' },
+      { kind: 'link', text: 'item 129', href: '/waiting/129', external: false },
+      { kind: 'text', text: ' first.' },
+    ]);
+    expect(links(linkRuns('items 12 and 13', HOME, href))).toEqual([
+      { kind: 'link', text: 'items 12', href: '/waiting/12', external: false },
+      { kind: 'link', text: '13', href: '/waiting/13', external: false },
+    ]);
+    expect(links(linkRuns('see item #12', HOME, href)).map((r) => r.text)).toEqual(['item #12']);
+  });
+
+  it('a number no item has stays text, and without an itemHref every reference does', () => {
+    expect(links(linkRuns('items 77 and 13', HOME, href)).map((r) => r.text)).toEqual(['13']);
+    expect(links(linkRuns('item 129', HOME))).toEqual([]);
+  });
+
+  it('references sit beside the other links, and the runs still put back together to the text', () => {
+    const t = 'item 4 then https://example.com/x and /runs, item 99, items 5 and 6.';
+    const runs = linkRuns(t, HOME, href);
+    expect(joined(runs)).toBe(t);
+    expect(links(runs).map((r) => r.text)).toEqual(['item 4', 'https://example.com/x', '/runs', 'items 5', '6']);
+    runs.forEach((r, i) => { if (i > 0 && r.kind === 'text') expect(runs[i - 1]?.kind).toBe('link'); });
+  });
+
+  it('itemRefIds: the numbers several texts name, each once, in the order first named', () => {
+    expect(itemRefIds(['item 13 and item 4', 'items 4 and 12', 'nothing'])).toEqual([13, 4, 12]);
   });
 });

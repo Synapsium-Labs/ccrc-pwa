@@ -15,6 +15,9 @@ explained here or fixed. The sources:
   `defer_loading`; `output_config.effort` rides the `effort-2025-11-24` beta (`ccd/ccgpt-proxy.py`'s effort hook).
 - Claude Code 2.1.310's `anthropic-beta` values, measured on the live lane's first traffic after the flip (runbook
   step 4, 2026-10-27; D-7093), each read against the Messages API's documentation and the client's own beta table.
+- The Stage 4 watch's stats files (both lanes, 2026-10-29 to 2026-11-04): the `redact-thinking-2026-02-12` beta and
+  the CDN edge's HTML error page's four header names (`content-type:text/html`, `cache-control`, `expires`,
+  `x-frame-options`), each explained at its entry below.
 - The fields inbound drops by rule (D-6426 and the plan's Task 2 table), and the names inbound counts for a shape
   it maps (a dropped `thinking` block, `is_error`, `output_config.format`, D-6425) or refuses by name (a `document`
   block, an `output_config.format` of another type, D-6414).
@@ -118,6 +121,19 @@ KNOWN = {
         "referrer-policy",
         # The origin proxy's own marker, read by nothing here or in Codex.
         "x-openai-proxy-wasm",
+        # The CDN edge's own HTML error page, measured twice on lane-a between 2026-10-29 and 2026-11-04 out of about
+        # 27.8k upstream answers (lane-b: none): the edge's `server` and `cf-ray` without the origin's headers, and
+        # these four names with them, `content-type:text/html` (the media type, counted as a name above) among them.
+        # Inferred from the name counts, not proven per answer: every answer carried `cf-ray`, and only the answers
+        # with no content type carried the origin's own headers. Each name is only counted, never its value
+        # (stats.Stats.header_names), and `content-type` carries its media type because server._media_type counts
+        # that as a second name. The bridge answers such a page by status: errors.classify_http reads no code from a
+        # body that is not JSON, so a 5xx or a 403 that is not a JSON object is a 503 `api_error` (counted 5xx). On
+        # the stream path a 2xx page has no terminal event, so the reducer's `finish` makes it a 503 `api_error` too
+        # (`the stream closed before a terminal event`, counted 5xx unless the client had gone). Only an error reaches
+        # the client, and the page's own text never does. The line `server.log_upstream_page` writes for each such
+        # answer (status, route, media type, edge marker) is how to see one.
+        "content-type:text/html", "cache-control", "expires", "x-frame-options",
     }),
     "unsupportedField": frozenset({"document", "output_config.format"}),
     "modelSubstitution": frozenset(),
@@ -157,6 +173,14 @@ KNOWN = {
         # A tool defined in a message: a `tool_addition` whose tool is a `tool_definition`, a tool absent from
         # `tools`. Inbound makes it a tool exactly as a `tools` entry (inbound._tool) and offers it (D-7143).
         "inline-tools-2026-09-15",
+        # Claude Code's `redact_thinking` beta (its beta table at 2.1.312 to 2.1.322; measured on both lanes between
+        # 2026-10-29 and 2026-11-04: 5 requests on lane-a, 20 on lane-b). Claude Code sends it when interleaved
+        # thinking is on, the session is interactive and `showThinkingSummaries` is off, and removes it from any
+        # request that sets `thinking.display`. It asks for thinking returned redacted. The request already gets that:
+        # the shim's effort hook pops `thinking` before inbound (ccgpt-proxy.py `_apply_effort`, called by
+        # server._Request.messages first), and the reducer opens only text and tool_use blocks (reducer.Reducer._open),
+        # so no thinking block, readable or redacted, ever reaches the client.
+        "redact-thinking-2026-02-12",
     }),
     "contextEdit": frozenset({"clear_thinking_20251015"}),
 }  # type: Dict[str, FrozenSet[str]]

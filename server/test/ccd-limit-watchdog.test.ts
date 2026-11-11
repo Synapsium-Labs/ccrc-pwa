@@ -58,11 +58,11 @@ const fullFleet = (): void => {
   limits('claude', 100, 10, { fiveResetAt: T0 + 10000 }); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
 };
 
-const limitRow = (at: number): string => JSON.stringify({
+const limitRow = (at: number, resetsAt = at + 9000): string => JSON.stringify({
   parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: `b${at}`, timestamp: iso(at),
   message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: "You've hit your session limit · resets 9:10pm (UTC)" }] },
   isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429,
-  quotaLimits: { status: 'rejected', resetsAt: at + 9000, rateLimitType: 'five_hour' },
+  quotaLimits: { status: 'rejected', resetsAt, rateLimitType: 'five_hour' },
 });
 const turn = (at: number): string => JSON.stringify({
   type: 'assistant', uuid: `a${at}`, timestamp: iso(at),
@@ -394,7 +394,7 @@ describe('no account has measured room', () => {
     expect(dispatches()).toEqual([]);
     expect(lines('watchdog-noroom')).toEqual([expect.stringMatching(/watchdog-noroom lane-a-project-a: claude sign=banner for=5m and no account has measured room$/)]);
     expect(field(ID, 'stranded')).toMatch(/limit sign banner for 5 min and no account has measured room/);
-    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0 + 300} reset=${T0 + 10000} account=claude sign=banner`);
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0 + 300} reset=${T0 + 10000} account=claude sign=banner choice=wait at=${T0 + 300} by=auto`);
   });
 
   it('an unmeasured account is never room (claude-d and gpt have no telemetry)', () => {
@@ -425,7 +425,7 @@ describe('no account has measured room', () => {
     pass(BANNER, T0); pass(BANNER, T0 + 300);
     limits('claude', 10, 10);
     pass(PROMPT, T0 + 360);
-    expect(field(ID, 'limitwait')).toMatch(/^state=closed since=1900000300 reset=\d+ account=claude sign=banner end=clear until=1900000360$/);
+    expect(field(ID, 'limitwait')).toMatch(/^state=closed since=1900000300 reset=\d+ account=claude sign=banner choice=wait at=1900000300 by=auto end=clear until=1900000360$/);
     expect(field(ID, 'limitsign')).toBeNull();
   });
 
@@ -630,9 +630,160 @@ describe('the act gate (cmd_swap\'s watchdog arm)', () => {
     expect(lines('watchdog-cancel')).toEqual([expect.stringMatching(/not live \(unknown\)$/)]);
   });
 
+  it('the operator pinned the wait during the jitter (D-8173 ruling (a)): rescue-backoff, lastswap put back, the record still open', () => {
+    seed(); fleet(); h.sh(`_reg_set ${ID} lastswap ${T0}`);
+    const rec = `state=open since=${T0 - 400} reset=${T0 + 5000} account=claude sign=banner choice=wait at=${T0 - 300}`;
+    h.sh(`_reg_set ${ID} limitwait "${rec}"`);
+    expect(gate(BANNER, '', { CCD_SWAP_PREV: '777' })).toBe('rc=1');
+    expect(lines('rescue-backoff')).toEqual([expect.stringMatching(/rescue-backoff lane-a-project-a: the operator chose Wait until reset \(a limit-wait pin\)$/)]);
+    expect(field(ID, 'lastswap')).toBe('777');
+    expect(field(ID, 'limitwait')).toBe(rec);
+  });
+
+  it('ccd\'s own wait (by=auto) at the act is no pin: the act proceeds', () => {
+    seed(); fleet();
+    h.sh(`_reg_set ${ID} limitwait "state=open since=${T0 - 400} reset=${T0 + 5000} account=claude sign=banner choice=wait at=${T0 - 300} by=auto"`);
+    expect(gate(BANNER)).toBe('rc=0');
+    expect(swapLog()).toBe('');
+  });
+
   it('cmd_swap runs it for the watchdog arm and names the cause swap-auto-rescue', () => {
     expect(h.sh('CCD_SWAP_AUTO=1 CCD_SWAP_ARM=watchdog _swap_end_cause')).toBe('swap-auto-rescue');
     expect(ccdSource()).toMatch(/watchdog\) +_swap_watchdog_act_gate "\$id" "\$cur" \|\| return 0 ;;/);
+  });
+});
+
+describe('no account has room: ccd chooses "Wait until reset" itself (D-8173 ruling (a))', () => {
+  it('a stopped session with a stated reset gets choice=wait by=auto, said once in the log', () => {
+    seed(); fullFleet();
+    pass(BANNER, T0); pass(BANNER, T0 + 300); pass(BANNER, T0 + 360);
+    expect(lines('limit-wait')).toEqual([expect.stringMatching(/limit-wait lane-a-project-a: choice=wait account=claude sign=banner by=auto$/)]);
+    expect(field(ID, 'limitwait')).toMatch(/ choice=wait at=1900000300 by=auto$/);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('an account-only sign is not a stopped session: no automatic choice', () => {
+    seed(); limits('claude', 99, 10, { fiveResetAt: T0 + 10000 }); limits('claude-a', 100, 100); limits('claude-b', 100, 100); processStatus();
+    pass(PROMPT, T0); pass(PROMPT, T0 + 300);
+    expect(field(ID, 'limitwait')).toMatch(/ sign=account$/);
+    expect(lines('limit-wait')).toEqual([]);
+  });
+
+  it('a record with no stated reset ("-") stays the operator\'s: no automatic choice', () => {
+    seed(); limits('claude-a', 100, 100); limits('claude-b', 100, 100);
+    h.sh(`_reg_set ${ID} limitwait "state=open since=${T0} reset=- account=claude sign=banner"`);
+    pass(BANNER, T0); pass(BANNER, T0 + 300, '_rescue_target() { return 1; };');
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0} reset=- account=claude sign=banner`);
+    expect(lines('limit-wait')).toEqual([]);
+  });
+
+  it('room appears before the reset: the automatic wait is not a pin, the rescue moves the session', () => {
+    seed(); fullFleet();
+    pass(BANNER, T0); pass(BANNER, T0 + 300);
+    expect(field(ID, 'limitwait')).toMatch(/by=auto$/);
+    limits('claude-b', 20, 20);
+    pass(BANNER, T0 + 360);
+    expect(dispatches()).toEqual([expect.stringMatching(/ -> claude-b watchdog$/)]);
+    expect(detached()).toEqual([]);
+  });
+
+  it('the reset passes with no room elsewhere: the session restarts in place on its own account', () => {
+    seed(); fullFleet(); processStatus();
+    pass(BANNER, T0); pass(BANNER, T0 + 300);
+    limits('claude', 10, 10);
+    pass(BANNER, T0 + 10060);
+    expect(lines('watchdog-resume')).toEqual([expect.stringMatching(/watchdog-resume lane-a-project-a: claude after reset$/)]);
+    expect(dispatches()).toEqual([]);
+    expect(field(ID, 'limitwait')).toMatch(/^state=closed .* choice=wait at=\d+ by=auto end=resume until=\d+$/);
+  });
+
+  it('the operator\'s own choice is still a pin: room elsewhere moves nothing', () => {
+    seed(); fleet();
+    h.sh(`_reg_set ${ID} limitwait "state=open since=${T0 - 400} reset=${T0 + 5000} account=claude sign=banner choice=wait at=${T0 - 300}"`);
+    pass(BANNER, T0); pass(BANNER, T0 + 600);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('the operator\'s tap on an automatic choice pins it: the next pass with room elsewhere moves nothing', () => {
+    seed(); fullFleet();
+    pass(BANNER, T0); pass(BANNER, T0 + 300);
+    expect(h.sh(`_limitwait_choose ${ID}; echo rc=$?`)).toMatch(/rc=0$/);
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0 + 300} reset=${T0 + 10000} account=claude sign=banner choice=wait at=${T0 + 300}`);
+    expect(lines('limit-wait')).toEqual([
+      expect.stringMatching(/limit-wait lane-a-project-a: choice=wait account=claude sign=banner by=auto$/),
+      expect.stringMatching(/limit-wait lane-a-project-a: choice=wait pinned by operator \(was by=auto\) account=claude sign=banner$/),
+    ]);
+    limits('claude-b', 20, 20);
+    pass(BANNER, T0 + 360); pass(BANNER, T0 + 900);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('an automatic choice never overwrites a choice that stands, and a chooser other than auto is refused', () => {
+    seed(); fullFleet();
+    pass(BANNER, T0); pass(BANNER, T0 + 300);
+    expect(h.sh(`_limitwait_choose ${ID} auto; echo rc=$?`)).toMatch(/rc=0$/);
+    expect(field(ID, 'limitwait')).toMatch(/ choice=wait at=1900000300 by=auto$/);
+    h.sh(`_limitwait_choose ${ID}`);
+    expect(h.sh(`_limitwait_choose ${ID} auto; echo rc=$?`)).toMatch(/rc=0$/);
+    expect(field(ID, 'limitwait')).toMatch(/ choice=wait at=1900000300$/);
+    expect(h.sh(`_limitwait_choose ${ID} other; echo rc=$?`)).toMatch(/rc=1$/);
+  });
+
+  it('a transcript reset that already passed at the first no-room pass is kept, and the same pass restarts in place', () => {
+    seed(); processStatus();
+    limits('claude', 10, 10); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
+    writeTranscript([turn(T0 - 600), limitRow(T0, T0 + 180)]);
+    h.sh(`_reg_set ${ID} limitsign "${T0} transcript"`);   // the sign began at the row; this pass is the first past N minutes
+    pass(PROMPT, T0 + 420, '', {}, T0 - 3600);
+    expect(lines('watchdog-noroom')).toHaveLength(1);
+    expect(lines('limit-wait')).toEqual([expect.stringMatching(/limit-wait lane-a-project-a: choice=wait account=claude sign=transcript by=auto$/)]);
+    expect(lines('watchdog-resume')).toEqual([expect.stringMatching(/watchdog-resume lane-a-project-a: claude after reset$/)]);
+    expect(field(ID, 'limitwait')).toMatch(new RegExp(`^state=closed since=${T0 + 420} reset=${T0 + 180} account=claude sign=transcript choice=wait at=${T0 + 420} by=auto end=resume until=\\d+$`));
+    expect(detached()).toHaveLength(1);
+    expect(dispatches()).toEqual([]);
+    expect(field(ID, 'stranded')).toBeNull();
+  });
+
+  it('a passed transcript reset on an account that is still full restarts nothing: it waits, stranded, for room', () => {
+    seed(); processStatus();
+    limits('claude', 10, 100); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
+    writeTranscript([turn(T0 - 600), limitRow(T0, T0 + 180)]);
+    h.sh(`_reg_set ${ID} limitsign "${T0} transcript"`);
+    pass(PROMPT, T0 + 420, '', {}, T0 - 3600);
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0 + 420} reset=${T0 + 180} account=claude sign=transcript choice=wait at=${T0 + 420} by=auto`);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(detached()).toEqual([]);
+    expect(field(ID, 'stranded')).toMatch(/no account has measured room/);
+  });
+});
+
+describe('a standing record with no reset takes the reset a later pass dates (D-8173 ruling (a))', () => {
+  it('reset=- and no choice: a later pass that dates the reset fills it (since, account and sign kept) and the automatic choice applies', () => {
+    seed(); limits('claude', 100, 10); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
+    h.sh(`_reg_set ${ID} limitwait "state=open since=${T0} reset=- account=claude sign=menu"`);
+    h.sh(`_reg_set ${ID} limitsign "${T0} transcript"`);
+    writeTranscript([turn(T0 - 600), limitRow(T0, T0 + 9000)]);
+    pass(PROMPT, T0 + 420, '', {}, T0 - 3600);
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0} reset=${T0 + 9000} account=claude sign=menu choice=wait at=${T0 + 420} by=auto`);
+    expect(lines('limit-wait')).toEqual([expect.stringMatching(/limit-wait lane-a-project-a: choice=wait account=claude sign=menu by=auto$/)]);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a pass that still dates nothing leaves reset=- as it stands', () => {
+    seed(); limits('claude-a', 100, 100); limits('claude-b', 100, 100);
+    h.sh(`_reg_set ${ID} limitwait "state=open since=${T0} reset=- account=claude sign=banner"`);
+    pass(BANNER, T0); pass(BANNER, T0 + 300, '_rescue_target() { return 1; };');
+    expect(field(ID, 'limitwait')).toBe(`state=open since=${T0} reset=- account=claude sign=banner`);
+  });
+
+  it('a record with a reset already stated is never rewritten by a later pass', () => {
+    seed(); limits('claude', 100, 10); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
+    const rec = `state=open since=${T0} reset=${T0 + 7000} account=claude sign=banner choice=wait at=${T0 + 10} by=auto`;
+    h.sh(`_reg_set ${ID} limitwait "${rec}"`);
+    h.sh(`_reg_set ${ID} limitsign "${T0} transcript"`);
+    writeTranscript([turn(T0 - 600), limitRow(T0, T0 + 9000)]);
+    pass(PROMPT, T0 + 420, '', {}, T0 - 3600);
+    expect(field(ID, 'limitwait')).toBe(rec);
   });
 });
 

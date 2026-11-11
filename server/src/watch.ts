@@ -173,6 +173,8 @@ import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js'
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink, notifyPushOnly } from './notice.js';
+import { LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_MARKER, type LaneArmImport, type LaneArmLane } from '../../shared/lane-arm.js';
+import { laneArmImportLine } from './coord/laneArm.js';
 import { runDriftPass } from './coord/driftLane.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -1323,7 +1325,7 @@ export class FleetWatcher {
    *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   /** The automatic coordinator roll's journal throttle (D-7452). Its clock and single flight are the `rollIdle` row. */
-  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map() };
+  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -1486,8 +1488,8 @@ export class FleetWatcher {
   stamp(name: LaneName): void { this.lanes.stamp(name); }
 
   /** A synchronous beat on the row's cadence (the claim pair, the daily prune, the digest's beat): runs `fn` when it is
-   *  due at `now` (default: the row's clock) and answers whether it did. */
-  runLaneSync(name: LaneName, fn: () => void, now?: number): boolean { return this.lanes.runSync(name, fn, now); }
+   *  due on the row's own clock and answers whether it did (D-8197: no caller hands in a reading). */
+  runLaneSync(name: LaneName, fn: () => void): boolean { return this.lanes.runSync(name, fn); }
   /** The lane runs on the next tick. */
   kick(name: LaneName): void { this.lanes.kick(name); }
   /** The post-gather re-stamp on the decision clock, with the reading the pass decided on when it has one. */
@@ -2069,6 +2071,39 @@ export class FleetWatcher {
     return this.delegationClosing ??= Promise.all([closing, Promise.allSettled([...this.delegationSweeps])]).then(() => undefined);
   }
 
+  /** D-8274 (spec 2026-10-28 R-6): THE ONE-TIME IMPORT of each Shadow lanes row's retired marker, off the tick's own listing
+   *  (a measured one: an unlistable registry never reaches here). For each lane with a marker the import has not yet run
+   *  for, the store records it once (`CoordStore.importLaneArmMarker`): a standing marker sets a never-written row Live,
+   *  with a record-only feed row naming the file. From then on the marker is not read, and this pass asks the store
+   *  nothing for that lane (the latch below). A throw is logged once and retried on a later pass. */
+  importLaneArmMarkers(names: readonly string[], at: number): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    for (const lane of LANE_ARM_LANES) {
+      const marker = LANE_ARM_MARKER[lane];
+      if (marker === undefined || this.laneArmImported.has(lane)) continue;
+      let result: LaneArmImport | null;
+      try {
+        result = coord.importLaneArmMarker(lane, names.includes(marker), at);
+      } catch (err) {
+        if (!this.laneArmImportWarned.has(lane)) {
+          this.laneArmImportWarned.add(lane);
+          console.warn(`ccrc-server: lane-arm: the ${lane} marker import failed (${err instanceof Error ? err.message : String(err)}); retried next pass`);
+        }
+        continue;
+      }
+      this.laneArmImported.add(lane);
+      if (result === 'stood' || result === 'stood-kept') {
+        notify({ notifyLog: this.deps.notifyLog, coord },
+          { kind: 'coord', sessionId: '', runId: null, title: LANE_ARM_FEED_TITLE.imported, body: laneArmImportLine(lane, marker, result) },
+          'record-only', { degraded: 'shadow lane marker imported, feed archive degraded' });
+      }
+    }
+  }
+  /** The lanes whose import has run (or was found already run): never asked again in this process. */
+  private readonly laneArmImported = new Set<LaneArmLane>();
+  private readonly laneArmImportWarned = new Set<LaneArmLane>();
+
   /** Whether `tick()`'s registry read listed. The health reads it as of the request: an unreadable registry is an unmeasured basis. */
   noteDelegationRegistry(listed: boolean): void {
     this.delegationLane().noteRegistry(listed);
@@ -2347,9 +2382,9 @@ export class FleetWatcher {
   }
 
   /**
-   * THE AUTOMATIC COORDINATOR ROLL, RELEASE HALF (D-7452): every `rollIdle` beat (hibernation's clock), on THIS tick's
-   * rows and listing, `rollPass` rolls at most one idle coordinator whose pane started before the node's current ccrc
-   * install, by `ccd hibernate` then `ccd ensure` on the coordination serialiser and the session's queue. The setting is
+   * THE AUTOMATIC ROLL (D-7452; D-8276): every `rollIdle` beat (hibernation's clock), on THIS tick's
+   * rows and listing, `rollPass` rolls at most one idle session (every role under the default, D-8276) whose pane started
+   * before the node's current ccrc install or could reach a newer Claude Code build on its own lane, by `ccd hibernate` then `ccd ensure` on the coordination serialiser and the session's queue. The setting is
    * the Settings row (`CoordStore.rollSettings`, D-7453); without a store it reads as unreadable and nothing is rolled.
    * The install time is `~/.ccrc/installed`'s modification time on the fleet node (`deps.io`, the fleet box's io in
    * remote mode, under the same `ccrcDir` the inventory reads). Never awaited by the tick.
@@ -2618,6 +2653,7 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
+      this.importLaneArmMarkers(registryRead.names, listedAt);   // D-8274: once per lane, then never again
       const paneListing = await listingP;
       const notice = listingNotice(this.listingFailed, paneListing);
       this.listingFailed = notice.failed;

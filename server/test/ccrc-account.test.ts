@@ -1439,9 +1439,10 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     ['a suffix another account already holds', { '--suffix': '.claude-a' },
       'suffix-collision', 1],
     ['a provider nothing knows', { '--provider': 'orchard' }, 'unknown-provider', 2],
-    // `add` makes this lane now (accounts plan Task A24), on a box with the Codex runtime, which this fixture's has
-    // not: `ccrc-account-codex-add.test.ts` drives the verb where it has.
-    ['a codex lane on a box with no Codex runtime', { '--provider': 'openai', '--base-url': null }, 'codex-runtime-absent', 1],
+    // `add` makes this lane now (accounts plan Task A24), as a `direct` lane that needs no Codex runtime (Stage 4,
+    // Task 7), so what refuses here is the credential this table's argv carries: a ChatGPT lane's credential is its
+    // sign-in. `ccrc-account-codex-add.test.ts` drives the add itself, and the box with no python3 for the lane.
+    ['a codex lane handed a credential it has no file for', { '--provider': 'openai', '--base-url': null }, 'credential-not-managed', 2],
     ['a compatible lane with no endpoint', { '--base-url': null }, 'base-url-required', 2],
     // THE OTHER SIDE OF THE SAME GATE, and the row that keeps `base-url-required`
     // from being read as "every provider without a default". An `anthropic` lane

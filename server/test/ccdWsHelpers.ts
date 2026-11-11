@@ -800,7 +800,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // two non-exported shell variables `ccd_h_src` and `ccd_h_snippet`.
   const sh = (snippet: string, extra: NodeJS.ProcessEnv = {}): string =>
     execFileSync('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
-      + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; eval "$ccd_h_snippet"'],
+      + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; FLEET_SPAWN_PINS=; eval "$ccd_h_snippet"'],
       { encoding: 'utf8', cwd: home,
         env: { ...env(extra), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet } }).trim();
 

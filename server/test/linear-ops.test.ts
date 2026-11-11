@@ -22,7 +22,7 @@ import { keyTailOf } from '../src/linear/connection.js';
 import { LinearDirectory } from '../src/linear/directory.js';
 import {
   LINEAR_DESCRIPTION_MAX_BYTES, LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES,
-  LINEAR_DIRECTORY_PAGE_SIZE, LINEAR_DOCUMENTS, LINEAR_ERROR_CODES, LINEAR_INPUT_FIELDS, LINEAR_LIST_LIMIT, LINEAR_OPS, LINEAR_PROVENANCE_LINE, LINEAR_STRIPS,
+  LINEAR_DIRECTORY_PAGE_SIZE, LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, LINEAR_ERROR_CODES, LINEAR_INPUT_FIELDS, LINEAR_LIST_LIMIT, LINEAR_OPS, LINEAR_PROVENANCE_LINE, LINEAR_STRIPS,
   LINEAR_VERBS, decodeLinearCursor, encodeLinearCursor, linearMoved, linearOutbound, linearResolvePlan, linearRouteAsk,
   lookupLinearName, readLinearDirectoryPage, shapeLinearResolve, shapeLinearTeams, shapeLinearWorkspaces,
   validateLinearCall, withLinearProvenance, type LinearCallRow, type LinearDirectoryEntries, type LinearOpContext,
@@ -78,6 +78,20 @@ const RECORDED_DOCUMENT = {
   comment: 'mutation-comment-create', link: 'mutation-attachment-link-url-constructed', resolveIssue: 'resolve-issue', resolveIssueAndParent: 'resolve-issue-and-parent',
   resolveParent: 'resolve-parent', directoryStates: 'directory-states-page-1', directoryLabels: 'directory-labels-page-1',
   directoryProjects: 'directory-projects-page-1', directoryUsers: 'directory-users-page-1',
+  // The hierarchy documents (D-8180): constructed files until FX2 records them.
+  initiativeById: 'read-initiative-by-id-constructed', projectById: 'read-project-by-id-constructed',
+  projectStatuses: 'read-project-statuses-constructed', initiativesProbe: 'read-initiatives-probe-constructed',
+  initiativesByName: 'read-initiatives-by-name-constructed', projectsByName: 'read-projects-by-name-constructed',
+  changedInitiatives: 'read-changed-initiatives-constructed', changedProjects: 'read-changed-projects-constructed',
+  changedMilestones: 'read-changed-milestones-constructed', changedIssues: 'read-changed-issues-constructed',
+  teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned-constructed',
+  initiativeCreate: 'mutation-initiative-create-constructed', initiativeUpdate: 'mutation-initiative-update-constructed',
+  initiativeToProjectCreate: 'mutation-initiative-to-project-create-constructed',
+  initiativeToProjectDelete: 'mutation-initiative-to-project-delete-constructed',
+  projectCreate: 'mutation-project-create-constructed', projectUpdate: 'mutation-project-update-constructed',
+  projectMilestoneCreate: 'mutation-project-milestone-create-constructed',
+  projectMilestoneUpdate: 'mutation-project-milestone-update-constructed',
+  issueRelationCreate: 'mutation-issue-relation-create-constructed',
 } as const satisfies Record<keyof typeof LINEAR_DOCUMENTS, string>;
 
 /** An issue URL as Linear writes it, joined here so no line of this file holds the web origin and a path together. */
@@ -99,6 +113,8 @@ const DIR: LinearDirectoryEntries = {
     { id: USER_A, name: 'user-a', displayName: 'User A' },
     { id: USER_B, name: 'user-b', displayName: null },
   ],
+  projectStatuses: [],
+  initiatives: 'unknown',
 };
 
 const RESOLVED: LinearResolved = {
@@ -254,14 +270,16 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
   });
 
   it('every document\'s recorded X-Complexity is under LINEAR_QUOTA.maxQueryComplexity, the directory pages included (slug linear-fx-ops-complexity)', () => {
-    for (const [name, file] of Object.entries(RECORDED_DOCUMENT)) {
+    // The hierarchy documents' constructed files carry no complexity (D-8180): FX2 records it, and joins them here.
+    const measured = Object.entries(RECORDED_DOCUMENT).filter(([name]) => !(name in LINEAR_HIERARCHY_DOCUMENTS));
+    for (const [name, file] of measured) {
       const cost = recordedComplexity(file);
       expect(cost, name).not.toBeNull();
       expect(cost!, name).toBeGreaterThan(0);
       expect(cost!, name).toBeLessThan(LINEAR_QUOTA.maxQueryComplexity);
     }
     // The recorded values themselves (README.md's table), so a re-capture that changes one is seen here.
-    expect(Object.fromEntries(Object.entries(RECORDED_DOCUMENT).map(([n, f]) => [n, recordedComplexity(f)]))).toEqual({
+    expect(Object.fromEntries(measured.map(([n, f]) => [n, recordedComplexity(f)]))).toEqual({
       issue: 10, search: 12, comments: 6, statuses: 601, projects: 60, labels: 575, users: 65, create: 11, update: 11, comment: 3, link: 3,
       resolveIssue: 3, resolveIssueAndParent: 5, resolveParent: 3,
       directoryStates: 901, directoryLabels: 875, directoryProjects: 600, directoryUsers: 651,
@@ -998,6 +1016,8 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
       labels: [{ id: LABEL_BUG, name: 'Bug', teamKey: null }],
       projects: [{ id: PROJECT_X, name: 'Project X' }],
       users: [{ id: USER_A, name: 'user-a', displayName: 'User A' }],
+      projectStatuses: [],
+      initiatives: 'unknown',
     });
     expect(varsOf('update', valid('update', { ref: 'AAA-12', body: { state: 'todo', assignee: 'me' } }), ctxOf({ directory: filled })))
       .toEqual({ id: ISSUE_ID, input: { stateId: STATE_TODO_A, assigneeId: VIEWER } });
@@ -1198,7 +1218,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(0);
     expect(b.fx.rate.take({ lane: 'request', slot: SLOT, calls: 25 }).ok).toBe(true);
-    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 425 }).ok).toBe(true);
+    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 350 }).ok).toBe(true);
   });
 
   it('a team miss and a name miss are two jobs of the one queue, one slot at a time', async () => {
@@ -1238,5 +1258,14 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     expect(readLinearDirectoryPage('projects', { data: { projects: conn(big) } })).toEqual({ ok: false, word: 'malformed' });
     const users = readLinearDirectoryPage('users', pageFor({ auth: '', query: LINEAR_DOCUMENTS.directoryUsers, variables: {} }));
     expect(users).toMatchObject({ ok: true, viewerId: VIEWER, users: [{ id: USER_A }] });
+  });
+});
+
+describe('the session body shaper stays narrower than the ccrc journal list (D-8180)', () => {
+  it('a session update naming team or milestone is still refused by the proxy body shaper', () => {
+    for (const key of ['team', 'milestone', 'projectMilestoneId', 'teamId']) {
+      const v = validateLinearCall('update', { ref: 'AAA-12', body: { [key]: 'x' } });
+      expect(v.ok, key).toBe(false);
+    }
   });
 });

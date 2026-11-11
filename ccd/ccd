@@ -3613,6 +3613,7 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     # separately above), a directory, a FIFO. ccd never writes through it and
     # never replaces it, so no compaction settles and no wait ends this — the
     # remedy is a human removing the object, which is why it carries a token.
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     [[ -f "$lock" && ! -L "$lock" ]] || { COMPACT_LOCK_WHY=lock-path-occupied; return 1; }
   elif _compact_lock_vanished "$id"; then
     # REFUSE BEFORE THE MINT: nothing has been created yet, so the refusal owns
@@ -3631,6 +3632,7 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     # folded in here because the acquire cannot tell them apart, not because
     # they share a remedy (r6 R5-M2). A wait frees neither, so this one
     # carries a token too.
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) \
       || { COMPACT_LOCK_WHY=lock-source-refused; return 1; }
     [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
@@ -3668,6 +3670,7 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     #     STATE, never an act, so the token's remedy is worded to the state and
     #     enumerates the `$REG` causes as the usual ones alone.
     if [[ ! -f "$lock" || -L "$lock" ]]; then
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       if [ -e "$lock" ] || [ -L "$lock" ]; then COMPACT_LOCK_WHY=lock-path-occupied
       else COMPACT_LOCK_WHY=lock-publish-failed
       fi
@@ -5634,6 +5637,7 @@ PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository
 # all. It meets the rule `CCD_DISK_FLOOR_GB` states for an override: it names a
 # GitHub label, never a path, so it cannot aim a command at another tree.
 # `labels`/`closedAt` above are what it is read from (and when the PR landed).
+# shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
 PR_LANDED_LABEL_DEFAULT=landed-in-train
 # NAMED ONCE, spent in two places — the head-filtered row window that carries it
 # in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
@@ -10568,8 +10572,84 @@ _project_github_url_ok() {   # url -> 0 when it is exactly a clone url `parseGit
 # kill grace (`ccd-project-add.test.ts` reads both): a clone past it dies INSIDE ccd, so ccd removes its own temp.
 PROJECT_ADD_GIT_S=220
 
+# AN EMPTY PROJECT IS BORN READY FOR A WORKSPACE (D-8193). `ws-add` bases every workspace on `origin/HEAD`, and a bare
+# `git init` has neither a commit nor an origin, so an Empty project used to take sessions in its main checkout and never
+# a workspace. `--empty` now makes a LOCAL BARE ORIGIN, `<origins>/<name>.git`, seeds one commit with the empty tree on
+# `main` there, and CLONES the project from it: `origin`, `origin/HEAD` and `main`'s upstream are then exactly what a
+# GitHub clone has, and `ws-add`'s fetch and base need no extra step. The origin is local to the fleet box, so a
+# workspace's branch pushes there and a pull request needs a GitHub remote the operator adds later.
+#
+# WHERE THE ORIGINS LIVE is machine-neutral: `$REG/origins` by default (ccd's own data directory; dotless, so no
+# registry glob, all suffix-shaped `"$REG/$id".*`, can name it, the reason `POOLS_DIR` gives), or the absolute path on
+# the first line of `~/.ccrc/project-origins`, an OPERATOR-OWNED file nothing writes. A FILE, not an env var: HOME is
+# ccd's only isolation boundary (`_rc_enabled`'s reason). A file that is there but names no absolute path is refused,
+# never read as the default: where a project's history goes is not guessed.
+PROJECT_ORIGINS_FILE="$HOME/.ccrc/project-origins"
+_project_origins_dir() {   # -> the origins directory on stdout; rc 1 with the refusal's text on stdout instead
+  local v=""
+  if [[ ! -e "$PROJECT_ORIGINS_FILE" && ! -L "$PROJECT_ORIGINS_FILE" ]]; then printf '%s' "$REG/origins"; return 0; fi
+  # `-f` before the open (`_reg_get`'s rung): a FIFO or a directory there must not hang or half-read.
+  [[ -f "$PROJECT_ORIGINS_FILE" && -r "$PROJECT_ORIGINS_FILE" ]] \
+    || { printf '%s is not a readable regular file — nothing was touched' "$PROJECT_ORIGINS_FILE"; return 1; }
+  # An empty file, or a last line with no newline, still leaves what it read in `v`; the absolute-path test judges it.
+  IFS= read -r v 2>/dev/null < "$PROJECT_ORIGINS_FILE"; v="${v%$'\r'}"
+  [[ "$v" == /* ]] \
+    || { printf "%s names '%s', not an absolute path — nothing was touched" "$PROJECT_ORIGINS_FILE" "$v"; return 1; }
+  printf '%s' "$v"
+}
+
+# OURS is a real directory (never a link), a BARE repository, whose LOCAL config names this project in
+# `ccd.emptyorigin`, the one key `_project_origin_make` writes. Anything else at the path is someone else's and is
+# never adopted, seeded or replaced. `--local` so a box-wide config cannot vouch for a directory.
+_project_origin_ours() {   # path name -> 0 when the bare origin at path is ccd's for name
+  [[ -d "$1" && ! -L "$1" ]] || return 1
+  [[ "$(git --git-dir="$1" rev-parse --is-bare-repository 2>/dev/null)" == true ]] || return 1
+  [[ "$(git --git-dir="$1" config --local --get ccd.emptyorigin 2>/dev/null)" == "$2" ]]
+}
+
+# SEED: one commit with the EMPTY TREE on `main`, made only when the origin has no `main` yet, and written with
+# `update-ref`'s empty old value, so a `main` that appeared meanwhile is never moved. It is written by ccd's ONE commit
+# writer, `_ws_reclaim_commit_tree`, so it carries ccd's one fixed identity (never an invented person) and no second
+# writer exists to drift; its caller list is pinned (`ccd-child-reclaim-pin.test.ts`). No index, no work tree, no hook,
+# no signing.
+_project_origin_seed() {   # bare-path -> 0 when the origin has a main
+  local tree c
+  git --git-dir="$1" rev-parse --verify --quiet refs/heads/main >/dev/null && return 0
+  tree=$(git --git-dir="$1" hash-object -t tree -w --stdin </dev/null) || return 1
+  c=$(_ws_reclaim_commit_tree "$1" -m 'Initial empty commit (ccd project-add --empty)' "$tree") || return 1
+  git --git-dir="$1" update-ref -m 'ccd project-add --empty' refs/heads/main "$c" '' 2>/dev/null \
+    || git --git-dir="$1" rev-parse --verify --quiet refs/heads/main >/dev/null || return 1
+  git --git-dir="$1" symbolic-ref HEAD refs/heads/main
+}
+
+# MAKE OR ADOPT, IDEMPOTENT: an origin of ours that stands (an earlier run's, its project since removed or never moved
+# into place) is adopted with its history and seeded only if it has no `main`; an absent one is built aside in a
+# dot-named temp of this pid and moved onto the name by `_plat_mv_notdir`, which never replaces a non-empty directory.
+# A run that loses that move to a concurrent one adopts the winner's when it is ours. A failure removes only this run's
+# temp; an origin already in place is left for the next run to adopt.
+_project_origin_make() {   # dir name -> the origin's path on stdout; rc 1 with the refusal's text on stdout instead
+  local dir=$1 name=$2 origin="$1/$2.git" otmp="$1/.project-add.$2.$$.git"
+  if [[ -e "$origin" || -L "$origin" ]]; then
+    _project_origin_ours "$origin" "$name" || { printf "an origin that is not ccd's stands at %s" "$origin"; return 1; }
+    _project_origin_seed "$origin" || { printf 'could not seed the origin at %s' "$origin"; return 1; }
+    printf '%s' "$origin"; return 0
+  fi
+  mkdir -p -- "$dir" || { printf 'cannot create %s' "$dir"; return 1; }
+  [[ ! -e "$otmp" && ! -L "$otmp" ]] || { printf 'a temp of an earlier project-add stands at %s — remove it by hand' "$otmp"; return 1; }
+  if ! { git init --quiet --bare -b main -- "$otmp" >/dev/null 2>&1 \
+         && git --git-dir="$otmp" config ccd.emptyorigin "$name" && _project_origin_seed "$otmp"; }; then
+    rm -rf -- "$otmp"; printf 'could not create the origin at %s' "$origin"; return 1
+  fi
+  if [[ -e "$origin" || -L "$origin" ]] || ! _plat_mv_notdir "$otmp" "$origin" 2>/dev/null; then
+    rm -rf -- "$otmp"
+    _project_origin_ours "$origin" "$name" || { printf "an origin that is not ccd's stands at %s" "$origin"; return 1; }
+  fi
+  printf '%s' "$origin"
+}
+
 cmd_project_add() {   # ccd project-add --name <n> (--url <github-url> | --empty)
-  # A NEW PROJECT under `$PROJECTS_ROOT`, cloned from GitHub or `git init`ed empty (add-project spec 2026-11-04 §4);
+  # A NEW PROJECT under `$PROJECTS_ROOT`, cloned from GitHub or, for `--empty`, from a local bare origin ccd makes and
+  # seeds with one empty commit, so it takes a workspace at once (D-8193; add-project spec 2026-11-04 §4);
   # `POST /api/projects` reaches it through the agent's gated grant `['project-add','--name']`. EXACT ARITY, the
   # `cmd_project_pool` rule: `--name` leads, then `--url <u>` or `--empty`, and any other argv is the usage line.
   # VALIDATE, THEN BUILD ASIDE, THEN MOVE. Nothing is touched before both checks pass. The tree is built in
@@ -10590,14 +10670,25 @@ cmd_project_add() {   # ccd project-add --name <n> (--url <github-url> | --empty
   # `-L` beside `-e`: a dangling link answers false to `-e` and is still a name someone holds.
   local dest="$PROJECTS_ROOT/$name" tmp="$PROJECTS_ROOT/.project-add.$name.$$" err rc
   [[ ! -e "$dest" && ! -L "$dest" ]] || die "project exists: $name"
+  # `--empty`'s origin is judged BEFORE anything is touched (D-8193): a bad `project-origins` file, or a path at the
+  # origin that is not ccd's, refuses here with the projects root as it was.
+  local odir="" origin
+  if [[ $mode == init ]]; then
+    odir=$(_project_origins_dir) || die "$odir"
+    origin="$odir/$name.git"
+    [[ ! -e "$origin" && ! -L "$origin" ]] || _project_origin_ours "$origin" "$name"       || die "an origin that is not ccd's stands at $origin"
+  fi
   mkdir -p -- "$PROJECTS_ROOT" || die "cannot create $PROJECTS_ROOT"
   # A temp of this pid's that already stands is a killed run's, not this one's: refuse rather than adopt or delete it.
   [[ ! -e "$tmp" && ! -L "$tmp" ]] || die "a temp of an earlier project-add stands at $tmp — remove it by hand"
-  local -a op=(init --quiet -b main -- "$tmp")
+  if [[ $mode == init ]]; then origin=$(_project_origin_make "$odir" "$name") || die "$origin"; fi
+  # Both arms are a clone: `--empty`'s from the local origin just made or adopted, so it lands with `origin`,
+  # `origin/HEAD` and an upstream for `main`, as a GitHub clone does.
+  local -a op=(clone --quiet -- "${origin:-}" "$tmp")
   [[ $mode == init ]] || op=(clone --quiet -- "$url" "$tmp")
   # NO PROMPT EVER: `GIT_TERMINAL_PROMPT=0` for https, and a batch-mode ssh unless the box chose its own (GIT_SSH_COMMAND,
   # GIT_SSH or `core.sshCommand`, which the variable would override), so a private repo with no credential fails at
-  # once instead of holding the exec until its timeout. No commit on `init`: ccd does not invent an author identity.
+  # once instead of holding the exec until its timeout.
   [[ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$PROJECTS_ROOT" config --get core.sshCommand 2>/dev/null)" ]] || local -x GIT_SSH_COMMAND='ssh -o BatchMode=yes'
   err=$(GIT_TERMINAL_PROMPT=0 _plat_timeout "$PROJECT_ADD_GIT_S" git "${op[@]}" 2>&1 >/dev/null) || {
     rc=$?; rm -rf -- "$tmp"; (( rc != 124 )) || die "git ${op[0]} timed out for $name after ${PROJECT_ADD_GIT_S}s"
@@ -11579,6 +11670,7 @@ _pr_bind_facts() {   # id main [rows-head-branch] -> 0, the binding's shell-side
   # the four pinned cases of that shape keep their behaviour untouched.
   if (( registered == 0 )) && [[ -n "$wthead" && -n "$tip" && "$wthead" != "$branch" ]]; then
     echo "pr-state: the registry says $branch, git's worktree record for $workdir says $wthead — PR state not measured for $id (reconcile with: ccd ws-rename --session $id --branch $wthead)" >&2
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     BIND_REFUSAL=branch-drift
     return 1
   fi
@@ -13248,6 +13340,7 @@ _ws_children() {   # main parentdir -> "resolvedpath\tbranch\theadoid" per child
 # `ls-files -u` sees. `rc 1` on ANY git read here means "could not tell", not
 # "idle" — the caller must refuse `tree-unreadable` rather than wave a child
 # through it never actually looked at.
+# shellcheck disable=SC2128,SC2178  # op is a local string here; the arrays named op are other functions' locals (shellcheck does not scope names by function)
 _ws_child_op() {   # childdir -> op name on stdout ('' = idle), rc 1 = unprobeable
   local d="$1" g p op=""
   for p in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge \
@@ -13789,6 +13882,7 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
     if [[ -n "$mb" ]]; then
       a=$(git -C "$main" diff --binary "$mb" "$tip" -- 2>/dev/null | git -C "$main" patch-id --stable | cut -d' ' -f1)
       b=$(git -C "$main" diff --binary "$Pm" "$M"   -- 2>/dev/null | git -C "$main" patch-id --stable | cut -d' ' -f1)
+      # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
       [[ -n "$a" && "$a" == "$b" ]] && { _WS_PROOF=patch-id; return 0; }
     fi
   fi
@@ -17230,6 +17324,7 @@ _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked fil
   local out errf err rc
   # Assume the worst before measuring, so no path out of this function can
   # forget to set it.
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   GC_DIRTY_STATE=tree-unreadable; GC_DIRTY_WHY=''
   # `git status` failing means unreadable, corrupt, or not a worktree at all —
   # NOT clean. Swallowing the exit code and testing an empty string would report
@@ -19003,6 +19098,7 @@ _ci_bgwait_owner_live() {   # bgwait-record -> 0 iff the supervisor that wrote i
   _ci_hold_live "$p" "$(_rw_field "$1" supst)" ""
 }
 
+# shellcheck disable=SC2128,SC2178  # w is a local string here; the arrays named w are other functions' locals (shellcheck does not scope names by function)
 _ci_bgwait_open() {   # id job hid wrapper -> record the wait ONCE: a supervisor restarted mid-wait keeps its onset
   local id="$1" job="$2" hid="$3" w="$4" rec now
   _ci_sup_me
@@ -20392,6 +20488,7 @@ _pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR
   return 0
 }
 
+# FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is waiting out a limit on its own (D-2229).
   # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
   # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
@@ -20485,6 +20582,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   if [[ -z "$narrow" ]]; then
     # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
     # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=pane; return 1; }; HARD_BLOCK_VIA=pane; return 0; }
     # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
     # arm below the transcript deliberately: a banner Claude Code is rendering on
@@ -20499,6 +20597,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     # the conversation.
     _pane_limit_capture_to cap "$id" "$pane"
     _pane_limit_menu "$cap" && menu=1
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     _pane_limit_banner "$cap" && { _pane_carried_in "$id" banner "$cap" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=banner; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
     grep -q "esc to interrupt" <<<"$pane" && { HARD_BLOCK_NO=running; return 1; }
   fi
@@ -20519,6 +20618,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   fi
   # D-6180: a fresh scan names a carried-in row. On a narrow pane a silent transcript is `unmeasurable`, not `negative`:
   # nothing on screen was read, so "not blocked" is not a measured answer (D-8123).
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; [[ -n "$narrow" ]] && HARD_BLOCK_NO=unmeasurable; (( lrc == 3 )) && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=carried-in; }; return 1; }
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
@@ -20580,6 +20680,7 @@ _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its
   grep -qiE "usage limit has reset.*press enter to continue" <<<"$1"
 }
 
+# FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its own auto-continue went stale.
   # Runs on the supervise tick BEFORE `_auto_swap_check`: the account has reset,
   # the continuation is right there, and Enter is Claude Code's documented
@@ -22325,7 +22426,9 @@ _pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 w
   local id="$1" prc pane
   KS_PANE=""; KS_WHY=""; KS_DETAIL=""
   pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); prc=$?
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$prc" == 0 ]] || { KS_WHY=pane-unreadable; KS_DETAIL="tmux capture-pane rc=$prc"; return 1; }
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ -n "$pane" ]] || { KS_WHY=pane-blank; KS_DETAIL="tmux capture-pane rc=0, empty capture"; return 1; }
   _pane_auto_continue_armed "$pane" && { KS_WHY=auto-continue; KS_DETAIL="Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 1; }
   KS_PANE="$pane"
@@ -22354,9 +22457,11 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # §6.3 exists to refuse, reached through code wave 2 never saw. The guard belongs in the
   # body that carries the phrase, which is also what `ccd-reader-standdown.test.ts`'s
   # POPULATION census requires: a phrase-carrying function guards itself.
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   _pane_measurable "$id" || { KS_WHY=pane-narrow; KS_DETAIL="pane is under ${READER_MIN_COLS} cols; a wrapped phrase reads as idle (§6.3)"; return 1; }
   _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
   echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
@@ -22415,6 +22520,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
   # `=~ ^[0-9]+$` (was `-n`) is also the D-299 guard on the operand the next line evaluates.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   [[ "$sua" =~ ^[0-9]+$ ]] || { KS_WHY=quiet-unmeasured; KS_DETAIL="no statusUpdatedAt in $sf${ctxnote:+, $ctxnote}"; return 1; }
   [[ $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] \
     || { KS_WHY=not-quiet; KS_DETAIL="$ctxnote"; return 1; }
@@ -22730,6 +22836,7 @@ _route_apply_pending() {   # id -> 0 iff the record asks for a class or effort `
   return 1
 }
 
+# shellcheck disable=SC2128,SC2178  # words is a local string here; the arrays named words are other functions' locals (shellcheck does not scope names by function)
 _route_apply_seed() {   # id [why] -> 0 iff it SEEDED `routeapplied` (the tick's caller then returns)
   # A RECORD THAT PREDATES THE APPLIER IS NOT AN UNAPPLIED RECORD (controller
   # ruling S4-R8). Every routing record on this fleet was applied by its last
@@ -25207,6 +25314,7 @@ _pane_scope_reap() {   # id pid cg — in its own unit: wait for the main proces
   fi
   return 0
 }
+# shellcheck disable=SC2128,SC2178  # scope is a local string here; the arrays named scope are other functions' locals (shellcheck does not scope names by function)
 _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
   # `oom` FIRST (D-5345): the pane scope's own journal naming an OOM kill in the 120 s
   # before now is the most specific answer, and it holds when the tmux server
@@ -25665,6 +25773,52 @@ _browser_spawn_compose() {   # id launchflags -> sets BROWSER_SPAWN_FLAGS; write
     BROWSER_SPAWN_FLAGS="${flags:+$flags }--settings '$deny'"
   fi
   _reg_set "$id" browsermcp off || true
+  return 0
+}
+
+# ── THE THREE FLEET PINS IN EVERY SPAWN'S ONE `--settings` (D-8173) ──────────
+# The operator's rulings of 2026-11-10 (session host research §6.1), each a fixed default, no knob:
+#   Q4 `autoContinueAtUsageLimit: false` — Claude Code's own wait-then-continue at a usage limit is OFF, so ccd always
+#      swaps the session to an account with room; the operator's options (wait until the reset, ...) come only when no
+#      account has room (D-8123's watchdog and the limit menu reading).
+#   Q5 `crossSessionInbound: "refuse"` — a stray inbox message can never open the approval dialog; nudges stay typed.
+#   Q6 `idleCompaction: true` — pinned ON, so no account or session setting can switch it off.
+# `FLEET_SPAWN_PINS` is the ONE spelling. `_fleet_spawn_compose` merges it LAST (so a lane's own value never beats the
+# pin) into the row's one `--settings` (D-5391): a row with none gets it inline; a row with a path or inline value gets
+# the two merged. Every lane execs Claude Code with the same flags, so it composes on every row, like the account file.
+# IT FAILS OPEN, for the account composer's reason (it is on every swap's path): a base that cannot be read or merged
+# spawns with the flags as they were and warns.
+# SPELLING EVIDENCE (a read of the Claude Code binary's strings and settings schema, never a live probe; builds 2.1.306,
+# 2.1.321 and 2.1.322 carry all three keys, 2.1.306 being the oldest on the fleet's disk, so that is the floor read):
+#   `autoContinueAtUsageLimit` and `idleCompaction` are optional booleans in the schema (the same helper as
+#   `autoScrollEnabled`); `idleCompaction` reads "Set to false to stop ... Defaults to true".
+#   `crossSessionInbound` is an enum of 'accept' | 'hold' | 'refuse' ("'refuse' opts this session out"), declared
+#   `.optional().catch(void 0)`, so even an unknown spelling falls back to unset and never invalidates the file.
+# An older build that does not know a key ignores it. A pin this file never writes any other way is why the test pins the
+# literal (`ccd-spawn-fleet-pins.test.ts`): a respelling must come with a new binary read, since a schema-invalid value
+# makes Claude Code skip the WHOLE settings source (the deny rules ride the same one).
+# FOLLOW-UP, NOT HERE: once the pin is watched working live, the four screen-read holds that exist only because the
+# native wait could be armed are deleted (`_pane_auto_continue_armed` D-2229, the mail sweep's hold D-2369, the rescue
+# near-wait `_rescue_armed`, the stale-Enter check `_auto_stale_check`).
+FLEET_SPAWN_PINS='{"autoContinueAtUsageLimit":false,"crossSessionInbound":"refuse","idleCompaction":true}'
+_fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fails
+  local id="$1" flags="$2" v base="" merged re="--settings '([^']*)'"
+  FLEET_SPAWN_FLAGS="$flags"
+  [[ -n "$FLEET_SPAWN_PINS" ]] || return 0   # EMPTY composes nothing: the older argv suites' harness clears it after sourcing (as it pins the browser default); no setting reads it
+  if [[ "$flags" =~ $re ]]; then
+    v="${BASH_REMATCH[1]}"
+    if [[ "$v" == "{"* ]]; then base="$v"
+    elif [[ -f "$v" && ! -L "$v" ]] && ! grep -q "'" -- "$v" 2>/dev/null; then base=$(jq -c . "$v" 2>/dev/null) || base=""
+    fi
+    if [[ -n "$base" ]] && merged=$(jq -c -n --argjson b "$base" --argjson p "$FLEET_SPAWN_PINS" "[\$b, \$p] | $SETTINGS_UNION_JQ" 2>/dev/null) \
+       && [[ -n "$merged" && "$merged" != *"'"* ]]; then
+      FLEET_SPAWN_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
+    else
+      echo "ccd: warn: $id: could not merge the fleet pins into this spawn's one --settings — spawning without them" >&2
+    fi
+  else
+    FLEET_SPAWN_FLAGS="${flags:+$flags }--settings '$FLEET_SPAWN_PINS'"
+  fi
   return 0
 }
 
@@ -26251,6 +26405,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # denial into the one `--settings`; the record says what this spawn applied (`_browser_spawn_compose`, never fails).
   _browser_spawn_compose "$id" "$launchflags"; launchflags="$BROWSER_SPAWN_FLAGS"
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
+  # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
+  _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -29116,6 +29272,7 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
           mode="link: via-mount"
         else
           [[ -e "$dst" ]] && rm -rf "$dst"
+          # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
           CARRY_ROUTE=root-failed
         fi
       fi
@@ -29608,6 +29765,7 @@ _rescuewait_close() {   # id end-word — RECORDED ONCE ON EXIT; a no-op unless 
   echo "$(date '+%F %T') rescuewait-end $id: kind=$kind on $w reset=$reset after $((now - 10#$since))s end=$end" >> "$REG/swap.log"
 }
 
+# FOLLOW-UP (D-8173): the spawn settings now pin `autoContinueAtUsageLimit` off, so this screen-read hold goes once that pin is watched working live; it is kept until then.
 _rescue_armed() {   # pane text -> Claude Code's own auto-continue FOOTER: `_pane_auto_continue_armed`'s phrases, outside the prompt box and on a `·`-separated line
   # A FALSE "ARMED" HERE PARKS A STALLED SESSION, where the typing sites that share the
   # detector only decline to type. So the footer's shape, as the two pane rungs read theirs:
@@ -29652,7 +29810,7 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
   # on a banner is not — so a wait would park it; it is rescued as today, by a
   # swap whose `--resume` spawn re-drives the turn. ARMED is Claude Code's own
   # footer (`_rescue_armed`), never a draft or a line of prose saying the words.
-  local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R
+  local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R lw=""
   if [[ -z "$hb" ]]; then
     # EVERY NOT-BLOCKED TICK OF EVERY SESSION reaches this line, and the close's
     # two command substitutions fork whether or not a record exists (measured
@@ -29662,6 +29820,19 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
     return 0
   fi
   now=$(date +%s); R="${HARD_BLOCK_RESET:-}"
+  # THE OPERATOR'S LIMIT-WAIT PIN (D-8173 ruling (a)): an open `$REG/<id>.limitwait` on THIS account with `choice=wait`
+  # and no ` by=auto` is the operator's own "Wait until reset", and nothing moves the session before the reset. The
+  # watchdog honours it (`_watchdog_one`) and so does this rescue: HOLD, said once per limit episode (the `pinheld` flag
+  # on `.limitsign`, which the watchdog that opened the record wrote first). ccd's own wait (` by=auto`) is not a pin and
+  # falls through, so the tick still swaps the moment a target has room. The restart in place after the reset is the
+  # watchdog's (`_watchdog_resume_here`), and a cleared sign closes the record (`_watchdog_clear`), releasing the hold.
+  if [[ -e "$REG/$id.limitwait" ]] && _reg_get_to lw "$id" limitwait \
+     && [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait \
+           && "$(_rw_field "$lw" account)" == "$wrapper" && "$(_rw_field "$lw" by)" != auto ]]; then
+    _wd_record_read "$id" "$now" && _wd_flag_once "$id" pinheld \
+      && echo "$(date '+%F %T') rescue-hold $id: the operator chose Wait until reset on $wrapper (a limit-wait pin); the rescue moves nothing before the reset" >> "$REG/swap.log"
+    return 1
+  fi
   rec=$(_reg_get "$id" rescuewait)
   state=$(_rw_field "$rec" state); kind=$(_rw_field "$rec" kind); since=$(_rw_field "$rec" since)
   rreset=$(_rw_field "$rec" reset); rend=$(_rw_field "$rec" end)
@@ -30628,6 +30799,7 @@ _standdown_probe() {
     _reg_get_to sw "$id" lastswap
     { [[ "$sw" =~ ^[0-9]+$ && "$out" =~ ^[0-9]+$ ]] && (( 10#$sw > 10#$out )) && ! _never_came_up "$id" "$born"; } || rc=0
   fi
+  # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
   case "$rc" in 0) STANDDOWN_EV=transcript ;; 3) STANDDOWN_EV=carried-in ;; esac
   _reg_set "$id" standdownprobe "$now $STANDDOWN_EV" 2>/dev/null || true
   return 0
@@ -31594,12 +31766,14 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
 # within seconds and the next pass set it again.
 #
 # THE OPERATOR'S CHOICE. `choice=wait` on an open record (Task 10's `ccd limit-wait`) means "wait until the limit resets":
-# the watchdog then moves nothing. When the record's reset has passed (or is unknown) and the session's OWN account has
-# measured room, `_watchdog_resume_here` restarts the session in place on that account (stop and ensure, in a transient unit,
-# the cause `limit-resume`), because Claude Code does not always continue by itself. A resume counts against the same
-# WATCHDOG_PER_PASS as a forced rescue (WD_FORCED): every session waiting on one account becomes eligible at the one
-# moment its first fresh reading after the reset arrives, and an uncapped door would restart them all together (the
-# 2026-08-14 herd). The ones over the cap keep their open record and go in the next pass.
+# the watchdog then moves nothing. `choice=wait ... by=auto` is the watchdog's own choice where no account had room (D-8173
+# ruling (a)): it restarts in place the same way but is not a pin, so the rescue still moves the session the moment another
+# account has measured room; the operator's tap on it drops ` by=auto` and makes it a pin. When the record's reset has
+# passed and the session's OWN account has measured room, `_watchdog_resume_here` restarts the session in place on that
+# account (stop and ensure, in a transient unit, the cause `limit-resume`), because Claude Code does not always continue by
+# itself. A resume counts against the same WATCHDOG_PER_PASS as a forced rescue (WD_FORCED): every session waiting on one
+# account becomes eligible at the one moment its first fresh reading after the reset arrives, and an uncapped door would
+# restart them all together (the 2026-08-14 herd). The ones over the cap keep their open record and go in the next pass.
 #
 # NO KEYS, EVER. Nothing in this region reads or writes the input box or sends a key: the rate-limit menu is never typed
 # into (an Enter or a digit there can pick "Switch to usage credits"). The rescue's one act is `ccd swap`, which ends the
@@ -31638,19 +31812,31 @@ _watchdog_clear() {   # id — no sign: the episode is over. Its record goes and
 }
 
 _limitwait_open() {   # id wrapper sign -> the one writer of `$REG/<id>.limitwait` (D-8123); rc 0 | 1 could not record
-  # `state=open since=<epoch> reset=<epoch|-> account=<wrapper> sign=<sign>[ choice=wait at=<epoch>]`. The reset is the
-  # transcript row's own (`HARD_BLOCK_RESET`, set by this pass's sign rung), else the account's `fiveResetAt` or
-  # `sevenResetAt` for the window at the ceiling (the later when both are), else `-`; a reset that is not ahead of now is `-`.
-  # An open record for the same account stands as it is (its `since` and any choice are the operator's to keep); one for
-  # another account is closed `swap` first.
-  local id="$1" w="$2" sign="$3" rec="" reset="-" now r5 r7 f5 f7 best=""
+  # `state=open since=<epoch> reset=<epoch|-> account=<wrapper> sign=<sign>[ choice=wait at=<epoch>[ by=auto]]`. This
+  # function writes no choice: `_limitwait_choose` alone appends one, for the operator's tap (no `by`, a pin) or for the
+  # watchdog's own choice where no account has room (` by=auto`, D-8173 ruling (a), not a pin). The reset is the
+  # transcript row's own (`HARD_BLOCK_RESET`, set by this pass's sign rung), kept EVEN WHEN IT HAS PASSED: `_hard_block_date`
+  # keeps it only when it is later than its own row, so it is a real reset, and a pass that first finds no room after it
+  # must still say when the wait ends (`_watchdog_resume_here` then restarts at once, room permitting). Else the account's
+  # `fiveResetAt` or `sevenResetAt` for the window at the ceiling (the later when both are), which must be ahead of now:
+  # a passed one there is a stale reading that says nothing about this block. Else `-`.
+  # An open record for the same account stands as it is (its `since` and any choice are kept), with ONE exception: a record
+  # that states no reset (`-`) and carries no choice yet takes the reset a later pass dates (a first pass on a menu sign, or
+  # on a stale limits reading, dates nothing; a later banner, pane or transcript rung can), keeping its `since`, account
+  # and sign, so the watchdog's automatic choice (D-8173 ruling (a)) can apply on that same pass. One for another account
+  # is closed `swap` first.
+  local id="$1" w="$2" sign="$3" rec="" reset="-" now r5 r7 f5 f7 best="" fill=""
   _reg_get_to rec "$id" limitwait || rec=""
   if [[ "$(_rw_field "$rec" state)" == open ]]; then
-    [[ "$(_rw_field "$rec" account)" == "$w" ]] && return 0
-    _limitwait_close "$id" swap
+    if [[ "$(_rw_field "$rec" account)" == "$w" ]]; then
+      [[ "$(_rw_field "$rec" reset)" == - && -z "$(_rw_field "$rec" choice)" && "$rec" == *" reset=- "* ]] || return 0
+      fill=1
+    else
+      _limitwait_close "$id" swap
+    fi
   fi
   _now_s_to now
-  if [[ "${HARD_BLOCK_RESET:-}" =~ ^[0-9]+$ ]]; then best="$HARD_BLOCK_RESET"
+  if [[ "${HARD_BLOCK_RESET:-}" =~ ^[0-9]{1,12}$ ]]; then reset=$(( 10#$HARD_BLOCK_RESET ))   # dated by its row: kept when passed
   else
     _limit_field_to f5 "$w" five 0; _limit_field_to f7 "$w" seven 0
     r5=$(_limit_json_num "$LIMITS_DIR/$w.json" fiveResetAt 2>/dev/null); r7=$(_limit_json_num "$LIMITS_DIR/$w.json" sevenResetAt 2>/dev/null)
@@ -31658,8 +31844,13 @@ _limitwait_open() {   # id wrapper sign -> the one writer of `$REG/<id>.limitwai
     if [[ "$f7" =~ ^[0-9]+$ && "$r7" =~ ^[0-9]+$ ]] && (( 10#$f7 >= SWAP_CEILING )); then
       if [[ -z "$best" ]] || (( 10#$r7 > 10#$best )); then best="$r7"; fi
     fi
+    [[ "$best" =~ ^[0-9]{1,12}$ ]] && (( 10#$best > now )) && reset=$(( 10#$best ))   # the limits file's only: ahead of now
   fi
-  [[ "$best" =~ ^[0-9]+$ ]] && (( 10#$best > now )) && reset=$(( 10#$best ))
+  if [[ -n "$fill" ]]; then
+    [[ "$reset" == - ]] && return 0   # this pass dates nothing either: the record stands as it is
+    _reg_set "$id" limitwait "${rec/ reset=- / reset=$reset }" || return 1
+    return 0
+  fi
   _reg_set "$id" limitwait "state=open since=$now reset=$reset account=$w sign=$sign" || return 1
   return 0
 }
@@ -31673,17 +31864,26 @@ _limitwait_close() {   # id end-word — close an open record: `state=closed` wi
   return 0
 }
 
-_limitwait_choose() {   # id -> record `choice=wait at=<now>` on an OPEN limitwait. rc 0 recorded (or already chosen) | 1 not open | 2 could not write
+_limitwait_choose() {   # id [auto] -> record `choice=wait at=<now>[ by=auto]` on an OPEN limitwait. rc 0 recorded (or already chosen) | 1 not open | 2 could not write
   # The second and last write to `$REG/<id>.limitwait` (the first is `_limitwait_open`, the end is `_limitwait_close`): the
-  # operator's own tap, behind `ccd limit-wait`. A record that is not exactly `state=open` (closed by a landing or by a pass
-  # with no sign, absent, or a hand-edited line) is refused, never evaluated. The first choice stands: a second tap keeps its time.
-  local id="$1" rec="" now re='^state=open since=[0-9]{1,12} reset=([0-9]{1,12}|-) account=[A-Za-z0-9._-]+ sign=(pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12})?$'
+  # operator's own tap, behind `ccd limit-wait`, or, with `auto`, the watchdog's own choice where no account has room
+  # (D-8173 ruling (a), `_watchdog_one`). A record that is not exactly `state=open` (closed by a landing or by a pass
+  # with no sign, absent, or a hand-edited line) is refused, never evaluated. A choice that stands keeps its time. The
+  # operator's tap on an AUTOMATIC choice makes it the operator's: ` by=auto` goes (the time stays), and from then on it is
+  # a pin that nothing moves before the reset. An automatic choice never overwrites one that stands.
+  local id="$1" by="${2:-}" rec="" now re='^state=open since=[0-9]{1,12} reset=([0-9]{1,12}|-) account=[A-Za-z0-9._-]+ sign=(pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12}( by=auto)?)?$'
+  [[ -z "$by" || "$by" == auto ]] || return 1
   _reg_get_to rec "$id" limitwait || return 1
   [[ "$rec" =~ $re ]] || return 1   # the whole line is matched, never evaluated: a torn or hand-edited record is no record
-  [[ -n "${BASH_REMATCH[3]}" ]] && return 0
+  if [[ -n "${BASH_REMATCH[3]}" ]]; then
+    [[ -z "$by" && -n "${BASH_REMATCH[4]}" ]] || return 0   # a choice stands: kept, unless the operator pins an automatic one
+    _reg_set "$id" limitwait "${rec% by=auto}" || return 2
+    echo "$(date '+%F %T') limit-wait $id: choice=wait pinned by operator (was by=auto) account=$(_rw_field "$rec" account) sign=$(_rw_field "$rec" sign)" >> "$REG/swap.log"
+    return 0
+  fi
   _now_s_to now
-  _reg_set "$id" limitwait "$rec choice=wait at=$now" || return 2
-  echo "$(date '+%F %T') limit-wait $id: choice=wait account=$(_rw_field "$rec" account) sign=$(_rw_field "$rec" sign)" >> "$REG/swap.log"
+  _reg_set "$id" limitwait "$rec choice=wait at=$now${by:+ by=$by}" || return 2
+  echo "$(date '+%F %T') limit-wait $id: choice=wait account=$(_rw_field "$rec" account) sign=$(_rw_field "$rec" sign)${by:+ by=$by}" >> "$REG/swap.log"
   return 0
 }
 
@@ -31747,9 +31947,10 @@ _wd_running() {   # id -> rc 0 iff the session is NOT at a clean turn boundary, 
 _swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelled or backed off (logged, `lastswap` restored, nothing stopped)
   # Re-asks the decision's own question at the act, after the dispatch's jitter: stopped, hibernated or no longer live, or no
   # sign any more -> `watchdog-cancel`; output since the decision, or (under an account-only sign) a session not at a clean turn
-  # boundary, `_swap_idle_gate`'s question, or an operator hold or manual-swap pin (`_wd_operator_hold_to`) -> `rescue-backoff`.
+  # boundary, `_swap_idle_gate`'s question, or an operator hold or manual-swap pin (`_wd_operator_hold_to`) -> `rescue-backoff`;
+  # so does the operator's own limit-wait pin (`choice=wait` without ` by=auto`, D-8173), whatever the sign.
   # A DRAFT OR A STALE-PRESS DOES NOT BACK OFF (ruled): the watchdog is the net for exactly the session those holds keep on a limit. Never reads or writes the input box.
-  local id="$1" sign="" word="" why=""
+  local id="$1" sign="" word="" why="" lw=""
   # THE OPERATOR MAY HAVE STOPPED THE SESSION DURING THE JITTER. `_watchdog_one` asked at the decision; `cmd_swap` refuses
   # `.hibernated` but not `.stopped`, and its tail respawns a session (`cmd_ensure` also removes `.stopped`). A stopped
   # pane cannot be measured and the transcript rung would still read the old limit row, so the gate asks again, first.
@@ -31761,6 +31962,15 @@ _swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancel
   fi
   if [[ -n "$why" ]]; then
     echo "$(date '+%F %T') watchdog-cancel $id: $why" >> "$REG/swap.log"
+    _swap_lastswap_restore "$id"
+    return 1
+  fi
+  # THE OPERATOR MAY HAVE PINNED THE WAIT DURING THE JITTER (D-8173 ruling (a)). A watchdog rescue is dispatched for ccd's
+  # own wait (` by=auto`, not a pin), and the row keeps its Wait control meanwhile; the operator's tap drops ` by=auto` and
+  # promises nothing moves the session before the reset. So the act re-reads the record and backs off on that pin.
+  _reg_get_to lw "$id" limitwait || lw=""
+  if [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait && "$(_rw_field "$lw" by)" != auto ]]; then
+    echo "$(date '+%F %T') rescue-backoff $id: the operator chose Wait until reset (a limit-wait pin)" >> "$REG/swap.log"
     _swap_lastswap_restore "$id"
     return 1
   fi
@@ -31905,10 +32115,14 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
     _reg_set "$id" limitsign "$since $sign" || return 0
   fi
   # THE OPERATOR WAITS. Nothing is moved; the session restarts in place once its own account has room again.
+  # AN AUTOMATIC WAIT (`by=auto`, D-8173 ruling (a)) restarts in place the same way, but it is not the operator's pin: until
+  # the reset it keeps looking, and the moment another account has measured room the rescue below moves the session there
+  # (ccd always swaps; the wait is for when there is nowhere to go). Its landing closes the record `swap`. The operator's
+  # tap on it (`ccd limit-wait`) drops ` by=auto`, and from then on it is the operator's pin like any other.
   _reg_get_to lw "$id" limitwait || lw=""
   if [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait ]]; then
-    _watchdog_resume_here "$id" || :
-    return 0
+    _watchdog_resume_here "$id" && return 0
+    [[ "$(_rw_field "$lw" by)" == auto ]] || return 0
   fi
   age=$(( now - since ))
   (( age >= n * 60 )) || return 0
@@ -31972,6 +32186,20 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
     # NOWHERE TO GO. The operator is told through the record, once per episode in the log.
     _wd_flag_once "$id" noroom && echo "$(date '+%F %T') watchdog-noroom $id: $wrapper sign=$sign for=${m}m and no account has measured room" >> "$REG/swap.log"
     _limitwait_open "$id" "$wrapper" "$sign" || :
+    # D-8173 RULING (a): with no account that has room, ccd chooses "Wait until reset" itself, so the session restarts in place
+    # at the reset instead of sitting idle until the operator taps (spawns pin auto-continue off, so Claude Code will not).
+    # Only for a session that HAS stopped (not an account-only sign) and only when the record states a reset: a `-` reset is
+    # the stale-low-reading case, where a restart by the clock would hit the limit again, so that one stays the operator's.
+    # A reset the transcript row dated may already have passed (`_limitwait_open` keeps it), so the restart is asked on this
+    # same pass: `_watchdog_resume_here` restarts only when the session's OWN account reads room, under WATCHDOG_PER_PASS and
+    # its holds, and a restarted session is not stranded.
+    if [[ "$sign" != account ]]; then
+      _reg_get_to lw "$id" limitwait || lw=""
+      # A choice that already stood was offered the restart at the top of this pass; only a new one is asked here.
+      if [[ "$(_rw_field "$lw" reset)" =~ ^[0-9]+$ && "$(_rw_field "$lw" choice)" != wait ]] && _limitwait_choose "$id" auto; then
+        _watchdog_resume_here "$id" && return 0
+      fi
+    fi
     if [[ "$sign" != account && ! -e "$REG/$id.stranded" ]]; then
       _reg_get_to project "$id" project || project=""
       _strand_mark "$id" "$wrapper" "$project" "limit sign $sign for $m min and no account has measured room"
@@ -36141,7 +36369,9 @@ _ws_reclaim_commit_tree() {   # dir args... -> the new commit's id on stdout, an
   #                                are git's own for writing a commit object (parents, message, tree)
   # THE ONE COMMIT WRITER, and the ONE IDENTITY, of the RECLAIM region: the WIP
   # commit (`_ws_wip_commit`) and the reflog keep (`_ws_reclaim_keep_reflogs`)
-  # both write through here, so no second identity exists to drift. It is FIXED,
+  # both write through here, so no second identity exists to drift; outside the
+  # region, an empty project's root commit (`_project_origin_seed`, D-8193: the
+  # empty tree, no work tree content) is the one other caller. It is FIXED,
   # in both channels. `-c user.*` names it to git's config; the GIT_*
   # environment is what outranks config, so a caller that happened to export
   # GIT_AUTHOR_NAME cannot put its own name on a commit it did not write. The
@@ -36821,6 +37051,7 @@ _ws_reclaim_secrets_json() {   # -> RECLAIM_SECRETS as a JSON array of strings, 
   printf '%s]' "$out"
 }
 
+# shellcheck disable=SC2128,SC2178  # same and kept are local strings here; the arrays of those names are other functions' locals (shellcheck does not scope names by function)
 _ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclaim-only tombstone keys as a
   #                                JSON fragment ENDING IN A COMMA — `_ws_tombstone`'s optional third
   #                                argument. Reads the eval's RECLAIM_NESTED/RECLAIM_FOREIGN and the pin's
@@ -37176,6 +37407,7 @@ _ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie 
 }
 
 _WS_NREC_BRANCH=''
+# shellcheck disable=SC2178  # m is a local string here; the arrays named m are other functions' locals (shellcheck does not scope names by function)
 _ws_reclaim_nested_record() {   # main cpath -> rc 0 with _WS_NREC_BRANCH ('' = detached) when one of $main's
   #                                  worktree records names exactly cpath; 1 when none does; 2 when the list
   #                                  could not be READ
@@ -42276,6 +42508,7 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
   return "$rc"
 }
 
+# shellcheck disable=SC2128,SC2178  # recs is a local string here; the arrays named recs are other functions' locals (shellcheck does not scope names by function)
 _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line of a TERMINAL word; rc 1 on
   #                             `unmeasured`, else 0
   local id="$1" leaf="$HOME/.cc-tmp/$1" exists=false wit=null recs='[' r first=1 newest=null entries=null
@@ -43167,6 +43400,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
     fi
   fi
   if [[ "${REAP_VERDICT-}" == collectable && "$token" != "${REAP_TOKEN-}" ]]; then
+    # shellcheck disable=SC2100  # a hyphenated word assigned as a string, not arithmetic (D-8198)
     REAP_VERDICT=state-changed
     REAP_DETAIL="nothing was moved: $id changed since the audit that minted the token (expected ${REAP_TOKEN-}, was given $token)"
   fi
@@ -47521,16 +47755,21 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
 # Where the load looks for a hashing tool when the one `_plat_sha256` selects is not on PATH, in order. Absolute, fixed, never
 # from the environment: these are the platforms' standard locations (GNU coreutils, perl's shasum, BSD/macOS sha256).
 __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_SHA256=stamp-at-install
 # THE TRAIN-PROOF LIBRARY'S PIN (D-7463): the SHA-256 of ccd/lib/train-proof.sh, the second library the load reads, checks
 # and evaluates (after disk-retention.sh). A placeholder here, rendered by ccd/ccd-entry-install.py from exactly one line, as
 # the pin above is.
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_TRAIN_SHA256=stamp-at-install
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_LEASE_SHA256=stamp-at-install
 # THE DOCS REDACTOR'S PINS (D-7077, OA-C11 (a)): the SHA-256 of `shared/redact.mjs` and `shared/redact-cli.mjs`, installed beside
 # this body. Placeholders here, rendered by ccd/ccd-entry-install.py from exactly one line each, as the library pin is. Read only by
 # `_docs_redact_cli` and `_docs_front`; written only here (the census in ccd-lib-load.test.ts).
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_REDACT_SHA256=stamp-at-install
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_REDACT_CLI_SHA256=stamp-at-install
 # WHAT THE LOAD DECIDED, PUBLISHED (D-7125). `_ccd_lib_load` is the one writer of these two: `__CCD_LAYOUT` is `source` (the
 # source checkout's arm) or `installed` (the digest checked), and `__CCD_HASH_CMD` the hashing command it chose. The docs front

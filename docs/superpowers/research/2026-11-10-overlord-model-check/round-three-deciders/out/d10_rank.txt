@@ -1,0 +1,10 @@
+ok  decisionRank as three sort keys orders all 435 pairs of 30 rows (ties go to the Overlord's order)
+CE RANK-fixed: Table 5.6a: "The decision queue ranks it by its slack to that date". §6.6 puts slack third, after rank weight times blocked hours. In 12 pairs a `fixed-date` row with less weighted blocked time ranks under a `standard` or `background` row however close its date, e.g. slack 1 h against weight x hours 2; Table 5.6a gives no scale to compare slack with blocked hours. In 45 pairs two `fixed-date` rows come out in the other order than their slack gives
+CE LADDER-pause: Pause at `off` sets `operatorRung` to `chat`: a rung up, with no step-up
+ok  Pause at `chat` -> `chat`: not a rung up
+ok  Pause at `advise` -> `chat`: not a rung up
+ok  Pause at `full` -> `chat`: not a rung up
+note Table 7.5a: 17 rows, 13 of them caps; the other 4 are read by the decider each names
+ok  effectiveRung: 32768 inputs (4 rungs x every set of 13 caps): never above the operator's rung, and a new cap never raises it
+ok  nine restatements of a cap outside Table 7.5a name the rung its row names
+== decisionRank, Pause, effectiveRung: domain 435 pairs of queue rows; 4 rungs x Pause; 32768 ladder inputs; counterexamples 2; checks passed 6

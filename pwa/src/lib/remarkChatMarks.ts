@@ -30,8 +30,8 @@
 // Inline code, link text and raw html hold no sentence end, a name in link text is a name there too, and a `<br>` is a
 // line break (review 1601 F3; desktop-polish Task C14, D-8110).
 import {
-  LabelScan, MARK_ATTR, leadKind, leadingStatus, markRuns, nameSpans, statusTone, wordAfter, wordBefore, type LeadKind,
-  type MarkRun, type Span,
+  LabelScan, MARK_ATTR, leadKind, leadingStatus, markRuns, nameSpans, qualifiedNames, statusTone, wordAfter, wordBefore,
+  type LeadKind, type MarkRun, type Span,
 } from './chatMarks';
 
 interface MdNode {
@@ -41,7 +41,6 @@ interface MdNode {
   data?: { hName?: string; hProperties?: Record<string, unknown> };
   position?: { start?: { offset?: number }; end?: { offset?: number } };
 }
-
 
 /** The node types the walk never enters: a name inside one is not prose. */
 const SKIP: ReadonlySet<string> = new Set([
@@ -168,9 +167,24 @@ function edgeQualified(node: MdNode, from: number, to: number, source: string | 
   return to === (node.value ?? '').length && end !== undefined && wordAfter(source, end);
 }
 
+/** The qualified names (`owner/repo#n`, as `${repo}#${id}`) that the message's SOURCE holds over text node `node`'s own range,
+ *  read by the evidence reader's own walk (`qualifiedNames`), or null for a node with no position or a plugin run with no
+ *  source, which keeps the node's own reading (review 1762 F4; Task C20 fix round 1, review 1766 F4). A qualified name the
+ *  node holds is a name only where its range's source holds it too: an escape or an entity inside the name
+ *  (`owner/repo\#12`, `owner/repo&#35;12`) decodes to a name the raw-text evidence reader (`chatRepoEvidence.ts`) never
+ *  counted, so the grammar refuses it too and the two agree. A container's prefix on a middle line of a list item, a quote or
+ *  an alert, and an escape elsewhere in the node, change nothing: the name is looked for, not lined up. */
+function sourceNames(node: MdNode, source: string | null): ReadonlySet<string> | null {
+  const start = node.position?.start?.offset;
+  const end = node.position?.end?.offset;
+  if (source === null || start === undefined || end === undefined) return null;
+  return new Set(qualifiedNames(source.slice(start, end)).map((q) => `${q.repo}#${q.id}`));
+}
+
 /** A text node as `markRuns`' runs (`blockRuns`' when its block made them); `null` when there is nothing to mark. Where
  *  `labels` is false (a header cell) a status run stays text, joined to the text beside it, and only names are marked. A
- *  qualified name the source's boundary refuses (`edgeQualified`) stays text. */
+ *  qualified name the source's boundary refuses (`edgeQualified`), or that the source does not hold over the node's range
+ *  (`sourceNames`), stays text. */
 function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | undefined, source: string | null): MdNode[] | null {
   const out: MdNode[] = [];
   let marked = false;
@@ -180,12 +194,16 @@ function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | unde
     else out.push({ type: 'text', value });
   };
   let at = 0;
+  let held: ReadonlySet<string> | null | undefined;
+  /** The source's qualified names over this node, read once and only when a qualified name needs them. */
+  const heldNames = (): ReadonlySet<string> | null => (held === undefined ? (held = sourceNames(node, source)) : held);
   for (const r of made ?? markRuns(node.value ?? '')) {
     const from = at;
     at += r.kind === 'mark' ? r.mark.text.length : r.text.length;
     if (r.kind === 'text' || (r.kind === 'status' && !labels)) {
       pushText(r.text);
-    } else if (r.kind === 'mark' && r.mark.repo !== undefined && edgeQualified(node, from, at, source)) {
+    } else if (r.kind === 'mark' && r.mark.repo !== undefined && (edgeQualified(node, from, at, source)
+      || heldNames()?.has(`${r.mark.repo}#${r.mark.id}`) === false)) {
       pushText(r.mark.text);
     } else if (r.kind === 'mark') {
       marked = true;

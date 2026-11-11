@@ -42,6 +42,7 @@ import {
   BOX_SETTING_SOURCES, BOX_SETTING_STATES, BOX_SETTINGS_SHOWN, BOX_SETTING_REFUSAL_WORDS, BOX_SETTING_SPECS, BOX_SETTINGS_TEXT_MAX,
   BOX_SETTING_VALUE_WORDS, BOX_SETTINGS_V1_REFUSED_WHY, BOX_SETTINGS_V1_UNFIT_WHY, type BoxSettingsDoc, type UpdatesView,
 } from '../../shared/api.js';
+import { fakeTime } from './fakeTime.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -572,7 +573,7 @@ async function box(o: { watcher: boolean; files?: Record<string, string> }): Pro
   const coord = new CoordStore(openCoordDb(join(cfg.ccrcDir, 'coord.db')));
   const d: Deps = {
     cfg, runCcd: ccdRunner(failingRunner, cfg), tmux: new Tmux(failingRunner), io: localIO,
-    queue: new KeyedQueue(), mailToken: 'f'.repeat(64), coord,
+    queue: new KeyedQueue(), time: fakeTime().ports, mailToken: 'f'.repeat(64), coord,
   };
   const bus = new Bus();
   const watcher = o.watcher ? new FleetWatcher(d, bus, 10_000, join(cfg.ccrcDir, 'state-cache.json')) : undefined;

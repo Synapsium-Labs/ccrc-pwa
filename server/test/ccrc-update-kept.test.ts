@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync, symlinkSync, readlinkSync, utimesSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
@@ -124,7 +125,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // The exit-4 sentence names the FIRST gate's failure, not arm 1's passing
     // re-gate (D-3444).
     expect(r.stderr).toContain(`update: v2.0.0 was installed, but the box did not come back healthy on it (${GATE_DENIED.slice('gate: '.length)}) — exit 4.`);
-  }, 60_000);
+  }, scaled(60_000));
 
   // C26 (review 155; W6 Task 8A). Arm 2 runs its restore child from the tree
   // just installed. After `ccrc update --to <a release older than wave 4>
@@ -189,7 +190,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // as it does for a W6 spine whose gate then fails — that is not this
     // item's, and no restore path reads it as `current`.)
     expect(linkOf(home)).not.toBe(join(home, 'ccrc-versions', 'v1.0.0'));
-  }, 60_000);
+  }, scaled(60_000));
 
   // The marker the dying spine leaves, as the stub npm writes it. Since D-3457
   // an `_inst_tree`-marked death before the flip is "nothing replaced" (exit 1,
@@ -250,7 +251,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(v1, 'server', 'node_modules', '.fixture-dep'))).toBe('installed\n');
     expect(existsSync(join(v1, '.ccrc-installed')), 'the running version stopped claiming completeness').toBe(true);
     expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
-  }, 60_000);
+  }, scaled(60_000));
 
   it('arm 1 with ~/ccrc already ON the previous version restores it IN PLACE — unit pin, the arm called directly on a FULL box: its kept stamp, its own spine, the gate once more, no download, no npm ci in the running version, that version byte-unchanged (D-3445; the end-to-end case above reaches it through cmd_update; an `_inst_tree`-marked death never gets here, D-3457)', () => {
     const home = onKeptV1('ccrc-update-arm1-in-place-');
@@ -303,7 +304,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(v1, 'server', 'node_modules', '.fixture-dep'))).toBe('installed\n');
     expect(existsSync(join(v1, '.ccrc-installed')), 'the running version stopped claiming completeness').toBe(true);
     expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
-  }, 60_000);
+  }, scaled(60_000));
 
   it('arm 1 whose kept spine COMPLETED under a failing doctor still reverts, and the report and the line say the doctor exited N — as arm 2\'s rc-3 arm does (F9; the flip stubbed to VER_SPINE_RC=3, the arm called directly)', () => {
     const home = freshUpdateBox('ccrc-update-arm1-doctor-');
@@ -357,7 +358,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(rb.stderr).toMatch(/^ccrc: rollback: v2\.0\.0 is not a published release \(its SHA256SUMS answered 404\)/m);
     expect(rb.stdout).not.toMatch(/is kept at/);
     expect(linkOf(home)).toBe(v2);
-  }, 60_000);
+  }, scaled(60_000));
 
   // W6 Task 8A (review 173's F1r: every write on an arm-3 path is true). On a
   // versioned box arm 3 says, BEFORE its copy, what it will leave in the
@@ -404,7 +405,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(lastReport(home)['phase']).toBe('reverted');
     expect(String(lastReport(home)['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
     expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
-  }, 60_000);
+  }, scaled(60_000));
 
   it('arm 1 refuses BEFORE any flip, naming why, and falls to arm 2: no previous, an untagged or malformed one, a box not versioned, one already on a previous tag that is not kept complete (on one that is, arm 1 restores in place — the FULL case above), a previous with no kept or an incomplete kept version (the arm, sourced)', () => {
     const prev = (h: string, body: string): void => writeFileSync(join(h, '.ccrc', 'previous'), body);
@@ -885,7 +886,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
       const restartAt = c.indexOf(UNIT_RESTART);
       expect(restartAt, 'a rollback by flip must end in the supervisor sweep').toBeGreaterThan(c.indexOf('--user is-active ccrc.service'));
     }
-  }, 60_000);
+  }, scaled(60_000));
 
   it('a crashed migration is completed BEFORE the kept check, so a kept tag still reads kept — no release-host question, no download — and the flip\'s passed gate then removes ~/ccrc.migrating (W6 Task 3, D-3437)', () => {
     const { home, kept } = flipBox('ccrc-rollback-crashed-');
@@ -908,7 +909,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(localUrls(home)).toEqual([]);
     expect(linkOf(home)).toBe(kept);
     expect(existsSync(join(home, 'ccrc.migrating')), 'the passed gate did not remove the old tree').toBe(false);
-  }, 60_000);
+  }, scaled(60_000));
 });
 
 describe('ccrc update: a spine older than W6 gets a directory named for its own tag (W6 Task 4)', () => {
@@ -2132,7 +2133,7 @@ describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and 
   });
   const run = (home: string, body: string): { code: number; stdout: string; stderr: string } => {
     const r = spawnSync(BASH, ['-c', `set --; source "${join(REPO, 'ccd', 'ccrc')}"; mkdir -p "$HOME/.ccrc"; ${body}`],
-      { env: chainEnv(home), encoding: 'utf8', timeout: 30_000 });
+      { env: chainEnv(home), encoding: 'utf8', timeout: scaled(30_000) });
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
   const leftovers = (home: string): string[] =>
@@ -2436,7 +2437,7 @@ describe('"kept" is a statement about the version\'s bytes: a digest in the reco
     expect(localUrls(home).some((u) => u.endsWith('/download/v1.0.0/ccrc-v1.0.0.tar.gz')), localUrls(home).join('\n')).toBe(true);
     expect(existsSync(join(v1, 'agent', 'WRITTEN-THROUGH')), 'the marker survived: nothing was re-installed').toBe(false);
     expect(keptAnswer(home, 'v1.0.0', '')).toBe('rc=0 why=');
-  }, 120_000);
+  }, scaled(120_000));
 
   it('a FULL gate failure whose previous version was written through does not flip back into it: arm 1 names why and arm 2 re-installs it from its release', () => {
     const home = onKeptV1('ccrc-fx-a-arm1-');
@@ -2451,7 +2452,7 @@ describe('"kept" is a statement about the version\'s bytes: a digest in the reco
     expect(r.stdout).not.toMatch(/flipping back to it|REVERTED \(arm 1\)/);
     expect(r.stdout).toMatch(/^update: arm 2: re-installing v1\.0\.0 /m);
     expect(existsSync(join(v1, 'agent', 'WRITTEN-THROUGH')), 'arm 2 did not re-install over the written-through tree').toBe(false);
-  }, 120_000);
+  }, scaled(120_000));
 
   // ── the listing says it; GC's verdicts are exactly today's ───────────────
   it('`ccrc versions` says `written-through` for a version whose tree is not the one that was kept — and the verdicts, the count and what --prune removes are exactly what they are for the same box with that version clean', () => {
@@ -2491,7 +2492,7 @@ describe('"kept" is a statement about the version\'s bytes: a digest in the reco
     expect(dp.code).toBe(cp.code);
     expect(dp.stdout.replace(/written-through/g, 'complete')).toBe(cp.stdout);
     expect(readdirSync(join(dirty, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
-  }, 120_000);
+  }, scaled(120_000));
 });
 
 // ── M1 (review 179 fix round 1): the listing's third word ─────────────────────
@@ -2531,7 +2532,7 @@ describe('`ccrc versions` says `unmeasured` for a version kept before digests ex
     expect(pp.code).toBe(cp.code);
     expect(pp.stdout.replace(/unmeasured/g, 'complete')).toBe(cp.stdout);
     expect(readdirSync(join(pre, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
-  }, 120_000);
+  }, scaled(120_000));
 });
 
 // R20a (centralised-update wave 13): each test's fixture homes go in a root `afterEach`, not all at once in the

@@ -1,0 +1,6 @@
+CE FUP-silent: a `hands-off` programme, at `advise`: the clock comes due and no rule nudges or moves the request (12 inputs, e.g. state `routed`, 0 nudges so far). It stays where it is, and the operator is never told
+CE FUP-silent: a `hands-off` programme, at `full`: the clock comes due and no rule nudges or moves the request (12 inputs, e.g. state `routed`, 0 nudges so far). It stays where it is, and the operator is never told
+CE FUP-silent: the `off` rung, an acknowledged request: the clock comes due and no rule nudges or moves the request (9 inputs, e.g. state `in-progress`, 0 nudges so far). It stays where it is, and the operator is never told
+CE FUP-monotonic: a lower rung or a lower engagement turns "a nudge" or "moved to needs-you" into no answer in 69 input pairs
+CE FUP-order: `followUpDue` is a first-match decider (Table 11.7b) and "the nudge names its reason"; §5.4 lists 6 reasons and no order. 15 pairs can hold together. In the order listed, "no acknowledgement" names the nudge of a request whose coordinator is dead, and the Overlord nudges a dead owner
+== followUpDue: domain 144 inputs; 15 pairs of reasons; counterexamples 5; checks passed 0

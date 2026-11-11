@@ -297,18 +297,22 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts (L0) and stallWatchSays from sessionReading (L1, which imports only L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts (L0), stallWatchSays from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(['../../../shared/api.js', '../sessionReading.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
+      expect(['../../../shared/api.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
     // From sessionReading, `stallWatchSays` ALONE, and on exactly this one line: a second name, or a second import
     // from the module, would let the lane reach the policy table or `turnSays` and spell a policy name of its own.
     const fromReading = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/sessionReading\.js\1;?$/gm)].map((m) => m[0].trim());
     expect(fromReading, 'the one import from sessionReading').toEqual([`import { stallWatchSays } from '../sessionReading.js';`]);
+    // From roleOf, `sessionRoleOf` ALONE: a second name would let the lane read the role table or `roleOf` and decide a
+    // role of its own. roleOf.ts is L1 and imports only L0.
+    const fromRoleOf = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/roleOf\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromRoleOf, 'the one import from roleOf').toEqual([`import { sessionRoleOf } from '../roleOf.js';`]);
   });
 });
 

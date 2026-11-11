@@ -20,6 +20,7 @@ import { seedRoster } from './helpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-f';
 
@@ -38,7 +39,7 @@ async function makeApp(
   };
   const cfg = loadConfig({ CCRC_HOME: home });
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() },
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports },
     new Bus(),
   );
   return { app, calls };

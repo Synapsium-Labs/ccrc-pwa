@@ -1,0 +1,6 @@
+ok  roleOf: 864 inputs, each gets a role or a typed undecided answer
+ok  every undecided answer has members of one `SessionRole` view
+ok  undecided between `coordinator` and `plain`: one answer for every reader
+ok  undecided between `reviewer` and `worker`: one answer for every reader
+ok  every role has compaction text
+== roleOf (with the proposed edits): domain 864 inputs; 2 undecided answers x 4 readers; 7 roles x the compaction column; counterexamples 0; checks passed 5

@@ -252,3 +252,17 @@ describe('the proxy asks the point at step 10, with the resolved team (#1444, sp
     expect(rig.calls.slice(1).map((c) => c.op)).toEqual(['ResolveParent', 'IssueCreate']);
   });
 });
+
+describe('the policy point passes a ccrc ask unchanged (D-8180)', () => {
+  it('the policy point passes a ccrc ask to the policy unchanged', async () => {
+    const ccrcAsk: LinearWriteAsk = {
+      actor: { kind: 'ccrc', pass: 'plan-sync' }, verb: 'operate', route: 'ccrc:plan-sync',
+      resource: { workspaceId: WS, teamKey: null, issue: null, parentTeamKey: null, op: 'initiative-create',
+        object: { kind: 'initiative', id: null } },
+    };
+    const seen: LinearWriteAsk[] = [];
+    await askWithDeadline(async (a) => { seen.push(a); return { allow: true, decisionId: null }; }, ccrcAsk);
+    expect(seen[0]!.actor).toEqual({ kind: 'ccrc', pass: 'plan-sync' });
+    expect(seen[0]).toEqual(ccrcAsk);
+  });
+});

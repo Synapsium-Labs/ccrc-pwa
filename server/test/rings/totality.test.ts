@@ -7,7 +7,7 @@
 // file is stale and is deleted. The contexts are ARCH-34's vocabulary (`CCD_CONTEXTS`). No exemption set: the table
 // is the override map, and every row in it is a reason written in the spec.
 import { describe, expect, it } from 'vitest';
-import { CCD_CONTEXTS } from '../consolidationCensus.js';
+import { CCD_CONTEXTS, CCD_ONLY_CONTEXTS } from '../consolidationCensus.js';
 import { pwaRing, serverRing, type Ring } from './ring.js';
 import {
   assignContexts, fileRowNames, parseContextTable, readContextTable, type ContextRow,
@@ -73,10 +73,19 @@ describe('the context table (ARCH-04 stage 4)', () => {
     expect(assignContexts('server', ['exec.ts'], dup).duplicateRows).toEqual(['`exec.ts`']);
   });
 
-  it('the spec holds each of the ten contexts, once and in order, and every row names a known context', () => {
+  it('CONTROL: a two-digit context id is read, not skipped (C10, D-8272)', () => {
+    const ten = TABLE.replace('| K Kernels', '| C10 Session host | `host.ts` | (none) |\n| K Kernels');
+    expect(parseContextTable(ten).filter((r) => r.context === 'C10').map((r) => `${r.pkg} ${r.pattern}`))
+      .toEqual(['server host.ts']);
+  });
+
+  it('the spec holds each context the packages have, once and in order, and every row names a known context', () => {
+    // CCD_ONLY_CONTEXTS have no row: C10 Session host is ccd's adapter, and the server declares its SessionHost port
+    // at its consumer, C3 (D-8272). A row for one here is red, as a missing row for any other context is.
     const rows = readContextTable();
     const order = [...new Set(rows.map((r) => r.context))];
-    expect(order).toEqual([...CCD_CONTEXTS]);
+    expect(order).toEqual(CCD_CONTEXTS.filter((c) => !(CCD_ONLY_CONTEXTS as readonly string[]).includes(c)));
+    expect(CCD_ONLY_CONTEXTS).toEqual(['C10']);
   });
 });
 

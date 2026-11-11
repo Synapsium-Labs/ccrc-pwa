@@ -128,7 +128,7 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'census-w8/cadence.test.ts': ['_ccd_job', '_check_bounds', '_check_words', '_elsewhere', '_job_accepted',
     '_job_assigned_in_another_function', '_job_calendar', '_job_foreign', '_job_inline', '_job_literal',
     '_job_unassigned_local'],
-  'ccrc-doctor-codex.test.ts': ['_check_failed', '_check_warned', '_fix_failed', '_fix_warned'],
+  'ccrc-doctor-codex-fix.test.ts': ['_check_failed', '_check_warned', '_fix_failed', '_fix_warned'],
   'ccrc-doctor-fleet.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_gamma', '_check_liar',
     '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_weird'],
   'ccrc-models.test.ts': ['_fk_cfg', '_fk_log', '_fk_probe', '_fk_rc', '_fk_ret'],

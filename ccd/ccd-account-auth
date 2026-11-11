@@ -1125,8 +1125,9 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
         #     by hand": `ccrc wrappers`, even with `--force`, never writes
         #     that id's launcher ("upstream and external are never written"
         #     is the verb's own summary line).
-        # `upstream`, `generated`, `external` and `codex` are the roster
-        # validator's EXEC_KINDS (`shared/roster-json.mjs`), and
+        # `upstream`, `generated`, `external` and `codex` are the roster's
+        # EXEC_KINDS (one definition in `shared/roster.ts`, mirrored in order
+        # by the validator `shared/roster-json.mjs`, D-8192), and
         # `ccd-account-auth.test.ts` runs every kind it declares through this
         # gate, so a kind added there and not here reads red there, never as
         # "invalid" on a phone.

@@ -24,6 +24,7 @@ import type { Dialog, HookAsk, SessionStreamMsg } from '../../shared/api.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-f';
 const UUID_A = 'a'.repeat(36);
@@ -199,7 +200,7 @@ export async function runSequence(sc: Scenario): Promise<{ frames: Sent[]; repli
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord };
     let copied: string | null = null;
     const set = (s: Step): void => {
       current = paneText(s.pane);

@@ -1,0 +1,58 @@
+| machine | scenario | reading | states | transitions | secs | violated |
+|---|---|---|---|---|---|---|
+| evidence | item | safe | 720 | 1168 | 0.0 | - |
+| evidence | bundle | safe | 186 | 255 | 0.0 | - |
+| evidence | own-item | safe | 360 | 533 | 0.0 | - |
+| evidence | old-console | safe | 360 | 533 | 0.0 | - |
+| evidence | item | SCORE_AGAINST=final | 720 | 1168 | 0.0 | E1 |
+| evidence | item | PRED_REFILE=last | 1440 | 2302 | 0.0 | E4 |
+| evidence | item | PRED_LATE=final | 832 | 1344 | 0.0 | E4 |
+| evidence | bundle | BUNDLE_COUNTS=each | 186 | 255 | 0.0 | E2 |
+| evidence | own-item | SELF_COUNTS=True | 360 | 533 | 0.0 | E3 |
+| evidence | item | MISSING=left-out | 720 | 1168 | 0.0 | E7 |
+| spot | routine | safe | 10 | 13 | 0.0 | - |
+| spot | routine-agree | safe | 7 | 8 | 0.0 | - |
+| spot | grant | safe | 8 | 7 | 0.0 | - |
+| spot | grant-quiet | safe | 4 | 3 | 0.0 | - |
+| spot | seeded | safe | 25 | 47 | 0.0 | - |
+| spot | routine | SPOT_OVERTURN=both | 10 | 13 | 0.0 | S2 |
+| spot | grant | RENEWAL_WORD=blind | 8 | 7 | 0.0 | S1 |
+| spot | grant-quiet | RENEW_FEWER=shown | 8 | 7 | 0.0 | S5 |
+| arming | releases | safe | 4895 | 7549 | 0.0 | - |
+| arming | fallback | safe | 604 | 1100 | 0.0 | - |
+| arming | latches | safe | 90 | 237 | 0.0 | - |
+| arming | restore | safe | 95 | 181 | 0.0 | - |
+| arming | releases | GATE3_REF=last | 5512 | 7011 | 0.0 | A3 |
+| arming | releases | FAIL_EXIT=none | 3390 | 5574 | 0.0 | A4 |
+| arming | releases | FAIL_EXIT=rerun | 6774 | 16422 | 0.1 | - |
+| arming | fallback | GRANT_MODEL=replay | 604 | 1100 | 0.0 | A6 |
+| arming | fallback | FB_AHEAD=False | 285 | 327 | 0.0 | A8 |
+| arming | latches | DRILL_MODE=advisory | 60 | 148 | 0.0 | - |
+| decision | drift | safe | 2489 | 4864 | 0.0 | - |
+| decision | key | safe | 965 | 1934 | 0.0 | - |
+| decision | key-old-yes | safe | 1001 | 1952 | 0.0 | - |
+| decision | down | safe | 141 | 257 | 0.0 | - |
+| decision | off | safe | 35 | 41 | 0.0 | - |
+| decision | drift | ANCHOR=cached | 344 | 842 | 0.0 | D3 |
+| decision | drift | COMMIT_SHADOW=letter | 2413 | 4756 | 0.0 | D1 D2 |
+| decision | key-old-yes | COMMIT_KEY=reuse | 1001 | 1952 | 0.0 | D2 |
+| decision | drift | REARM=tap | 913 | 1992 | 0.0 | D4 |
+| decision | drift | RECORDS=kept | 2400 | 4682 | 0.0 | D7 |
+| decision | drift | RECORDS=kept GATHERED=used | 2454 | 4791 | 0.0 | D2 D7 |
+| decision | drift | GATHERED=used | 2543 | 4973 | 0.0 | D2 |
+| decision | off | OFF_DOOR=plain | 35 | 41 | 0.0 | D5 |
+| judges | drill-burst | safe | 21 | 21 | 0.0 | - |
+| judges | drill-day-one | safe | 22 | 25 | 0.0 | - |
+| judges | drill-brief | safe | 22 | 25 | 0.0 | - |
+| judges | audit | safe | 16 | 24 | 0.0 | - |
+| judges | audit-unlabelled | safe | 9 | 11 | 0.0 | - |
+| judges | audit-low-judge | safe | 9 | 11 | 0.0 | - |
+| judges | weekly | safe | 19 | 26 | 0.0 | - |
+| judges | drill-burst | ADMISSION=ignored | 24 | 26 | 0.0 | J2 |
+| judges | drill-burst | SEQUENCE=stamped | 21 | 21 | 0.0 | J3 |
+| judges | drill-burst | SEQUENCE=absent | 21 | 21 | 0.0 | J4 |
+| judges | drill-day-one | SEAT=any | 18 | 19 | 0.0 | J4 |
+| judges | audit | AUDIT_GAP=nothing | 16 | 24 | 0.0 | J6 |
+| judges | audit-unlabelled | UNMEASURED=advisory | 9 | 11 | 0.0 | J9 |
+
+total states 45234, 0.3s; runs that differ from what the machine file expects: 0

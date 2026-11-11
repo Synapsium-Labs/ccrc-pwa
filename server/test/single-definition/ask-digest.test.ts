@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../../shared/api.js';
+import { callsIn, symbolOf } from '../scan/symbols.js';
 import { ALL, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -676,9 +677,9 @@ describe('the swap route spells its refusal words once (D-5240)', () => {
 
 // D-5301 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 10; spec §8). APPENDED. The
 // session role is enumerated once (`SESSION_ROLE_MAP`, its list derived by `Object.keys`), narrowed by one guard, and
-// DERIVED once, by `sessionRoleOf` from the registry's `.child` reading; `server/src/fleet.ts` is the one place the
+// DERIVED once, by `sessionRoleOf` (`server/src/roleOf.ts`) from the registry's `.child` reading; `server/src/fleet.ts` is the one place the
 // wire field is computed, and it computes it through that function. Code lines only (`stallCode`).
-describe('the session role is enumerated, narrowed and derived once, in shared/api.ts (D-5301)', () => {
+describe('the session role is enumerated and narrowed once in shared/api.ts, and derived once (D-5301)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
 
   it('CONTROL: the patterns see a definition and pass over comment lines', () => {
@@ -687,11 +688,11 @@ describe('the session role is enumerated, narrowed and derived once, in shared/a
     expect(stallCodeText('// const SESSION_ROLE_MAP = {}\nconst x = 1;')).not.toMatch(/\bSESSION_ROLE_MAP\s*[:=]/);
   });
 
-  it('SESSION_ROLE_MAP, SESSION_ROLES, isSessionRole and sessionRoleOf are each defined in shared/api.ts and nowhere else', () => {
+  it('SESSION_ROLE_MAP, SESSION_ROLES and isSessionRole are each defined in shared/api.ts, and sessionRoleOf in server/src/roleOf.ts, and nowhere else', () => {
     expect(holders(/\bSESSION_ROLE_MAP\s*[:=]/)).toEqual(['shared/api.ts']);
     expect(holders(/\bSESSION_ROLES\s*[:=]/)).toEqual(['shared/api.ts']);
     expect(holders(/\bfunction\s+isSessionRole\b|\bisSessionRole\s*=/)).toEqual(['shared/api.ts']);
-    expect(holders(/\bfunction\s+sessionRoleOf\b|\bsessionRoleOf\s*=/)).toEqual(['shared/api.ts']);
+    expect(holders(/\bfunction\s+sessionRoleOf\b|\bsessionRoleOf\s*=/)).toEqual(['server/src/roleOf.ts']);
   });
 
   it('SESSION_ROLES is derived from its map, never a hand-kept list', () => {
@@ -703,6 +704,37 @@ describe('the session role is enumerated, narrowed and derived once, in shared/a
   it("the wire field is computed in server/src/fleet.ts only, through sessionRoleOf of the registry's child", () => {
     expect(holders(/\brole:\s*sessionRoleOf\(/)).toEqual(['server/src/fleet.ts']);
     expect(stallCode(path.join(ccrcRoot, 'server/src/fleet.ts'))).toMatch(/\brole:\s*sessionRoleOf\(r\.child\)/);
+  });
+});
+
+// Overlord spec C49 (W1a roles plan, Task 5). The role vocabulary has one table and one reader: `FLEET_ROLES` and
+// `FleetRole` in shared/fleetRoles.ts, `roleOf` and `sessionRoleOfReading` in server/src/roleOf.ts. `FLEET_ROLE_NAMES`
+// is derived from the table, and the old two-word derivation of `SessionRole` is spelled nowhere. Code lines only.
+// KNOWN WIDTH: only the `kind === 'none' ? 'coordinator'` spelling is seen; an inverted test, double quotes, an `||` chain
+// or a `switch` is not.
+describe('one role vocabulary and one reader (Overlord spec C49)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  it('CONTROL: the patterns see a definition and pass over a comment', () => {
+    expect(/\bFLEET_ROLES\s*[:=]/.test('export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {')).toBe(true);
+    expect(/\bfunction\s+roleOf\b/.test('export function roleOf(f: RoleFacts): RoleReading {')).toBe(true);
+    expect(stallCodeText('// export function roleOf(f) {}\nconst x = 1;')).not.toMatch(/\bfunction\s+roleOf\b/);
+  });
+  it('FLEET_ROLES and FleetRole are defined in shared/fleetRoles.ts only', () => {
+    expect(holders(/\bFLEET_ROLES\s*[:=]/)).toEqual(['shared/fleetRoles.ts']);
+    expect(holders(/\btype\s+FleetRole\s*=/)).toEqual(['shared/fleetRoles.ts']);
+  });
+  it('FLEET_ROLE_NAMES is derived from the table, never hand-kept', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/fleetRoles.ts'), 'utf8');
+    expect(src).toMatch(/FLEET_ROLE_NAMES: readonly FleetRole\[\] =\s*\n?\s*Object\.keys\(FLEET_ROLES\)/);
+  });
+  it('roleOf and sessionRoleOfReading are defined in server/src/roleOf.ts only, and sessionRoleOf goes through roleOf', () => {
+    expect(holders(/\bfunction\s+roleOf\b|\broleOf\s*=/)).toEqual(['server/src/roleOf.ts']);
+    expect(holders(/\bfunction\s+sessionRoleOfReading\b|\bsessionRoleOfReading\s*=/)).toEqual(['server/src/roleOf.ts']);
+    // The pin reads the symbol's calls (scan/symbols.ts), not the file's text.
+    expect(callsIn(symbolOf('server/src/roleOf.ts', 'sessionRoleOf')).map((c) => c.name)).toContain('roleOf');
+  });
+  it('the old two-word ternary is spelled nowhere', () => {
+    expect(holders(/kind\s*===\s*'none'\s*\?\s*'coordinator'/)).toEqual([]);
   });
 });
 

@@ -40,7 +40,7 @@ describe('the digest\'s closes line', () => {
   });
 
   it('the push body carries the line after the decisions, and only when given', () => {
-    const totals = { decisions: 2, answers: 2, allows: 0, denies: 0, handOvers: 0, lapses: 0, guardForbidden: 0 };
+    const totals = { decisions: 2, answers: 2, allows: 0, denies: 0, handOvers: 0, lapses: 0, guardForbidden: 0, calls: 0 };
     expect(digestPushCopy('2026-11-09', totals).body).toBe('2 answered — tap to review and correct');
     expect(digestPushCopy('2026-11-09', totals, 0, 'ccrc closed 1 stuck run (1 never started)').body)
       .toBe('2 answered — ccrc closed 1 stuck run (1 never started) — tap to review and correct');

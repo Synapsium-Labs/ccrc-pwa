@@ -1272,3 +1272,47 @@ describe('wave 2\'s residue: the wait ends at the landing, and rule 3 counts lan
     expect(h.sh(`_rescue_history ${ID}; echo "$?|$RESCUE_COUNT|$RESCUE_SKIP_LEFT"`)).toBe('0|1|claude-a');
   });
 });
+
+// ── THE OPERATOR'S LIMIT-WAIT PIN (D-8173 ruling (a)) ────────────────────────
+// The operator's own "Wait until reset" (`$REG/<id>.limitwait` open with
+// `choice=wait` and no ` by=auto`) is a pin: nothing moves the session before
+// the reset. The watchdog honours it; the supervise tick's rescue must too.
+// ccd's automatic wait (` by=auto`) is not a pin: the tick still swaps the
+// moment a target has room.
+describe('the operator\'s limit-wait pin holds the tick\'s rescue (D-8173 ruling (a))', () => {
+  const pinned = (by = '', account = 'claude'): void => {
+    const t = now();
+    h.sh(`_reg_set ${ID} limitwait "state=open since=${t - 400} reset=${t + 3000} account=${account} sign=banner choice=wait at=${t - 300}${by}"
+          _reg_set ${ID} limitsign "${t - 400} banner"`);
+  };
+  const blocked = (): void => { const t = now(); writeTranscript([limitRow(t - 5, t + 3000, 'five_hour')]); };
+
+  it('the operator\'s pin: a target with room is not dispatched, and the hold is said once', () => {
+    seed(); blocked(); pinned();
+    tick(STALLED); tick(STALLED);
+    expect(dispatches()).toEqual([]);
+    expect(logLines('rescue-hold')).toEqual([expect.stringMatching(/rescue-hold claude-demo: the operator chose Wait until reset on claude \(a limit-wait pin\)/)]);
+    expect(field(h.reg(ID, 'limitwait'), 'state')).toBe('open');
+  });
+
+  it('ccd\'s own wait (by=auto) is not a pin: the tick dispatches to the target with room', () => {
+    seed(); blocked(); pinned(' by=auto');
+    tick(STALLED);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+    expect(logLines('rescue-hold')).toEqual([]);
+  });
+
+  it('a pin recorded against another account says nothing about this one', () => {
+    seed(); blocked(); pinned('', 'claude-b');
+    tick(STALLED);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('a closed record is no pin', () => {
+    seed(); blocked();
+    const t = now();
+    h.sh(`_reg_set ${ID} limitwait "state=closed since=${t - 400} reset=${t + 3000} account=claude sign=banner choice=wait at=${t - 300} end=clear until=${t - 10}"`);
+    tick(STALLED);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+});

@@ -10,7 +10,7 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
+import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 
@@ -215,12 +215,18 @@ export interface GoalsView {
 export interface GoalsRead {
   goals: GoalsView;
   openItems: { id: number; kind: ItemKind; title: string; neededBy: NeededBy }[];
+  /** D-8126: the programme's last 20 big calls, newest first, however long ago and whether or not seen. */
+  bigCalls: CallView[];
 }
 
 export interface WaitingView {
   items: ItemView[];
   cleared: ItemView[];
   goals: GoalsView[];
+  /** D-8126: the big calls the operator has yet to see (newest first), and those that left the group inside the
+   *  Recently cleared window. OPTIONAL on the wire: an older server omits both. ADDITIVE. */
+  calls?: CallView[];
+  callsCleared?: CallView[];
 }
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };
@@ -413,8 +419,9 @@ export function doneWhenOf(raw: unknown): { ok: true; doneWhen: string[] } | { o
   return { ok: true, doneWhen: out };
 }
 
-/** "Recently cleared" keeps seven days (spec D13). */
-export const CLEARED_WINDOW_MS = 7 * 24 * 3600 * 1000;
+/** "Recently cleared" keeps the last 48 hours (D-8194; was seven days, spec D13): the server's list and the console's trail both
+ *  read this one window, so neither shows what the other has dropped. */
+export const CLEARED_WINDOW_MS = 48 * 3600 * 1000;
 /** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
  *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
 export const TICK_UNANSWERED_MS = 30 * 60 * 1000;

@@ -778,7 +778,7 @@ describe('SessionScreen overflow menu', () => {
   // confirm reads by case, and the header never stops a session on its own any more.
   it('archive asks for confirmation in the case\'s words and fires api.archive only on confirm — never api.stop', async () => {
     const archive = vi.spyOn(api, 'archive').mockResolvedValue(null);
-    const stop = vi.spyOn(api, 'stop').mockResolvedValue(undefined);
+    const stop = vi.spyOn(api, 'stop').mockResolvedValue(null);
     renderScreen();
 
     // Cancel path: the sheet closes without archiving anything.

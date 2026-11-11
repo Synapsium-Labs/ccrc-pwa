@@ -77,6 +77,10 @@ describe('`add --provider openai` (spec §7.2 step 3; G2)', () => {
     expect(row['telemetry']).toBe('codex');
     expect(row['exec']['kind']).toBe('codex');
     expect(row['exec']['provider']).toBe('openai');
+    // A new lane is a `direct` lane (the operator's ruling of 2026-11-10; codex-bridge Stage 4, Task 7): the mode is
+    // written into the row, because a row without the key reads `litellm` in every reader, and lane.json follows it.
+    expect(row['exec']['bridge']).toBe('direct');
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'codex', 'lane-g', 'lane.json'), 'utf8'))['bridge']).toBe('direct');
     expect(row['exec']['authDir']).toMatch(new RegExp(`^${AUTH_ROOT}/lane-g-[0-9a-f]{6}$`));
     expect(existsSync(join(home, row['exec']['authDir'])), 'the sign-in makes the folder, the add does not').toBe(false);
     const ports = [row['exec']['proxyPort'], row['exec']['litellmPort']] as number[];
@@ -139,32 +143,35 @@ describe('`add --provider openai` (spec §7.2 step 3; G2)', () => {
     expect(readdirSync(taken)).toEqual([]);
   }, 60_000);
 
-  it('no venv refuses `codex-runtime-absent` and writes nothing, and builds nothing', async () => {
+  // A new lane is `direct`, and a `direct` lane runs under the system python3: its bridge, its probe, its usage poll and
+  // its sign-in need no LiteLLM runtime. So an add asks for that python3 and never for a runtime, and builds none.
+  it('with no LiteLLM runtime on the box an add goes through, as a direct lane, and builds nothing', async () => {
     const { home, base } = await codexBox('ccrc-codex-add-no-venv-', { runtime: false });
     const cli = join(home, '.local', 'bin', 'ccgpt-runtime');
     const real = readFileSync(cli, 'utf8');
     writeFileSync(cli, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$HOME/runtime-calls"\n[ "\${1:-}" = build ] && mkdir -p "$HOME/built"\n${real.replace(/^#!.*\n/, '')}`,
       { mode: 0o755 });
+    const r = add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(rowOf(home, 'lane-g')!['exec']['bridge']).toBe('direct');
+    expect(existsSync(join(home, 'built')), 'a venv was built under the verb').toBe(false);
+    const calls = existsSync(join(home, 'runtime-calls')) ? readFileSync(join(home, 'runtime-calls'), 'utf8').trim().split('\n') : [];
+    expect(calls, 'the add asked the runtime builder to build').not.toContain('build');
+    expect(existsSync(join(home, '.ccrc', 'runtime')), 'a runtime directory appeared').toBe(false);
+  }, 60_000);
+
+  it('no python3 the bridge can run under refuses `codex-python-absent` and writes nothing', async () => {
+    const { home, base } = await codexBox('ccrc-codex-add-no-python-');
+    // Silent when asked its version, so whether it can run a bridge cannot be told. The runtime is there, and is not asked.
+    writeFileSync(join(home, '.local', 'bin', 'python3'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
     const r = add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base });
     expect(r.code).toBe(1);
-    expect(answerOf(r)['error']).toBe('codex-runtime-absent');
+    expect(answerOf(r)['error']).toBe('codex-python-absent');
+    expect(String(answerOf(r)['detail'])).toContain('python3');
+    expect(String(answerOf(r)['detail'])).not.toContain('ccgpt-runtime build');
     expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
     nothingOf(home, 'lane-g');
-    expect(existsSync(join(home, 'built')), 'a venv was built under the verb').toBe(false);
-    expect(readFileSync(join(home, 'runtime-calls'), 'utf8').trim().split('\n')).not.toContain('build');
-  }, 60_000);
-
-  it('the first lane on a box: the refusal names the build that needs no lane, and what it leaves gets the add through', async () => {
-    const { home, base } = await codexBox('ccrc-codex-add-first-', { runtime: false });
-    const refused = add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base });
-    expect(answerOf(refused)['error']).toBe('codex-runtime-absent');
-    // `ccrc install` builds nothing here: its step answers "none" until a row exists, and this verb writes the row.
-    expect(String(answerOf(refused)['detail'])).toContain("Run 'ccgpt-runtime build'");
-    plantFakeRuntime(home);
-    const r = add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base });
-    expect(r.code, r.stdout + r.stderr).toBe(0);
-    expect(rowOf(home, 'lane-g')!['exec']['kind']).toBe('codex');
   }, 60_000);
 
   it.each([

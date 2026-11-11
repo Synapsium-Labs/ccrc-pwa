@@ -29,6 +29,12 @@ removeTmpFixturesEachTest();
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LINUX = process.platform === 'linux';
 const T = 90_000;
+// The over-budget CI line, on branch `main` (D-8266): one full run per accepted tip, never per push or fix round;
+// cancel a superseded dispatched run on the branch first; read only the Linux legs (macOS is advisory).
+const CI_LINE = 'ccrc test: the full suite runs on CI, once per accepted tip (after review, never per push or fix round): '
+  + 'first cancel a superseded run on the branch (gh run list --workflow ci.yml --branch main --event workflow_dispatch '
+  + '--status in_progress, then gh run cancel <id>), then gh workflow run ci.yml --ref main -f mode=full; '
+  + 'only its Linux legs arbitrate, the macOS legs are advisory';
 const ME = os.userInfo().username;
 const DARWIN_SAYS = 'ccrc test: this box has no systemd user manager (macOS), so the run is not contained; the queue still applies';
 const TOKEN = 'fixture-token';
@@ -619,7 +625,7 @@ describe('TB8: every fallback row, in TESTBOX_FALLBACK\'s order (spec §5 row 7)
   it.each(FALLBACK_ROWS)('%s: the reason first and last, the local slice, the local run\'s exit, one fallback line', async (id, make) => {
     const { w, r, exit, command } = await make();
     expectFallback(w, r, id, exit, command);
-    if (id === 'over-budget') expect(r.stderr).toContain('gh workflow run ci.yml --ref main -f mode=full');
+    if (id === 'over-budget') expect(r.stderr).toContain(CI_LINE);
   }, T);
 });
 
@@ -629,7 +635,9 @@ describe('TB8: the three refusals, exit 75, nothing run (spec §2.5; D-7417)', (
     const r = await wrap(w, ['--remote', ...VITEST_A]);
     expect(r.status).toBe(75);
     expect(r.lines[0]).toMatch(reasonOf('over-budget'));
-    expect(r.stderr).toContain('ccrc test: the full suite runs on CI: gh workflow run ci.yml --ref main -f mode=full');
+    // One line (D-8266): the dispatch is once per accepted tip, a superseded run is cancelled first, and only the
+    // Linux legs arbitrate.
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('ccrc test:'))).toEqual([CI_LINE]);
     expect(r.stdout).toBe('');
     expect(log(w, 'systemd-run.log')).toBe('');
     expect(w.mgr.log).toEqual([]);

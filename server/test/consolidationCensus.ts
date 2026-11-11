@@ -86,19 +86,24 @@ export function markerDefinitions(name: string, root: string = REPO): CensusSite
 }
 
 // ── ccd's function-to-context manifest (D-6054; ARCH-34 (#536)) ──────────────────────────────────────────────────
-// `ccd/contexts.tsv` maps every function `ccd/ccd` defines to one context of the 08-10 spec (C1 to C9, or K). These
-// queries read the launcher and the manifest; `ccd-contexts.test.ts` holds coverage and ratchets the cross-context
-// count. KNOWN WIDTH, the call graph: a function's REGION runs from its definition to its first column-0 `}`, or to
-// the next definition when it closes on an indented line (a one-liner, or a `{ …; }` continued below it). A REFERENCE
+// `ccd/contexts.tsv` maps every function `ccd/ccd` defines to one context of the 08-10 spec (C1 to C9), C10 Session
+// host (D-8272), or K. These queries read the launcher and the manifest; `ccd-contexts.test.ts` holds coverage and
+// ratchets the cross-context count. KNOWN WIDTH, the call graph: a function's REGION runs from its definition to its
+// first column-0 `}`, or to the next definition when it closes on an indented line (a one-liner, or a `{ …; }` continued below it). A REFERENCE
 // is a defined name as a whole word on a code line of a region other than its own: a `#` comment line is dropped and
 // a trailing ` # …` is cut, a `$name`/`${name` expansion and a `name=` assignment are variables, and a name inside a
 // quoted message counts. One edge per (caller, callee) pair, at the caller's first reference.
 // A column-0 `}` inside a heredoc body would end a region early and hide the calls after it: `ccdHeredocBraces`
 // lists any such line, and the test's CONTROL holds that list empty.
 
-/** The contexts a manifest row may name: the 08-10 spec's nine and K (kernels and platform, no aggregate). */
-export const CCD_CONTEXTS = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'K'] as const;
+/** The contexts a manifest row may name: the 08-10 spec's nine, C10 Session host (the session-host ruling Q13,
+ *  D-8272: hosting, observing and driving sessions behind one SessionHost interface, home `ccd/lib/sessionhost.sh`
+ *  in the file-split plan's Task 7) and K (kernels and platform, no aggregate). */
+export const CCD_CONTEXTS = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'K'] as const;
 export type CcdContext = (typeof CCD_CONTEXTS)[number];
+/** Contexts ccd has and `server/src` and `pwa/src` do not, so the spec's ring-context-map table holds no row for them:
+ *  C10 is ccd's SessionHost adapter, and the server declares the port at its consumer, C3 (D-8272). */
+export const CCD_ONLY_CONTEXTS: readonly CcdContext[] = ['C10'];
 
 /** The launcher under `root`: `ccdWsHelpers.ts`'s `CCD`, the one spelling of its path, re-rooted for a fixture tree. */
 export function ccdLauncherIn(root: string = REPO): string {

@@ -538,8 +538,8 @@ function main() {
   }
 
   // The macOS budget follows the EVENT: a pull request keeps to 2 shards even when it fell back to full (the
-  // organisation's 5 macOS slots are shared with every other PR); 4 only for the daily, dispatched or called
-  // full run.
+  // organisation's 5 macOS slots are shared with every other PR); up to 8 only for the daily, dispatched or called
+  // full run (D-8265).
   const macosProfile = event !== 'pull_request' && testsOut === 'full' ? PROFILES.macosFull : PROFILES.macosSelected;
 
   // A dispatch's `workers` input (2 or 4) plans the server shards at that many vitest workers; every other event

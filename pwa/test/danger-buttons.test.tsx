@@ -69,7 +69,7 @@ describe('every destructive confirm is the danger variant', () => {
     const { ApiError } = await import('../src/lib/api');
     const archive = vi.fn().mockRejectedValueOnce(
       new ApiError(409, { ok: false, error: 'worktree-gone' })) as unknown as typeof api.archive;
-    render(<><ArchiveSheet session={sess()} open onClose={() => {}} archive={archive} onStopOnly={() => {}} /><ToastHost /></>);
+    render(<><ArchiveSheet session={sess()} open onClose={() => {}} archive={archive} onStopOnly={async () => null} /><ToastHost /></>);
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     expect(await screen.findByRole('button', { name: 'Stop only' })).toHaveClass('btn-danger');
   });

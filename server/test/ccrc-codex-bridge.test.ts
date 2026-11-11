@@ -732,6 +732,94 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     });
   });
 
+  // Codex bridge Stage 4, Task 9: `ccrc codex runtime remove`, the operator's act that takes the LiteLLM runtime off a
+  // box whose lanes no longer run on it. It refuses, with nothing removed, while the roster records a lane in litellm
+  // mode, while it cannot tell, and while a LiteLLM or shim tier of any lane still runs.
+  describe('ccrc codex runtime remove (codex bridge Stage 4, Task 9)', () => {
+    const runtimeRoot = (home: string): string => join(home, '.ccrc', 'runtime', 'codex');
+    const setBridge = (home: string, bridge: string): void => {
+      const file = join(home, '.ccrc', 'accounts.json');
+      const json = JSON.parse(fs.readFileSync(file, 'utf8')) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+      json.accounts.find((a) => a.id === 'codex-a')!.exec['bridge'] = bridge;
+      fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+    };
+
+    it('removes the runtime from a box whose lanes all run direct, leaves a running bridge serving, and says how to go back', async () => {
+      const { home, proxyPort } = await bridgeBox({ userManager: false });
+      expect(fs.existsSync(runtimeRoot(home)), 'the fixture planted no runtime').toBe(true);
+      const s = cx(home, ['start', 'codex-a']);
+      expect(s.code, s.stderr).toBe(0);
+      const lane = fs.readFileSync(join(laneDir(home, 'codex-a'), 'lane.json'), 'utf8');
+      const r = cx(home, ['runtime', 'remove']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toMatch(/^ccrc codex: runtime: removed \$HOME\/\.ccrc\/runtime\/codex: no codex lane of this box runs in litellm mode\. .*ccgpt-runtime build.*\n$/);
+      expect(r.stdout.split('\n').filter(Boolean)).toHaveLength(1);
+      expect(fs.existsSync(runtimeRoot(home))).toBe(false);
+      expect(fs.readFileSync(join(laneDir(home, 'codex-a'), 'lane.json'), 'utf8'), 'the removal touched a lane file').toBe(lane);
+      expect(JSON.parse((await laneAnswer(proxyPort))!.body)).toEqual({ lane: 'codex-a', mode: 'direct' });
+      // Again: nothing to remove, said, exit 0.
+      const again = cx(home, ['runtime', 'remove']);
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).toMatch(/^ccrc codex: runtime: already absent: there is no LiteLLM runtime on this box, and no codex lane runs in litellm mode\.\n$/);
+    }, 120_000);
+
+    it('is refused lane-needs-runtime while the roster records a lane in litellm mode, and names the lane and its move', async () => {
+      const { home } = await bridgeBox({ userManager: false, mode: 'litellm' });
+      const r = cx(home, ['runtime', 'remove']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: lane-needs-runtime: codex-a runs in litellm mode, .*ccrc codex switch codex-a direct.*Nothing was removed\.$/m);
+      expect(fs.existsSync(runtimeRoot(home)), 'a refused removal removed the runtime').toBe(true);
+    }, 60_000);
+
+    it('is refused modes-unreadable when the roster cannot say: cannot tell is never "no lane needs it"', async () => {
+      const { home } = await bridgeBox({ userManager: false });
+      setBridge(home, 'sideways');
+      const r = cx(home, ['runtime', 'remove']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: modes-unreadable: .*Nothing was removed\.$/m);
+      expect(fs.existsSync(runtimeRoot(home))).toBe(true);
+    }, 60_000);
+
+    it('is refused tier-running while a lane the roster calls direct still runs its LiteLLM tiers', async () => {
+      const { home } = await bridgeBox({ userManager: false, mode: 'litellm' });
+      const s = cx(home, ['start', 'codex-a']);
+      expect(s.code, s.stderr).toBe(0);
+      const lit = Number(/ litellm started \(nohup (\d+)\)/.exec(s.stdout)?.[1]);
+      expect(alive(lit), s.stdout).toBe(true);
+      setBridge(home, 'direct');   // by hand: the roster now says direct, and nothing stopped the tiers
+      const r = cx(home, ['runtime', 'remove']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: tier-running: codex-a's litellm tier still runs.*ccrc codex stop codex-a.*Nothing was removed\.$/m);
+      expect(fs.existsSync(runtimeRoot(home))).toBe(true);
+      expect(alive(lit), 'the removal stopped a tier').toBe(true);
+    }, 120_000);
+
+    it.each([
+      [['runtime']],
+      [['runtime', 'destroy']],
+      [['runtime', 'remove', 'extra']],
+    ])('ccrc codex %j is a usage refusal that names the one form', async (argv) => {
+      const { home } = await bridgeBox({ userManager: false });
+      const r = cx(home, argv);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/^ccrc codex: usage: .*ccrc codex runtime remove/m);
+      expect(fs.existsSync(runtimeRoot(home))).toBe(true);
+    }, 60_000);
+
+    it('the uninstall and the verb remove the runtime through one function: the removal is spelled once', () => {
+      const src = fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      expect(src.match(/rm -rf -- "\$\{rt:\?/g) ?? [], 'the runtime directory is removed in more than one place').toHaveLength(1);
+      for (const fn of ['_uninst_codex', '_codex_cmd_runtime_remove']) {
+        const body = new RegExp(`^${fn}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm').exec(src)?.[0] ?? '';
+        expect(body, `${fn} does not remove through _codex_runtime_rm`).toMatch(/\b_codex_runtime_rm\b/);
+      }
+    });
+  });
+
   it('a new gateway key under a running bridge restarts the bridge tier', async () => {
     const { home, proxyPort } = await bridgeBox({ userManager: false });
     const r = cx(home, ['start', 'codex-a']);

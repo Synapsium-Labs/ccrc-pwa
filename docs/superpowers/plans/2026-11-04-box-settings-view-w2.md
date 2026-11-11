@@ -2236,6 +2236,10 @@ exactly as today, omit keys included. What changes is how a name the file sets i
     file the summary does not list is cleared only by that full run. The macOS legs are advisory, but a red
     `ccrc-settings-verb`, `ccrc-doctor-codex` or `ccrc-doctor-carry-copies` there is this PR's own (bash constructs in
     moved code): fix it, never dismiss it as a flake.
+  - **Note (2026-11-11, D-8266), added after this wave; the step above is kept as written:** a dispatched full run
+    goes out once per accepted tip, after review, never per push or fix round. Cancel a superseded one on the same
+    branch first (`gh run list --workflow ci.yml --branch <branch> --event workflow_dispatch --status in_progress`,
+    then `gh run cancel <id>`), and read only its Linux legs as the arbiter; the macOS legs stay advisory.
   - **Wave-done:** list mail before every push and before the wave-done; send it only after the fast run on the final
     tip is green and the full run has passed; then push nothing more.
 - [ ] **Step 7: The programme's Next-wave brief** (`docs/superpowers/programs/box-settings-view.md:184-207`, the

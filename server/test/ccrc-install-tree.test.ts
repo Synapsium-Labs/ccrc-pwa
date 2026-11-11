@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { installedCcdBody, renderCcdEntry } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
@@ -487,7 +488,9 @@ describe('ccrc install: the fixture tree', () => {
     ]) {
       const at = src.indexOf(`  it('${title}`);
       expect(at, `no case titled ${title}`).toBeGreaterThan(-1);
-      const close = /^ {2}\}(?:, ([0-9_]+))?\);$/m.exec(src.slice(at));
+      // The bound is scaled for a slow environment (D-8277), so the closing line is `}, scaled(60_000));`.
+      const close = /^ {2}\}(?:, (?:scaled\(([0-9_]+)\)|([0-9_]+)))?\);$/m.exec(src.slice(at));
+      expect(close?.[2], `'${title}' sets a bound the trace's clock scale cannot reach`).toBeUndefined();
       expect(close?.[1], `'${title}' runs under the default bound again`).toBe('60_000');
     }
   });
@@ -846,7 +849,7 @@ describe('runInstall: the noManager option (wave 9 M7)', () => {
   itLinux('noManager makes the final-env check require BOTH manager names absent — under ccrcEnv they resolve to the fixture front, so it refuses (wave 9 M7)', () => {
     expect(() => runInstall(freshBox('ccrc-install-nomgr-'), ['install'], {}, { noManager: true }))
       .toThrow(/systemd-run was expected absent/);
-  }, 60_000);   // freshBox builds a whole tree: measured past the 20 s default under load 30-50 (final review)
+  }, scaled(60_000));   // freshBox builds a whole tree: measured past the 20 s default under load 30-50 (final review)
 });
 
 describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {

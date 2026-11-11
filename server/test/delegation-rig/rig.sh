@@ -12,6 +12,12 @@
 #   rig.sh check-scenario <file>     exit 0 iff every step is well formed (verbs, integers, key names)
 #   rig.sh setup <root> [<version>]  fixture HOME <root>/fixhome (config <root>/fixhome/cfg), repo <root>/repo
 #   rig.sh run <version> <scenario.json> <out-dir>   one run; a raw bundle lands in <out-dir>
+#   rig.sh print-launch <version> <scenario.json> <root>   set up <root> as a run would, then print the pane's
+#                                    launch line (port 0) without starting anything: the launch block's proof
+#                                    A scenario may carry `launch` {args, env, settings, files}, `capS`, `timing`,
+#                                    `requests` and `mainMarker` (README.md); flags and env names only from
+#                                    RIG_LAUNCH_FLAGS and RIG_LAUNCH_ENV; a permission bypass only in this rig's
+#                                    own scenarios-overlord/
 #   rig.sh all <raw-root> [<version>...]   reap, then every installed version (or only those named, each checked
 #                                    first) x every scenario -> <raw-root>/<v>/<s>/, then <raw-root>/.done; exit 1 if any run failed
 #   rig.sh versions [<version>...]   the versions `all` would cover, one per line: every installed one, or the ones named
@@ -29,7 +35,13 @@ VERSIONS=$REAL_HOME/.local/share/claude/versions
 SOCK_RE='^dlg[A-Za-z0-9_-]*$'
 VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 SESSION=cc-rig-hookcap
-VERBS='waitReady type keys waitLabels probeLabels answerDialog sleep kill9 swapConfig relaunch snapshot'
+VERBS='waitReady type keys waitLabels probeLabels answerDialog sleep kill9 swapConfig relaunch snapshot sessionsSnap paneSnap'
+# The Overlord's W0 launch block (plan 2026-11-10-overlord/w0-spike.md, Task 2): the ONLY flags a scenario's launch.args may
+# carry, and the ONLY env names its launch.env may set. Each flag is in Claude Code's CLI reference (W0 Task 1 Step 2).
+RIG_LAUNCH_FLAGS='--setting-sources --settings --mcp-config --strict-mcp-config --agents --allowedTools --disallowedTools --permission-mode --dangerously-skip-permissions --model --tools --autocompact --append-system-prompt --disable-slash-commands'
+# Of those, the ones that take no value (CLI reference, W0 Task 1); every other one takes exactly one, the next argument.
+RIG_LAUNCH_BARE_FLAGS='--strict-mcp-config --dangerously-skip-permissions --disable-slash-commands'
+RIG_LAUNCH_ENV='RIG_EMIT_LOG RIG_STATUS_LOG DOOR_LOG DOOR_NONCE CLAUDE_CODE_DISABLE_AUTO_MEMORY CLAUDE_CODE_FORK_SUBAGENT CLAUDE_CODE_DISABLE_AGENT_VIEW CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_AUTOCOMPACT_PCT_OVERRIDE DISABLE_AUTO_COMPACT CLAUDE_CODE_DISABLE_CRON CLAUDE_CODE_DISABLE_BACKGROUND_TASKS CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK'
 RUN_CAP_S=1200
 
 die() { printf 'rig: %s\n' "$*" >&2; exit 2; }
@@ -126,6 +138,8 @@ rig_path() {
 check_scenario() {
   local f=${1-} step verb n k
   [[ -f $f ]] || return 1
+  # Exactly one JSON document: each jq read below answers for the LAST document of a file, and load_launch reads them all.
+  jq -e -s 'length == 1' "$f" >/dev/null 2>&1 || return 1
   jq -e '(.steps | type) == "array" and (.entries | type) == "array"' "$f" >/dev/null 2>&1 || return 1
   while IFS= read -r step; do
     verb=$(jq -r 'keys_unsorted[0]' <<<"$step")
@@ -144,11 +158,107 @@ check_scenario() {
       jq -e --arg n "$n" 'if has($n) then (.[$n] | type == "string" and (test("[\n\r]") | not)) else true end' <<<"$step" >/dev/null || return 1
     done
     if [[ $verb == snapshot ]]; then jq -e '.snapshot | type == "string" and test("^[a-z0-9-]{1,40}$")' <<<"$step" >/dev/null || return 1; fi
+    if [[ $verb == sessionsSnap ]]; then jq -e '.sessionsSnap | type == "string" and test("^[a-z0-9-]{1,40}$")' <<<"$step" >/dev/null || return 1; fi
+    if [[ $verb == paneSnap ]]; then jq -e '.paneSnap | type == "string" and test("^[a-z0-9-]{1,40}$")' <<<"$step" >/dev/null || return 1; fi
+    if [[ $verb == relaunch ]]; then jq -e '.relaunch == true or .relaunch == {mode: "fresh"} or .relaunch == {mode: "fork"}' <<<"$step" >/dev/null || return 1; fi
   done < <(jq -c '.steps[]' "$f")
   k=$(jq -r '.settleS // 8 | tostring' "$f"); [[ $k =~ ^[0-9]{1,5}$ ]] || return 1
+  check_launch "$f" || return 1
+  return 0
+}
+# The W0 launch block (README.md): launch.args parse as flags from RIG_LAUNCH_FLAGS, each either bare (one of
+# RIG_LAUNCH_BARE_FLAGS, never with a value) or with exactly one value (the next argument, which is no flag, or a
+# `--flag=value` spelling), so no positional argument or subcommand rides a launch; every env name on RIG_LAUNCH_ENV and
+# none reserved, in launch.env or in launch.settings.env (either would point the binary away from the mock or the
+# fixture); file paths relative, with no `..` segment; capS 60 to 5400; mainMarker a one-line regular expression (as the
+# mock compiles it). A permission bypass, spelled anywhere in the scenario (a flag, a --settings value, a file it writes),
+# only in a file whose physical directory is this rig's own scenarios-overlord/ (D-8203): the delegation corpus measures
+# ccrc's granted launch and stays bypass-free. The spelling is looked for in every string and key once JSON escapes are
+# decoded, again in every string that is itself JSON (Claude Code parses a --settings or --agents value and a settings
+# file), to BYPASS_JSON_DEPTH levels, and in each of those strings and the raw text normalised: \xHH, \uHHHH and
+# \UHHHHHHHH escapes decoded, a backslash before any line terminator (LF, CRLF, CR, U+2028, U+2029) joined with the next
+# line's leading whitespace, every other backslash removed and the letters lower-cased (YAML frontmatter, a settings file
+# that is not strict JSON, a script a shell unescapes by backslash). The env names are a deny-list, not an allow-list:
+# launch.settings.env may set any other name (README.md, "known limits").
+RESERVED_ENV_RE='^(PATH|HOME|TMPDIR|CLAUDE_CONFIG_DIR|ANTHROPIC_.*)$'
+BYPASS_RE='bypass[-_ ]?permissions|dangerously[-_ ]?skip[-_ ]?permissions'
+BYPASS_JSON_DEPTH=4
+check_launch() {
+  local f=$1 dir own scan
+  jq -e --arg flags "$RIG_LAUNCH_FLAGS" --arg bare "$RIG_LAUNCH_BARE_FLAGS" --arg envs "$RIG_LAUNCH_ENV" --arg reserved "$RESERVED_ENV_RE" '
+    def line: type == "string" and (test("[\n\r]") | not);
+    ($flags | split(" ")) as $F | ($bare | split(" ")) as $B | ($envs | split(" ")) as $E
+    | def flag($x): ($x | startswith("-"));
+      def name($x): ($x | split("=") | .[0]);
+      def bare($x): (name($x) as $n | any($B[]; . == $n));
+    (if has("launch") then (.launch | type == "object" and ((keys - ["args", "env", "settings", "files"]) == [])) else true end)
+    and ((.launch.args // []) as $a | ($a | type == "array") and all($a[]; line)
+         and ([range(0; $a | length) as $i | $a[$i] as $x
+               | if flag($x) then
+                   (name($x) as $n | any($F[]; . == $n))
+                   and (if ($x | contains("=")) then (bare($x) | not)
+                        elif bare($x) then true
+                        else ($i + 1 < ($a | length)) and (flag($a[$i + 1]) | not) end)
+                 else ($i > 0) and flag($a[$i - 1]) and ($a[$i - 1] | contains("=") | not) and (bare($a[$i - 1]) | not) end] | all))
+    and ((.launch.env // {}) as $e | ($e | type == "object")
+         and all($e | to_entries[]; (.value | line) and (.key as $k | any($E[]; . == $k)) and (.key | test($reserved) | not)))
+    and ((.launch.settings // {}) | type == "object"
+         and ((.env // {}) | type == "object" and all(keys[]; test($reserved) | not))
+         and ((.hooks // {}) | type == "object" and all(.[]; type == "array")))
+    and ((.launch.files // []) as $fs | ($fs | type == "array") and all($fs[]; type == "object"
+         and (.in == "cfg" or .in == "repo" or .in == "cfg2")
+         and (.path | type == "string" and (gsub("@RIG_PROJECT@"; "p") | test("^[A-Za-z0-9._/-]{1,200}$"))
+              and (startswith("/") | not) and ((split("/") | index("..")) == null))
+         and (.text | type == "string") and ((.exec // false) | type == "boolean")))
+    and (if has("capS") then (.capS | type == "number" and . == floor and . >= 60 and . <= 5400) else true end)
+    and (if has("timing") then (.timing | type == "boolean") else true end)
+    and (if has("requests") then (.requests | type == "boolean") else true end)
+    and (if has("mainMarker") then (.mainMarker | line and length >= 1 and length <= 200) else true end)
+  ' "$f" >/dev/null 2>&1 || return 1
+  if jq -e 'has("mainMarker")' "$f" >/dev/null 2>&1; then
+    # node reads the marker from the file it is named in the environment: the marker is never an argument node could read
+    # as an option of its own (`--import=…` would run code).
+    RIG_SCENARIO=$f node -e '
+      new RegExp(JSON.parse(require("node:fs").readFileSync(process.env.RIG_SCENARIO, "utf8")).mainMarker)' >/dev/null 2>&1 \
+      || return 1
+  fi
+  # One jq program reads the raw text and every string and key: 0 found, 1 not found, anything else could not look, which
+  # refuses, so an error never reads as a scenario without a bypass.
+  scan=0
+  jq -e --arg re "$BYPASS_RE" --argjson depth "$BYPASS_JSON_DEPTH" --rawfile raw "$f" '
+    def hexval: ascii_downcase | explode | reduce .[] as $c (0; . * 16 + (if $c >= 97 then $c - 87 else $c - 48 end));
+    def norm: gsub("\\\\(\r\n|[\r\n\u2028\u2029])[ \t]*"; "")
+      | gsub("\\\\x(?<h>[0-9A-Fa-f]{2})"; [.h | hexval] | implode)
+      | gsub("\\\\u(?<h>[0-9A-Fa-f]{4})"; [.h | hexval] | implode)
+      | gsub("\\\\U(?<h>[0-9A-Fa-f]{8})"; [.h | hexval] | implode)
+      | gsub("\\\\"; "") | ascii_downcase;
+    def texts($d): (strings, (objects | keys[])) as $t
+      | $t, (if $d > 0 then (($t | try fromjson catch null) | .. | texts($d - 1)) else empty end);
+    ($raw | norm | contains("bypasspermissions") or contains("dangerously-skip-permissions"))
+    or any(.. | texts($depth); test($re; "i") or (norm | test($re)))' "$f" >/dev/null 2>&1 || scan=$?
+  case $scan in
+    0) ;;
+    1) return 0 ;;
+    *) return 1 ;;
+  esac
+  # The file itself, through any link to it, must sit in this rig's own directory; a directory merely CALLED so is not.
+  f=$(readlink -f -- "$f") || return 1
+  dir=$(cd -P -- "$(dirname -- "$f")" && pwd) || return 1
+  own=$(cd -P -- "$HERE/scenarios-overlord" && pwd) || return 1
+  [[ $dir == "$own" ]] || return 1
   return 0
 }
 
+# The launch block's five placeholders, replaced LITERALLY in every string of the JSON on stdin; no other expansion.
+# <root> is the run root; the rest derive from it as cmd_setup lays it out.
+launch_subst() {
+  local R=$1
+  jq --arg root "$R" --arg home "$R/fixhome" --arg cfg "$R/fixhome/cfg" --arg repo "$R/repo" --arg stubs "$HERE/stubs" '
+    walk(if type == "string" then
+           gsub("@RIG_ROOT@"; $root) | gsub("@RIG_HOME@"; $home) | gsub("@RIG_CFG@"; $cfg) | gsub("@RIG_REPO@"; $repo)
+           | gsub("@RIG_STUBS@"; $stubs)
+         else . end)'
+}
 g() { local R=$1; shift; HOME=$R/fixhome GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.hooksPath=/dev/null -C "$R/repo" "$@"; }
 cmd_setup() {
   local R=${1-} V=${2:-0.0.0} H phys
@@ -176,6 +286,16 @@ cmd_setup() {
   jq -n '{env: {DISABLE_AUTOUPDATER: "1"}, enableWorkflows: true, worktree: {baseRef: "head"},
           permissions: {defaultMode: "default", disableAutoMode: "disable", allow: ["Bash", "Read", "Write", "Edit", "Agent", "Task", "Workflow"]}}' > "$H/cfg/settings.json"
   HOME=$H bash "$TREE/ccd/install-session-hooks.sh" --homes "$H/cfg" >/dev/null
+  # A scenario's launch.settings (W0): merged over the fixture with jq's `*`, except that each hooks.<event> array is
+  # APPENDED to the fixture's, so ccrc's own hook stays registered. No launch block: the file is untouched.
+  if [[ -n ${SCEN-} ]] && jq -e '.launch.settings | type == "object"' "$SCEN" >/dev/null 2>&1; then
+    jq '.launch.settings' "$SCEN" | launch_subst "$R" > "$R/launch-settings.json"
+    jq --slurpfile l "$R/launch-settings.json" '
+      ($l[0]) as $s
+      | (. * ($s | del(.hooks)))
+      | reduce (($s.hooks // {}) | to_entries[]) as $h (.; .hooks[$h.key] = ((.hooks[$h.key] // []) + $h.value))' \
+      "$H/cfg/settings.json" > "$H/cfg/settings.json.w0" && mv "$H/cfg/settings.json.w0" "$H/cfg/settings.json"
+  fi
   jq -n --arg tail "$(tail -c 20 "$R/key")" --arg repo "$R/repo" --arg v "$V" '{
       numStartups: 5, hasCompletedOnboarding: true, firstStartTime: "2026-01-01T00:00:00.000Z",
       lastOnboardingVersion: $v, lastReleaseNotesSeen: $v, lastClawdEntranceVersion: $v,
@@ -183,10 +303,49 @@ cmd_setup() {
       customApiKeyResponses: {approved: [$tail], rejected: []},
       projects: {($repo): {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true,
                            projectOnboardingSeenCount: 5, allowedTools: []}}}' > "$H/cfg/.claude.json"
+  # A scenario's launch.files (W0), last, so a file may stand in for anything above. `cfg2` files wait for swapConfig.
+  if [[ -n ${SCEN-} ]]; then apply_launch_files "$R" cfg "$H/cfg"; apply_launch_files "$R" repo "$R/repo"; fi
+}
+# The launch.files entries whose `in` is <in>, written under <base>: each by a path check_launch already held to relative
+# and `..`-free, `@RIG_PROJECT@` in it replaced by the project directory name Claude Code derives from the fixture repo
+# (every character but a letter or a digit as `-`); mode 0755 when `exec` is true.
+apply_launch_files() {
+  local R=$1 want=$2 base=$3 i n in path dest project
+  jq -e '(.launch.files // []) | length > 0' "$SCEN" >/dev/null 2>&1 || return 0
+  project=$(printf '%s' "$R/repo" | sed 's/[^A-Za-z0-9]/-/g')
+  n=$(jq '.launch.files | length' "$SCEN")
+  for (( i = 0; i < n; i++ )); do
+    in=$(jq -r --argjson i "$i" '.launch.files[$i].in' "$SCEN")
+    [[ $in == "$want" ]] || continue
+    path=$(jq -r --argjson i "$i" '.launch.files[$i].path' "$SCEN")
+    dest=$base/${path//@RIG_PROJECT@/$project}
+    mkdir -p "$(dirname "$dest")"
+    jq --argjson i "$i" '.launch.files[$i].text' "$SCEN" | launch_subst "$R" | jq -j . > "$dest"
+    if jq -e --argjson i "$i" '.launch.files[$i].exec == true' "$SCEN" >/dev/null; then chmod 0755 "$dest"; fi
+  done
+  return 0
 }
 
 # ── run ─────────────────────────────────────────────────────────────────────────────
-VER="" SCEN="" RUN_R="" RUN_H="" SOCK="" CFG="" PORT="" MOCK_PID="" OUT_DIR="" COLLECTED=0
+VER="" SCEN="" RUN_R="" RUN_H="" SOCK="" CFG="" PORT="" MOCK_PID="" OUT_DIR="" COLLECTED=0 TIMING=0 REQUESTS=0
+LAUNCH_ARGS=() LAUNCH_ENV=()
+# The scenario's checked launch.args and launch.env (as NAME=value), placeholders replaced for this run root. A scenario
+# with no launch block leaves both empty, so its launch line is byte-identical to the one before the block existed.
+load_launch() {
+  LAUNCH_ARGS=(); LAUNCH_ENV=()
+  mapfile -t LAUNCH_ARGS < <(jq '.launch.args // []' "$SCEN" | launch_subst "$RUN_R" | jq -r '.[]')
+  mapfile -t LAUNCH_ENV < <(jq '.launch.env // {}' "$SCEN" | launch_subst "$RUN_R" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+}
+# The scenario's run options (README.md): `capS` in place of RUN_CAP_S's 1200, and the `timing` and `requests` switches.
+run_opts() {
+  RUN_CAP_S=$(jq -r --argjson d "$RUN_CAP_S" '.capS // $d' "$SCEN")
+  TIMING=0; REQUESTS=0
+  if jq -e '.timing == true' "$SCEN" >/dev/null; then TIMING=1; fi
+  if jq -e '.requests == true' "$SCEN" >/dev/null; then REQUESTS=1; fi
+}
+# W0's `timing: true`: each step's start and waitReady's elapsed milliseconds, in their OWN file. Not `note`: the notes file
+# is the run's failure-and-outcome channel that build-matrix.mjs reads, and a timing line there would read as a failure.
+timing() { printf '%s\n' "$*" >> "$RUN_R/timing"; }
 note() { printf '%s\n' "$*" >> "$RUN_R/notes"; }
 pane() { T "$SOCK" capture-pane -p -t "$SESSION" 2>/dev/null || true; }
 wait_text() {
@@ -237,18 +396,19 @@ claude_pid() {
   return 1
 }
 launch_cmd() {   # [claude args...] -> one shell command line for the pane (run by `bash -c`)
-  local bin=$VERSIONS/$VER gen args="" a to=""
+  local bin=$VERSIONS/$VER gen args="" a to="" lenv=""
   # This die runs inside a command substitution (`bash -c "$(launch_cmd)"`), so its exit 2 ends only that subshell and the run
   # carries on with an empty command: cmd_run refuses a missing binary up front, and this is what is left for `relaunch`.
   [[ -x $bin ]] || die "no Claude Code binary '$VER' under $VERSIONS"
   gen=$(cat "$RUN_H/.cc-sessions/rig-hookcap.generation")
-  for a in "$@"; do args+=" $(printf '%q' "$a")"; done
+  for a in ${LAUNCH_ARGS[@]+"${LAUNCH_ARGS[@]}"} "$@"; do args+=" $(printf '%q' "$a")"; done
+  for a in ${LAUNCH_ENV[@]+"${LAUNCH_ENV[@]}"}; do lenv+="${a%%=*}=$(printf '%q' "${a#*=}") "; done
   if command -v timeout >/dev/null 2>&1; then to="timeout -k 10 $RUN_CAP_S "; elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout -k 10 $RUN_CAP_S "; fi
   # TMUX/TMUX_PANE are expanded by the PANE's bash: inside this private server they name the
   # private socket, so the hook's own display-message asks the rig, never the default server.
   # The key is read from its 0600 file by that bash, so it never appears on a command line.
-  printf 'cd %q && exec env -i PATH=%q TERM=tmux-256color LANG=C.UTF-8 LC_ALL=C.UTF-8 HOME=%q TMPDIR=%q CLAUDE_CONFIG_DIR=%q ANTHROPIC_API_KEY="$(cat %q)" ANTHROPIC_BASE_URL=http://127.0.0.1:%s DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CLAUDE_CODE_NO_FLICKER=0 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 CCRC_SESSION_GENERATION=%q TMUX="$TMUX" TMUX_PANE="$TMUX_PANE" %s%q%s' \
-    "$RUN_R/repo" "$(rig_path)" "$RUN_H" "$RUN_R/tmp" "$CFG" "$RUN_R/key" "$PORT" "$gen" "$to" "$bin" "$args"
+  printf 'cd %q && exec env -i PATH=%q TERM=tmux-256color LANG=C.UTF-8 LC_ALL=C.UTF-8 HOME=%q TMPDIR=%q CLAUDE_CONFIG_DIR=%q ANTHROPIC_API_KEY="$(cat %q)" ANTHROPIC_BASE_URL=http://127.0.0.1:%s DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CLAUDE_CODE_NO_FLICKER=0 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 CCRC_SESSION_GENERATION=%q TMUX="$TMUX" TMUX_PANE="$TMUX_PANE" %s%s%q%s' \
+    "$RUN_R/repo" "$(rig_path)" "$RUN_H" "$RUN_R/tmp" "$CFG" "$RUN_R/key" "$PORT" "$gen" "$lenv" "$to" "$bin" "$args"
 }
 snapshot() {   # <name>: the admin records and the .claude/worktrees entries, at this instant
   local d=$RUN_R/snapshots/$1
@@ -256,12 +416,22 @@ snapshot() {   # <name>: the admin records and the .claude/worktrees entries, at
   { ls -A "$RUN_R/repo/.git/worktrees" 2>/dev/null || true; } > "$d/admin-records"
   { ls -A "$RUN_R/repo/.claude/worktrees" 2>/dev/null || true; } > "$d/worktrees"
 }
+sessions_snap() {   # <name>: Claude Code's live-session records, and each transcript's name and size in bytes, at this instant (W0-05)
+  local d=$RUN_R/snapshots/$1
+  mkdir -p "$d/sessions"
+  cp "$CFG"/sessions/*.json "$d/sessions/" 2>/dev/null || true
+  # A subshell, so the cd never moves the run's own working directory (later steps and collect may name relative paths).
+  ( cd "$CFG/projects" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.jsonl' -type f -printf '%P\t%s\n' | sort || true ) > "$d/transcripts"
+}
 run_steps() {
-  local step verb sid pid
+  local step verb sid pid i=0 t0 mode
   while IFS= read -r step; do
     verb=$(jq -r 'keys_unsorted[0]' <<<"$step")
+    i=$((i + 1))
+    if (( ${TIMING:-0} )); then t0=$(date +%s%3N); timing "step $i $verb start $t0"; fi
     case $verb in
-      waitReady)    wait_ready "$(jq -r .waitReady <<<"$step")" || note "waitReady: no ready prompt" ;;
+      waitReady)    wait_ready "$(jq -r .waitReady <<<"$step")" || note "waitReady: no ready prompt"
+                    if (( ${TIMING:-0} )); then timing "step $i waitReady elapsed $(( $(date +%s%3N) - t0 ))"; fi ;;
       type)         T "$SOCK" send-keys -t "$SESSION" -l -- "$(jq -r .type <<<"$step")" ;;
       keys)         mapfile -t ks < <(jq -r '.keys[]' <<<"$step"); T "$SOCK" send-keys -t "$SESSION" "${ks[@]}" ;;
       waitLabels)   wait_labels "$(jq -c .waitLabels <<<"$step")" "$(jq -r '.timeoutS // 120' <<<"$step")" \
@@ -274,11 +444,18 @@ run_steps() {
                     fi ;;
       sleep)        sleep "$(jq -r .sleep <<<"$step")" ;;
       kill9)        if pid=$(claude_pid); then kill -9 "$pid"; else note "kill9: no pid"; fi ;;
-      swapConfig)   mkdir -p "$RUN_H/cfg2"; cp -a "$RUN_H/cfg/." "$RUN_H/cfg2/"; CFG=$RUN_H/cfg2 ;;
-      relaunch)     if sid=$(current_sid) && [[ -n $sid ]]; then
-                      T "$SOCK" respawn-pane -k -t "$SESSION" bash -c "$(launch_cmd --resume "$sid")"
+      swapConfig)   mkdir -p "$RUN_H/cfg2"; cp -a "$RUN_H/cfg/." "$RUN_H/cfg2/"; CFG=$RUN_H/cfg2
+                    if [[ -n ${SCEN-} ]]; then apply_launch_files "$RUN_R" cfg2 "$RUN_H/cfg2"; fi ;;
+      relaunch)     mode=$(jq -r 'if .relaunch == true then "resume" else .relaunch.mode end' <<<"$step")
+                    if [[ $mode == fresh ]]; then
+                      T "$SOCK" respawn-pane -k -t "$SESSION" bash -c "$(launch_cmd)"
+                    elif sid=$(current_sid) && [[ -n $sid ]]; then
+                      if [[ $mode == fork ]]; then T "$SOCK" respawn-pane -k -t "$SESSION" bash -c "$(launch_cmd --resume "$sid" --fork-session)"
+                      else T "$SOCK" respawn-pane -k -t "$SESSION" bash -c "$(launch_cmd --resume "$sid")"; fi
                     else note "relaunch: no session id captured"; fi ;;
       snapshot)     snapshot "$(jq -r .snapshot <<<"$step")" ;;
+      sessionsSnap) sessions_snap "$(jq -r .sessionsSnap <<<"$step")" ;;
+      paneSnap)     mkdir -p "$RUN_R/snapshots/$(jq -r .paneSnap <<<"$step")"; pane > "$RUN_R/snapshots/$(jq -r .paneSnap <<<"$step")/pane" ;;
       *)            note "unknown step verb $verb" ;;
     esac
   done < <(jq -c '.steps[]' "$SCEN")
@@ -312,6 +489,11 @@ collect() {
   [[ -d $RUN_R/snapshots ]] && cp -R "$RUN_R/snapshots/." "$O/snapshots/"
   curl -fsS "http://127.0.0.1:$PORT/__rig/state" 2>/dev/null | jq -c '.consumedLabels' > "$O/labels" || printf '[]\n' > "$O/labels"
   if [[ -f $RUN_R/notes ]]; then cp "$RUN_R/notes" "$O/notes"; else : > "$O/notes"; fi
+  # W0: the mock's request dumps (a scenario with requests: true), the step timings and the stubs' logs, when the run made them.
+  if [[ -d $RUN_R/reqs ]]; then mkdir -p "$O/reqs"; cp -R "$RUN_R/reqs/." "$O/reqs/"; fi
+  if [[ -f $RUN_R/timing ]]; then cp "$RUN_R/timing" "$O/timing"; fi
+  if [[ -d $RUN_R/logs ]]; then mkdir -p "$O/logs"; cp -R "$RUN_R/logs/." "$O/logs/"; fi
+  return 0
 }
 # Pids (never this shell's own) whose working directory is at or under <root>, by /proc (Linux, as
 # claude_pid already is). A process whose cwd was REMOVED reads "<path> (deleted)": it still matches when
@@ -399,7 +581,15 @@ cmd_run() {
   trap 'exit 130' INT TERM HUP
   printf '%s\n' "$$" > "$RUN_R/.owner"
   cmd_setup "$RUN_R" "$VER"
-  MOCK_PORT=0 MOCK_SCRIPT=$SCEN MOCK_LOG=$RUN_R/mock.log node "$HERE/mockapi.mjs" > "$RUN_R/mock.out" 2>&1 &
+  run_opts
+  load_launch
+  if jq -e 'has("launch")' "$SCEN" >/dev/null; then mkdir -p "$RUN_R/logs"; fi
+  if (( REQUESTS )); then
+    mkdir -p "$RUN_R/reqs"
+    MOCK_REQDIR=$RUN_R/reqs MOCK_PORT=0 MOCK_SCRIPT=$SCEN MOCK_LOG=$RUN_R/mock.log node "$HERE/mockapi.mjs" > "$RUN_R/mock.out" 2>&1 &
+  else
+    MOCK_PORT=0 MOCK_SCRIPT=$SCEN MOCK_LOG=$RUN_R/mock.log node "$HERE/mockapi.mjs" > "$RUN_R/mock.out" 2>&1 &
+  fi
   MOCK_PID=$!
   for _ in $(seq 100); do
     PORT=$(sed -n 's/^mock listening 127\.0\.0\.1:\([0-9][0-9]*\)$/\1/p' "$RUN_R/mock.out")
@@ -410,6 +600,21 @@ cmd_run() {
   run_steps
   sleep "$(jq -r '.settleS // 8' "$SCEN")"
   collect "$OUT_DIR"
+}
+# Read-only: the launch line a run of <scenario> on <version> would type into its pane, with port 0, after setting <root> up
+# exactly as a run does (so launch.settings and launch.files are applied). Nothing is started.
+cmd_print_launch() {
+  VER=${1-}; SCEN=${2-}
+  local R=${3-}
+  [[ -n $VER && -n $SCEN && -n $R ]] || die "usage: rig.sh print-launch <version> <scenario.json> <root>"
+  need_version "$VER"
+  check_scenario "$SCEN" || die "scenario '$SCEN' is malformed (rig.sh check-scenario names the rule)"
+  cmd_setup "$R" "$VER"
+  RUN_R=$R; RUN_H=$R/fixhome; CFG=$RUN_H/cfg; PORT=0
+  run_opts
+  load_launch
+  launch_cmd
+  echo
 }
 cmd_reap() {
   local d s pid base
@@ -474,8 +679,9 @@ case ${1-} in
   check-scenario) check_scenario "${2-}" || exit 2 ;;
   setup)          shift; cmd_setup "$@" ;;
   run)            shift; cmd_run "$@" ;;
+  print-launch)   shift; cmd_print_launch "$@" ;;
   all)            shift; cmd_all "$@" ;;
   versions)       shift; pick_versions "$@"; if (( ${#VERS[@]} )); then printf '%s\n' "${VERS[@]}"; fi ;;
   reap)           cmd_reap ;;
-  *)              sed -n '2,23p' "$0" >&2; exit 2 ;;
+  *)              sed -n '2,29p' "$0" >&2; exit 2 ;;
 esac

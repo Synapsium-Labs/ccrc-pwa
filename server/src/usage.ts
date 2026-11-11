@@ -42,6 +42,7 @@ export function parseUsageSidecar(content: string, nowS: number): Extract<UsageR
     effort: str(o['effort']),
     ctxPct: num(o['ctxPct']),
     cost: num(o['cost']),
+    cacheExpiresAt: num(o['cacheExpiresAt']),   // D-8267: `prompt_cache.expires_at`, epoch seconds
     stale: nowS - ts > USAGE_FRESH_S,
   } };
 }

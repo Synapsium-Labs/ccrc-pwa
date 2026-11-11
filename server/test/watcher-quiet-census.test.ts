@@ -161,7 +161,6 @@ const EXEMPT: Record<string, string> = {
   'sweep-close.test.ts': MEASURED,
   'tick-characterization.test.ts': MEASURED,
   'tick-concurrency.test.ts': MEASURED,
-  'tick-refused-lanes.test.ts': MEASURED,
   'tickListingHarness.ts': RIG,
   'transcript-work.test.ts': MEASURED,
   'update-apply-routes.test.ts': MEASURED,
@@ -175,8 +174,9 @@ const EXEMPT: Record<string, string> = {
 };
 /** The pinned size of `EXEMPT`: lower it when an entry goes; raising it is a decision a reviewer sees. Raised once, from
  *  95 by the 13 partial quiets (fix round 1 of C17, review 1724 F1): a correction of what the census measured, not a
- *  new loud builder. It only falls from here: to 103 when `watcherTeardown` came to quiet through `quietWatcher` (F2). */
-const EXEMPT_CEILING = 103;
+ *  new loud builder. It only falls from here: to 103 when `watcherTeardown` came to quiet through `quietWatcher` (F2), to
+ *  102 when `tick-refused-lanes.test.ts` came to quiet its rig's watcher (D-8269). */
+const EXEMPT_CEILING = 102;
 
 describe('every test that builds a FleetWatcher quiets it, or is exempt with its reason (D-8140)', () => {
   const files = testFiles();
@@ -208,6 +208,9 @@ describe('every test that builds a FleetWatcher quiets it, or is exempt with its
     expect(quiets(`const t = watcherTeardown(); el.classList.remove('x'); ${tracked}`), 'an unrelated .remove(').toBe(false);
     expect(quiets(`const t = watcherTeardown(); afterEach(() => list.remove(home)); ${tracked}`), 'another handle removed, whose name ends in the teardown\'s').toBe(false);
     expect(quiets(`let teardown = watcherTeardown(); afterEach(() => teardown.remove(home)); ${tracked}`), 'a let binding removed').toBe(true);
+    // Review 1740 F1 (Task C20, D-8187): a `.` or a `$` before the name makes it a member or a longer name, not the binding.
+    expect(quiets(`const t = watcherTeardown(); afterEach(() => obj.t.remove(home)); ${tracked}`), 'a member named like the teardown').toBe(false);
+    expect(quiets(`const t = watcherTeardown(); afterEach(() => $t.remove(home)); ${tracked}`), 'a $-prefixed name ending in the teardown\'s').toBe(false);
   });
 
   it('EXEMPT only shrinks: every entry still builds a watcher and still quiets none, and its size is pinned', () => {

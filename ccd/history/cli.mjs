@@ -500,7 +500,7 @@ export function render(env) {
 /** Every bad-args answer prints this on stderr. */
 const USAGE = [
   'usage: ccrc history <verb> [options]',
-  '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>',
+  '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>, each [--agents]',
   '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
   '  operator verbs: import | prune | reparse | recall-off <id> [--generation <uuid>] [--clear] | recall-off --clear-all',
@@ -616,12 +616,14 @@ function readFailure(e, storeId, id, gen, idx = NO_PAIRS) {
   return refusal(f.exit, f.reason, storeId, id, gen);
 }
 
-/** The argv that reproduces this scope on a next: line. */
+/** The argv that reproduces this scope on a next: line: the one scope flag, then `--agents` when the call read the subagent rows
+ *  too (W4 addendum P7), so a page keeps the scope it began in. */
 function scopeArgsOf(o) {
-  if (typeof o.session === 'string') return ['--session', o.session];
-  if (o.project === true) return ['--project'];
-  if (o.workspace === true) return ['--workspace'];
-  return [];
+  const agents = o.agents === true ? ['--agents'] : [];
+  if (typeof o.session === 'string') return ['--session', o.session, ...agents];
+  if (o.project === true) return ['--project', ...agents];
+  if (o.workspace === true) return ['--workspace', ...agents];
+  return agents;
 }
 
 /** The CLI's one write (§8.1): `{v, ev:'recall', id, gen?, cmd, rc, ms, ts}`, fenced like the hook's lines.
@@ -796,7 +798,7 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
     const session = typeof o.session === 'string' ? o.session : null;
     const scopeInputs = {
       source: SCOPE_SOURCES[0], id, generation,
-      flags: { project: o.project === true, workspace: o.workspace === true, session },
+      flags: { project: o.project === true, workspace: o.workspace === true, session, agents: o.agents === true },
       reg: {
         project: regPresence(P, id, 'project'),
         workdir: regPresence(P, id, 'workdir'),
@@ -817,14 +819,14 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
       gen = families[0].generation;
       seen.gen = gen;
     }
-    const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk));
+    const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk), verdict.agents);
     if (transcriptPks.length === 0) return refusal(EXIT.NOT_INDEXED, undefined, storeId, id, gen);
     const rc = {
       db, version, schema: SCHEMA_ADDED, storeId, nowMs, home, id, gen,
       scope: {
         kind: verdict.kind, id: verdict.id, generation: families.length === 1 ? families[0].generation : null,
         project: verdict.project, workdir: verdict.workdir,
-        sessionPks: families.map((f) => f.sessionPk), transcriptPks, families,
+        sessionPks: families.map((f) => f.sessionPk), transcriptPks, families, agents: verdict.agents,
       },
       scopeArgs: scopeArgsOf(o),
       pairIdx: pairIndexOf(db, home),
@@ -912,7 +914,7 @@ async function readContextEnv(home, P, parsed, nowMs, seen, recall, pane) {
     const session = typeof o.session === 'string' ? o.session : null;
     const verdict = decideScope({
       source: SCOPE_SOURCES[1], id, generation: { value: gen, via: fam.via },
-      flags: { project: o.project === true, workspace: o.workspace === true, session },
+      flags: { project: o.project === true, workspace: o.workspace === true, session, agents: o.agents === true },
       reg: {
         project: regPresence(P, id, 'project'),
         workdir: fam.anchor === null ? ABSENT : { state: 'value', value: fam.anchor },
@@ -928,7 +930,7 @@ async function readContextEnv(home, P, parsed, nowMs, seen, recall, pane) {
       kind: verdict.kind, id: verdict.id, generation: verdict.generation, project: verdict.project,
       workdir: verdict.workdir, workdirReal: verdict.workdir,
     });
-    const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk));
+    const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk), verdict.agents);
     if (transcriptPks.length === 0) return refusal(EXIT.NOT_INDEXED, undefined, storeId, id, gen);
     // The cut (W2-D46 step 7): W2-2a's store half, so every door that reads rc.scope.cut applies it. Its asof-invalid
     // (D-5765) comes after admission and is counted.
@@ -939,7 +941,7 @@ async function readContextEnv(home, P, parsed, nowMs, seen, recall, pane) {
       scope: {
         kind: verdict.kind, id: verdict.id, generation: families.length === 1 ? families[0].generation : null,
         project: verdict.project, workdir: verdict.workdir,
-        sessionPks: families.map((f) => f.sessionPk), transcriptPks, families, cut: cut.cut,
+        sessionPks: families.map((f) => f.sessionPk), transcriptPks, families, agents: verdict.agents, cut: cut.cut,
       },
       scopeArgs: scopeArgsOf(o),
       pairIdx: pairIndexOf(db, home),

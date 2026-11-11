@@ -20,6 +20,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-f';
 const UUID_A = 'a'.repeat(36);
@@ -80,7 +81,7 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), coord };
+    deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports, coord };
   });
   afterEach(() => { rmSync(home, { recursive: true, force: true }); });
 

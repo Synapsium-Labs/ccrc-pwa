@@ -450,9 +450,9 @@ describe('Finished is the programmes (§8.2.3, A26, D-8075)', () => {
 describe('What ccrc closes on its own (§8.6 item 2, §12.3, A15, o7, o12, Task 26, D-8077)', () => {
   const HOUR = 3_600_000;
   const none = { closed7d: 0, refused7d: 0, updatedAt: 0, marker: 'clear' as const, held: null };
-  const group = (g: 'never-started' | 'claimant-crashed', over: Partial<RunCloseGroupView> = {}): RunCloseGroupView =>
+  const group = (g: 'never-started' | 'claimant-crashed' | 'claimant-gone', over: Partial<RunCloseGroupView> = {}): RunCloseGroupView =>
     ({ group: g, choice: 'shadow', state: 'shadow', list: null, ...none, ...over });
-  const would = (runId: number, at: number, why: 'never-started' | 'review-of-closed' | 'later-review' = 'never-started') =>
+  const would = (runId: number, at: number, why: 'never-started' | 'review-of-closed' | 'later-review' | 'claimant-gone' | 'claimant-stopped' | 'name-reused' = 'never-started') =>
     ({ runId, program: `prog-${runId}`, why, at });
   /** 14 runs would close, 11 now and 3 later (the spec's example), with 1085 held and 65 under an archived coordinator. */
   const fourteen = (): RunCloseGroupView => {
@@ -609,6 +609,28 @@ describe('What ccrc closes on its own (§8.6 item 2, §12.3, A15, o7, o12, Task 
     const sheet = await screen.findByTestId('run-close-sheet');
     expect(within(sheet).getByText(/closes the runs of a coordinator that crashed/)).toBeInTheDocument();
     expect(within(sheet).queryByRole('list')).toBeNull();
+  });
+
+  it('the claimant-gone group (E3, E3s, E5) gets the same control, its own reasons, and names a busy worker and a held burst (D-8078)', async () => {
+    const list = {
+      would: [would(7, NOW - HOUR, 'claimant-gone'), would(8, NOW + 20 * HOUR, 'claimant-stopped'), would(9, NOW, 'name-reused')],
+      named: [{ runId: 10, program: 'prog-10', why: 'busy-worker' }, { runId: 11, program: 'prog-11', why: 'breaker-held' }], now: 0, later: 0,
+    };
+    const m = mount(view(fourteen(), group('claimant-crashed'), group('claimant-gone', { list })));
+    await flush();
+    const row = rowOf('claimant-gone');
+    expect(within(row).getByText('Runs of a coordinator that was removed or stopped')).toBeInTheDocument();
+    expect(within(row).getByTestId('run-close-count')).toHaveTextContent('3 runs would close, 2 now and 1 when their time runs out.');
+    fireEvent.click(within(row).getByRole('button', { name: 'Turn on' }));
+    const sheet = await screen.findByTestId('run-close-sheet');
+    expect(within(sheet).getByText(/Its coordinator was removed/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/Its coordinator was stopped by a person/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/Its session now belongs to a later run/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/its worker is still running, so it comes to you as Open the worker/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/went away together with another/)).toBeInTheDocument();
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Turn on' }));
+    await flush();
+    expect(m.writeRunClose).toHaveBeenCalledWith({ group: 'claimant-gone', choice: 'on' });
   });
 
   it('closes and refusals of the last 7 days show per group', async () => {

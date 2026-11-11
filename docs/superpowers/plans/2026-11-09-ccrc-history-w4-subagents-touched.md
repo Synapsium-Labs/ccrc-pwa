@@ -1015,7 +1015,7 @@ it('SA27 forked copies and a true conflict', () => {
   // two holdings sharing a prefix, then different rows: every row stored, transcript_forked counted,
   // each leaf from the copy that holds its boundary; one message uuid with two bodies: one entry, two entry_variants rows (one per body, nothing dropped)
   expect(counter(db, 'transcript_forked')).toBeGreaterThan(0);
-  expect(variantsOf(db, conflictUuid)).toBe(2);
+  expect(variantsOf(db, agentKey)).toBe(2);   // variantsOf counts a transcript's variant rows by its agent key
 });
 ```
 
@@ -1279,3 +1279,8 @@ W4-2 (run 1754) defines two, dated 2026-11-10: D-8168, the departure the coordin
 
 - **D-8168 — `history-w4-sa27-in-w4-2`** (2026-11-10). SA27 moves from W4-1 to W4-2, against section 8's pin split: at the base `derive.mjs` reads `agent_id = ''` only, so `transcript_forked` and a subagent leaf's span exist only once W4-2 widens derive's boundary and file statements.
 - **D-8169 — `history-w4-main-gists-main-only`** (2026-11-10). Under P2 (own chain), `derive.mjs`' `priorGists` and `otherGists` read the nodes of the session's main transcripts only (`agent_id = ''`), so a main leaf's steered-gist check and a parent's node block never compare against a subagent leaf's gist; a statement change beyond Task 2's "only the boundary and file statements widen".
+
+W4-3 (run 1761) defines two, dated 2026-11-10: D-8175 and D-8176, the build questions the coordinator approved for it and numbered at dispatch.
+
+- **D-8175 — `history-w4-agents-mark-on-read-verbs`** (2026-11-10). Under `--agents`, `grep`, `describe`, `expand` and `tree` mark a subagent row `agent:<agent_id>`, as `touched` does; P7 rules visibility, not the mark.
+- **D-8176 — `history-w4-recall-carry-reread`** (2026-11-10). The `recall.mjs` carry's comments are re-read against the code as it stands after D-7095, and only what the code contradicts is reworded.

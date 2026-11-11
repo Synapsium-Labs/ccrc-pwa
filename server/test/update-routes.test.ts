@@ -43,6 +43,7 @@ import type { BoxTokenView } from '../../shared/box-token.js';
 import type { TokenRouteDriver } from '../src/token/routes.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const TOKEN = 'f'.repeat(64);
 /** Cheap-cost scrypt, the `pool-accounts-route.test.ts` ARMED fixture: an armed
@@ -164,7 +165,7 @@ const open = async (
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps: Deps = {
     cfg, runCcd: ccdRunner(failingRunner, cfg), tmux: new Tmux(failingRunner), io: localIO,
-    queue: new KeyedQueue(), mailToken: TOKEN, coord,
+    queue: new KeyedQueue(), time: fakeTime().ports, mailToken: TOKEN, coord,
     updateIntentLog: new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir)),
     ...(o.catalogue ? { catalogue: o.catalogue } : {}),
     ...(o.catalogueFactory ? { catalogue: o.catalogueFactory(coord) } : {}),

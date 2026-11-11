@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
-  type ItemList, type QuestionRow,
+  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedTrail, itemNumber,
 } from '../src/ledgers/ledgerWords';
+import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -300,12 +301,14 @@ describe('the summary pills count the groups the list draws', () => {
 describe('limitRows (a session on a limit with no account to take it)', () => {
   const stuck = (id: string, over: object = {}) => fleetSession({
     id, title: `Title of ${id}`,
-    limitWait: { since: NOW - 10 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, ...over },
+    limitWait: { since: NOW - 10 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, waitingBy: null, ...over },
   });
   it('lists exactly the sessions whose limitWait is not null, oldest first', () => {
     const rows = limitRows([stuck('s-b', { since: NOW - MIN }), fleetSession({ id: 's-none' }), stuck('s-a', { since: NOW - 30 * MIN })]);
     expect(rows.map((r) => r.sessionId)).toEqual(['s-a', 's-b']);
-    expect(rows[0]).toMatchObject({ title: 'Title of s-a', since: NOW - 30 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, program: null });
+    expect(rows[0]).toMatchObject({ title: 'Title of s-a', since: NOW - 30 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, waitingBy: null, program: null });
+    // Who chose the wait rides along (D-8173): ccrc's own is not the operator's pin, and the row words it differently.
+    expect(limitRows([stuck('s-c', { waiting: true, waitingBy: 'auto' })])[0]).toMatchObject({ waiting: true, waitingBy: 'auto' });
   });
   it('files a row under its programme as a question is (the run it is bound to)', () => {
     const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 's-a' })];
@@ -357,5 +360,28 @@ describe('review caps in the grouping (Task 24, F21)', () => {
   it('an item\'s place in a list ignores the cap rows', () => {
     const groups = groupByProgramme([itemView({ id: 3, program: 'prog-a' }), itemView({ id: 4, program: 'prog-a' })], [], [], [cap(12, 'prog-a')]);
     expect(itemPlace(4, COMBINED_LIST, groups)).toMatchObject({ index: 1, total: 2, prev: 3, next: null });
+  });
+});
+
+// D-8194: the Recently cleared trail is the last 48 hours (CLEARED_WINDOW_MS, the server's window too), newest first.
+describe('clearedTrail and itemNumber (D-8194)', () => {
+  const HOUR = 60 * MIN;
+  const done = (id: number, closedAt: number | null) => itemView({ id, state: 'done', closedAt });
+
+  it('the window is 48 hours, one shared constant', () => {
+    expect(CLEARED_WINDOW_MS).toBe(48 * HOUR);
+  });
+
+  it('keeps what was cleared inside the window, edge included, newest first; drops the older and the undated', () => {
+    const items = [done(1, NOW - 2 * HOUR), done(2, NOW - CLEARED_WINDOW_MS), done(3, NOW - CLEARED_WINDOW_MS - 1), done(4, NOW - HOUR), done(5, null)];
+    expect(clearedTrail(items, NOW).map((i) => i.id)).toEqual([4, 1, 2]);
+  });
+
+  it('the shown count is five', () => {
+    expect(CLEARED_SHOWN).toBe(5);
+  });
+
+  it('an item\'s number is its id after a #', () => {
+    expect(itemNumber(itemView({ id: 129 }))).toBe('#129');
   });
 });

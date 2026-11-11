@@ -5509,15 +5509,15 @@ describe('decideScope: the scope source is data, and every widening is decided o
   });
   /** One row per verdict the CLI must reproduce: the C50 table. */
   const TABLE: ReadonlyArray<readonly [string, libScope.ScopeInputs, unknown]> = [
-    ['family by default', base(), { ok: true, kind: 'family', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: null }],
+    ['family by default', base(), { ok: true, kind: 'family', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: null, agents: false }],
     ['family, newest generation', base({ generation: { value: null, via: 'newest' } }),
-      { ok: true, kind: 'family', source: 'tmux', id: 'claude-a-demo', generation: null, project: 'demo', workdir: null }],
+      { ok: true, kind: 'family', source: 'tmux', id: 'claude-a-demo', generation: null, project: 'demo', workdir: null, agents: false }],
     ['--project', base({ flags: { project: true, workspace: false, session: null } }),
-      { ok: true, kind: 'project', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: null }],
+      { ok: true, kind: 'project', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: null, agents: false }],
     ['--workspace', base({ flags: { project: false, workspace: true, session: null } }),
-      { ok: true, kind: 'workspace', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: '/home/u/tree/demo' }],
+      { ok: true, kind: 'workspace', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: '/home/u/tree/demo', agents: false }],
     ['--session, same project', base({ flags: { project: false, workspace: false, session: 'claude-b-demo' }, reg: { project: v('demo'), workdir: v('/w'), sessionProject: v('demo\n') } }),
-      { ok: true, kind: 'family', source: 'tmux', id: 'claude-b-demo', generation: null, project: 'demo', workdir: null }],
+      { ok: true, kind: 'family', source: 'tmux', id: 'claude-b-demo', generation: null, project: 'demo', workdir: null, agents: false }],
     ['--session, another project (C5)', base({ flags: { project: false, workspace: false, session: 'claude-b-other' }, reg: { project: v('demo'), workdir: v('/w'), sessionProject: v('other') } }),
       { ok: false, rc: 2, reason: 'cross-project' }],
     ['--session ..', base({ flags: { project: false, workspace: false, session: '..' } }), { ok: false, rc: 2, reason: 'bad-id' }],
@@ -11962,6 +11962,44 @@ describe('W2-2b headless seam: decideHeadless, decideHeadlessStore and decideAsO
   });
 });
 
+describe('--agents (W4 addendum P7, Task 3): one read option every read verb derives, and the scope carries it', () => {
+  const v = (value: string): libScope.Presence<string> => ({ state: 'value', value });
+  const scopeOf = (flags: Record<string, unknown>): unknown => libScope.decideScope({
+    source: 'tmux', id: 'claude-a-demo', generation: { value: null, via: 'newest' },
+    flags: { project: false, workspace: false, session: null, ...flags } as libScope.ScopeInputs['flags'],
+    reg: { project: v('demo'), workdir: v('/w'), sessionProject: v('demo') },
+  });
+  const ARGS: Record<string, string[]> = { grep: ['x'], describe: ['L0123ab'], expand: ['L0123ab'], tree: [] };
+
+  it('every read verb takes --agents as a flag that defaults to false, and a repeat is bad-args', () => {
+    for (const verb of libScope.READ_VERBS) {
+      const off = libScope.parseReadArgs(verb, ARGS[verb]!) as { ok: boolean; opts?: Record<string, unknown> };
+      const on = libScope.parseReadArgs(verb, [...ARGS[verb]!, '--agents']) as { ok: boolean; opts?: Record<string, unknown> };
+      expect(off.ok && off.opts?.['agents'], `${verb}: absent`).toBe(false);
+      expect(on.ok && on.opts?.['agents'], `${verb}: given`).toBe(true);
+      expect(libScope.parseReadArgs(verb, [...ARGS[verb]!, '--agents', '--agents']), `${verb}: repeated`).toEqual({ ok: false, reason: 'bad-args' });
+    }
+  });
+
+  it('grep and describe re-read their own argv and pass --agents over, as they pass the scope flags', () => {
+    expect(libScope.parseGrepArgs(['x', '--agents'], Date.now()).ok).toBe(true);
+    expect(libScope.parseDescribeArgs(['L0123ab', '--agents']).ok).toBe(true);
+    expect(libScope.parseGrepArgs(['x', '--agents', '--agents'], Date.now()).ok, 'repeated').toBe(false);
+  });
+
+  it('decideScope carries agents: false by default and true with the flag, in every scope kind', () => {
+    expect(scopeOf({})).toMatchObject({ ok: true, kind: 'family', agents: false });
+    expect(scopeOf({ agents: false })).toMatchObject({ ok: true, agents: false });
+    for (const [flags, kind] of [[{}, 'family'], [{ project: true }, 'project'], [{ workspace: true }, 'workspace'], [{ session: 'claude-b-demo' }, 'family']] as const) {
+      expect(scopeOf({ ...flags, agents: true }), kind).toMatchObject({ ok: true, kind, agents: true });
+    }
+  });
+
+  it('a refusal carries no agents word: the flag widens nothing a refusal decided', () => {
+    expect(scopeOf({ project: true, workspace: true, agents: true })).toEqual({ ok: false, rc: 2, reason: 'bad-args' });
+  });
+});
+
 describe('W2-2b review fix (D-6445): decideScope\'s workspace arm keeps the env anchor as stored, and the tmux registry text trimmed (W2-D40, W2-D41; D-5767)', () => {
   const v = (value: string): libScope.Presence<string> => ({ state: 'value', value });
   const at = (source: string, workdir: libScope.Presence<string>): unknown => libScope.decideScope({
@@ -11970,7 +12008,7 @@ describe('W2-2b review fix (D-6445): decideScope\'s workspace arm keeps the env 
     reg: { project: v('demo'), workdir, sessionProject: null },
   });
   const ok = (source: string, workdir: string): unknown =>
-    ({ ok: true, kind: 'workspace', source, id: 'claude-a-demo', generation: null, project: 'demo', workdir });
+    ({ ok: true, kind: 'workspace', source, id: 'claude-a-demo', generation: null, project: 'demo', workdir, agents: false });
   const refused = { ok: false, rc: 2, reason: 'workspace-unreadable' };
 
   it('the env source returns the anchor untrimmed, a trailing or a leading space kept', () => {

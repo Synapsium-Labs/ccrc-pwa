@@ -24,6 +24,7 @@ import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js'
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField, degradedStatIO } from './ioDoubles.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'claude-a-project-f';
 const UUID_A = 'a'.repeat(36);
@@ -497,7 +498,7 @@ const streamWith = async (opts: {
     },
   };
   const cfg = loadConfig({ CCRC_HOME: home });
-  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
   const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
   const hookSeq = opts.hookstateSequence ?? [opts.hookstate ?? null];
   put(at(seq, 0));
@@ -1059,7 +1060,7 @@ describe('session WS', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -1206,7 +1207,7 @@ describe('session WS', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const menuCfg = loadConfig({ CCRC_HOME: home });
-    const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO, queue: new KeyedQueue() }, new Bus());
+    const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports }, new Bus());
     await menuApp.listen({ host: '127.0.0.1', port: 0 });
     const a = menuApp.server.address();
     const p = typeof a === 'object' && a !== null ? a.port : 0;
@@ -1269,7 +1270,7 @@ const mkLadderDeps = (home: string, io: FleetIO): Deps => {
     return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
-  return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+  return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
 };
 
 /** Private-field peeks, same discipline as this file's own `pollOnce` (a cast
@@ -3120,7 +3121,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -3181,7 +3182,7 @@ describe('session WS — dead session behind a symlinked workdir', () => {
     // resolution the way it always rescued running sessions.
     const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const deadApp = await buildServer(deps, new Bus());
     await deadApp.listen({ host: '127.0.0.1', port: 0 });
     const addr = deadApp.server.address();
@@ -3225,7 +3226,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord };
     bus = new Bus();
     app = await buildServer(deps, bus);
     await app.listen({ host: '127.0.0.1', port: 0 });
@@ -3285,7 +3286,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord };
     const frames: SessionStreamMsg[] = [];
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
     try {
@@ -3504,7 +3505,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const noCoordApp = await buildServer(deps, new Bus());
     await noCoordApp.listen({ host: '127.0.0.1', port: 0 });
     const addr = noCoordApp.server.address();
@@ -3682,7 +3683,7 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const frames: SessionStreamMsg[] = [];
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
     try { await stream.start(); } finally { stream.stop(); }
@@ -3713,7 +3714,7 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const frames: SessionStreamMsg[] = [];
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
     try {

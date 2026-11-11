@@ -413,8 +413,16 @@ async function snapshot(c: Ctx, release: string, mirrorPath: string): Promise<Sn
   try { return JSON.parse(last) as Snap; } catch { return fall('unreachable', 'snapshot: no frame fields'); }
 }
 
-/** The CI command for a set over the budget (spec §2.5). */
-const ciCommand = (branch: string | null): string => `gh workflow run ci.yml --ref ${branch ?? '<branch>'} -f mode=full`;
+/** The CI line for a set over the budget (spec §2.5), one line. D-8266: a dispatched full run costs every leg, macOS
+ *  included, so it goes out once per accepted tip (after review), never per push or fix round; a superseded run on the
+ *  same branch is cancelled first; and only its Linux legs arbitrate (the macOS legs are advisory, off the merge path). */
+const ciLine = (branch: string | null): string => {
+  const b = branch ?? '<branch>';
+  return 'ccrc test: the full suite runs on CI, once per accepted tip (after review, never per push or fix round): '
+    + `first cancel a superseded run on the branch (gh run list --workflow ci.yml --branch ${b} --event workflow_dispatch `
+    + `--status in_progress, then gh run cancel <id>), then gh workflow run ci.yml --ref ${b} -f mode=full; `
+    + 'only its Linux legs arbitrate, the macOS legs are advisory';
+};
 
 async function sendCancel(c: Ctx): Promise<void> {
   if (c.runId === null) return;
@@ -513,7 +521,7 @@ async function remote(c0: { explicit: boolean; argv: readonly string[] }, releas
     const est = estimate({ argv: c.argv, pkg: w.pkg, durations, workers: workerCount(c.argv, process.env), packageTestFiles: () => packageTestFiles(w.top, w.pkg) });
     if (est.ms > s.budgetMs) {
       const text = fill('over-budget', `estimate ${minutes(est.ms)} over ${est.files} files, budget ${minutes(s.budgetMs)}`);
-      const after = [`ccrc test: the full suite runs on CI: ${ciCommand(snap.branch)}`];
+      const after = [ciLine(snap.branch)];
       return c.explicit ? { t: 'refused', id: 'over-budget', text, after } : { t: 'fallback', id: 'over-budget', text, after };
     }
     const deps = depsLine(w.top, w.pkg);

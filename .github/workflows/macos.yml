@@ -119,8 +119,12 @@ jobs:
   # cut at 55 minutes). The original one-worker policy was superseded by
   # D-3527 after hosted `macos-26-arm64` runs measured a 20.64 -> 12.99 minute
   # critical-path improvement, then 12.44 and 12.25 minute repetitions, with
-  # identical file, case, skip and failure identities. 4 shards in full, so
-  # the organisation's 5-job macOS cap still leaves room for `probe-macos`.
+  # identical file, case, skip and failure identities. Up to 8 shards in full
+  # (D-8265): at 4, every shard of the daily run ran 46-53 minutes of `Test`
+  # (2026-11-08 to 11-10) and most were cut at 55. 8 is more than the
+  # organisation's 5-job macOS cap, so the daily run's shards and `probe-macos`
+  # queue for slots: a job's timeout counts from its start, never its wait, so
+  # the queue costs wall-clock only, and the daily run starts at 03:17 UTC.
   test-macos:
     name: test-macos ${{ matrix.shard }}/${{ matrix.total }}
     needs: plan
@@ -135,7 +139,9 @@ jobs:
     # from the first two of those and was 1.6x the max once all six were in;
     # 55 is ~2x, which is the headroom a runner this variable needs before a
     # slow-but-healthy leg starts reading as a wedge. A shard carries a
-    # fraction of that suite, so 55 is now generous rather than tight.
+    # fraction of that suite — but only while the shard count keeps up with
+    # it: at 4 shards the suite outgrew 55 (D-8265), and shards.mjs's
+    # `macosFull` now plans up to 8, about 28 minutes each on today's suite.
     #
     # It is also the leg that most needs a deadline at all: this suite has
     # already hung here once, on its first run, when a missing `gtimeout` left

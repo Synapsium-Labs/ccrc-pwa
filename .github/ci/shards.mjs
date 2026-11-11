@@ -61,7 +61,11 @@ export const PROFILES = {
   // tests and the guard suites finish inside the fast run's ~5 minutes; one file longer than that still takes its own.
   linuxFast: { targetMs: 120_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
   macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
-  macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
+  // The daily full run (D-8265): at 4 shards every shard ran 46-53 minutes of `Test` against macos.yml's 55-minute
+  // timeout (2026-11-08 to 11-10, the server suite at about 368 minutes of file time), and most were cancelled. 8
+  // shards, about 28 minutes each today. `scale` is the measurement, not a guess: on those runs a file's macOS time
+  // over its Linux time was 1.20 across every shard's files (1.56 on the shard of the heaviest files alone).
+  macosFull: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 1.2 },
   // `budgetMs`: what ONE trace shard may be planned to take. The job's own timeout is 60 minutes; a refresh plans to
   // 45 and defers the rest (planTraceBatch), because a shard that hits the timeout is cancelled, leaves no records,
   // and the map is not published at all.

@@ -1,5 +1,6 @@
-// Settings › Automation (settings spec §3.3, §5.4; D-5503): twelve cards, in this order, each a `Section` with its
-// scope and purpose line: Stall watch, Temp root collector, Dispatches that never came back (D-7319), Cleanup pause,
+// Settings › Automation (settings spec §3.3, §5.4; D-5503): thirteen cards, in this order, each a `Section` with its
+// scope and purpose line: Stall watch, Temp root collector, Shadow lanes (D-8274, which reads and writes its own door),
+// Dispatches that never came back (D-7319), Cleanup pause,
 // Browser tools (D-8121), which reads the updates poll's fleet node and the fleet frame, Roll idle sessions (D-7453), which reads and writes its own door, Stop leftovers (D-7902), which reads the coord frame
 // through its one reader (`paneScopeStopMarker`) and writes its switch, Leftover processes (D-7994), Worktrees left behind (D-8114), which reads the frame's view, Backups (D-7860) and
 // Work in transcript folders (D-7898), which read the shell's health poll, then Test box (D-7412), the section's last card
@@ -12,6 +13,7 @@ import type { ReactNode } from 'react';
 import { Section } from '@ccrc/ui';
 import { CollectLaneSection, PauseAllCleanup } from '../../fleet/CollectLaneSection';
 import { DispatchAbandonSection } from '../../fleet/DispatchAbandonSection';
+import { ShadowLanesSection } from '../../fleet/ShadowLanesSection';
 import { ScopeSweepSection } from '../../fleet/ScopeSweepSection';
 import { DelegationAdoptSection } from '../../fleet/DelegationAdoptSection';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
@@ -30,6 +32,7 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
     <>
       <StallWatchSection poll={view.stall} />
       <CollectLaneSection poll={view.collect} />
+      <ShadowLanesSection />
       <DispatchAbandonSection poll={view.dispatchAbandon} />
       <Section level={3} scope={pause.scope} title={pause.title} purpose={pause.purpose}>
         <PauseAllCleanup />

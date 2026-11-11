@@ -306,6 +306,9 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/scope-sweep',
     // D-8112: the adoption switch of the delegation lane and its read, a gate for the operator (O5-7 (a)), session-gated, no box token.
     '/api/coord/delegation-adopt',
+    // D-8274 (R-6): Settings › Automation › Shadow lanes, the one switch of each shadow lane for the operator, which refuses
+    // Live while sign-in is dark: the collect-lane argument, session-gated, no box token.
+    '/api/coord/lane-arm',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',
     // Delegation wave 5 PR8: the lease doors of the operator (keep, attach, not delegated), acts of the PWA on a delegated worktree.

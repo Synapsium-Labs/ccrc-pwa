@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync, readdirSync, rmSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
 import { GPT_LANE_BINS } from './codexLaneFixture.js';
 import { here, REPO, BASH, PYTHON3, treeRoot, ccrcIn, treeFile, placed, FIXTURE_BINS, freshBox, freshBoxNoUpstream, ccrcEnv, replantDoctorStubs, runInstall, read, mtime, preexisting, strays, FIVE_ACCOUNT_ROSTER, gitInit, unitDir, UNIT_FILES, systemctlCalls, loginctlCalls, type Result } from './ccrc-installFixture.js';
@@ -555,7 +556,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // AN EXPLICIT BOUND (final review F4): three whole install spines, legitimately. Measured alone
     // (one file, `-t`): 6.8 s at load average 12 (2026-09-28), 7.6 s at load 30 (the final review) —
     // a third of the 20 s default before any load spike, which is the bound that was wrong.
-  }, 60_000);
+  }, scaled(60_000));
 
   // Review fix round 1 I1: EVERY released `cmd_update` before this wave ran
   // its staged spine as `env CCRC_UPDATE_VERIFIED=1 bash "$UPD_TREE/ccd/ccrc"

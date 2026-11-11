@@ -354,7 +354,7 @@ describe('statusline-command.sh writes the per-session usage sidecar (routing sp
     const row = usageFile(home, 'demo-quiet-basin.json') as Record<string, unknown>;
     expect(row).toEqual({
       ts: expect.any(Number), uuid: '11111111-2222-3333-4444-555555555555', account: 'zeta',
-      model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25, agent: null,
+      model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25, cacheExpiresAt: null, agent: null,
     });
     expect(row['ts'] as number).toBeGreaterThanOrEqual(before);
     expect(row['ts'] as number).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 1);
@@ -362,6 +362,18 @@ describe('statusline-command.sh writes the per-session usage sidecar (routing sp
     expect(usageFile(home, '11111111-2222-3333-4444-555555555555.json')).toBeNull();
     // the limits row still lands — the second side-effect did not displace the first
     expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63 });
+  });
+
+  // D-8267: the prompt cache's expiry rides the sidecar as Claude Code's statusline input documents it
+  // (`prompt_cache.expires_at`, epoch seconds, null while the last response reported no cache tokens).
+  it.each([
+    ['a warm cache', { prompt_cache: { warm: true, ttl: '1h', expires_at: 1_800_003_600 } }, 1_800_003_600],
+    ['a cold cache (expires_at null)', { prompt_cache: { warm: false, ttl: '1h', expires_at: null } }, null],
+    ['no prompt_cache object (before the first response, or an older Claude Code)', {}, null],
+  ] as const)('%s: cacheExpiresAt is %s', (_label, extra, want) => {
+    const home = seed('ccrc-statusline-usage-cache-'); seedReg(home);
+    runUsage(home, usagePayload(extra), { tmux: 'cc-demo-cache' });
+    expect(usageFile(home, 'demo-cache.json')).toMatchObject({ cacheExpiresAt: want });
   });
 
   it('an agent render writes <ccd-id>.agents/<name>.json and leaves the main-loop row untouched', () => {

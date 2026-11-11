@@ -1,0 +1,22 @@
+ok  total: 92160 inputs, each gets one word
+CE RDY-unreachable: the word `degraded` is never answered: every input its row matches is caught by an earlier row
+CE RDY-degraded: generation degraded:card-unread, nothing else wrong -> `renewing`, not `degraded`. Its holds are released all the same, as `released:rung`: the ladder caps a degraded generation at `chat` (Table 7.5a)
+CE RDY-degraded: generation degraded:probes-failed, nothing else wrong -> `renewing`, not `degraded`. Its holds are released all the same, as `released:rung`: the ladder caps a degraded generation at `chat` (Table 7.5a)
+CE RDY-monotonic: restart: within, at most 2 -> within, over 2 moves `restarting` (kept if the deadline is later than the bound) to `ready` (takes holds); 1 input pairs, e.g. {'restart': 'within, at most 2', 'gen': 'active'}
+CE RDY-monotonic: restart: within, at most 2 -> within, over 2 moves `restarting` (kept if the deadline is later than the bound) to `saturated` (no new hold, standing kept); 2 input pairs, e.g. {'restart': 'within, at most 2', 'gen': 'active'}
+CE RDY-monotonic: restart: within, at most 2 -> within, over 2 moves `restarting` (kept if the deadline is later than the bound) to `unproved` (no new hold, standing kept); 1 input pairs, e.g. {'restart': 'within, at most 2', 'gen': 'active', 'proof': False}
+CE RDY-crashloop: it measures dead, third restart in the hour, its generation still `carded` from the last start -> `renewing` (kept if the deadline is later than the bound). §3.4: "A crash loop therefore cannot keep holds standing."
+note no account can serve it while a renewal drains -> `renewing` (kept if the deadline is later than the bound); Table 3.4b says `stranded` releases all. The word reaches `stranded` when the renewal fails back to `active`.
+ok  retention: the event "readiness" has a row
+ok  retention: the event "the ladder" has a row
+ok  retention: the event "arming" has a row
+ok  retention: the event "a grant revoked" has a row
+ok  retention: the event "suspended or expired" has a row
+ok  retention: the event "a class raised" has a row
+CE RET-norow: the Retention sentence names the event "the breaker"; Table 6.7c has no row for it
+ok  retention: the event "engagement" has a row
+ok  retention: the event "a load line" has a row
+ok  retention: the event "a bypass" has a row
+CE RET-norow: `mayHold` needs "the operator is not at that programme"; Table 6.7c has no row for the mark being written, and the Retention sentence does not name it
+CE BRK-trial: half-open, the trial hold ends with an outcome §6.4 gives no rule for, so the breaker neither closes, opens nor gets its trial back: staged, not-ready:absent, not-ready:off, not-ready:unmeasured, not-ready:dead, not-ready:restarting, not-ready:renewing, not-ready:degraded, not-ready:stranded, not-ready:saturated, not-ready:unproved, server-gap, released:rung, released:disarmed, released:engagement, released:class-raised, released:grant-ended, released:bypassed, released:deaf
+== overlordReadiness, retention, breaker: domain 92160 readiness inputs; 11 retention events; 28 trial outcomes; counterexamples 10; checks passed 10

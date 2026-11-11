@@ -18,6 +18,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { VIEWER_OPEN_TTL_MS, VIEWER_REFRESH_MS, VIEWER_TTL_MS } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const ID = 'lane-a-project-a';
 const T0 = 1_800_000_000_000;
@@ -182,7 +183,7 @@ describe('/ws/session/:id keeps the open claim', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     clock.t = T0;
     viewers = new Viewers(() => clock.t);
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), viewers };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, viewers };
     app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();

@@ -603,7 +603,7 @@ _dl_audit_heads() {   # <tree> -> rc 0 DL_A_TIP (the tip) DL_A_BTIP (the carrier
            [[ "$q" == "refs/heads/$DL_C_branch" && "$r" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] && DL_A_BTIP="$r"
          done <<< "$bref"
        fi ;;
-    2) DL_A_BTIP=branch-gone ;;   # recorded, and proven no longer there: its commits cannot be counted, never 0
+    2) DL_A_BTIP='branch-gone' ;;   # recorded, and proven no longer there: its commits cannot be counted, never 0
     *) DL_A_BTIP=unmeasured ;;
   esac
   return 0

@@ -47,6 +47,7 @@ import { copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSyn
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { python3ProgramArm } from './platformFixtures.js';
@@ -134,10 +135,11 @@ export const UPD_DEADLINE_BIN: string | null = (() => {
 
 /** Runs `argv` bounded by the process GROUP — a hang becomes a readable
  *  failure, never a hung suite. Shared by every FIFO pin in this file. */
-export function runBounded(argv: string[], env: NodeJS.ProcessEnv, ms = 10000): Result {
+export function runBounded(argv: string[], env: NodeJS.ProcessEnv, bound = 10000): Result {
   if (UPD_DEADLINE_BIN === null) {
     throw new Error('runBounded: no usable `timeout`/`gtimeout` — cannot bound this call safely');
   }
+  const ms = scaled(bound);   // a hang guard: scaled for a slow environment (D-8277)
   const r = spawnSync(UPD_DEADLINE_BIN, ['-k', '1', String(ms / 1000), ...argv], { env, encoding: 'utf8' });
   if (r.status === 124) {
     throw new Error(

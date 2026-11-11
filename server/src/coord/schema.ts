@@ -2502,6 +2502,68 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE run_close_settings ADD COLUMN claimantGone TEXT NOT NULL DEFAULT 'shadow';
   `,
+  // ── 55: user_version 54 -> 55 ─────────────────────────────────────────────
+  // The coordinator call record (D-8126; spec 2026-11-09 §8.2, the autonomy default's wave A3): `coordinator_calls`, one row
+  // per decision a coordinator took in the operator's name. `class` is `routine` (the run record), `big` (the operator's
+  // Seen door) or `block` (a thread waiting on a condition, `wakeOn`, lapsing at `expiresAt`). Its writers are all in
+  // `coordCallsStore.ts`: `insertCall` is the only INSERT, `markCallSeen` the only writer of `seenAt`, `overturnCallTx` the
+  // only writer of `overturnedAt` and `overturnNote` (inside `correctWithMail`'s transaction), `markBlockWoken` the only
+  // writer of `wokenAt`. `build` is the server's build stamp at the insert.
+  //
+  // A NEW TABLE AND ITS INDEXES, NOTHING ELSE: an older build opening a file at `user_version 55` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 54 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE coordinator_calls (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    program      TEXT    NOT NULL,
+    runId        INTEGER REFERENCES runs(id),
+    madeBy       TEXT    NOT NULL,
+    class        TEXT    NOT NULL,
+    question     TEXT,
+    options      TEXT,
+    chosen       TEXT    NOT NULL,
+    why          TEXT    NOT NULL,
+    reversible   INTEGER NOT NULL,
+    wakeOn       TEXT,
+    expiresAt    INTEGER,
+    at           INTEGER NOT NULL,
+    seenAt       INTEGER,
+    overturnedAt INTEGER,
+    overturnNote TEXT,
+    wokenAt      INTEGER,
+    build        TEXT
+  );
+  CREATE INDEX coordinator_calls_by_program ON coordinator_calls(program, class, at);
+  CREATE INDEX coordinator_calls_by_run ON coordinator_calls(runId);
+  CREATE INDEX coordinator_calls_live_blocks ON coordinator_calls(madeBy, class, wokenAt, expiresAt);
+  `,
+  // ── 56: user_version 55 -> 56 ─────────────────────────────────────────────
+  // D-8274 (worktree economy spec 2026-10-28 R-6): `lane_arm_settings`, Settings › Automation › Shadow lanes. ONE ROW PER
+  // LANE, keyed by its `LaneArmLane` name, seeded `shadow` at updatedAt 0 (the seed is what "never written" means to the
+  // marker import). `choice` carries NO CHECK, `collect_lane_settings.choice`'s reason: a token a newer build writes reads
+  // here as `unknown`, which arms nothing. Its writers are all in `CoordStore`: `setLaneArm`, called only by
+  // `POST /api/coord/lane-arm`, writes `choice` and `updatedAt`; `importLaneArmMarker`, called only by the watcher's
+  // one-time import, writes `importedAt` and `imported` (and `choice` once, for a never-written row whose marker stood).
+  // Its readers go through `CoordStore.laneArmSetting`. A later lane joins with a migration that inserts its seed row.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 56` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the
+  // PR and before merge (it must print 55 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE lane_arm_settings (
+    lane       TEXT PRIMARY KEY,
+    choice     TEXT NOT NULL,
+    updatedAt  INTEGER NOT NULL,
+    importedAt INTEGER,
+    imported   TEXT
+  );
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('roster-card', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

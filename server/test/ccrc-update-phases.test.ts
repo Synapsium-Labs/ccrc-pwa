@@ -10,6 +10,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, l
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { scaled } from './timeScale.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
@@ -159,7 +160,7 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toContain(`v1.0.0 (resolved by --to v1.0.0) is below this box's floor v2.0.0 (`);
     expect(r.stderr).toContain(`${RAISED_BY('v2.0.0')} — moving down is a typed act: ccrc update --to v1.0.0 --downgrade. Nothing on this box was changed`);
-  }, 60_000);
+  }, scaled(60_000));
 
   it.each([
     ['a report that says the update to the floor tag was restored', REVERTED_REPORT('v3.0.0'), true],
@@ -1171,12 +1172,12 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     assertNoRealTool(env, home);
     const t0 = Date.now();
     // The spawn's own 90 s kill only ends a run the bound did not; the 30 s assertion below is the row's measure.
-    const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args], { env, encoding: 'utf8', timeout: 90_000 });
+    const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args], { env, encoding: 'utf8', timeout: scaled(90_000) });
     return { r: { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' }, ms: Date.now() - t0 };
   };
   const expectBounded = (home: string, run: { r: Result; ms: number }, lead: string, value: string): void => {
     const { r, ms } = run;
-    expect(ms, `the run took ${ms} ms`).toBeLessThan(30_000);
+    expect(ms, `the run took ${ms} ms`).toBeLessThan(scaled(30_000));
     expect(r.code, `stderr: ${r.stderr.slice(0, 2000)}`).toBe(1);
     const die = r.stderr.split('\n').filter((l) => l.startsWith(`ccrc: ${lead} is `));
     expect(die, r.stderr.slice(0, 2000)).toHaveLength(1);
@@ -1201,7 +1202,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       writeFileSync(join(relDir, 'SHA256SUMS'), `${'a'.repeat(64)}  ${name}\n`);
       expectBounded(home, boundedRun(home, []), 'SHA256SUMS\'s tarball name', name);
       expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
-    }, 150_000);
+    }, scaled(150_000));
   }
   // R45: each die prints its 40-byte excerpt with every byte outside printable ASCII as `?`, read byte-wise (LC_ALL=C).
   it('a 300-character tarball name with an ESC and a CR in its first 40 characters: the die and update.json\'s detail show ? for each, never the byte (D-6751, R45)', () => {
@@ -1239,7 +1240,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       packRelease(home, tree, { tag: 'v2.0.0', latest: false, bundle: false });
       expectBounded(home, boundedRun(home, ['--to', 'v2.0.0', '--allow-unsigned']), 'build.json\'s version', version);
       expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged install ran').toBe(false);
-    }, 150_000);
+    }, scaled(150_000));
   }
 
   // D-6751 (fix round 5 part 2, R46): a value of 200 bytes or fewer used to pass the bound and still carry raw ESC, BEL, CR
@@ -1341,7 +1342,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const { home, r } = unsignedVersion('ccrc-update-bound-version-osc-', 'v\x1b]52;c;SGVsbG8=\x07');
     expect(r.stderr.split('\n').filter((l) => l.startsWith(MALFORMED)), r.stderr).toHaveLength(1);
     expectNoHostileByte(home, r);
-  }, 150_000);
+  }, scaled(150_000));
   for (const locale of [UTF8, 'C']) {
     it(`an unsigned release whose build.json version carries U+009B (a C1 CSI), the caller's locale ${locale}: the update dies, and the byte reaches no way out (D-6751, R46)`, () => {
       const { home, r } = unsignedVersion('ccrc-update-bound-version-c1-', 'v2.0.0\u009b2J', locale);
@@ -1351,7 +1352,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         expect(r.stderr.split('\n').filter((l) => l.startsWith(MALFORMED)), r.stderr).toHaveLength(1);
       }
       expectNoHostileByte(home, r);
-    }, 150_000);
+    }, scaled(150_000));
   }
   it('an unsigned release whose build.json version is exactly 200 bytes passes the bound, and one of 201 bytes dies at it (D-6751, R46)', () => {
     for (const [n, dies] of [[200, false], [201, true]] as const) {
@@ -1364,13 +1365,13 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         expect(r.stderr, 'it reached the version binding').toContain(`build.json says version '${version}' but the release was resolved as v2.0.0`);
       }
     }
-  }, 300_000);
+  }, scaled(300_000));
   it('an unsigned release whose build.json version is 201 bytes in 101 characters, the caller\'s locale UTF-8: the bound counts bytes and dies (D-6751, R46)', () => {
     const version = `v${'é'.repeat(100)}`;
     expect([version.length, Buffer.byteLength(version)]).toEqual([101, 201]);
     const { r } = unsignedVersion('ccrc-update-bound-version-mb-', version, UTF8);
     expect(versionDie(r), r.stderr).toEqual([`ccrc: build.json's version is 201 bytes or not printable ASCII, not a ccrc release's (starts: v${'?'.repeat(39)}) — refusing; nothing outside the staging dir was touched`]);
-  }, 150_000);
+  }, scaled(150_000));
 
   // Fix round 1 item 11 / review 155 C17: the floor death's update.json
   // DETAIL keeps its VERDICT (D-3249) even with a HOME long enough that the
@@ -1573,7 +1574,7 @@ describe('ccrc update: one update at a time (the lock)', () => {
   const waitUntil = (cond: () => boolean, what: string): void => {
     const t0 = Date.now();
     while (!cond()) {
-      if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+      if (Date.now() - t0 > scaled(10_000)) throw new Error(`timed out waiting for ${what}`);
       spawnSync('sleep', ['0.05']);
     }
   };
@@ -1659,7 +1660,7 @@ describe('ccrc update: one update at a time (the lock)', () => {
       const r = runBounded([BASH, join(REPO, 'ccd', 'ccrc'), 'update'], env, 5000);
       expect(r.code, r.stderr).toBe(1);
       expect(r.stderr).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(pid unknown, target unknown\)$/m);
-    }, 15000);
+    }, scaled(15000));
 
   it.skipIf(process.getuid?.() === 0)('a lock that cannot be MEASURED — the file there, not openable — is neither held nor free: the restore child refuses naming probe rc 3, and a plain run refuses to open it (ruling R16)', () => {
     // Plan D-3250: rc 3 folded into "held" would exempt
@@ -1817,7 +1818,7 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     const r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
     const elapsed = Date.now() - t0;
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(elapsed, 'the parent waited on the run it detached').toBeLessThan(10_000);
+    expect(elapsed, 'the parent waited on the run it detached').toBeLessThan(scaled(10_000));
     expect(detachArgv(home)).toEqual([
       '--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
       + 'ccrc-detach update --to v2.0.0 --from cli',
@@ -1871,7 +1872,7 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
       expect(code, `the parent did not return on its own\nstderr: ${err}\nstdout: ${out}`).toBe(0);
       expect(out).toMatch(/^update: detached — 'update --to v2\.0\.0' runs as a transient systemd --user unit; its progress is ~\/\.ccrc\/update\.json$/m);
       // Parked: the staged spine has recorded its argv and is waiting for the go file.
-      for (let until = Date.now() + 15_000; Date.now() < until && !existsSync(join(home, 'staged-ccrc-argv'));) await pause(50);
+      for (let until = Date.now() + scaled(15_000); Date.now() < until && !existsSync(join(home, 'staged-ccrc-argv'));) await pause(50);
       expect(existsSync(join(home, 'staged-ccrc-argv')), `the detached run never reached its install\n${detachedLog()}`).toBe(true);
       const parked = report(home);
       expect(parked['phase']).toBe('installing');
@@ -1883,7 +1884,7 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
       try { process.kill(-parent.pid!, 'SIGKILL'); } catch { /* an empty group: nothing stayed behind */ }
       await pause(200);
       writeFileSync(join(home, 'fixture-install-go'), '');
-      for (let until = Date.now() + 20_000; Date.now() < until;) {
+      for (let until = Date.now() + scaled(20_000); Date.now() < until;) {
         try { final = report(home); } catch { final = {}; }
         if (final['phase'] === 'done' || final['phase'] === 'failed') break;
         await pause(50);
@@ -1903,10 +1904,10 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     expect(runPids.has(parent.pid), 'the parent did the run itself').toBe(false);
     expect(readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n')[1]).toBe('install');
     // The run's own lock goes with the run: free once it has exited.
-    for (let until = Date.now() + 10_000; Date.now() < until
+    for (let until = Date.now() + scaled(10_000); Date.now() < until
       && spawnSync('flock', ['-n', lockPath(home), 'true']).status !== 0;) await pause(50);
     expect(spawnSync('flock', ['-n', lockPath(home), 'true']).status, 'the finished run left the lock held').toBe(0);
-  }, 60_000);
+  }, scaled(60_000));
 
   // Review 179 fix round 1, item 8 (F8): a DETACHED run's floor refusal names
   // the floor ALONE. `_upd_detach` writes `queued` before the child runs, so
@@ -1946,7 +1947,7 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     const detachedLog = (): string => (existsSync(join(home, 'detached.log'))
       ? readFileSync(join(home, 'detached.log'), 'utf8') : '(no detached.log)');
     let final: Record<string, unknown> = {};
-    for (let until = Date.now() + 20_000; Date.now() < until;) {
+    for (let until = Date.now() + scaled(20_000); Date.now() < until;) {
       try { final = report(home); } catch { final = {}; }
       if (final['phase'] === 'failed' || final['phase'] === 'done') break;
       await new Promise<void>((res) => setTimeout(res, 50));
@@ -1957,7 +1958,7 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     expect(log).toContain("v2.0.0 (resolved by --to v2.0.0) is below this box's floor v3.0.0 (");
     expect(log).toMatch(/the highest version this box completed an install of\) — moving down is a typed act: ccrc update --to v2\.0\.0 --downgrade\. Nothing on this box was changed/);
     expect(log, 'a detached refusal must not claim a restore it never read').not.toContain(RESTORED);
-  }, 60_000);
+  }, scaled(60_000));
 
   itLinux('--from and every typed flag ride the detached argv in ONE fixed order, whatever order they were typed in (D-3238)', () => {
     const home = detachedBox('ccrc-update-detach-flags-');
@@ -2270,7 +2271,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     const detachedLog = (): string => (existsSync(join(home, 'detached.log'))
       ? readFileSync(join(home, 'detached.log'), 'utf8') : '(no detached.log)');
     let final: Record<string, unknown> = {};
-    for (let until = Date.now() + 30_000; Date.now() < until;) {
+    for (let until = Date.now() + scaled(30_000); Date.now() < until;) {
       try { final = reportOf(home); } catch { final = {}; }
       if (final['phase'] === 'done' || final['phase'] === 'failed' || final['phase'] === 'reverted') break;
       await new Promise<void>((res) => setTimeout(res, 50));
@@ -2279,7 +2280,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
       phase: 'done', target: 'v2.0.0', from: 'pwa', detail: "doctor exited 1 - the box moved; its health is ccrc doctor's",
     });
     expect(detachedLog()).toMatch(/^update: the staged install completed \(the record is written\) but its trailing doctor exited 1/m);
-  }, 60_000);
+  }, scaled(60_000));
 
   itLinux('fleet: ccrc-agent.service active AND staying up (verify-service.sh\'s two samples) passes with no /health asked; a MainPID that churns behind `active` fails', () => {
     const home = gateBox('ccrc-update-gate-fleet-', 'fleet');
@@ -3843,7 +3844,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   const holdRollbackLock = (home: string): ChildProcess => {
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     const h = spawn('flock', [join(home, '.ccrc', 'update.lock'), 'sleep', '30'], { stdio: 'ignore', detached: true });
-    const until = Date.now() + 5000;
+    const until = Date.now() + scaled(5000);
     while (Date.now() < until) {
       if (spawnSync('flock', ['-n', join(home, '.ccrc', 'update.lock'), 'true']).status !== 0) return h;
       spawnSync('sleep', ['0.02']);
@@ -3952,19 +3953,19 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       allowCurlPort(home, port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
-        { env, encoding: 'utf8', timeout: 20_000 });
+        { env, encoding: 'utf8', timeout: scaled(20_000) });
       const elapsedMs = Date.now() - t0;
       expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${port}/`);
       expect(r.status, r.stderr).toBe(1);
       // Bounded by the OVERRIDDEN probe bound (2s), not left hanging to
       // curl's own (much longer) defaults or to this test's 20s kill.
-      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
+      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(scaled(10_000));
       expect(r.stderr).toMatch(
         /could not ask the release host whether v0\.0\.9 exists within 2s \(curl failed, timed out, or the host answered neither 200 nor 404\)/);
     } finally {
       server.close();
     }
-  }, 20_000);
+  }, scaled(20_000));
 
   // Review fix round 1 (review 155's own M5, distinct from this file's
   // earlier "fix round 1, M5" label below): the four CCRC_RELEASE_* knobs
@@ -4784,7 +4785,7 @@ describe('ccrc channel (design 2026-09-20 §14 — read-only)', () => {
     const r = runChannel(home);
     expect(r.stdout).toMatch(/^channel: state=unreadable /);
     expect(r.stdout).toMatch(/is unreadable \(not a readable regular file\)/);
-  }, 60_000);
+  }, scaled(60_000));
 
   it('every argument is refused — the channel is set from the console (decision 15); -h prints usage', () => {
     const home = freshUpdateBox('ccrc-channel-argv-');
@@ -4935,7 +4936,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   const holdLock = async (home: string): Promise<number> => {
     const holder = spawn('flock', [join(home, '.ccrc', 'update.lock'), 'sleep', '30'],
       { stdio: 'ignore', detached: true });
-    const until = Date.now() + 5000;
+    const until = Date.now() + scaled(5000);
     while (Date.now() < until) {
       if (!lockFree(home)) return holder.pid!;
       await new Promise((res) => setTimeout(res, 20));
@@ -5001,7 +5002,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       const r = runBounded([BASH, join(REPO, 'ccd', 'ccrc'), 'watchdog'], env, 5000);
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toBe('watchdog: ~/.ccrc/update.json is unreadable or malformed — not acting on what cannot be read\n');
-    }, 15000);
+    }, scaled(15000));
 
   itLinux('acts on exactly the nine in-flight phases — W2\'s IN_FLIGHT_UPDATE_PHASES — declared once in ccd/ccrc', () => {
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
@@ -5333,7 +5334,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       expect(r.stdout).toMatch(/^watchdog: ccrc rollback --from watchdog exited 1$/m);
       // A FIFO now sits at the path — no readable regular report to assert.
-    }, 15000);
+    }, scaled(15000));
 
   // Fix round 1 item 18 / review 155 C29: a killed watchdog rollback must
   // not be retried with no bound. Two ticks, one launcher that RECORDS ITS
@@ -5747,7 +5748,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       const r = runBounded([BASH, join(REPO, 'ccd', 'ccrc'), 'watchdog'], env, 5000);
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       expect(r.stdout).toBe('watchdog: the report moved while measuring — next tick\n');
-    }, 15000);
+    }, scaled(15000));
 
   itLinux('D-3278: the failing verdict needs three failing probe samples — one passing sample is a pass; all three failing rolls back with exactly 3 probes', () => {
     const healthCount = (home: string): number =>
@@ -5795,7 +5796,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     // The re-lock is CONTENDED (the launcher's own holder), so nothing is
     // recorded: the stale report the rollback was called on stands untouched.
     expect(readReport(home)).toEqual(was);
-  }, 10_000);
+  }, scaled(10_000));
 
   itLinux('Minor F5: jq missing is refused by name, exit 1, nothing measured', () => {
     const home = watchBox('ccrc-watchdog-nojq-');
@@ -5843,7 +5844,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       { env, detached: true, stdio: 'ignore' });
     let phase = '';
     try {
-      const until = Date.now() + 15_000;
+      const until = Date.now() + scaled(15_000);
       while (Date.now() < until) {
         try { phase = String(readReport(home).phase); } catch { phase = ''; }
         if (phase === 'installing' && existsSync(join(home, 'staged-ccrc-argv'))) break;
@@ -5853,7 +5854,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       release(child.pid!);
     }
     expect(phase, 'the update never reached its staged install').toBe('installing');
-    const until = Date.now() + 5000;
+    const until = Date.now() + scaled(5000);
     while (!lockFree(home) && Date.now() < until) await new Promise((res) => setTimeout(res, 20));
     expect(lockFree(home), 'the lock outlived the killed updater').toBe(true);
     const left = readReport(home);
@@ -5874,7 +5875,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
     expect(lines(home, 'launcher-lock')).toEqual(['free']);
-  }, 60_000);
+  }, scaled(60_000));
 
   itLinux('the watchdog leaves the collector\'s generation journal byte-identical when it reverts (path-identity spec 2026-10-12 §5.3)', () => {
     const home = watchBox('ccrc-watchdog-journal-');

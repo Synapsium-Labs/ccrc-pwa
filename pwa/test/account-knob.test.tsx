@@ -79,7 +79,8 @@ const show = (w: World, o: { connect?: AccountsConnect | null; sessions?: FleetS
   render(<><AccountsScreen /><ToastHost /></>);
 };
 const card = (id: string): HTMLElement => document.querySelector(`.accounts-row[data-lane='${id}']`) as HTMLElement;
-const knob = (id: string): HTMLElement => within(card(id)).getByRole('switch');
+// By name: the card also draws "Start new sessions here" (D-8195), a switch of its own.
+const knob = (id: string): HTMLElement => within(card(id)).getByRole('switch', { name: `${id}: lane on or off` });
 
 afterEach(() => {
   cleanup();

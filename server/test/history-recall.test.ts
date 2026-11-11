@@ -35,6 +35,7 @@ import { brotliDecompressSync as t16brotli, brotliCompressSync as t16brotliCompr
 import { randomBytes as t16random, createHash as t18createHash } from 'node:crypto';
 import { DEFAULT_TEST_ROSTER as t18roster } from './helpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { agentRig, plantAgentTree, armed as agArmed, T0 as AG_RIG_T0, type AgentRig } from './historyAgentFixtures.js';
 // Every spawn that can run the auth library's code names a closed auth endpoint (codex-bridge Stage 1's rule).
 import { CLOSED_AUTH_BASE as c49AuthBase } from './codexAuthFixture.js';
 
@@ -8054,4 +8055,346 @@ describe.skipIf(process.platform === 'darwin')('W2-D37 and W2-D38: the regex chi
     for (const f of ['recall.mjs', 'regex-worker.mjs', 'cli.mjs']) expect(read(f), f).not.toContain(':asof:');
     expect(read('lib.mjs').split("':asof:'").length - 1).toBe(1);
   });
+});
+
+
+// ── W4 Task 3 (P7; D-8175): subagent rows show only under --agents ─────────────────────────────────────────────────────
+// Two stores are built from one planted main thread: A holds the main thread alone, B holds it with a subagent file beside it
+// (two subagent leaves, and a row of its own that only a subagent holds). The CLI runs on both, in a pane, with the clock pinned
+// so two runs' lag figures agree. Without --agents the two stores answer byte for byte alike; with it the subagent rows
+// appear, each marked `agent:<agent_id>` (a --json item carries `agent_id`, null on a main row).
+describe.skipIf(process.platform === 'darwin')('AG: subagent rows show only under --agents (W4 addendum P7, D-8175; Task 3)', () => {
+  const PARENT = 'b3000000-0000-4000-8000-0000000000a1';
+  const SLUG_AG = '-home-u-ag';
+  const AGENT = 'af3c9e21';
+  const NEEDLE = 'quokkaneedle';
+  const FAMILY = 'lane-a-e1';
+  const DAY_BEFORE = AG_RIG_T0 - 86_400_000;
+  const NOW = AG_RIG_T0 + 3_600_000;
+  const NEEDLE_UUID = '00003103-0000-4000-8000-0000000000aa';
+  const mainSeq = rFx.compactionSequence({ n: 2, trigger: 'manual', seed: 0x3101, sessionId: PARENT, startMs: DAY_BEFORE });
+  const agentSeq = rFx.compactionSequence({
+    n: 2, trigger: 'manual', seed: 0x3102, sessionId: PARENT, startMs: DAY_BEFORE,
+    summaryText: (k) => rFx.fixtureSummaryText(k).replaceAll('fixture', 'wombat'),
+  });
+  const agentRows: Row[] = [
+    rFx.userRow({ uuid: NEEDLE_UUID, ts: new Date(DAY_BEFORE - 5000).toISOString(), sessionId: PARENT, text: `${NEEDLE} remark` }),
+    ...agentSeq.rows,
+  ];
+
+  interface Built { rig: AgentRig; main: string[]; agents: string[] }
+  const built: AgentRig[] = [];
+
+  async function deriveAll(rig: AgentRig): Promise<void> {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>; newBudget(): object };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as { deriveNodes(db: unknown, ictx: object, budget: object): void };
+    for (let i = 0; i < 2; i += 1) D.deriveNodes(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, AG_RIG_T0 + 3_600_000, null), S.newBudget());
+  }
+  /** The full-text index, which grep needs (a tick of the rig does not build it): ftsPrepare, then deriveFts to its end. */
+  async function indexFts(rig: AgentRig): Promise<void> {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>; newBudget(): object;
+      ftsPrepare(db: unknown, nowMs: number): { tables: boolean }; deriveFts(db: unknown, ctx: object, budget: object): Promise<void> };
+    const c = S.makeIngestCtx(rig.box.home, rig.box.homes, AG_RIG_T0 + 3_600_000, null);
+    c.fts = S.ftsPrepare(rig.db, AG_RIG_T0 + 3_600_000).tables;
+    c.pairIdx = libRead.makePairIndex([]);
+    await S.deriveFts(rig.db, c, S.newBudget());
+  }
+  /** `mainStored` false: the parent's main transcript is never planted, so the family's only rows are the subagent's (F1). */
+  async function build(withAgents: boolean, mainStored = true): Promise<Built> {
+    const rig = await agentRig(!mainStored ? 'ccrc-hist-ag-c-' : withAgents ? 'ccrc-hist-ag-b-' : 'ccrc-hist-ag-a-');
+    built.push(rig);
+    plantAgentTree(rig, {
+      slug: SLUG_AG, uuid: PARENT, parent: 'epoch', ...(mainStored ? { mainRows: mainSeq.rows } : { main: false }),
+      agents: withAgents ? [{ id: AGENT, rows: agentRows }] : [],
+    }, { sinceMs: AG_RIG_T0 });
+    await rig.tick(agArmed, { scan: true });
+    await deriveAll(rig);
+    await indexFts(rig);
+    const rows = rig.db.prepare(`SELECT n.node_id AS id, t.agent_id AS agent FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk
+      WHERE n.depth = 0 ORDER BY n.boundary_entry_id, n.node_id`).all() as unknown as Array<{ id: string; agent: string }>;
+    return { rig, main: rows.filter((r) => r.agent === '').map((r) => r.id), agents: rows.filter((r) => r.agent !== '').map((r) => r.id) };
+  }
+  let A: Built;
+  let B: Built;
+  let C: Built;
+  beforeAll(async () => {
+    A = await build(false);
+    B = await build(true);
+    C = await build(true, false);
+  }, 600_000);
+  afterAll(async () => {
+    const store = await import('../../ccd/history/store.mjs');
+    for (const r of built.splice(0)) { try { store.closeWriter(r.db); } catch { /* already closed */ } }
+  });
+
+  /** The CLI in a pane of the family, the clock pinned to NOW (the data: preload), beside the statfs preload runCli's env replaces. */
+  const cli = (b: Built, args: string[]): CliRun => runCli(b.rig.box, args, {
+    env: {
+      ...withPane(b.rig.box, FAMILY),
+      NODE_OPTIONS: `--import ${pathToFileURL(PRELOADS.statfs).href} --import data:text/javascript,Date.now=()=>${NOW}`,
+    },
+  });
+  /** A --json answer without its store id, which differs between two stores. */
+  const jsonNoStore = (r: CliRun): string => {
+    const j = { ...(r.json ?? {}) } as Record<string, unknown>;
+    delete j['store_id'];
+    return JSON.stringify(j);
+  };
+  const items = (r: CliRun): Array<Record<string, unknown>> => (r.json?.['items'] ?? []) as Array<Record<string, unknown>>;
+  const MARK = `agent:${AGENT}`;
+
+  it('CONTROL: store B holds the same two main leaves as A and two subagent leaves beside them; A holds none', () => {
+    expect(A.main.length).toBe(2);
+    expect(A.agents).toEqual([]);
+    expect(B.main).toEqual(A.main);
+    expect(B.agents.length).toBe(2);
+    const sane = cli(A, ['tree', '--json']);
+    expect(sane.code, `${sane.stderr}${sane.stdout}`).toBe(0);
+  }, HEAVY);
+
+  /** What each verb is asked, and what proves a subagent row showed: tree lists the subagent leaf, grep finds the word only the
+   *  subagent file holds, describe and expand name a subagent leaf by its full id. */
+  const argsFor = (verb: string): string[] => ({
+    grep: [NEEDLE], describe: [B.agents[0]!], expand: [B.agents[0]!], tree: [],
+  } as Record<string, string[]>)[verb]!;
+
+  it.each(['grep', 'describe', 'expand', 'tree'])('AG1 %s hides a subagent row without --agents and shows it with it', (verb) => {
+    const off = cli(B, [verb, ...argsFor(verb)]);
+    const on = cli(B, [verb, ...argsFor(verb), '--agents']);
+    expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
+    expect(on.stdout, 'with --agents the subagent row is marked').toContain(MARK);
+    expect(off.stdout, 'without it nothing of the subagent shows').not.toContain(MARK);
+    if (verb === 'tree') {
+      expect(off.code).toBe(0);
+      for (const id of B.agents) expect(off.stdout, `the subagent leaf ${id} is not listed`).not.toContain(id.slice(0, 7));
+      for (const id of B.agents) expect(on.stdout, `CONTROL: with --agents ${id} is listed`).toContain(id.slice(0, 7));
+      expect(on.stdout).toContain('wombat');
+      expect(off.stdout).not.toContain('wombat');
+    } else if (verb === 'grep') {
+      expect(off.code, 'the word only the subagent file holds is not found').toBe(3);
+      expect(on.stdout).toContain(NEEDLE);
+    } else {
+      expect([off.code, JSON.parse(cli(B, [verb, ...argsFor(verb), '--json']).stdout.trim().split('\n').at(-1)!).reason]).toEqual([2, 'out-of-scope']);
+    }
+  }, HEAVY);
+
+  it('D-8175 the mark: a subagent row prints agent:<id> right after its id and kind, a main row prints none, and --json items carry agent_id', () => {
+    const tree = cli(B, ['tree', '--agents']);
+    const lines = tree.stdout.split('\n').filter((l) => / native_leaf /.test(l));
+    expect(lines.length, 'CONTROL: four leaf lines, two main and two subagent').toBe(4);
+    expect(lines.filter((l) => l.includes(MARK)).length).toBe(2);
+    expect(lines.filter((l) => !l.includes(MARK)).every((l) => !l.includes('agent:'))).toBe(true);
+    for (const l of lines.filter((x) => x.includes(MARK))) expect(l, 'right after the kind').toMatch(new RegExp(`^ +[LN][0-9a-f]+ native_leaf ${MARK} depth=`));
+
+    const treeJ = items(cli(B, ['tree', '--agents', '--json']));
+    expect(treeJ.map((i) => i['agent_id']).sort()).toEqual([AGENT, AGENT, null, null].sort((a, b) => String(a).localeCompare(String(b))));
+    for (const i of items(cli(B, ['tree', '--json']))) expect('agent_id' in i, 'without --agents no field is added').toBe(false);
+
+    const grepJ = items(cli(B, ['grep', 'Segment', '--agents', '--json']));
+    expect(new Set(grepJ.map((i) => i['agent_id'])), 'main and subagent hits both show').toEqual(new Set([null, AGENT]));
+    for (const i of items(cli(B, ['grep', 'Segment', '--json']))) expect('agent_id' in i).toBe(false);
+    const grepH = cli(B, ['grep', 'Segment', '--agents']).stdout;
+    const heads = grepH.split('\n').filter((l) => l.startsWith('── leaf '));
+    expect(heads.some((l) => new RegExp(`^── leaf [LN][0-9a-f]+ ${MARK} `).test(l)), 'a subagent leaf\'s group header carries the mark (leafHeads)').toBe(true);
+    expect(heads.some((l) => !l.includes('agent:')), 'CONTROL: a main leaf\'s header carries none').toBe(true);
+    expect(grepH.split('\n').filter((l) => l.includes(MARK) && l.includes('<ccrc-recall')).length, 'a hit line of the subagent carries the mark').toBeGreaterThan(0);
+    expect(grepH.split('\n').filter((l) => l.includes('<ccrc-recall') && !l.includes(MARK)).length, 'a main hit line carries none').toBeGreaterThan(0);
+
+    const dAgent = items(cli(B, ['describe', B.agents[0]!, '--agents', '--json']));
+    expect(dAgent[0]!['agent_id']).toBe(AGENT);
+    expect(cli(B, ['describe', B.agents[0]!, '--agents']).stdout).toMatch(new RegExp(`^node [LN][0-9a-f]+ native_leaf ${MARK} depth 0 `, 'm'));
+    const dMain = items(cli(B, ['describe', B.main[0]!, '--agents', '--json']));
+    expect(dMain[0]!['agent_id']).toBeNull();
+    expect(cli(B, ['describe', B.main[0]!, '--agents']).stdout).not.toContain('agent:');
+    expect('agent_id' in items(cli(B, ['describe', B.main[0]!, '--json']))[0]!).toBe(false);
+
+    const eAgent = cli(B, ['expand', B.agents[0]!, '--agents', '--json']);
+    expect(items(eAgent).length).toBeGreaterThan(0);
+    expect(items(eAgent).every((i) => i['agent_id'] === AGENT)).toBe(true);
+    expect(cli(B, ['expand', B.agents[0]!, '--agents']).stdout.split('\n').filter((l) => l.startsWith('── ')).every((l) => l.includes(MARK))).toBe(true);
+    const eMain = cli(B, ['expand', B.main[0]!, '--agents', '--json']);
+    expect(items(eMain).every((i) => i['agent_id'] === null)).toBe(true);
+    expect(cli(B, ['expand', B.main[0]!, '--agents']).stdout).not.toContain('agent:');
+    expect(items(cli(B, ['expand', B.main[0]!, '--json'])).every((i) => !('agent_id' in i))).toBe(true);
+  }, HEAVY);
+
+  it('the default read is unchanged: with no --agents each verb answers byte for byte alike on the main thread alone and on the main thread beside subagent rows, human and --json', () => {
+    const asked: Array<[string, string[]]> = [
+      ['tree', []], ['grep', ['Segment']], ['grep', ['Segment', '--limit', '3']], ['describe', [A.main[0]!]], ['expand', [A.main[0]!]], ['expand', [A.main[1]!]],
+    ];
+    for (const [verb, args] of asked) {
+      const a = cli(A, [verb, ...args]);
+      const b = cli(B, [verb, ...args]);
+      expect(a.code, `${verb} ${args.join(' ')}: ${a.stderr}`).toBe(0);
+      expect([b.code, b.stdout, b.stderr], `${verb} ${args.join(' ')}: human`).toEqual([a.code, a.stdout, a.stderr]);
+      const aj = cli(A, [verb, ...args, '--json']);
+      const bj = cli(B, [verb, ...args, '--json']);
+      expect(jsonNoStore(bj), `${verb} ${args.join(' ')}: --json`).toBe(jsonNoStore(aj));
+      expect(`${b.stdout}${bj.stdout}`).not.toMatch(/wombat|quokka|agent:/);
+    }
+    // CONTROL: the header names one transcript in both, so it is the count the subagent file would have changed
+    expect(cli(B, ['tree']).stdout).toContain('1 transcripts');
+    expect(cli(B, ['tree', '--agents']).stdout, 'CONTROL: with --agents the scope holds the subagent transcript too').toContain('2 transcripts');
+  }, HEAVY);
+
+  it('an exact id of a subagent leaf is out of scope (exit 2) for describe, expand and grep --node without --agents, and answers 0 with it', () => {
+    const id = B.agents[0]!;
+    for (const args of [['describe', id], ['expand', id], ['grep', 'Segment', '--node', id]]) {
+      const off = cli(B, [...args, '--json']);
+      expect([args[0], off.code, off.json?.['reason']], 'refused').toEqual([args[0], 2, 'out-of-scope']);
+      const on = cli(B, [...args, '--agents', '--json']);
+      expect([args[0], on.code, on.stderr], 'CONTROL: with --agents').toEqual([args[0], 0, '']);
+    }
+  }, HEAVY);
+
+  it('a message uuid or --around uuid held by a subagent transcript is out of scope without --agents, and read with it', () => {
+    for (const args of [['expand', NEEDLE_UUID], ['expand', '--around', NEEDLE_UUID]]) {
+      const off = cli(B, [...args, '--json']);
+      expect([args.join(' '), off.code, off.json?.['reason']]).toEqual([args.join(' '), 2, 'out-of-scope']);
+      const on = cli(B, [...args, '--agents', '--json']);
+      expect([args.join(' '), on.code], 'CONTROL').toEqual([args.join(' '), 0]);
+      expect(items(on).some((i) => i['agent_id'] === AGENT)).toBe(true);
+    }
+  }, HEAVY);
+
+  it('Review Focus 5: the scope\'s node rules count the main thread\'s nodes only: a prefix unique without --agents is ambiguous with it, display prefixes and covering leaves ignore a subagent node', () => {
+    const main = B.main[0]!;
+    const clone = `${main.slice(0, 9)}${'0'.repeat(main.length - 9)}`;
+    expect(clone, 'CONTROL: a distinct id, below the main leaf\'s').not.toBe(main);
+    expect(clone < main).toBe(true);
+    const w = B.rig.db;
+    w.exec('PRAGMA foreign_keys = OFF');
+    // a subagent node that shares 9 characters of the main leaf's id, and holds a row the main leaf holds
+    const source = w.prepare('SELECT entry_id, ord FROM node_sources WHERE node_id = ? ORDER BY ord LIMIT 1').get(main) as { entry_id: number; ord: number };
+    try {
+      w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
+          span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms)
+        SELECT ?, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
+          span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms
+        FROM nodes WHERE node_id = ?`).run(clone, B.agents[0]!);
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)').run(clone, source.entry_id, source.ord);
+      const prefix = main.slice(0, 9);
+      const off = cli(B, ['describe', prefix, '--json']);
+      expect([off.code, items(off)[0]?.['node_id']], 'unique among the main nodes').toEqual([0, main]);
+      const on = cli(B, ['describe', prefix, '--agents', '--json']);
+      expect([on.code, on.json?.['reason']], 'ambiguous once the subagent node counts').toEqual([2, 'bad-args']);
+      expect(on.stderr + on.stdout).toContain(clone);
+      expect(on.stderr + on.stdout).toContain(main);
+      // display prefixes are computed among the nodes the scope reads: the main leaf keeps its 7-character prefix
+      expect(cli(B, ['describe', main]).stdout, 'describe\'s display prefix').toMatch(new RegExp(`^node ${main.slice(0, 7)} native_leaf `, 'm'));
+      // and a row both hold groups under the main leaf, never under the subagent node
+      const grepOff = cli(B, ['grep', 'Segment']).stdout;
+      expect(grepOff, 'CONTROL: the grep reads the row the clone also holds').toMatch(/^── leaf L[0-9a-f]{6} /m);
+      expect(grepOff, 'no group is headed by the subagent node').not.toContain(clone);
+      // every group header is headed by a main leaf: the display prefix of one of the main thread's leaves, whatever its digits
+      for (const h of grepOff.split('\n').filter((l) => l.startsWith('── leaf '))) {
+        expect(B.main.some((id) => h.startsWith(`── leaf ${id.slice(0, 7)} `)), `${h} is headed by a main leaf`).toBe(true);
+      }
+    } finally {
+      w.prepare('DELETE FROM node_sources WHERE node_id = ?').run(clone);
+      w.prepare('DELETE FROM nodes WHERE node_id = ?').run(clone);
+    }
+  }, HEAVY);
+
+  it('a next: line keeps the scope: --agents rides it, and a grep cursor minted under --agents is refused without it', () => {
+    const tree = cli(B, ['tree', '--agents']);
+    expect(tree.stdout.split('\n').find((l) => l.startsWith('next:')), 'tree').toContain('--agents');
+    const page = cli(B, ['grep', 'Segment', '--agents', '--limit', '2', '--json']);
+    const next = String(page.json?.['next']);
+    expect(next, 'CONTROL: the page names a next line').toContain('--cursor');
+    expect(next).toContain('--agents');
+    const cursor = next.split(' ').at(next.split(' ').indexOf('--cursor') + 1)!.replace(/^'|'$/g, '');
+    const replay = cli(B, ['grep', 'Segment', '--limit', '2', '--cursor', cursor, '--json']);
+    expect([replay.code, replay.json?.['reason']], 'another scope\'s cursor').toEqual([2, 'bad-args']);
+    const same = cli(B, ['grep', 'Segment', '--agents', '--limit', '2', '--cursor', cursor, '--json']);
+    expect(same.code, 'CONTROL: the same scope reads it').toBe(0);
+  }, HEAVY);
+
+  it('tree prints a node range as the literal text it always printed, to the minute, `unknown` for a missing end (D-8176)', () => {
+    // Pinned as literals, not through lib: the range the main thread's first leaf covers, and a leaf whose ends are edited.
+    const w = A.rig.db;
+    const first = cli(A, ['tree']).stdout.split('\n').find((l) => l.includes(` ${A.main[0]!.slice(0, 7)} `))!;
+    expect(first).toMatch(/^ {4}[LN][0-9a-f]{6} native_leaf depth=0 2025-10-08T08:53Z\.\.2025-10-08T08:53Z <ccrc-recall /);
+    const was = w.prepare('SELECT earliest_ms AS e, latest_ms AS l FROM nodes WHERE node_id = ?').get(A.main[1]!) as { e: number; l: number };
+    try {
+      w.prepare('UPDATE nodes SET earliest_ms = NULL, latest_ms = ? WHERE node_id = ?').run(Date.UTC(2025, 9, 8, 11, 5, 59), A.main[1]!);
+      const edited = cli(A, ['tree']).stdout.split('\n').find((l) => l.includes(` ${A.main[1]!.slice(0, 7)} `))!;
+      expect(edited).toMatch(/^ {4}[LN][0-9a-f]{6} native_leaf depth=0 unknown\.\.2025-10-08T11:05Z <ccrc-recall /);
+    } finally {
+      w.prepare('UPDATE nodes SET earliest_ms = ?, latest_ms = ? WHERE node_id = ?').run(was.e, was.l, A.main[1]!);
+    }
+  }, HEAVY);
+
+  it('F1 a family whose only stored rows are a subagent\'s answers exit 6 without --agents, with none of its text, and reads with --agents (history-w4-agents-only-family-not-indexed)', () => {
+    const rows = C.rig.db.prepare("SELECT t.agent_id AS a, count(e.entry_id) AS n FROM transcripts t LEFT JOIN entries e ON e.transcript_pk = t.transcript_pk GROUP BY t.transcript_pk").all() as unknown as Array<{ a: string; n: number }>;
+    expect(rows.filter((r) => r.a === '' && r.n > 0), 'CONTROL: no main-thread row is stored').toEqual([]);
+    expect(rows.filter((r) => r.a === AGENT && r.n > 0).length, 'CONTROL: the subagent\'s rows are').toBe(1);
+    const off = cli(C, ['grep', NEEDLE]);
+    // exit 6 carries no reason word; what it prints is the refusal line (cli.mjs refusalLine over EXIT_MEANING[6]) and, with --json, its envelope
+    expect(off.code).toBe(6);
+    expect(off.stdout.trim(), 'the refusal line, unchanged').toBe('exit 6: not indexed yet: the first tick has not created the store, or this store has no rows yet');
+    expect(`${off.stdout}${off.stderr}`, 'no subagent text without --agents').not.toMatch(/quokka|wombat|agent:/);
+    const offJson = cli(C, ['grep', NEEDLE, '--json']);
+    expect(offJson.code).toBe(6);
+    expect(offJson.json, 'the --json envelope: exit 6, no reason, no scope, no items').toMatchObject({ exit: 6, scope: null, items: [], shown: 0, total: 0 });
+    expect(offJson.json).not.toHaveProperty('reason');
+    expect(offJson.stdout, 'no subagent text in the envelope').not.toMatch(/quokka|wombat|agent:/);
+    const on = cli(C, ['grep', NEEDLE, '--agents']);
+    expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
+    expect(on.stdout).toContain(NEEDLE);
+    expect(on.stdout.split('\n').some((l) => l.includes(MARK) && l.includes('<ccrc-recall')), 'the row carries its mark').toBe(true);
+  }, HEAVY);
+
+  /** The headless seam (readContextEnv): the marker lists the family, the boundary N is the main thread's second compaction. */
+  const headless = (b: Built, args: string[]): CliRun => {
+    const root = b.rig.box.root;
+    const storeId = fs.readFileSync(path.join(root, 'store.id'), 'utf8').trim();
+    fs.writeFileSync(path.join(root, 'headless-on'), `store ${storeId}\n${FAMILY} -\n`, { mode: 0o600 });
+    return runCli(b.rig.box, args, {
+      env: {
+        CCRC_RECALL_SESSION: FAMILY, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: mainSeq.boundaryUuids[1]!,
+        NODE_OPTIONS: `--import ${pathToFileURL(PRELOADS.statfs).href} --import data:text/javascript,Date.now=()=>${NOW}`,
+      },
+    });
+  };
+
+  it('F2 the headless seam: grep hides a subagent row without --agents and shows it, marked, with it', () => {
+    const off = headless(B, ['grep', NEEDLE, '--json']);
+    expect([off.code, off.json?.['reason']], 'hidden').toEqual([3, undefined]);
+    const on = headless(B, ['grep', NEEDLE, '--agents', '--json']);
+    expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
+    expect(items(on).map((i) => i['agent_id'])).toEqual([AGENT]);
+    expect(headless(B, ['grep', NEEDLE, '--agents']).stdout).toContain(MARK);
+    const control = headless(B, ['grep', 'Segment', '--json']);
+    expect(control.code, 'CONTROL: the seam reads the main thread').toBe(0);
+    expect(items(control).every((i) => !('agent_id' in i))).toBe(true);
+  }, HEAVY);
+
+  it('F2 the as-of arm of coveringLeaves: under a cut a row a subagent node also holds groups under the main leaf, and under --agents under the subagent\'s', () => {
+    const clone = `L${'0'.repeat(20)}`;
+    const w = B.rig.db;
+    w.exec('PRAGMA foreign_keys = OFF');
+    const source = w.prepare('SELECT entry_id, ord FROM node_sources WHERE node_id = ? ORDER BY ord LIMIT 1').get(B.main[0]!) as { entry_id: number; ord: number };
+    try {
+      w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
+          span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms)
+        SELECT ?, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id, boundary_entry_id,
+          span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped, parser_version, created_ms
+        FROM nodes WHERE node_id = ?`).run(clone, B.agents[0]!);
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)').run(clone, source.entry_id, source.ord);
+      const off = headless(B, ['grep', 'Segment']);
+      expect(off.code, `${off.stderr}${off.stdout}`).toBe(0);
+      expect(off.stdout, 'CONTROL: the cut grep groups under leaves').toMatch(/^── leaf L[0-9a-f]{6} /m);
+      expect(off.stdout, 'no group is headed by the subagent node').not.toContain(clone);
+      expect(off.stdout).not.toContain('agent:');
+      const on = headless(B, ['grep', 'Segment', '--agents']);
+      expect(on.code, `${on.stderr}${on.stdout}`).toBe(0);
+      expect(on.stdout, 'with --agents the lower id covers the row').toMatch(new RegExp(`^── leaf L000000 ${MARK} `, 'm'));
+    } finally {
+      w.prepare('DELETE FROM node_sources WHERE node_id = ?').run(clone);
+      w.prepare('DELETE FROM nodes WHERE node_id = ?').run(clone);
+    }
+  }, HEAVY);
 });
