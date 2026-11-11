@@ -1,14 +1,17 @@
 /**
- * THE AUTOMATIC COORDINATOR ROLL, RELEASE HALF (D-7443, D-7452, D-7454; the operator's rulings of 2026-10-29): L1, pure.
+ * THE AUTOMATIC ROLL (D-7443, D-7452, D-7454; D-8276): L1, pure.
  *
- * "Always auto-roll all coordinators when they go idle, but never auto-roll any non-coordinators." A coordinator should
- * follow the new rules (a new ccrc release, new skill text) as soon as it is idle; a non-coordinator picks them up the
- * next time it starts for another reason (a wake, an ensure, a swap), so this verdict never takes one.
+ * WHO (D-8276, the operator's ruling of 2026-11-10, reversing the 2026-10-29 rule "never auto-roll any
+ * non-coordinators"): every idle session rolls onto the newest release and Claude Code build as soon as it can, under
+ * the setting's default `all`. The setting keeps `coordinators` (the 2026-10-29 rule: an idle coordinator only) and
+ * `off` as choices, and a session's own `.no-roll` marker opts it out under every value.
  *
- * BEHIND (D-7454): a coordinator is behind when its Claude Code process started before the node's current ccrc install
- * completed: the live file's `startedAt` (`sessions/<pid>.json`, the process's own stamp) against the modification time
- * of `~/.ccrc/installed`, the completed-install record `ccrc install` writes as its last step. The Claude Code binary
- * trigger is not here: it comes with the binary-lifecycle programme's `ccd roll` (its wave 2) and its canary.
+ * BEHIND (D-7454; D-8276): a session is behind when its Claude Code process started before the node's current ccrc
+ * install completed (the live file's `startedAt`, `sessions/<pid>.json`, against the modification time of
+ * `~/.ccrc/installed`, the completed-install record `ccrc install` writes as its last step), OR when it runs an older
+ * Claude Code build than the newest any awake session on the fleet runs (`claudeBuildOf`, `shared/claudeVersion.ts`:
+ * every pane launches the one installed binary, so that build is what a restart reaches). A session already rolled for
+ * that newest build (`rolledFor`) is not rolled for it again: its restart did not reach it, so another would not either.
  *
  * IDLE is hibernation's gate (`hibernateVerdict`, the one ladder `decideSleep` runs), with its quiet window set to the
  * roll's 90 minutes (binary-lifecycle spec §7.2, its U2) and its claims holds passed (`ROLL_IDLE_GATE`, D-7562: an
@@ -23,12 +26,13 @@
  * take within `ROLL_HIBERNATION_LEAD_MS` is left to it (`hibernation-due`). Only an ARMED hibernation is due, and never
  * for a session carrying `.no-hibernate`, which hibernation does not take (D-7458).
  *
- * The order is cheapest first: the setting, then the role (so a child is never measured), then the node's install
- * time, then `measure` (the live reads), then behind, the opt-outs, the idle gate, hibernation and compaction.
+ * The order is cheapest first: the setting, then the role (so under `coordinators` a child is never measured), then the
+ * node's install time, then `measure` (the live reads), then behind, the opt-outs, the idle gate, hibernation and
+ * compaction.
  * Every fact that could not be read holds. A MANUAL restart never calls this: the operator chose the session.
  */
 import type { SessionRole } from '../../../shared/api.js';
-import { CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import { CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeBuildFact, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { hibernateVerdict, type HibernateHold, type HibernateInput, type IdleGateOptions } from './hibernate.js';
 
 /** The quiet window (binary-lifecycle spec §7.2 and §12, decision U2): the turn marker's newest stamp older than this. */
@@ -50,8 +54,8 @@ export const ROLL_SWEEP_ACTOR = 'sweep:roll';
 const AUTO_ROLL_SKIP_MAP = {
   'setting-unreadable': 'the Settings row could not be read, so nothing is rolled',
   'setting-off': 'Settings › Automation › Roll idle sessions is off',
-  'role-unknown': 'the row does not say whether it is a coordinator',
-  'not-coordinator': 'it is not a coordinator: it picks up the release when it next starts for another reason',
+  'role-unknown': 'the setting is coordinators only, and the row does not say whether it is a coordinator',
+  'not-coordinator': 'the setting is coordinators only, and it is not one: it picks up the release when it next starts for another reason',
   'release-unmeasured': 'when the node\'s current ccrc install completed could not be read',
   'start-unmeasured': 'when its Claude Code process started could not be read',
   'no-roll': 'the operator opted it out ($REG/<id>.no-roll)',
@@ -73,26 +77,29 @@ export type RollTargetVerdict =
   | { readonly take: true }
   | { readonly take: false; readonly skip: Extract<AutoRollSkip, 'setting-off' | 'role-unknown' | 'not-coordinator'> };
 
-/** May an automatic roll take this session at all? `off` takes nothing; then only a coordinator. A row whose role is
- *  unknown (an older build's snapshot) is never taken, and an unreadable `.child` already reads `child`
- *  (`server/src/roleOf.ts#sessionRoleOf`). */
+/** May an automatic roll take this session at all? `off` takes nothing; `all` (D-8276) every role, the role unread;
+ *  `coordinators` only a coordinator. Under `coordinators` a row whose role is unknown (an older build's snapshot) is
+ *  never taken, and an unreadable `.child` already reads `child` (`server/src/roleOf.ts#sessionRoleOf`). */
 export function rollTargetVerdict(targets: ClaudeRollTargets, role: SessionRole | null): RollTargetVerdict {
   if (targets === 'off') return { take: false, skip: 'setting-off' };
+  if (targets === 'all') return { take: true };
   if (role === null) return { take: false, skip: 'role-unknown' };
   if (role !== 'coordinator') return { take: false, skip: 'not-coordinator' };
   return { take: true };
 }
 
-/** The Settings row as the store read it (`CoordStore.rollSettings`), every value `unknown`. */
+/** The Settings row as the store read it (`CoordStore.rollSettings`), every value `unknown`. `seeded`: the row is the
+ *  migration's seed, never written by an operator (its `updatedAt` is still the seed's 0). */
 export type RollSettingsRead =
-  | { readonly kind: 'row'; readonly targets: unknown }
+  | { readonly kind: 'row'; readonly targets: unknown; readonly seeded: boolean }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable'; readonly detail: string };
 
-/** The setting: a stored choice through the one narrowing; a lost row is the default (the seed); a value this build
- *  does not know, or a read that failed, is `null`, which rolls nothing. */
+/** The setting: a stored choice through the one narrowing; a lost row, and the migration's seed no operator has written
+ *  (D-8276: it spells the 2026-10-29 rule, which the operator's ruling of 2026-11-10 reversed), are the default; a value
+ *  this build does not know, or a read that failed, is `null`, which rolls nothing. */
 export function rollTargetsOf(r: RollSettingsRead): ClaudeRollTargets | null {
-  if (r.kind === 'absent') return CLAUDE_ROLL_TARGETS_DEFAULT;
+  if (r.kind === 'absent' || (r.kind === 'row' && r.seeded)) return CLAUDE_ROLL_TARGETS_DEFAULT;
   if (r.kind === 'unreadable') return null;
   return isClaudeRollTargets(r.targets) ? r.targets : null;
 }
@@ -107,6 +114,11 @@ export interface AutoRollInput {
   /** When this session's Claude Code process started (epoch ms); null when it could not be read. Read with the live
    *  state, so it is not looked at while `sleep.live` is unread. */
   readonly startedAt: number | null;
+  /** D-8276: this session's Claude Code build against the newest the fleet runs (`claudeBuildOf`). */
+  readonly build: ClaudeBuildFact;
+  /** D-8276: the newest build this session was last rolled for, by this server; null when none. A build-behind session
+   *  already rolled for the same newest build is not behind on the build (the restart did not reach it). */
+  readonly rolledFor: string | null;
   /** `$REG/<id>.no-roll` and `$REG/<id>.no-hibernate`. Only `.no-roll` opts out of the roll (D-7458): the act,
    *  `ccd hibernate --roll`, refuses `.no-roll` and not `.no-hibernate`. `.no-hibernate` says only that hibernation
    *  will never take the session, so `hibernation-due` never holds it. */
@@ -127,7 +139,7 @@ export type AutoRollVerdict =
   | { readonly act: 'skip'; readonly reason: Exclude<AutoRollSkip, 'idle-gate'> }
   | { readonly act: 'skip'; readonly reason: 'idle-gate'; readonly hold: HibernateHold };
 
-/** Roll this session onto the current release now? */
+/** Roll this session onto the current release and build now? */
 export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.targets === null) return { act: 'skip', reason: 'setting-unreadable' };
   const t = rollTargetVerdict(i.targets, i.role);
@@ -135,7 +147,8 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.release === null) return { act: 'skip', reason: 'release-unmeasured' };
   if (i.sleep.live.kind === 'unread') return { act: 'measure' };
   if (i.startedAt === null) return { act: 'skip', reason: 'start-unmeasured' };
-  if (i.startedAt >= i.release) return { act: 'current' };
+  const buildBehind = i.build.kind === 'behind' && i.rolledFor !== i.build.latest;
+  if (i.startedAt >= i.release && !buildBehind) return { act: 'current' };
   if (i.optedOut.roll) return { act: 'skip', reason: 'no-roll' };
   const sleep = { ...i.sleep, optedOut: false };
   const gate = hibernateVerdict(sleep, i.now, ROLL_QUIET_MS, ROLL_IDLE_GATE);

@@ -1,8 +1,9 @@
-// The automatic coordinator roll's verdict, release half (D-7443, D-7452, D-7454; the operator's rulings of
-// 2026-10-29): an idle coordinator whose pane started before the node's current ccrc install is rolled once it has
-// been quiet for 90 minutes; a non-coordinator is never rolled; a busy, compacting or opted-out coordinator, or one
-// hibernation will take within 30 minutes, is skipped by name; the setting off rolls nothing. Pure: no fixture HOME,
-// no process, no network.
+// The automatic roll's verdict (D-7443, D-7452, D-7454; D-8276, the operator's ruling of 2026-11-10 that reverses the
+// 2026-10-29 coordinators-only rule): an idle session whose pane started before the node's current ccrc install, or
+// that runs an older Claude Code build than the newest the fleet runs, is rolled once it has been quiet for 90 minutes,
+// whatever its role under the default `all`; under `coordinators` a non-coordinator is never rolled; a busy, compacting
+// or opted-out session, or one hibernation will take within 30 minutes, is skipped by name; the setting off rolls
+// nothing. Pure: no fixture HOME, no process, no network.
 import { describe, expect, it } from 'vitest';
 import { VIEWER_OPEN_TTL_MS, type ChildMark } from '../../shared/api.js';
 import { sessionRoleOf } from '../src/roleOf.js';
@@ -39,12 +40,14 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
   live: o.unread ? { kind: 'unread' } : { kind: 'read', word: { ok: true, word: o.word ?? 'idle' }, mark: o.mark ?? mark(ageMs) },
 });
 
-/** An idle coordinator, behind on release, quiet for `ageMs`, hibernation unarmed. */
+/** An idle coordinator, behind on release, quiet for `ageMs`, hibernation unarmed, its build unmeasured. */
 const input = (ageMs: number, o: Partial<AutoRollInput> = {}): AutoRollInput => ({
   targets: CLAUDE_ROLL_TARGETS_DEFAULT,
   role: 'coordinator',
   release: INSTALLED,
   startedAt: PANE_START,
+  build: { kind: 'unmeasured' },
+  rolledFor: null,
   optedOut: { roll: false, hibernate: false },
   hibernation: { armed: false, afterMs: HIBERNATE_AFTER_MS_DEFAULT },
   statusUpdatedAt: NOW - ageMs,
@@ -53,19 +56,26 @@ const input = (ageMs: number, o: Partial<AutoRollInput> = {}): AutoRollInput => 
   ...o,
 });
 
-describe('the setting (D-7453)', () => {
-  it('the default is coordinators, and the row offers coordinators or off, never all', () => {
-    expect(CLAUDE_ROLL_TARGETS_DEFAULT).toBe('coordinators');
-    expect([...CLAUDE_ROLL_TARGETS]).toEqual(['coordinators', 'off']);
-    expect(isClaudeRollTargets('all')).toBe(false);
+describe('the setting (D-7453; D-8276)', () => {
+  it('the default is all (D-8276), and the row offers every idle session, coordinators only, or off', () => {
+    expect(CLAUDE_ROLL_TARGETS_DEFAULT).toBe('all');
+    expect([...CLAUDE_ROLL_TARGETS]).toEqual(['all', 'coordinators', 'off']);
+    expect(isClaudeRollTargets('all')).toBe(true);
+    expect(isClaudeRollTargets('children')).toBe(false);
   });
 
   it('a stored row is read through the one narrowing; a lost row is the default; anything else rolls nothing', () => {
-    expect(rollTargetsOf({ kind: 'row', targets: 'off' })).toBe('off');
-    expect(rollTargetsOf({ kind: 'row', targets: 'coordinators' })).toBe('coordinators');
-    expect(rollTargetsOf({ kind: 'absent' })).toBe('coordinators');
-    expect(rollTargetsOf({ kind: 'row', targets: 'all' })).toBeNull();
+    expect(rollTargetsOf({ kind: 'row', targets: 'off', seeded: false })).toBe('off');
+    expect(rollTargetsOf({ kind: 'row', targets: 'coordinators', seeded: false })).toBe('coordinators');
+    expect(rollTargetsOf({ kind: 'row', targets: 'all', seeded: false })).toBe('all');
+    expect(rollTargetsOf({ kind: 'absent' })).toBe('all');
+    expect(rollTargetsOf({ kind: 'row', targets: 'children', seeded: false })).toBeNull();
     expect(rollTargetsOf({ kind: 'unreadable', detail: 'locked' })).toBeNull();
+  });
+
+  it('D-8276: the migration\'s seed, never written by an operator, reads as today\'s default, not as the 10-29 rule', () => {
+    expect(rollTargetsOf({ kind: 'row', targets: 'coordinators', seeded: true })).toBe('all');
+    expect(rollTargetsOf({ kind: 'row', targets: 'off', seeded: true }), 'any seeded word is the default').toBe('all');
   });
 
   it('off rolls nothing, and reads nothing first', () => {
@@ -79,7 +89,26 @@ describe('the setting (D-7453)', () => {
   });
 });
 
-describe('the role (D-7443): coordinators only', () => {
+describe('the role (D-8276): every idle session under all, coordinators only under coordinators', () => {
+  it('under the default, an idle child is rolled like a coordinator, and so is an unreadable .child or an unknown role', () => {
+    expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN, { role: sessionRoleOf(CHILD) }))).toEqual({ act: 'roll', idleMs: ROLL_QUIET_MS + MIN });
+    expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN, { role: sessionRoleOf(UNREADABLE) })).act).toBe('roll');
+    expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN, { role: null })).act).toBe('roll');
+  });
+
+  it('under the default, a busy child is never rolled, and a child with .no-roll is skipped by name', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { role: 'child', sleep: sleep(2 * HOUR, { word: 'busy' }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'live-word' });
+    expect(autoRollVerdict(input(2 * HOUR, { role: 'child', optedOut: { roll: true, hibernate: false } })))
+      .toEqual({ act: 'skip', reason: 'no-roll' });
+  });
+
+  it('under the default, a child an open run names as worker is still held (the idle gate\'s run-worker hold)', () => {
+    const store = { ok: true as const, openWorker: true, openClaimant: false, claim: false, mail: false };
+    expect(autoRollVerdict(input(2 * HOUR, { role: 'child', sleep: sleep(2 * HOUR, { store }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'run-worker' });
+  });
+
   it('an idle coordinator behind on release is rolled after 90 minutes', () => {
     expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN))).toEqual({ act: 'roll', idleMs: ROLL_QUIET_MS + MIN });
     expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN, { role: sessionRoleOf(NONE) })).act).toBe('roll');
@@ -95,30 +124,38 @@ describe('the role (D-7443): coordinators only', () => {
     expect(autoRollVerdict(input(ROLL_QUIET_MS - MIN))).toEqual({ act: 'skip', reason: 'idle-gate', hold: 'recent' });
   });
 
-  it('an idle child is never rolled, however long it idles and however far behind', () => {
-    expect(autoRollVerdict(input(30 * HOUR, { role: sessionRoleOf(CHILD) }))).toEqual({ act: 'skip', reason: 'not-coordinator' });
+  it('under coordinators, an idle child is never rolled, however long it idles and however far behind', () => {
+    expect(autoRollVerdict(input(30 * HOUR, { targets: 'coordinators', role: sessionRoleOf(CHILD) })))
+      .toEqual({ act: 'skip', reason: 'not-coordinator' });
   });
 
-  it('an unreadable .child counts as a child', () => {
+  it('under coordinators, an unreadable .child counts as a child', () => {
     expect(sessionRoleOf(UNREADABLE)).toBe('child');
-    expect(autoRollVerdict(input(30 * HOUR, { role: sessionRoleOf(UNREADABLE) }))).toEqual({ act: 'skip', reason: 'not-coordinator' });
+    expect(autoRollVerdict(input(30 * HOUR, { targets: 'coordinators', role: sessionRoleOf(UNREADABLE) })))
+      .toEqual({ act: 'skip', reason: 'not-coordinator' });
   });
 
-  it('a row whose role is unknown is never rolled', () => {
-    expect(autoRollVerdict(input(30 * HOUR, { role: null }))).toEqual({ act: 'skip', reason: 'role-unknown' });
+  it('under coordinators, a row whose role is unknown is never rolled', () => {
+    expect(autoRollVerdict(input(30 * HOUR, { targets: 'coordinators', role: null }))).toEqual({ act: 'skip', reason: 'role-unknown' });
   });
 
-  it('the role is tested before anything is measured: a child is never measured', () => {
-    expect(autoRollVerdict(input(2 * HOUR, { role: 'child', sleep: sleep(2 * HOUR, { unread: true }) })))
+  it('under coordinators, the role is tested before anything is measured: a child is never measured', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { targets: 'coordinators', role: 'child', sleep: sleep(2 * HOUR, { unread: true }) })))
       .toEqual({ act: 'skip', reason: 'not-coordinator' });
     expect(autoRollVerdict(input(2 * HOUR, { sleep: sleep(2 * HOUR, { unread: true }) }))).toEqual({ act: 'measure' });
+    expect(autoRollVerdict(input(2 * HOUR, { role: 'child', sleep: sleep(2 * HOUR, { unread: true }) })), 'under all, a child is measured')
+      .toEqual({ act: 'measure' });
   });
 
-  it('rollTargetVerdict is the filter: setting first, then the role', () => {
+  it('rollTargetVerdict is the filter: setting first, then the role, which only coordinators reads', () => {
     expect(rollTargetVerdict('coordinators', 'coordinator')).toEqual({ take: true });
     expect(rollTargetVerdict('off', 'coordinator')).toEqual({ take: false, skip: 'setting-off' });
     expect(rollTargetVerdict('coordinators', 'child')).toEqual({ take: false, skip: 'not-coordinator' });
     expect(rollTargetVerdict('coordinators', null)).toEqual({ take: false, skip: 'role-unknown' });
+    expect(rollTargetVerdict('all', 'coordinator')).toEqual({ take: true });
+    expect(rollTargetVerdict('all', 'child')).toEqual({ take: true });
+    expect(rollTargetVerdict('all', null)).toEqual({ take: true });
+    expect(rollTargetVerdict('off', 'child')).toEqual({ take: false, skip: 'setting-off' });
   });
 });
 
@@ -131,6 +168,38 @@ describe('behind on release (D-7454)', () => {
   it('an install time or a pane start that could not be measured rolls nothing', () => {
     expect(autoRollVerdict(input(2 * HOUR, { release: null }))).toEqual({ act: 'skip', reason: 'release-unmeasured' });
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: null }))).toEqual({ act: 'skip', reason: 'start-unmeasured' });
+  });
+});
+
+describe('behind on the Claude Code build (D-8276)', () => {
+  const after = INSTALLED + MIN;
+  const behind = { kind: 'behind', build: '2.1.296', latest: '2.1.302' } as const;
+
+  it('a pane on the current release but an older build than the newest the fleet runs is rolled', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, role: 'child', build: behind })).act, 'whatever its role').toBe('roll');
+  });
+
+  it('a pane on the newest build, an unmeasured build or an asleep row is current when the release is', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: { kind: 'current', build: '2.1.302' } }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: { kind: 'unmeasured' } }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: { kind: 'asleep' } }))).toEqual({ act: 'current' });
+  });
+
+  it('a session already rolled for this newest build is not rolled for it again (its restart did not reach it)', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, rolledFor: '2.1.302' }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, rolledFor: '2.1.300' })).act, 'a newer build asks again').toBe('roll');
+    expect(autoRollVerdict(input(2 * HOUR, { build: behind, rolledFor: '2.1.302' })).act, 'the release still rolls it').toBe('roll');
+  });
+
+  it('a build-behind session keeps every hold: busy, .no-roll, under coordinators a child, the setting off', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, sleep: sleep(2 * HOUR, { word: 'busy' }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'live-word' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, optedOut: { roll: true, hibernate: false } })))
+      .toEqual({ act: 'skip', reason: 'no-roll' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, targets: 'coordinators', role: 'child' })))
+      .toEqual({ act: 'skip', reason: 'not-coordinator' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, build: behind, targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
   });
 });
 
@@ -243,10 +312,10 @@ describe('claimed runs and claims do not hold a roll (D-7562)', () => {
       .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'runs-unreadable' });
   });
 
-  it('with claims, .no-roll still opts it out, and a non-coordinator is still never rolled', () => {
+  it('with claims, .no-roll still opts it out, and under coordinators a non-coordinator is still never rolled', () => {
     expect(autoRollVerdict(input(past, { optedOut: { roll: true, hibernate: false }, sleep: sleep(past, { store: claims() }) })))
       .toEqual({ act: 'skip', reason: 'no-roll' });
-    expect(autoRollVerdict(input(30 * HOUR, { role: sessionRoleOf(CHILD), sleep: sleep(30 * HOUR, { store: claims() }) })))
+    expect(autoRollVerdict(input(30 * HOUR, { targets: 'coordinators', role: sessionRoleOf(CHILD), sleep: sleep(30 * HOUR, { store: claims() }) })))
       .toEqual({ act: 'skip', reason: 'not-coordinator' });
   });
 

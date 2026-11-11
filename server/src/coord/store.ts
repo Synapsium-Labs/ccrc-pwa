@@ -5774,11 +5774,12 @@ export class CoordStore {
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────
 
   /** The "Roll idle sessions" row as read: a row, no row, or a read that failed, never one `null`. Nothing is decided
-   *  here: `rollTargetsOf` (L1, `coord/rollTarget.ts`) decides what the stored word means. */
+   *  here: `rollTargetsOf` (L1, `coord/rollTarget.ts`) decides what the stored word means. `seeded` (D-8276): the row's
+   *  `updatedAt` is still the migration seed's 0, so no operator has written it (every write stamps its own time). */
   rollSettings(): RollSettingsRead {
     try {
-      const r = this.db.prepare('SELECT targets FROM roll_settings WHERE id = 1').get() as { targets: unknown } | undefined;
-      return r === undefined ? { kind: 'absent' } : { kind: 'row', targets: r.targets };
+      const r = this.db.prepare('SELECT targets, updatedAt FROM roll_settings WHERE id = 1').get() as { targets: unknown; updatedAt: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', targets: r.targets, seeded: r.updatedAt === 0 };
     } catch (err) {
       return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
     }
@@ -5786,14 +5787,15 @@ export class CoordStore {
 
   /** The one writer of `roll_settings`, in one `tx()`: the row before, then the write (an insert for a lost row), then
    *  the row after. It validates nothing: the route has narrowed `targets`. A write that changes nothing runs no
-   *  `UPDATE`, so `updatedAt` stays. */
+   *  `UPDATE`, so `updatedAt` stays, except over the untouched seed (D-8276), which the write stamps: the seed reads as
+   *  the default, so writing its own word is a change the operator made. */
   setRollTargets(targets: ClaudeRollTargets, at: number): { before: RollSettingsRead; after: RollSettingsRead } {
     return tx(this.db, () => {
       const before = this.rollSettings();
       if (before.kind === 'unreadable') throw new Error(`roll settings unreadable inside the write: ${before.detail}`);
       if (before.kind === 'absent') {
         this.db.prepare('INSERT INTO roll_settings (id, targets, updatedAt) VALUES (1, ?, ?)').run(targets, at);
-      } else if (before.targets !== targets) {
+      } else if (before.targets !== targets || before.seeded) {
         this.db.prepare('UPDATE roll_settings SET targets = ?, updatedAt = ? WHERE id = 1').run(targets, at);
       }
       return { before, after: this.rollSettings() };

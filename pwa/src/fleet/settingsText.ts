@@ -320,8 +320,8 @@ export const SETTINGS_CARDS = {
     },
     roll: {
       scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',
-      purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
-        + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
+      purpose: 'Restarts an idle session onto the current ccrc release and the newest Claude Code build, resuming its '
+        + 'conversation, once it has been quiet for 90 minutes. One session at a time, and never one that is working.',
     },
     /** D-8121: the browser MCP servers' box default and what the fleet's running sessions use, before Roll idle sessions. */
     browser: {

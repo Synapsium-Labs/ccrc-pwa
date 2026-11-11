@@ -11,10 +11,11 @@ import {
 import { AFTER_UNMEASURED, idleHoursBindings, laneVerb, sleepPass, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
 import { readSwitches } from '../../shared/switches.js';
 import type { FleetSession } from '../../shared/api.js';
-import type { ClaudeRollTargets } from '../../shared/claudeVersion.js';
+import { claudeBuildOf, fleetClaudeLatest, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
 
 /**
- * THE AUTOMATIC COORDINATOR ROLL, RELEASE HALF (D-7452; the operator's rulings of 2026-10-29): L4, one row of the sleep
+ * THE AUTOMATIC ROLL (D-7452; D-8276, the operator's ruling of 2026-11-10: every idle session, not only coordinators,
+ * and behind on the Claude Code build as well as on the release): L4, one row of the sleep
  * executor (`sleepLane.ts`'s `sleepPass` and `sleepAct`, the fleet's ONE `ccd hibernate` act site), whose `then: 'wake'`
  * follows the sleep with the wake. `autoRollVerdict` (`coord/rollTarget.ts`, L1) decides.
  *
@@ -42,8 +43,8 @@ import type { ClaudeRollTargets } from '../../shared/claudeVersion.js';
  * kill), or one whose ending the runner did not measure, is `unknown`: the line names the session to check, since ccd
  * may have stopped it, woken it, or neither.
  *
- * ONE PASS (`rollPass`): `hibernate-disabled` (the act's kill switch) or the Settings row at anything but
- * `coordinators` journals one line and reads nothing; otherwise the node's install time is read once, and the executor
+ * ONE PASS (`rollPass`): `hibernate-disabled` (the act's kill switch) or the Settings row at `off` (or unreadable)
+ * journals one line and reads nothing; otherwise the node's install time is read once, and the executor
  * asks every recorded row, measures the ones the verdict asks it to, and acts on at most ONE a pass (`ROLL_PER_PASS`),
  * so rolls never herd. A row ccd refused, that failed, or that was held at the act is held off for `ROLL_HOLD_OFF_MS`
  * (D-7552), so a coordinator that will not roll leaves the pass's population and the next one in frame order gets the
@@ -98,6 +99,9 @@ export interface RollSweepMemory {
   readonly lastWhat: Map<string, string>;
   /** D-7552: rows held off, and until when (the executor's `hold-off` map). */
   readonly heldUntil: Map<string, number>;
+  /** D-8276: the fleet's newest Claude Code build when each id was last rolled, so a session whose restart did not reach
+   *  that build is not rolled for it again (`AutoRollInput.rolledFor`). Pruned with the ids the pass no longer sees. */
+  readonly builtFor: Map<string, string>;
 }
 
 export type RollOutcome =
@@ -138,6 +142,10 @@ interface Pass {
   readonly targets: ClaudeRollTargets | null;
   readonly release: number | null;
   readonly hibernation: { readonly armed: boolean; readonly afterMs: number };
+  /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest`), and the build each id
+   *  was last rolled for (`RollSweepMemory.builtFor`). */
+  readonly latest: string | null;
+  readonly builtFor: ReadonlyMap<string, string>;
 }
 
 /** The pass's facts the executor's asks read, carried on the deps it is handed. */
@@ -154,6 +162,7 @@ function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetS
   live: HibernateLive, startedAt: number | null, now: number): RollAnswer {
   return answerOf(autoRollVerdict({
     targets: p.targets, role: row.role, release: p.release, startedAt,
+    build: claudeBuildOf(row, p.latest), rolledFor: p.builtFor.get(row.id) ?? null,
     optedOut: { roll: names.includes(`${row.id}.${NO_ROLL_SUFFIX}`), hibernate: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`) },
     hibernation: p.hibernation, statusUpdatedAt: row.statusUpdatedAt,
     sleep: { row, optedOut: false, store, viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: now - deps.startedAt, live },
@@ -258,7 +267,7 @@ export async function rollPass(
     return [];
   }
   const targets = deps.targets();
-  if (targets !== 'coordinators') {
+  if (targets === null || targets === 'off') {
     const why = targets === null ? 'setting-unreadable' : 'setting-off';
     journal(deps, mem, '*', why, `ccrc-server: roll-skip all: ${why}`);
     return [];
@@ -275,7 +284,8 @@ export async function rollPass(
     journal(deps, mem, '*', 'release-unmeasured', 'ccrc-server: roll-skip all: release-unmeasured (the node\'s ~/.ccrc/installed could not be read)');
     return [];
   }
-  const pass: Pass = { targets, release, hibernation: { armed, afterMs } };
+  const latest = fleetClaudeLatest(sessions);
+  const pass: Pass = { targets, release, hibernation: { armed, afterMs }, latest, builtFor: mem.builtFor };
   mem.lastAt.delete('*');
   const actArmed = deps.act !== null && deps.act.serial !== null && laneVerb(ROLL_LANE.then, deps.act.fleetState);
   const out = (await sleepPass(ROLL_LANE, { ...deps, pass }, mem, sessions, records, names))
@@ -286,15 +296,17 @@ export async function rollPass(
   const seen = new Set(sessions.map((s) => s.id));
   for (const k of [...mem.lastAt.keys()]) if (k !== '*' && !seen.has(k)) mem.lastAt.delete(k);
   for (const k of [...mem.lastWhat.keys()]) if (k !== '*' && !mem.lastAt.has(k)) mem.lastWhat.delete(k);
+  for (const k of [...mem.builtFor.keys()]) if (!seen.has(k)) mem.builtFor.delete(k);
   const done = new Set<string>();
   for (const o of out) {
     done.add(o.id);
     if (o.kind === 'rolled') {
       mem.lastAt.delete(o.id);
+      if (latest !== null) mem.builtFor.set(o.id, latest);
       const after = o.after === undefined ? ''
         : UNREAD_AFTER.has(o.after) ? `; once ccd answered, whether it was still a roll target could not be read again (${o.after})`
           : `; by the time ccd answered it was no longer a roll target (${o.after})`;
-      deps.log(`ccrc-server: rolled ${o.id} onto the current release (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
+      deps.log(`ccrc-server: rolled ${o.id} onto the current release${latest === null ? '' : ` (the fleet's newest Claude Code build is ${latest})`} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
     } else if (o.kind === 'skipped') {
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
     } else if (o.kind === 'failed') {

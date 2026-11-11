@@ -27,6 +27,8 @@ import { SessionMeta } from './SessionMeta';
 import { cardFacts, sessionFacts } from './sessionFacts';
 import { sameLineProps } from './lineProps';
 import { actionDoor } from '../command/door';
+import { useFleetStore } from '../stores/fleet';
+import { fleetClaudeLatest } from '../../../shared/claudeVersion';
 import './fleet.css';
 
 
@@ -78,6 +80,7 @@ function SessionLineView({
   coordinatorTitle,
   now,
   delegated,
+  claudeLatest,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
@@ -123,6 +126,9 @@ function SessionLineView({
   /** R9 (delegation broker wave 4): the delegated work `nestFleet` attached to this row, drawn as one chip when any
    *  of it is live. Absent = today's row, byte for byte. */
   delegated?: readonly DelegationActivityWire[];
+  /** D-8276: the fleet's newest Claude Code build, for a test or a caller that already holds it; absent, the row reads it
+   *  from the fleet store (`fleetClaudeLatest` over every row the console holds). */
+  claudeLatest?: string | null;
 }): ReactNode {
   // D-5545: every fact this row shows is decided by `sessionFacts`, the model the session header reads too —
   // so the card is a glance (the name, the state word, ONE context fact, at most ONE marker and the
@@ -133,9 +139,11 @@ function SessionLineView({
   // (`SessionDetails`), each still one tap away.
   const busy = session.status === 'busy';
   const tick = useNow(30_000, busy && now === undefined);
+  const storeLatest = useFleetStore((st) => fleetClaudeLatest(st.sessions));
   const facts = sessionFacts({
     session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
     workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null, ...(delegated === undefined ? {} : { delegated }),
+    claudeLatest: claudeLatest === undefined ? storeLatest : claudeLatest,
   });
   const glance = cardFacts(facts);
   const label = glance.name.text;

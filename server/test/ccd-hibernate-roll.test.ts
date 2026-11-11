@@ -156,6 +156,41 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
     expect(ensureAt()).toBe(-1);
   });
 
+  // D-8276 (the operator's ruling of 2026-11-10): every idle session rolls, not only coordinators. The act never read
+  // the role (the 10-29 rule lived in the server's verdict), and these rows pin that it still does not: a dispatched
+  // child (`$REG/<id>.child` naming its run) rolls by the same one act, and keeps every refusal.
+  it('D-8276: an idle dispatched child (a .child marker) is rolled by the same one act', () => {
+    idle();
+    h.sh(`_reg_set ${ID} child 7`);
+    const r = roll();
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+    expect(ensureAt(), 'the wake ran after the kill').toBeGreaterThan(killAt());
+    expect(has('child'), 'the roll leaves the child marker as it was').toBe(true);
+  });
+
+  it('D-8276: a busy dispatched child is never rolled: busy at exit 3, nothing touched', () => {
+    idle();
+    h.sh(`_reg_set ${ID} child 7`);
+    live('busy');
+    const r = roll();
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toContain('ccd: session-busy: busy');
+    expect(has('hibernated')).toBe(false);
+    expect(killAt()).toBe(-1);
+    expect(ensureAt()).toBe(-1);
+  });
+
+  it('D-8276: a dispatched child carrying .no-roll is refused opted-out', () => {
+    idle();
+    h.sh(`_reg_set ${ID} child 7`);
+    fs.writeFileSync(regPath('no-roll'), '');
+    const r = roll();
+    expect(r.rc).toBe(3);
+    expect(r.err).toMatch(/^ccd: session-busy: opted-out — .*no-roll/);
+    expect(killAt()).toBe(-1);
+  });
+
   it('a failed wake exits 4 with roll-wake-failed and leaves the row hibernated', () => {
     idle();
     fs.writeFileSync(path.join(h.home, 'wake-fails'), '');

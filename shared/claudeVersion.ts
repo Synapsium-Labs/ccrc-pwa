@@ -56,17 +56,82 @@ export const CLAUDE_ROLL_MODES = ['off', 'manual', 'auto'] as const;
 export type ClaudeRollMode = (typeof CLAUDE_ROLL_MODES)[number];
 export const CLAUDE_ROLL_MODE_DEFAULT: ClaudeRollMode = 'manual';
 
-/** Which sessions an AUTOMATIC roll may take: the Settings › Automation row "Roll idle sessions" (D-7443; D-7453, the
- *  operator's rulings of 2026-10-29). `coordinators`, the default and the row's ON, rolls an idle coordinator onto the
- *  current release; `off` rolls nothing. There is no `all`: a non-coordinator is never rolled automatically and picks
- *  up a new release only when it next starts for another reason (a wake, an ensure, a swap). A manual restart never
- *  reads this. */
-export const CLAUDE_ROLL_TARGETS = ['coordinators', 'off'] as const;
+/** Which sessions an AUTOMATIC roll may take: the Settings › Automation row "Roll idle sessions" (D-7443; D-7453; D-8276).
+ *  `all`, the default since the operator's ruling of 2026-11-10 (D-8276, reversing the 2026-10-29 rule), rolls every
+ *  idle session onto the current release and the newest Claude Code build; `coordinators` keeps the 2026-10-29 rule as
+ *  a choice (an idle coordinator only; every other session picks the release up when it next starts for another
+ *  reason); `off` rolls nothing. A session's own `.no-roll` marker opts it out under every value. A manual restart
+ *  never reads this. */
+export const CLAUDE_ROLL_TARGETS = ['all', 'coordinators', 'off'] as const;
 export type ClaudeRollTargets = (typeof CLAUDE_ROLL_TARGETS)[number];
-export const CLAUDE_ROLL_TARGETS_DEFAULT: ClaudeRollTargets = 'coordinators';
+export const CLAUDE_ROLL_TARGETS_DEFAULT: ClaudeRollTargets = 'all';
 /** The one narrowing of an untrusted value (a stored column, a request body) to a `ClaudeRollTargets`. */
 export function isClaudeRollTargets(v: unknown): v is ClaudeRollTargets {
   return typeof v === 'string' && (CLAUDE_ROLL_TARGETS as readonly string[]).includes(v);
+}
+
+// ─── the fleet's expected build, and each session's place against it (D-8276) ───
+//
+// Every pane on a node launches the one installed binary, so a session that starts now runs the newest build the
+// node has; the newest build any AWAKE session reports is therefore the build a restart reaches, measured, with no
+// node file (spec §6.2's `~/.ccrc/claude.json` has no writer yet). A session on an older build is `behind`, and the
+// automatic roll takes it once it is idle. Asleep rows (hibernated) wake on the current build, so they neither set the
+// newest build nor count as behind; archived rows run nothing. One reading, here, for the roll lane
+// (`server/src/rollLane.ts`) and the console (`pwa/src/fleet/sessionFacts.ts`, Settings › Automation).
+
+/** A fleet row as the build reading needs it (`FleetSession`'s own fields). `hibernatedAt` absent (an older peer)
+ *  reads as awake. */
+export interface ClaudeBuildRow {
+  readonly version: string | null;
+  readonly archivedAt: number | null;
+  readonly hibernatedAt?: number | null;
+}
+
+/** One session's build against the fleet's newest. `unmeasured`: no well-formed build (no live file, an older peer,
+ *  an archived row); `asleep`: hibernated, it wakes on the current build. */
+export type ClaudeBuildFact =
+  | { readonly kind: 'unmeasured' }
+  | { readonly kind: 'asleep' }
+  | { readonly kind: 'current'; readonly build: string }
+  | { readonly kind: 'behind'; readonly build: string; readonly latest: string };
+
+const buildAwake = (r: ClaudeBuildRow): boolean => r.archivedAt === null && (r.hibernatedAt ?? null) === null;
+
+/** The newest well-formed build any awake session runs; null when none is measured. */
+export function fleetClaudeLatest(rows: readonly ClaudeBuildRow[]): string | null {
+  let latest: string | null = null;
+  for (const r of rows) {
+    if (!buildAwake(r) || !isClaudeVersion(r.version)) continue;
+    if (latest === null || compareClaudeVersions(r.version, latest) > 0) latest = r.version;
+  }
+  return latest;
+}
+
+/** Where one session stands against `latest` (`fleetClaudeLatest` over the same fleet). */
+export function claudeBuildOf(row: ClaudeBuildRow, latest: string | null): ClaudeBuildFact {
+  if (row.archivedAt !== null) return { kind: 'unmeasured' };
+  if ((row.hibernatedAt ?? null) !== null) return { kind: 'asleep' };
+  if (!isClaudeVersion(row.version)) return { kind: 'unmeasured' };
+  if (latest !== null && isClaudeVersion(latest) && compareClaudeVersions(row.version, latest) < 0) {
+    return { kind: 'behind', build: row.version, latest };
+  }
+  return { kind: 'current', build: row.version };
+}
+
+/** The fleet's newest build and how many sessions stand where against it. */
+export interface ClaudeBuildCounts {
+  readonly latest: string | null;
+  readonly behind: number;
+  readonly current: number;
+  readonly unmeasured: number;
+  readonly asleep: number;
+}
+
+export function claudeBuildCounts(rows: readonly ClaudeBuildRow[]): ClaudeBuildCounts {
+  const latest = fleetClaudeLatest(rows);
+  const n = { behind: 0, current: 0, unmeasured: 0, asleep: 0 };
+  for (const r of rows) n[claudeBuildOf(r, latest).kind]++;
+  return { latest, ...n };
 }
 
 /** The lane kinds a (node, lane kind) target is kept for (spec §10.1). */
