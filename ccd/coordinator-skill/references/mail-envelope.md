@@ -1,7 +1,12 @@
 # The envelope
 
-Your session is never typed a message directly — only a tiny one-line nudge
-pointing at `GET /api/mail?to=<you>` (`references/wave-lifecycle.md` §3). Each
+Your session is never typed a message directly — only a tiny one-line nudge.
+Read your mail with `~/.local/bin/ccrc-api mail inbox`, run bare (no pipe, no
+redirect, no `head` or `tail`; a piped run acks nothing): it prints each
+unacked delivery in the shape below, under `delivery:` and without the `ack:`
+lines, and acks each one it printed; its footer lists them, for
+`mail fetch <delivery>` (`references/wave-lifecycle.md` §3). The fallback is
+the list the older nudge points at, `GET /api/mail?to=<you>`. Each
 listed row carries a `deliveryId` — use THAT, never the row's `id`
 (`references/wave-lifecycle.md` §3, re-opened D-41) — for
 `GET /api/mail/<deliveryId>`, which is what returns one outstanding delivery:
