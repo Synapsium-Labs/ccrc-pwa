@@ -2569,6 +2569,7 @@ button.proj-card-pool::before {
    frame's "Not the account you meant?" and its act (Task A22, D-7849) wrap the same way. */
 .accounts-row-kind,
 .acct-knob,
+.acct-home,
 .acct-wrong-account {
   display: flex;
   flex-wrap: wrap;
@@ -2708,6 +2709,27 @@ button.proj-card-pool::before {
 .acct-check-again { justify-self: start; }
 /* The reason's ink and type are the trouble sentences' (the group above); here only its own line. */
 .acct-knob-reason { flex: 1 0 100%; }
+
+/* Start new sessions here (D-8195): its own row under the kill switch's, the same switch drawing, with a visible label
+   the knob does not have so the two never read as one control. The label and its sentence stack in one block that
+   takes the rest of the row and wraps inside it, so at a phone's width the switch keeps its place at the left edge. */
+.acct-home { flex-wrap: nowrap; }
+.acct-home-words {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.accounts-row[data-state] .acct-home-label {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+}
+.accounts-row[data-state] .acct-home-state {
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
 
 /* The Move sessions sheet (spec §4.5; accounts plan Task A3), inside <Sheet>'s panel: one row per session, its name on
    the left and its outcome word right-aligned. The word never truncates: at a phone's width the name gives way and

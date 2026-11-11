@@ -31,29 +31,38 @@ import { CHECK_LABEL, STATE_LAMPS, laneActRefusal, moveOffLabel, switchRow } fro
 import { MoveSessionsSheet, sessionsToMove } from './MoveSessionsSheet';
 import './fleet.css';
 
+/** The acts a lane runs one at a time: Check, the kill switch, and whether new sessions start on it (D-8195). */
+export type LaneActKind = 'check' | 'switch' | 'placement';
+
 /** An act in flight on a lane, and the switch an ack has set until the store's next answer lands. */
 export interface LaneActs {
   /** The act in flight on each lane. */
-  readonly busy: Readonly<Record<string, 'check' | 'switch'>>;
+  readonly busy: Readonly<Record<string, LaneActKind>>;
   /** The switch each ack set (true: on), held until the refreshed answer has landed. */
   readonly acked: Readonly<Record<string, boolean>>;
+  /** Whether new sessions start on the lane, as each placement ack's roster read it back (D-8195), held the same way. */
+  readonly homeAcked: Readonly<Record<string, boolean>>;
   check(id: string): void;
   flip(id: string, toOn: boolean): void;
+  /** `ccrc account set --placement full|overflow` through `POST /api/accounts/:id/set` (D-8195). */
+  place(id: string, homeAble: boolean): void;
 }
 
 /** The screen's lane acts. `refresh` re-reads `/api/accounts` through the store, its one reader. */
 export function useLaneActs(refresh: () => Promise<unknown>): LaneActs {
-  const [busy, setBusy] = useState<Record<string, 'check' | 'switch'>>({});
+  const [busy, setBusy] = useState<Record<string, LaneActKind>>({});
   const [acked, setAcked] = useState<Record<string, boolean>>({});
+  const [homeAcked, setHomeAcked] = useState<Record<string, boolean>>({});
   const settle = (id: string): void => setBusy((b) => { const { [id]: _done, ...rest } = b; return rest; });
   const release = (id: string): void => setAcked((a) => { const { [id]: _done, ...rest } = a; return rest; });
-  const run = (id: string, kind: 'check' | 'switch', act: () => Promise<void>): void => {
+  const releaseHome = (id: string): void => setHomeAcked((a) => { const { [id]: _done, ...rest } = a; return rest; });
+  const run = (id: string, kind: LaneActKind, act: () => Promise<void>): void => {
     if (busy[id] !== undefined) return;
     setBusy((b) => ({ ...b, [id]: kind }));
     void act().finally(() => settle(id));
   };
   return {
-    busy, acked,
+    busy, acked, homeAcked,
     check: (id) => run(id, 'check', async () => {
       try {
         const a = await api.accountCheck(id);
@@ -74,6 +83,18 @@ export function useLaneActs(refresh: () => Promise<unknown>): LaneActs {
       await refresh();
       release(id);
     }),
+    place: (id, homeAble) => run(id, 'placement', async () => {
+      try {
+        const a = await api.accountSet(id, { placement: homeAble ? 'full' : 'overflow' });
+        // The ack: the roster as the route re-read it. A roster that no longer names the lane holds nothing.
+        const read = a.roster.find((r) => r.id === id)?.homeAble;
+        if (read !== undefined) setHomeAcked((x) => ({ ...x, [id]: read }));
+      } catch (e) {
+        toast(laneActRefusal('placement', id, e), 'error');
+      }
+      await refresh();
+      releaseHome(id);
+    }),
   };
 }
 
@@ -92,7 +113,7 @@ export interface AccountKnobProps {
   blocked: string | null;
   /** The live sessions on the lane, which keep running when it is switched off. */
   running: number;
-  busy: 'check' | 'switch' | undefined;
+  busy: LaneActKind | undefined;
   onFlip: () => void;
   onCheck: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
@@ -109,19 +130,14 @@ export function AccountKnob({ id, on, notReady, blocked, running, busy, onFlip, 
   const switchDisabled = busy !== undefined || blocked !== null || (!on && notReady !== null);
   return (
     <div className="acct-knob" data-on={on ? 'true' : 'false'}>
-      <button
-        type="button"
-        role="switch"
-        className="acct-switch"
-        aria-checked={on}
-        aria-label={`${id}: new sessions`}
-        aria-busy={busy === 'switch' || undefined}
-        aria-describedby={reason !== null ? `acct-knob-reason-${id}` : undefined}
+      <LaneSwitch
+        on={on}
+        name={`${id}: lane on or off`}
+        busy={busy === 'switch'}
+        describedBy={reason !== null ? `acct-knob-reason-${id}` : undefined}
         disabled={switchDisabled}
         onClick={onFlip}
-      >
-        <span className="acct-switch-track" aria-hidden="true"><span className="acct-switch-thumb" /></span>
-      </button>
+      />
       <span className="acct-knob-state">{switchRow(on, running)}</span>
       {blocked === null && (
         <Button
@@ -139,5 +155,36 @@ export function AccountKnob({ id, on, notReady, blocked, running, busy, onFlip, 
       {reason !== null && <p className="acct-knob-reason" id={`acct-knob-reason-${id}`}>{reason}</p>}
       <MoveSessionsSheet lane={id} open={moveOpen} onClose={() => setMoveOpen(false)} fleet={fleet} />
     </div>
+  );
+}
+
+export interface LaneSwitchProps {
+  on: boolean;
+  /** The accessible name: what the switch switches, never only the lane's id. */
+  name: string;
+  busy: boolean;
+  /** The id of the sentence that says why it cannot move, when one is drawn. */
+  describedBy: string | undefined;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+/** The card's switch drawing, one component for its two switches: the kill switch above and "Start new sessions here"
+ *  (`AccountHomeAble`, D-8195). Each brings its own name and its own act. */
+export function LaneSwitch({ on, name, busy, describedBy, disabled, onClick }: LaneSwitchProps): ReactNode {
+  return (
+    <button
+      type="button"
+      role="switch"
+      className="acct-switch"
+      aria-checked={on}
+      aria-label={name}
+      aria-busy={busy || undefined}
+      aria-describedby={describedBy}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className="acct-switch-track" aria-hidden="true"><span className="acct-switch-thumb" /></span>
+    </button>
   );
 }

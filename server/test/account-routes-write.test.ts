@@ -512,6 +512,41 @@ describe('set and the revoke tick', () => {
     expect(r.argv()).toHaveLength(1);
   });
 
+  // The Accounts card's "Start new sessions here" switch (D-8195) sends `{placement}` alone: the roster's `homeAble`.
+  it('set {placement} alone: refused to a caller with no session, run for a signed-in one, and `last-home-able` crosses as its word', async () => {
+    const r = await openApp();
+    const none = await post(r, `/api/accounts/${LANE}/set`, { placement: 'overflow' });
+    expect(none.statusCode).toBe(401);
+    expect(r.calls).toEqual([]);
+    expect(r.rows).toEqual([]);
+
+    const cookie = await login(r.app);
+    const roster = r.roster();
+    const off = { ...roster, accounts: roster.accounts.map((a) => (a['id'] === LANE ? { ...a, homeAble: false } : a)) };
+    r.stub('set', { out: { ok: true, roster: off, fleetIdentity: NODE } });
+    const ok = await post(r, `/api/accounts/${LANE}/set`, { placement: 'overflow' }, cookie);
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(r.argv()).toEqual([`account set --id=${LANE} --placement=overflow`]);
+    const answered = ok.json() as { ok: boolean; roster: { id: string; homeAble: boolean }[] };
+    expect(answered.ok).toBe(true);
+    expect(answered.roster.find((x) => x.id === LANE)?.homeAble).toBe(false);
+    expect(r.rows.map((x) => [x.act, x.laneId, x.outcome])).toEqual([['set', LANE, 'ok']]);
+
+    r.stub('set', { out: { ok: false, error: 'last-home-able', detail: 'a sentence with /a/path' }, code: 1 });
+    const last = await post(r, `/api/accounts/${LANE}/set`, { placement: 'overflow' }, cookie);
+    expect(last.statusCode).toBe(REFUSAL_STATUS['last-home-able']);
+    expect(last.json()).toEqual({ ok: false, error: 'last-home-able' });
+
+    // A placement off the enum is refused before any verb runs.
+    const before = r.argv().length;
+    for (const placement of ['everywhere', true, 1]) {
+      expect((await post(r, `/api/accounts/${LANE}/set`, { placement }, cookie)).json(), String(placement))
+        .toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(r.argv()).toHaveLength(before);
+    expect(r.argv().filter((l) => l.startsWith('account set'))).toHaveLength(2);
+  });
+
   it('revoke-ack writes one revoke-acknowledged row with no value, for a lane that may be gone, and runs no op', async () => {
     const r = await openApp();
     const cookie = await login(r.app);

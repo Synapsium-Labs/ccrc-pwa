@@ -326,6 +326,30 @@ export function switchRow(on: boolean, running: number): string {
   return `Off: no new sessions; the ${running} running here ${running === 1 ? 'keeps' : 'keep'} running.`;
 }
 
+// ── Start new sessions here (D-8195) ───────────────────────────────────────────────────────────────────────────────
+// Whether new sessions may START on a lane: the roster's `homeAble`, written by `ccrc account set --placement`
+// (`full` | `overflow`, spec §8.4). It is not the kill switch above: a lane switched on but not home-able still runs the
+// sessions it has and may be picked by hand or by a pool; new sessions are placed on the other accounts. So its row
+// has a label of its own, sits under the knob's row, and asks before it changes anything.
+
+/** The switch's visible label and the start of its accessible name. */
+export const HOME_ABLE_LABEL = 'Start new sessions here';
+
+/** The row's sentence under the label, as the roster has it. */
+export function homeAbleRow(on: boolean): string {
+  return on ? 'New sessions can start on it.' : 'Overflow only: new sessions start on other accounts.';
+}
+
+/** The confirm a tap opens: what changes, by the lane's label. */
+export function homeAbleConfirm(label: string, toOn: boolean): { title: string; consequence: string; confirmLabel: string } {
+  return toOn
+    ? { title: `Start new sessions on ${label}?`, consequence: `New sessions can start on ${label}.`, confirmLabel: 'Start new sessions here' }
+    : {
+      title: `Stop new sessions on ${label}?`, consequence: `New sessions will not start on ${label}; running sessions stay.`,
+      confirmLabel: 'Stop new sessions here',
+    };
+}
+
 /** Why the knob cannot turn the lane on (spec §10): the box's reason, worded. A lane with no check recorded (a legacy
  *  lane the backfill wrote, or one with no lane state) reads "Check it once to turn it on". */
 export function notReadyWords(reason: LaneNotReadyReason | undefined): string {
@@ -577,10 +601,12 @@ export const checkLatency = (ms: number): string => `Checked: one test reply in 
  *  literal branch on a code). `field` reads one more word off the body (`reason`, `verbCode`), already held to a word. */
 type LaneRefusalWord = Extract<RouteRefusal,
   'not-ready' | 'last-enabled-home' | 'lane-busy' | 'outcome-unknown' | 'not-found' | 'unsupported' | 'insecure-origin'
-  | 'unavailable' | 'lane-act-refused' | 'check-unrecorded'>;
+  | 'unavailable' | 'lane-act-refused' | 'check-unrecorded' | 'last-home-able'>;
 const LANE_REFUSAL_TEXT: Readonly<Record<LaneRefusalWord, (id: string, what: string, field: (k: string) => string | undefined) => string>> = {
   'not-ready': (_id, _what, field) => notReadyWords(field('reason') as LaneNotReadyReason | undefined),
   'last-enabled-home': (id) => `${id} is the only lane that can take new sessions. Turn another on first.`,
+  // The placement act's (D-8195): `ccrc account set --placement overflow` on the only home-able lane.
+  'last-home-able': (id) => `${id} is the only lane new sessions can start on, so it stays. Let another start them first.`,
   'lane-busy': (id) => `${id} is busy with another account change. Try again in a moment.`,
   'outcome-unknown': (id, what) => `The fleet host didn't answer in time, so whether ${id} was ${what} is unknown. The screen reads it again.`,
   'check-unrecorded': (id) => `The check ran, but its result couldn't be read back from the fleet host, so what this screen shows for ${id} is out of date. Run it on the fleet host to see the result: ${fixCommands.check(id)}`,
@@ -597,13 +623,13 @@ const LANE_REFUSAL_TEXT: Readonly<Record<LaneRefusalWord, (id: string, what: str
 /** A refusal's words for a lane act, built from its CODE only (the server's `error` word, its `reason`, its
  *  `verbCode`), never from the response's text (D-7732). `failure` is what the call rejected with: an `ApiError`'s
  *  body, or anything else for a request that did not complete. */
-export function laneActRefusal(act: 'check' | 'switch', id: string, failure: unknown): string {
+export function laneActRefusal(act: 'check' | 'switch' | 'placement', id: string, failure: unknown): string {
   const body = typeof failure === 'object' && failure !== null && 'body' in failure ? (failure as { body: unknown }).body : undefined;
   const field = (k: string): string | undefined => {
     const v = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)[k] : undefined;
     return typeof v === 'string' && CODE_RE.test(v) ? v : undefined;
   };
-  const what = act === 'check' ? 'checked' : 'switched';
+  const what = act === 'check' ? 'checked' : act === 'switch' ? 'switched' : 'changed';
   const word = field('error');
   if (word === undefined) {
     return body === undefined
