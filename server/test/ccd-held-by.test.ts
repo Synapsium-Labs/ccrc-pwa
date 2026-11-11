@@ -19,6 +19,7 @@ import { EXP_ID, expireAudit, makeArchived } from './wsExpireFixture.js';
 import { COL_ID, collectAudit, makeOrphan } from './wsCollectFixture.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
 import { writeField } from './worktreeIdentityFixture.js';
+import { itDarwin, itLinux } from './platformFixtures.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-held-by-'); });
@@ -56,6 +57,17 @@ const collectDoc = (): Audit => parse(collectAudit(h));
 /** The document's keys with R2's two keys set aside: what Step 0 pins as today's document. */
 const keysBefore = (d: Doc): string[] => Object.keys(d).filter((k) => k !== 'heldBy' && k !== 'heldByOwn');
 const heldBy = (d: Doc): unknown => d['heldBy'];
+/** The collect document on Darwin (D-8265): ccd's temp-root collector runs on Linux only, so on a Mac it answers
+ *  `unmeasured` with the `platform` probe before it reads the population or asks the rows rung — `heldBy` is null
+ *  there, as for any document whose rung was not reached. The Linux cases pin the rung's answer; these pin this one. */
+const expectDarwinCollect = (c: Audit): void => {
+  expect(c.code, c.stdout).toBe(1);
+  expect(c.doc['mode']).toBe('collect');
+  expect(c.doc['verdict']).toBe('unmeasured');
+  expect((c.doc['collect'] as Doc | undefined)?.['unmeasured']).toBe('platform');
+  expect(String(c.doc['detail'])).toContain('the temp-root collector runs on Linux only');
+  expect(heldBy(c.doc), 'the rows rung was not reached').toBeNull();
+};
 
 // ── Step 0: today's documents, characterized ─────────────────────────────────────────────────────────────────────
 // Pinned on main before R2 (green there), minus the new keys: R2 adds `heldBy`/`heldByOwn` and changes nothing else.
@@ -88,7 +100,7 @@ describe('Step 0: the three documents as main prints them, minus heldBy', () => 
     expect(String(a.doc['detail'])).toContain('is also named by registry row(s) demo-twin');
   }, 90_000);
 
-  it('the expiry and collect documents keep their verdicts with a gone row', () => {
+  itLinux('the expiry and collect documents keep their verdicts with a gone row', () => {
     makeArchived(h);
     otherRow(ROW, gonePath());
     const e = expiryAudit();
@@ -100,6 +112,17 @@ describe('Step 0: the three documents as main prints them, minus heldBy', () => 
     expect(c.doc['mode']).toBe('collect');
     expect(c.doc['verdict']).toBe('unmeasured');
     expect(String(c.doc['detail'])).toContain(`registry row(s) ${ROW} name a workdir that cannot be resolved completely`);
+  }, 120_000);
+
+  itDarwin('on Darwin the expiry document keeps its verdict and the collect document answers `platform`', () => {
+    makeArchived(h);
+    otherRow(ROW, gonePath());
+    const e = expiryAudit();
+    expect(e.code, e.stdout).toBe(1);
+    expect(e.doc['verdict']).toBe('unmeasured');
+    expect(e.doc['mode']).toBe('expire');
+    makeOrphan(h);
+    expectDarwinCollect(collectDoc());
   }, 120_000);
 });
 
@@ -240,7 +263,7 @@ describe('ccd names the rows that hold the child, by id and word', () => {
     } finally { fs.chmodSync(tmp, 0o755); }
   }, 90_000);
 
-  it('the expiry and the collect documents carry the same field', () => {
+  itLinux('the expiry and the collect documents carry the same field', () => {
     makeArchived(h);
     otherRow(ROW, gonePath());
     const e = expiryAudit();
@@ -252,6 +275,17 @@ describe('ccd names the rows that hold the child, by id and word', () => {
     expect(c.doc['verdict']).toBe('unmeasured');
     expect(heldBy(c.doc)).toEqual([{ id: ROW, word: 'gone-unrecorded', workspace: 'absent' }]);
     expect(c.doc['heldByOwn']).toBe(false);
+  }, 120_000);
+
+  itDarwin('on Darwin the expiry document carries the field and the collect document answers `platform`', () => {
+    makeArchived(h);
+    otherRow(ROW, gonePath());
+    const e = expiryAudit();
+    expect(e.doc['verdict']).toBe('unmeasured');
+    expect(heldBy(e.doc)).toEqual([{ id: ROW, word: 'gone-unrecorded', workspace: 'absent' }]);
+    expect(e.doc['heldByOwn']).toBe(false);
+    makeOrphan(h);
+    expectDarwinCollect(collectDoc());
   }, 120_000);
 
   it('the collect document prints null when its rows rung was not reached (the id’s own row stands)', () => {
