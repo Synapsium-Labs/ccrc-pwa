@@ -7,12 +7,13 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 const RIG = path.resolve(__dirname, 'delegation-rig');
 const RIGSH = path.join(RIG, 'rig.sh');
 
 const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000 });
+  const r = spawnSyncGroup('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000 });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 };
 /** A scenario file at <tmp>/<dir>/<name>.json: `{ steps, entries: [], ...top }`, so `top.steps` replaces `steps`. */
