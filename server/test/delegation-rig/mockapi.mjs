@@ -28,7 +28,8 @@
 //   `w0 pad ` words), with "chunk_chars": the text delta size (default 12), so a run can grow a transcript to a
 //   measured size without a megabyte scenario file. `pad` is a whole number of at most 16 MB and never on a "blocks"
 //   entry, and `chunk_chars` a positive integer: an entry that breaks either is answered HTTP 500 and logged, never a
-//   short reply. A script "mainMarker" that is no regular expression answers every request HTTP 500 the same way. `nameAny` picks the first name the request offers (else the first listed). A header VALUE of the form
+//   short reply. A script "mainMarker" that is a string but no regular expression answers every request HTTP 500 the
+//   same way. `nameAny` picks the first name the request offers (else the first listed). A header VALUE of the form
 //   `$NOW+<s>` is sent as the epoch second <s> from now.
 // Fallbacks: "default" for main and sub (else text "(mock default reply)"); "sideDefault" for side
 //   (else JSON synthesised from the request's json_schema, or "Rig session").

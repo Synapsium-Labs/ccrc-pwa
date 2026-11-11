@@ -173,14 +173,16 @@ check_scenario() {
 # only in a file whose physical directory is this rig's own scenarios-overlord/ (D-8203): the delegation corpus measures
 # ccrc's granted launch and stays bypass-free. The spelling is looked for in every string and key once JSON escapes are
 # decoded, again in every string that is itself JSON (Claude Code parses a --settings or --agents value and a settings
-# file), to BYPASS_JSON_DEPTH levels, and in the raw text lower-cased with every backslash removed (a script a shell
-# unescapes). The env names are a deny-list, not an allow-list: launch.settings.env may set any other name (README.md,
-# "known limits").
+# file), to BYPASS_JSON_DEPTH levels, and in each of those strings and the raw text normalised: \xHH, \uHHHH and
+# \UHHHHHHHH escapes decoded, each backslash-newline continuation and its leading whitespace joined, every other
+# backslash removed and the letters lower-cased (YAML frontmatter, a settings file that is not strict JSON, a script a
+# shell unescapes by backslash). The env names are a deny-list, not an allow-list: launch.settings.env may set any other
+# name (README.md, "known limits").
 RESERVED_ENV_RE='^(PATH|HOME|TMPDIR|CLAUDE_CONFIG_DIR|ANTHROPIC_.*)$'
 BYPASS_RE='bypass[-_ ]?permissions|dangerously[-_ ]?skip[-_ ]?permissions'
 BYPASS_JSON_DEPTH=4
 check_launch() {
-  local f=$1 dir own raw marker
+  local f=$1 dir own scan
   jq -e --arg flags "$RIG_LAUNCH_FLAGS" --arg bare "$RIG_LAUNCH_BARE_FLAGS" --arg envs "$RIG_LAUNCH_ENV" --arg reserved "$RESERVED_ENV_RE" '
     def line: type == "string" and (test("[\n\r]") | not);
     ($flags | split(" ")) as $F | ($bare | split(" ")) as $B | ($envs | split(" ")) as $E
@@ -212,22 +214,36 @@ check_launch() {
     and (if has("mainMarker") then (.mainMarker | line and length >= 1 and length <= 200) else true end)
   ' "$f" >/dev/null 2>&1 || return 1
   if jq -e 'has("mainMarker")' "$f" >/dev/null 2>&1; then
-    marker=$(jq -r '.mainMarker' "$f") || return 1
-    node -e 'new RegExp(process.argv[1])' "$marker" >/dev/null 2>&1 || return 1
+    # node reads the marker from the file it is named in the environment: the marker is never an argument node could read
+    # as an option of its own (`--import=…` would run code).
+    RIG_SCENARIO=$f node -e '
+      new RegExp(JSON.parse(require("node:fs").readFileSync(process.env.RIG_SCENARIO, "utf8")).mainMarker)' >/dev/null 2>&1 \
+      || return 1
   fi
-  # Captured, not piped into `grep -q`: under pipefail an early grep exit would turn a match into a failure.
-  raw=$(tr -d '\\' < "$f" | tr '[:upper:]' '[:lower:]') || return 1
-  if [[ $raw == *bypasspermissions* || $raw == *dangerously-skip-permissions* ]] \
-     || jq -e --arg re "$BYPASS_RE" --argjson depth "$BYPASS_JSON_DEPTH" '
-          def texts($d): (strings, (objects | keys[])) as $t
-            | $t, (if $d > 0 then (($t | try fromjson catch null) | .. | texts($d - 1)) else empty end);
-          any(.. | texts($depth); test($re; "i"))' "$f" >/dev/null 2>&1; then
-    # The file itself, through any link to it, must sit in this rig's own directory; a directory merely CALLED so is not.
-    f=$(readlink -f -- "$f") || return 1
-    dir=$(cd -P -- "$(dirname -- "$f")" && pwd) || return 1
-    own=$(cd -P -- "$HERE/scenarios-overlord" && pwd) || return 1
-    [[ $dir == "$own" ]] || return 1
-  fi
+  # One jq program reads the raw text and every string and key: 0 found, 1 not found, anything else could not look, which
+  # refuses, so an error never reads as a scenario without a bypass.
+  scan=0
+  jq -e --arg re "$BYPASS_RE" --argjson depth "$BYPASS_JSON_DEPTH" --rawfile raw "$f" '
+    def hexval: ascii_downcase | explode | reduce .[] as $c (0; . * 16 + (if $c >= 97 then $c - 87 else $c - 48 end));
+    def norm: gsub("\\\\\\r?\\n[ \\t]*"; "")
+      | gsub("\\\\x(?<h>[0-9A-Fa-f]{2})"; [.h | hexval] | implode)
+      | gsub("\\\\u(?<h>[0-9A-Fa-f]{4})"; [.h | hexval] | implode)
+      | gsub("\\\\U(?<h>[0-9A-Fa-f]{8})"; [.h | hexval] | implode)
+      | gsub("\\\\"; "") | ascii_downcase;
+    def texts($d): (strings, (objects | keys[])) as $t
+      | $t, (if $d > 0 then (($t | try fromjson catch null) | .. | texts($d - 1)) else empty end);
+    ($raw | norm | contains("bypasspermissions") or contains("dangerously-skip-permissions"))
+    or any(.. | texts($depth); test($re; "i") or (norm | test($re)))' "$f" >/dev/null 2>&1 || scan=$?
+  case $scan in
+    0) ;;
+    1) return 0 ;;
+    *) return 1 ;;
+  esac
+  # The file itself, through any link to it, must sit in this rig's own directory; a directory merely CALLED so is not.
+  f=$(readlink -f -- "$f") || return 1
+  dir=$(cd -P -- "$(dirname -- "$f")" && pwd) || return 1
+  own=$(cd -P -- "$HERE/scenarios-overlord" && pwd) || return 1
+  [[ $dir == "$own" ]] || return 1
   return 0
 }
 

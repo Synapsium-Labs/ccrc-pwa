@@ -6,6 +6,8 @@ import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 
@@ -114,6 +116,27 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(rigsh(['check-scenario', f]).status).toBe(0);
   }, 60_000);
 
+  // check-scenario compiles the marker as the mock will, and the marker reaches node through the file, never as an argument
+  // node could read as an option of its own: scenario text never runs code (review 1789 F1).
+  it('a mainMarker spelled as node\'s --import runs nothing: the module that would write a file is never loaded (F1)', () => {
+    const t = mkTmp('ccrc-dlg-mark-');
+    const proof = path.join(t, 'proof.txt');
+    const mod = path.join(t, 'ran.mjs');
+    fs.writeFileSync(mod, `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(proof)}, 'ran');\n`);
+    const marker = `--import=${pathToFileURL(mod).href}`;
+    expect(marker.length, 'the premise: within the marker\'s 200 characters').toBeLessThanOrEqual(200);
+    const r = rigsh(['check-scenario', scen('scenarios-overlord', 'imp', [{ waitReady: 60 }], { mainMarker: marker })]);
+    expect(fs.existsSync(proof), 'the module ran').toBe(false);
+    expect(r.status, 'a valid regular expression, accepted as one').toBe(0);
+  }, 60_000);
+
+  it.each([
+    ['--title=(', 2],
+    ['-x', 0],
+  ])('a mainMarker %s, which starts with a dash, is compiled as the regular expression it is: exit %s (F1)', (marker, code) => {
+    expect(rigsh(['check-scenario', scen('scenarios-overlord', 'dash', [{ waitReady: 60 }], { mainMarker: marker })]).status).toBe(code);
+  }, 60_000);
+
   // D-8203's exception is the rig's own rule, not only the corpus test's (F3): a bypass anywhere in the scenario's text, in a
   // flag, a --settings value or a file the scenario writes, passes only for a file in the rig's own scenarios-overlord.
   const SETTINGS_BYPASS = '{"permissions":{"defaultMode":"bypassPermissions"}}';
@@ -172,6 +195,83 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(JSON.parse(fs.readFileSync(f, 'utf8')).launch.files[0].text, 'the premise: the decoded text hides it').not.toMatch(
       /bypass[-_ ]?permissions|dangerously[-_ ]?skip[-_ ]?permissions/i);
     expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  /** The premise of a row below: what the scan read before review 1789 F2 hides the bypass. Every string and key once
+   *  decoded, and the raw text lower-cased with every backslash removed, carry no spelling of it. */
+  function hiddenFromTheOldScan(f: string): void {
+    const raw = fs.readFileSync(f, 'utf8');
+    const texts = (v: unknown): string[] => typeof v === 'string' ? [v]
+      : v !== null && typeof v === 'object' ? Object.entries(v).flatMap(([k, x]) => [k, ...texts(x)]) : [];
+    expect(texts(JSON.parse(raw)).filter((s) => /bypass[-_ ]?permissions|dangerously[-_ ]?skip[-_ ]?permissions/i.test(s)),
+      'the premise: no decoded string shows it').toEqual([]);
+    expect(raw.toLowerCase().replace(/\\/g, ''), 'the premise: the raw text without backslashes hides it')
+      .not.toMatch(/bypasspermissions|dangerously-skip-permissions/);
+  }
+  // YAML (a subagent file's frontmatter) and a settings file that is not strict JSON keep escapes of their own, which no
+  // JSON decoding undoes: the check decodes \xHH, \uHHHH and \UHHHHHHHH and joins a backslash-newline continuation, in every
+  // string and in the raw text, before it looks (review 1789 F2).
+  const frontmatter = (mode: string): string => `---\nname: r\ndescription: x\npermissionMode: ${mode}\n---\nx\n`;
+  const YAML_FORMS: [string, string][] = [
+    ['a \\x escape', '"bypass\\x50ermissions"'],
+    ['a \\u escape', '"bypass\\u0050ermissions"'],
+    ['a \\U escape', '"bypass\\U00000050ermissions"'],
+    ['a line continuation', '"bypass\\\n    Permissions"'],
+  ];
+  it.each(YAML_FORMS.flatMap(([w, mode]) => [[w, '.claude/agents/r.md', 'repo', mode], [w, 'agents/r.md', 'cfg', mode]]))(
+    'a subagent file\'s permissionMode spelled with %s, at %s, is refused outside the rig\'s own scenarios-overlord (F2)',
+    (_w, p, where, mode) => {
+      const text = frontmatter(mode as string);
+      expect(parseYaml((text.split('---\n')[1]) as string).permissionMode, 'the premise: YAML reads the bypass').toBe('bypassPermissions');
+      const f = scen('scenarios', 'yaml', [{ waitReady: 60 }], { launch: { files: [{ in: where, path: p, text }] } });
+      hiddenFromTheOldScan(f);
+      expect(rigsh(['check-scenario', f]).status).toBe(2);
+    }, 60_000);
+
+  it.each([
+    ['a comment', '{\n  // the mode\n  "permissions": {"defaultMode": "bypass\\u0050ermissions"}\n}\n'],
+    ['a trailing comma', '{"permissions": {"defaultMode": "bypass\\u0050ermissions",},}'],
+    ['single quotes', '{\'permissions\': {\'defaultMode\': \'bypass\\u0050ermissions\'}}'],
+    ['unquoted keys', '{permissions: {defaultMode: "bypass\\x50ermissions"}}'],
+  ])('a settings file that is not strict JSON, with %s and the mode escaped, is refused outside the rig\'s own scenarios-overlord (F2)',
+    (_w, text) => {
+      expect(() => JSON.parse(text), 'the premise: no strict JSON reader decodes it').toThrow();
+      const f = scen('scenarios', 'loose', [{ waitReady: 60 }], { launch: { files: [{ in: 'cfg', path: 'settings.json', text }] } });
+      hiddenFromTheOldScan(f);
+      expect(rigsh(['check-scenario', f]).status).toBe(2);
+    }, 60_000);
+
+  // A continuation's newline is a JSON `\n` escape until a JSON decoding makes it one, so a continuation two JSON levels
+  // down is found only by a scan that decodes two levels: the row holds BYPASS_JSON_DEPTH at 2 or more (review 1789 M-a).
+  it('a bypass two JSON levels deep is refused, so the scan decodes at least two levels (M-a)', () => {
+    const inner = JSON.stringify({ permissions: { defaultMode: 'bypass\\\n  Permissions' } });
+    const outer = JSON.stringify({ env: { W0_X: inner } });
+    const f = scen('scenarios', 'deep', [{ waitReady: 60 }], { launch: { files: [{ in: 'cfg', path: 'settings.json', text: outer }] } });
+    hiddenFromTheOldScan(f);
+    expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  // The raw text is read as well as the parse: a duplicate key the parse drops (jq and the mock keep the last) still shows.
+  it('a bypass under a key a later duplicate hides from the parse is refused outside the rig\'s own scenarios-overlord: the raw text is read', () => {
+    const d = path.join(mkTmp('ccrc-dlg-w0-'), 'scenarios');
+    fs.mkdirSync(d, { recursive: true });
+    const f = path.join(d, 'dup.json');
+    fs.writeFileSync(f, '{"steps":[{"waitReady":60}],"entries":[],"launch":{"args":["--dangerously-skip-permissions"]},"launch":{"args":[]}}');
+    expect(JSON.parse(fs.readFileSync(f, 'utf8')).launch.args, 'the premise: the parse keeps the clean one').toEqual([]);
+    expect(rigsh(['check-scenario', f]).status).toBe(2);
+  }, 60_000);
+
+  // The scan answers found, not found, or could not look; the last refuses, so an error never reads as a clean scenario.
+  it('a scan that cannot run refuses the scenario: with BYPASS_JSON_DEPTH unreadable, an escaped bypass is still refused', () => {
+    const d = mkTmp('ccrc-dlg-w0-scan-');
+    const src = fs.readFileSync(RIGSH, 'utf8');
+    expect(src, 'the premise: rig.sh sets the depth on one line').toMatch(/^BYPASS_JSON_DEPTH=4$/m);
+    fs.writeFileSync(path.join(d, 'rig.sh'), src.replace(/^BYPASS_JSON_DEPTH=4$/m, 'BYPASS_JSON_DEPTH=not-a-number'));
+    const f = scen('scenarios', 'esc', [{ waitReady: 60 }], { launch: { args: ['--permission-mode', 'BYPASS'] } });
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('BYPASS', 'bypass\\u0050ermissions'));
+    const run = (sh: string): number | null => spawnSyncGroup('bash', [sh, 'check-scenario', f], { encoding: 'utf8', timeout: 120_000 }).status;
+    expect(run(RIGSH), 'the control: the rig as committed refuses it').toBe(2);
+    expect(run(path.join(d, 'rig.sh'))).toBe(2);
   }, 60_000);
 
   it('the force-hook arm differs from its control only by FORCE and a paneSnap, and pins no setting source, so ccrc\'s hook is loaded (M6)', () => {

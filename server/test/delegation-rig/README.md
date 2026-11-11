@@ -22,9 +22,12 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`). These scenarios measure the launch ccd makes, so
   they may carry a permission bypass (D-8203). `check-scenario` refuses a bypass spelled anywhere in a scenario (a
   flag, a `--settings` value, a file the scenario writes: any string or key once JSON escapes are decoded, again inside
-  every string that is itself JSON, to `BYPASS_JSON_DEPTH` levels, and the raw text lower-cased with every backslash
-  removed) unless the file itself sits in this directory's own `scenarios-overlord/` (by its physical path, so a
-  directory merely called that does not count), and a test holds the delegation corpus bypass-free. `recapture.sh` and `rig.sh all` never run
+  every string that is itself JSON, to `BYPASS_JSON_DEPTH` levels, and each of those strings and the raw text with
+  `\xHH`, `\uHHHH` and `\UHHHHHHHH` escapes decoded, a backslash-newline continuation and its leading whitespace
+  joined, every other backslash removed and the letters lower-cased, which reads YAML frontmatter and a settings file
+  that is not strict JSON too) unless the file itself sits in this directory's own `scenarios-overlord/` (by its
+  physical path, so a directory merely called that does not count), and a test holds the delegation corpus
+  bypass-free. A scan that cannot run refuses. `recapture.sh` and `rig.sh all` never run
   them; each is run by hand, one at a time, with `rig.sh run <version> <file> <out-dir>`, and nothing from a run is
   committed: the results note holds the facts. **Run the set again whenever the fleet's model class advances, and on a
   new Claude Code build before a W1 piece relies on a row it measured** (spec 2026-11-09 §3.3: "W0 and the probes
@@ -49,17 +52,22 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   - `mainMarker` — the regular expression the mock reads a main-thread request by (its script's own key, over
     `MOCK_MAIN_MARKER` and the default; one that does not compile is refused by `check-scenario` and answered HTTP 500
     by the mock); every `scenarios-overlord` file carries
-    `You are (an interactive agent|an agent working with the user|Claude Code)`, which a test holds. Known limit: the
-    `Claude Code` alternative would also match a subagent prompt that opens "You are Claude Code", so the split rests on
-    Claude Code's `cc_is_subagent=true` stamp, which the mock reads first.
+    `You are (an interactive agent|an agent working with the user|Claude Code)`, which a test holds.
   Steps gain `relaunch` `{"mode":"fresh"}` (no `--resume`) and `{"mode":"fork"}` (`--resume <sid> --fork-session`)
   beside `true`, `paneSnap: <name>` (the pane's text, for a dialog), and `sessionsSnap: <name>` (Claude Code's `sessions/*.json`, and each transcript's name and size, at
   that instant). `rig.sh print-launch <version> <scenario> <root>` prints the launch line a run would type, after the same
   setup, and starts nothing.
   **Known limits.** The env names in `launch.settings.env` are a deny-list, not an allow-list: beside the reserved names
-  above, any name passes there (`HTTPS_PROXY`, `NODE_OPTIONS` and the like), and the bypass check reads spellings, so a
-  bypass assembled at run time (a script a file writes, say) passes it. Both guard against accidents in a committed
-  scenario, which review reads; neither is a wall.
+  above, any name passes there (`HTTPS_PROXY`, `NODE_OPTIONS` and the like). The bypass check reads spellings, and of a
+  shell's unescaping it undoes the backslash only: quote removal (`bypass''Permissions`, `bypass$'\x50'ermissions`,
+  `--dangerously-skip"-"permissions`) passes it, as does a bypass assembled at run time (a script a file writes, say);
+  each needs code to run. Both guard against accidents in a committed scenario, which review reads; neither is a wall.
+  The bypass is D-8203's, the permission bypass ccd's launch uses (the flag, or the `bypassPermissions` mode by
+  `--permission-mode`, a settings `defaultMode` or a subagent's `permissionMode`). `--permission-mode dontAsk`, `auto`
+  or `acceptEdits`, `--allowedTools` and a hook that allows every tool are not bypasses by that definition, and the
+  check passes them; the delegation corpus grants its tools through `permissions.allow`. The `Claude Code` alternative
+  in the `mainMarker` above would also match a subagent prompt that opens "You are Claude Code", so the split rests on
+  Claude Code's `cc_is_subagent=true` stamp, which the mock reads first.
 - `recapture.sh` — the corpus's one re-capture script: the steps below, in order (spec §8.2).
 - `sanitize.mjs` — raw run bundles → `server/test/fixtures/delegation/<version>/<scenario>.json`, fail-closed on any
   residue of a real path, user or host.
