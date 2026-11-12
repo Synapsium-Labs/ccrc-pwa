@@ -768,7 +768,9 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
   // broken, never the raw name (it may carry a terminal escape), and the second curl never runs.
   const longName = (n: number): string => `ccrc-${'a'.repeat(n - 'ccrc-.tar.gz'.length)}.tar.gz`;
   const refusedNames: ReadonlyArray<{ label: string; name: string; rule: RegExp; raw: string }> = [
-    { label: 'a path traversal', name: 'ccrc-x/../../evil.tar.gz', rule: /path separator/, raw: 'evil.tar.gz' },
+    // `../` first, so `curl -o "$STAGING/<name>"` would land in TMPDIR itself, a directory that exists: a name
+    // whose `..` sits under a directory staging never holds (`ccrc-x/../`) cannot be written anywhere.
+    { label: 'a path traversal', name: '../ccrc-evil.tar.gz', rule: /path separator/, raw: 'ccrc-evil' },
     { label: 'a path separator', name: 'ccrc-a/b.tar.gz', rule: /path separator/, raw: 'a/b' },
     { label: 'a ".." with no separator', name: 'ccrc-v1..2.tar.gz', rule: /"\.\."/, raw: 'v1..2' },
     { label: 'an ESC byte', name: 'ccrc-\u001b[31mx.tar.gz', rule: /not printable ASCII/, raw: '\u001b' },
@@ -782,10 +784,21 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
       const root = fixtureRoot(home, REAL_FLOOR_RANGE);
       plantReleaseTools(home);
       plantSumsOnly(home, sumsLine(row.name));
+      // The host SERVES the name it lists, so a name let through would be fetched and written, not 404'd.
+      const listedDir = join(home, 'releases', 'latest', 'download');
+      const served = path.resolve(listedDir, row.name);
+      if (served.startsWith(join(home, 'releases') + path.sep)) {
+        mkdirSync(path.dirname(served), { recursive: true });
+        writeFileSync(served, 'served by the host\n');
+      }
       const r = runRelease(root, ['--release'], home);
       expect(r.code, `stderr: ${r.stderr}`).toBe(1);
       expect(r.stderr).toMatch(row.rule);
       expect(r.stderr).toMatch(/refusing/);
+      // No tarball was written anywhere under the fixture home but the host's own files (`releases/`): staging is
+      // gone by the trap, so a file here is one a name put outside it.
+      const written = filesUnder(home).filter((f) => f.endsWith('.tar.gz') && !f.startsWith(`releases${path.sep}`));
+      expect(written, `a tarball path was written: ${written.join(', ')}`).toEqual([]);
       // Only SHA256SUMS was fetched: the name never reached `curl -o`.
       expect(readLog(home, 'curl-argv').map((u) => u.replace(/^.*\//, ''))).toEqual(['SHA256SUMS']);
       expect(r.stdout + r.stderr, 'the raw name was printed').not.toContain(row.raw);
@@ -802,6 +815,15 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     writeFileSync(sums, readFileSync(sums, 'utf8').replace(`ccrc-${tag}.tar.gz`, listed));
   };
 
+  /** The updater's sentence for a tag the sums file does not bind, read out of `_upd_resolve` in ccd/ccrc: `$to`,
+   *  `$UPD_TARNAME` and `$UPD_VERSION` become what this run names. install.sh sources nothing, so its line is a copy. */
+  const updaterBindRefusal = (to: string, tarName: string, version: string): string => {
+    const m = /_ccrc_die "(the release at \$to names a \$UPD_TARNAME \(version \$UPD_VERSION, not \$to\)[^"]*)"/
+      .exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    expect(m, 'ccd/ccrc lost its tag-binding refusal — this pin went vacuous').not.toBeNull();
+    return m![1]!.replaceAll('$to', to).replace('$UPD_TARNAME', tarName).replace('$UPD_VERSION', version);
+  };
+
   it('--release vX.Y.Z refuses a SHA256SUMS naming another version, tag to tag and un-stripped, with no second curl', () => {
     for (const [listed, version] of [['ccrc-v1.2.4.tar.gz', 'v1.2.4'], ['ccrc-1.2.3.tar.gz', '1.2.3']] as const) {
       const home = mkTmp('install-sh-release-bind-');
@@ -810,7 +832,9 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
       releaseListing(home, 'v1.2.3', listed);
       const r = runRelease(root, ['--release', 'v1.2.3'], home);
       expect(r.code, `${listed}; stderr: ${r.stderr}`).toBe(1);
-      expect(r.stderr).toBe(`install.sh: the release at v1.2.3 names a ${listed} (version ${version}, not v1.2.3) — refusing\n`);
+      // The updater's words exactly (D-8385), and the only line on stderr.
+      expect(r.stderr).toBe(`install.sh: ${updaterBindRefusal('v1.2.3', listed, version)}\n`);
+      expect(r.stderr).toContain(`names a ${listed} (version ${version}, not v1.2.3)`);
       expect(readLog(home, 'curl-argv').map((u) => u.replace(/^.*\//, ''))).toEqual(['SHA256SUMS']);
       expect(existsSync(join(home, 'ccrc-argv')), 'the staged ccrc ran').toBe(false);
     }
