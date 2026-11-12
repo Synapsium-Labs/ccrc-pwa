@@ -14,14 +14,17 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync, chmodSync,
+  existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync, chmodSync,
 } from 'node:fs';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { harnessBin } from './ccdWsHelpers.js';
-import { CONTAINED_TOOLS, assertNoRealTool, loopbackCurlFront } from './containedTools.js';
+import { ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import {
+  CONTAINED_TOOLS, assertNoPoisonLeft, assertNoRealTool, busUnder as busUnderOf, loopbackCurlFront, physicalPath,
+  plantPoison, takePoisonRecord,
+} from './containedTools.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { installVersionedTree, keepDigestEnv } from './installTreeFixture.js';
 import { TOKEN_CLAIM_PATH } from '../../shared/box-token.js';
@@ -89,6 +92,167 @@ describe('assertNoRealTool — the checker\'s own self-tests (wave 9 R10d, 3a)',
   });
 });
 
+describe('the bus is read physically, loginctl is contained, and every builder sets the bus (D-8394, residue R35(e) and (f))', () => {
+  /** A directory outside every fixture HOME, standing in for the real runtime dir. */
+  const outside = (): string => mkTmp('contain-real-runtime-');
+
+  it('a bus path through `sym/..` resolves inside HOME lexically but climbs out physically: refused', () => {
+    const home = mkTmp('contain-symdotdot-');
+    const real = outside();
+    mkdirSync(join(real, 'sub'));
+    symlinkSync(join(real, 'sub'), join(home, 'sym'));
+    const via = `${home}/sym/..`;
+    expect(path.resolve(via), 'lexically, HOME itself').toBe(home);
+    expect(physicalPath(via), 'physically, the real dir').toBe(realpathSync(real));
+    const env = { HOME: home, PATH: join(home, 'bin'), XDG_RUNTIME_DIR: via,
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${via}/bus` };
+    expect(busUnderOf(env, home)).toBe(false);
+    expect(() => assertNoRealTool(env, home)).toThrow(/XDG_RUNTIME_DIR=.*does not name a path inside the fixture HOME/);
+  });
+
+  it('a bus value that is a symlink under HOME to a runtime dir outside it is refused', () => {
+    const home = mkTmp('contain-symbus-');
+    const real = outside();
+    symlinkSync(real, join(home, 'xdg'));
+    const env = { HOME: home, PATH: join(home, 'bin'), XDG_RUNTIME_DIR: join(home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, 'xdg', 'bus')}` };
+    expect(busUnderOf(env, home)).toBe(false);
+    expect(() => assertNoRealTool(env, home)).toThrow(/does not name a path inside the fixture HOME/);
+    // ghContainedEnv no longer keeps that pair: the fixture pair replaces it.
+    const contained = ghContainedEnv(home, env);
+    expect(contained['XDG_RUNTIME_DIR']).toBe(join(home, 'no-runtime-dir'));
+  });
+
+  it('a fixture runtime dir the test made under HOME, existing or not, still stands', () => {
+    const home = mkTmp('contain-ownbus-');
+    mkdirSync(join(home, 'xdg'));
+    for (const dir of [join(home, 'xdg'), join(home, 'not-made-yet')]) {
+      const env = { HOME: home, XDG_RUNTIME_DIR: dir, DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(dir, 'bus')}` };
+      expect(busUnderOf(env, home), dir).toBe(true);
+      expect(ghContainedEnv(home, env)['XDG_RUNTIME_DIR'], dir).toBe(dir);
+    }
+  });
+
+  it('loginctl is a contained tool: a real-looking one first on PATH is refused, and ccrcContainedEnv poisons it', () => {
+    expect(CONTAINED_TOOLS).toContain('loginctl');
+    const home = mkTmp('contain-loginctl-');
+    const d = decoy('loginctl');
+    expect(() => assertNoRealTool({ ...busUnder(home), PATH: d }, home)).toThrow(/loginctl resolved to .*decoy/);
+    const env = ccrcContainedEnv(home, { ...process.env, PATH: `${d}:${process.env['PATH'] ?? ''}` },
+      { managers: false, curl: 'poison' });
+    // `managers: false` is a SPINE builder's call, and a spine builder fronts its own systemctl and systemd-run next;
+    // this case plants those two as poisons in its place, so a runner with a real /usr/bin/systemctl stays contained
+    // and loginctl is the one thing under test (D-8394).
+    for (const n of ['systemctl', 'systemd-run']) plantPoison(harnessBin(home), n);
+    expect(resolve(env, 'loginctl')).toBe(join(harnessBin(home), 'loginctl'));
+    expect(() => assertNoRealTool(env, home)).not.toThrow();
+    const ccd = ghContainedEnv(mkTmp('contain-loginctl-ccd-'), {}, { systemd: true });
+    expect(ccd['PATH']!.split(':')[0]).toMatch(/\.local\/bin$/);
+    expect(existsSync(join(ccd['PATH']!.split(':')[0]!, 'loginctl')), 'the systemd arm plants it').toBe(true);
+  });
+
+  it('a gh-only ghContainedEnv (a thin builder) sets the fixture bus over the caller\'s real pair', () => {
+    const home = mkTmp('contain-thin-bus-');
+    const env = ghContainedEnv(home, { ...process.env, HOME: home, XDG_RUNTIME_DIR: '/run/user/0',
+      DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/0/bus' });
+    expect(`${env['XDG_RUNTIME_DIR']}|${env['DBUS_SESSION_BUS_ADDRESS']}`)
+      .toBe(`${join(home, 'no-runtime-dir')}|unix:path=${join(home, 'no-bus')}`);
+  });
+});
+
+describe('the poison teardown: a record nothing took is a standing red (D-8394, residue R35(e))', () => {
+  /** Runs the poison at `<home>/.local/bin/<name>` with HOME set, as a spawn under a builder would. */
+  const hit = (home: string, name: string, ...args: string[]): number | null =>
+    spawnSync(join(harnessBin(home), name), args, { env: { HOME: home, PATH: '/usr/bin:/bin' } }).status;
+
+  it('a poison hit and not taken fails the check, naming the record and its argv; once named it is not named again', () => {
+    const home = mkTmp('contain-ledger-');
+    plantPoison(harnessBin(home), 'ssh');
+    expect(hit(home, 'ssh', 'box', 'uptime')).toBe(97);
+    expect(() => assertNoPoisonLeft()).toThrow(new RegExp(`${join(home, 'ssh-poison').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: "box uptime"`));
+    expect(() => assertNoPoisonLeft(), 'a leak reds once, in the test that made it').not.toThrow();
+  });
+
+  it('a record the case takes passes; a later hit of the same record re-arms it', () => {
+    const home = mkTmp('contain-ledger-take-');
+    plantPoison(harnessBin(home), 'scp');
+    hit(home, 'scp', 'a', 'b');
+    expect(takePoisonRecord(home, 'scp')).toEqual(['a b']);
+    expect(() => assertNoPoisonLeft([home])).not.toThrow();
+    hit(home, 'scp', 'c');
+    expect(() => assertNoPoisonLeft()).toThrow(/scp-poison: "a b"/);
+  });
+
+  it('the ledger outlives a HOME the test removed itself', () => {
+    const home = mkTmp('contain-ledger-gone-');
+    plantPoison(harnessBin(home), 'curl');
+    hit(home, 'curl', 'http://example.invalid/');
+    rmSync(home, { recursive: true, force: true });
+    expect(() => assertNoPoisonLeft()).toThrow(/curl-poison: "http:\/\/example\.invalid\/" \(removed with its HOME\)/);
+  });
+
+  it('the one standing allowance: a manager poison met by read-only state queries only, read off the file or the ledger', () => {
+    const home = mkTmp('contain-ledger-readonly-');
+    for (const n of ['launchctl', 'loginctl']) plantPoison(harnessBin(home), n);
+    hit(home, 'launchctl', 'print', 'gui/501/app.ccrc.ccrc');
+    hit(home, 'loginctl', 'show-user', '501', '--property=Linger');
+    expect(() => assertNoPoisonLeft([home]), 'read-only queries, the files present').not.toThrow();
+    hit(home, 'launchctl', 'print', 'gui/501/app.ccrc.ccrc-agent');
+    rmSync(home, { recursive: true, force: true });
+    expect(() => assertNoPoisonLeft(), 'a read-only query, its HOME gone: judged from the ledger').not.toThrow();
+  });
+
+  it('a manager record with a WRITE beside its state query is a leak', () => {
+    const home = mkTmp('contain-ledger-write-');
+    plantPoison(harnessBin(home), 'launchctl');
+    hit(home, 'launchctl', 'print', 'gui/501/app.ccrc.ccrc');
+    hit(home, 'launchctl', 'bootout', 'gui/501/app.ccrc.ccrc');
+    expect(() => assertNoPoisonLeft([home])).toThrow(/launchctl-poison: "print gui\/501\/app\.ccrc\.ccrc"/);
+    writeFileSync(join(home, 'systemctl-poison'), '--user is-active ccrc.service\n--user stop ccrc.service\n');
+    expect(() => assertNoPoisonLeft([home])).toThrow(/systemctl-poison/);
+  });
+
+  it('a hand-written `*-poison` file under a directory is found by the scan, and taking it clears it', () => {
+    const home = mkTmp('contain-ledger-scan-');
+    mkdirSync(join(home, 'nested', 'home'), { recursive: true });
+    writeFileSync(join(home, 'nested', 'home', 'journalctl-poison'), '-u ccrc\n');
+    expect(() => assertNoPoisonLeft([home])).toThrow(/journalctl-poison: "-u ccrc"/);
+    writeFileSync(join(home, 'rsync-poison'), 'x\n');
+    expect(takePoisonRecord(home, 'rsync')).toEqual(['x']);
+    expect(() => assertNoPoisonLeft([home])).not.toThrow();
+  });
+
+  it('the teardown is wired: tmpHelpers checks after every test and scans what it removes; the harness checks its HOME', () => {
+    // An afterEach runs after the test it guards, so nothing in a file can watch its own hook fire: pinned in the
+    // source, as `tmpfixtures.test.ts` pins `afterAll(removeTmpFixtures);`.
+    const strip = (src: string): string => src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    const tmp = strip(read('tmpHelpers.ts'));
+    expect(tmp.split('afterEach(() => { assertNoPoisonLeft(); });').length - 1, 'the per-test check').toBe(1);
+    for (const fn of ['export function removeTmpFixtures(', 'export function removeTmpFixturesSince(']) {
+      const start = tmp.indexOf(fn);
+      expect(start, fn).toBeGreaterThan(-1);
+      const body = tmp.slice(start, tmp.indexOf('\n}\n', start));
+      expect(body.indexOf('assertNoPoisonLeft(dirs)'), `${fn} scans before it removes`).toBeGreaterThan(-1);
+      // The removal goes through `removeDir` (the late-writer retry, D-8394), which is `rmSync` recursive and forced.
+      expect(body.indexOf('removeDir('), `${fn} removes through removeDir`).toBeGreaterThan(-1);
+      expect(body.indexOf('assertNoPoisonLeft(dirs)')).toBeLessThan(body.indexOf('removeDir('));
+    }
+    const rd = tmp.slice(tmp.indexOf('function removeDir('), tmp.indexOf('\n}\n', tmp.indexOf('function removeDir(')));
+    expect(rd).toContain('rmSync(dir, { recursive: true, force: true, maxRetries: ');
+    expect(strip(read('ccdWsHelpers.ts'))).toContain('cleanup: () => { try { assertNoPoisonLeft([home]); } finally {');
+  });
+
+  it('the gh poison and the loopback curl front log their hits in the same ledger', () => {
+    const home = mkTmp('contain-ledger-gh-');
+    const env = ghContainedEnv(home, { HOME: home, PATH: '/usr/bin:/bin' });
+    expect(spawnSync('gh', ['pr', 'list'], { env }).status).toBe(97);
+    writeFileSync(join(harnessBin(home), 'curl'), loopbackCurlFront('/usr/bin/false'), { mode: 0o755 });
+    expect(spawnSync(join(harnessBin(home), 'curl'), ['http://example.invalid/'], { env }).status).toBe(97);
+    rmSync(home, { recursive: true, force: true });
+    expect(() => assertNoPoisonLeft()).toThrow(/gh-poison[^]*curl-poison|curl-poison[^]*gh-poison/);
+  });
+});
+
 describe('ccrcContainedEnv — create-if-absent, spine builders, and the loopback curl front (wave 9 R10d, 3a)', () => {
   it('(f) a functional ssh and systemctl planted BEFORE the call keep their content; the rest is poisoned; the env passes the checker', () => {
     const home = mkTmp('contain-f-');
@@ -149,7 +313,7 @@ describe('ccrcContainedEnv — create-if-absent, spine builders, and the loopbac
       // `--url <listed>` reaches the real curl too (7); the `=` form is not a curl option at all (2, curl's own).
       expect(run(env, ['-sS', '--url', `http://127.0.0.1:${P}/`]), '--url').toBe(7);
       expect(run(env, [`--url=http://127.0.0.1:${P}/`]), '--url=').toBe(2);
-      const refused = readFileSync(join(home, 'curl-poison'), 'utf8');
+      const refused = takePoisonRecord(home, 'curl').join('\n');
       expect(refused).toContain('http://127.0.0.1:7788/health');
       expect(refused).toContain('https://example.invalid/');
       expect(refused).toContain('-K');
@@ -189,7 +353,8 @@ describe('the loopback curl front parses argv — an option it does not allowlis
       fakeArgv: () => read('fake-curl-argv').split('\n').filter(Boolean),
       fakeStdin: () => read('fake-curl-stdin'),
       fakeProxyEnv: () => read('fake-curl-proxy-env'),
-      poison: () => read('curl-poison'),
+      // TAKEN (D-8394): every case here meets the front's refusal on purpose and asserts on its record.
+      poison: () => { const lines = takePoisonRecord(home, 'curl'); return lines.length ? `${lines.join('\n')}\n` : ''; },
       passed: () => read('curl-front-passed'),
     };
   };
@@ -490,6 +655,41 @@ describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ..
       const window = read(f!).split('\n').slice(Math.max(0, line - 12), line + 1).join('\n');
       expect(window, `${loc} must be a ccgpt-runtime spawn`).toMatch(/ccgpt-runtime/);
     }
+  });
+
+  // THE SECOND RING (residue R35(a), D-8394): the update suites' direct callers and the thin `ccrc-*` builders. Each
+  // file's builders start from ccrcContainedEnv, or call ghContainedEnv with `net: true` (ssh, scp and curl poisons;
+  // the fixture bus is every caller's since D-8394). `ccrc-doctor-fleet-box.test.ts` stays gh-only by measurement:
+  // `net`'s poisons land in `~/.local/bin`, ahead of the doctor fixture's own stub dir on `doctorEnv`'s PATH.
+  const RING2 = ['ccd-update-sync.test.ts', 'update-intent-cross-side.test.ts', 'updateIntentFixtures.ts',
+    'ccrc-restamp.test.ts', 'ccrc-approval-key.test.ts', 'ccrc-versioned-audit.test.ts', 'ccrc-passwd.test.ts',
+    'ccrc-rollout.test.ts', 'ccrc-uninstall.test.ts', 'ccrc-account.test.ts', 'ccrc-expose.test.ts'] as const;
+  /** Every `ghContainedEnv(` CALL in `src` (comment lines skipped) as its full argument text, parentheses matched. */
+  const ghCalls = (src: string): Array<{ at: number; text: string }> => {
+    const out: Array<{ at: number; text: string }> = [];
+    for (const m of src.matchAll(/ghContainedEnv\(/g)) {
+      const lineStart = src.lastIndexOf('\n', m.index!) + 1;
+      if (/^\s*(\/\/|\*)/.test(src.slice(lineStart, m.index!))) continue;
+      let depth = 0;
+      let j = m.index! + 'ghContainedEnv'.length;
+      for (; j < src.length; j++) {
+        if (src[j] === '(') depth++;
+        else if (src[j] === ')' && --depth === 0) break;
+      }
+      out.push({ at: lineOf(src, m.index!), text: src.slice(m.index!, j + 1) });
+    }
+    return out;
+  };
+
+  it('the second ring: every builder in the files starts from ccrcContainedEnv, or asks ghContainedEnv for `net` (D-8394)', () => {
+    const offenders: string[] = [];
+    for (const f of RING2) {
+      const src = read(f);
+      const calls = ghCalls(src);
+      for (const c of calls) if (!/\bnet: true\b/.test(c.text)) offenders.push(`${f}:${c.at}`);
+      if (calls.length === 0 && !/ccrcContainedEnv\(/.test(src)) offenders.push(`${f}: no builder at all`);
+    }
+    expect(offenders, `a second-ring builder without net or ccrcContainedEnv at ${offenders.join(', ')}`).toEqual([]);
   });
 
   it('keepDigest spawns under keepDigestEnv, and installTreeFixture.ts imports nothing from vitest or ./ccrcContainment', () => {

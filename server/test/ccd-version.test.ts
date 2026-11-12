@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { assertNoRealTool } from './containedTools.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-version-'); });
@@ -50,8 +51,8 @@ const which = (name: string): string => execFileSync('bash', ['-c', `command -v 
  *  `bash` is included so the curated directory can resolve the interpreter
  *  ccd itself needs to run under; `mkdir` because `ccd/ccd`'s top level runs
  *  `mkdir -p "$REG"` unconditionally, before any verb dispatches. `id` is
- *  avoided rather than symlinked — the harness presets XDG_RUNTIME_DIR /
- *  DBUS_SESSION_BUS_ADDRESS below so ccd's `${XDG_RUNTIME_DIR:=...$(id -u)}`
+ *  avoided rather than symlinked — the builder presets XDG_RUNTIME_DIR /
+ *  DBUS_SESSION_BUS_ADDRESS under HOME so ccd's `${XDG_RUNTIME_DIR:=...$(id -u)}`
  *  default never evaluates its command substitution. */
 function pathWithoutPython3(home: string): string {
   const dir = path.join(home, 'no-python3-bin');
@@ -61,11 +62,11 @@ function pathWithoutPython3(home: string): string {
 }
 
 const runCcdNoPython3 = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+  // The builder SETS the bus pair under HOME, so ccd's own default (`: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"`),
+  // which would need the `id` the curated PATH omits, never evaluates. It used to be overwritten here with a pair
+  // under /tmp, outside the fixture (residue R35(f), D-8394); the check below holds the builder's pair.
   const env = ghContainedEnv(h.home, { HOME: h.home, PATH: pathWithoutPython3(h.home) }, { systemd: true, tmux: true });
-  // ccd's own default (`: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"`) would
-  // otherwise need `id`, which the curated PATH above deliberately omits.
-  env['XDG_RUNTIME_DIR'] = '/tmp';
-  env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=/tmp/ccd-version-test-bus';
+  assertNoRealTool(env, h.home);
   try {
     return { code: 0, stderr: '', stdout: execFileSync('bash', [CCD, ...args], { encoding: 'utf8', cwd: h.home, env }) };
   } catch (e) {

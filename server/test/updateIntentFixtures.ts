@@ -15,17 +15,19 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 /** The repo's own script under test — never an installed copy. */
 export const CCRC = path.join(REPO, 'ccd', 'ccrc');
 
 /** A contained environment for a node HOME: HOME and TMPDIR inside the
- *  fixture, `gh` and the three service-manager binaries poisons first on PATH
- *  (`ghContainedEnv`, systemd opt-in — this reader and the watchdog must never
- *  reach a real user manager), and none of the runner's own update knobs
- *  leaking into the child. */
+ *  fixture, `ccrcContainedEnv`'s poisons first on PATH (gh, tmux, the service
+ *  managers — this reader and the watchdog must never reach a real user
+ *  manager — and, since the second ring (residue R35(a), D-8394), ssh, scp and
+ *  curl, with the fixture user bus), and none of the runner's own update knobs
+ *  leaking into the child. A curl stub a case planted in `~/.local/bin` first is
+ *  kept: the poisons are create-if-absent. */
 export function nodeEnv(home: string): NodeJS.ProcessEnv {
   const tmp = path.join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
@@ -33,7 +35,7 @@ export function nodeEnv(home: string): NodeJS.ProcessEnv {
   for (const k of ['CCRC_UPDATE_DEADLINE_MS', 'CCRC_UPDATE_HEALTH_S', 'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_SESSION_SLICE_MEMORY_MAX', 'CCRC_SESSION_SLICE_SWAP_MAX',
     'CCRC_UPDATE_LOCK_HELD', 'CCRC_UPDATE_VERIFIED',
     'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT', 'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS']) delete base[k];
-  return ghContainedEnv(home, base, { systemd: true });
+  return ccrcContainedEnv(home, base, { managers: true, curl: 'poison' });
 }
 
 export type NodeRoleWord = 'fleet' | 'server' | 'both';

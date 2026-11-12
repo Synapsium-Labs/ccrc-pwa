@@ -6,7 +6,7 @@
 //
 // STANDING NOTE: this file matches `ccd-workspaces.test.ts`'s
 // `/^ccd.*\.ts$/` containment scan, so EVERY bash spawn below builds its env
-// through `ghContainedEnv(…, { systemd: true, tmux: true })` AT THE CALL SITE,
+// through `ghContainedEnv(…, { systemd: true, tmux: true, net: true })` AT THE CALL SITE,
 // inside the scan's twelve-line window (`SCAN_LOOKBACK_LINES`). A helper at
 // the top of the file would be invisible to it — `ccd-pool-sync.test.ts`'s
 // `run` measured that.
@@ -27,7 +27,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, st
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, stubContainedTool } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { SERVER_CAPS, SERVER_CAPS_FILE, isServerCapWord, parseServerCaps } from '../../shared/api.js';
 import { REGIONS, ccdFunctionDefinition, checkRegion, extractRegion } from '../../shared/hook-helpers.mjs';
@@ -88,7 +88,9 @@ const box = (prefix: string, o: { url?: string; nodeId?: string | null } = {}): 
   if (o.nodeId !== null) writeFileSync(join(home, '.ccrc', 'node-id'), `${o.nodeId ?? NODE_ID}\n`);
   const bin = join(home, 'bin');
   mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, 'curl'), [
+  // The stub goes through `stubContainedTool` into `harnessBin` (residue R35(a), D-8394): every spawn below asks
+  // `net`, whose curl poison is first on PATH, ahead of `~/bin`, and keeps a stub it finds there.
+  stubContainedTool(home, 'curl', [
     '#!/usr/bin/env bash',
     // D-5232's mechanism (Task 9b): the second, independent pull asks `<url>/health`. It answers from its OWN
     // fixtures (`fixture-health-*`, default a 200 whose `caps` is empty) and records to its OWN files, so every
@@ -123,7 +125,7 @@ const box = (prefix: string, o: { url?: string; nodeId?: string | null } = {}): 
     'status=200; [ -f "$HOME/fixture-status" ] && IFS= read -r status < "$HOME/fixture-status"',
     'printf \'%s\' "$status"',
     '',
-  ].join('\n'), { mode: 0o755 });
+  ].join('\n'));
   return home;
 };
 
@@ -138,7 +140,7 @@ const sync = (home: string, extra: NodeJS.ProcessEnv = {}): Run => {
   const env = ghContainedEnv(home, {
     ...process.env, CCRC_UPDATE_SYNC_TIMEOUT: undefined, ...extra,
     HOME: home, PATH: `${join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-  }, { systemd: true, tmux: true });
+  }, { systemd: true, tmux: true, net: true });
   const r = spawnSync('bash', ['-c', 'umask 022; exec bash "$0"', SYNC], { encoding: 'utf8', env });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
@@ -177,7 +179,7 @@ const readBack = (home: string): Run => {
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(units, { recursive: true });
   writeFileSync(join(units, 'ccd-update-sync.timer'), '');
-  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
+  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true, net: true });
   const r = spawnSync('bash', [CCRC, 'channel'], { encoding: 'utf8', env });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
@@ -365,7 +367,7 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     const call = (text: string, h: string): string => {
       const input = join(home, `input-${n++}`);
       writeFileSync(input, text);
-      const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true });
+      const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true, net: true });
       const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', defs, input],
         { env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n', encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
@@ -410,10 +412,10 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     // Unreadable: agent.env absent entirely.
     const missing = mkTmp('upd-sync-redact-home-missing-');
     mkdirSync(join(missing, 'bin'), { recursive: true });
-    writeFileSync(join(missing, 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    stubContainedTool(missing, 'curl', '#!/bin/sh\nexit 99\n');
     const envMissing = ghContainedEnv(missing,
       { ...process.env, HOME: missing, PATH: `${join(missing, 'bin')}:${process.env['PATH'] ?? ''}` },
-      { systemd: true, tmux: true });
+      { systemd: true, tmux: true, net: true });
     const rMissing = spawnSync('bash', [SYNC], { encoding: 'utf8', env: envMissing });
     expect(rMissing.status).toBe(1);
     expect(rMissing.stderr).not.toContain(missing);
@@ -424,10 +426,10 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     mkdirSync(join(noUrl, '.ccrc'), { recursive: true });
     writeFileSync(join(noUrl, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=agent-bearer-fixture\n');
     mkdirSync(join(noUrl, 'bin'), { recursive: true });
-    writeFileSync(join(noUrl, 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    stubContainedTool(noUrl, 'curl', '#!/bin/sh\nexit 99\n');
     const envNoUrl = ghContainedEnv(noUrl,
       { ...process.env, HOME: noUrl, PATH: `${join(noUrl, 'bin')}:${process.env['PATH'] ?? ''}` },
-      { systemd: true, tmux: true });
+      { systemd: true, tmux: true, net: true });
     const rNoUrl = spawnSync('bash', [SYNC], { encoding: 'utf8', env: envNoUrl });
     expect(rNoUrl.status).toBe(1);
     expect(rNoUrl.stderr).not.toContain(noUrl);
@@ -562,7 +564,7 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     writeFileSync(redactor, block!);
     const env = ghContainedEnv(home, {
       HOME: home, LC_ALL: locale, PATH: process.env['PATH'] ?? '',
-    }, { systemd: true, tmux: true });
+    }, { systemd: true, tmux: true, net: true });
     const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', redactor, fixture], {
       env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n',
     });

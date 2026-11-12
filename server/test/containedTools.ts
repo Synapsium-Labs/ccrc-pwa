@@ -34,14 +34,161 @@
 //   them would let ccrc's own `: "${XDG_RUNTIME_DIR:=/run/user/$UID}"` (seven pairs in ccd/ccrc, one in
 //   ccrc-doctor-checks) default them to the real bus. A stub under HOME that itself execs a real binary is that
 //   stub's own contract (the rsync recorder's and the loopback curl front's are two), not this check's.
+//
+// * THE POISON LEDGER (D-8394, residue R35(e)). A poison answers 97 and records, and a test that met one and stayed
+//   green used to leave nothing but that record, removed unread with its HOME. Every shared poison (`plantPoison`,
+//   `ghContainedEnv`'s gh, the loopback curl front's refusals) now also appends its record's path to this file's
+//   ledger, a path fixed when the module loads (one per test file: vitest isolates the module registry by file), so
+//   a HOME a test removes itself cannot take the hit with it. `tmpHelpers.ts`'s teardown reads it after every test
+//   and fails that test for a record it did not take (`takePoisonRecord`), and scans each `mkTmp` directory it
+//   removes for any `*-poison` file, hand-written poisons included.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
 /** THE names a ccrc test env may never let resolve outside its fixture HOME (wave 9 R10d). The two managers and their
  *  macOS twin, tmux (the live fleet server), gh (a repo-WRITE token), curl (a live server), ssh and scp (a live box).
  *  ONE spelling: the poisons, the checker, FIXTURE_BINS and the darwin probe bin all read this list. */
-export const CONTAINED_TOOLS = ['ssh', 'scp', 'systemctl', 'systemd-run', 'launchctl', 'tmux', 'gh', 'curl'] as const;
+export const CONTAINED_TOOLS = ['ssh', 'scp', 'systemctl', 'systemd-run', 'launchctl', 'loginctl', 'tmux', 'gh', 'curl'] as const;
+// `loginctl` joined in D-8394 (residue R35(f)): `_inst_linger` runs `loginctl enable-linger`, a write to the same
+// user manager, and before it only the install and update fixtures' own recorders stood in for it.
+
+/** This test file's poison ledger (D-8394): `hit <record path>\t<argv>` per poison call, `taken <record path>` per
+ *  take. Created by the first hit, so a file that meets no poison writes nothing under TMPDIR; it lies in the run's
+ *  own TMPDIR (`run-tmp.globalsetup.mjs`), which the run removes. */
+const LEDGER = path.join(os.tmpdir(), `ccrc-poison-ledger-${process.pid}-${randomBytes(4).toString('hex')}`);
+
+/** The ledger's path, single-quoted for sh. */
+const LEDGER_SH = `'${LEDGER.replace(/'/g, `'\\''`)}'`;
+
+/** The sh line a poison runs to log one hit of the record at `$HOME/<record>`, with its argv, in the ledger. It
+ *  cannot fail the poison: a ledger that cannot be written leaves the record itself, which the removal scan sees. */
+export function ledgerHitLine(record: string): string {
+  return `printf 'hit %s\\t%s\\n' "$HOME/${record}" "$*" >> ${LEDGER_SH} 2>/dev/null || :`;
+}
+
+/** A poison record's file name: `<tool>-poison` (and `<tool>-stdin-poison`), lowercase, as every poison in both
+ *  test trees spells it. */
+export const POISON_RECORD_RE = /^[a-z][a-z0-9-]*-poison$/;
+
+/** Reads `<home>/<name>-poison` as argv lines (absent: none) and marks it TAKEN in the ledger: the test met that
+ *  poison on purpose and has asserted on it (D-8394). A later hit of the same record re-arms the teardown. */
+export function takePoisonRecord(home: string, name: string): string[] {
+  const p = path.join(home, `${name}-poison`);
+  fs.appendFileSync(LEDGER, `taken ${p}\n`);
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+}
+
+/** The doctor's own `gh auth status` probe, the one argv a doctor run may send the gh POISON: on a box with no gh
+ *  stub the poison answers 97, as an unauthenticated gh would, and `gh_auth` reports it. Every doctor runner takes
+ *  exactly that record (D-8394); any other argv in it still fails the teardown. */
+export const DOCTOR_GH_PROBE = /^auth status(?: --hostname github\.com)?$/;
+
+/** Takes `<home>/<name>-poison` ONLY when every line it holds matches `expected` (D-8394): a fixture whose subject
+ *  meets a poison by design (the doctor's `gh auth status` probe on a box with no gh stub, answered 97 as an
+ *  unauthenticated gh would) takes exactly that, and any other argv in the record still fails the teardown. Returns
+ *  whether it took. */
+export function takeExpectedPoison(home: string, name: string, expected: RegExp): boolean {
+  const p = path.join(home, `${name}-poison`);
+  if (!fs.existsSync(p)) return false;
+  const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
+  if (lines.length === 0 || !lines.every((l) => expected.test(l))) return false;
+  fs.appendFileSync(LEDGER, `taken ${p}\n`);
+  return true;
+}
+
+/** THE ONE STANDING ALLOWANCE (D-8394): a service manager's READ-ONLY state query. `launchctl print
+ *  gui/<uid>/<label>`, `systemctl --user is-active <unit>` and `loginctl show-user <uid> --property=Linger` are what
+ *  ccrc's status, removal and doctor paths ask, and a manager poison answers each with 97, which ccrc reads as
+ *  `unknown`: the fixture default of every ccrc runner that plants a manager poison (`ccrc-cli.test.ts` says so), and
+ *  a query that cannot change a box. A record holding only these is not a leak. Any other argv in it is. */
+const READ_ONLY_MANAGER_QUERY: Readonly<Record<string, RegExp>> = {
+  'launchctl-poison': /^print gui\/\d+\/[A-Za-z0-9._-]+$/,
+  'systemctl-poison': /^--user is-active [A-Za-z0-9@._-]+$/,
+  'loginctl-poison': /^show-user \d+ --property=Linger$/,
+};
+
+/** One record's ledger state: its last kind, and the argv of every hit since its last take. */
+interface LedgerRecord { kind: 'hit' | 'taken'; argv: string[] }
+
+/** The ledger, folded by normalised record path; no ledger reads as none. */
+function ledgerState(): Map<string, LedgerRecord> {
+  const state = new Map<string, LedgerRecord>();
+  let text: string;
+  try { text = fs.readFileSync(LEDGER, 'utf8'); } catch { return state; }
+  for (const line of text.split('\n')) {
+    const hit = /^hit ([^\t]+)(?:\t(.*))?$/.exec(line);
+    if (hit) {
+      const p = path.normalize(hit[1]!);
+      const prev = state.get(p);
+      const argv = prev?.kind === 'hit' ? prev.argv : [];
+      state.set(p, { kind: 'hit', argv: [...argv, hit[2] ?? ''] });
+      continue;
+    }
+    const taken = /^taken (.+)$/.exec(line);
+    if (taken) state.set(path.normalize(taken[1]!), { kind: 'taken', argv: [] });
+  }
+  return state;
+}
+
+/** The argv lines of the record at `p`: the file's, while it exists, else the ledger's hits since the last take. */
+function recordArgv(p: string, state: Map<string, LedgerRecord>): string[] {
+  try { return fs.readFileSync(p, 'utf8').split('\n').filter(Boolean); } catch { /* removed with its HOME */ }
+  return state.get(path.normalize(p))?.argv ?? [];
+}
+
+/** True when the record at `p` holds nothing but a read-only manager state query (`READ_ONLY_MANAGER_QUERY`). */
+function readOnlyManagerRecord(p: string, state: Map<string, LedgerRecord>): boolean {
+  const rule = READ_ONLY_MANAGER_QUERY[path.basename(p)];
+  if (rule === undefined) return false;
+  const argv = recordArgv(p, state);
+  return argv.length > 0 && argv.every((l) => rule.test(l));
+}
+
+/** Every `*-poison` regular file under `root` (to `depth` levels, symlinks not followed, `.git` and `node_modules`
+ *  skipped) that the ledger does not hold as taken (D-8394). */
+export function poisonRecordsUnder(root: string, depth = 4): string[] {
+  const found: string[] = [];
+  const state = ledgerState();
+  const walk = (dir: string, left: number): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isFile() && POISON_RECORD_RE.test(e.name)) { if (state.get(path.normalize(p))?.kind !== 'taken') found.push(p); }
+      else if (e.isDirectory() && left > 1 && e.name !== '.git' && e.name !== 'node_modules') walk(p, left - 1);
+    }
+  };
+  walk(root, depth);
+  return found;
+}
+
+/** One line per record: its path and the first argv it holds (from the ledger once its HOME is gone). */
+function describeRecords(records: string[], state: Map<string, LedgerRecord>): string {
+  return records.map((p) => {
+    const first = recordArgv(p, state)[0];
+    const gone = !fs.existsSync(p);
+    return `  ${p}: ${first === undefined ? '(no argv recorded)' : JSON.stringify(first)}${gone ? ' (removed with its HOME)' : ''}`;
+  }).join('\n');
+}
+
+/** THROWS when a poison was hit and its record not taken, by the ledger, or when a `*-poison` file lies under one of
+ *  `dirs` untaken (D-8394, R35(e)), unless the record holds only a read-only manager state query (the one standing
+ *  allowance, `READ_ONLY_MANAGER_QUERY`). Every untaken record is marked taken first, so one leak reds once, in the
+ *  test that made it, and not again in every later one. `tmpHelpers.ts` calls it after every test and before it
+ *  removes a directory; `makeCcdHarness`'s cleanup calls it before it removes its HOME. */
+export function assertNoPoisonLeft(dirs: readonly string[] = []): void {
+  const state = ledgerState();
+  const left = new Set([...state].filter(([, r]) => r.kind === 'hit').map(([p]) => p));
+  for (const d of dirs) for (const p of poisonRecordsUnder(d)) left.add(path.normalize(p));
+  const leaks = [...left].filter((p) => !readOnlyManagerRecord(p, state));
+  for (const p of left) fs.appendFileSync(LEDGER, `taken ${p}\n`);
+  if (leaks.length === 0) return;
+  throw new Error('poison record(s) left behind: a contained tool was reached and nothing took the record '
+    + `(read it through takePoisonRecord when the case means to meet the poison, D-8394):\n${describeRecords(leaks, state)}`);
+}
 
 /** A recording poison at `<bin>/<name>`, CREATE-IF-ABSENT — `ghContainedEnv`'s systemd/tmux rule, for its reason: a
  *  builder plants its functional stub AFTER this runs, and must win; a stub planted BEFORE it is kept. Records argv to
@@ -51,7 +198,7 @@ export function plantPoison(bin: string, name: string): void {
   if (fs.existsSync(p)) return;
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(p,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n${ledgerHitLine(`${name}-poison`)}\n`
     + `echo "ccrc tests must never reach a real ${name}" >&2\nexit 97\n`, { mode: 0o755 });
 }
 
@@ -111,6 +258,7 @@ export function loopbackCurlFront(realCurl: string): string {
     'argv_log="$*"',
     'refuse() {',
     '  printf \'%s\\n\' "$argv_log" >> "$HOME/curl-poison"',
+    `  ${ledgerHitLine('curl-poison')}`,
     '  echo "ccrc tests: this curl takes only ccrc\'s own options and reaches only http://127.0.0.1:<port>/ with <port> listed in $HOME/curl-allow-ports" >&2',
     '  exit 97',
     '}',
@@ -190,6 +338,36 @@ function busPath(name: string, value: string): string | null {
   return m ? m[1]! : null;
 }
 
+/** Where `p` PHYSICALLY leads (D-8394, residue R35(e) and (f)): the realpath of its deepest existing ancestor, found
+ *  by walking up WITHOUT lexical normalisation (and `realpathSync.native`: the JS `realpathSync` resolves `..`
+ *  lexically first), with the rest appended. So `<home>/sym/..` (with `sym` a symlink out of
+ *  home) and a symlink under home to the real runtime dir answer where a client would land, not where
+ *  `path.resolve` puts them. A relative path, or a dangling symlink on the way, answers null. */
+export function physicalPath(p: string): string | null {
+  if (!path.isAbsolute(p)) return null;
+  const rest: string[] = [];
+  let cur = p;
+  for (;;) {
+    let exists = true;
+    try { fs.lstatSync(cur); } catch { exists = false; }
+    if (exists) {
+      try { return path.join(fs.realpathSync.native(cur), ...rest.reverse()); } catch { return null; }
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    rest.push(path.basename(cur));
+    cur = parent;
+  }
+}
+
+/** True when the bus value `v` of `name` names a path that is physically inside `home` (`busPath`, then
+ *  `physicalPath`). */
+function busInside(name: string, v: string | undefined, inside: (p: string) => boolean): boolean {
+  const p = v === undefined || v === '' ? null : busPath(name, v);
+  const phys = p === null ? null : physicalPath(p);
+  return phys !== null && inside(phys);
+}
+
 /** The one "inside the fixture HOME" predicate: the path itself or under it, for HOME as given or its realpath
  *  (macOS's `/var` is `/private/var`). `assertNoRealTool` and `busUnder` both read it (wave 18). */
 export function insideOf(home: string): (p: string) => boolean {
@@ -199,24 +377,20 @@ export function insideOf(home: string): (p: string) => boolean {
 
 /** True when BOTH bus variables are set and name paths inside `home`: a fixture bus the test made itself, which
  *  `ghContainedEnv` keeps (wave 18, D-5248). Exactly the condition `assertNoRealTool` refuses the negation of.
- *  A value with `;`, `%` or a second `path=` is refused (`busPath`, D-5257, D-5258). KNOWN LIMIT, not fixed: neither
- *  this nor `assertNoRealTool` takes a realpath of the bus value, so a path under HOME that is a SYMLINK to the real
- *  runtime dir passes. */
+ *  A value with `;`, `%` or a second `path=` is refused (`busPath`, D-5257, D-5258). The path is read PHYSICALLY
+ *  (`physicalPath`, D-8394): a symlink under HOME to the real runtime dir, or a `sym/..` that climbs out through one,
+ *  is outside. */
 export function busUnder(env: NodeJS.ProcessEnv, home: string): boolean {
   const inside = insideOf(home);
-  return (['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] as const).every((name) => {
-    const v = env[name];
-    const p = v === undefined || v === '' ? null : busPath(name, v);
-    return p !== null && inside(path.resolve(p));
-  });
+  return (['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] as const).every((name) => busInside(name, env[name], inside));
 }
 
 /** THROWS unless, under `env`, every CONTAINED_TOOLS name resolves to NOTHING or to a file whose REALPATH is inside
  *  realpath(home) — a symlink from the fixture to a real binary fails — and unless XDG_RUNTIME_DIR and
  *  DBUS_SESSION_BUS_ADDRESS are both SET and name a path inside home. One `/bin/sh -c 'command -v …'` per name; the
- *  resolved file is never executed. A bus value with `;`, `%` or a second `path=` is refused (D-5257, D-5258), but a
- *  SYMLINK under home that points at the real runtime dir passes: the bus value is checked lexically, never by
- *  realpath (known limit, not fixed). It reads RESOLUTION: a stub under home that itself execs a real binary is that
+ *  resolved file is never executed. A bus value with `;`, `%` or a second `path=` is refused (D-5257, D-5258), and the
+ *  bus path is read physically (D-8394): a SYMLINK under home that points at the real runtime dir is refused. It reads
+ *  RESOLUTION: a stub under home that itself execs a real binary is that
  *  stub's own contract (the rsync recorder's and the loopback curl front's are two), not this check's. */
 export function assertNoRealTool(env: NodeJS.ProcessEnv, home: string): void {
   const inside = insideOf(home);
@@ -225,8 +399,7 @@ export function assertNoRealTool(env: NodeJS.ProcessEnv, home: string): void {
     if (v === undefined || v === '') {
       throw new Error(`assertNoRealTool: ${name} is not set — ccrc would default it to the real user bus`);
     }
-    const p = busPath(name, v);
-    if (p === null || !inside(path.resolve(p))) {
+    if (!busInside(name, v, inside)) {
       throw new Error(`assertNoRealTool: ${name}=${v} does not name a path inside the fixture HOME ${home}`);
     }
   }

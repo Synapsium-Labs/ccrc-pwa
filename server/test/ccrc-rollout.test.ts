@@ -9,7 +9,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+// The second ring (residue R35(a), D-8394): every builder here starts from ccrcContainedEnv.
+import { ccrcContainedEnv } from './ccrcContainment.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -210,7 +211,7 @@ function twoBoxFleet(prefix: string): string {
  *  falls to -1, no output to match) rather than stalling this suite. Every
  *  other caller leaves it unset (`spawnSync`'s own default: no timeout). */
 function run(home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}, timeoutMs?: number): Result {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home, ...extraEnv });
+  const env = ccrcContainedEnv(home, { ...process.env, ...extraEnv }, { managers: true, curl: 'poison' });
   for (const k of ['CCRC_BOX', 'CCRC_AGENT_BOX', 'CCRC_SSH_KEY', 'CCRC_SSH_PORT', 'CCRC_RELEASE_BASE_URL', 'CCRC_DEPLOY_ENV']) delete env[k];
   env['CCRC_DEPLOY_ENV'] = join(home, 'deploy.env');
   env['CCRC_RELEASE_BASE_URL'] = `local://${home}/releases`;
