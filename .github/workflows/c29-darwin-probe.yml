@@ -31,27 +31,28 @@ jobs:
       - name: Versions
         run: |
           jq --version; bash --version | head -1; command -v bash jq; sysctl -n hw.ncpu hw.memsize; uptime
-      - name: The jq invocation, bare
+      - name: spawnSync with a 128 KB stdin, bare
         working-directory: server
-        run: node ../.github/c29-darwin-probe/jqcost.mjs 100 bare
-      - name: The jq invocation, under a test shard's load
+        run: |
+          sysctl net.local.stream.sendspace net.local.stream.recvspace kern.ipc.maxsockbuf || true
+          w() { node ../.github/c29-darwin-probe/syncspawn.mjs "$@" & p=$!; node ../.github/c29-darwin-probe/watch.mjs "$p" "$2" & q=$!; wait "$p"; kill "$q" 2>/dev/null || true; }
+          w 3000 bare-cat-det cat detached
+          w 3000 bare-cat-att cat attached
+          w 300 bare-jq-det jq detached
+      - name: spawnSync with a 128 KB stdin, under a test shard's load
         working-directory: server
         run: |
           ( ./node_modules/.bin/vitest run --maxWorkers=2 test/ccd-child-reclaim-pin.test.ts test/ccd-reclaim-tail-window.test.ts test/ccd-reclaim-tail-mounts.test.ts >/dev/null 2>&1 ) &
           sleep 30
-          node ../.github/c29-darwin-probe/jqcost.mjs 100 shard
+          w() { node ../.github/c29-darwin-probe/syncspawn.mjs "$@" & p=$!; node ../.github/c29-darwin-probe/watch.mjs "$p" "$2" & q=$!; wait "$p"; kill "$q" 2>/dev/null || true; }
+          w 3000 shard-cat-det cat detached
+          w 600 shard-jq-det jq detached
+          w 3000 shard-cat-att cat attached
           kill %1 2>/dev/null || true
-      - name: compact-carry alone, repeated
-        working-directory: server
-        run: bash ../.github/c29-darwin-probe/repeat.sh 5 cc-bare test/session-hook-compact-carry.test.ts
-      - name: prune-deny's dqsub cases alone, repeated
-        working-directory: server
-        run: bash ../.github/c29-darwin-probe/repeat.sh 5 pd-dqsub test/session-hook-prune-deny.test.ts dqsub
-      - name: both files under a test shard's load
+      - name: the whole prune-deny file under a test shard's load
         working-directory: server
         run: |
-          ( ./node_modules/.bin/vitest run --maxWorkers=2 test/ccd-child-reclaim-pin.test.ts test/ccd-reclaim-tail-window.test.ts test/ccd-reclaim-tail-mounts.test.ts >/dev/null 2>&1 ) &
+          ( ./node_modules/.bin/vitest run --maxWorkers=2 test/ccd-child-reclaim-pin.test.ts test/ccd-reclaim-tail-window.test.ts test/ccd-reclaim-tail-mounts.test.ts test/ccd-ws-reap.test.ts >/dev/null 2>&1 ) &
           sleep 30
-          bash ../.github/c29-darwin-probe/repeat.sh 3 cc-shard test/session-hook-compact-carry.test.ts
-          bash ../.github/c29-darwin-probe/repeat.sh 3 pd-shard test/session-hook-prune-deny.test.ts dqsub
+          bash ../.github/c29-darwin-probe/repeat.sh 2 pd-whole test/session-hook-prune-deny.test.ts
           kill %1 2>/dev/null || true
