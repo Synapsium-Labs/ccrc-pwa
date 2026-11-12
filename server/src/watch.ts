@@ -91,7 +91,7 @@ import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
 import { VisibilityLane } from './linking/visibilityLane.js';
-import { ProjectWalkCache, listProjects } from './lifecycle.js';
+import { ProjectWalkCache, listProjects, ccdEnding } from './lifecycle.js';
 import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
@@ -633,10 +633,19 @@ function mergeBreakerMembers(
  *  without `recordAlways` had no caller and is not a type. */
 type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
-/** What a failed `pr-state` call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail, else
- *  the first line of ccd's stderr, cut to 160 characters. */
+/** What a failed ccd call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail; else how
+ *  ccd ended (`ccdEnding`, the single reader of the kill halves; `exit <n>` only when the exit code was measured),
+ *  then the first stderr line and, when it differs, the last non-empty one, each cut to 160 characters. */
 function failureDetail(res: CcdResult): string {
-  return (res.ran === false ? res.detail : res.stderr.split('\n')[0] ?? '').slice(0, 160);
+  if (res.ran === false) return res.detail.slice(0, 160);
+  const e = ccdEnding(res);
+  const ending = e.kind === 'exited' ? (res.exitCode === undefined ? 'exited' : `exit ${res.exitCode}`)
+    : e.kind === 'signal' ? `signal ${e.signal}` : e.kind === 'deadline' ? 'deadline' : 'ending unmeasured';
+  const lines = res.stderr.split('\n').filter((l) => l.trim() !== '');
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+  return [ending, ...(first === undefined ? [] : [`first: ${first.slice(0, 160)}`]),
+    ...(first !== undefined && last !== first ? [`last: ${last!.slice(0, 160)}`] : [])].join('; ');
 }
 
 export class FleetWatcher {
