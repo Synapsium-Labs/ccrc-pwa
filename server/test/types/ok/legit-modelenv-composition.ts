@@ -19,7 +19,7 @@
 //
 // This file MUST compile clean.
 import {
-  MODEL_ENV_KEYS, clearSettingsEnv, contextWindowFor, mergeSettingsEnv, modelEnvBlock,
+  CODEX_LANE_ENV, LANE_ENV_KEYS, MODEL_ENV_KEYS, clearSettingsEnv, contextWindowFor, mergeSettingsEnv, modelEnvBlock,
 } from '../../../../shared/modelenv.mjs';
 import type { ContextWindow } from '../../../../shared/modelenv.mjs';
 import type { Catalogue, ModelWindows, Registry } from '../../../../shared/models.js';
@@ -44,3 +44,11 @@ export const cleared = clearSettingsEnv(settingsPath, MODEL_ENV_KEYS);
 // quiet gap.
 export const mergedMeasured = mergeSettingsEnv(settingsPath, modelEnvBlock(reg, cat, win));
 export const room: ContextWindow = contextWindowFor(reg, cat, win);
+
+// Operator ruling 2026-11-12, option (b): a codex-kind lane's block also carries
+// the plugin switch, asked for in the fourth argument; `rm` clears every key a
+// lane block can carry (`LANE_ENV_KEYS`), no respelling.
+export const mergedCodexLane = mergeSettingsEnv(settingsPath, modelEnvBlock(reg, cat, win, { codexLane: true }));
+export const mergedNotCodexLane = mergeSettingsEnv(settingsPath, modelEnvBlock(reg, cat, null, { codexLane: false }));
+export const clearedLane = clearSettingsEnv(settingsPath, LANE_ENV_KEYS);
+export const switchValue: '0' = CODEX_LANE_ENV.ENABLE_CODE_SECURITY_REVIEW;

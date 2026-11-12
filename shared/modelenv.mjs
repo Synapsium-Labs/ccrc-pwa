@@ -1,6 +1,6 @@
 // shared/modelenv.mjs — the materialiser's pure half (§6.1, §6.4, §7): a lane's
-// class registry turned into the eight environment variables Claude Code reads,
-// the THREE-column TSV ccd reads (Plan 2), and the effort map `ccgpt-proxy`
+// class registry turned into the eight model environment variables Claude Code
+// reads (and, on a Codex lane, one plugin switch: `CODEX_LANE_ENV`), the THREE-column TSV ccd reads (Plan 2), and the effort map `ccgpt-proxy`
 // reads per request.
 //
 // `.mjs` because every caller runs under a bare `node`: `deploy/models-op.mjs`
@@ -64,17 +64,19 @@ export function readRegular(p) {
  *  (`contextWindowFor`, codex-bridge spec §2.7) may. */
 export const CLIENT_DEFAULT_CONTEXT_TOKENS = 200000;
 
-/** The eight keys `modelEnvBlock` can write, frozen so a caller iterates them
+/** The eight model keys `modelEnvBlock` can write (a Codex lane's block adds
+ *  `CODEX_LANE_ENV`, below), frozen so a caller iterates them
  *  rather than spelling them a second time. `clearSettingsEnv(path,
- *  MODEL_ENV_KEYS)` is `ccrc models <id> rm`'s whole settings step (spec §4.1
- *  Lifecycle, §10, §11) — the single-writer pin below counts this export as
- *  the one place these eight names originate, so a caller that respelled them
- *  would be a second definition and not merely a second writer. The eighth,
+ *  MODEL_ENV_KEYS)` was `ccrc models <id> rm`'s whole settings step (spec §4.1
+ *  Lifecycle, §10, §11); it now clears `LANE_ENV_KEYS`, below, which starts
+ *  from this list. The single-writer pin counts this export as the one place
+ *  these eight names originate, so a caller that respelled them would be a
+ *  second definition and not merely a second writer. The eighth,
  *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, is the one entry `modelEnvBlock` may
  *  OMIT from a given answer (§6.1 amendment) — `mergeSettingsEnv` below is
  *  what deletes it off a lane's settings when a re-materialise stops emitting
- *  it, which is why this list, and not just `modelEnvBlock`'s return value,
- *  is the set that function treats as its own. */
+ *  it, which is why a list wider than `modelEnvBlock`'s return value is the set
+ *  that function treats as its own. */
 export const MODEL_ENV_KEYS = Object.freeze([
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
@@ -85,6 +87,48 @@ export const MODEL_ENV_KEYS = Object.freeze([
   'CLAUDE_CODE_SUBAGENT_MODEL',
   'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
 ]);
+
+/** The one key a Codex lane's settings carry beyond `MODEL_ENV_KEYS`, written
+ *  only when the caller says the lane is Codex-kind (`modelEnvBlock`'s
+ *  `codexLane`). Frozen, like the list above.
+ *
+ *  Why. On a Codex lane Claude Code runs against ccrc's local bridge, and the
+ *  official `security-guidance` plugin (from `claude-plugins-official`) runs
+ *  its LLM reviews by raw HTTP: each one POSTs `/v1/messages` to
+ *  `ANTHROPIC_BASE_URL` with a Claude model id, which the bridge answers with a
+ *  local 404. The review therefore fails open, on every Stop, every commit and
+ *  every push, and says nothing useful while it does.
+ *
+ *  What. `ENABLE_CODE_SECURITY_REVIEW=0` is the plugin's master switch,
+ *  measured in plugin 2.0.19 (stable across 2.0.16 to 2.0.19): its
+ *  `hooks/_base.py` `llm_reviews_switched_off` reads it from the hook
+ *  process's own variables, and its README's "Disable all LLM reviews" names
+ *  it. One switch turns every LLM review off, the Stop hook, the commit review
+ *  and the push review alike, and keeps the plugin's non-LLM pattern warnings.
+ *  Claude Code hands a settings.json `env` to the processes it spawns, hooks
+ *  included, so the switch rides in the lane's settings like the model keys.
+ *
+ *  Who. The operator's ruling of 2026-11-12, option (b): the reviews are off on
+ *  the Codex lanes only. An Anthropic lane never reaches this writer
+ *  (`deploy/models-op.mjs` refuses it as `anthropic-lane`, so its settings file
+ *  never materialises it; only `rm`, which runs before that gate, writes its
+ *  settings file, and then only to clear `LANE_ENV_KEYS`), and the other lane
+ *  kinds that can carry a registry (external, openrouter, compatible) do not
+ *  get the key either, because the caller gates it on the lane being
+ *  Codex-kind: those lanes keep the reviews.
+ *
+ *  Owned. ccrc owns this key on every lane that carries a registry, as it owns
+ *  the model keys: a hand-set value on a Codex lane is reverted to '0', and a
+ *  hand-set copy on any other kind of lane is deleted, at the next materialise;
+ *  `show` reports both as settings drift until then. */
+export const CODEX_LANE_ENV = Object.freeze({ ENABLE_CODE_SECURITY_REVIEW: '0' });
+
+/** Every key a lane's settings `env` can carry from this writer: the model
+ *  keys and the Codex lane's own. `mergeSettingsEnv` treats exactly this set as
+ *  its own (it deletes a member its block omits), and `ccrc models <id> rm`
+ *  clears exactly this set. Derived, so a key added to either list above reaches
+ *  both callers without a third spelling. */
+export const LANE_ENV_KEYS = Object.freeze([...MODEL_ENV_KEYS, ...Object.keys(CODEX_LANE_ENV)]);
 
 const slot = (registry, cls) => {
   const v = registry.classes[cls];
@@ -268,10 +312,15 @@ export function contextWindowFor(registry, catalogue, windows) {
  * proactive compaction it would disable is what keeps a lane whose window is
  * set wrong from hitting the provider's own 400 instead.
  *
+ * `codexLane` (default false) adds `CODEX_LANE_ENV` to the block: the caller
+ * passes true for an `exec.kind: 'codex'` lane and for nothing else, and the
+ * default call returns exactly the block this function returned before the key
+ * existed (see `CODEX_LANE_ENV` for what the key does and why only there).
+ *
  * @throws {ModelEnvInvalid} when no class among opus/sonnet/haiku is set, or
  *   when the subagent class's slot is null.
  */
-export function modelEnvBlock(registry, catalogue, windows = null) {
+export function modelEnvBlock(registry, catalogue, windows = null, { codexLane = false } = {}) {
   const haiku = slot(registry, 'haiku');
   const sonnet = slot(registry, 'sonnet');
   const opus = slot(registry, 'opus');
@@ -314,24 +363,27 @@ export function modelEnvBlock(registry, catalogue, windows = null) {
   // too. Omitted, never sentinelled, when it yields no window.
   const room = contextWindowFor(registry, catalogue, windows);
   if (room.tokens !== null) block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(room.tokens);
+  if (codexLane) Object.assign(block, CODEX_LANE_ENV);
   return block;
 }
 
 /**
  * `(settingsPath: string, block: Record<string,string>) => { changed: boolean }`
  *
- * ADD AND UPDATE for every key `block` carries; for the REST of `MODEL_ENV_KEYS`
- * — today, only `CLAUDE_CODE_MAX_CONTEXT_TOKENS` can be absent from a given
- * `block` — DELETE it if present. Every other key, owned by nobody this
- * function knows about, is never touched: `ccgpt`'s own `_sync_gpt_config`
+ * ADD AND UPDATE for every key `block` carries; for the REST of `LANE_ENV_KEYS`
+ * — today, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `ENABLE_CODE_SECURITY_REVIEW`
+ * can be absent from a given `block` — DELETE it if present. Every other key,
+ * owned by nobody this function knows about, is never touched: `ccgpt`'s own `_sync_gpt_config`
  * mirrors an allow-list into this same file and is equally careful in the
  * other direction (measured, §1), and a lane's `settings.json` carries the
- * operator's own edits. The eighth key is the one exception because it alone
- * has no sentinel (§6.1 amendment): a catalogue going stale, or the lane's
- * default model changing to one with no catalogue context, must not leave a
- * STALE number on disk — omission from `block` has to reach the file as a
- * deletion, or a re-materialise could only ever add this key, never retract
- * it.
+ * operator's own edits. The eighth key is an exception because it has no
+ * sentinel (§6.1 amendment): a catalogue going stale, or the lane's default
+ * model changing to one with no catalogue context, must not leave a STALE
+ * number on disk — omission from `block` has to reach the file as a deletion,
+ * or a re-materialise could only ever add this key, never retract it. The
+ * Codex lane's plugin switch is the other: a lane that stops being Codex-kind
+ * must not keep a switch that turns a plugin's reviews off for a reason that no
+ * longer holds.
  *
  * A file that is not JSON, or whose top level is not an object, is a REFUSAL
  * and not an overwrite: the alternative is destroying a hand-edited settings
@@ -373,13 +425,15 @@ export function mergeSettingsEnv(settingsPath, block) {
   for (const [k, v] of Object.entries(block)) {
     if (env[k] !== v) { env[k] = v; changed = true; }
   }
-  // The eighth key can drop OUT of `block` between two materialisations (a
-  // catalogue going stale, or the default model changing to one with no
-  // measured context). It carries no sentinel, so a STALE value left on disk
-  // would misstate the window rather than merely go missing — this is the
-  // one member of MODEL_ENV_KEYS this function ever deletes on its own, and
-  // it never deletes a key `block` did not have the chance to name.
-  for (const k of MODEL_ENV_KEYS) {
+  // Two keys can drop OUT of `block` between two materialisations. The eighth
+  // (a catalogue going stale, or the default model changing to one with no
+  // measured context) carries no sentinel, so a STALE value left on disk would
+  // misstate the window rather than merely go missing. The Codex lane's switch
+  // drops out when the lane stops being Codex-kind. Both are members of
+  // LANE_ENV_KEYS, the set this function owns and deletes from when a block
+  // omits one; a key outside that set is never touched, and it never deletes a
+  // key `block` did not have the chance to name.
+  for (const k of LANE_ENV_KEYS) {
     if (!(k in block) && Object.prototype.hasOwnProperty.call(env, k)) {
       delete env[k];
       changed = true;
@@ -419,7 +473,7 @@ export function mergeSettingsEnv(settingsPath, block) {
  * @throws {ModelEnvInvalid} on a settings file that is not JSON, or whose top
  *   level is not an object — the same refusal `mergeSettingsEnv` makes, for
  *   the same reason: the alternative is destroying a hand-edited file to
- *   reap eight keys from it.
+ *   reap a handful of keys (`rm` passes `LANE_ENV_KEYS`) from it.
  */
 export function clearSettingsEnv(settingsPath, keys) {
   let json;

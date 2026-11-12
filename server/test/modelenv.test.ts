@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
+  CODEX_LANE_ENV, LANE_ENV_KEYS, MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
   modelEnvBlock,
 } from '../../shared/modelenv.mjs';
 import { CLASSES, parseRegistry, parseWindows } from '../../shared/models.js';
@@ -648,6 +648,55 @@ describe('MODEL_ENV_KEYS', () => {
   it('never carries API_TIMEOUT_MS or CLAUDE_CODE_MAX_RETRIES — those ride in the ccrc-codex launcher (C26)', () => {
     expect(MODEL_ENV_KEYS).not.toContain('API_TIMEOUT_MS');
     expect(MODEL_ENV_KEYS).not.toContain('CLAUDE_CODE_MAX_RETRIES');
+    // The same two, for the codex-lane switch: CODEX_LANE_ENV is written to the
+    // settings file too, so the same override argument applies to it.
+    expect(Object.keys(CODEX_LANE_ENV)).not.toContain('API_TIMEOUT_MS');
+    expect(Object.keys(CODEX_LANE_ENV)).not.toContain('CLAUDE_CODE_MAX_RETRIES');
+  });
+});
+
+describe('CODEX_LANE_ENV and LANE_ENV_KEYS — the security-guidance plugin\'s LLM reviews off on a codex lane (operator ruling 2026-11-12, option b)', () => {
+  it('a codex lane\'s block carries ENABLE_CODE_SECURITY_REVIEW=0', () => {
+    expect(modelEnvBlock(SEEDED, CODEX, null, { codexLane: true }).ENABLE_CODE_SECURITY_REVIEW).toBe('0');
+    expect(modelEnvBlock(SEEDED, null, null, { codexLane: true }).ENABLE_CODE_SECURITY_REVIEW).toBe('0');
+  });
+
+  it('the default call, and codexLane:false, carry no such key', () => {
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX))).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX, null))).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX, null, {}))).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX, null, { codexLane: false })))
+      .not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+  });
+
+  it('LANE_ENV_KEYS is every key a lane block can carry, frozen; CODEX_LANE_ENV is frozen', () => {
+    expect([...LANE_ENV_KEYS].sort())
+      .toEqual(Object.keys(modelEnvBlock(SEEDED, CODEX, null, { codexLane: true })).sort());
+    expect(LANE_ENV_KEYS).toEqual(expect.arrayContaining([...MODEL_ENV_KEYS]));
+    expect(Object.isFrozen(LANE_ENV_KEYS)).toBe(true);
+    expect(Object.isFrozen(CODEX_LANE_ENV)).toBe(true);
+    expect(CODEX_LANE_ENV).toEqual({ ENABLE_CODE_SECURITY_REVIEW: '0' });
+  });
+
+  it('the opts bag changes nothing but that key', () => {
+    const plain = modelEnvBlock(SEEDED, CODEX);
+    const codex = modelEnvBlock(SEEDED, CODEX, null, { codexLane: true });
+    const { ENABLE_CODE_SECURITY_REVIEW: _gone, ...rest } = codex;
+    expect(rest).toEqual(plain);
+  });
+
+  it('mergeSettingsEnv DELETES the key when a block omits it, and keeps a key ccrc does not own', () => {
+    const settings = path.join(home, '.claude-gpt', 'settings.json');
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    fs.writeFileSync(settings, JSON.stringify({ env: { DISABLE_TELEMETRY: '1' } }));
+    mergeSettingsEnv(settings, modelEnvBlock(SEEDED, null, null, { codexLane: true }));
+    expect(JSON.parse(fs.readFileSync(settings, 'utf8')).env.ENABLE_CODE_SECURITY_REVIEW).toBe('0');
+    // The lane stops being codex-kind: its next block omits the key.
+    const r = mergeSettingsEnv(settings, modelEnvBlock(SEEDED, null));
+    expect(r).toEqual({ changed: true });
+    const j = JSON.parse(fs.readFileSync(settings, 'utf8'));
+    expect(Object.keys(j.env)).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(j.env.DISABLE_TELEMETRY).toBe('1');
   });
 });
 
