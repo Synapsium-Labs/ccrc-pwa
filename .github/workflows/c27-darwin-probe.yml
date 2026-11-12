@@ -28,25 +28,10 @@ jobs:
       - name: Install
         working-directory: server
         run: ../.github/ci/bounded.sh 180 npm ci
-      - name: Single reader, bare
-        run: bash .github/c27-darwin-probe/single.sh 60 bare
-      - name: Single reader, under CPU load
-        run: |
-          n=$(( $(sysctl -n hw.ncpu) * 2 ))
-          for i in $(seq 1 "$n"); do yes >/dev/null & done
-          bash .github/c27-darwin-probe/single.sh 100 cpu
-          pkill yes || true
-      - name: Single reader, under a test shard's load
-        working-directory: server
-        run: |
-          ( ./node_modules/.bin/vitest run --maxWorkers=3 test/ccd-ws-*.test.ts >/dev/null 2>&1 ) &
-          sleep 20
-          bash ../.github/c27-darwin-probe/single.sh 100 shard
-          kill %1 2>/dev/null || true
       - name: The fixed test file alone, repeated, under CPU load
         working-directory: server
         run: |
           n=$(( $(sysctl -n hw.ncpu) * 2 ))
           for i in $(seq 1 "$n"); do yes >/dev/null & done
-          bash ../.github/c27-darwin-probe/repeat.sh 15 cpu
+          bash ../.github/c27-darwin-probe/repeat.sh 30 cpu
           pkill yes || true
