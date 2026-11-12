@@ -48,6 +48,10 @@ CUT_HASH = 8
 SESSION_HEADER = "x-claude-code-session-id"
 AGENT_HEADER = "x-claude-code-agent-id"
 BETA_HEADER = "anthropic-beta"
+# Claude Code's identity beta, on every request Claude Code sends (known.py explains it as a betaValue by this name). A
+# request whose anthropic-beta values hold it is Claude Code's (`from_claude_code`); server.py counts a model
+# substitution from any other request under its own family (known.KNOWN's foreignSubstitution).
+CLAUDE_CODE_BETA = "claude-code-20250219"
 
 DEFERRED_PLACEHOLDER = "DeferredToolPlaceholder"
 OUTPUT_SCHEMA_NAME = "ccrc_output_schema"
@@ -158,6 +162,23 @@ def _header_values(headers: Mapping[str, str], name: str) -> List[str]:
         if isinstance(k, str) and k.lower() == name and isinstance(v, str):
             out.append(v)
     return out
+
+
+def betas(headers: Mapping[str, str]) -> List[str]:
+    """The request's anthropic-beta values, in order: every BETA_HEADER line (the name read case-insensitively, a
+    repeated line read too, `_header_values`), each split on commas, each value trimmed, an empty one dropped. The one
+    parser of the header: `from_anthropic` counts these, and `from_claude_code` reads them."""
+    out = []
+    for value in _header_values(headers, BETA_HEADER):
+        for beta in value.split(","):
+            if beta.strip():
+                out.append(beta.strip())
+    return out
+
+
+def from_claude_code(headers: Mapping[str, str]) -> bool:
+    """True when the request carries Claude Code's identity beta, CLAUDE_CODE_BETA, as a whole anthropic-beta value."""
+    return CLAUDE_CODE_BETA in betas(headers)
 
 
 def _header(headers: Mapping[str, str], name: str) -> Optional[str]:
@@ -679,10 +700,8 @@ def from_anthropic(body: dict, headers: Mapping[str, str], *, names: NameSink, o
         for edit in context["edits"]:
             if isinstance(edit, dict) and isinstance(edit.get("type"), str):
                 names.name("contextEdit", edit["type"])
-    for value in _header_values(headers, BETA_HEADER):
-        for beta in value.split(","):
-            if beta.strip():
-                names.name("betaValue", beta.strip())
+    for beta in betas(headers):
+        names.name("betaValue", beta)
 
     session_id = _header(headers, SESSION_HEADER)
     agent_id = _header(headers, AGENT_HEADER)

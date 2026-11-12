@@ -26,10 +26,12 @@ itself (the idle bound, a timeout or transport failure of the post) is recorded 
 too, like every classified one. While the lane directory holds the operator's `record-streams` marker, each 2xx answer
 is also written raw into the lane's recordings directory (`record.start`, Task 18), at most `record.RECORD_MAX` files.
 
-THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>`. A
-catalogue that is absent, unreadable, nested too deep to decode or not in its shape (a row that is not an object with
-a non-empty string `id` among them) is the bridge's: 503 `api_error` (retryable) on `/v1/messages` and on `/v1/models`
-alike, counted `catalogue-unreadable`, never a substitution.
+THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>` when the
+request carries Claude Code's claude-code beta (`inbound.from_claude_code`) and `foreignSubstitution:<model>` when it
+does not (known.py says why), the same answer either way and nothing sent upstream. A catalogue that is absent,
+unreadable, nested too deep to decode or not in its shape (a row that is not an object with a non-empty string `id`
+among them) is the bridge's: 503 `api_error` (retryable) on `/v1/messages` and on `/v1/models` alike, counted
+`catalogue-unreadable`, never a substitution.
 
 THE OVERFLOW. Task 1's table answers the overflow row with the bare `prompt is too long` (the backend's message holds
 no counts); here, where the D24 estimate and the lane's window are known, it becomes `overflow(N, M)` with
@@ -683,7 +685,10 @@ class _Request:
             if ids is None:
                 raise _catalogue_unreadable(st.stats)
             if model not in ids:
-                st.stats.name("modelSubstitution", model)
+                # A Claude Code fallback is a modelSubstitution; any other caller's is a foreignSubstitution
+                # (known.py), so a name from another caller never reads as, or hides, a Claude Code fallback.
+                family = "modelSubstitution" if inbound.from_claude_code(self.h.headers) else "foreignSubstitution"
+                st.stats.name(family, model)
                 raise _local_error(404, errors.NOT_FOUND, "model not served by this lane (see its catalogue): "
                                    + (model if errors.CODE_RE.fullmatch(model.lower()) else errors.UNRECOGNISED_CODE),
                                    retry=False)

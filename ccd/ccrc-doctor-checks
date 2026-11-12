@@ -8415,7 +8415,7 @@ _dr_cx_bound() {   # <variable name>...
 # `_load`, the Stage 2 wave 3 whole-wave fix round's Z1).
 _dr_cx_drift() {   # <id>
   local id="$1" dir p i fam name list fix why unrec='' over='' kind
-  local names_max=256 families=10 shown=32
+  local names_max=256 families=11 shown=32
   local -a got=() listed=()
   local -A seen=()
   _dr_cx_stats_read "$id" '$doc | if . != null and (.unexplained | type) == "object"
@@ -8478,11 +8478,11 @@ _dr_cx_drift() {   # <id>
 # (server.py counts `header_names` before its 2xx branch records). `r`: every
 # other family, the request side (inbound.py names requestField,
 # unsupportedField, betaValue and contextEdit, and server.py's catalogue
-# check modelSubstitution, all from Claude Code's request, which nothing the
-# bridge writes holds) and any family no bridge writes, so that clause never
-# sends the operator to `record-streams`. Each clause ends by saying that the
-# bridge's restart clears the marker (stats.py's `_load`, Z1) and that it
-# comes back when the bridge meets such a name again.
+# check modelSubstitution and foreignSubstitution, from the client's request,
+# which nothing the bridge writes holds) and any family no bridge writes, so
+# that clause never sends the operator to `record-streams`. Each clause ends
+# by saying that the bridge's restart clears the marker (stats.py's `_load`,
+# Z1) and that it comes back when the bridge meets such a name again.
 _dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
   local m="$1" kinds="$2" dir="$3" what them out
   if [ "$m" = overflow ]; then
@@ -8494,7 +8494,7 @@ _dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
   fi
   [[ "$kinds" != *s* ]] || out+="; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in $dir (the bridge records the lane's stream only while it is there) and read $what in the recording when the bridge meets $them again"
   [[ "$kinds" != *h* ]] || out+="; for a responseHeader name, put the operator's record-streams marker in $dir and read $what in the recording when the bridge meets $them again on a 2xx answer: only a 2xx answer's head is recorded"
-  [[ "$kinds" != *r* ]] || out+="; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds $what: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read $what from the client's request, for example from Claude Code's release notes or a reviewed diagnostic"
+  [[ "$kinds" != *r* ]] || out+="; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution, foreignSubstitution or other name, no recording holds $what: those families' names come from the client's request (Claude Code's, or another caller's for foreignSubstitution), and the bridge records only the upstream's answers, so read $what from the client's request, for example from Claude Code's release notes or a reviewed diagnostic"
   if [ "$m" = overflow ]; then
     out+="; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py"
   else
