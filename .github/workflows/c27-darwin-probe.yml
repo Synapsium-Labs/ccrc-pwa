@@ -39,12 +39,12 @@ jobs:
         run: |
           n=$(( $(sysctl -n hw.ncpu) * 2 ))
           for i in $(seq 1 "$n"); do yes >/dev/null & done
-          bash .github/c27-darwin-probe/probe.sh 40 cpu
+          bash .github/c27-darwin-probe/probe.sh 60 cpu
           pkill yes || true
       - name: Under a test shard's load
         working-directory: server
         run: |
           ( ./node_modules/.bin/vitest run --maxWorkers=3 test/ccd-ws-*.test.ts >/dev/null 2>&1 ) &
           sleep 20
-          bash ../.github/c27-darwin-probe/probe.sh 30 shard
+          bash ../.github/c27-darwin-probe/probe.sh 40 shard
           kill %1 2>/dev/null || true

@@ -6,7 +6,7 @@
 set -u
 N="${1:-20}"; LABEL="${2:-plain}"
 HELPER="$(cd "$(dirname "$0")/../.." && pwd)/ccd/ccd-account-auth"
-red=0; green=0
+red=0; green=0; newred=0; newgreen=0
 for i in $(seq 1 "$N"); do
   out=$(
     export CCRC_AUTH_NO_MAIN=1 HOME=$(mktemp -d)
@@ -20,6 +20,10 @@ for i in $(seq 1 "$N"); do
     T0=$EPOCHREALTIME
     ( sleep 1; ps -A -o pid=,ppid=,pgid=,stat=,command= > "$D/pre" 2>/dev/null ) &
     t0=$SECONDS; GOT=none
+    # THE SELECT-FREE READER, on the same FIFO in the same iteration: a plain
+    # blocking read(2) loop in a subshell that marks EOF in a file.
+    ( exec 9<&8; while IFS= read -r -u 9 l; do :; done; echo "$EPOCHREALTIME" > "$D/eof" ) &
+    NR=$!
     RC=''
     while :; do
       IFS= read -r -t 0.5 -u 8 line; rc=$?
@@ -30,6 +34,11 @@ for i in $(seq 1 "$N"); do
     echo "RCS=$RC"
     echo "LASTLINE=[$line]"
     T1=$EPOCHREALTIME
+    # the select-free reader had the same 15 s (it started with the loop)
+    for k in 1 2 3 4 5 6 7 8 9 10; do [ -s "$D/eof" ] && break; sleep 0.2; done
+    NEW=never; [ -s "$D/eof" ] && NEW="eof@$(cat "$D/eof")"
+    kill $NR 2>/dev/null
+    echo "NEWREADER=$NEW"
     echo "RESULT=$GOT t0=$T0 t1=$T1"
     if [ "$GOT" = never ]; then
       echo "--- log"; cat "$L"
@@ -64,6 +73,8 @@ b=os.read(8,100); print("READ bytes=%d %r" % (len(b), b[:40]))' 8<&8 2>&1; echo 
     rm -rf "$D"
   )
   r=$(printf '%s\n' "$out" | sed -n 's/^RESULT=\([a-z]*\).*/\1/p')
-  if [ "$r" = eof ]; then green=$((green+1)); else red=$((red+1)); printf '=== %s iteration %s RED\n%s\n' "$LABEL" "$i" "$out"; fi
+  n=$(printf '%s\n' "$out" | sed -n 's/^NEWREADER=\([a-z]*\).*/\1/p')
+  [ "$n" = eof ] && newgreen=$((newgreen+1)) || newred=$((newred+1))
+  if [ "$r" = eof ] && [ "$n" = eof ]; then green=$((green+1)); else [ "$r" = eof ] && green=$((green+1)) || red=$((red+1)); printf '=== %s iteration %s RED (old=%s new=%s)\n%s\n' "$LABEL" "$i" "$r" "$n" "$out"; fi
 done
-echo "SUMMARY $LABEL: green=$green red=$red of $N"
+echo "SUMMARY $LABEL: read -t loop green=$green red=$red; select-free reader green=$newgreen red=$newred; of $N"
