@@ -2138,6 +2138,15 @@ subagent model, and a context-window key (below; set from `<id>.windows.json`) â
 `<id>.classes.tsv`, `<id>.effort.json` and, on a Codex lane, `~/.ccrc/codex/<id>/lane.json`, so nothing reads
 a registry the lane's settings disagree with.
 
+A Codex lane's block carries one more key, `ENABLE_CODE_SECURITY_REVIEW=0` (operator ruling 2026-11-12). On that
+lane the official `security-guidance` plugin's LLM reviews would POST Claude model ids to the local bridge, which
+answers each with a 404, so every Stop, commit and push review would fail open. The key is the plugin's master
+switch (plugin 2.0.19): it turns every LLM review off and keeps the pattern warnings. No other kind of lane gets it
+(external, OpenRouter and compatible lanes keep the reviews, and an Anthropic lane is never written). It reaches a
+lane at that lane's next materialise (any `ccrc models <id>` change, or the hourly `ccrc models refresh` after a
+probe that succeeds) and a session at its next launch, because Claude Code reads the file at launch. `show` lists
+it under settings drift when it is missing, and `rm` clears it.
+
 ```bash
 ccrc models <id> init <codex|openrouter|compatible> [--base-url <url> | --suggested]   # seed a registry; --suggested is openrouter's, from its catalogue
 ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift

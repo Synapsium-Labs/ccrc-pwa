@@ -1760,6 +1760,100 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
   });
 });
 
+// Operator ruling 2026-11-12, option (b): on a Codex lane the security-guidance plugin's LLM reviews would POST
+// Claude model ids to the bridge, which answers a local 404, so the lane's settings turn them off with
+// ENABLE_CODE_SECURITY_REVIEW=0. The gate is the lane's exec.kind: `canCarryRegistry` also admits external,
+// openrouter and compatible lanes, which keep the reviews (their exact-env cases elsewhere in this file are the
+// negative pins), and an Anthropic lane never reaches the writer.
+describe('a codex-kind lane\'s settings turn the plugin\'s LLM reviews off (operator ruling 2026-11-12, option b)', () => {
+  const KEY = 'ENABLE_CODE_SECURITY_REVIEW';
+  const CODEX_SUFFIX = '.claude-codex-a';
+  const settingsFile = (): string => path.join(home, CODEX_SUFFIX, 'settings.json');
+  const show = (): Result => op('show', '--file', rosterPath(), '--id', 'codex-a');
+  const mat = (): Result => op('materialise', '--file', rosterPath(), '--id', 'codex-a');
+
+  beforeEach(() => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    writeCatalogue('codex-a');
+    const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+  });
+
+  it('materialise on a codex-kind lane writes ENABLE_CODE_SECURITY_REVIEW=0', () => {
+    expect(mat().code).toBe(0);
+    expect(settingsOf(CODEX_SUFFIX).env[KEY]).toBe('0');
+  });
+
+  it('init (its own materialise) wrote it too, with the seven model keys beside it', () => {
+    const env = settingsOf(CODEX_SUFFIX).env;
+    expect(env[KEY]).toBe('0');
+    expect(env['ANTHROPIC_MODEL']).toBe(SEEDED.classes.opus);
+  });
+
+  it('show names the key as drift once it is deleted by hand, and a materialise restores it', () => {
+    expect(show().body['settingsDrift']).toEqual([]);
+    const j = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    delete j.env[KEY];
+    fs.writeFileSync(settingsFile(), JSON.stringify(j, null, 2));
+    expect(show().body['settingsDrift']).toEqual([KEY]);
+    // `show` names the drift and never repairs it.
+    expect(Object.keys(settingsOf(CODEX_SUFFIX).env)).not.toContain(KEY);
+    expect(mat().code).toBe(0);
+    expect(settingsOf(CODEX_SUFFIX).env[KEY]).toBe('0');
+    expect(show().body['settingsDrift']).toEqual([]);
+  });
+
+  it('show names a hand-edited value of the key as drift too', () => {
+    const j = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    j.env[KEY] = '1';
+    fs.writeFileSync(settingsFile(), JSON.stringify(j, null, 2));
+    expect(show().body['settingsDrift']).toEqual([KEY]);
+  });
+
+  it('a lane that stops being codex-kind loses the key at its next materialise, and drifts until then', () => {
+    const roster = JSON.parse(fs.readFileSync(rosterPath(), 'utf8'));
+    const row = roster.accounts.find((a: { id: string }) => a.id === 'codex-a');
+    row.exec = { kind: 'external', provider: 'openai' };
+    fs.writeFileSync(rosterPath(), JSON.stringify(roster, null, 2));
+    expect(show().body['settingsDrift']).toEqual([KEY]);
+    expect(mat().code).toBe(0);
+    expect(Object.keys(settingsOf(CODEX_SUFFIX).env)).not.toContain(KEY);
+    expect(show().body['settingsDrift']).toEqual([]);
+  });
+
+  it('rm on a codex lane clears the key and keeps a key ccrc does not own', () => {
+    const j = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    j.env['DISABLE_TELEMETRY'] = '1';
+    fs.writeFileSync(settingsFile(), JSON.stringify(j, null, 2));
+    expect(j.env[KEY]).toBe('0');
+    const r = op('rm', '--file', rosterPath(), '--id', 'codex-a');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['settings']).toBe('cleared');
+    const after = settingsOf(CODEX_SUFFIX);
+    expect(after.env['DISABLE_TELEMETRY']).toBe('1');
+    expect(Object.keys(after.env)).not.toContain(KEY);
+    expect(Object.keys(after.env)).not.toContain('ANTHROPIC_MODEL');
+  });
+
+  it('an external lane carrying a codex registry never gets the key (the gate)', () => {
+    writeCatalogue('gpt');
+    plantCodex(LEGACY_EXTERNAL_ID);
+    expect(Object.keys(settingsOf('.claude-gpt').env)).not.toContain(KEY);
+    expect(op('show', '--file', rosterPath(), '--id', 'gpt').body['settingsDrift']).toEqual([]);
+  });
+
+  it('an Anthropic lane is still refused anthropic-lane, and its settings.json is byte-identical', () => {
+    const dir = path.join(home, '.claude-a');
+    fs.mkdirSync(dir, { recursive: true });
+    const bytes = '{\n  "env": {\n    "DISABLE_TELEMETRY": "1"\n  }\n}\n';
+    fs.writeFileSync(path.join(dir, 'settings.json'), bytes);
+    const r = op('materialise', '--file', rosterPath(), '--id', 'claude-a');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('anthropic-lane');
+    expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).toBe(bytes);
+  });
+});
+
 describe('the measured windows file — read, applied, reported, reaped (codex-bridge spec §2.7)', () => {
   const ID = LEGACY_EXTERNAL_ID;
   const all = (tokens: number): unknown => windowsFor(Object.fromEntries(CLASS_MODELS.map((m) => [m, tokens])));

@@ -38,12 +38,20 @@ export type ModelEnv = {
   // model when the catalogue is non-null, not stale and names it with a
   // POSITIVE INTEGER context; absent otherwise.
   CLAUDE_CODE_MAX_CONTEXT_TOKENS?: string;
+  // Present only when the caller asked for a Codex lane's block
+  // (`modelEnvBlock`'s `codexLane` option): the security-guidance plugin's
+  // master switch for its LLM reviews (operator ruling 2026-11-12, option b).
+  ENABLE_CODE_SECURITY_REVIEW?: '0';
 };
 export declare class ModelEnvInvalid extends Error {}
 /** A lane file's text, type-tested first: throws ENOTREG for anything that is
  *  not a regular file (a FIFO above all), ENOENT for an absent path. */
 export declare function readRegular(p: string): string;
 export declare const MODEL_ENV_KEYS: readonly string[];
+/** The keys a Codex lane's block carries beyond `MODEL_ENV_KEYS`. */
+export declare const CODEX_LANE_ENV: Readonly<{ ENABLE_CODE_SECURITY_REVIEW: '0' }>;
+/** Every key a lane's settings `env` can carry from this writer. */
+export declare const LANE_ENV_KEYS: readonly string[];
 /** The client's default window for a model id it does not know (spec §6.1).
  *  The DEFAULT window rule never writes more than this; a measured window may. */
 export declare const CLIENT_DEFAULT_CONTEXT_TOKENS: number;
@@ -60,6 +68,7 @@ export declare function contextWindowFor(
 ): ContextWindow;
 export declare function modelEnvBlock(
   registry: Registry, catalogue: Catalogue | null, windows?: ModelWindows | null,
+  opts?: { codexLane?: boolean },
 ): ModelEnv;
 export declare function mergeSettingsEnv(
   settingsPath: string, block: Record<string, string>,

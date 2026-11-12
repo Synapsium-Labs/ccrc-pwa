@@ -72,7 +72,7 @@ import {
   WINDOW_MAX, WINDOW_MIN, availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
 } from '../shared/models.mjs';
 import {
-  CLIENT_DEFAULT_CONTEXT_TOKENS, MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
+  CLIENT_DEFAULT_CONTEXT_TOKENS, LANE_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
   effortFile, mergeSettingsEnv, modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
@@ -269,6 +269,13 @@ const isAnthropicLane = (account) => account.telemetry === 'anthropic';
  *  Claude Code binary and ccrc never writes its launcher) and not Anthropic. */
 const canCarryRegistry = (account) =>
   isObj(account.exec) && account.exec.kind !== 'upstream' && !isAnthropicLane(account);
+
+/** A Codex-kind lane (`exec.kind: 'codex'`): the one kind whose settings also
+ *  carry `CODEX_LANE_ENV` (operator ruling 2026-11-12, option b — the
+ *  security-guidance plugin's LLM reviews off, because the bridge 404s them).
+ *  `canCarryRegistry` admits external, openrouter and compatible lanes too, and
+ *  those keep the reviews, so this gate is what keeps the key off them. */
+const isCodexKind = (account) => isObj(account.exec) && account.exec.kind === 'codex';
 
 /** The lane's catalogue, or null when it has never been probed. A file that
  *  EXISTS and is not a catalogue is a refusal, never "never probed": the two
@@ -974,7 +981,7 @@ function materialise(account, registry, catalogue, windows) {
     // to compute `derived`/`settingsDrift` (spec §6.1 amendment) — never a
     // second read of `<id>.json` or of the windows file, so a materialise never
     // disagrees with the `show` answer it is bundled with.
-    block = modelEnvBlock(registry, catalogue, windows);
+    block = modelEnvBlock(registry, catalogue, windows, { codexLane: isCodexKind(account) });
   } catch (e) {
     if (!(e instanceof ModelEnvInvalid)) throw e;
     // Fix round 2A (N1): a registry reached here WITHOUT going through the
@@ -1059,7 +1066,7 @@ function materialise(account, registry, catalogue, windows) {
  *  carry the key then, and a settings file that also lacks it drifts on
  *  nothing. A settings file that STILL CARRIES it drifts on it (D-5785): the
  *  next materialise deletes it (`mergeSettingsEnv` deletes every member of
- *  `MODEL_ENV_KEYS` its block omits), so the second filter below asks the same
+ *  `LANE_ENV_KEYS` its block omits), so the second filter below asks the same
  *  question of the same keys. Before measured windows that copy held at most
  *  `min(catalogue context, 200000)`; a measured one can hold up to 1000000.
  *  With a stale or absent catalogue the rule yields nothing, the hourly refresh
@@ -1080,7 +1087,7 @@ function settingsDrift(account, registry, catalogue, windows) {
   if (registry === null) return [];
   let want;
   try {
-    want = modelEnvBlock(registry, catalogue, windows);
+    want = modelEnvBlock(registry, catalogue, windows, { codexLane: isCodexKind(account) });
   } catch {
     // An unseeded (or unroutable) lane has no expected block to compare against.
     return [];
@@ -1096,7 +1103,7 @@ function settingsDrift(account, registry, catalogue, windows) {
   }
   return [
     ...Object.keys(want).filter((k) => env[k] !== want[k]),
-    ...MODEL_ENV_KEYS.filter((k) => !(k in want) && Object.prototype.hasOwnProperty.call(env, k)),
+    ...LANE_ENV_KEYS.filter((k) => !(k in want) && Object.prototype.hasOwnProperty.call(env, k)),
   ];
 }
 
@@ -2056,7 +2063,7 @@ function main(argv) {
     if (account !== null) {
       const settingsPath = path.join(HOME, account.configDirSuffix, 'settings.json');
       try {
-        settings = clearSettingsEnv(settingsPath, MODEL_ENV_KEYS).changed ? 'cleared' : 'unchanged';
+        settings = clearSettingsEnv(settingsPath, LANE_ENV_KEYS).changed ? 'cleared' : 'unchanged';
       } catch (e) {
         if (e instanceof ModelEnvInvalid) return refuse(1, 'settings-unwritable', e.message);
         throw e;

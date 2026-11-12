@@ -84,6 +84,12 @@ Each has a recommendation. None blocks wave 4a's first tasks.
    have to cover, so it is out of this plan unless the operator rules it in.
 6. **The leftovers on the fleet box** (the ownership spec's §23.8): another repository's LiteLLM environments, old
    logs and snapshots. This plan never touches them.
+7. **The drift criterion's cause, a plugin on the Codex lanes.** **Ruled 2026-11-12: option (b).** The official
+   `security-guidance` plugin's LLM reviews POST Claude model ids to the bridge, which answers each with a local 404,
+   and the two ids fail the watch's drift criterion. Operator ruling 2026-11-12: drift option (b), the plugin's LLM
+   reviews off on Codex lanes only, through the lanes' settings (this PR); step 3 after drift passes is the
+   operator's decision; step 4 a week after step 3. The switch is `ENABLE_CODE_SECURITY_REVIEW=0`, written by
+   `ccrc models` into a Codex lane's settings at its next materialise and read by a session at its next launch.
 
 ## Global Constraints
 
@@ -444,6 +450,9 @@ the stage.
 **Still to build:** wave 4c, which waits for R4. Task 7 is built: a new lane starts `direct`.
 
 **The operator's:** R1 to R5. R1 needs nothing but a build at or after v0.0.1076 on the fleet box.
+
+**Ruled 2026-11-12 (7 above):** the plugin's LLM reviews go off on the Codex lanes, through their settings, so a
+lane's drift counters can read clean once a lane's next materialise and a relaunch of its sessions have landed it.
 
 **Open questions for the operator:** the six rulings above, most important first: 2 (the verdict), 1 (the order of
 the stages), 3 (new lanes), 4 (when the runtime leaves).
