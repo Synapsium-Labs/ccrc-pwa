@@ -9891,7 +9891,9 @@ export interface ClaimConflict {
  * One of the caller's OWN claims that lapsed within the last `CLAIM_LEASE_MS` on a path it is taking again
  * (D-8392, public issue #145). `POST /api/claims`' 200 answer carries them as `lapsedSince`, present only when
  * there is one: the caller's claim had a gap, so another session may have edited those paths meanwhile, and the
- * caller re-checks before it edits. `endedBy` is `ClaimSummary.endedBy`'s display word, parsed back by nothing.
+ * caller re-checks before it edits. `endedAt` is when the gap BEGAN, the lapsed row's `expiresAt` (no lapse fires
+ * before it), not the later moment a sweep or this very attempt wrote the lapse: re-check from it. `endedBy` is
+ * `ClaimSummary.endedBy`'s display word, parsed back by nothing.
  */
 export interface ClaimLapse {
   readonly id: number;

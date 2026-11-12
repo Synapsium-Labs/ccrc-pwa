@@ -236,11 +236,15 @@ export function recentlyLapsedClaims(rows: readonly ClaimSummary[], now: number)
 }
 
 /** `POST /api/claims`' `lapsedSince` (D-8392): the caller's OWN recent lapses whose paths overlap the ones it is
- *  taking (`pathsOverlap`, the conflict rule's containment). Someone else's lapse is not the caller's gap. */
+ *  taking (`pathsOverlap`, the conflict rule's containment). Someone else's lapse is not the caller's gap. Each
+ *  names when the GAP BEGAN: the row's `expiresAt`, since every lapse fires at or after it (`claimExpiry` and the
+ *  store's expiry both require `now >= expiresAt`, and the lease never outruns the hard cap). The stored `endedAt`
+ *  is when a sweep wrote the lapse, which for a row this very attempt swept is now, so it would hide the gap the
+ *  caller has to re-check; `min` keeps a row ended before its lease (none today) at its own end. */
 export function ownLapsesUnder(
   rows: readonly ClaimSummary[], sessionId: string, paths: readonly string[], now: number,
 ): ClaimLapse[] {
   return recentlyLapsedClaims(rows, now)
     .filter((r) => r.heldBy === sessionId && r.paths.some((p) => paths.some((q) => pathsOverlap(p, q))))
-    .map((r) => ({ id: r.id, endedAt: r.endedAt, endedBy: r.endedBy }));
+    .map((r) => ({ id: r.id, endedAt: Math.min(r.endedAt, r.expiresAt), endedBy: r.endedBy }));
 }

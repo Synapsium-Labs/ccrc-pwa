@@ -143,13 +143,34 @@ describe('POST /api/claims names the caller\'s own recent lapse it re-takes (D-8
     const home = mkTmp('ccrc-claims-lapse-');
     seed(home, A.byId, A.byUuid);
     const w = await openApp(home);
-    const gone = storeClaim(w.coord, A, ['shared/api.ts'], Date.now() - CLAIM_LEASE_MS - 60_000);
+    const seededAt = Date.now() - CLAIM_LEASE_MS - 60_000;
+    const gone = storeClaim(w.coord, A, ['shared/api.ts'], seededAt);
 
     const res = await take(w.app, { ...A, paths: ['shared/api.ts'], intent: 'back at it' });
     expect(res.statusCode).toBe(200);
     const body = res.json() as TakeAnswer;
-    expect(body.lapsedSince?.map((l) => ({ id: l.id, endedBy: l.endedBy }))).toEqual([{ id: gone, endedBy: 'expired' }]);
+    // The gap began when the lease ran out (its expiresAt), not at the re-take that swept it: the attempt's own
+    // expiry writes endedAt = now, which would make the window to re-check read as nothing.
+    expect(body.lapsedSince).toEqual([{ id: gone, endedAt: seededAt + CLAIM_LEASE_MS, endedBy: 'expired' }]);
     expect(body.ids).not.toContain(gone);
+    // The GET read names the same lapse at the same moment, swept or not.
+    const listed = (await list(w.app)).recentlyLapsed?.find((c) => c.id === gone);
+    expect(listed?.expiresAt).toBe(seededAt + CLAIM_LEASE_MS);
+  });
+
+  it('a lapse a sweep wrote late still names the gap from when the lease ran out', async () => {
+    const home = mkTmp('ccrc-claims-lapse-');
+    seed(home, A.byId, A.byUuid);
+    const w = await openApp(home);
+    const now = Date.now();
+    const seededAt = now - CLAIM_LEASE_MS - 10 * 60_000;
+    const gone = storeClaim(w.coord, A, ['shared/api.ts'], seededAt);
+    w.coord.lapseClaimRow(gone, 'session-gone', now - 60_000); // the watcher came back nine minutes late
+
+    const res = await take(w.app, { ...A, paths: ['shared/api.ts'], intent: 'back at it' });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as TakeAnswer).lapsedSince)
+      .toEqual([{ id: gone, endedAt: seededAt + CLAIM_LEASE_MS, endedBy: 'session-gone' }]);
   });
 
   it('a re-take over SOMEONE ELSE\'s lapsed row carries no lapsedSince', async () => {

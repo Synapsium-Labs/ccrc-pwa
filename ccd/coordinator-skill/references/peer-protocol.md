@@ -64,8 +64,9 @@ its claim rather than holding it forever.
 
 A 200 that carries `lapsedSince` (`[{id, endedAt, endedBy}]`) means one of
 YOUR claims on these paths lapsed within the last lease (`CLAIM_LEASE_MS`)
-and you have just taken them again: between `endedAt` and now nothing held
-them, so another session may have edited them. Before you edit, fetch and
+and you have just taken them again: between `endedAt` (when that lease ran
+out, however late it was swept) and now nothing held them, so another
+session may have edited them. Before you edit, fetch and
 read what landed on those paths since `endedAt` (`git log --since`, the
 peers' branches, `GET /api/claims?project=<slug>&all=1` for who held them in
 the gap), and fold any change in; say in your report that the claim had a

@@ -41,5 +41,10 @@ which another session could have edited those paths.
 - Clause 10 had to stay within the coordinator SKILL.md's byte cap (the skill-size ratchet allows growth only by a
   new clause), so its first sentence was tightened: "a worker never calls the allocator mid-wave" became "no worker
   calls the allocator", which the worker skill already states.
+- `lapsedSince[].endedAt` is when the gap began, the lapsed row's `expiresAt`, not the stored `endedAt`. Every
+  lapse fires at or after `expiresAt`, and a lease that ran out unswept is lapsed by the re-taking attempt itself
+  with `endedAt = now`, so the stored value would have made the window to re-check read as zero, and a lease that
+  ran out hours before a late sweep would have read as a fresh one. The `GET` rows keep the stored `endedAt` and
+  carry `expiresAt` beside it.
 - The worker SKILL.md is at its cap too, so the worker's instruction for `lapsedSince` lives in
   `references/peer-protocol.md`, which the worker skill already names as the long form of its claim calls.
