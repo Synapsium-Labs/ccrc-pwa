@@ -130,6 +130,20 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(store.match(/MAX\([^)]*\)[^'"`]*FROM landing_/g) ?? []).toEqual([]);
   });
 
+  it("landingFactsInner reads its own project's rows whole and every other project's rows as id, project and pr only", () => {
+    const inner = symbolOf(STORE, 'CoordStore.landingFactsInner');
+    const reads = FILES.flatMap((f) => sqlStatementsInFile(f))
+      .filter((q) => !isSchema(q) && q.verb === 'SELECT' && q.table === 'landing_entries' && q.file.endsWith(STORE) && q.start >= inner.start && q.start < inner.end);
+    const flat = reads.map((q) => q.source.replace(/\s+/g, ' ').trim());
+    expect(flat).toHaveLength(2);
+    const own = flat.filter((x) => /WHERE project = \?/.test(x));
+    const foreign = flat.filter((x) => /WHERE project <> \?/.test(x));
+    expect(own).toHaveLength(1);
+    expect(own[0]).toMatch(/SELECT id, project, pr, pinnedSha, /);
+    expect(foreign).toHaveLength(1);
+    expect(foreign[0]).toMatch(/SELECT id, project, pr FROM landing_entries WHERE project <> \?/);
+  });
+
   it('the merging-at detail is built only inside advanceLanding', () => {
     const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'mergingAtDetail').map((c) => ({ file: f, start: c.start })));
     expect(calls.length).toBeGreaterThanOrEqual(1);

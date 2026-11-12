@@ -3488,7 +3488,8 @@ export class CoordStore {
     const all = (sql: string, ...p: string[]): Record<string, unknown>[] => this.bigReads(sql).all(...p) as Record<string, unknown>[];
     return landingFactsOf(project, {
       entries: all('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, ' +
-        'setBy, pinnedAt, quarantineKind FROM landing_entries ORDER BY pinnedAt, id'),
+        'setBy, pinnedAt, quarantineKind FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id', project),
+      foreign: all('SELECT id, project, pr FROM landing_entries WHERE project <> ? ORDER BY pinnedAt, id', project),
       subjects: all('SELECT id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim FROM landing_subjects'),
       authorities: all('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority'),
       witnesses: all('SELECT entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit FROM landing_projection_witness'),

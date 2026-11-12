@@ -92,7 +92,10 @@ export interface LandingHold { reason: 'landing-recovery-unresolved'; subjectIds
 /** GET /api/landing's answer, flat beside ok. */
 export interface LandingLineView { project: string; operatorPaused: boolean; mainRedHold: boolean; entries: LandingEntry[]; order: LandingOrder;
   /** Absent from an older peer: not reported, never "complete". */
-  recovery?: LandingRecovery }
+  recovery?: LandingRecovery;
+  /** Which entries `entries` holds (wave 5h): `open` the ones still in the line, `pr` one PR's entry in any state.
+   *  Absent from an older server, whose `entries` are every entry. */
+  entriesScope?: 'open' | 'pr' }
 
 // Landing order, wave 5f: the authority journal's vocabulary (shared contract §1, §5). Pure types, no imports.
 export interface LandingIdentity { id: number; project: string; pr: number }

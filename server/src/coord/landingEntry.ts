@@ -318,7 +318,11 @@ export function landingFlagsOfRow(row: Record<string, unknown> | undefined): { o
 
 /** Every landing row the store read, as values (a SELECT with `setReadBigInts(true)`, so no INTEGER is rounded). */
 export interface LandingStoreRows {
+  /** This project's `landing_entries` rows, whole. */
   entries: Record<string, unknown>[];
+  /** Every OTHER project's rows: `id`, `project` and `pr` only, the identity the allocator, the foreign ids and the
+   *  recovery fold's conflict search need. An invalid id or pr in one still refuses the whole snapshot. */
+  foreign: Record<string, unknown>[];
   subjects: Record<string, unknown>[];
   authorities: Record<string, unknown>[];
   witnesses: Record<string, unknown>[];
@@ -382,7 +386,16 @@ export function landingFactsOf(project: string, rows: LandingStoreRows): Landing
     const facts = landingEntryFactsOfRow(set === null ? row
       : { ...row, afterIds: JSON.stringify(set.afterIds), fixesMain: set.fixesMain ? 1 : 0, setBy: set.setBy });
     all.push(facts);
-    if (row.project === project) mine.push({ facts, row }); else foreign.add(id);
+    mine.push({ facts, row });
+  }
+  // Another project's row is read by identity only: its id, project and pr are all the allocator, the foreign ids and
+  // the recovery fold's conflict and exact-identity search use of it. The stub facts carry no other claim.
+  for (const row of rows.foreign) {
+    const id = safeIntOf(row.id, 1); const pr = safeIntOf(row.pr, 1);
+    if (id === null || pr === null || typeof row.project !== 'string') return UNREADABLE;
+    ids.push(id);
+    all.push(landingEntryFactsOfRow({ id, project: row.project, pr }));
+    foreign.add(id);
   }
   const witnesses: LandingProjectionWitness[] = [];
   for (const w of rows.witnesses) {
