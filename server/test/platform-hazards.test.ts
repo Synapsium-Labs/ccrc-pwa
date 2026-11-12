@@ -280,18 +280,18 @@ describe('the deadline shim, asked directly (D-2661)', () => {
     expect(field(r.stdout, 'EOF'), `a held writer read as EOF: ${r.stdout.slice(0, 200)}`).toBe('never');
   });
 
+  // ANSWERED (C27, D-8344): on macOS too, EOF arrives once the deadline fires.
+  // The intermittent reds this case gave (2026-11-09, 2026-11-12, and earlier
+  // on PRs #116 and #117) came from the READER it used, `read -t`, which can
+  // consume a Darwin FIFO's one-shot EOF and still answer a timeout; `eofWait`
+  // above says how that was measured. Candidate (b), a descendant holding the
+  // write end, was not seen in any of those runs. The case stays: it still asks
+  // the question, now with a reader that answers it.
+  //
   // PLATFORM-ONLY: the Linux answer to this one is already measured and is not
   // in dispute — EOF arrived in all six configurations tried, including a
   // setsid'd grandchild confirmed alive. This asks it of the platform where
   // D-2661 was observed, which is the only place the answer was unknown.
-  //
-  // ANSWERED (C27, D-8344): on macOS too, EOF arrives once the deadline fires.
-  // The intermittent reds this case gave (2026-11-09, 2026-11-12, and earlier
-  // on PRs #116 and #117) came from the READER it used, `read -t`, which can
-  // consume a Darwin FIFO's one-shot EOF and still answer a timeout;
-  // `eofWait` above says how that was measured. Candidate (b), a descendant holding the write end, was not seen
-  // in any of those runs. The case stays: it still asks the question, now with
-  // a reader that answers it.
   itDarwin('BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)', () => {
     // `_auth_pump` leaves only on EOF, and EOF needs every writer of the FIFO
     // to close.
