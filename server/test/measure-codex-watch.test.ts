@@ -367,6 +367,8 @@ const keepBaseline = (edit?: (rep: any) => void): string => {
 const LATER = ['--now', String(NOW_S + 600)];
 const withBaseline = (file: string = baselineFile()): string[] => ['--drift-baseline', file, ...LATER];
 const TAKEN = '2026-11-03T07:00:00Z';
+/** The lane answered 100 more requests between the baseline and the later reading (2xx 990 -> 1090). */
+const TRAFFIC: Stats = { outcomes: { ...OUTCOMES, '2xx': 1090 } };
 const SINCE = '2026-10-27T06:26:05.000Z';
 
 describe('measure-codex-watch.py: drift reads growth since a baseline reading', () => {
@@ -400,11 +402,12 @@ describe('measure-codex-watch.py: drift reads growth since a baseline reading', 
     passing();
     writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }));
     keepBaseline();
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }, {}, TRAFFIC));
     const rep = report(withBaseline());
     expect(rep.takenAt).toBe('2026-11-03T07:10:00Z');
     expect(criterion(rep, 'drift')).toMatchObject({
       verdict: 'pass', unexplained: { modelSubstitution: [OPUS, SONNET] },
-      baseline: { takenAt: TAKEN, since: SINCE },
+      baseline: { takenAt: TAKEN, since: SINCE }, answeredSince: 100,
       names: [
         { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
         { family: 'modelSubstitution', name: SONNET, baseline: 12, now: 12, state: 'held' },
@@ -413,7 +416,7 @@ describe('measure-codex-watch.py: drift reads growth since a baseline reading', 
     expect(rep.verdict).toBe('pass');
     const text = run(withBaseline());
     expect(text.stdout).toMatch(/^drift: pass\b/m);
-    expect(text.stdout).toMatch(new RegExp(`^drift baseline: taken at ${TAKEN}, stats since ${SINCE}$`, 'm'));
+    expect(text.stdout).toMatch(new RegExp(`^drift baseline: taken at ${TAKEN}, stats since ${SINCE}, 100 requests answered since$`, 'm'));
     expect(text.stdout).toMatch(new RegExp(`^ {2}modelSubstitution ${OPUS}: 496 then, 496 now: held$`, 'm'));
   });
 
@@ -470,21 +473,24 @@ describe('measure-codex-watch.py: drift reads growth since a baseline reading', 
     writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }));
     keepBaseline();
     writeStats(substitutions({ [OPUS]: 496 }, {}, {
+      ...TRAFFIC,
       names: { modelSubstitution: { [OPUS]: 496, [SONNET]: 30 } },
       unexplained: { modelSubstitution: [OPUS] },
     }));
     const rep = report(withBaseline());
+    // its count is read from the stats file's names, as every count is: it grew, and explained, that is no drift
     expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'pass', names: [
       { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
-      { family: 'modelSubstitution', name: SONNET, baseline: 12, now: null, state: 'explained since' },
+      { family: 'modelSubstitution', name: SONNET, baseline: 12, now: 30, state: 'explained since' },
     ] });
-    expect(run(withBaseline()).stdout).toMatch(new RegExp(`^ {2}modelSubstitution ${SONNET}: 12 then, none now: explained since$`, 'm'));
+    expect(run(withBaseline()).stdout).toMatch(new RegExp(`^ {2}modelSubstitution ${SONNET}: 12 then, 30 now: explained since$`, 'm'));
   });
 
   it('the foreignSubstitution family is read the same way, under its own family', () => {
     passing();
     writeStats(substitutions({ [OPUS]: 496 }, { [OPUS]: 7 }));
     keepBaseline();
+    writeStats(substitutions({ [OPUS]: 496 }, { [OPUS]: 7 }, TRAFFIC));
     expect(criterion(report(withBaseline()), 'drift')).toMatchObject({ verdict: 'pass', names: [
       { family: 'foreignSubstitution', name: OPUS, baseline: 7, now: 7, state: 'held' },
       { family: 'modelSubstitution', name: OPUS, baseline: 496, now: 496, state: 'held' },
@@ -556,6 +562,11 @@ describe('measure-codex-watch.py: drift reads growth since a baseline reading', 
     const cases: [string, () => void, RegExp][] = [
       ['absent', () => fs.rmSync(baselineFile(), { force: true }), /is absent/],
       ['a directory', () => fs.mkdirSync(baselineFile(), { recursive: true }), /not a regular file/],
+      // root reads a mode-000 file, so the case is left out there
+      ...(process.getuid?.() === 0 ? [] : [['unreadable (mode 000)', () => {
+        write(baselineFile(), JSON.stringify(report()));
+        fs.chmodSync(baselineFile(), 0o000);
+      }, /is unreadable/] as [string, () => void, RegExp]]),
       ['not JSON', () => write(baselineFile(), '{"lane": '), /not JSON/],
       ['a list', () => write(baselineFile(), '[1]'), /not a --json reading of this instrument/],
       ['another object', () => write(baselineFile(), JSON.stringify({ lane: LANE })), /not a --json reading of this instrument/],
@@ -574,6 +585,128 @@ describe('measure-codex-watch.py: drift reads growth since a baseline reading', 
       expect(d.reason, what).toMatch(why);
       expect(rep.verdict, what).toBe('unmeasured');
     }
+  });
+
+  it('a marker is counted whether it is listed or not, since a restart drops it from the list and keeps its count', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 4 }, {}, {
+      names: { modelSubstitution: { [OPUS]: 4, overflow: 10 }, responseHeader: { unrecognised: 2, 'x-a': 1 } },
+      unexplained: { modelSubstitution: [OPUS] },
+    }));
+    const rep = report();
+    expect(rep.bridge.unexplained).toEqual({ modelSubstitution: [OPUS] });
+    expect(rep.bridge.unexplainedCounts).toEqual({
+      modelSubstitution: { [OPUS]: 4, overflow: 10 }, responseHeader: { unrecognised: 2 },
+    });
+  });
+
+  it('a marker whose count grew since the baseline fails, listed then and not now, or listed at neither reading', () => {
+    passing();
+    // listed at the baseline; a restart (any rollout) then drops it from the list while five more names arrive
+    writeStats(substitutions({ [OPUS]: 496, overflow: 10 }));
+    keepBaseline();
+    const unlisted = (overflow: number, over: Stats = TRAFFIC): Stats => substitutions({ [OPUS]: 496 }, {}, {
+      ...over, names: { modelSubstitution: { [OPUS]: 496, overflow } },
+    });
+    writeStats(unlisted(15));
+    let rep = report(withBaseline());
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'fail', names: [
+      { family: 'modelSubstitution', name: OPUS, state: 'held' },
+      { family: 'modelSubstitution', name: 'overflow', baseline: 10, now: 15, state: 'grew' },
+    ] });
+    expect(rep.verdict).toBe('fail');
+    // dropped from the list at both readings
+    writeStats(unlisted(10, {}));
+    keepBaseline();
+    writeStats(unlisted(15));
+    expect(criterion(report(withBaseline()), 'drift')).toMatchObject({ verdict: 'fail', names: [
+      { name: OPUS, state: 'held' }, { name: 'overflow', baseline: 10, now: 15, state: 'grew' },
+    ] });
+    writeStats(unlisted(10));
+    expect(criterion(report(withBaseline()), 'drift')).toMatchObject({ verdict: 'pass', names: [
+      { name: OPUS, state: 'held' }, { name: 'overflow', baseline: 10, now: 10, state: 'held' },
+    ] });
+    // a marker never explained: gone from the counters, it went backwards, never `explained since`
+    writeStats(substitutions({ [OPUS]: 496 }, {}, TRAFFIC));
+    rep = report(withBaseline());
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'unmeasured', names: [
+      { name: OPUS, state: 'held' }, { name: 'overflow', baseline: 10, now: 0, state: 'fell' },
+    ] });
+  });
+
+  it('a stats since unreadable now or in the baseline reading is unmeasured: whether it is the same file is unknown', () => {
+    passing();
+    const why = /since is unreadable now or in the baseline reading/;
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline((rep) => { delete rep.bridge.since; });
+    writeStats(substitutions({ [OPUS]: 496 }, {}, { ...TRAFFIC, since: 'not a stamp' }));
+    let d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured' });
+    expect(d.reason).toMatch(why);
+    expect(d).not.toHaveProperty('names');
+    writeStats(substitutions({ [OPUS]: 496 }, {}, TRAFFIC));   // unreadable in the baseline only
+    expect(criterion(report(withBaseline()), 'drift').reason).toMatch(why);
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 496 }, {}, { ...TRAFFIC, since: 'not a stamp' }));   // unreadable now only
+    d = criterion(report(withBaseline()), 'drift');
+    expect(d.reason).toMatch(why);
+    expect(d.verdict).toBe('unmeasured');
+  });
+
+  it('a lane that answered no request since the baseline is unmeasured: a hold over nothing observed is no pass', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline();
+    let d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured', answeredSince: 0, names: [{ name: OPUS, state: 'held' }] });
+    expect(d.reason).toMatch(/answered no requests? since the baseline reading/);
+    expect(run(withBaseline()).stdout).toMatch(/^drift baseline: taken at .*, 0 requests answered since$/m);
+    // the answered count went backwards: not the file the baseline read
+    writeStats(substitutions({ [OPUS]: 496 }, {}, { outcomes: { ...OUTCOMES, '2xx': 900 } }));
+    d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured', answeredSince: -90 });
+    expect(d.reason).toMatch(/answered count went backwards/);
+    // a new name still fails an idle lane
+    writeStats(substitutions({ [OPUS]: 496, [SONNET]: 1 }));
+    expect(criterion(report(withBaseline()), 'drift').verdict).toBe('fail');
+    // a baseline reading with no answered count is not compared
+    keepBaseline((rep) => { delete rep.bridge.answered; });
+    writeStats(substitutions({ [OPUS]: 496 }, {}, TRAFFIC));
+    d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured' });
+    expect(d.reason).toMatch(/no answered count/);
+  });
+
+  it('a baseline reading with no takenAt stamp, or not taken before this reading, is unmeasured', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    for (const edit of [(rep: { takenAt?: unknown }) => { delete rep.takenAt; }, (rep: { takenAt?: unknown }) => { rep.takenAt = 'yesterday'; }]) {
+      keepBaseline(edit);
+      writeStats(substitutions({ [OPUS]: 496 }, {}, TRAFFIC));
+      const d = criterion(report(withBaseline()), 'drift');
+      expect(d).toMatchObject({ verdict: 'unmeasured' });
+      expect(d.reason).toMatch(/no takenAt stamp/);
+      writeStats(substitutions({ [OPUS]: 496 }));
+    }
+    keepBaseline();
+    writeStats(substitutions({ [OPUS]: 496 }, {}, TRAFFIC));
+    const d = criterion(report(['--drift-baseline', baselineFile()]), 'drift');   // the same clock as the baseline
+    expect(d).toMatchObject({ verdict: 'unmeasured', baseline: { takenAt: TAKEN } });
+    expect(d.reason).toMatch(/not taken before this reading/);
+  });
+
+  it('a baseline read while the bridge is unmeasured keeps its stamps and says it was not compared', () => {
+    passing();
+    writeStats(substitutions({ [OPUS]: 496 }));
+    keepBaseline();
+    fs.rmSync(path.join(laneDir(), 'bridge.stats.json'));
+    const d = criterion(report(withBaseline()), 'drift');
+    expect(d).toMatchObject({ verdict: 'unmeasured', baseline: { takenAt: TAKEN, since: SINCE } });
+    expect(d.reason).toMatch(/stats file is absent/);
+    expect(d).not.toHaveProperty('names');
+    expect(run(withBaseline()).stdout).toMatch(
+      new RegExp(`^drift baseline: taken at ${TAKEN}, stats since ${SINCE}, not compared \\(the reason is on the drift line\\)$`, 'm'));
   });
 
   it('the baseline\'s path never leaves, in either form, whatever the reading', () => {
