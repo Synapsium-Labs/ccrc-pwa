@@ -163,10 +163,11 @@ describe('spawnSyncGroup: an input reaches the child from a regular file (D-8381
       expect(r.status, `${input.length} bytes: ${r.stderr}`).toBe(0);
       expect(r.stdout.trim()).toBe(String(input.length));
     }
+    // Bytes, not text, arrive as given: `od` reads the stdin itself, the one reader of it.
     const bytes = Buffer.from([0, 1, 2, 255, 10, 13]);
-    const b = spawnSyncGroup('sh', ['-c', `${STDIN_IS_A_FILE}; od -An -tu1 /dev/stdin`], { input: bytes, encoding: 'utf8', timeout: 30_000 });
+    const b = spawnSyncGroup('sh', ['-c', 'test -f /dev/stdin || exit 3; od -An -tu1'], { input: bytes, encoding: 'utf8', timeout: 30_000 });
     expect(b.status, b.stderr).toBe(0);
-    expect(b.stdout.split('\n')[0]?.trim()).toBe('6');
+    expect(b.stdout.trim().split(/\s+/)).toEqual(['0', '1', '2', '255', '10', '13']);
   });
 
   it('a caller\'s stdout and stderr settings are kept beside the input', () => {
