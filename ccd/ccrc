@@ -18735,12 +18735,24 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
 # files carry today is a scalar (host, port, token, origin) — and the shapes
 # that would diverge are also the shapes systemd itself documents as needing
 # quotes.
-_inst_plist_server() {   # <label> <log> -> the plist bytes, on stdout
-  local label="$1" log="$2" env1="$BOX_ENV_FILE" env2="$CCRC_EXPOSURE_FILE"
+#
+# THE ROLE PICKS THE LAUNCH LINE, as it picks the label (D-8388). A fleet box's
+# job is `ccrc-agent.service`'s translation: the agent's entry point, and its
+# ONE env file, `~/.ccrc/agent.env`, which that unit reads with no `-`, i.e.
+# REQUIRED. So the fleet line stops (`|| exit 1`) where systemd refuses to
+# start, and never reads ccrc.env or exposure.env, which a fleet unit does not
+# read either. Every other role gets the server's line, unchanged.
+_inst_plist_server() {   # <label> <log> [<role>] -> the plist bytes, on stdout
+  local label="$1" log="$2" role="${3:-}" env1="$BOX_ENV_FILE" env2="$CCRC_EXPOSURE_FILE"
   local entry="$HOME/ccrc/server/dist/server/src/index.js"
   # `&amp;&amp;` — this string lands inside XML, where a bare `&` is a parse
   # error and `plutil` refuses the whole file.
   local cmd="set -a; [ -f '$env1' ] &amp;&amp; . '$env1'; [ -f '$env2' ] &amp;&amp; . '$env2'; set +a; exec /usr/bin/env node '$entry'"
+  if [ "$role" = fleet ]; then
+    local agent_env="$HOME/.ccrc/agent.env"
+    entry="$HOME/ccrc/agent/dist/agent/src/index.js"
+    cmd="set -a; . '$agent_env' || exit 1; set +a; exec /usr/bin/env node '$entry'"
+  fi
   cat <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -18785,7 +18797,7 @@ _inst_units_darwin() {
   log="$HOME/.ccrc/logs/${label}.log"
   mkdir -p "$dir" "$HOME/.ccrc/logs" || _ccrc_die "cannot create $dir and \$HOME/.ccrc/logs"
   gen="$dir/$label.plist.tmp.$$.new"
-  _inst_plist_server "$label" "$log" > "$gen" \
+  _inst_plist_server "$label" "$log" "$INST_ROLE" > "$gen" \
     || { rm -f -- "$gen"; _ccrc_die "could not generate the $label job at $gen"; }
   # VALIDATED BEFORE IT LANDS. `launchctl bootstrap` on a malformed plist
   # fails with "Could not find specified service", a message about the wrong
