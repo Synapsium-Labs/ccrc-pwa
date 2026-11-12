@@ -9828,7 +9828,8 @@ export function isClaimState(v: unknown): v is ClaimState {
  * zero acquired. `expiresAt` is the lease `renewClaims` renews while the
  * holder measures RUNNING (registry unmeasurable reads as HELD — doubt is
  * not death); `hardExpiresAt` is NEVER renewed, so doubt cannot hold
- * forever. `endedBy` is display/forensic — `Divergence.detail`'s contract:
+ * forever (a running holder's re-take near it opens a chained row instead,
+ * D-8395). `endedBy` is display/forensic — `Divergence.detail`'s contract:
  * written by the closer (`'session-gone'`, the run close, the break door),
  * parsed back by nothing.
  */
@@ -9854,6 +9855,28 @@ export interface ClaimSummary {
   readonly hardExpiresAt: number;
   readonly endedAt: number | null;
   readonly endedBy: string | null;
+  /** D-8395: the row this one continues, or null for a claim taken afresh. A running holder's re-take inside the last
+   *  `CLAIM_LEASE_MS` before its hard cap ends the old row (`state:'released'`, `endedBy:'rechained'`) and opens this
+   *  one with a fresh lease and a fresh hard cap, so `?all=1` reads the whole hold as one chain of rows. */
+  readonly chainedFrom: number | null;
+}
+
+/**
+ * D-8395: the one `endedBy` word a re-take writes when it carries a running holder's claim into a new window
+ * (`ClaimSummary.chainedFrom`). `endedBy` stays display/forensic for every other closer; this word is the closed
+ * member a reader of a chain may switch on, read through `isClaimRechainEnd`.
+ */
+export const CLAIM_RECHAIN_ENDS = ['rechained'] as const;
+export type ClaimRechainEnd = (typeof CLAIM_RECHAIN_ENDS)[number];
+
+export function isClaimRechainEnd(v: unknown): v is ClaimRechainEnd {
+  return typeof v === 'string' && (CLAIM_RECHAIN_ENDS as readonly string[]).includes(v);
+}
+
+/** D-8395: one link `POST /api/claims` made — the ended row `from` and the row `to` that now holds its paths. */
+export interface ClaimRechain {
+  readonly from: number;
+  readonly to: number;
 }
 
 /**
@@ -9914,7 +9937,8 @@ export interface ClaimsListAnswer {
   readonly recentlyLapsed?: readonly ClaimSummary[];
 }
 
-/** `POST /api/claims`' 200 answer. `lapsedSince` (D-8392): see `ClaimLapse`; absent when none applies. */
+/** `POST /api/claims`' 200 answer. `lapsedSince` (D-8392): see `ClaimLapse`; absent when none applies. `renewed` is
+ *  true when the caller already held some of these paths, a re-take that rechained included (D-8395). */
 export interface ClaimTakeAnswer {
   readonly ok: true;
   readonly ids: readonly number[];
@@ -9922,6 +9946,8 @@ export interface ClaimTakeAnswer {
   readonly hardExpiresAt: number;
   readonly renewed: boolean;
   readonly lapsedSince?: readonly ClaimLapse[];
+  /** D-8395: the claims this take carried into a new 8 h window (`ClaimRechain`); absent when none was. */
+  readonly rechained?: readonly ClaimRechain[];
 }
 
 /**
@@ -9998,7 +10024,12 @@ export const CLAIM_LEASE_MS = 45 * 60_000;
 
 /** The horizon no renewal moves (D12). Doubt cannot hold forever: every
  *  claim must be periodically re-declared (re-POSTing the same paths renews
- *  AND re-states intent), and eight hours outlasts any honest wave. */
+ *  AND re-states intent), and eight hours outlasts any honest wave.
+ *  AMENDED by D-8395 (operator ruling 2026-11-12) for one case: a holder
+ *  measured RUNNING that re-takes its paths inside the last `CLAIM_LEASE_MS`
+ *  before this cap starts a new window, as a new row chained to the old one
+ *  (`ClaimSummary.chainedFrom`). No renewal still moves a row's own cap, and
+ *  a holder that is not running still lapses at it. */
 export const CLAIM_HARD_CAP_MS = 8 * 60 * 60_000;
 
 /** `intent`'s cap, BYTES — the same number and the same char-vs-byte care

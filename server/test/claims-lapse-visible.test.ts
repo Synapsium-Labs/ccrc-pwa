@@ -203,7 +203,7 @@ describe('recentlyLapsedClaims (L1, D-8392)', () => {
   const row = (over: Partial<ClaimSummary>): ClaimSummary => ({
     id: 1, project: 'demo', paths: ['a'], heldBy: 'x', heldByUuid: null, intent: 'i', runId: null,
     state: 'live', createdAt: 0, renewedAt: 0, expiresAt: 0, hardExpiresAt: CLAIM_HARD_CAP_MS,
-    endedAt: null, endedBy: null, ...over,
+    endedAt: null, endedBy: null, chainedFrom: null, ...over,
   });
   const NOW = 10 * CLAIM_LEASE_MS;
 

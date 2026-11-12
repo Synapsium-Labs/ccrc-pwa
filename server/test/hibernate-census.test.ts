@@ -90,9 +90,15 @@ const CENSUS: readonly Row[] = [
       + 'which reads `hibernatedAt` before any dead reading, so a sleeper is asleep and never reaches a cause (D-7371)' },
   { source: 'stopped-compare', file: 'server/src/coord/collectTempRoot.ts', hits: 1, stances: ['other-meaning'],
     why: 'the collector\'s own lane state (`lane.kind === \'stopped\'`), not a session' },
-  { source: 'tmux-verdict', file: 'server/src/coord/claims.ts', hits: 5, stances: ['held-awake'],
-    why: '`LivenessVerdict`, `claimVerdictOf` and `claimExpiry`: a session holding a claim is never put to sleep (`claim`), '
-      + 'and a sleeping session takes none; were one met, `asleep` reads `gone` (D-6908)' },
+  { source: 'tmux-verdict', file: 'server/src/coord/claims.ts', hits: 7, stances: ['held-awake'],
+    why: '`LivenessVerdict`, `claimVerdictOf`, `claimExpiry` and the re-chain deciders (D-8395): a session holding a claim '
+      + 'is never put to sleep (`claim`), and a sleeping session takes none; were one met, `asleep` reads `gone` (D-6908)' },
+  { source: 'tmux-verdict', file: 'server/src/coord/routes.ts', hits: 1, stances: ['held-awake'],
+    why: '`POST /api/claims` measures the caller\'s own `LivenessVerdict` for a re-chain (D-8395) through '
+      + '`claimLivenessProbe`; a caller posting a claim is awake, and a sleeper reads `gone`, which never re-chains' },
+  { source: 'tmux-verdict', file: 'server/src/coord/store.ts', hits: 1, stances: ['held-awake'],
+    why: '`claimAttempt`\'s `callerLiveness` input (D-8395): only `running` re-chains, so doubt and sleep keep today\'s '
+      + 'renewal, clipped at the hard cap' },
   { source: 'lifecycle-table', file: 'server/src/coord/peers.ts', hits: 2, stances: ['consults', 'true-of-pane'],
     why: '`LIFECYCLE_RUNG`: `peerDeliverable` answers a hibernated probe `yes` before the tmux rung and this table; '
       + '`ARCHIVE_CONTRADICTS`: a sleeper is not live, so it contradicts no archive stamp' },

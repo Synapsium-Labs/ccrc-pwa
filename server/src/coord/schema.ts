@@ -2723,6 +2723,22 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE nodes ADD COLUMN reportedSweep TEXT;
   `,
+  // ── 62: user_version 61 -> 62 ─────────────────────────────────────────────
+  // D-8395 (operator ruling 2026-11-12, the claims hard cap): `claims.chainedFrom`, the id of the row a claim continues.
+  // A holder measured running that re-takes its paths inside the last `CLAIM_LEASE_MS` before its hard cap ends the old
+  // row (`released`, `endedBy 'rechained'`) and inserts a new one with a fresh lease and a fresh hard cap carrying the
+  // old id here, so `GET /api/claims?all=1` reads one hold as one chain. Its one writer is `claimAttempt`. NULL = a claim
+  // taken afresh, which is every row written before this entry.
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE, nothing else: an older build opening a file at `user_version 62` takes
+  // rule 3 (it warns, reads as-is and migrates nothing); its reads and writes name their columns and never this one, so
+  // a row it inserts reads as taken afresh. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before
+  // merge (it must print 61 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claims ADD COLUMN chainedFrom INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

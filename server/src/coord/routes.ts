@@ -16,7 +16,7 @@ import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
-import { claimMailHint, lapseWindowStart, recentlyLapsedClaims } from './claims.js';
+import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
@@ -3771,7 +3771,10 @@ export function registerCoordRoutes(
    * duplicate. No `coordMutex`: the mutex exists for routes whose precondition
    * read and commit are separated by fleet-act awaits, and this route has none
    * between them — the deliverable measurement below happens strictly AFTER
-   * the decision, on the losing arm only.
+   * the decision, on the losing arm only. The one read BEFORE it (D-8395) is the
+   * caller's own liveness, taken only when the caller holds a live claim this
+   * take could re-chain: an input to the decision, like `holderDeliverable`,
+   * never a precondition the transaction trusts — the store re-reads its rows.
    *
    * A claim writes NOTHING to the registry — no `.hold`, no run, no verb, no
    * grant (D12 ruling 1; `claims-no-hold.test.ts` exercises the real
@@ -3836,8 +3839,30 @@ export function registerCoordRoutes(
       }
     }
 
+    // D-8395 (operator ruling 2026-11-12): a RUNNING holder's re-take inside the last lease before its hard cap starts
+    // a new window as a chained row. The caller is measured only when it holds such a claim on these paths, by the
+    // watcher's own reading (`claimLivenessProbe`) over one registry read; unlistable is doubt, which never re-chains.
+    // The fleet is read at most ONCE per request (spec §2.3's one observation), memoized: this check and the conflict
+    // arm below share it. Its rows are `assembleFleet`'s and its listing is the presence ladder's. Unlistable gives no
+    // rows and a `null` listing.
+    let fleetRead: Promise<{ reg: Awaited<ReturnType<typeof readRegistryMeasured>>; sessions: Awaited<ReturnType<typeof assembleFleet>> }> | undefined;
+    const measureFleet = () => (fleetRead ??= (async () => {
+      // [registry-refused:reports]
+      const reg = await readRegistryMeasured(deps.io, deps.cfg);
+      const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
+        fleetNow(), { records: reg.listed ? reg.records : [], coord: deps.coord });
+      return { reg, sessions };
+    })());
+    const now = Date.now();
+    const asked = paths.flatMap((p) => normalizeClaimPath(p) ?? []);
+    const own = coord.claimsForProject(project.trim()).filter((c) => c.heldBy === byId);
+    let callerLiveness: LivenessVerdict = 'unmeasurable';
+    if (rechainTargets(own, asked, now, 'running').length > 0) {
+      const { reg, sessions } = await measureFleet();
+      if (reg.listed) callerLiveness = claimLivenessProbe(sessions, reg.refused).liveness(byId);
+    }
     const r = coord.claimAttempt({ project: project.trim(), paths, sessionId: byId,
-      uuid: byUuid, intent, runId, now: Date.now() });
+      uuid: byUuid, intent, runId, now, callerLiveness });
     if (r.ok) {
       // The store's ok arm is the rows themselves; the wire summary is DERIVED
       // from them, one reader: `renewed` is true exactly when some row's lease
@@ -3848,8 +3873,10 @@ export function registerCoordRoutes(
         ok: true, ids: r.claims.map((c) => c.id),
         expiresAt: Math.min(...r.claims.map((c) => c.expiresAt)),
         hardExpiresAt: Math.min(...r.claims.map((c) => c.hardExpiresAt)),
-        renewed: r.claims.some((c) => c.renewedAt > c.createdAt),
+        renewed: r.claims.some((c) => c.renewedAt > c.createdAt) || r.rechained.length > 0,
         ...(r.lapsedSince.length > 0 ? { lapsedSince: r.lapsedSince } : {}),
+        // D-8395: present only when this take carried a running holder's claim into a new 8 h window.
+        ...(r.rechained.length > 0 ? { rechained: r.rechained } : {}),
       };
       return reply.code(200).send(answer);
     }
@@ -3864,14 +3891,12 @@ export function registerCoordRoutes(
         // conflict row is REPLACED by what was measured — with the mailHint
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
-        // ONE registry read (spec §2.3): its rows are `assembleFleet`'s and its listing is the presence ladder's, so
-        // the two describe one observation. Unlistable gives no rows and a `null` listing: every holder reads
-        // unmeasurable, never absent and never `yes` off a second read the ladder did not see.
-        // [registry-refused:reports]
-        const reg = await readRegistryMeasured(deps.io, deps.cfg);
+        // ONE registry read (spec §2.3), `measureFleet`'s, the same one the re-chain check took if it took one: its
+        // rows are `assembleFleet`'s and its listing is the presence ladder's, so the two describe one observation.
+        // Unlistable gives no rows and a `null` listing: every holder reads unmeasurable, never absent and never
+        // `yes` off a second read the ladder did not see.
+        const { reg, sessions } = await measureFleet();
         const names = reg.listed ? reg.names : null;
-        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
-          fleetNow(), { records: reg.listed ? reg.records : [], coord: deps.coord });
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {

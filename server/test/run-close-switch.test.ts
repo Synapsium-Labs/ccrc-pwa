@@ -88,16 +88,16 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
+    // Back to version 53: undo migrations 62 (claims.chainedFrom, D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
-    // as 54, so the reopen replays all eight.
+    // as 54, so the reopen replays all nine.
     fresh.exec(`DROP TABLE linear_bindings; DROP TABLE plan_sync_due; DROP TABLE plan_tickets; DROP TABLE plan_checkpoints; DROP TABLE plan_epics;
       ALTER TABLE runs DROP COLUMN ticketId;
       ALTER TABLE project_linking DROP COLUMN initiatives; ALTER TABLE project_linking DROP COLUMN linearOwner; ALTER TABLE project_linking DROP COLUMN ownsTeam;
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;
       ALTER TABLE programs DROP COLUMN planEnd; ALTER TABLE programs DROP COLUMN planEndWhy; ALTER TABLE programs DROP COLUMN planEndAt;
       DELETE FROM programs WHERE slug = 'linear-sync';`);
-    fresh.exec('ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
+    fresh.exec('ALTER TABLE claims DROP COLUMN chainedFrom; ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
     fresh.close();
     const coord = new CoordStore(openCoordDb(file));
     expect(coord.runCloseSetting()).toEqual({ kind: 'row', neverStarted: 'on', claimantCrashed: 'off', claimantGone: 'shadow', updatedAt: 9 });

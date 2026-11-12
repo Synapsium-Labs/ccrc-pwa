@@ -715,9 +715,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[57] (practice_cases, Overlord W1a)
     // and MIGRATIONS[58] (the plan tables, bindings, runs.ticketId and the hierarchy settings, D-8181)
     // and MIGRATIONS[59] (claude_builds, the trusted set of Claude Code builds, D-8289)
-    // and MIGRATIONS[60] (nodes.reportedSweep, the update sweep's record, D-8386).
-    expect(COORD_SCHEMA_VERSION).toBe(61);
-    expect(MIGRATIONS.length).toBe(61);
+    // and MIGRATIONS[60] (nodes.reportedSweep, the update sweep's record, D-8386)
+    // and MIGRATIONS[61] (claims.chainedFrom, a running holder's re-chained claim, D-8395).
+    expect(COORD_SCHEMA_VERSION).toBe(62);
+    expect(MIGRATIONS.length).toBe(62);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -804,8 +805,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[57] (practice_cases, Overlord W1a)
     // and MIGRATIONS[58] (the plan model, D-8181)
     // and MIGRATIONS[59] (claude_builds, D-8289)
-    // and MIGRATIONS[60] (nodes.reportedSweep, D-8386); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(61);
+    // and MIGRATIONS[60] (nodes.reportedSweep, D-8386)
+    // and MIGRATIONS[61] (claims.chainedFrom, D-8395); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(62);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

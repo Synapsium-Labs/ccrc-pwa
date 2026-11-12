@@ -137,8 +137,8 @@ import {
   type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
   type DelegationObservationInterval, type DelegationRecoveryState,
 } from './coord/delegation-model.js';
-import { claimExpiry, claimVerdictOf, type LivenessProbe } from './coord/claims.js';
-import { rowStanding, type RowStandingFacts } from './sessionReading.js';
+import { claimExpiry, claimLivenessProbe, type LivenessProbe } from './coord/claims.js';
+import type { RowStandingFacts } from './sessionReading.js';
 import { claimantMeasuredDead, measureClaimant, measureClaimantHeld } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
@@ -6546,15 +6546,8 @@ export class FleetWatcher {
     sessions: readonly ClaimProbeRow[],
     refused: ReadonlySet<string>,
   ): LivenessProbe {
-    const byId = new Map(sessions.map((s) => [s.id, s]));
-    return {
-      liveness: (id: string) => {
-        if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
-        const s = byId.get(id);
-        if (s === undefined) return 'gone';                 // the fleet no longer lists it
-        return claimVerdictOf(rowStanding(s));              // doubt reads as HELD (D12)
-      },
-    };
+    // D-8395: the reading is `claims.ts`'s, so `POST /api/claims`' re-chain asks the same question this lane does.
+    return claimLivenessProbe(sessions, refused);
   }
 
   /**
