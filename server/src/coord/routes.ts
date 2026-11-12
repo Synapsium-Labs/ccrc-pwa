@@ -1709,7 +1709,7 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord) };
+      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord), notice };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body, 'coordinator'));
     return sendCloseOutcome(reply, outcome);
   });

@@ -8,7 +8,7 @@ import { isLandable } from './landingEntry.js';
 import type { LandingLand, LandingOutcome } from './landingEntry.js';
 import type { LandingMutationFacts } from './landingWrites.js';
 import type { NoticeMode, NoticeRecord } from '../notice.js';
-import type { PrStatePrRead } from '../prstate.js';
+import type { PrMergedFacts, PrStatePrRead } from '../prstate.js';
 
 /** How many entries one sweep reads: the PR lane reads one project a call, this reads one PR a call. */
 export const LANDED_READS_PER_SWEEP = 10;
@@ -137,4 +137,14 @@ export function landedNoticeModeOf(mergedAt: string | null, now: number): Notice
 export function landedLandOf(cand: LandedCandidate, answer: Extract<LandedAnswer, { act: 'land' | 'close' }>, at: number): LandingLand {
   return { kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at, outcome: answer.outcome,
     expect: { id: cand.id, pinnedAt: cand.pinnedAt } };
+}
+
+/** The close's mark (landing order wave 5h): a `done` work close whose own re-measure read the bound PR MERGED lands the
+ *  entry by the close, with no compare-and-set (`expect: null`: the close read no entry). Anything else, an abandon
+ *  included, is null. */
+export function closeLandingOf(f: { state: 'done' | 'failed'; facts: PrMergedFacts | null; project: string; at: number }): LandingLand | null {
+  if (f.state !== 'done' || f.facts === null) return null;
+  const { pr, head, base, mergedAt, mergeCommit } = f.facts;
+  return { kind: 'land', project: f.project, pr, by: 'close', at: f.at, expect: null,
+    outcome: { word: 'merged', head, base, mergedAt, mergeCommit, train: null } };
 }

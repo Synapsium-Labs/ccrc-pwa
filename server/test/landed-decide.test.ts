@@ -2,10 +2,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   LANDED_FRESH_MS, LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedAnswerOf, landedCandidatesOf, landedNext,
-  landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
+  closeLandingOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
 } from '../src/coord/landed.js';
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
-import type { PrStatePrRead } from '../src/prstate.js';
+import type { PrMergedFacts, PrStatePrRead } from '../src/prstate.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
 import type { LandingEntry, LandingEntryState } from '../../shared/landingLine.js';
 import type { LandingProjectionRead } from '../src/coord/landingEntry.js';
@@ -150,5 +150,21 @@ describe('the merged record', () => {
     expect(landedNoticeModeOf(new Date(now - LANDED_FRESH_MS - 1).toISOString(), now)).toBe('record-only');
     expect(landedNoticeModeOf(null, now)).toBe('record-only');
     expect(landedNoticeModeOf('not a date', now)).toBe('record-only');
+  });
+});
+
+describe('closeLandingOf', () => {
+  const facts: PrMergedFacts = { pr: 7, head: HEAD, base: 'main', mergedAt: '2026-11-11T10:00:00Z', mergeCommit: MERGE };
+  it('a done close with merged facts lands by the close, with no compare-and-set', () => {
+    expect(closeLandingOf({ state: 'done', facts, project: 'project-a', at: 5 })).toEqual({
+      kind: 'land', project: 'project-a', pr: 7, by: 'close', at: 5, expect: null,
+      outcome: { word: 'merged', head: HEAD, base: 'main', mergedAt: '2026-11-11T10:00:00Z', mergeCommit: MERGE, train: null },
+    });
+  });
+  it('a done close with no facts is null', () => {
+    expect(closeLandingOf({ state: 'done', facts: null, project: 'project-a', at: 5 })).toBeNull();
+  });
+  it('a failed close is null, facts or not', () => {
+    expect(closeLandingOf({ state: 'failed', facts, project: 'project-a', at: 5 })).toBeNull();
   });
 });

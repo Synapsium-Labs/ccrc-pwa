@@ -178,6 +178,21 @@ export function boundRow(rows: readonly CcdPrRow[], baseShort: string, branch: s
   return cands[cands.length - 1] ?? null;
 }
 
+/** What a `--session` line's bound row says of a PR GitHub reads MERGED, for the landing line's close mark (landing order
+ *  wave 5h): the PR, the head GitHub merged, its base, when, and the merge commit. A row closed as landed in a train is
+ *  merged for every phase reader but is NOT answered here: a `--session` line carries no train number, so the PR-keyed
+ *  reader marks it. Null for every other phase, and for a row that names no head or no number. */
+export interface PrMergedFacts { pr: number; head: string; base: string; mergedAt: string; mergeCommit: string }
+export function mergedFactsOf(line: CcdPrLine): PrMergedFacts | null {
+  const row = boundRow(line.rows, line.baseShort, line.branch);
+  if (row === null || row.state !== 'MERGED' || !isMergedRow(row, line.baseShort, line.branch)) return null;
+  const { number, headRefOid, baseRefName, mergedAt } = row;
+  const mergeCommit = row.mergeCommit?.oid;
+  if (typeof number !== 'number' || typeof headRefOid !== 'string' || !isHead40(headRefOid)) return null;
+  if (typeof baseRefName !== 'string' || typeof mergedAt !== 'string' || typeof mergeCommit !== 'string') return null;
+  return { pr: number, head: headRefOid, base: baseRefName, mergedAt, mergeCommit };
+}
+
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
 const RUNNING = new Set(['PENDING', 'IN_PROGRESS', 'QUEUED', 'WAITING', 'EXPECTED', 'REQUESTED']);
 const MAX_CHECK_NAMES = 10;

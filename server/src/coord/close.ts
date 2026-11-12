@@ -31,7 +31,10 @@ import {
 import { queueSystemMail } from './rundefsTx.js';
 import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
-import type { CcdPrLine } from '../prstate.js';
+import { mergedFactsOf, type CcdPrLine } from '../prstate.js';
+import type { NoticeSink } from '../notice.js';
+import { closeLandingOf } from './landed.js';
+import { raiseLandedNotice } from './landedLane.js';
 import type { DeadCoordinatorStop, SweepFleetAct } from '../deadCoordinator.js';
 import {
   CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_LICENCE_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
@@ -62,6 +65,9 @@ export interface CloseRunDeps {
    *  eligible child is answered `not-queued` with no reason, and wave 4's sweep
    *  reaches it. `coord/routes.ts` wires it to the session's own queue. */
   childReclaim?: (req: ChildReclaimRequest) => void;
+  /** The notice funnel (landing order wave 5h): a close that marks its entry landed raises the session's one merged
+   *  record through it. OPTIONAL: absent, the mark is still written and the landed reader's pass raises the record. */
+  notice?: NoticeSink;
 }
 
 export type CloseOutcome =
@@ -421,7 +427,35 @@ async function closeWorkRun(
     program: run.program, viaClosing: true });
   const committed = decideClose({ step: 'commit', closed, acted: true });
   if (committed.kind !== 'go') return stopped(deps, committed);
+  if (line !== null) landOnClose(deps, run, state, line, Date.now());
   return { ok: true, id, state, released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
+}
+
+/**
+ * The landing line's mark (landing order wave 5h), AFTER `coord.closeRun` committed a `done` work close: the line the
+ * close's own `verifyDone` measured, read for a MERGED bound row, marks the project's entry for that PR landed, by the
+ * close, in its own call (a transaction does not nest). It never changes the close's answer: a refusal or a throw is one
+ * `console.warn` line and the landed reader marks the entry later. A `landed` mark raises the session's merged record
+ * once, through the same funnel the merged sweep and the reader use, when the route wired one.
+ */
+function landOnClose(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, run: RunRow, state: 'done' | 'failed', line: CcdPrLine, at: number,
+): void {
+  const facts = mergedFactsOf(line);
+  const land = closeLandingOf({ state, facts, project: run.project, at });
+  if (land === null) return;
+  const said = (why: string): void => {
+    console.warn(`ccrc-server: close of run ${run.id} could not mark ${land.project} #${land.pr} landed (${why})`);
+  };
+  try {
+    const mark = deps.coord.advanceLanding(land);   // the land arm (kind: 'land'), never a run arm
+    if (!mark.ok) return said(mark.error);
+    if (mark.landing.kind !== 'landed' || deps.notice === undefined) return;
+    raiseLandedNotice({ coord: deps.coord, notice: deps.notice, entry: mark.landing.entry,
+      mergedAt: land.outcome.word === 'merged' ? land.outcome.mergedAt : null, now: at });
+  } catch (err) {
+    said(err instanceof Error ? err.message : String(err));
+  }
 }
 
 /** The review-kind close (design 2026-09-14 §5.3–5.4, D-2796). Body:
