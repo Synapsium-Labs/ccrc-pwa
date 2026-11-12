@@ -153,13 +153,13 @@ the rig, or by a box-token read, with no operator setup; **c** needs the operato
 | W0-15 | The door process under a restricted launch: hooks, skills, tools offered, the permission mode, the nonce | H1, H4, H9, and the §3.6 fallback | Rig `ov-door`: pinned setting sources, a `--settings` profile, `--strict-mcp-config` with the door stub, a narrowed tool list, readers in `--agents`, bypass mode, one skill | b | All hold: as designed. Hooks or skills lost under pinned sources: the profile carries them the way that worked (H1 amended). Door tools refused or prompting: the fallback, a shell for `ccrc-api` only, a 0600 key file and `OVERLORD_DENY_RULES` |
 | W0-16 | Reader types with no shell | C55, the subagent-scope arm | Within `ov-door`: the reader resolves; its offered tools are its list; a deny rule fires inside it; SubagentStart and SubagentStop fields | b | As designed, or the scope arm keys on the field that exists |
 | W0-17 | Peer messaging closed, and the inbox socket | H1 closes the channel; H2 keeps today's delivery unless W0 proves the socket | Documentation for the settings and any documented interface a local process may use; rig: tools offered with and without the profile. No reverse engineering | a, b | A documented interface works with inbound closed: the Later item's trigger is met (recorded, not built). Otherwise today's delivery stays. Peer tools still offered under the profile: W1's sandbox check must refuse, and this blocks W1 |
-| W0-18 | The statusline's token and window fields, its idle cadence, any per-model weekly figure | The hard-cap trigger (Table 3.3.11b); the reservation proxy | Rig: a statusline capture under mock usage and rate-limit headers; ten idle minutes. The binary's strings for the rate-limit header names it reads | a, b | Present: the sidecar gains them in W1a. Absent: the cap reads the last main assistant row's usage (Table 3.6a amended). No idle renders: a stale sample is unmeasured, as designed. A per-model figure: W0-24 uses it |
+| W0-18 | The statusline's token and window fields, its idle cadence, any per-model weekly figure | The hard-cap trigger (Table 3.3.11b); the Fable share proxy, whose use is W1's call since R18 (C46) | Rig: a statusline capture under mock usage and rate-limit headers; ten idle minutes. The binary's strings for the rate-limit header names it reads | a, b | Present: the sidecar gains them in W1a. Absent: the cap reads the last main assistant row's usage (Table 3.6a amended). No idle renders: a stale sample is unmeasured, as designed. A per-model figure: W0-24 uses it |
 | W0-19 | What an account's shared config directory loads: settings, the user memory file, mods, tool servers, skills | H1 pins sources; §3.5 no mods; H14 | Rig: a fixture config with each kind, launched with and without the pinned sources. Fleet: per account that may serve the Overlord, counts by kind and settings key names only | b, c | Pinning excludes all: as designed. A kind leaks through: the loaded-file report names it and refuses `launch-profile-unmet`. Mods present on the fleet: doctor's no-mods check is required before designation |
 | W0-20 | Nudge-and-read against typed text | §3.8 delivery | Subject: ten pairs, the operator's typed words and the same words as mail read by tool; latency to first tool call and to reply, net of the mail gate; whether it acts on both alike; the operator's 1 to 5 rating | c | Net latency ≤ 10 s, equal fidelity, rating ≥ 4: as designed. Worse fidelity: wording of the `messages` result and the skill clause (W1). The gate dominates: the Overlord's `MAIL_PACE` row (C24) |
 | W0-21 | A swap at idle and one mid-turn, each followed by a stand-in renewal and probes | §3.4, C57: "W0 measures it" | Subject: `ccd swap` at idle and `ccd swap --interrupt` mid-turn; then the operator's `/clear`, a card file re-read, three closed-form questions on facts mailed before | c | Both pass: as designed. More than the turn lost: recorded against the resumed-long trigger. Probes fail: the restart bound is taken from this run |
 | W0-22 | A continuity record for each lane | H16: no record, no Overlord on that lane | Client side from W0-01, W0-02, W0-15 and W0-16 for each installed build. Model side on the subject (or a second scratch session) per named lane: the anchor canary, a deny rule, a reader, a closed-form probe after `/clear`; synthetic text only | b, c | Four passes: the operator may set the record (W1). Any fail: no record |
 | W0-23 | Whether each account bills Fable to usage credits | The billing fact (H16, O2) | Prior statement (a); the operator's reading of each account's plan and credits setting | a, c | Credits off: billing fact `none`. On: Fable unservable for the Overlord there, as designed |
-| W0-24 | How closely the seven-day figure times the Fable share tracks Claude Code's own Fable figure | The reservation's Fable arm (C46, Table 3.4c) | Per account running Fable: three readings over at least three days; the operator's `/usage` Fable line and the sweep's `estimate`, `sevenPct`, `finishedAt` at the same minute; or W0-18's field | c | Error ≤ 5 points of the window: the proxy, labelled. 5 to 15: the ceiling lowered by the largest error, Table 3.4c recomputed. Above 15 or no truth: W1's reservation rule stays shadow until a direct reading |
+| W0-24 | How closely the seven-day figure times the Fable share tracks Claude Code's own Fable figure | Written for the reservation's Fable arm, which R18 removed; whether it still informs the shared Fable test is W1's call (C46) | Per account running Fable: three readings over at least three days; the operator's `/usage` Fable line and the sweep's `estimate`, `sevenPct`, `finishedAt` at the same minute; or W0-18's field | c | Error ≤ 5 points of the window: the proxy, labelled. 5 to 15: any use W1 makes of it carries the largest error. Above 15 or no truth: W1 uses no proxy until a direct reading |
 | W0-25 | Today's account pick, and any hidden order | C56: "listed order before load" is new | The code and its pins; a fixture-HOME run through `makeCcdHarness` with `lane-a` to `lane-d` at equal scores only if a tie-break is unpinned | a, b | Home, then load: W1 adds the list as specified. A roster-order tie-break: W1 extends it rather than adding a second order |
 | W0-26 | Restarts per session per hour, the restart time, the sweep after boot | Readiness `restarting` (two in an hour); "one sweep" (Table 11.5b) | A scratch reader over `journal_facts`'s `claude-session@` starts, per session per clock hour, 30 days; `measure-working-state.py --section spawn`, 30 days; `LANE_SCHEDULE` | a, c | p99 restarts per session-hour ≤ 2: two stands, else the p99. Restart p95 (`spawn`): `restarting`'s bound. One sweep: no lane computes readiness today, so W0 records `LANE_SCHEDULE`'s cadences and W1 names the lane whose cadence it is |
 | W0-27 | The first model of holds, readiness, generations and restarts | §11.7, H33: "written before the code" | Task 7 | b | No violation: the machines compose as specified. A violation: a spec contradiction, recorded and ruled before W1a |
@@ -194,7 +194,8 @@ Each line is the operator's act or answer, before Task 8. No line needs anything
    Send the ten W0-20 messages from the console, and rate each pair 1 to 5.
 6. **Lanes to record (W0-22).** Name the lanes to test, and consent to swapping the subject onto each and back.
    Another provider's lane only after the spec's Waiting on you ruling 6.
-7. **Account facts (W0-23).** For each account that may be reserved: its plan, and whether usage credits are on.
+7. **Account facts (W0-23).** For each account in a pool the operator may name for the Overlord (R18; what W0-23
+   measures there is C46's open question for W1): its plan, and whether usage credits are on.
 8. **`/usage` readings (W0-24).** For each account running Fable this week, read its Fable line three times over at
    least three days, at the conductor's mail, from your own shell.
 9. **The replay quiz (W0-28).** Rule between the two options in Task 11.
@@ -554,7 +555,8 @@ with 15 scenarios, 24 switches for readings the text had left open, and 14 plant
 must catch. A second round, in `round-two/` beside it, covers authority, restore, requests, commands, the push budget
 and playbook entries with six small machines. A third round, in `round-three-deciders/` and
 `round-three-accounts-privacy/`, enumerates every decider table over its whole domain and models the reservation
-arithmetic, the operator's messages and the privacy rules. A fourth, in `round-four-oversight/`, models the evidence
+arithmetic (of the edition it was written for; R18 has since removed the reservation), the operator's messages and
+the privacy rules. A fourth, in `round-four-oversight/`, models the evidence
 behind each gate, the decision model and the judges, and computes what each kind of trust takes to earn. The spec's
 later editions wrote each round's findings in.
 This task writes no new model. It re-runs them against the merged edition and records W0-27.
@@ -636,7 +638,8 @@ git commit -m "docs(overlord): W0 Task 8, fleet reads: restarts, rolls, the conf
 
 **Files:** Modify: the results note.
 
-- [ ] **Step 1:** Record the operator's per-account billing answers by stand-in name.
+- [ ] **Step 1:** Record the operator's per-account billing answers by stand-in name, for each account in a pool the
+  operator may name (R18, C46's open question). With no pool named, the row is deferred, unmeasured.
 - [ ] **Step 2:** At each `/usage` reading's minute, read the sweep's `$REG/usage/sweep/latest.json` for that account:
   `perAccount.<id>.fableShare.estimate` and `.sevenPct`, and the top-level `finishedAt`. Compute
   `sevenPct × estimate` against the Fable share of the window that `/usage` shows. If W0-18 found a per-model field,
@@ -715,6 +718,17 @@ index plan; the whole decision is in the results note's "Departures from the pla
   `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, so the force arm pins its setting sources to measure the model; the refusal is
   measured on its own, with ccrc's hook loaded (`ov-subagent-model-force-hook`, W0-11).
 
+**Cited by W0b (run 1820).** **D-8243** (defined in the programme's index plan) applies as written: W0b runs on the
+fleet's own accounts. W0b's further departures wait for their numbers; the whole decision of each is in the results
+note's "Departures from the plan":
+
+- **w0b-synthetic-deny-rule-in-the-subjects-project, method** — W0-22's deny check uses one synthetic rule in the
+  subject's scratch project settings, because every fleet deny rule guards an account or secret path.
+- **w0b-a-background-shell-arm, method** — W0-21's first interrupting swap met a background shell, not a running turn,
+  and is recorded as its own arm; the mid-turn case was re-run in the foreground.
+- **w0-23-deferred-to-the-pool-design, scope** — under R18 no account is reserved, so W0-23 is unmeasured, with the
+  conservative branch and C46's open question.
+
 **Settled by the spec's later edition, so no longer deviations:** W0 changes nothing that runs,
 and its test-only files ship (§14). W0 measures a swap with a stand-in renewal, and W1a measures the real act
 (§3.4). The first model is a dependency-free explorer (§11.7).
@@ -729,7 +743,8 @@ and its test-only files ship (§14). W0 measures a swap with a stand-in renewal,
 
 **What depends on it:** W1a (the anchor slot's ceiling, the renewal deadlines and budget, the PreCompact arm's
 arming, the idle switch, the per-prompt delta) and W1 (the launch profile, the door process or its fallback, the
-model-switch journal, the restart bound and the reservation's Fable arm).
+model-switch journal, the restart bound, and whether the Fable share proxy still informs the shared Fable test, which
+R18 made W1's call under C46).
 
 **Open questions for the operator, most important first:**
 1. **The bypass exception in the rig.** Recommended: yes, scoped to `scenarios-overlord/`, with the corpus test. The
