@@ -3426,11 +3426,12 @@ operator chose to fix macOS, not to make the gate ignore it. Each cause, fix and
   `find -printf`, which is GNU find's; BSD find refuses it, and the `|| true` hid the refusal. It now lists them with
   `find` and `wc -c`. A new case runs it with a `find` that refuses `-printf` as BSD's does: red on `main`, green here.
 - **`ccd-tick-diet-equivalence-route.test.ts` (E9 under C).** The batch ended in 0.4 s with an empty stderr and no row
-  begun. The bound it runs under, the test helper `BOUNDED` (`ccdWsHelpers.ts`), exits 125 with nothing on stderr when
+  begun, its rc unrecorded; the cause below is inferred, not seen. The bound it runs under, the test helper `BOUNDED` (`ccdWsHelpers.ts`), exits 125 with nothing on stderr when
   either side's `setpgid` fails with an errno other than EACCES or ESRCH; the daily run of 2026-11-09 shows the same
   silent 125 in `ccd-operator-choice.test.ts`. On XNU that errno does not prove that the group is missing, so `BOUNDED`
-  now asks the group itself before it gives up, and every 125 and 127 says why on stderr. A new pair of cases makes one
-  side's `setpgid` fail with EPERM once the group exists, as Darwin did: red on `main` (125), green here. The runner's
+  now asks the group itself before it gives up, which covers a failure once the group exists, and every 125 and 127 says
+  why on stderr. A new pair of cases makes one side's `setpgid` fail with EPERM once the group exists, the condition
+  inferred for Darwin: red on `main` (125), green here. The runner's
   "a row never finished" line now carries the batch's rc and signal.
 - **Run 41949722215.** Its one failing test, `ledgers-secrets.test.ts`'s `kept2`, was fixed on `main` after that run (#2286:
   two planted names were one file on macOS's case-insensitive disk); its cancelled shard 3/4 was cut at the 55-minute deadline of the four-shard plan, which D-8265 replaced with

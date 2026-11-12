@@ -1264,9 +1264,10 @@ describe.skipIf(!PY)('siwc-trial.py: standard library only, Python 3.9 grammar',
 });
 
 // `HTTPServer.server_bind` names the server `socket.getfqdn(host)`, a reverse lookup of 127.0.0.1 that nothing reads. On
-// the macOS runner it has taken about 35 s in a new process (ccgpt-proxy.test.ts measured it), so each fake printed its
-// port after the 15 s `startFake` waits, and 73 of this file's cases failed there (D-8343). Each case makes a
-// `getfqdn` call fatal in the one process it starts, so Linux, where the lookup is quick, shows the macOS defect.
+// the macOS runner it took about 35 s in a new process (diagnostic run 36410278756, recorded at `ccd/ccgpt-proxy.py`'s
+// `_Server`), so each fake printed its port after the 15 s `startFake` waits, and 73 of this file's cases failed there
+// (D-8343). Each case makes a `getfqdn` call fatal in the one process it starts, so Linux, where the lookup is quick,
+// shows the macOS defect.
 const NO_FQDN = [
   'import runpy, socket, socketserver, sys',
   'def _refuse(*a, **k):',
@@ -1302,7 +1303,8 @@ describe.skipIf(!PY)('siwc-trial: nothing binds through a reverse lookup of its 
     const run = spawnSync(PY!, ['-I', '-c', NO_FQDN, SCRIPT, 'signin', '--dir', r.dir, '--no-browser', '--wait', '1'], {
       cwd: r.home, env: childEnv(r.home, r.env), encoding: 'utf8', timeout: 30_000,
     });
-    expect(run.stderr).not.toMatch(/getfqdn/);
+    // The tool prints an exception by its class alone, so a `getfqdn` reached inside `server_bind` reads `AssertionError`.
+    expect(run.stdout + run.stderr).not.toMatch(/AssertionError/);
     expect(run.stdout).toMatch(/^siwc-trial: authorize-url \S+$/m);
     expect(refusal(run)).toMatch(new RegExp(`^${P}refused callback-timeout: `));
   });

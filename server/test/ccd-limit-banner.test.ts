@@ -214,10 +214,11 @@ BEGIN {
       }
     }
   });
-  // On the macOS runner the harness exited 125 with nothing on stderr (a tick-diet batch that began no row, a FIFO case
-  // that read 125 for its 0): one side's `setpgid` failed with an errno other than EACCES or ESRCH although the other
-  // side had already made the child's group (D-8343). This preload fails one side's call with EPERM, as Darwin did,
-  // once the other side has made the group, so Linux shows the failure; the harness now asks the group, not the errno.
+  // On the macOS runner a FIFO case read the harness's rc 125, with nothing on stderr, for its own 0; a tick-diet batch
+  // there ended in 0.4 s with no row begun, its rc unrecorded (D-8343). The inferred cause: one side's `setpgid` failed
+  // with an errno other than EACCES or ESRCH although the other side had already made the child's group. This preload
+  // fails one side's call with EPERM once the other side has made the group, the condition inferred for Darwin, so
+  // Linux shows the failure; the harness now asks the group, not the errno.
   it.each(['parent', 'child'] as const)('the timed harness runs the child when the %s\'s setpgid fails after the group exists (D-8343)', (side) => {
     seed();
     fs.writeFileSync(path.join(h.home, 'DarwinSetpgid.pm'), `package DarwinSetpgid;
