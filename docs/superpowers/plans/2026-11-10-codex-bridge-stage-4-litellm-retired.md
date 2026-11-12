@@ -397,33 +397,6 @@ python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-a --flip 2026-10-27T
 Read `ccrc doctor`'s `codex` row and `ccrc codex status <id> --json` beside them. The readings and the verdict go in
 the Stage 2 plan's record, as its step 7 says.
 
-**Drift reads growth since a baseline reading.** A stats file's `unexplained` list is cumulative: the bridge carries a
-name until a reviewed change to `ccd/codexbridge/known.py` explains it. Both lanes carry `claude-opus-5-5` and
-`claude-sonnet-4-6` under `modelSubstitution`, from the security-guidance plugin's LLM review, and that list alone
-fails drift for good. Neither id is explained in `known.py` (that would hide a real Claude Code fallback, which sends
-exactly `claude-opus-5-5`), and the stats file is never edited by hand. Instead:
-
-1. Wait until the plugin switch has reached both lanes. First, the fleet box runs a build that carries the switch
-   (`ccrc version`, `ccrc update --check`): a build without it has no such key in its desired settings, so it lists no
-   settings drift either. Only then does the lane's `ccrc models <id> show` listing no settings drift mean the key is
-   on disk. Then every GPT-lane session has restarted since, and the plugin's own log on the lane says its LLM review
-   is disabled.
-2. Take one `--json` reading per lane and keep it, outside the repository:
-
-   ```
-   python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-b --flip 2026-10-27T06:26:03Z --baseline-since 2026-10-22T10:48:00Z --json > <kept>/lane-b.drift-baseline.json
-   python3 -I ~/ccrc/deploy/measure-codex-watch.py --lane lane-a --flip 2026-10-27T12:32:04Z --baseline-since 2026-10-22T10:48:00Z --json > <kept>/lane-a.drift-baseline.json
-   ```
-
-3. Leave time for real use of the lanes: the plugin's review ran on every Stop, so a day of ordinary sessions shows
-   whether it is really off.
-4. Take R1's readings again, each with `--drift-baseline <kept>/<lane>.drift-baseline.json`. Drift then passes only if
-   no unexplained name is new or still growing since the baseline, the `overflow` and `unrecognised` markers included
-   (a restart drops them from the list and keeps their counts, so they are compared listed or not). A counter that
-   went backwards, a lane that answered no request since, a baseline of another lane, or a stats file replaced since
-   (another `since`) reads `unmeasured`, never pass. The drift lines print the requests answered since, and each name
-   with its baseline and current counts and its state.
-
 **R2. Roll out the build that carries wave 4a**, fleet box first. Every running bridge restarts once, behind its
 5-second drain.
 
