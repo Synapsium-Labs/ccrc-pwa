@@ -132,13 +132,6 @@ export function landedNoticeModeOf(mergedAt: string | null, now: number): Notice
   return Number.isFinite(at) && now - at <= LANDED_FRESH_MS ? 'record-always' : 'record-only';
 }
 
-/** The mark's input for an answer that lands or closes, built from the candidate (the compare-and-set is the pin the
- *  reader read). */
-export function landedLandOf(cand: LandedCandidate, answer: Extract<LandedAnswer, { act: 'land' | 'close' }>, at: number): LandingLand {
-  return { kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at, outcome: answer.outcome,
-    expect: { id: cand.id, pinnedAt: cand.pinnedAt } };
-}
-
 /** The close's mark (landing order wave 5h): a `done` work close whose own re-measure read the bound PR MERGED lands the
  *  entry by the close, with no compare-and-set (`expect: null`: the close read no entry). Anything else, an abandon
  *  included, is null. */

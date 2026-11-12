@@ -13,8 +13,9 @@ import { readPrStatePrLine } from '../prstate.js';
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { LandingEntry } from '../../../shared/landingLine.js';
+import type { LandingLand } from './landingEntry.js';
 import {
-  landedAnswerOf, landedCandidatesOf, landedLandOf, landedNext, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf,
+  landedAnswerOf, landedCandidatesOf, landedNext, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf,
   pickLandedReads, type LandedCandidate, type LandedMemory,
 } from './landed.js';
 
@@ -100,7 +101,10 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
       }
       continue;
     }
-    const mark = deps.coord.advanceLanding(landedLandOf(cand, answer, deps.now()));
+    const mark = deps.coord.advanceLanding({
+      kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at: deps.now(), outcome: answer.outcome,
+      expect: { id: cand.id, pinnedAt: cand.pinnedAt },
+    } satisfies LandingLand);
     if (!mark.ok) {
       if (mark.error === 'landing-recovery-unresolved' || mark.error === 'landing-identity-conflict') {
         // A recovery refusal is the line's, not the PR's: read it again at the next sweep.
