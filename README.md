@@ -1026,8 +1026,10 @@ floor and reading `current` on the older tag included — stops a rollout before
 
 **Two trust roots, both named.** Everything above verifies against two things nothing on the box verifies: the
 Sigstore trusted root vendored in the INSTALLED tree at `deploy/sigstore-trusted-root.jsonl` — a snapshot taken
-when it was vendored, whose age nothing on the box reports, so an upstream key rotation it outlives makes it
-refuse every newer bundle until refreshed (the override below, for one update) — and a box's first
+when it was vendored, so an upstream key rotation it outlives makes it
+refuse every newer bundle until refreshed (the override below, for one update; for good, `gh attestation trusted-root`
+written over that file in a release PR). Doctor's `sigstore-root` check reads the newest validity start of any key in it
+and WARNs `stale` past 270 days (`unreadable` when the file cannot be read; D-8388) — and a box's first
 `install.sh --release`, which trusts the transport checksum alone — trust on first use — and places the verifier
 every later update runs. Whoever controls the environment can substitute the vendored root through
 `CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches a
