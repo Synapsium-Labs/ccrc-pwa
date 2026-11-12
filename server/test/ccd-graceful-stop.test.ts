@@ -33,8 +33,8 @@ const alive = (pid: number): boolean => { try { process.kill(pid, 0); return tru
 type Handler = 'exit' | 'ignore' | 'slow' | 'silent';
 interface Pane { term?: Handler; hup?: Handler }
 /** The handlers set a flag the loop reads, rather than exit: two signals pending together (a TERM, then the kill's HUP)
- *  are both recorded, since bash runs HUP's trap before TERM's and an `exit` there would hide the second. */
-/** The snippet that starts the pane process (a job of the snippet's own bash) and waits until its traps stand. */
+ *  are both recorded, since bash runs HUP's trap before TERM's and an `exit` there would hide the second.
+ *  The snippet starts the pane process (a job of the snippet's own bash) and waits until its traps stand. */
 const PANE = (p: Pane = {}): string => {
   const body = (name: string, hd: Handler | undefined): string => {
     const rec = `echo ${name} >> $HOME/fx/signals`;
@@ -75,7 +75,7 @@ interface Run { realDetach?: boolean; pane?: Pane; env?: string; pre?: string; v
 const run = (r: Run = {}): string => h.sh(`${PANE(r.pane)}
   ${STUBS}
   ${r.realDetach ? '' : INLINE}
-  GRACEFUL_STOP_OBSERVE_S=2 GRACEFUL_STOP_TERM_WAIT_S=2
+  GRACEFUL_STOP_OBSERVE_S=5 GRACEFUL_STOP_TERM_WAIT_S=5
   ${r.env ?? ''}
   ${r.pre ?? ''}
   ${r.verb ?? `_watchdog_resume_run ${ID}`}`);
@@ -175,7 +175,7 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     expect(gs()).toEqual([expect.stringMatching(/^graceful-stop lane-a-project-a: site=limit-resume mode=live exited=\d+$/)]);
     const n = Number(/exited=(\d+)$/.exec(gs()[0]!)![1]);
     expect(n).toBeGreaterThanOrEqual(300);
-    expect(n).toBeLessThan(10000);
+    expect(n).toBeLessThan(5000);
   });
 
   it('live: a process that ignores SIGTERM is waited GRACEFUL_STOP_TERM_WAIT_S, then killed as today', () => {

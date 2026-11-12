@@ -118,7 +118,7 @@ Six mechanisms, read off the source at `bbb5e714`:
 2. **The restarted session is told nothing specific.** The redrive prompt is one constant (`RESUME_PROMPT`,
    `ccd/ccd:1208`): background work "is gone: re-check their journals". Resuming by run id works across accounts
    when the journal is present; the eight journal-missing refusals are the carry, and the five scriptPath
-   refusals are unexplained (stage 2 measures them). *(History, dated: true until rev 12, 2026-11-11. Since D-5237 the
+   refusals are unexplained (stage 2 measures them). *(History, dated: true until D-5237. Since D-5237 the
    prompt is composed per spawn from the end's cause (`ccd/ccd#_resume_prompt_for`), and the typed fallback types that
    composed prompt. Since 2026-10-22 a config-root script path passed after a swap was refused 17 of 17 times on disk.
    On 2.1.314, after one swap, R2 (the old root's returned path) and R1 (the current-root path, the carry's hard link)
@@ -897,7 +897,7 @@ actual restart or stop count.
   session in place after a stated reset (`ccd/ccd#_watchdog_resume_run`, cause `limit-resume`). The typed fallback types
   D-5237's composed prompt. In 6a the stop's default sends no signal; it adds a bounded pane read before the kill (at
   swap and limit-resume) and a detached observer unit after it, and SIGTERM before the kill only behind
-  `graceful-stop-live` (D-8317).)*
+  `graceful-stop-live` (D-8317, D-8318).)*
 - **A new, named process-stop authority, bounded.** Stage 6 stops the scopes of panes ccd itself ends and (C11)
   dead ccd pane scopes that have done nothing for six hours and serve nothing; never a scope of another live tmux
   server, and never a scope that is not a pane's.
@@ -1145,4 +1145,4 @@ Preventing the rate-limit deaths themselves (no headroom estimation, C4); recove
 cut mid-turn (a resumed agent re-runs from its start); reconciling divergent transcripts across roots (counted and
 named, never overwritten); typing anything but the fallback's composed prompt; the Codex
 lane's delegation (`not-applicable`). *(Amended 2026-11-11, rev 12: "server mail carrying resume lists" is no longer
-out of scope, C15; "the fallback's constant" was false from D-5237 on.)*
+out of scope, C15; "the fallback's constant" was false from D-5237 on; "the Codex lane's delegation" rests on the premise §6's rev-12 note corrects: `not-applicable` is keyed on a session whose config root holds no Claude Code transcript for its uuid, not on the exec kind (call H, D-8331).)*
