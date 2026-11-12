@@ -38,7 +38,7 @@ is re-measured on `origin/main` before that pull request and before its merge, n
 "60" that names the legacy length (§5, §7.2 items 1, 5 and 7, §7.4, §8 tests 1, 2 and 9) as *L*, the prefix's
 length at that moment.
 
-Writing the plan settled three details that §7.2 left open. Each keeps §7's behaviour and its tests:
+Writing the plan settled four details that §7.2 left open. Each keeps §7's behaviour and its tests:
 
 1. **The frozen entries have names too.** Entry *k* of the prefix is `legacy-<k>` with three digits (`legacy-001` to
    `legacy-061`), and it is declared after `legacy-<k-1>`. Every named migration is after `legacy-<L>` without saying
@@ -47,11 +47,25 @@ Writing the plan settled three details that §7.2 left open. Each keeps §7's be
    the file's `user_version` *v*, in that migration's own transaction. Nothing is written when nothing is missing, and
    a fresh install whose first migration fails still leaves no file behind. *a* in §7.2 item 4 then counts every name,
    and the count rule of item 5 reads `user_version = |applied set|`, the same number as *L* plus the named ones.
+   Two changes to §5 and §7.2 item 3 follow, and the plan builds these, not the earlier text:
+   - **Every migration's transaction creates the table**, a frozen entry's included (`CREATE TABLE IF NOT EXISTS`,
+     then its own row), not only the first named one's. So rows and version always commit together, and a file a
+     legacy-only open migrated already holds the set. Two existing tests compare the whole schema after such an open
+     and see the new table: `coord-calls-store.test.ts` (the objects its entry adds) and `coord-db.test.ts`'s "is
+     ADDITIVE: every older table and index is byte-for-byte …". Each leaves `coord_migrations` out once, in the
+     runner's pull request (plan Task 4 Step 4), and the first test also leaves out what shipped named migrations
+     create, so a later named migration edits neither.
+   - **The table is `coord_migrations (name TEXT PRIMARY KEY, appliedAt INTEGER)`**, not §5's
+     `appliedAt INTEGER NOT NULL, build TEXT`. `appliedAt` is nullable because the backfilled rows have no time
+     (NULL reads "applied before the set was kept"). `build` is dropped: nothing reads it, `openCoordDb` is not told
+     the build, and a named migration can add the column later if a reader appears.
 2. **Up to the prefix's end the version is the authority.** While `user_version` is at or below *L*, the applied set
    is exactly `legacy-001` to `legacy-<v>`, whatever rows the table holds, and the backfill writes it so. No build
    writes such a file with any other rows (a row and its version commit together, and the version only goes up), so
    this only meets a test that rewinds a file by hand (`run-close-switch.test.ts`'s rewind to 53) or a fixture built
-   without the runner. Both keep working unchanged.
+   without the runner. Both keep working unchanged. A hand rewind re-applies every named migration too (the rewrite
+   drops their rows), and their tables are still there, so a test that rewinds builds its file with no named
+   migration (`coordDbAt`, plan Task 5) and never depends on the shipped named set.
 3. **The apply order is topological with a fixed tiebreak.** The runner orders the missing migrations by their
    declared dependencies (Kahn's algorithm), choosing among the ready ones by name in byte order. The chain on the
    frozen entries makes them apply in position order, exactly as today's loop does. A dependency that names no
