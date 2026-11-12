@@ -173,7 +173,7 @@ describe('sessionHeaderView (W2 Task S7a, D-5471)', () => {
       const p = hostProps(session, status);
       expect(viewOf(p).stop).toEqual({ shown: true, enabled });
       render(createElement(SessionHeaderHost, p));
-      expect((screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(!enabled);
+      expect((screen.getByRole('button', { name: 'Esc (Stop)' }) as HTMLButtonElement).disabled).toBe(!enabled);
       cleanup();
     }
     // Where a physical Escape key exists the cap is absent, busy or not.
@@ -181,7 +181,7 @@ describe('sessionHeaderView (W2 Task S7a, D-5471)', () => {
     const p = hostProps(session, 'busy');
     expect(viewOf(p, true).stop).toEqual({ shown: false, enabled: true });
     render(createElement(SessionHeaderHost, p));
-    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Esc (Stop)' })).toBeNull();
   });
 
   it('the header draws the view\'s title and Stop, not its own', () => {
@@ -192,11 +192,11 @@ describe('sessionHeaderView (W2 Task S7a, D-5471)', () => {
     const { container } = render(createElement(SessionHeaderHost, p));
     expect(container.querySelector('.chat-title')?.textContent).toContain('sentinel-title');
     expect(container.querySelector('.chat-title')?.textContent).not.toContain('demo');
-    expect((screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Esc (Stop)' }) as HTMLButtonElement).disabled).toBe(true);
     cleanup();
     drop.override = { stop: { shown: false, enabled: true } };
     render(createElement(SessionHeaderHost, p));
-    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Esc (Stop)' })).toBeNull();
   });
 
   it('a working row ticks every second in the busy tint; any other ticks every 30 s', () => {

@@ -23,6 +23,7 @@ import {
 import type { PaneHistoryReply } from '../../shared/api';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { labelInName, shownText } from './labelInName';
 
 afterEach(() => {
   cleanup();
@@ -503,7 +504,7 @@ describe('the phone, which has no wheel', () => {
     vi.stubGlobal('fetch', fetchImpl);
     const { h, ws } = mountDrawer();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Scroll back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hist (Scroll back)' }));
     await waitFor(() => expect(h.write).toHaveBeenCalled());
 
     expect(fetchImpl.mock.calls.map((c) => c[0])).toEqual([
@@ -699,7 +700,7 @@ describe('the console history has a door a thumb can reach', () => {
     // this key stays beside them, in the bar's tail, as an action and not a
     // key: the one affordance touch has is never laid out as one of them.
     render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
-    const door = screen.getByRole('button', { name: 'Scroll back' });
+    const door = screen.getByRole('button', { name: 'Hist (Scroll back)' });
     expect(door.closest('.term-keys-seq'), 'the history door scrolls off the edge with the keys').toBeNull();
     expect(door.closest('.term-keys'), 'the history door left the key bar entirely').not.toBeNull();
     // …and every sequence cap DID stay in a half, so this is a split and not
@@ -715,7 +716,7 @@ describe('the console history has a door a thumb can reach', () => {
     // reach the Claude Code TUI, which is the prompt paging the operator's
     // ruling puts on the arrows.
     render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
-    const door = screen.getByRole('button', { name: 'Scroll back' });
+    const door = screen.getByRole('button', { name: 'Hist (Scroll back)' });
     expect(door.textContent).toBe('hist');
     expect(door.className).toContain('keycap--act');
   });
@@ -734,7 +735,7 @@ describe('the history door is a toggle', () => {
     vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
     const { t, h, ws } = mountDrawer();
 
-    const door = screen.getByRole('button', { name: 'Scroll back' });
+    const door = screen.getByRole('button', { name: 'Hist (Scroll back)' });
     expect(door.textContent, 'the door did not offer the history').toBe('hist');
     expect(door.getAttribute('aria-pressed')).toBe('false');
 
@@ -758,6 +759,24 @@ describe('the history door is a toggle', () => {
     expect(door.getAttribute('aria-pressed')).toBe('false');
     // Still not a key: the way out sends nothing to the pane either.
     expect(ws.sent, 'the toggle put a control sequence on the socket').toEqual([]);
+  });
+
+  // LABEL IN NAME (WCAG 2.5.3, D-8383): no story renders the drawer, so this is
+  // where the door is measured. Its shown legend is a word of its name in both
+  // states: `hist` leads `Hist (Scroll back)`, and `live` ends `Back to live`.
+  it('the door\'s name holds the legend it shows, both ways (label in name, D-8383)', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h } = mountDrawer();
+    const door = screen.getByRole('button', { name: 'Hist (Scroll back)' });
+    expect(shownText(door)).toBe('hist');
+    expect(labelInName(shownText(door), door.getAttribute('aria-label')!)).toBe(true);
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+    const back = screen.getByRole('button', { name: 'Back to live' });
+    expect(shownText(back)).toBe('live');
+    expect(labelInName(shownText(back), back.getAttribute('aria-label')!)).toBe(true);
   });
 
   it('the badge over a history that is up is gone, and the two states that need words keep them', async () => {
@@ -2459,9 +2478,9 @@ describe('the drawer’s other two frames', () => {
 
     // And the history cap, which is an ACTION rather than a sequence — same
     // rule, and it must not reach the pty at all.
-    // `Scroll back` while the live pane is up; `historyDoor()` finds its other
+    // `Hist (Scroll back)` while the live pane is up; `historyDoor()` finds its other
     // name (`Back to live`), which only exists once the history is showing.
-    const histCap = screen.getByRole('button', { name: 'Scroll back' });
+    const histCap = screen.getByRole('button', { name: 'Hist (Scroll back)' });
     ws.sent.length = 0;
     expect(fireEvent.pointerDown(histCap, { pointerId: 1, isPrimary: true, button: 0 })).toBe(false);
     expect(ws.sent).toEqual([]);

@@ -267,7 +267,7 @@ import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
-import { labelInName, labelWords, shownText } from './labelInName';
+import { labelInName, labelWords, namesWithoutTheirLabel, shownText } from './labelInName';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
 vi.mock('../src/lib/push', () => ({
@@ -766,6 +766,17 @@ describe('the status bar', () => {
     const keys = within(footer()).getAllByRole('button');
     expect(keys.map((k) => k.getAttribute('data-command'))).toEqual(['open-palette', 'show-shortcuts']);
     for (const k of keys) expect(k).toHaveClass('ins-status-key');
+  });
+
+  // LABEL IN NAME (WCAG 2.5.3, D-8383): no story renders the status bar, so its
+  // keys are measured here. The ⌘K cap shows a command icon and `K`; its name
+  // spells the key as it is said, `Command K`, then what it does.
+  it('the status bar\'s keys hold the words they show (label in name, D-8383)', () => {
+    mount('/');
+    const palette = within(footer()).getByRole('button', { name: 'Command K (Open the command palette)' });
+    expect(palette).toHaveAttribute('data-command', 'open-palette');
+    expect(shownText(palette)).toBe('K');
+    expect(namesWithoutTheirLabel(footer())).toEqual([]);
   });
 
   it('the agent link reads "agent: checking" until the health poll answers, never an all-clear', () => {
