@@ -82,7 +82,7 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
   });
 
   it('advanceLanding owns pin, repin, ejection and quarantine on landing_entries and the one witness write; replay owns neither', () => {
-    expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'UPDATE']);
+    expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'UPDATE', 'UPDATE']);
     const witness = allWrites(/^landing_projection_witness$/);
     expect(witness.length).toBe(1);
     expect(witness.every(inWriter)).toBe(true);
@@ -142,11 +142,38 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(names).not.toContain('advance');
   });
 
-  it('advanceLanding has one caller, advanceAct', () => {
-    const act = symbolOf(ROUTES, ADVANCE_ACT);
-    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'advanceLanding').map((c) => ({ file: f, start: c.start })));
+  it('detail has two statements, both inside advanceLanding: the land UPDATE writes state and detail and nothing else, and the re-pin UPDATE clears it', () => {
+    const marks = writes(/\bdetail\b/i).filter((q) => /^landing_entries$/.test(q.table ?? ''));
+    expect(marks.map((q) => q.verb)).toEqual(['UPDATE', 'UPDATE']);
+    expect(marks.filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
+    const flat = marks.map((q) => q.source.replace(/\s+/g, ' '));
+    expect(flat.filter((t) => /SET state = \?, detail = \? WHERE id = \?/.test(t))).toHaveLength(1);
+    expect(flat.filter((t) => /\bdetail = NULL\b/.test(t))).toHaveLength(1);
+  });
+
+  it('advanceLanding is declared once', () => {
+    expect(() => symbolOf(STORE, WRITER)).not.toThrow();
+    const text = parsedFile(STORE).text;
+    expect(text.match(/^\s*advanceLanding[<(]/gm) ?? []).toHaveLength(1);
+  });
+
+  it('decideLandingLand has one call, inside advanceLanding', () => {
+    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'decideLandingLand').map((c) => ({ file: f, start: c.start })));
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.file.endsWith(ROUTES) && calls[0]!.start >= act.start && calls[0]!.start < act.end).toBe(true);
+    expect(calls.every(inWriter)).toBe(true);
+  });
+
+  it('advanceLanding has three callers: advanceAct, the close\'s land step and the landed lane\'s pass, and only advanceAct passes a run arm', () => {
+    const act = symbolOf(ROUTES, ADVANCE_ACT);
+    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'advanceLanding')
+      .map((c) => ({ file: f, start: c.start, text: parsedFile(f).text.slice(c.start, c.start + 400) })));
+    expect(calls).toHaveLength(3);
+    const inAct = calls.filter((c) => c.file.endsWith(ROUTES) && c.start >= act.start && c.start < act.end);
+    expect(inAct).toHaveLength(1);
+    expect(inAct[0]!.text).not.toMatch(/kind: 'land'/);
+    const others = calls.filter((c) => !inAct.includes(c));
+    expect(others).toHaveLength(2);
+    expect(others.every((c) => /kind: 'land'/.test(c.text))).toBe(true);
   });
 
   it('advanceLanding decides the edge before it writes, in one tx', () => {

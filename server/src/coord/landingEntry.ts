@@ -5,7 +5,7 @@ import type { RunState } from '../../../shared/api.js';
 import type { ChecksMode } from '../../../shared/landing.js';
 import { isLandingEjectionKind, isLandingEntryState } from '../../../shared/landingLine.js';
 import type {
-  LandingAuthority, LandingEjectionKind, LandingEntry, LandingHistoricalBinding, LandingIdentity,
+  LandingAuthority, LandingEjectionKind, LandingEntry, LandingEntryState, LandingHistoricalBinding, LandingIdentity,
   LandingJournalRecord, LandingMutationCode, LandingRecovery, LandingRecoverySubject, LandingSubjectRef, LandingWrite,
 } from '../../../shared/landingLine.js';
 import type { LandingAuthorityCommand, LandingMutationDecision, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
@@ -58,7 +58,8 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
   if (landing.kind === 'pin') {
     if (landing.pr === null) return { act: 'none', write: { kind: 'no-pr' } };
     if (current === null) return { act: 'insert' };
-    if (current.state === 'pinned' || current.state === 'ejected') return { act: 'repin', id: current.id };
+    // A `closed` row re-pins as an ejected one does: GitHub lets a closed PR reopen, and only a verified pin brings it back.
+    if (current.state === 'pinned' || current.state === 'ejected' || current.state === 'closed') return { act: 'repin', id: current.id };
     // Wave 5f: `projection` is the single row reader's verdict on `current`. A quarantined row (literal unknown with exactly
     // the stale-head marker and every retained field readable) re-pins; every other unknown row stays kept.
     if (current.state === 'unknown' && f.projection?.kind === 'readable' && f.projection.quarantine === 'stale-episode-head') {
@@ -82,6 +83,56 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
   }
   return { act: 'eject', id: current.id, base: landing.ejection?.base ?? null, kind: landing.ejection?.kind ?? null,
     ejections: current.ejections >= Number.MAX_SAFE_INTEGER ? current.ejections : current.ejections + 1 };
+}
+
+// ── Landing order wave 5h: the landed reader's mark (the land arm of the one writer) ──
+
+/** The states a mark may take out of the line. */
+export const LANDING_LANDABLE_STATES = ['pinned', 'ejected'] as const;
+
+/** Whether the land arm may mark a row: its state is landable and its projection is readable with no quarantine marker.
+ *  The ONE copy of the rule: `decideLandingLand` and the landed reader's candidate walk both call it. */
+export function isLandable(state: LandingEntryState, projection: LandingProjectionRead | null): boolean {
+  return (LANDING_LANDABLE_STATES as readonly string[]).includes(state)
+    && projection?.kind === 'readable' && projection.quarantine === null;
+}
+
+/** What GitHub said of one PR: merged (with the facts the mark records), closed without merging, or no such PR. */
+export type LandingOutcome =
+  | { word: 'merged'; head: string; base: string; mergedAt: string | null; mergeCommit: string | null;
+    train: { number: number; mergeCommit: string } | null }
+  | { word: 'closed' | 'absent' };
+
+/** The land arm's input. `expect` is the reader's compare-and-set: the entry it read before the GitHub call. `null` is
+ *  the close's: a merge is final, so no later pin can make it untrue. */
+export interface LandingLand {
+  kind: 'land'; project: string; pr: number; by: 'close' | 'reader'; at: number; outcome: LandingOutcome;
+  expect: { id: number; pinnedAt: number } | null;
+}
+
+/** What the land arm recorded, as the store answers it. */
+export type LandingLandWrite =
+  | { kind: 'landed' | 'closed'; entry: LandingEntry }
+  | { kind: 'kept'; state: LandingEntryState }
+  | { kind: 'no-entry' }
+  | { kind: 'moved' };
+
+/** The mark's decision, from values: which row takes which word and `detail`, or why nothing is written. */
+export function decideLandingLand(f: { land: LandingLand; current: LandingEntry | null; projection: LandingProjectionRead | null }):
+  { act: 'land'; id: number; state: 'landed' | 'closed'; detail: string } | { act: 'none'; write: LandingLandWrite } {
+  const { land, current } = f;
+  if (current === null) return { act: 'none', write: { kind: 'no-entry' } };
+  if (land.expect !== null && (land.expect.id !== current.id || land.expect.pinnedAt !== current.pinnedAt)) {
+    return { act: 'none', write: { kind: 'moved' } };
+  }
+  if (!isLandable(current.state, f.projection)) return { act: 'none', write: { kind: 'kept', state: current.state } };
+  const o = land.outcome;
+  const base = { v: 1, by: land.by, at: land.at, word: o.word };
+  const detail = o.word === 'merged'
+    ? { ...base, ...(o.head !== current.pinnedSha ? { head: o.head } : {}), base: o.base, mergedAt: o.mergedAt,
+      mergeCommit: o.mergeCommit, train: o.train?.number ?? null, trainMergeCommit: o.train?.mergeCommit ?? null }
+    : base;
+  return { act: 'land', id: current.id, state: o.word === 'merged' ? 'landed' : 'closed', detail: JSON.stringify(detail) };
 }
 
 const isPositiveSafe = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
@@ -364,16 +415,21 @@ export type LandingHoldGate =
   | { ok: false; error: Extract<LandingMutationCode, 'landing-recovery-unresolved' | 'landing-identity-conflict'> };
 
 /**
- * Whether a pin or retreat may go ahead while recovery holds the project (shared contract §6). A hold is refused to every
+ * Whether a pin, retreat or mark may go ahead while recovery holds the project (shared contract §6). A hold is refused to every
  * retreat and every pin, with two bounded exceptions: a pin may resolve its OWN subject's missing projection, or its
  * exact-identity association mismatch while that projection is readable; and a pin to a brand-new PR (no projection and
  * no recovered subject in the project) is allocated the next id and materialized normally. An identity collision anywhere in the project
  * has no exception and answers its own word.
  */
-export function landingHoldGate(recovery: LandingRecovery, kind: 'pin' | 'retreat', key: { project: string; pr: number },
+export function landingHoldGate(recovery: LandingRecovery, kind: 'pin' | 'retreat' | 'land', key: { project: string; pr: number },
   projection: LandingProjectionRead | null): LandingHoldGate {
   if (recovery.hold === null) return { ok: true, own: null };
   if (recovery.subjects.some((s) => s.projection.kind === 'identity-conflict')) return { ok: false, error: 'landing-identity-conflict' };
+  // A mark only takes an entry out of the line and never chooses a head, so only the entry's own unresolved subject holds it.
+  if (kind === 'land') {
+    return recovery.subjects.some((s) => s.project === key.project && s.pr === key.pr)
+      ? { ok: false, error: 'landing-recovery-unresolved' } : { ok: true, own: null };
+  }
   const own = kind === 'pin' ? recovery.subjects.find((s) => s.project === key.project && s.pr === key.pr) : undefined;
   if (own !== undefined && (own.projection.kind === 'missing' || (own.projection.kind === 'association-unmeasured' && projection?.kind === 'readable'))) {
     return { ok: true, own };

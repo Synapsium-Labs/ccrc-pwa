@@ -13,12 +13,21 @@ export const LANDING_ENTRY_STATE = {
   ejected: 'sent back from the line for a fix round',
   landed: 'merged into its base',
   withdrawn: 'taken out of the line by the operator',
+  closed: 'GitHub reads the PR closed without merging, or answers that no pull request has its number',
   unknown: 'a row this build cannot read, or one measured stale and set aside until a verified pin',
 } as const;
 export type LandingEntryState = keyof typeof LANDING_ENTRY_STATE;
 export const LANDING_ENTRY_STATES: readonly LandingEntryState[] = Object.keys(LANDING_ENTRY_STATE) as LandingEntryState[];
 export const isLandingEntryState = (v: unknown): v is LandingEntryState =>
   typeof v === 'string' && (LANDING_ENTRY_STATES as readonly string[]).includes(v);
+
+/** Which states end an entry's life in the line. A new state is a compile error until it is classified here; only a
+ *  verified pin can bring a `closed` row back (GitHub lets a closed PR reopen). */
+export const LANDING_ENTRY_TERMINAL: Record<LandingEntryState, boolean> = {
+  pinned: false, ejected: false, unknown: false, landed: true, withdrawn: true, closed: true,
+};
+export const LANDING_TERMINAL_STATES: readonly LandingEntryState[] =
+  LANDING_ENTRY_STATES.filter((s) => LANDING_ENTRY_TERMINAL[s]);
 
 /** Why a pinned entry was sent back: the queue dequeued it, its head moved, or it conflicts with its base. */
 export const LANDING_EJECTION_KINDS = ['dequeued', 'new-head', 'conflict'] as const;
