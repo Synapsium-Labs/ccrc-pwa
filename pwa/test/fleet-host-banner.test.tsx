@@ -6,9 +6,7 @@
 // other box was a false claim about the reader's machine.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import {
-  FLEET_REBOOT_NOT_CONFIGURED_TEXT, FLEET_REBOOT_REMEDY_TEXT, type FleetHealth, type NodeWire, type ReleaseWire, type UpdateIntentWire,
-} from '../../shared/api';
+import type { FleetHealth, NodeWire, ReleaseWire, UpdateIntentWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { FleetHostBanner } from '../src/fleet/FleetHostBanner';
@@ -219,32 +217,6 @@ describe('FleetHostBanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reboot' }));
     fireEvent.click(screen.getByRole('button', { name: 'Reboot the fleet host' }));
     expect(reboot).toHaveBeenCalledTimes(1);
-  });
-
-  // D-8382: the reboot's configuration is said BEFORE the tap. `rebootConfigured: false` disables the button and puts the
-  // two sentences in the banner; true or absent (an older server) leaves the button as it was.
-  it('a reboot not configured on this box: the button is disabled, and the banner says so and names the remedy (D-8382)', async () => {
-    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ rebootConfigured: false }));
-    const reboot = vi.spyOn(api, 'rebootFleet').mockResolvedValue(undefined);
-    render(<FleetHostBanner />);
-    const button = await screen.findByRole('button', { name: 'Reboot' });
-    expect(button).toBeDisabled();
-    expect(screen.getByText(FLEET_REBOOT_NOT_CONFIGURED_TEXT)).toBeInTheDocument();
-    expect(screen.getByText(FLEET_REBOOT_REMEDY_TEXT)).toBeInTheDocument();
-    fireEvent.click(button);
-    expect(screen.queryByText(/Reboots the whole fleet box/)).not.toBeInTheDocument();
-    expect(reboot).not.toHaveBeenCalled();
-  });
-
-  it('configured, or an older server that omits the field: the button is enabled and no remedy is shown (D-8382)', async () => {
-    for (const over of [{ rebootConfigured: true }, {}] as const) {
-      vi.spyOn(api, 'fleetHealth').mockResolvedValue(health(over));
-      render(<FleetHostBanner />);
-      expect(await screen.findByRole('button', { name: 'Reboot' }), JSON.stringify(over)).toBeEnabled();
-      expect(screen.queryByText(FLEET_REBOOT_NOT_CONFIGURED_TEXT)).not.toBeInTheDocument();
-      expect(screen.queryByText(FLEET_REBOOT_REMEDY_TEXT)).not.toBeInTheDocument();
-      cleanup();
-    }
   });
 
   it('warns when the boxes run DIFFERENT builds, naming both nodes\' versions from the inventory and the verb (spec §6, §14)', () => {

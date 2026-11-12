@@ -28,7 +28,7 @@ import {
 /** What the route reads through. */
 export interface OverridesReadDeps {
   readonly cfg: Pick<CcrcConfig, 'registryDir' | 'ccrcDir' | 'role' | 'fleetMode'>;
-  readonly io: Pick<FleetIO, 'readdir' | 'statMeasured'>;
+  readonly io: Pick<FleetIO, 'readdirMeasured' | 'statMeasured'>;
 }
 
 /** The fleet host's `~/.ccrc` rows, one `statMeasured` each, at `<ccrcDir>/<file>` (in remote mode the same absolute path
@@ -45,9 +45,9 @@ export async function readCcrcFileSwitches(io: Pick<FleetIO, 'statMeasured'>, cc
 /** One answer of the route: both reads at once, composed. */
 export async function overridesViewNow(deps: OverridesReadDeps): Promise<OverridesView> {
   const [listing, files] = await Promise.all([
-    deps.io.readdir(deps.cfg.registryDir),
+    deps.io.readdirMeasured(deps.cfg.registryDir),
     readCcrcFileSwitches(deps.io, deps.cfg.ccrcDir),
   ]);
   const { boxes, marker, file } = approvalsTopologyOf(deps.cfg.role, deps.cfg.fleetMode, deps.cfg.ccrcDir);
-  return { overrides: overridesOf(readSwitches(listing), files), approvals: { boxes, marker, file } };
+  return { overrides: overridesOf(readSwitches(listing.ok ? listing.entries : null), files), approvals: { boxes, marker, file } };
 }

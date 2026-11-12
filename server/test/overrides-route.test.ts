@@ -96,7 +96,7 @@ describe('GET /api/fleet/overrides (D-8382)', () => {
   it('an unlistable registry reads every registry row unmeasurable, never clear; the ~/.ccrc rows are still read', async () => {
     const home = mkTmp('ccrc-overrides-');
     const base = testDeps(home);
-    const io: FleetIO = { ...base.io, readdir: async () => null };
+    const io: FleetIO = { ...base.io, readdirMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
     const body = await read(await serve({ ...base, io }));
     for (const r of body.overrides) {
       expect(r.state, r.name).toBe((CCRC_SWITCH_FILES as readonly string[]).includes(r.name) ? 'clear' : 'unmeasurable');
