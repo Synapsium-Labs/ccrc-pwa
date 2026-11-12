@@ -5796,7 +5796,10 @@ that holder (`null` when the holder measures unable to take mail — escalate to
 conflict is the address, not an obstacle. Re-posting the same paths renews the claim and restates
 its `intent`, the line that stands in for a held workspace's frozen title. A claim writes nothing to
 the registry: no hold, no verb. Its lease is 45 minutes, renewed on the watcher's tick while the holder
-measures running (an unmeasurable registry reads as held), and no renewal moves its 8-hour hard cap.
+measures running (an unmeasurable registry reads as held), and no renewal moves its 8-hour hard cap. The one
+exception (D-8395): a holder measured running that re-posts its paths in the last 45 minutes before the cap gets a new
+claim with a fresh lease and cap, and the old row ends `rechained`. The new row's `chainedFrom` names the old one,
+and the answer says `rechained: [{from, to}]`; a holder that is not running still lapses at the cap.
 The holder ends it with `POST /api/claims/:id/release` (`403 not-owner` for anyone else); the
 operator breaks one with `POST /api/claims/:id/break`, an ungated door, and the row survives as
 `broken`. `GET /api/claims?project=<p>` reads the table — live rows by default, history with

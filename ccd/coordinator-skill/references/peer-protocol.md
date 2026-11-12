@@ -62,6 +62,18 @@ the watcher while the holding session is measured running; the hard cap
 (`CLAIM_HARD_CAP_MS`, 8 h) is never renewed, so a long program re-declares
 its claim rather than holding it forever.
 
+Before the hard cap, a still-busy holder re-takes its paths (D-8395). The
+200 names the cap as `hardExpiresAt`; once it is less than one lease (45 min)
+away and you are still working on those paths, POST the same paths again.
+Because the server measures you running, it ends the old claim
+(`endedBy:"rechained"`) and opens a new one with a fresh lease and a fresh
+8 h cap, whose `chainedFrom` names the old id, and the 200 says so:
+`rechained: [{from, to}]`, with the new `hardExpiresAt`. Release or report
+by the new id (`to`). A re-take earlier than that only renews the lease and
+leaves the cap where it was. A holder the server does not measure running
+is not re-chained and still lapses at the cap. That lapse is the
+`lapsedSince` gap below, so re-take before the cap, not after it.
+
 A 200 that carries `lapsedSince` (`[{id, endedAt, endedBy}]`) means one of
 YOUR claims on these paths lapsed within the last lease (`CLAIM_LEASE_MS`)
 and you have just taken them again: between `endedAt` (when that lease ran
@@ -128,7 +140,9 @@ path the wave touches is treated as still held by its holder: mail the holder
 and dispatch onto that path only once it confirms it is done there, or has
 re-claimed it. `all=1` includes ended rows, because
 "held by X until it died" is an answer, which is why a lapsed claim is kept
-and never deleted. `GET /api/lifecycle?session=<id>` is a workspace's past
+and never deleted. A hold that outlived one 8 h window reads there as a
+chain: each `released` row with `endedBy:"rechained"` is continued by the
+row whose `chainedFrom` is its id (D-8395). `GET /api/lifecycle?session=<id>` is a workspace's past
 tense, and it answers for a workspace that no longer exists — read each
 row's own lifecycle families (`obs`/`dec`/`meas`), never the registry's
 archive stamp, which is measured false on live rows. `GET /api/ledger?project=<slug>`

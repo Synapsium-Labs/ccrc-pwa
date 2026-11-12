@@ -33,7 +33,7 @@ import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type
 import type { CaseDue } from './practiceCases.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
-import { decideClaim, lapseWindowStart, ownLapsesUnder, type ClaimRow } from './claims.js';
+import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
@@ -173,7 +173,7 @@ import {
   // plan Task 16 (D-5298): the approvals row's vocabularies.
   APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
   type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState,
-  type ClaimConflict, type ClaimLapse, type ClaimState, type ClaimSummary,
+  type ClaimConflict, type ClaimLapse, type ClaimRechain, type ClaimRechainEnd, type ClaimState, type ClaimSummary,
   type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
@@ -783,8 +783,10 @@ export type SettleItemsResult =
  *  so this union reads like its `SetWorkItemResult` neighbours). */
 export type ClaimAttemptResult =
   /** `lapsedSince` (D-8392): the caller's own claims that lapsed within the last `CLAIM_LEASE_MS` on paths this
-   *  attempt took again, read inside the same transaction as the grant (`ownLapsesUnder`); empty when none. */
-  | { ok: true; claims: ClaimSummary[]; lapsedSince: readonly ClaimLapse[] }
+   *  attempt took again, read inside the same transaction as the grant (`ownLapsesUnder`); empty when none.
+   *  `rechained` (D-8395): the caller's own claims this attempt carried into a new window, each `{from, to}`; empty
+   *  when none was. */
+  | { ok: true; claims: ClaimSummary[]; lapsedSince: readonly ClaimLapse[]; rechained: readonly ClaimRechain[] }
   | { ok: false; why: 'bad-path'; paths: readonly string[] }
   | { ok: false; why: 'conflict'; conflicts: readonly ClaimConflict[] };
 
@@ -8475,7 +8477,7 @@ export class CoordStore {
   /** The column list, named ONCE — `SELECT *` is banned in this directory. */
   private static readonly CLAIM_COLS =
     'id, project, heldBy, heldByUuid, intent, runId, state, ' +
-    'createdAt, renewedAt, expiresAt, hardExpiresAt, endedAt, endedBy';
+    'createdAt, renewedAt, expiresAt, hardExpiresAt, endedAt, endedBy, chainedFrom';
 
   /** One raw row + its path set -> the typed shape. `state` goes through
    *  `isClaimState`, never a cast — the same rule `hydrateRun`/`feedEvents`
@@ -8487,7 +8489,7 @@ export class CoordStore {
     id: number; project: string; heldBy: string; heldByUuid: string | null;
     intent: string; runId: number | null; state: string; createdAt: number;
     renewedAt: number; expiresAt: number; hardExpiresAt: number;
-    endedAt: number | null; endedBy: string | null;
+    endedAt: number | null; endedBy: string | null; chainedFrom: number | null;
   }, paths: readonly string[]): ClaimSummary | null {
     if (!isClaimState(r.state)) return null;
     return {
@@ -8495,7 +8497,7 @@ export class CoordStore {
       intent: r.intent, runId: r.runId, state: r.state,
       createdAt: r.createdAt, renewedAt: r.renewedAt,
       expiresAt: r.expiresAt, hardExpiresAt: r.hardExpiresAt,
-      endedAt: r.endedAt, endedBy: r.endedBy,
+      endedAt: r.endedAt, endedBy: r.endedBy, chainedFrom: r.chainedFrom,
     };
   }
 
@@ -8542,22 +8544,30 @@ export class CoordStore {
    * (`peerDeliverable` over records the route already holds) — the store
    * cannot measure the fleet, so when the caller did not either, the answer
    * on every conflict is the honest `'unknown'` (D9: unknown is not no).
+   *
+   * `callerLiveness` (D-8395) is the CALLER's own verdict, measured by the route the way the watcher's renew lane
+   * measures a holder (`claimLivenessProbe`). Measured `running`, an own live claim inside its last `CLAIM_LEASE_MS`
+   * before the hard cap that the request overlaps is RE-CHAINED (`rechainTargets`): the old row is released with
+   * `endedBy 'rechained'` and a new row holds the same paths with a fresh lease and a fresh hard cap and
+   * `chainedFrom` naming the old id. Any other verdict, or no measurement, is today's renewal, clipped at the cap.
    */
   claimAttempt(input: {
     project: string; paths: readonly string[]; sessionId: string; uuid: string;
     runId: number | null; intent: string; now?: number;
     holderDeliverable?: (sessionId: string) => PeerDeliverable;
+    callerLiveness?: LivenessVerdict;
   }): ClaimAttemptResult {
     const now = input.now ?? Date.now();
+    const callerLiveness = input.callerLiveness ?? 'unmeasurable';
     const deliverable = input.holderDeliverable ?? ((): PeerDeliverable => 'unknown');
     return tx(this.db, () => {
       // 1 — expire lapsed rows IN THE SAME TX, then read, then insert (D11).
       this.expireLapsedInner(now);
       const liveRows = this.db.prepare(
-        'SELECT id, heldBy, heldByUuid, intent, runId, expiresAt FROM claims ' +
+        'SELECT id, heldBy, heldByUuid, intent, runId, expiresAt, hardExpiresAt FROM claims ' +
         "WHERE project = ? AND state = 'live' ORDER BY id",
       ).all(input.project) as { id: number; heldBy: string; heldByUuid: string;
-                                intent: string; runId: number | null; expiresAt: number }[];
+                                intent: string; runId: number | null; expiresAt: number; hardExpiresAt: number }[];
       const livePaths = this.db.prepare(
         'SELECT claimId, path FROM claim_paths WHERE project = ? AND live = 1 ORDER BY rowid',
       ).all(input.project) as { claimId: number; path: string }[];
@@ -8592,14 +8602,49 @@ export class CoordStore {
       // same paths re-writes intent AND re-arms the lease); only the paths no
       // own claim holds become a new row, so the backstop index never fires
       // on a legitimate re-declaration.
+      //
+      // D-8395 first: the own claims this attempt re-chains hold the requested paths equal to or inside theirs, so
+      // those ride the chained row and neither renew nor become fresh.
+      const mine = live.filter((c) => c.heldBy === input.sessionId);
+      const hardOf = new Map(liveRows.map((c) => [c.id, c.hardExpiresAt]));
+      const chain = rechainTargets(
+        mine.map((c) => ({ ...c, hardExpiresAt: hardOf.get(c.id)! })), paths, now, callerLiveness);
+      const chainIds = new Set(chain.map((c) => c.id));
       const renewIds: number[] = [];
       const fresh: string[] = [];
       for (const p of paths) {
-        const own = live.find((c) => c.heldBy === input.sessionId && c.paths.includes(p));
+        if (chain.some((c) => heldWithin(p, c.paths))) continue;
+        const own = mine.find((c) => !chainIds.has(c.id) && c.paths.includes(p));
         if (own !== undefined) { if (!renewIds.includes(own.id)) renewIds.push(own.id); }
         else fresh.push(p);
       }
       const out: ClaimSummary[] = [];
+      const rechained: ClaimRechain[] = [];
+      const insertClaim = (chainedFrom: number | null, claimPaths: readonly string[]): number => {
+        const res = this.db.prepare(
+          'INSERT INTO claims (project, heldBy, heldByUuid, intent, runId, state, ' +
+          'createdAt, renewedAt, expiresAt, hardExpiresAt, chainedFrom) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(input.project, input.sessionId, input.uuid, input.intent, input.runId,
+          'live', now, now, now + CLAIM_LEASE_MS, now + CLAIM_HARD_CAP_MS, chainedFrom);
+        const claimId = Number(res.lastInsertRowid);
+        const ins = this.db.prepare(
+          'INSERT INTO claim_paths (claimId, project, path, live) VALUES (?, ?, ?, 1)');
+        for (const p of claimPaths) ins.run(claimId, input.project, p);
+        return claimId;
+      };
+      const RECHAINED: ClaimRechainEnd = 'rechained';
+      for (const c of chain) {
+        // The old row ends FIRST, mirror bit with it (`endClaim`'s pair), so the backstop index never sees two live
+        // owners of one path; then the new row takes the old row's whole path set.
+        this.db.prepare(
+          "UPDATE claims SET state = 'released', endedAt = ?, endedBy = ? WHERE id = ? AND state = 'live'",
+        ).run(now, RECHAINED, c.id);
+        this.db.prepare('UPDATE claim_paths SET live = 0 WHERE claimId = ?').run(c.id);
+        const to = insertClaim(c.id, c.paths);
+        rechained.push({ from: c.id, to });
+        out.push(this.claimRow(to));
+      }
       for (const id of renewIds) {
         this.db.prepare(
           'UPDATE claims SET heldByUuid = ?, runId = ?, intent = ?, renewedAt = ?, ' +
@@ -8607,24 +8652,12 @@ export class CoordStore {
         ).run(input.uuid, input.runId, input.intent, now, now + CLAIM_LEASE_MS, id);
         out.push(this.claimRow(id));
       }
-      if (fresh.length > 0) {
-        const res = this.db.prepare(
-          'INSERT INTO claims (project, heldBy, heldByUuid, intent, runId, state, ' +
-          'createdAt, renewedAt, expiresAt, hardExpiresAt) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).run(input.project, input.sessionId, input.uuid, input.intent, input.runId,
-          'live', now, now, now + CLAIM_LEASE_MS, now + CLAIM_HARD_CAP_MS);
-        const claimId = Number(res.lastInsertRowid);
-        const ins = this.db.prepare(
-          'INSERT INTO claim_paths (claimId, project, path, live) VALUES (?, ?, ?, 1)');
-        for (const p of fresh) ins.run(claimId, input.project, p);
-        out.push(this.claimRow(claimId));
-      }
+      if (fresh.length > 0) out.push(this.claimRow(insertClaim(null, fresh)));
       // D-8392: after the expiry above, so a lease that ran out unswept is already the lapse it is.
       const lapsedSince = ownLapsesUnder(
         this.lapsedClaimsSince(input.project, lapseWindowStart(now), input.sessionId),
         input.sessionId, paths, now);
-      return { ok: true as const, claims: out, lapsedSince };
+      return { ok: true as const, claims: out, lapsedSince, rechained };
     });
   }
 

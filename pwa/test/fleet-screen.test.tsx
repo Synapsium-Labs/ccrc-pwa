@@ -3343,7 +3343,7 @@ describe('the predicted-conflict chip renders after the claimed-files strip (lan
     vi.spyOn(api, 'claims').mockResolvedValue({ claims: [{
       id: 1, project: 'ProjectC', paths: ['src/a.ts'], heldBy: 'lane-a-proj-a-alpha', heldByUuid: null, intent: '',
       runId: 3, state: 'live', createdAt: T - 60_000, renewedAt: T - 60_000, expiresAt: T + 40 * 60_000,
-      hardExpiresAt: T + 8 * 3_600_000, endedAt: null, endedBy: null,
+      hardExpiresAt: T + 8 * 3_600_000, endedAt: null, endedBy: null, chainedFrom: null,
     }] });
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);

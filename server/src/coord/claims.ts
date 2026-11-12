@@ -1,7 +1,7 @@
 import {
   CLAIM_LEASE_MS, type ClaimConflict, type ClaimLapse, type ClaimSummary, type PeerDeliverable,
 } from '../../../shared/api.js';
-import type { RowStanding } from '../sessionReading.js';
+import { rowStanding, type RowStanding, type RowStandingFacts } from '../sessionReading.js';
 
 /**
  * L1: pure, clock-free, fs-free, fastify-free — `journalparse.ts`'s exact
@@ -165,6 +165,59 @@ const CLAIM_VERDICT: Readonly<Record<RowStanding, LivenessVerdict>> = {
 };
 
 export const claimVerdictOf = (standing: RowStanding): LivenessVerdict => CLAIM_VERDICT[standing];
+
+/** One frame row as the claim probe reads it: its id and the facts `rowStanding` reads. */
+export type ClaimProbeRow = { readonly id: string } & RowStandingFacts;
+
+/**
+ * THE reading of a holder's liveness (D12, D-6908), over rows a caller has ALREADY assembled, so the watcher's renew
+ * and lapse lanes and `POST /api/claims`' re-chain (D-8395) ask one question one way. `refused` is the listing's
+ * refused ids: a holder among them was never read, so it is `unmeasurable` (doubt), checked BEFORE the absent test,
+ * which answers `gone`. A listed row reads through `rowStanding`.
+ */
+export function claimLivenessProbe(
+  sessions: readonly ClaimProbeRow[], refused: ReadonlySet<string>,
+): LivenessProbe {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  return {
+    liveness: (id: string) => {
+      if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
+      const s = byId.get(id);
+      if (s === undefined) return 'gone';                 // the fleet no longer lists it
+      return claimVerdictOf(rowStanding(s));              // doubt reads as HELD (D12)
+    },
+  };
+}
+
+/**
+ * D-8395 (operator ruling 2026-11-12, amending D12's "no renewal moves the horizon" for this one case): a re-take by
+ * the holder of a live claim starts a NEW 8 h window, as a new row chained to the old one, when the holder measures
+ * `running` and the claim is inside its last `CLAIM_LEASE_MS` before the hard cap — the point from which a plain
+ * renewal is clipped by the cap. Earlier, a renewal already gives a full lease, so the re-take renews in place and the
+ * audit trail is not one row per ten-minute intent. `unmeasurable` does not re-chain: doubt holds a claim to its cap
+ * (the watcher's renewal), it never moves the cap; a holder that is not running lapses there as before.
+ */
+export function rechainDue(
+  row: { readonly hardExpiresAt: number }, now: number, verdict: LivenessVerdict,
+): boolean {
+  return verdict === 'running' && now < row.hardExpiresAt && now + CLAIM_LEASE_MS > row.hardExpiresAt;
+}
+
+/** D-8395: the caller's own live claims a take re-chains — those `rechainDue` admits whose paths overlap a requested
+ *  one (`pathsOverlap`, the conflict rule's containment, so a re-take of the same or a covered path counts). Rows are
+ *  the caller's own; `paths` is the normalized request. Sorted by id. */
+export function rechainTargets<R extends { readonly id: number; readonly paths: readonly string[]; readonly hardExpiresAt: number }>(
+  own: readonly R[], paths: readonly string[], now: number, verdict: LivenessVerdict,
+): R[] {
+  return own
+    .filter((c) => rechainDue(c, now, verdict) && c.paths.some((q) => paths.some((p) => pathsOverlap(p, q))))
+    .sort((a, b) => a.id - b.id);
+}
+
+/** D-8395: whether a requested path is held by a re-chained row — the row's path itself or one inside it. Such a path
+ *  rides the new chained row and is not taken again as a fresh one. */
+export const heldWithin = (path: string, held: readonly string[]): boolean =>
+  held.some((q) => path === q || path.startsWith(q + '/'));
 
 export type ClaimExpiryDecision =
   | { readonly act: 'renew'; readonly expiresAt: number }

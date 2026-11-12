@@ -215,7 +215,7 @@ describe('the wire shapes compile as declared (typecheck-tests carries the real 
       state: 'live', createdAt: 1_756_000_000_000, renewedAt: 1_756_000_000_000,
       expiresAt: 1_756_000_000_000 + CLAIM_LEASE_MS,
       hardExpiresAt: 1_756_000_000_000 + CLAIM_HARD_CAP_MS,
-      endedAt: null, endedBy: null,
+      endedAt: null, endedBy: null, chainedFrom: null,
     };
     const conflict: ClaimConflict = {
       path: 'server/src/coord/store.ts', claimedPath: 'server/src/coord',
