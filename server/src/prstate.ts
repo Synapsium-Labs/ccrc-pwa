@@ -543,22 +543,49 @@ const PR_STATE_PR_MAP = {
 export type PrStatePrWord = keyof typeof PR_STATE_PR_MAP;
 export const PR_STATE_PR_WORDS: readonly PrStatePrWord[] = Object.keys(PR_STATE_PR_MAP) as PrStatePrWord[];
 
+/** The reason words the PR-keyed form prints: the twelve `_pr_state_by_pr` and `_pr_py by-pr` name. Built from `PrReason`, so
+ *  renaming a shared word is a compile error here. It is a subset map and legitimately different from `PR_REASON_MAP`: it
+ *  is this form's CLOSED set, which holds two words the session form never prints (`unreadable`, `missing-field`) and
+ *  leaves out the five it cannot (the session form's agent, merge and drift words). */
+export type PrStatePrReason = Extract<PrReason, 'no-remote' | 'timeout' | 'unauthenticated' | 'rate-limit' | 'offline'
+  | 'unavailable' | 'truncated' | 'error' | 'train-unproven' | 'train-unread'> | 'unreadable' | 'missing-field';
+export const PR_STATE_PR_REASON_MAP: Record<PrStatePrReason, string> = {
+  'no-remote': 'there is no project directory or its name is dotted, or its origin is not a GitHub repository',
+  timeout: 'the gh call outran its bound',
+  unauthenticated: 'gh is not signed in, or GitHub refused its credentials',
+  'rate-limit': 'GitHub refused the call for rate',
+  offline: 'GitHub could not be reached from this box',
+  unavailable: 'GitHub answered with a server error',
+  truncated: 'gh\'s answer was cut off mid-body',
+  error: 'gh failed in a way with no known shape',
+  unreadable: 'the view body did not parse, or it names another pull request number',
+  'missing-field': 'the view body lacked a field the line needs, or a field was malformed',
+  'train-unproven': 'the PR carries the train label and the train record does not back it',
+  'train-unread': 'the PR carries the train label and its train record could not be read',
+};
+export const PR_STATE_PR_REASONS: readonly PrStatePrReason[] = Object.keys(PR_STATE_PR_REASON_MAP) as PrStatePrReason[];
+const isPrStatePrReason = (v: string): v is PrStatePrReason => (PR_STATE_PR_REASONS as readonly string[]).includes(v);
+
 export interface PrStatePrFacts {
   headRefOid: string; baseRefName: string; isCrossRepository: boolean; mergedAt: string | null; mergeCommit: string | null;
 }
 /** What the PR-keyed form's one line says, every distinction kept. `unmeasured` says who could not follow: `by: 'ccd'` is
- *  ccd's own answer (a fleet retry, with ccd's `reason`), `by: 'reader'` is a line this reader could not follow (build
- *  skew, a different remedy). `absent` is GitHub's definite answer and is never folded into `unmeasured`. */
+ *  ccd's own answer (a fleet retry, with ccd's `reason`: a word of the closed map, `unrecognised` for any other string,
+ *  `unstated` for none), `by: 'reader'` is a line this reader could not follow (build skew, a different remedy). `absent`
+ *  is GitHub's definite answer and is never folded into `unmeasured`. A `merged` line the train proved carries the train's
+ *  number and merge commit. */
 export type PrStatePrRead =
   | { state: 'open' | 'closed'; pr: number; facts: PrStatePrFacts; train: null }
-  | { state: 'merged'; pr: number; facts: PrStatePrFacts; train: 'proved' | null }
-  | { state: 'unmeasured'; pr: number; by: 'ccd' | 'reader'; reason: string; train: 'unproven' | 'unread' | null }
+  | { state: 'merged'; pr: number; facts: PrStatePrFacts; train: { number: number; mergeCommit: string } | null }
+  | { state: 'unmeasured'; pr: number; by: 'ccd'; reason: PrStatePrReason | 'unrecognised' | 'unstated'; train: 'unproven' | 'unread' | null }
+  | { state: 'unmeasured'; pr: number; by: 'reader'; reason: 'line-count' | 'not-json' | 'pr-mismatch' | 'word'
+    | 'train-flags' | 'fields' | 'merge-facts'; train: null }
   | { state: 'absent'; pr: number };
 
 /** The ONE reader of the PR-keyed form's stdout, for the PR `pr` the caller asked about; the line's `number` must equal it.
  *  Pure. It stops at the first rule that fails, and every refusal is the reader's own `unmeasured`. */
 export function readPrStatePrLine(stdout: string, pr: number): PrStatePrRead {
-  const refuse = (reason: string): PrStatePrRead => ({ state: 'unmeasured', pr, by: 'reader', reason, train: null });
+  const refuse = (reason: Extract<PrStatePrRead, { by: 'reader' }>['reason']): PrStatePrRead => ({ state: 'unmeasured', pr, by: 'reader', reason, train: null });
   const lines = stdout.split('\n').filter((l) => l.trim() !== '');
   if (lines.length !== 1) return refuse('line-count');
   let x: unknown;
@@ -569,10 +596,14 @@ export function readPrStatePrLine(stdout: string, pr: number): PrStatePrRead {
   if (typeof state !== 'string' || !(PR_STATE_PR_WORDS as readonly string[]).includes(state)) return refuse('word');
   const word = state as PrStatePrWord;
   const landed = x['landedInTrain'] === true, unproven = x['trainUnproven'] === true, unread = x['trainUnread'] === true;
+  const { train, trainMergeCommit } = x;
+  const carriesTrain = (train ?? null) !== null || (trainMergeCommit ?? null) !== null;
+  if (carriesTrain && !(landed && word === 'merged')) return refuse('train-flags');
   if (word === 'absent') return landed || unproven || unread ? refuse('train-flags') : { state: 'absent', pr };
   if (word === 'unmeasured') {
     if (unproven && unread) return refuse('train-flags');
-    const reason = typeof x['reason'] === 'string' && x['reason'] !== '' ? x['reason'] : 'unstated';
+    const said = x['reason'];
+    const reason = typeof said !== 'string' || said === '' ? 'unstated' : isPrStatePrReason(said) ? said : 'unrecognised';
     return { state: 'unmeasured', pr, by: 'ccd', reason, train: unread ? 'unread' : unproven ? 'unproven' : null };
   }
   if (unproven || unread || (landed && word !== 'merged')) return refuse('train-flags');
@@ -584,10 +615,13 @@ export function readPrStatePrLine(stdout: string, pr: number): PrStatePrRead {
   if (mergeCommit !== null && !(typeof mergeCommit === 'string' && isHead40(mergeCommit))) return refuse('fields');
   const facts: PrStatePrFacts = { headRefOid, baseRefName, isCrossRepository, mergedAt, mergeCommit };
   if (word === 'merged') {
-    if (landed) return { state: 'merged', pr, facts, train: 'proved' };
+    if (landed) {
+      if (!positiveSafe(train) || typeof trainMergeCommit !== 'string' || !isHead40(trainMergeCommit)) return refuse('fields');
+      return { state: 'merged', pr, facts, train: { number: train, mergeCommit: trainMergeCommit } };
+    }
     if (mergedAt === null || mergeCommit === null) return refuse('fields');
     return { state: 'merged', pr, facts, train: null };
   }
-  if (mergedAt !== null || mergeCommit !== null) return refuse('fields');
+  if (mergedAt !== null || mergeCommit !== null) return refuse('merge-facts');
   return { state: word, pr, facts, train: null };
 }

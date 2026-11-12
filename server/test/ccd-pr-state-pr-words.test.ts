@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { GH_STUB, makePrHarness, trainComment, trainRow, type PrHarness } from './ccdPrHelpers.js';
-import { PR_STATE_PR_WORDS, readPrStatePrLine } from '../src/prstate.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { PR_STATE_PR_REASONS, PR_STATE_PR_WORDS, readPrStatePrLine } from '../src/prstate.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-prstate-pr-words-'); });
@@ -34,18 +36,62 @@ describe('ccd\'s PR-keyed pr-state words are the server\'s (landing order wave 5
     expect(printedLine(r.stdout).state).toBe(word);
     expect(readPrStatePrLine(r.stdout, 41).state).toBe(word);
   });
-  it('the train-proved line is merged, proved, on both sides', () => {
+  it('the train-proved line is merged, carrying its train, on both sides', () => {
     h.makeGhRepo('demo');
     h.ghView(41, { ...view('CLOSED', { labels: [{ name: 'landed-in-train' }] }), ...trainComment(50) });
     h.ghView(50, trainRow(50, 'e'.repeat(40), [[41, HEAD]]));
     const r = h.run(`${GH_STUB} cmd_pr_state --project demo --pr 41`);
     expect(printedLine(r.stdout).state).toBe('merged');
-    expect(readPrStatePrLine(r.stdout, 41)).toMatchObject({ state: 'merged', train: 'proved' });
+    expect(readPrStatePrLine(r.stdout, 41)).toMatchObject({ state: 'merged', train: { number: 50, mergeCommit: 'e'.repeat(40) } });
   });
   it('CONTROL: with no stub the poisoned gh answers, and the line is unmeasured, never absent', () => {
     h.makeGhRepo('demo');
     const r = h.run('cmd_pr_state --project demo --pr 41');
     expect(printedLine(r.stdout).state).toBe('unmeasured');
     expect(h.ghPoison().length).toBeGreaterThan(0);
+  });
+});
+
+/** One ccd fixture per reason word the PR-keyed form prints. */
+const labelled = (p: PrHarness): void => p.ghView(41, { ...view('CLOSED', { labels: [{ name: 'landed-in-train' }] }), ...trainComment(50) });
+const REASON_FIXTURES: readonly (readonly [string, (p: PrHarness) => void])[] = [
+  ['no-remote', () => { /* no project directory, so no origin */ }],
+  ['timeout', (p) => p.ghViewFail(41, 124)],
+  ['unauthenticated', (p) => p.ghViewFail(41, 1, 'HTTP 401: Bad credentials\n')],
+  ['rate-limit', (p) => p.ghViewFail(41, 1, 'API rate limit exceeded\n')],
+  ['offline', (p) => p.ghViewFail(41, 1, 'dial tcp: lookup api.github.com: no such host\n')],
+  ['unavailable', (p) => p.ghViewFail(41, 1, 'HTTP 503: Service Unavailable\n')],
+  ['truncated', (p) => p.ghViewFail(41, 1, 'unexpected EOF\n')],
+  ['error', (p) => p.ghViewFail(41, 1, 'something nobody has seen\n')],
+  ['unreadable', (p) => p.ghView(41, view('OPEN', { number: 42 }))],
+  ['missing-field', (p) => p.ghView(41, view('OPEN', { baseRefName: 'main+x' }))],
+  ['train-unproven', (p) => { p.ghView(41, view('CLOSED', { labels: [{ name: 'landed-in-train' }], comments: [] })); p.ghSearch([]); }],
+  ['train-unread', (p) => { labelled(p); p.ghViewFail(50, 124); }],
+];
+
+describe('every reason word the PR-keyed form prints is the server\'s, and no other (landing order wave 5h)', () => {
+  it('the fixtures cover every server reason word, and no other', () => {
+    expect(REASON_FIXTURES.map(([w]) => w).sort()).toEqual([...PR_STATE_PR_REASONS].sort());
+  });
+  it.each(REASON_FIXTURES)('the %s fixture prints that reason, and the server reads it back as ccd\'s', (word, plant) => {
+    if (word !== 'no-remote') h.makeGhRepo('demo');
+    plant(h);
+    const r = h.run(`${GH_STUB} cmd_pr_state --project demo --pr 41`);
+    const printed = printedLine(r.stdout);
+    expect(printed.state).toBe('unmeasured');
+    expect(printed.reason).toBe(word);
+    expect(readPrStatePrLine(r.stdout, 41)).toMatchObject({ state: 'unmeasured', by: 'ccd', reason: word });
+  });
+});
+
+describe('the PR-keyed form prints one line, byte for byte (landing order wave 5h; 5c\'s carried item, D-7600)', () => {
+  it('ends in exactly one newline and holds no other', () => {
+    h.makeGhRepo('demo');
+    h.ghView(41, view('OPEN'));
+    h.run(`${GH_STUB} cmd_pr_state --project demo --pr 41 > "$HOME/line.out"`);
+    const raw = fs.readFileSync(path.join(h.home, 'line.out'), 'utf8');
+    expect(raw.endsWith('\n')).toBe(true);
+    expect(raw.slice(0, -1)).not.toContain('\n');
+    expect(raw.length).toBeGreaterThan(1);
   });
 });
