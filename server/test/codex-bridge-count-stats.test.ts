@@ -380,10 +380,14 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     const [k, sets] = await run(home, [{ op: 'known' }, { op: 'sets' }]);
     expect(k.families).toEqual([
       'requestField', 'eventType', 'itemType', 'errorCode', 'incompleteReason', 'responseHeader', 'unsupportedField',
-      'modelSubstitution', 'betaValue', 'contextEdit',
+      'modelSubstitution', 'betaValue', 'contextEdit', 'foreignSubstitution',
     ]);
     expect(Object.keys(k.known).sort()).toEqual([...k.families].sort());
     expect(k.known.errorCode).toEqual(sets.ALL_CODES);
+    // Both substitution families are empty on purpose (known.py): a Claude Code fallback and a substitution from any
+    // other caller each warn under their own name, and neither is ever explained away.
+    expect(k.known.modelSubstitution).toEqual([]);
+    expect(k.known.foreignSubstitution).toEqual([]);
     expect(k.known.contextEdit).toEqual(['clear_thinking_20251015']);
     expect(k.known.eventType).toContain('response.metadata');
     expect(k.known.eventType).toContain('keepalive');
@@ -508,6 +512,30 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     const doc = readDoc(file);
     expect(doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
     expect(doc.since).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  // A version-1 file a bridge from before foreignSubstitution wrote has no such key: it loads as it is, no reset, and a
+  // carried modelSubstitution name stays unexplained (it leaves only when a reviewed change explains it). Additive:
+  // stats.VERSION stays 1.
+  it('a version-1 file with no foreignSubstitution key loads with no reset, and keeps a carried modelSubstitution name', async () => {
+    const { home, file } = lane('cb-stats-nofsub-');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '4xx': 2 },
+      names: { modelSubstitution: { 'claude-opus-5-5': 2 } },
+      unexplained: { modelSubstitution: ['claude-opus-5-5'] },
+      usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o, , snap] = await run(home, [open(file), call('name', ['foreignSubstitution', 'claude-sonnet-4-6']), { op: 'stats-snapshot' }]);
+    expect(o.doc.outcomes).toEqual({ '4xx': 2 });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.names).toEqual(planted.names);
+    expect(o.doc.unexplained).toEqual({ modelSubstitution: ['claude-opus-5-5'] });
+    // Nothing the load changed, so the file is the old process's until a flush.
+    expect(readDoc(file)).toEqual(planted);
+    expect(snap.doc.names.foreignSubstitution).toEqual({ 'claude-sonnet-4-6': 1 });
+    expect(snap.doc.unexplained).toEqual({ foreignSubstitution: ['claude-sonnet-4-6'], modelSubstitution: ['claude-opus-5-5'] });
   });
 
   // The whole-wave fix round, Z1: `unrecognised` and `overflow` are markers, which no change to known.py can explain,

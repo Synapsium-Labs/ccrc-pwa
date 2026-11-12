@@ -42,6 +42,9 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    `stored` is the lookup stub: a list of {"call": <id>, "turn"} or {"session", "text", "turn"}, each
                    keyed by `inbound.call_key` / `inbound.text_key`, so a test never spells a key itself; "lookups"
                    lists the keys asked for, in order
+  inbound-betas    {headers? | headerLines?} -> {"betas": inbound.betas, "fromClaudeCode": inbound.from_claude_code,
+                   "CLAUDE_CODE_BETA"}: the headers read as from-anthropic reads them (a plain dict, or [name, value]
+                   pairs put in an http.client.HTTPMessage, a repeated name kept as repeated lines)
   inbound-keys     {cut?: [names], text?: [[session, text]], call?: [ids], cache?: [[session, agent]]} -> each list
                    mapped through cut_name / text_key / call_key / cache_key, and "consts": BILLING_PREFIX,
                    COMPACTION_MARKER, IMAGE_TOKENS
@@ -735,6 +738,15 @@ def _run(op, pkg, cb):
         request = req._asdict()
         request["tools_required"] = sorted(request["tools_required"])
         return {"request": request, "names": [list(n) for n in sink.names], "lookups": lookups}
+    if name == "inbound-betas":
+        inbound = cb.inbound
+        headers = op.get("headers") or {}
+        if "headerLines" in op:
+            headers = http.client.HTTPMessage()
+            for k, v in op["headerLines"]:
+                headers[k] = v  # Message.__setitem__ appends: a repeated name stays two lines
+        return {"betas": inbound.betas(headers), "fromClaudeCode": inbound.from_claude_code(headers),
+                "CLAUDE_CODE_BETA": inbound.CLAUDE_CODE_BETA}
     if name == "inbound-keys":
         inbound = cb.inbound
         return {

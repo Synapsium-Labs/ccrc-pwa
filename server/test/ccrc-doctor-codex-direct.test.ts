@@ -472,7 +472,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
   const MARKER_WHERE = (dir: string, classes: string, what: string, them: string): string =>
     (classes.includes('s') ? `; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in ${dir} (the bridge records the lane's stream only while it is there) and read ${what} in the recording when the bridge meets ${them} again` : '')
     + (classes.includes('h') ? `; for a responseHeader name, put the operator's record-streams marker in ${dir} and read ${what} in the recording when the bridge meets ${them} again on a 2xx answer: only a 2xx answer's head is recorded` : '')
-    + (classes.includes('r') ? `; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds ${what}: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read ${what} from the client's request, for example from Claude Code's release notes or a reviewed diagnostic` : '');
+    + (classes.includes('r') ? `; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution, foreignSubstitution or other name, no recording holds ${what}: those families' names come from the client's request (Claude Code's, or another caller's for foreignSubstitution), and the bridge records only the upstream's answers, so read ${what} from the client's request, for example from Claude Code's release notes or a reviewed diagnostic` : '');
   const UNREC_CLAUSE = (dir: string, classes: string): string => `; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'that name', 'it')}; the bridge's restart clears unrecognised from the list, and it comes back when the bridge meets such a name again; never add unrecognised to known.py`;
   const OVER_CLAUSE = (dir: string, classes: string): string => `; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'the names past it', 'them')}; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py`;
   // Fix round 2, M1: a stats file the row cannot read as the bridge's is the drift row's own unmeasured WARN, so it
@@ -518,6 +518,24 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     expect(remedyAfter(r.stdout, re)).toBe(DRIFT_FIX);
     expect(r.stdout.split('\n').filter((l) => /the bridge met/.test(l))).toHaveLength(1);
     expect(r.stdout).not.toContain(KNOWN_EVENT);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // A substitution from a request without Claude Code's claude-code beta is counted under foreignSubstitution
+  // (ccd/codexbridge/known.py): the row prints it under that family, beside a Claude Code fallback's
+  // modelSubstitution name for the same model id, never folded into it.
+  it('a foreignSubstitution name warns under its own family, apart from a modelSubstitution of the same id', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-foreign-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['foreignSubstitution', 'claude-opus-5-5'], ['modelSubstitution', 'claude-opus-5-5']]);
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { unexplained: unknown }).unexplained)
+      .toEqual({ foreignSubstitution: ['claude-opus-5-5'], modelSubstitution: ['claude-opus-5-5'] });
+    const r = runDoctor(home);
+    const line = r.stdout.split('\n').filter((l) => /the bridge met/.test(l));
+    expect(line, r.stdout).toHaveLength(1);
+    expect(line[0]).toMatch(/^WARN codex: codex-a: the bridge met 2 name\(s\) it does not know: /);
+    expect(line[0]).toContain('foreignSubstitution:claude-opus-5-5');
+    expect(line[0]).toContain('modelSubstitution:claude-opus-5-5');
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -696,7 +714,9 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
   it('a stats file listing more names than any bridge writes is unmeasured, and no drift row', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-drift-many-', ['codex-a']);
     plantDirectLane(home, 'codex-a');
-    const many = Array.from({ length: 10 * 257 + 1 }, (_, i) => `response.fx_m${i}`);
+    // One past the most a bridge writes, from the shipped sources: known.KNOWN's families times NAMES_MAX + 1, plus one.
+    const { namesMax, families } = bridgeBounds();
+    const many = Array.from({ length: families.length * (namesMax + 1) + 1 }, (_, i) => `response.fx_m${i}`);
     const file = statsFile(home, 'codex-a');
     plantStats(file, `${JSON.stringify({ version: 1, lane: 'codex-a', unexplained: { eventType: many } })}\n`);
     const r = runDoctor(home);

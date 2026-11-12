@@ -76,7 +76,7 @@ from typing import Dict, Mapping, Optional
 from . import count, errors, known, store
 
 VERSION = 1
-FAMILIES = tuple(known.KNOWN)  # the ten D3 families, in the plan's order; spelled once, in known.KNOWN
+FAMILIES = tuple(known.KNOWN)  # the eleven D3 families, in the plan's order; spelled once, in known.KNOWN
 NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,64}$")
 UNRECOGNISED = errors.UNRECOGNISED_CODE  # "unrecognised"
 OVERFLOW = "overflow"

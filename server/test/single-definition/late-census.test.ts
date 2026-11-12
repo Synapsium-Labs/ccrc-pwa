@@ -947,3 +947,18 @@ describe('delegation PR7, PR8b: DELEGATION_ADOPT_MARKER is one switchboard row, 
     expect(row!.default).toMatch(/^absent: shadow/);
   });
 });
+
+// Claude Code's identity beta is spelled once, as inbound.CLAUDE_CODE_BETA in ccd/codexbridge/inbound.py: the bridge
+// tells a Claude Code request from any other by it (inbound.from_claude_code, which picks a substitution's family in
+// server.py), and known.py explains the beta value by that constant, so the two can never drift apart. APPENDED, for
+// the reason the blocks above state.
+describe('codex bridge: Claude Code\'s identity beta is spelled once', () => {
+  it('claude-code-20250219 is spelled in ccd/codexbridge/inbound.py alone', () => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-w', '-e', 'claude-code-20250219', '--',
+      'ccd', 'shared', 'deploy', 'server/src'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/inbound.py']);
+  });
+});
