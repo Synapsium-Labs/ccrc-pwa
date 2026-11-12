@@ -37,7 +37,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
 | 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09); land-synced at `211fdff14` after #2248, MERGED 2026-11-04 10:17 UTC (`6da86bb8`), run 1312 closed (Decisions, 2026-11-04 10:36) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); approved as written (item 74), the plan merged (#2408 `67db632c`) and run 1427 dispatched 2026-11-07 (Decisions, 2026-11-07 23:08); wave-done verified at `e8c92d065`, review 1654, fix round 1; its wave-done verified at `f9b65a028`, accepted by review 1660, departures D-8117 to D-8119; MERGED 2026-11-08 02:23 UTC (#2453 `12ce1ba7`), run 1427 closed (Decisions, 2026-11-08 02:25) |
-| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25); planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314; Decisions, 2026-11-11 16:15), awaiting the operator's approval |
+| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25); planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314; Decisions, 2026-11-11 16:15); approved as written (item 173), the plan merged (#2671 `f517128c`) and run 1661 dispatched 2026-11-12 (Decisions, 2026-11-12 00:14) |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
 | 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
@@ -2178,6 +2178,25 @@ carries it (spec §5.1, amended 2026-09-24).
     naming its entry.
   - **Numbers.** D-8294 to D-8314 are defined in the plan. One more number was issued with the block and is unused.
   - **Next.** The operator approves the plan as written, as an item. Then the plan lands and run 1661 is dispatched.
+- **2026-11-12 00:14 — item 173: the plan is approved as written, merged (#2671, `f517128c`), and run 1661 is
+  dispatched.**
+  - **The answer.** The operator ticked item 173 at 2026-11-11 23:35 UTC: "Approve as written: land the plan and
+    dispatch it". This coordinator re-measured the PR and confirmed the item at 23:36.
+  - **The ledger guard.** Before the approval, another coordinator mailed that CI's ledger guard moves from warn to
+    enforce. A pull request whose branch is not a ledger branch may edit an existing programme or plan file only when
+    its head commit carries a `Ledger-Edit:` trailer. #2671 edits this file from a plan branch, so an empty commit
+    carrying `Ledger-Edit: D-8294 …` became its head, `37594ea75`. No pushed commit was rewritten, and the guard
+    passed in enforce mode locally.
+  - **The landing.** At `37594ea75` all 36 checks that ran passed (9 skipped), the merge state was clean, and a
+    `BOUND_S=0` verdict read the merge queue. #2671 was enqueued at 23:36:22 UTC with `--match-head-commit`, at queue
+    position 2, and merged at 23:43:23 as `f517128c`. No run was bound to it, so a scheduled read-back measured the
+    merge.
+  - **The dispatch.** Run 1661 was dispatched at 00:13:45 UTC to a fresh worker, `ccrc-pwa-landing-5h`, with the plan's
+    nine tasks as its items. The route is the spec'd-plan worker row: Opus at high, Sonnet subagents, workflow off,
+    compact 40. The brief notes that coord.db is at schema 60 now (#2665 took slot 60 after the plan was drafted), and
+    that 5h adds no migration. One claim was open in the project at dispatch, another programme's, on files the plan
+    does not name.
+  - **Next.** The worker's wave-done, then a review run.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2794,9 +2813,9 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   is `docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`. Deploy: ccrc's updater carries the
   server and the skill text. A server older than 5g ignores `intents` and its `200` names none, which a coordinator
   reads as no hold taken (D-8086). Stage 5's §10 count is read by hand two weeks after the rollout (D-8088).
-- **5h is next.** Its run, 1661, is open at `planned`. Its plan is written
-  (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314) and awaits the
-  operator's approval as written. The silent merge notices are measured: a close-before-sweep race, and a failing
+- **5h is in flight.** Its plan (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to
+  D-8314) was approved as written (item 173) and merged (#2671), and run 1661 was dispatched on 2026-11-12 (Decisions,
+  2026-11-12 00:14). The silent merge notices are measured: a close-before-sweep race, and a failing
   project sweep (Decisions, 2026-11-11 16:15). The plan takes the items carried to 5h, review 1660's A1 and A2
   among them.
 - **5h to 5k follow in order**, each planned against `main` as it then stands. The fleet box runs 5c, which 5h reads
