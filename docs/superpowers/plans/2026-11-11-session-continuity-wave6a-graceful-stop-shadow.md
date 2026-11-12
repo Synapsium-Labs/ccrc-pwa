@@ -922,7 +922,7 @@ execution is named by slug in the wave-done.
   - A detached observer times the process's exit after the kill. It runs in its own unit, through
     `_pane_scope_detach`, and watches for up to 30 s at 0.1 s.
   - Each stop writes one `graceful-stop <id>: site= mode= <outcome>` line to swap.log.
-  - The kill already hangs up Claude Code, whose SIGHUP and SIGTERM handlers are one `shutdown()` (builds 2.1.314 to
+  - The kill already hangs up Claude Code, whose SIGHUP and SIGTERM handlers are one `shutdown()` (builds 2.1.314 and
     2.1.322). So the shadow times that shutdown, with the terminal gone, and sends no new signal.
   - With the marker absent, the stop's acts and their order are today's, but it is not today's stop byte for byte, as
     ruling (i) worded it (COORDINATOR note 7): at swap and limit-resume one bounded tmux read before the kill (up to
