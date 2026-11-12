@@ -3480,15 +3480,19 @@ BASH_ENV reaches the drained text, and the drain's bound is a function of its ow
 tick's whole part with `10#`. New cases pin each: the drain reads fd 8 on the pure-bash arm, a printing BASH_ENV, `login`
 with the lost-EOF stand-in, `login`'s TERM-ignoring mint on the pure-bash arm, and the bound; each is red without its
 fix (from a saved copy). The record's 51 of 180 is corrected to 51 of 140. The departure `login-backstop-kills-nothing`
-is closed, and `pure-bash-arm-mint-stdin` (the pure-bash arm hands the mint /dev/null, so no code reaches it) is
-observed for a ruling, by slug in `c28.md`.
+is closed. `pure-bash-arm-mint-stdin`, found in this round and fixed in it on the coordinator's rulings: on that arm the
+mint got /dev/null for stdin, so no pasted code reached it (measured on Linux; pre-existing; a Mac without Homebrew
+coreutils takes that arm, inferred). Each spawn now hands its stdin over on fd 5 as well, and a `bash -p` trampoline
+puts it back before the mint runs; `_auth_timeout` and its two pinned copies are unchanged. Three cases pin it, red
+without the fix. Departures by slug in `c28.md`.
 
 - **D-8345** - `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
   whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 140 runs
   measured). After a timed-out tick with the child gone, the pump confirms the end of the stream with one bounded drain
   read that does not use `select()`. Fix round 1 (review 1849): the backstop TERMs the pump's own child, so `login`'s
   ends too (F2); the drain's shell runs `-p` (M1); a zero tick is 1 and the tick is read with `10#` (M2, M3); cases pin
-  the pure-bash arm and `login` (F3, F4). Departures are named by slug in `c28.md`.
+  the pure-bash arm and `login` (F3, F4); each spawn carries the mint's stdin past the shim's pure-bash arm on fd 5
+  (`pure-bash-arm-mint-stdin`). Departures are named by slug in `c28.md`.
 
 ## Acceptance (the matrix, per PR)
 
