@@ -3182,6 +3182,19 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
     a later stop or revival skips its read, so a choice typed in between is lost (narrow; closing it needs the marker bound
     to a pane instance).
 
+### The stop's grace is measured before it is armed (session-continuity stage 3, wave 6a)
+
+A stop that kills a session's process at once can cut off a turn's last writes. Wave 6a measures how long the
+process takes to leave before anything waits for it. Three stop sites carry the measurement: the swap, the
+limit-resume and the hibernate. By default each runs in **shadow**: `ccd/ccd#_graceful_stop_note` appends one
+`graceful-stop <id>: site=<site> mode=<mode> <outcome>` line to `swap.log` per stop and sends no new signal. The
+outcome is `exited=<ms>`, `alive=<ms>` (the process outlived the wait: a censored reading), `no-pid`,
+`gone-before-signal` or `unmeasured=<why>`. `$REG/graceful-stop-live` arms the live mode (SIGTERM first, with a
+provisional 10 s wait); it is the operator's, made by hand, and has no writer in the tree.
+`python3 deploy/measure-continuity.py --stage 3` reads the lines by site and mode (`deploy/measure-continuity.py#stage3`),
+reporting exit times by nearest rank and setting no target, as the bound is the operator's. A restart after a failed
+turn now also records the background tasks it ended as lost.
+
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 
 A swap carries more than the transcript: beside it sits the session's sidecar directory — every subagent

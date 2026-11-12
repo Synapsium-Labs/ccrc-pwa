@@ -3384,6 +3384,30 @@ net's join and one for the API commits address.
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.
 
+### Task C27: the macOS FIFO-EOF probe measured its own reader, not the FIFO (D-8344) — now
+
+Placed here, before C24, so that it does not touch C26's section, which was in review when this one was written.
+
+**Why.** With C26's three files fixed, the last red in the macOS test legs was `platform-hazards.test.ts`'s darwin case
+"BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)" (D-2661): red on 2026-11-09 and in C26's
+dispatch 43124495612, green on 2026-11-05 and 2026-11-11, always with "nothing alive, nothing holding". A promotion to
+stable needs it green. Root cause first, by the brief: fix the shim if a descendant holds the output, or the probe if the
+probe is wrong on Darwin.
+
+**What was found and done.** No writer survived. Reproduced on macOS (17 reds in 185 iterations), the timeout's whole group
+was gone at +2 s, yet `read -t 0.5` answered 142 for 15 s while a fresh `read(2)` on the same descriptor returned 0 bytes at
+once and `select()` said "not readable". On macOS a FIFO's EOF is one-shot for anything waiting on it. The first read to
+return EOF clears it, and `read -t`'s own read consumed it and still answered a timeout. The case now waits with one
+blocking reader that never asks `select()` (`eofWait`), records the timeout's group before the deadline, and gains a control
+on both platforms that the reader still says "never" while a writer holds the FIFO. The fixed reader was green in 260 of 260
+iterations. The shim, the window, `macos.yml` and the gate are unchanged. The sign-in helper's pump reads with the same
+`read -t` and is booked as Task C28 (ask 356). Evidence, runs and the C28 hand-off are in `c27.md`.
+
+- **D-8344** - `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
+
+**Acceptance.** The darwin case is green in a `macos.yml` dispatch at the PR's tip, and its repeat runs are recorded in
+`c27.md`. The control reds when the reader is made to answer "eof" whatever happens. **Rollback.** A plain revert.
+
 ### Task C24: the gh reader's net reads the raw and the joined text, and quotes as the shell does (D-8291) — now
 
 **Why.** Review 1808, the third and last review of Task C23, found that the net read only the text as the shell joins it, so
@@ -3407,6 +3431,44 @@ R15 gains one sentence for the union, one for single quotes and one for the glue
 `owner/repo@sha` (M6, the coordinator's answer to this task's ask), and nothing else in the spec changes.
 
 - **D-8291** - `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
+
+### Task C26: the macOS test legs go green, so a promotion to stable can pass its gate (D-8343) — now
+
+**Why.** The operator asked to promote v0.0.1115. `release-stable`'s gate needs a green `full-suite` on the commit, and
+`full-suite` includes the macOS test shards. The manual full run 42992355563 on `0efa0c8a3` had every Linux leg green and
+three of eight macOS shards red; the last standalone macOS run, 41949722215 (2026-11-05, `3231cb2b5`), was red too. The
+operator chose to fix macOS, not to make the gate ignore it. Each cause, fix and measurement is in `c26.md`.
+
+**Items, and what was done.**
+- **`siwc-trial.test.ts` (73 cases at the 15 s wait).** `HTTPServer.server_bind` names the server `socket.getfqdn(host)`,
+  a reverse lookup of 127.0.0.1 that has taken about 35 s in a new process on the macOS runner (measured for
+  `ccgpt-proxy.py`'s `_Server`). Both fakes printed their port after `startFake`'s 15 s wait ("auth did not start"), and
+  the tool's own sign-in listener paid it too. The fakes and the shipped tool (`deploy/siwc-trial.py`'s `_Server`) bind
+  through `TCPServer`'s bind and set the two names themselves. A new describe makes `getfqdn` fatal in the process it
+  starts, so Linux shows the defect: red on `main`, green here.
+- **`delegation-rig-w0.test.ts:493` (an empty transcripts list).** `rig.sh`'s `sessions_snap` listed the transcripts with
+  `find -printf`, which is GNU find's; BSD find refuses it, and the `|| true` hid the refusal. It now lists them with
+  `find` and `wc -c`. A new case runs it with a `find` that refuses `-printf` as BSD's does: red on `main`, green here.
+- **`ccd-tick-diet-equivalence-route.test.ts` (E9 under C).** The batch ended in 0.4 s with an empty stderr and no row
+  begun, its rc unrecorded; the cause below is inferred, not seen. The bound it runs under, the test helper `BOUNDED` (`ccdWsHelpers.ts`), exits 125 with nothing on stderr when
+  either side's `setpgid` fails with an errno other than EACCES or ESRCH; the daily run of 2026-11-09 shows the same
+  silent 125 in `ccd-operator-choice.test.ts`. On XNU that errno does not prove that the group is missing, so `BOUNDED`
+  now asks the group itself before it gives up, which covers a failure once the group exists, and every 125 and 127 says
+  why on stderr. A new pair of cases makes one side's `setpgid` fail with EPERM once the group exists, the condition
+  inferred for Darwin: red on `main` (125), green here. The runner's
+  "a row never finished" line now carries the batch's rc and signal.
+- **Run 41949722215.** Its one failing test, `ledgers-secrets.test.ts`'s `kept2`, was fixed on `main` after that run (#2286:
+  two planted names were one file on macOS's case-insensitive disk); its cancelled shard 3/4 was cut at the 55-minute deadline of the four-shard plan, which D-8265 replaced with
+  eight. Neither needs a change here.
+
+No test is skipped on Darwin, no Linux assertion is loosened, no timeout is raised, and the gate, `full-suite` and
+`macos.yml` are unchanged.
+
+- **D-8343** - `macos-legs-green`: Task C26, issued on 2026-11-11. The three red macOS files of run 42992355563: the siwc
+  fakes and the trial's sign-in listener bind without `HTTPServer`'s `getfqdn` (about 35 s on macOS), `rig.sh`'s
+  `sessions_snap` lists transcripts without GNU find's `-printf`, and the test bound `BOUNDED` decides from the child's
+  process group rather than from a `setpgid` errno, and names every 125 and 127 on stderr. Each fix ships with a case that
+  is red on Linux without it. Departures are named by slug in `c26.md`.
 
 ## Acceptance (the matrix, per PR)
 

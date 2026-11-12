@@ -3533,7 +3533,7 @@ fi
 # `fitk` keeps WHOLE aliases inside 200 bytes: a byte cut after the join can leave
 # half an alias or a trailing comma, which the reader refuses
 # (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
-# restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
+# restart: a same-session done or failed moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
 # `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
@@ -3558,7 +3558,7 @@ def fiti: .[0:8] | join(",");
   elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons}
   elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
   elif $kind == "restart" then $b
-    + (if $same and $p.state == "done" then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
+    + (if $same and ($p.state == "done" or $p.state == "failed") then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
     + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
   elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1}
   else empty end'

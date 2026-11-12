@@ -877,6 +877,21 @@ export function makeCcdHarness(prefix: string): CcdHarness {
  *  defined value equal to 0 on success, so success is tested with `defined`, never
  *  `!= 0`; errno is saved at once. EACCES means the child has already exec'd (after
  *  its own successful group setup) and ESRCH that it is already gone: both leave a
- *  group to kill or nothing to kill. Any other failure kills and reaps only that
- *  child and exits 125 rather than arming an alarm against an unknown group. */
-export const BOUNDED = `perl -e 'use POSIX qw(setpgid); use Errno qw(EACCES ESRCH); $t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { exit 125 unless defined setpgid(0, 0); exec @ARGV; exit 127 } $g = setpgid($p, $p); $e = 0 + $!; if (!defined($g) && $e != EACCES && $e != ESRCH) { kill "KILL", $p; waitpid($p, 0); exit 125 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;
+ *  group to kill or nothing to kill. Any other failure is followed by asking the
+ *  group itself (below); only a child that never gets its group is killed and
+ *  reaped, and the prefix exits 125 rather than arming an alarm against an
+ *  unknown group.
+ *
+ *  STATE, NOT ERRNO, DECIDES (D-8343). Seen on the macOS runner: a FIFO case read
+ *  this prefix's rc 125, with nothing on stderr, for its own 0 (the daily run of
+ *  2026-11-09). Inferred, not seen: a tick-diet batch there ended in 0.4 s with no
+ *  row begun and an empty stderr, its rc unrecorded, and a failed `setpgid` is the
+ *  cause that fits both. XNU's `setpgid` has failure paths besides EACCES and
+ *  ESRCH, so a failed call does not by itself prove that the group is missing. So
+ *  a failed call on either side is followed by asking the group itself: the child
+ *  goes on when it already leads its own group, and the parent, for up to 2 s,
+ *  waits until the child leads one (or is gone) before it arms the alarm. That
+ *  covers a failure once the group exists. A child whose own call fails before the
+ *  group exists still exits 125, and every 125 and 127 now says why on stderr, so
+ *  the next failure names its cause instead of an empty line. */
+export const BOUNDED = `perl -e 'use POSIX qw(setpgid); use Errno qw(EACCES ESRCH); $t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { if (!defined(setpgid(0, 0))) { $m = "$!"; if (getpgrp(0) != $$) { print STDERR "bounded: the child could not make its own process group: $m\\n"; exit 125 } } exec @ARGV; print STDERR "bounded: could not exec $ARGV[0]: $!\\n"; exit 127 } $g = setpgid($p, $p); $e = 0 + $!; $m = "$!"; if (!defined($g) && $e != EACCES && $e != ESRCH) { for ($i = 0; $i < 2000; $i++) { $q = getpgrp($p); last if $q == $p || $q < 0; select(undef, undef, undef, 0.001) } if ($q != $p && $q >= 0) { print STDERR "bounded: the child is not in its own process group ($q, not $p) and setpgid failed: $m\\n"; kill "KILL", $p; waitpid($p, 0); exit 125 } } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;
