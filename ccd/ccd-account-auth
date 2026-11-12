@@ -852,8 +852,49 @@ _auth_line() {   # <raw line from the child> [prefix already classified] — cla
   printf '%s\n' "$clean"
 }
 
-_auth_pump() {   # the one loop: the child's stream out, the operator's code in
-  local line rc pending='' shown=''
+_auth_pump_read() {   # the pump's tick read: fd 8 into the CALLER's `line`, rc 0 / 1 (EOF) / >128 (timeout)
+  # A FUNCTION OF ITS OWN, AND IT IS A TEST SEAM (D-8345). `line` is the pump's
+  # local, reached by bash's dynamic scope. A test that sources this helper
+  # replaces this one function with a stand-in that answers 142 after the writer
+  # has gone, which is what macOS's `read -t` does (below), so a Linux box can
+  # show the pump's answer to it. Production runs only this body.
+  _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line
+}
+
+AUTH_DRAINED=''
+_auth_drain_read() {   # <seconds> -> one line from fd 8 with NO select(), into AUTH_DRAINED; rc 0 line, 1 EOF, else unconfirmed
+  # THE READ THAT `read -t` CANNOT BE, ON macOS (D-8345, after C27's D-8344).
+  # Darwin delivers a FIFO's end of file ONCE to whatever is waiting for it, and
+  # `select()` can then report a FIFO with no writer left as "not readable" for
+  # good. bash's `read -t` waits in `select()`, so it can consume that EOF and
+  # still answer 142, and every later `read -t` times out. A plain `read(2)`
+  # checks the writer count before it waits, so it answers 0 bytes at once.
+  # MEASURED on macos-26-arm64, bash 5.3.20 (C27's runs, and this task's): see
+  # docs/superpowers/plans/2026-10-22-desktop-polish/c28.md.
+  #
+  # So this read has no `-t`. It still must not block past the pump's backstop,
+  # because a DESCENDANT that holds the write end after the child is gone
+  # (D-2736's case) makes a plain read wait for ever. It runs in its own shell
+  # under `_auth_timeout`, bounded by the caller, and it reads one CHARACTER at a
+  # time and prints each as it goes, so the bytes a read that hits its bound had
+  # already taken still reach the caller rather than dying with it.
+  #
+  # `-u 8`, NEVER fd 8 on stdin: `_auth_timeout`'s pure-bash arm runs the command
+  # as `"$@" &`, and bash gives an asynchronous command /dev/null for stdin, which
+  # would read as an instant EOF while a descendant still writes. MEASURED, bash
+  # 5.3: `f(){ "$@" & wait; }; f cat <&8` prints nothing, while a command that
+  # reads `-u 8` gets the bytes. `7<&- 9<&-` so
+  # the reader holds neither the code channel nor a write end on `in.child`.
+  AUTH_DRAINED=$(_auth_timeout "$1" "$BASH" -c \
+    'printf -v n "\n"; c=""; while IFS= read -r -N 1 -u 8 c; do printf %s "$c"; [ "$c" = "$n" ] && exit 0; done; printf %s "$c"; exit 1' \
+    7<&- 9<&- 2>/dev/null)
+}
+
+_auth_pump() {   # [child pid] — the one loop: the child's stream out, the operator's code in
+  # `child` is the pid whose exit licenses the drain read below. The pane methods
+  # spawn through `_auth_spawn_pty_child`, which sets AUTH_CHILD; `login` spawns
+  # its own and passes it.
+  local line rc pending='' shown='' child=${1:-$AUTH_CHILD} r left t
   # THE LOOP'S OWN DEADLINE (D-2736). `_auth_timeout` bounds the CHILD; this
   # bounds the READER, and the two are not the same guarantee. The loop below
   # leaves only on EOF, and EOF needs every writer of `$AUTH_RUN/out` to close
@@ -877,7 +918,27 @@ _auth_pump() {   # the one loop: the child's stream out, the operator's code in
       return 0
     fi
     line=''
-    _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
+    _auth_pump_read; rc=$?
+    # A TIMEOUT AFTER THE CHILD HAS GONE IS CONFIRMED WITHOUT select() (D-8345).
+    # On macOS that timeout can be the FIFO's end of file, consumed by `read -t`
+    # and answered as 142; looping on it ran a finished mint to the backstop and
+    # stamped it `expired`. One drain read, bounded by the tick and by what is
+    # left before the backstop, tells the three cases apart: a line (rc 0), the
+    # end of the stream (rc 1), or a writer still there (anything else), which
+    # stays a timeout, so D-2736's descendant still ends at the backstop. While
+    # the child lives nothing here runs, and a Linux FIFO reports its EOF to
+    # `read -t` as rc 1, so this arm is reached there only in D-2736's case.
+    if (( rc > 128 )) && [[ -n "$child" ]] && ! kill -0 "$child" 2>/dev/null; then
+      left=$(( bound - (SECONDS - t0) ))
+      t=$CCRC_AUTH_TICK
+      [[ $t =~ ^[0-9]+(\.[0-9]+)?$ ]] || t=1
+      (( ${t%%.*} < left )) || t=$left
+      if (( left > 0 )); then
+        _auth_drain_read "$t"; r=$?
+        line="$line$AUTH_DRAINED"
+        (( r > 1 )) || rc=$r
+      fi
+    fi
     if (( rc == 0 )); then
       _auth_line "$pending$line" "$shown"; pending=''; shown=''
     elif (( rc > 128 )); then
@@ -959,7 +1020,7 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
       <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
   local child=$!
   exec 8<"$AUTH_RUN/out"
-  _auth_pump
+  _auth_pump "$child"
   wait "$child"; rc=$?
   _auth_close_pipes
   # 124 IS `_plat_timeout`'s own expiry code, and the ONE thing the callers

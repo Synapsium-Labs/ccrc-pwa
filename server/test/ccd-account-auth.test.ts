@@ -2082,17 +2082,21 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
    */
   const drive = (os: 'linux' | 'darwin', opts: {
     mint: string; code?: string; secs?: string; grace?: string; noDeadline?: boolean;
+    /** Bash defining a stand-in for the pump's tick read (D-8345's seam), after sourcing. */
+    tickRead?: string; strays?: 'end';
   }): Record<string, string> => {
     const out = path.join(h.home, `drive-${os}.txt`);
     const script = `
       source "${HELPER}"
       CCD_OS=${os}; AUTH_ID=claude-a
       ${opts.noDeadline ? '_auth_timeout() { shift; "$@"; }' : ''}
+      ${opts.tickRead ?? ''}
       _auth_open_pipes || exit 9
       _auth_spawn_pty_child bash -c "$MINT"
       child=$AUTH_CHILD; exec 8<"$AUTH_RUN/out"
       [ -n "\${CODE:-}" ] && printf '%s\\n' "$CODE" >&9
-      _auth_pump; wait "$child"; rc=$?
+      t0=$SECONDS
+      _auth_pump >"${out}.pump"; took=$(( SECONDS - t0 )); wait "$child"; rc=$?
       # The default on AUTH_EXPIRED below is load-bearing: the helper runs
       # under set -u, so a tree without D-2736 global would die HERE rather
       # than in the behaviour under test - a red proving the variable is
@@ -2103,9 +2107,9 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
       # class as D-2613's stat -c, caught by CI rather than by reading.
       before=$(( $(pgrep -P $$ -x cat | wc -l) ))
       _auth_close_pipes; sleep 1
-      printf 'rc=%s\\nexpired=%s\\ncopier_before=%s\\ncopier_after=%s\\nfifos=%s\\nstate=%s\\n' \\
+      printf 'rc=%s\\nexpired=%s\\ncopier_before=%s\\ncopier_after=%s\\nfifos=%s\\nstate=%s\\ntook=%s\\n' \\
         "$rc" "\${AUTH_EXPIRED:-0}" "$before" "$(( $(pgrep -P $$ -x cat | wc -l) ))" \\
-        "$(( $(ls -1 "$AUTH_RUN" 2>/dev/null | wc -l) ))" "$AUTH_STATE" > "${out}"
+        "$(( $(ls -1 "$AUTH_RUN" 2>/dev/null | wc -l) ))" "$AUTH_STATE" "$took" > "${out}"
     `;
     const env = ghContainedEnv(h.home, {
       ...process.env, HOME: h.home, CCRC_AUTH_NO_MAIN: '1', CCRC_AUTH_TICK: '0.2',
@@ -2119,10 +2123,13 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
     // mint under it runs on), has that mint ended through the group when it returns. A hang leaves the file
     // below absent or stale.
     spawnSyncGroup('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore', encoding: 'utf8' },
-      { strays: opts.noDeadline ? 'end' : 'throw' });
+      { strays: opts.noDeadline || opts.strays === 'end' ? 'end' : 'throw' });
     if (!fs.existsSync(out)) return { hung: 'yes' };
-    return Object.fromEntries(fs.readFileSync(out, 'utf8').trim().split('\n')
-      .map((l) => l.split('=') as [string, string]));
+    return {
+      ...Object.fromEntries(fs.readFileSync(out, 'utf8').trim().split('\n')
+        .map((l) => l.split('=') as [string, string])),
+      pump: fs.readFileSync(`${out}.pump`, 'utf8'),
+    };
   };
 
   // THE ONE THAT WOULD HAVE CAUGHT D-2673. Same helper, same mint, only the
@@ -2158,6 +2165,55 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
       expect(r['copier_after'], 'a copier survived the run; it holds fd 9 on the FIFO it reads')
         .toBe('0');
       expect(r['fifos'], 'FIFOs were left under $HOME').toBe('0');
+    });
+
+    // ── MACOS'S LOST END OF FILE (D-8345) ───────────────────────────────────
+    // On Darwin a FIFO's EOF is delivered ONCE to whatever waits for it, and
+    // `select()` can then call a FIFO with no writer "not readable" for good, so
+    // bash's `read -t` consumes the EOF and answers 142 (C27, D-8344, measured
+    // on macOS). Linux cannot show that, so these drive the pump's own seam,
+    // `_auth_pump_read`, with stand-ins that answer the way Darwin did. What only
+    // a Mac can show, that the real `read -t` does this, is in c28.md.
+    //
+    // LOST_EOF is the faithful one: the real tick read, except that the end of
+    // the stream answers 142, as a timeout, every time.
+    const LOST_EOF = `_auth_pump_read() {
+        local r=0; _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line || r=$?
+        if (( r == 1 )); then sleep "$CCRC_AUTH_TICK"; return 142; fi
+        return "$r"; }`;
+    // BLIND is the worst case: select() never reports fd 8 readable at all, so
+    // every byte the pump forwards has to come through the drain read.
+    const BLIND = `_auth_pump_read() { line=''; sleep "$CCRC_AUTH_TICK"; return 142; }`;
+
+    it(`${os}: a finished mint whose EOF the tick read lost ends at once, not at the backstop (D-8345)`, () => {
+      const r = drive(os, { mint: 'echo line-one; echo line-two; exit 0', secs: '3', grace: '3', tickRead: LOST_EOF });
+      expect(r['hung']).toBeUndefined();
+      expect(r['expired'], 'the pump looped on the lost EOF until its backstop and stamped a finished mint expired')
+        .toBe('0');
+      expect(Number(r['took']), 'the pump waited for the backstop (6 s) instead of confirming the EOF').toBeLessThan(3);
+      expect(r['rc'], 'the mint\'s own status was lost').toBe('0');
+      expect(r['pump']).toBe('line-one\nline-two\n');
+    });
+
+    it(`${os}: when select() never says readable, every byte still reaches the pane, in order, the partial last line too (D-8345)`, () => {
+      const r = drive(os, { mint: 'echo line-one; echo line-two; printf tail-no-newline; exit 0', secs: '3', grace: '3', tickRead: BLIND });
+      expect(r['hung']).toBeUndefined();
+      expect(r['expired'], 'the drain read did not reach the end of the stream').toBe('0');
+      expect(Number(r['took'])).toBeLessThan(3);
+      expect(r['pump'], 'the drain read lost or reordered bytes').toBe('line-one\nline-two\ntail-no-newline\n');
+    });
+
+    // D-2736's case must survive the drain: a DESCENDANT keeps the write end
+    // after the child has gone, so a read with no bound would block for ever.
+    it(`${os}: a descendant still holding the stream after the child exits still ends at the backstop, as EXPIRED (D-8345, D-2736)`, () => {
+      const r = drive(os, {
+        mint: 'echo alive; (exec sleep 300) & exit 0', secs: '3', grace: '3', tickRead: BLIND, strays: 'end',
+      });
+      expect(r['hung'], 'the drain read blocked past the backstop on a writer that never closes').toBeUndefined();
+      expect(r['expired'], 'a held stream must end as expired').toBe('1');
+      expect(Number(r['took']), 'the backstop is 6 s; the drain read may not hold the loop past it').toBeGreaterThanOrEqual(6);
+      expect(Number(r['took'])).toBeLessThanOrEqual(8);
+      expect(r['pump'], 'the line the child printed before it left was lost').toBe('alive\n');
     });
   }
 });
