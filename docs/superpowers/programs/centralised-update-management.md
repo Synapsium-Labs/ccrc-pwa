@@ -7414,7 +7414,9 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
 - **R41 (review 891's whole-branch notes; older than wave 24).** `_inst_plist_server` for the fleet role emits the
   server's entry point, while the Darwin installer around it picks the agent's label. The generator and its callers
   are byte-identical at wave 24's base and tip, and no launchd job was installed or run, so it is measured from a
-  fixture only. A macOS install wave reads it.
+  fixture only. A macOS install wave reads it. **Fixed by D-8388 (2026-11-12):** confirmed red from the fixture, then
+  `_inst_plist_server` takes the role, and the fleet job execs the agent's entry point and reads only its required
+  `agent.env`, as `ccrc-agent.service` does (`darwin-role-plist.test.ts`, on every leg).
 - **R42 (review 891's suites; main shares it).** `ccrc-install.test.ts` describe 35 (the codex tier's restart on a
   real spine) passes its five assertions, but its teardown names one fixture-only Python supervisor still running
   under a deleted fixture HOME and exits 1. It reproduces on current main. The process ends on its own later. The
