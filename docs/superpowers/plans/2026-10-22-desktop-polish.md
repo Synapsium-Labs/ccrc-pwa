@@ -3384,6 +3384,30 @@ net's join and one for the API commits address.
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.
 
+### Task C27: the macOS FIFO-EOF probe measured its own reader, not the FIFO (D-8344) — now
+
+Placed here, before C24, so that it does not touch C26's section, which was in review when this one was written.
+
+**Why.** With C26's three files fixed, the last red in the macOS test legs was `platform-hazards.test.ts`'s darwin case
+"BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)" (D-2661): red on 2026-11-09 and in C26's
+dispatch 43124495612, green on 2026-11-05 and 2026-11-11, always with "nothing alive, nothing holding". A promotion to
+stable needs it green. Root cause first, by the brief: fix the shim if a descendant holds the output, or the probe if the
+probe is wrong on Darwin.
+
+**What was found and done.** No writer survived. Reproduced on macOS (17 reds in 185 iterations), the timeout's whole group
+was gone at +2 s, yet `read -t 0.5` answered 142 for 15 s while a fresh `read(2)` on the same descriptor returned 0 bytes at
+once and `select()` said "not readable". On macOS a FIFO's EOF is one-shot for anything waiting on it. The first read to
+return EOF clears it, and `read -t`'s own read consumed it and still answered a timeout. The case now waits with one
+blocking reader that never asks `select()` (`eofWait`), records the timeout's group before the deadline, and gains a control
+on both platforms that the reader still says "never" while a writer holds the FIFO. The fixed reader was green in 260 of 260
+iterations. The shim, the window, `macos.yml` and the gate are unchanged. The sign-in helper's pump reads with the same
+`read -t` and is booked as Task C28 (ask 356). Evidence, runs and the C28 hand-off are in `c27.md`.
+
+- **D-8344** - `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
+
+**Acceptance.** The darwin case is green in a `macos.yml` dispatch at the PR's tip, and its repeat runs are recorded in
+`c27.md`. The control reds when the reader is made to answer "eof" whatever happens. **Rollback.** A plain revert.
+
 ### Task C24: the gh reader's net reads the raw and the joined text, and quotes as the shell does (D-8291) — now
 
 **Why.** Review 1808, the third and last review of Task C23, found that the net read only the text as the shell joins it, so
