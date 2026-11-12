@@ -34,3 +34,26 @@ export const TIME_SCALE = parseTimeScale(process.env[TIME_SCALE_ENV]);
 export const scaled = scaledBy(TIME_SCALE);
 /** A budget in whole seconds, scaled for this environment. */
 export const scaledSeconds = scaledSecondsBy(TIME_SCALE);
+
+// D-8398: a deadline a test sets for ITSELF (a bound it hands a shell, a spawn's timeout, a wait loop, a case's own
+// timeout) is written for Linux. On macOS the same work races a slower fork and exec (see `vitest.config.ts`'s Darwin
+// clock), and the operator's ruling of 2026-11-12 is that a macOS-only timing flake gets a Darwin deadline in the test
+// itself, never a retry. This is that one factor: Linux and every other platform read 1, so their deadlines stay their
+// literals; darwin reads `DARWIN_DEADLINE_FACTOR`. It composes with the time scale above. 3 is a ruling, set between
+// session-hook's 2x bound and the suite clock's 4.5x; it is not a measurement.
+/** How much longer a test's own deadline runs on macOS. Only ever lengthens one. */
+export const DARWIN_DEADLINE_FACTOR = 3;
+
+/** The deadline factor for `platform` (a `process.platform` value): `DARWIN_DEADLINE_FACTOR` on darwin, else 1. */
+export const platformFactor = (platform: string): number => (platform === 'darwin' ? DARWIN_DEADLINE_FACTOR : 1);
+/** `ms` multiplied by `scale` and by `platform`'s factor, rounded up. */
+export const platformDeadlineBy = (scale: number, platform: string) => (ms: number): number =>
+  Math.ceil(ms * scale * platformFactor(platform));
+/** Whole seconds, for a bound a shell takes: `s` multiplied by `scale` and by `platform`'s factor, rounded up. */
+export const platformDeadlineSecondsBy = (scale: number, platform: string) => (s: number): number =>
+  Math.ceil(s * scale * platformFactor(platform));
+
+/** A test's own deadline in milliseconds, for this environment and this platform. */
+export const platformDeadline = platformDeadlineBy(TIME_SCALE, process.platform);
+/** A test's own deadline in whole seconds, for this environment and this platform. */
+export const platformDeadlineSeconds = platformDeadlineSecondsBy(TIME_SCALE, process.platform);

@@ -20,6 +20,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import { fileURLToPath } from 'node:url';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { platformDeadline, platformDeadlineSeconds } from './timeScale.js';
 import { familyClassOf, FAMILY_TOKENS } from '../../shared/models.mjs';
 
 let h: CcdHarness;
@@ -90,6 +91,12 @@ const writeTranscript = (lines: string[], id = ID): string => {
 };
 const keep = (id = ID): string => h.sh(`_operator_choice_keep ${id}; echo "rc=$?"`);
 /** The one line a keep says when the newest /model or /effort has no acknowledgement this ccd recognises. */
+// THE FIFO CASES' DEADLINES (D-8398). Each FIFO case below bounds a function that must return without opening its
+// FIFO: a 10 s poll (100 ticks of 0.1 s), or `BOUNDED` at 5 s inside a 15 s spawn. They are Linux's numbers; on macOS
+// they read the Darwin factor through `platformDeadline`, so a slow runner's source of ccd is not read as a hang.
+const FIFO_POLLS = Math.ceil(platformDeadline(10_000) / 100);
+const FIFO_BOUND_S = platformDeadlineSeconds(5);
+const FIFO_OUTER_MS = platformDeadline(15_000);
 const driftLines = (id = ID): string[] => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${id}: unmeasured (a /model or /effort command with no acknowledgement`));
 /** `--stage 7` over this fixture HOME's swap.log (TZ=UTC, as the instrument's own test runs it). */
 const stage7 = (): Record<string, number | string | Record<string, number>> => JSON.parse(execFileSync('python3',
@@ -507,7 +514,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     fs.mkdirSync(path.dirname(p), { recursive: true });
     h.sh(`mkfifo ${JSON.stringify(p)}`);
     const out = h.sh(`_operator_choice_keep ${ID} & pid=$!
-      for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      for _ in $(seq 1 ${FIFO_POLLS}); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
       if kill -0 "$pid" 2>/dev/null; then kill "$pid"; : > ${JSON.stringify(p)}; echo held; else wait "$pid"; echo "rc=$?"; fi`);
     expect(out, 'a grep on a FIFO blocks the stop until somebody writes to it').toBe('rc=0');
     expect(h.reg(ID, 'class')).toBe('fable');
@@ -1216,8 +1223,8 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       h.sh(`mkfifo ${JSON.stringify(file)}`);
       const snippet = `source ${JSON.stringify(CCD)}; ${fn} ${ID}; printf 'rc=%s' "$?"`;
-      const r = spawnSyncGroup('bash', ['-c', `${BOUNDED} 5 bash -c "$1"`, '_', snippet], {
-        encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL',
+      const r = spawnSyncGroup('bash', ['-c', `${BOUNDED} ${FIFO_BOUND_S} bash -c "$1"`, '_', snippet], {
+        encoding: 'utf8', timeout: FIFO_OUTER_MS, killSignal: 'SIGKILL',
         env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
       });
       expect(r.error, 'outer bound exceeded').toBeUndefined();
@@ -1445,7 +1452,7 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     fs.writeFileSync(path.join(dir, '424242.json'), JSON.stringify({ sessionId: NEXT }));
     const out = h.sh(`tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
       _sync_uuid ${ID} & pid=$!
-      for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      for _ in $(seq 1 ${FIFO_POLLS}); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
       if kill -0 "$pid" 2>/dev/null; then kill "$pid"; : > ${JSON.stringify(fifo)}; echo held; else wait "$pid"; echo "rc=$?"; fi`);
     expect(out, 'a grep on a FIFO blocks the rotation until somebody writes to it').toBe('rc=0');
     expect(h.reg(ID, 'uuid')).toBe(NEXT);
