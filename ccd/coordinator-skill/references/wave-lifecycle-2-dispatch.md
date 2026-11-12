@@ -348,6 +348,18 @@ phrasing left to judgement (clause 5's "the content is this session's
 judgement" does not cover it) — it is the one sentence that keeps the wave
 closeable at all.
 
+**A second sentence goes in every brief beside it: "commit as often as useful;
+push once, when the build or a review fix round is complete, with its code,
+tests and notes in the same push."** (Operator ruling 2026-11-12, D-8397;
+worker clause 20 says it too, and the reason to repeat it is the branch
+sentence's own: a home that has not had the installer has only your brief.)
+Every push re-runs the PR's checks, so a push per commit buys CI runs and
+nothing else: pushing once per round is expected to bring a merged PR from
+about 2.8 runs to about 2.1. A push before the round is complete is right only to hand work
+to another session, or before a stop that could lose the work. A brief that
+asks for a push per task, per commit or per green test contradicts this
+sentence, and the sentence wins.
+
 **The workspace's name is frozen for the life of the claim.** This is a fact
 the fleet did not previously guarantee, not a correction to anything above:
 the automatic naming sweep used to rename a workspace to a slug of the

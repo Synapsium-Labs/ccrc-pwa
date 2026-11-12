@@ -149,12 +149,12 @@ run record and the server's own re-measurement are what settle facts.
 
 ## What stays discipline
 
-Handoffs are commits. Briefs are prose reviewed like code. The ledger is for
-humans and is parsed by nothing — including you: read it, do not build a parser
-for it. Parallelism only across workspaces a plan proves disjoint. SDD's per-PR
-mechanics (implement → review lenses → whole-branch pass) are unchanged; you
-*dispatch* that shape to a review run rather than run it yourself — the diff
-is never read by this session.
+Handoffs are commits, pushed once per build or fix round (D-8397). Briefs are
+prose reviewed like code. The ledger is for humans and is parsed by nothing, you
+included: read it, never parse it. Parallelism only across workspaces a plan
+proves disjoint. SDD's per-PR mechanics (implement → review lenses →
+whole-branch pass) are unchanged; you *dispatch* that shape to a review run —
+the diff is never read by this session.
 
 ## When something is wrong
 

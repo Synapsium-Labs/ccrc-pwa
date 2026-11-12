@@ -36,7 +36,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The nineteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The twenty clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -83,6 +83,8 @@ const CONTRACT = [
   "A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`): they belong in the workspace or in that temp root. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.",
   // Workflow rule, operator ruling 2026-10-25: no double quote, straight apostrophe.
   "Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.",
+  // Push once per round, operator ruling 2026-11-12 (D-8397): ASCII only, no double quote.
+  "Commit as often as useful, but push once per round: when the wave's build or a review fix round is complete, push its code, tests and notes together (plan, ledger and deviation lines in the same push), then measure the wave-done fingerprint. Every push re-runs the PR's checks, so a push per commit buys CI runs and nothing else. Push before that only to hand work to another session, or before a stop that could lose the work (D-8397).",
 ];
 
 /** The absorb clause, by its own index — the one clause licensed to name
@@ -113,6 +115,31 @@ describe('the worker skill: clause 19, a worker never launches a workflow (opera
     const routing = skill.slice(skill.indexOf('## Routing your subagents'), skill.indexOf('## Mutation testing'));
     expect(routing).not.toMatch(/Workflow `agent\(\)`|Workflow script on this/);
     expect(routing).toContain('clause 19');
+  });
+});
+
+describe('the worker skill: clause 20, push once per round (operator ruling 2026-11-12, D-8397)', () => {
+  const c20 = CONTRACT[19]!;
+
+  it('is the twentieth clause, and SKILL.md numbers it so', () => {
+    expect(c20.startsWith('Commit as often as useful, but push once per round: ')).toBe(true);
+    expect(skill).toContain(`\n20. ${c20}\n`);
+  });
+
+  it('pushes once when a build or a review fix round is complete, code, tests and notes together', () => {
+    expect(c20).toContain("when the wave's build or a review fix round is complete");
+    expect(c20).toContain('push its code, tests and notes together');
+    expect(c20).toContain('then measure the wave-done fingerprint');
+  });
+
+  it('licenses an earlier push only for a hand-off or a stop that could lose the work', () => {
+    expect(c20).toContain('Push before that only to hand work to another session, or before a stop that could lose the work');
+    expect(c20).not.toMatch(/push (?:each|every) commit|commit and push/i);
+  });
+
+  it('the fix-round bullet points the round at clause 20', () => {
+    const bullet = skill.slice(skill.indexOf('- **A `fix-round` mail arrives**'), skill.indexOf('A `fix-round` mail whose first line reads'));
+    expect(bullet).toContain('clause 20');
   });
 });
 
@@ -177,7 +204,7 @@ describe('the worker skill: its contract', () => {
     }
   });
 
-  it('carries all nineteen clauses verbatim', () => {
+  it('carries all twenty clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -381,8 +408,8 @@ describe('the worker skill: its contract', () => {
     expect(from, 'the worker skill lost its fix-round bullet').toBeGreaterThanOrEqual(0);
     const whole = [
       '- **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming this run): usually a review run read your wave and the coordinator ruled.',
-      'The report at the path in the mail\'s `artifacts` — plus the rulings in its body — is your brief for the fix round.',
-      'Ack it (clause 3), fix on this workspace\'s own branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.',
+      'The report at the path in the mail\'s `artifacts`, plus the rulings in its body, is your brief for the round.',
+      'Ack it (clause 3), fix on this workspace\'s own branch (clause 2), push once (clause 20) and report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.',
       'A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.',
       'Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.',
       'If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.',

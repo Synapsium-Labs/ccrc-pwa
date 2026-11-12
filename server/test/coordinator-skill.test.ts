@@ -1495,6 +1495,40 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
   });
 });
 
+// Operator ruling 2026-11-12 (D-8397): agents push once per build or review fix round, code, tests and notes
+// together, never once per commit (a PR's checks run on every push). The coordinator carries it three ways:
+// its own handoffs, the sentence every brief repeats beside the branch rule, and every fix-round mail.
+describe('push once per round (operator ruling 2026-11-12, D-8397)', () => {
+  const BRIEF_SENTENCE = 'commit as often as useful; push once, when the build or a review fix round is ' +
+    'complete, with its code, tests and notes in the same push.';
+
+  it('the coordinator pushes its own handoffs once per build or fix round', () => {
+    expect(flat(skillFile)).toContain('Handoffs are commits, pushed once per build or fix round (D-8397).');
+  });
+
+  it('every brief carries the push sentence beside the branch sentence, and says why', () => {
+    const wl = flat(waveLifecycleText());
+    expect(wl).toContain(BRIEF_SENTENCE);
+    const block = passage('the push-once block', wl, 'A second sentence goes in every brief beside it',
+      "The workspace's name is frozen", 300);
+    expect(block).toContain('worker clause 20');
+    expect(block).toMatch(/hand work to another session, or before a stop that could lose the work/);
+    expect(block).toMatch(/Every push re-runs the PR's checks, so a push per commit buys CI runs and nothing else/);
+    expect(flat(procedure('wave-steps.md'))).toContain(`its partner sentence: ${BRIEF_SENTENCE.slice(0, -1)} (D-8397, worker clause 20;`);
+  });
+
+  it('every fix-round mail asks for the round in one push', () => {
+    const steps = flat(procedure('wave-steps.md'));
+    expect(steps).toContain('The idle-gated delivery lane wakes the worker; it pushes the round once, its fixes, tests and notes together (worker clause 20), and its fix round ends in a new wave-done');
+  });
+
+  it('CLAUDE.md states the rule for every builder in this repository', () => {
+    const claude = flat(readFileSync(path.join(root, 'CLAUDE.md'), 'utf8'));
+    expect(claude).toContain('**Push once per round** (operator ruling 2026-11-12, D-8397):');
+    expect(claude).toContain('a push before that only hands work to another session or comes before a stop that could lose the work');
+  });
+});
+
 describe('the graph-card paragraph describes the card ccd/session-hook.sh actually prints', () => {
   // NOTHING under `server/test` read this paragraph when it landed, so it could
   // — and did — describe a two-state freshness the hook has not had since

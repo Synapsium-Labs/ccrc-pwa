@@ -46,7 +46,10 @@ not after.
    done-fingerprint (step 4) re-measures the workspace branch, a feature branch
    wedges every close with `stale-tip` forever (F5), and a skill reaches a home
    only once its installer has run there, so say it again even though the skill
-   says it (`references/wave-lifecycle.md` §2). This
+   says it (`references/wave-lifecycle.md` §2). Beside it goes its partner
+   sentence: commit as often as useful; push once, when the build or a review
+   fix round is complete, with its code, tests and notes in the same push
+   (D-8397, worker clause 20; `references/wave-lifecycle.md` §2). This
    is also where wave 1's hold actually lands, reason `program:<slug>
    wave:1/M run:<id>` — the run's own id is part of the reason, so size a slug
    against that full string, not against the prefix. For wave ≥ 2 the route itself resumes the workspace and injects
@@ -139,8 +142,9 @@ not after.
      `planned`'s door only, and a run at `working` has no edge back to
      `dispatched` (D-2824): `"$API" mail send --json -` with
      `{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<worker session id>","runId":<work run id>,"kind":"status","subject":"fix-round","body":"<the report's absolute path on the first line, then your rulings — which findings to fix, which you overruled and why>","artifacts":["<report path>"]}`.
-     The idle-gated delivery lane wakes the worker; its fix round ends in a new
-     wave-done and a NEW review run (step 5); review runs are never reused.
+     The idle-gated delivery lane wakes the worker; it pushes the round once,
+     its fixes, tests and notes together (worker clause 20), and its fix round
+     ends in a new wave-done and a NEW review run (step 5); review runs are never reused.
      **A fix round with no report behind it** comes from `merging`, and the
      cause you measured decides which of two forms it takes. **An ejection** is
      sent in two cases only: the new-head route for a red that is `main`'s own
