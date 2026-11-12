@@ -363,7 +363,8 @@ const keepBaseline = (edit?: (rep: any) => void): string => {
   write(baselineFile(), JSON.stringify(rep, null, 1) + '\n');
   return baselineFile();
 };
-const LATER = ['--now', String(NOW_S + 3600)];   // the second reading, an hour after the baseline
+// the second reading, ten minutes after the baseline (inside the fixture credential's life, so only drift moves)
+const LATER = ['--now', String(NOW_S + 600)];
 const withBaseline = (file: string = baselineFile()): string[] => ['--drift-baseline', file, ...LATER];
 const TAKEN = '2026-11-03T07:00:00Z';
 const SINCE = '2026-10-27T06:26:05.000Z';
@@ -400,7 +401,7 @@ describe('measure-codex-watch.py: drift reads growth since a baseline reading', 
     writeStats(substitutions({ [OPUS]: 496, [SONNET]: 12 }));
     keepBaseline();
     const rep = report(withBaseline());
-    expect(rep.takenAt).toBe('2026-11-03T08:00:00Z');
+    expect(rep.takenAt).toBe('2026-11-03T07:10:00Z');
     expect(criterion(rep, 'drift')).toMatchObject({
       verdict: 'pass', unexplained: { modelSubstitution: [OPUS, SONNET] },
       baseline: { takenAt: TAKEN, since: SINCE },

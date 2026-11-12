@@ -13,7 +13,9 @@ Every comparison is like for like: the same kind of request on both sides, the s
 
 `--flip` is when the lane went `direct`. The baseline window is [`--baseline-since`, flip), seven days by default; the
 watch window is [flip, `--until`), up to now by default. Stamps are UTC, `YYYY-MM-DDTHH:MM[:SS]Z`. `--home` is the
-home to read (default: this user's). `--now` (epoch seconds) pins the clock for the test suite.
+home to read (default: this user's). `--now` (epoch seconds) pins the clock for the test suite, and the reading's
+`takenAt` is that clock. `--drift-baseline PATH` is a previous `--json` reading of this lane, kept by the operator:
+drift then reads growth since it (THE FIVE CRITERIA, drift).
 
 WHAT IT READS, AND NOTHING ELSE:
   <home>/.ccrc/codex/<lane>/lane.json            the mode, the config directory, the auth directory, the stats name
@@ -36,14 +38,18 @@ WHAT IT READS, AND NOTHING ELSE:
                                                  `isSidechain`, `isApiErrorMessage`, `version`,
                                                  `compactMetadata.trigger`, `compactMetadata.preTokens`,
                                                  `message.id` and `message.model`. Never a row's text.
+  --drift-baseline PATH                          a previous --json reading, read once and bounded (BASELINE_MAX),
+                                                 nothing it names followed: its `lane`, `takenAt`, and its bridge's
+                                                 `since` and `unexplainedCounts`. Its path is never printed.
 
 WHAT LEAVES: counts, rates, statistics, stamps, model and class names, Claude Code version numbers, the lane id and
 its mode, the status file's state, last error code and unsaved flag, the store's outcome names, the store entry's
 state, reason and set-aside record (its stamp, what it found and the copy's file name), each event's kind and ok, why
-a model file was not read, and the names the bridge's drift counters hold (bounded by the bridge when it wrote them,
-bounded again here). A name from a model file or the store entry is printed only when it is name-shaped with no `/`
-(EVENT_NAME_RE), else `other`. No session id, uuid, path below the home, prompt, request id, advance reason or
-account identity is printed (`measure-codex-watch.test.ts` pins it with sentinels).
+a model file was not read, the names the bridge's drift counters hold and each one's count (bounded by the bridge when
+it wrote them, bounded again here), and a drift baseline's own stamps and counts. A name from a model file or the
+store entry is printed only when it is name-shaped with no `/` (EVENT_NAME_RE), else `other`. No session id, uuid,
+path below the home, prompt, request id, advance reason, account identity or drift baseline's path is printed
+(`measure-codex-watch.test.ts` pins it with sentinels).
 
 EVENTS. Every class advance (advance, revert or hand move) and every measured window (`window`, or `lowering` when
 its source is a refusal, D25) stamped in [baseline-since, until) is printed with its stamp, kind, class or model and
@@ -106,7 +112,15 @@ THE FIVE CRITERIA:
                     printed as "last upstream or refresh code", with the status's own update stamp, and never fails;
                     so is any other state, and the library's `unsaved` flag. This is one moment, not the week:
                     whether it stayed so is the doctor's history and the operator's.
-  drift             every family's `unexplained` list in the stats file is empty.
+  drift             with no `--drift-baseline`: every family's `unexplained` list in the stats file is empty. That
+                    list is cumulative (the bridge carries a name until a reviewed change to known.py explains it),
+                    so with a baseline, a previous `--json` reading of this lane, drift reads GROWTH since it instead,
+                    per (family, name) by the stats file's `names` count (`unexplainedCounts`): `new` (the baseline
+                    did not list it) and `grew` fail; `held` passes; `fell` is unmeasured, since a counter that went
+                    backwards means the file is not the one the baseline read; a baseline name no longer unexplained
+                    is `explained since` and passes. `unmeasured` too when the baseline cannot be read, is not this
+                    instrument's reading, is of another lane, has no per-name counts (a reading from an older build)
+                    or of another shape, or carries another stats `since` (the file was replaced or reset since).
 
 Also printed, as context: the stats file's cumulative `store:*` outcome counts and the store entry (its state, reason
 and `setAside`), so a store outage during the watch shows even while this process's store reads ok.
@@ -123,6 +137,7 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 import time
 
@@ -154,6 +169,8 @@ MESSAGES_PATH = "/v1/messages"
 COUNT_TOKENS_PATH = MESSAGES_PATH + "/count_tokens"
 STATUS_CLASSES = ("2xx", "4xx", "5xx")
 NO_STAMPS = "the whole litellm.log: its lines carry no stamps, so its share is over the whole file"
+# A --json reading of this instrument is kilobytes; a drift baseline larger than this is not one, and is not parsed.
+BASELINE_MAX = 4 * 2**20
 
 # The rulings' numbers (Stage 4 plan, Task 0).
 ALPHA = 0.05                 # every one-sided test's level, and the intervals' 1 - confidence
@@ -425,10 +442,20 @@ def bridge_section(st):
     shown = {}
     for key, value in outcomes.items():
         bump(shown, bounded(key), count(value))
-    names = {}
+    held = st.get("names") if isinstance(st.get("names"), dict) else {}
+    names, counts = {}, {}
     for family, listed in unexplained.items():
         if isinstance(listed, list) and listed:
             names[bounded(family)] = sorted({bounded(n) for n in listed})
+            # Each unexplained name's count in the stats file's `names` (drift's baseline reads its growth). A name
+            # listed but absent from `names` counts 0: the counter maps a name past its family's cap to `overflow`,
+            # so an unexplained name can have no count of its own. Names bounded to one printed name add up.
+            family_counts = held.get(family) if isinstance(held.get(family), dict) else {}
+            into = counts.setdefault(bounded(family), {})
+            for n in {n for n in listed if isinstance(n, str)}:
+                bump(into, bounded(n), count(family_counts.get(n)))
+            if any(not isinstance(n, str) for n in listed):
+                bump(into, OTHER, 0)
     return {
         "since": stamp_or_none(st.get("since")),
         "updatedAt": stamp_or_none(st.get("updatedAt")),
@@ -436,11 +463,78 @@ def bridge_section(st):
         "answered": sum(count(outcomes.get(c)) for c in STATUS_CLASSES),
         "outcomes": dict(sorted(shown.items())),
         "unexplained": dict(sorted(names.items())),
+        "unexplainedCounts": {f: dict(sorted(c.items())) for f, c in sorted(counts.items())},
         "refusals": len(refusals),
         # Cumulative, as every count is: an outage earlier in the watch shows here after a restart cleared the entry.
         "storeOutcomes": {k: v for k, v in sorted(shown.items()) if k.startswith("store:")},
         "store": store_entry(st.get("store")),
     }
+
+
+# ── the drift baseline: a previous --json reading of this instrument ───────────────────────────────────────────────
+def read_drift_baseline(path, lane):
+    """(the baseline, None) or (None, why). The baseline is the reading's own stamps (`takenAt`, its bridge's `since`)
+    and its per-name counts. The file is read once, bounded by BASELINE_MAX, and nothing it names is followed; its
+    path is never printed (it names a home), so no `why` carries it."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)   # a FIFO never blocks the reading
+    except FileNotFoundError:
+        return None, "the drift baseline reading is absent"
+    except OSError:
+        return None, "the drift baseline reading is unreadable"
+    try:
+        regular = stat.S_ISREG(os.fstat(fd).st_mode)
+        if not regular:
+            os.close(fd)
+            return None, "the drift baseline reading is not a regular file"
+        with os.fdopen(fd, "rb") as f:
+            data = f.read(BASELINE_MAX + 1)
+    except OSError:
+        return None, "the drift baseline reading is unreadable"
+    if len(data) > BASELINE_MAX:
+        return None, "the drift baseline reading is larger than %d bytes, so it is not a reading of this instrument" \
+            % BASELINE_MAX
+    try:
+        obj = json.loads(data.decode("utf-8"))
+    except (UnicodeError, ValueError, RecursionError):
+        return None, "the drift baseline reading is not JSON"
+    if not (isinstance(obj, dict) and isinstance(obj.get("criteria"), list) and isinstance(obj.get("bridge"), dict)
+            and isinstance(obj.get("lane"), str)):
+        return None, "the drift baseline reading is not a --json reading of this instrument"
+    if obj["lane"] != lane:
+        return None, "the drift baseline reading is of another lane"
+    bridge = obj["bridge"]
+    if "unmeasured" in bridge:
+        return None, "the drift baseline reading measured no bridge"
+    counts = bridge.get("unexplainedCounts")
+    if counts is None:
+        return None, "the baseline reading has no per-name counts; take a new reading with this build"
+    shaped = isinstance(counts, dict) and all(
+        isinstance(f, str) and NAME_RE.match(f) and isinstance(c, dict)
+        and all(isinstance(n, str) and NAME_RE.match(n) and isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                for n, v in c.items())
+        for f, c in counts.items())
+    if not shaped:
+        return None, "the drift baseline reading's per-name counts are of another shape"
+    return {"takenAt": stamp_or_none(obj.get("takenAt")), "since": stamp_or_none(bridge.get("since")),
+            "counts": counts}, None
+
+
+def drift_states(now, then):
+    """Every (family, name) of the current per-name counts against the baseline's, sorted: `new` (the baseline did
+    not list it), `grew`, `held` or `fell`; and every baseline name no longer unexplained, `explained since`."""
+    rows = []
+    for family in sorted(set(now) | set(then)):
+        cur, base = now.get(family, {}), then.get(family, {})
+        for name in sorted(set(cur) | set(base)):
+            if name not in cur:
+                rows.append({"family": family, "name": name, "baseline": base[name], "now": None,
+                             "state": "explained since"})
+                continue
+            was = base.get(name)
+            state = ("new" if was is None else "grew" if cur[name] > was else "fell" if cur[name] < was else "held")
+            rows.append({"family": family, "name": name, "baseline": was, "now": cur[name], "state": state})
+    return rows
 
 
 # ── the credential's status ────────────────────────────────────────────────────────────────────────────────────────
@@ -958,7 +1052,8 @@ def compaction(add, lane_tx, box_tx, events, doubts):
         add("compaction-rate", verdict, **rest)
 
 
-def criteria(mode, bridge, bridge_why, log, log_why, lane_tx, box_tx, events, doubts, auth, lib, auth_why, now):
+def criteria(mode, bridge, bridge_why, log, log_why, lane_tx, box_tx, events, doubts, auth, lib, auth_why, now,
+             baseline=None):
     out = []
 
     def add(name, verdict, **fields):
@@ -973,12 +1068,49 @@ def criteria(mode, bridge, bridge_why, log, log_why, lane_tx, box_tx, events, do
     five_xx(add, bridge, bridge_why, log, log_why)        # 2. the 5xx rate
     compaction(add, lane_tx, box_tx, events, doubts)      # 3. the compaction rate
     credential(add, auth, lib, auth_why, mode, now)       # 4. the credential
-    # 5. drift
-    if bridge is None:
-        add("drift", "unmeasured", reason=bridge_why)
-    else:
-        add("drift", "pass" if not bridge["unexplained"] else "fail", unexplained=bridge["unexplained"])
+    drift(add, bridge, bridge_why, baseline)              # 5. drift
     return out
+
+
+def drift(add, bridge, bridge_why, baseline):
+    """Without a baseline (`baseline` None), any unexplained name fails. With one ((reading, why) from
+    `read_drift_baseline`), drift reads growth since that reading: a new or grown name fails, a counter that went
+    backwards is unmeasured (the file is not the one the baseline read), and held or explained-since names pass."""
+    if baseline is None:   # exactly the criterion before baselines
+        if bridge is None:
+            add("drift", "unmeasured", reason=bridge_why)
+        else:
+            add("drift", "pass" if not bridge["unexplained"] else "fail", unexplained=bridge["unexplained"])
+        return
+    # With a baseline the item always carries `baseline`: its stamps, or None when it was not read.
+    if bridge is None:
+        add("drift", "unmeasured", reason=bridge_why, baseline=None)
+        return
+    then, why = baseline
+    if then is None:
+        add("drift", "unmeasured", reason=why, unexplained=bridge["unexplained"], baseline=None)
+        return
+    stamps = {"takenAt": then["takenAt"], "since": then["since"]}
+    if then["since"] is None or bridge["since"] is None:
+        add("drift", "unmeasured", unexplained=bridge["unexplained"], baseline=stamps,
+            reason="the stats file's since is unreadable now or in the baseline reading, so whether it is the file "
+                   "the baseline read is unknown")
+        return
+    if then["since"] != bridge["since"]:
+        add("drift", "unmeasured", unexplained=bridge["unexplained"], baseline=stamps,
+            reason="the stats file was replaced or reset since the baseline reading: its since is %s now and was %s "
+                   "then" % (bridge["since"], then["since"]))
+        return
+    rows = drift_states(bridge["unexplainedCounts"], then["counts"])
+    states = {r["state"] for r in rows}
+    fields = {"unexplained": bridge["unexplained"], "baseline": stamps, "names": rows}
+    if states & {"new", "grew"}:
+        add("drift", "fail", **fields)
+    elif "fell" in states:
+        add("drift", "unmeasured", reason="%d names' counters went backwards since the baseline reading: the stats "
+            "file is not the one it read" % sum(1 for r in rows if r["state"] == "fell"), **fields)
+    else:
+        add("drift", "pass", **fields)
 
 
 def overall(items):
@@ -1003,15 +1135,32 @@ def event_line(e):
     return "event: %s %s %s %s -> %s (%s)" % (e["at"], e["kind"], what, show(e["from"]), show(e["to"]), where)
 
 
+def drift_lines(c):
+    """The drift baseline's stamps and each name's state, a line each; with no baseline, how to take one."""
+    if "baseline" not in c:
+        return ["drift baseline: none, so any unexplained name fails drift. To read growth instead, keep a --json "
+                "reading taken once the lane has settled and pass it later as --drift-baseline <file>"]
+    b = c["baseline"]
+    if b is None:
+        return ["drift baseline: not read (the reason is on the drift line)"]
+    out = ["drift baseline: taken at %s, stats since %s" % (show(b["takenAt"]), show(b["since"]))]
+    for r in c.get("names", ()):
+        out.append("  %s %s: %s then, %s now: %s" % (r["family"], r["name"], show(r["baseline"]), show(r["now"]),
+                                                     r["state"]))
+    return out
+
+
 def text(rep):
     lines = ["lane: %s (%s)" % (rep["lane"], rep["mode"]),
+             "taken at: %s" % rep["takenAt"],
              "baseline window: %s to %s" % tuple(rep["windows"]["baseline"]),
              "comparable baseline: %s to %s" % tuple(rep["windows"]["comparable"]),
              "watch window: %s to %s" % tuple(rep["windows"]["watch"]),
              "verdict: %s" % rep["verdict"], ""]
     for c in rep["criteria"]:
-        rest = ", ".join("%s=%s" % (k, show(v)) for k, v in c.items() if k not in ("name", "verdict"))
+        rest = ", ".join("%s=%s" % (k, show(v)) for k, v in c.items() if k not in ("name", "verdict", "names"))
         lines.append("%s: %s%s" % (c["name"], c["verdict"], (" (" + rest + ")") if rest else ""))
+    lines.extend(drift_lines(next(c for c in rep["criteria"] if c["name"] == "drift")))
     lines.append("")
     lines.append("event files: %s" % show(rep["eventSources"]))
     lines.extend(event_line(e) for e in rep["events"])
@@ -1033,6 +1182,7 @@ def main(argv=None):
     ap.add_argument("--home", default=os.path.expanduser("~"))
     ap.add_argument("--now", type=float)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--drift-baseline", metavar="PATH")
     args = ap.parse_args(argv)
     try:
         if not LANE_RE.match(args.lane):
@@ -1056,10 +1206,11 @@ def main(argv=None):
         auth, lib, auth_why = read_auth_status(home, lane["authDir"])
         lane_tx, box_tx = scan(home, config_dirs(home), lane["configDir"], windows)
 
+        baseline = read_drift_baseline(args.drift_baseline, args.lane) if args.drift_baseline is not None else None
         items = criteria(lane["mode"], bridge, bridge_why, log, log_why, lane_tx, box_tx, events,
-                         event_doubts(sources), auth, lib, auth_why, now)
+                         event_doubts(sources), auth, lib, auth_why, now, baseline)
         rep = {
-            "lane": args.lane, "mode": lane["mode"],
+            "lane": args.lane, "mode": lane["mode"], "takenAt": iso(now),
             "windows": {name: [iso(a), iso(b)] for name, (a, b) in windows.items()},
             "verdict": overall(items), "criteria": items,
             "events": events, "eventSources": sources,
