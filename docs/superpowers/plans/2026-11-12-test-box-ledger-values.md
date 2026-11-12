@@ -16,7 +16,7 @@ is free text, an address, a path or a secret) and adds the values a setting's ow
   `TestboxSettingChange` type, `testboxLedgerValueOf` (a value through its key's shape), `testboxLedgerValueOfRow` (a box
   settings reader row) and `readTestboxLedgerChanges`, the one reader the writer, the store's read and the console's guard use.
 - `shared/api.ts`: `TestboxEventRow.changes?`, absent from an older server and from a row with none.
-- `server/src/coord/schema.ts`: migration 62, `testbox_events.changes` (nullable) and `testbox_staged_changes`.
+- `server/src/coord/schema.ts`: migration 63 (62 went to D-8395, which merged first), `testbox_events.changes` (nullable) and `testbox_staged_changes`.
 - `server/src/testboxAudit.ts`: `write` takes `changes` only on an `ok` settings row and only what the reader takes;
   `recent` reads them back through the reader; `stage` and `staged` hold a long act's changes by its id; any row with that
   act id drops them; `sweep` sweeps staged rows with the ledger.
@@ -47,7 +47,7 @@ is free text, an address, a path or a secret) and adds the values a setting's ow
 - `pwa/src/fleet/TestBoxManage.test.tsx` and `pwa/browser/testbox-manage.browser.test.ts`: the changes under the last act at
   every band and under the wide ledger's row; in Chrome at 360, 390, 1280, 1470 and 1920, both skins and both themes, the
   longest key and a value at the bound wrap inside the card with no sideways overflow.
-- Pins: `coord-db.test.ts` (schema 62), `run-close-switch.test.ts` (its rewind drops the new table), `testbox-pins.test.ts`
+- Pins: `coord-db.test.ts` (schema 63), `run-close-switch.test.ts` (its rewind drops the new table), `testbox-pins.test.ts`
   (two new readers of a test box key).
 
 ## Deviations found
