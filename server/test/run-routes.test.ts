@@ -5135,6 +5135,36 @@ describe('POST /api/runs/:id/close marks the landing entry (landing order wave 5
     ]);
   });
 
+  it('a mark that throws leaves the close answering 200 done, with one warning that names the failed mark', async () => {
+    const s = `${PROJECT}-land8`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'advanceLanding').mockImplementation(() => { throw new Error('boom'); });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(okRun(coord.run(id))!.state).toBe('done');
+    expect(stateOf(coord)).toBe('pinned');
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} could not mark ${PROJECT} #7 landed (boom)`,
+    ]);
+  });
+
+  it('a notice step that throws after the mark committed leaves the close answering 200, and the warning says the mark was written but the record was not', async () => {
+    const s = `${PROJECT}-land9`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'hasNotice').mockImplementation(() => { throw new Error('notice boom'); });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(stateOf(coord)).toBe('landed');
+    expect(mergedRecords(coord)).toHaveLength(0);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} marked ${PROJECT} #7 landed but its merged record was not written (notice boom)`,
+    ]);
+  });
+
   it('a session whose merged record sweepMerged already wrote gets no second one', async () => {
     const s = `${PROJECT}-land7`;
     const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);

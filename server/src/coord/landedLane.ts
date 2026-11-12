@@ -15,7 +15,7 @@ import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { LandingEntry } from '../../../shared/landingLine.js';
 import type { LandingLand } from './landingEntry.js';
 import {
-  landedAnswerOf, landedCandidatesOf, landedNext, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf,
+  isHeldRefusal, landedAnswerOf, landedCandidatesOf, landedNext, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf,
   pickLandedReads, type LandedCandidate, type LandedMemory,
 } from './landed.js';
 
@@ -67,6 +67,7 @@ export function raiseLandedNotice(f: {
 
 export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult> {
   const result: LandedPassResult = { read: 0, landed: 0, closed: 0, stopped: null };
+  const at = deps.now(); // the pass's start, taken once: every memory below is stamped with it, so a late read is due next sweep
   if (!ccdCan(deps.fleetState, 'prStatePr')) return { ...result, stopped: 'unsupported' };
   const projects = deps.coord.landingReadProjects();
   if (!projects.ok) { sayStopped(deps, projects.error); return { ...result, stopped: 'store' }; }
@@ -83,17 +84,17 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
     const live = new Set(cands.map((c) => c.id));
     for (const id of [...deps.memory.keys()]) if (!live.has(id)) deps.memory.delete(id);
   }
-  for (const cand of pickLandedReads(cands, deps.memory, deps.now())) {
+  for (const cand of pickLandedReads(cands, deps.memory, at)) {
     const res = await deps.runCcd(CCD_ARGV.prStatePr(cand.project, cand.pr));
     if (res.ran === false) {
-      deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, { act: 'retry', missingField: false }, deps.now()));
+      deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, { act: 'retry', missingField: false }, at));
       return { ...result, stopped: 'link' };
     }
     result.read++;
     const read = res.ok ? readPrStatePrLine(res.stdout, cand.pr) : { state: 'call-failed' as const };
     const answer = landedAnswerOf(read);
     if (answer.act === 'wait' || answer.act === 'retry') {
-      const next = landedNext(deps.memory.get(cand.id), cand, answer, deps.now());
+      const next = landedNext(deps.memory.get(cand.id), cand, answer, at);
       deps.memory.set(cand.id, next);
       if (next.missingStreak === 2) {
         sayOnce(deps, `missing-field:${cand.id}`,
@@ -102,14 +103,13 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
       continue;
     }
     const mark = deps.coord.advanceLanding({
-      kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at: deps.now(), outcome: answer.outcome,
+      kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at, outcome: answer.outcome,
       expect: { id: cand.id, pinnedAt: cand.pinnedAt },
     } satisfies LandingLand);
     if (!mark.ok) {
-      if (mark.error === 'landing-recovery-unresolved' || mark.error === 'landing-identity-conflict') {
-        // A recovery refusal is the line's, not the PR's: read it again at the next sweep.
-        const at = deps.now();
-        deps.memory.set(cand.id, { ...landedNext(undefined, cand, { act: 'wait' }, at), nextAt: at });
+      if (isHeldRefusal(mark.error)) {
+        // The hold appeared between the read and the write; L1 decides when the entry is read again (`landedNext`'s `held`).
+        deps.memory.set(cand.id, landedNext(deps.memory.get(cand.id), cand, { act: 'held' }, at));
         continue;
       }
       if (mark.error === 'landing-db-apply' || mark.error === 'landing-db-commit') {

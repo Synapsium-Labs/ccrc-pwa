@@ -4,7 +4,7 @@
 // the facts, makes the call and acts on these answers. Value imports are L0 and the lane table only; the landable rule
 // is `landingEntry.ts#isLandable`, the same predicate the land arm calls, so the lane re-states none of it.
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../laneSchedule.js';
-import { isLandable } from './landingEntry.js';
+import { isLandable, landingHoldGate } from './landingEntry.js';
 import type { LandingLand, LandingOutcome } from './landingEntry.js';
 import type { LandingMutationFacts } from './landingWrites.js';
 import type { NoticeMode, NoticeRecord } from '../notice.js';
@@ -34,12 +34,16 @@ export interface LandedCandidate {
   project: string; id: number; pr: number; pinnedAt: number; pinnedSha: string; runId: number | null;
 }
 
-/** The entries of one project's facts that are landable, in the facts' order. */
+/** The entries of one project's facts that are landable and not held, in the facts' order. A held subject is the line's
+ *  to repair, not the PR's to answer: the store would refuse its mark, so it is skipped HERE (the one hold rule, the
+ *  land arm's own `landingHoldGate`) and costs no `ccd pr-state --pr` call. It stays due, so it is read the sweep after
+ *  the hold clears. */
 export function landedCandidatesOf(facts: LandingMutationFacts): LandedCandidate[] {
   const out: LandedCandidate[] = [];
   for (const e of facts.entries) {
     const projection = facts.projections.find((p) => p.id === e.id)?.value ?? null;
     if (!isLandable(e.state, projection)) continue;
+    if (!landingHoldGate(facts.recovery, 'land', { project: e.project, pr: e.pr }, projection).ok) continue;
     out.push({ project: e.project, id: e.id, pr: e.pr, pinnedAt: e.pinnedAt, pinnedSha: e.pinnedSha, runId: e.runId });
   }
   return out;
@@ -75,13 +79,19 @@ export function pickLandedReads(
 
 /** What one read means for the entry. `retry` is an unmeasured answer or a failed call; `missingField` is true only
  *  for ccd's own `missing-field`. */
-export type LandedAnswer =
+export type LandedReadAnswer =
   | { act: 'land'; outcome: LandingOutcome }
   | { act: 'close'; outcome: LandingOutcome }
   | { act: 'wait' }
   | { act: 'retry'; missingField: boolean };
+/** What `landedNext` remembers: a read's answer, or a mark held at the write. */
+export type LandedAnswer = LandedReadAnswer | { act: 'held' };
 
-export function landedAnswerOf(read: PrStatePrRead | { state: 'call-failed' }): LandedAnswer {
+/** The two refusals of a mark that the line's recovery hold causes (the hold appeared between the read and the write):
+ *  they say nothing about the PR, so the entry is remembered as `held` and read again at the next pass. */
+export const isHeldRefusal = (error: string): boolean => error === 'landing-recovery-unresolved' || error === 'landing-identity-conflict';
+
+export function landedAnswerOf(read: PrStatePrRead | { state: 'call-failed' }): LandedReadAnswer {
   switch (read.state) {
     case 'merged':
       return { act: 'land', outcome: { word: 'merged', head: read.facts.headRefOid, base: read.facts.baseRefName,
@@ -94,11 +104,13 @@ export function landedAnswerOf(read: PrStatePrRead | { state: 'call-failed' }): 
   }
 }
 
-/** The entry's memory after a read at `now`. A wait is due one PR beat later and resets the step; a retry doubles the
+/** The entry's memory after a read at `now` (the pass's start: the lane takes it once per pass). A `held` mark is due at
+ *  the next pass, with the step and the streak reset. A wait is due one PR beat later and resets the step; a retry doubles the
  *  step from the beat to the PR backoff's ceiling; the second `missing-field` in a row is due an hour later, and any
  *  other answer resets the streak. */
 export function landedNext(prev: LandedMemory | undefined, cand: LandedCandidate, answer: LandedAnswer, now: number): LandedMemory {
   const kept = prev !== undefined && prev.pinnedAt === cand.pinnedAt ? prev : undefined;
+  if (answer.act === 'held') return { pinnedAt: cand.pinnedAt, lastReadAt: now, nextAt: now, step: PR_SWEEP_MS, missingStreak: 0 };
   if (answer.act !== 'retry') {
     return { pinnedAt: cand.pinnedAt, lastReadAt: now, nextAt: now + PR_SWEEP_MS, step: PR_SWEEP_MS, missingStreak: 0 };
   }

@@ -180,17 +180,30 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
   // Only code may satisfy the land-arm check: a comment is a request, a red suite is a mechanism.
   const stripComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
-  it('advanceLanding has three callers: advanceAct, the close\'s land step and the landed lane\'s pass, and only advanceAct passes a run arm', () => {
-    const act = symbolOf(ROUTES, ADVANCE_ACT);
+  const CLOSE = 'server/src/coord/close.ts';
+  const LANE = 'server/src/coord/landedLane.ts';
+  const CLOSE_LAND = 'landOnClose';
+  const LANE_PASS = 'landedPass';
+
+  it('advanceLanding has three callers, each named by symbol: advanceAct, the close\'s landOnClose and the lane\'s landedPass; only advanceAct passes a run arm', () => {
     const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'advanceLanding')
-      .map((c) => ({ file: f, start: c.start, text: stripComments(parsedFile(f).text.slice(c.start, c.start + 400)) })));
+      .map((c) => ({ file: f, start: c.start })));
     expect(calls).toHaveLength(3);
-    const inAct = calls.filter((c) => c.file.endsWith(ROUTES) && c.start >= act.start && c.start < act.end);
-    expect(inAct).toHaveLength(1);
-    expect(inAct[0]!.text).not.toMatch(/kind: 'land'/);
-    const others = calls.filter((c) => !inAct.includes(c));
-    expect(others).toHaveLength(2);
-    expect(others.every((c) => /kind: 'land'/.test(c.text))).toBe(true);
+    const within = (file: string, name: string) => {
+      const s = symbolOf(file, name);
+      return calls.filter((c) => c.file.endsWith(file) && c.start >= s.start && c.start < s.end);
+    };
+    expect(within(ROUTES, ADVANCE_ACT), 'advanceAct').toHaveLength(1);
+    expect(within(CLOSE, CLOSE_LAND), 'close.ts#landOnClose').toHaveLength(1);
+    expect(within(LANE, LANE_PASS), 'landedLane.ts#landedPass').toHaveLength(1);
+    const act = symbolOf(ROUTES, ADVANCE_ACT);
+    const actText = stripComments(parsedFile(ROUTES).text.slice(within(ROUTES, ADVANCE_ACT)[0]!.start, act.end).slice(0, 400));
+    expect(actText).not.toMatch(/kind: 'land'/);
+    // the other two compose a land command: the lane spells it, the close takes it from the one builder
+    const lane = symbolOf(LANE, LANE_PASS);
+    expect(stripComments(parsedFile(LANE).text.slice(within(LANE, LANE_PASS)[0]!.start, within(LANE, LANE_PASS)[0]!.start + 400))).toMatch(/kind: 'land'/);
+    expect(lane.end).toBeGreaterThan(lane.start);
+    expect(stripComments(symbolOf(CLOSE, CLOSE_LAND).text)).toMatch(/closeLandingOf\(/);
   });
 
   it('advanceLanding decides the edge before it writes, in one tx', () => {

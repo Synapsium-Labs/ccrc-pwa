@@ -32,6 +32,7 @@ import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './liv
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
+import { redactCommand } from './coord/redact.js';
 import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
@@ -644,8 +645,9 @@ function failureDetail(res: CcdResult): string {
   const lines = res.stderr.split('\n').filter((l) => l.trim() !== '');
   const first = lines[0];
   const last = lines[lines.length - 1];
-  return [ending, ...(first === undefined ? [] : [`first: ${first.slice(0, 160)}`]),
-    ...(first !== undefined && last !== first ? [`last: ${last!.slice(0, 160)}`] : [])].join('; ');
+  // ccd's and gh's stderr is foreign text: each line goes through the one redactor before it is cut and logged.
+  return [ending, ...(first === undefined ? [] : [`first: ${redactCommand(first).slice(0, 160)}`]),
+    ...(first !== undefined && last !== first ? [`last: ${redactCommand(last!).slice(0, 160)}`] : [])].join('; ');
 }
 
 export class FleetWatcher {

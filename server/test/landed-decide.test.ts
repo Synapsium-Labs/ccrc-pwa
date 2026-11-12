@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   LANDED_FRESH_MS, LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, landedAnswerOf, landedCandidatesOf, landedNext,
-  closeLandingOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
+  isHeldRefusal, closeLandingOf, landedNoticeModeOf, mergedBody, mergedKey, mergedNoticeOf, pickLandedReads, type LandedCandidate, type LandedMemory,
 } from '../src/coord/landed.js';
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
 import type { PrMergedFacts, PrStatePrRead } from '../src/prstate.js';
@@ -16,6 +16,7 @@ const cand = (id: number, pinnedAt: number, over: Partial<LandedCandidate> = {})
   ({ project: 'project-a', id, pr: 100 + id, pinnedAt, pinnedSha: HEAD, runId: id, ...over });
 const mem = (pinnedAt: number, over: Partial<LandedMemory> = {}): LandedMemory =>
   ({ pinnedAt, lastReadAt: 0, nextAt: 0, step: PR_SWEEP_MS, missingStreak: 0, ...over });
+const NO_HOLD = { hold: null, subjects: [] };
 const ids = (cs: LandedCandidate[]): number[] => cs.map((c) => c.id);
 
 describe('pickLandedReads', () => {
@@ -77,6 +78,15 @@ describe('landedAnswerOf', () => {
 
 describe('landedNext', () => {
   const c = cand(1, 100);
+  it('a mark held at the write is due again at the next pass, with the step reset and the streak cleared', () => {
+    const prev = mem(100, { step: 4 * PR_SWEEP_MS, missingStreak: 1 });
+    expect(landedNext(prev, c, { act: 'held' }, 1000)).toEqual({ pinnedAt: 100, lastReadAt: 1000, nextAt: 1000, step: PR_SWEEP_MS, missingStreak: 0 });
+    expect(pickLandedReads([c], new Map([[1, landedNext(prev, c, { act: 'held' }, 1000)]]), 1001)).toHaveLength(1);
+  });
+  it('isHeldRefusal names exactly the two recovery words', () => {
+    expect(['landing-recovery-unresolved', 'landing-identity-conflict', 'landing-fenced', 'landing-db-apply', 'moved'].filter(isHeldRefusal))
+      .toEqual(['landing-recovery-unresolved', 'landing-identity-conflict']);
+  });
   it('a wait is due one beat later and resets the step and the streak', () => {
     const prev = mem(100, { step: PR_BACKOFF_MAX_MS, missingStreak: 1 });
     expect(landedNext(prev, c, { act: 'wait' }, 1000)).toEqual({ pinnedAt: 100, lastReadAt: 1000, nextAt: 1000 + PR_SWEEP_MS, step: PR_SWEEP_MS, missingStreak: 0 });
@@ -120,12 +130,27 @@ describe('landedCandidatesOf', () => {
       { id: 6, value: { kind: 'readable', quarantine: 'stale-episode-head' } },
       { id: 7, value: readable },
     ];
-    const got = landedCandidatesOf({ entries, projections } as unknown as LandingMutationFacts);
+    const got = landedCandidatesOf({ entries, projections, recovery: NO_HOLD } as unknown as LandingMutationFacts);
     expect(ids(got)).toEqual([1, 2]);
     expect(got[0]).toEqual({ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1 });
   });
   it('an entry with no projection at all is not a candidate', () => {
-    expect(landedCandidatesOf({ entries: [entry(1, 'pinned')], projections: [] } as unknown as LandingMutationFacts)).toEqual([]);
+    expect(landedCandidatesOf({ entries: [entry(1, 'pinned')], projections: [], recovery: NO_HOLD } as unknown as LandingMutationFacts)).toEqual([]);
+  });
+  // A held subject is skipped here, by the land arm's own rule (`landingHoldGate`), so it costs no `ccd pr-state --pr` call.
+  const held = (subjects: unknown[]): LandingMutationFacts['recovery'] => ({ hold: { ids: [1] }, subjects }) as unknown as LandingMutationFacts['recovery'];
+  const facts2 = (recovery: LandingMutationFacts['recovery']): LandingMutationFacts => ({
+    entries: [entry(1, 'pinned'), entry(2, 'pinned')], projections: [{ id: 1, value: readable }, { id: 2, value: readable }], recovery,
+  }) as unknown as LandingMutationFacts;
+  it('an entry that is its own unresolved recovery subject is skipped; its neighbour is still a candidate', () => {
+    const got = landedCandidatesOf(facts2(held([{ project: 'project-a', pr: 101, projection: { kind: 'missing' } }])));
+    expect(ids(got)).toEqual([2]);
+  });
+  it('a subject of another project holds nothing here', () => {
+    expect(ids(landedCandidatesOf(facts2(held([{ project: 'project-b', pr: 101, projection: { kind: 'missing' } }]))))).toEqual([1, 2]);
+  });
+  it('an identity conflict holds the whole project: no candidate', () => {
+    expect(landedCandidatesOf(facts2(held([{ project: 'project-a', pr: 150, projection: { kind: 'identity-conflict' } }])))).toEqual([]);
   });
 });
 

@@ -34,7 +34,6 @@ import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './
 import { mergedFactsOf, type CcdPrLine } from '../prstate.js';
 import type { NoticeSink } from '../notice.js';
 import { closeLandingOf } from './landed.js';
-import type { LandingLand } from './landingEntry.js';
 import { raiseLandedNotice } from './landedLane.js';
 import type { DeadCoordinatorStop, SweepFleetAct } from '../deadCoordinator.js';
 import {
@@ -447,17 +446,24 @@ function landOnClose(
   const facts = mergedFactsOf(line);
   const land = closeLandingOf({ state, facts, project: run.project, at });
   if (land === null) return;
-  const said = (why: string): void => {
-    console.warn(`ccrc-server: close of run ${run.id} could not mark ${land.project} #${land.pr} landed (${why})`);
-  };
+  let mark: ReturnType<WatcherCoordPort['advanceLanding']>;
   try {
-    const mark = deps.coord.advanceLanding({ ...land, kind: 'land' } satisfies LandingLand);
-    if (!mark.ok) return said(mark.error);
-    if (mark.landing.kind !== 'landed' || deps.notice === undefined) return;
+    mark = deps.coord.advanceLanding(land);
+  } catch (err) {
+    console.warn(`ccrc-server: close of run ${run.id} could not mark ${land.project} #${land.pr} landed (${err instanceof Error ? err.message : String(err)})`);
+    return;
+  }
+  if (!mark.ok) {
+    console.warn(`ccrc-server: close of run ${run.id} could not mark ${land.project} #${land.pr} landed (${mark.error})`);
+    return;
+  }
+  if (mark.landing.kind !== 'landed' || deps.notice === undefined) return;
+  try {
     raiseLandedNotice({ coord: deps.coord, notice: deps.notice, entry: mark.landing.entry,
       mergedAt: land.outcome.word === 'merged' ? land.outcome.mergedAt : null, now: at });
   } catch (err) {
-    said(err instanceof Error ? err.message : String(err));
+    // The mark committed; only the feed record failed, and the merged sweep may still write it.
+    console.warn(`ccrc-server: close of run ${run.id} marked ${land.project} #${land.pr} landed but its merged record was not written (${err instanceof Error ? err.message : String(err)})`);
   }
 }
 

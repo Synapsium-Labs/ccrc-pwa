@@ -305,3 +305,135 @@ describe('the reader backs off and stops', () => {
     expect(stateOf(r.coord, 1501)).toBe('landed');
   });
 });
+
+// Review 1840 round 1 (F1): a held subject costs no read, and a mark held between the read and the write is remembered
+// by L1 (`landed.ts#landedNext`, the `held` answer), never by the lane.
+describe('the landed reader and a recovery hold', () => {
+  /** The store's own answers for a held subject, forged: the facts say `prs` are unresolved recovery subjects of the
+   *  project (or, with `conflict`, that an identity collision holds it whole), and the land arm refuses their marks the
+   *  way the real store does. */
+  function hold(r: Rig, prs: number[], conflict = false): { clear: () => void; marks: number[] } {
+    const realRead = r.coord.readLanding.bind(r.coord);
+    const realAdvance = r.coord.advanceLanding.bind(r.coord);
+    let held = true;
+    const marks: number[] = [];
+    vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) => {
+      const out = realRead(project);
+      if (!out.ok || !held) return out;
+      const subjects = conflict ? [{ project: P, pr: prs[0]!, projection: { kind: 'identity-conflict' } }]
+        : prs.map((pr) => ({ project: P, pr, projection: { kind: 'missing' } }));
+      return { ...out, facts: { ...out.facts, recovery: { hold: { ids: [1] }, subjects } } } as typeof out;
+    });
+    vi.spyOn(r.coord, 'advanceLanding').mockImplementation(((cmd: Parameters<typeof realAdvance>[0]) => {
+      if (held && 'kind' in cmd && cmd.kind === 'land' && (conflict || prs.includes(cmd.pr))) {
+        marks.push(cmd.pr);
+        return { ok: false, error: conflict ? 'landing-identity-conflict' : 'landing-recovery-unresolved' };
+      }
+      return realAdvance(cmd);
+    }) as typeof realAdvance);
+    return { clear: () => { held = false; }, marks };
+  }
+
+  it('held before the read: a held subject is not asked of ccd, ten of them do not starve the live entry, and it is read once the hold clears', async () => {
+    const r = await rig();
+    const heldPrs = Array.from({ length: LANDED_READS_PER_SWEEP }, (_, i) => 2001 + i);
+    heldPrs.forEach((pr) => pinned(r.coord, pr));
+    pinned(r.coord, 2100);
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    const h = hold(r, heldPrs);
+    expect(await r.pass()).toMatchObject({ read: 1, landed: 1, stopped: null });
+    expect(r.calls, 'no call for a held entry; the live one is read in the first pass').toEqual([2100]);
+    expect(h.marks).toEqual([]);
+    expect(await r.pass()).toMatchObject({ read: 0, stopped: null });
+    expect(r.calls).toEqual([2100]);
+    h.clear();
+    r.clock.t += 1;
+    expect(await r.pass()).toMatchObject({ read: LANDED_READS_PER_SWEEP, landed: LANDED_READS_PER_SWEEP });
+    expect(r.calls.slice(1)).toEqual(heldPrs);
+  });
+
+  it('held before the read by an identity conflict: the whole project is skipped, and the pass ends clean', async () => {
+    const r = await rig();
+    [2201, 2202].forEach((pr) => pinned(r.coord, pr));
+    hold(r, [2201], true);
+    expect(await r.pass()).toMatchObject({ read: 0, stopped: null });
+    expect(r.calls).toEqual([]);
+  });
+
+  it.each([['landing-recovery-unresolved', false], ['landing-identity-conflict', true]] as const)(
+    'held at the write (%s): the entry is due next pass by L1\'s memory, the pass goes on to the next entry', async (_word, conflict) => {
+      const r = await rig();
+      pinned(r.coord, 2301);
+      pinned(r.coord, 2302);
+      r.answer.fn = (pr) => ran(mergedLine(pr));
+      // the facts show no hold when the pass reads them: the hold appears between the read and the write
+      const realAdvance = r.coord.advanceLanding.bind(r.coord);
+      const refused: number[] = [];
+      vi.spyOn(r.coord, 'advanceLanding').mockImplementation(((cmd: Parameters<typeof realAdvance>[0]) => {
+        if ('kind' in cmd && cmd.kind === 'land' && cmd.pr === 2301) {
+          refused.push(cmd.pr);
+          return { ok: false, error: conflict ? 'landing-identity-conflict' : 'landing-recovery-unresolved' };
+        }
+        return realAdvance(cmd);
+      }) as typeof realAdvance);
+      const at = r.clock.t;
+      const first = await r.pass();
+      expect(first).toMatchObject({ read: 2, landed: 1, stopped: null });
+      expect(r.calls).toEqual([2301, 2302]);
+      expect(stateOf(r.coord, 2302)).toBe('landed');
+      const entryId = (r.coord.db.prepare('SELECT id FROM landing_entries WHERE pr = 2301').get() as { id: number }).id;
+      expect(r.memory.get(entryId)).toEqual({ pinnedAt: expect.any(Number), lastReadAt: at, nextAt: at, step: PR_SWEEP_MS, missingStreak: 0 });
+      r.clock.t += 1;
+      await r.pass();
+      expect(r.calls.filter((c) => c === 2301), 'due on the very next pass').toHaveLength(2);
+      expect(refused).toHaveLength(2);
+      expect(r.warns).toEqual([]);
+    });
+});
+
+describe('the landed reader walks projects one by one', () => {
+  const Q = 'project-b';
+  it('a store stop in the first project ends the pass: the second project is not read', async () => {
+    const r = await rig();
+    pinned(r.coord, 2401, P);
+    pinned(r.coord, 2402, Q);
+    const realRead = r.coord.readLanding.bind(r.coord);
+    vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) =>
+      project === P ? { ok: false, error: 'landing-fenced' } as ReturnType<typeof realRead> : realRead(project));
+    expect(await r.pass()).toMatchObject({ read: 0, stopped: 'store' });
+    expect(r.calls).toEqual([]);
+    expect(r.warns).toEqual(['ccrc-server: landed reader: stopped (landing-fenced); no entry is read until it clears']);
+  });
+
+  it('a project whose projection is unreadable is skipped, and the pass goes on to the next project', async () => {
+    const r = await rig();
+    pinned(r.coord, 2501, P);
+    pinned(r.coord, 2502, Q);
+    const realRead = r.coord.readLanding.bind(r.coord);
+    vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) =>
+      project === P ? { ok: false, error: 'landing-projection-unreadable' } as ReturnType<typeof realRead> : realRead(project));
+    expect(await r.pass()).toMatchObject({ read: 1, stopped: null });
+    expect(r.calls).toEqual([2502]);
+    expect(r.warns).toEqual([]);
+  });
+});
+
+describe('the landed reader stamps memory with the start of the pass', () => {
+  it('an entry read late in a pass is due at the next sweep, one beat after the pass began', async () => {
+    const r = await rig();
+    const prs = [2601, 2602, 2603];
+    prs.forEach((pr) => pinned(r.coord, pr));
+    const t0 = r.clock.t;
+    r.deps.runCcd = async (argv) => {
+      const pr = Number(argv[argv.indexOf('--pr') + 1]);
+      r.calls.push(pr);
+      r.clock.t += 5_000; // each read takes five seconds
+      return ran(openLine(pr));
+    };
+    await r.pass();
+    expect([...r.memory.values()].map((m) => [m.lastReadAt, m.nextAt])).toEqual(prs.map(() => [t0, t0 + PR_SWEEP_MS]));
+    r.clock.t = t0 + PR_SWEEP_MS;
+    await r.pass();
+    expect(r.calls, 'all three are due one beat after the pass began').toHaveLength(6);
+  });
+});

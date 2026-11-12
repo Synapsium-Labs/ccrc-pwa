@@ -719,6 +719,14 @@ describe('a failed sweep names how ccd ended and its stderr lines (landing-order
     expect(line).toMatch(/failed \(agent-down: exit 3; first: first boom; last: last boom\); retrying in \d+s$/);
   });
 
+  it('a token-shaped string in stderr is masked in the logged line', async () => {
+    const secret = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+    const line = await failedLine({ ran: true, code: 3, stdout: '', stderr: `auth failed with ${secret}\nretry with ${secret}\n`, killed: false, signal: null });
+    expect(line).not.toContain(secret);
+    expect(line).toMatch(/exit 3; first: auth failed with /);
+    expect(line).toMatch(/last: retry with /);
+  });
+
   it('a one-line stderr logs no last', async () => {
     const line = await failedLine({ ran: true, code: 3, stdout: '', stderr: 'only\n', killed: false, signal: null });
     expect(line).toContain('exit 3; first: only)');
