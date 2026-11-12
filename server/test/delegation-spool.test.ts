@@ -419,7 +419,7 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     expect(lit(/DSP_LIST_NAMES=(\d+)/)).toBe(B.listingNames);
     expect(lit(/DSP_NAME_BYTES=(\d+)/)).toBe(B.listingNameBytes);
   });
-  it('the prefilter that decides whether the spool\'s jq text is compiled names exactly the delegation tools and events (a necessary condition: no delegation payload can lack its own name)', async () => {
+  it('the prefilter that decides whether the spool\'s jq text is compiled names exactly the delegation tools and events, and the launch record\'s continuation tool (session-continuity 6b) (a necessary condition: no delegation payload can lack its own name)', async () => {
     const { DELEGATION_EVENT_KINDS } = await import('../../shared/api.js');
     const m = src.match(/case "\$payload" in ((?:\*'"?[A-Za-z<>-]+"?'\*\|?)+)\)/);
     expect(m, 'the hook carries the prefilter').not.toBeNull();
@@ -430,7 +430,7 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     // A tool event is named by its tool (Pre/PostToolUse carry no other delegation word), a notification by its tag, the rest by
     // their own event name. The vocabulary decides the set, so a new kind in it reds this until the prefilter learns it.
     const viaTool = new Set(['PreToolUse', 'PostToolUse']);
-    const want = [...DELEGATION_EVENT_KINDS.filter((k) => !viaTool.has(k) && k !== 'UserPromptSubmit'), 'Agent', 'Task', 'Workflow', 'Bash', 'task-notification'].sort();
+    const want = [...DELEGATION_EVENT_KINDS.filter((k) => !viaTool.has(k) && k !== 'UserPromptSubmit'), 'Agent', 'Task', 'Workflow', 'Bash', 'SendMessage', 'task-notification'].sort();
     expect(words).toEqual(want);
   });
   it('every bound is a positive integer, and the cap is the plan\'s 4096 on glibc Linux and 1008 elsewhere (D-5436)', () => {

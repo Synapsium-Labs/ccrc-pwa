@@ -1077,3 +1077,71 @@ describe('the graceful stop: its arming file has one reader and no writer in the
       .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))).map(rel)).toEqual([]);
   });
 });
+
+// SESSION-CONTINUITY 6B (D-8363..D-8367). `$REG/<id>.deleg`, the launch record: ONE appender (the session hook's
+// `_hook_launch_record_append`), ONE purge (`_reg_purge`'s post-generation `rm`) and, in 6b-1, no reader in the tree. APPENDED for the
+// reason the blocks above state. The patterns match the REGISTRY spelling only, never the bare word: `.delegation…` already stands
+// on main (in ccd/ccd and in nine pwa files), so a bare `deleg` match would be wrong from the start.
+describe('the launch record: one appender, one purge, and no reader in the tree (session-continuity 6b)', () => {
+  // bash: a `$REG/…/<id>.deleg` path, or the field word after `_reg_set "$id" `, each with a word boundary after `deleg`.
+  const BASH_PATH = /\$\{?REG\}?"?\/[^\s]*?\.deleg(?![A-Za-z0-9_-])/;
+  const BASH_FIELD = /_reg_set\s+"?\$\{?\w+\}?"?\s+deleg(?![A-Za-z0-9_-])/;
+  const bashNames = (l: string): boolean => BASH_PATH.test(l) || BASH_FIELD.test(l);
+  // Python and TypeScript: `.deleg` directly followed by a quote or a backtick.
+  const QUOTED = /\.deleg(?=["'`])/;
+
+  it('CONTROL: a planted line of each spelling is matched, and the .delegation… words are not', () => {
+    expect(bashNames('  rm -f "$REG/$id.deleg"')).toBe(true);
+    expect(bashNames('f="${REG}/$id.deleg"')).toBe(true);
+    expect(bashNames('  _reg_set "$id" deleg "$x"')).toBe(true);
+    expect(QUOTED.test('p = os.path.join(reg, id + ".deleg")')).toBe(true);
+    expect(QUOTED.test("const f = `${id}.deleg`;")).toBe(true);
+    expect(QUOTED.test("join(reg, id + '.deleg')")).toBe(true);
+    for (const bare of ['  rm -f "$REG/$id.delegation"', '_reg_set "$id" delegation x', 'this.delegate("x")', '`${id}.delegation`', 'a.deleg b']) {
+      expect(bashNames(bare) || QUOTED.test(bare), `not matched: ${bare}`).toBe(false);
+    }
+  });
+
+  const hookFile = (): string => BASH.find((f) => rel(f) === 'ccd/session-hook.sh') ?? '';
+  it('ccd/session-hook.sh: every code line naming it is the gate statement before the parse or a line of _hook_launch_record_append', () => {
+    const all = readFileSync(hookFile(), 'utf8').split('\n');
+    expect(all.length, 'the hook was read').toBeGreaterThan(1000);
+    const open = all.findIndex((l) => l.startsWith('_hook_launch_record_append() {'));
+    expect(open, 'the appender is defined').toBeGreaterThan(0);
+    expect(all.filter((l) => l.startsWith('_hook_launch_record_append() {')), 'once').toHaveLength(1);
+    const close = all.findIndex((l, i) => i > open && l === '}');
+    expect(close, 'and closes at column 0').toBeGreaterThan(open);
+    const named = all.map((l, i) => ({ l, i })).filter(({ l }) => !isBashComment(l) && bashNames(l));
+    expect(named.length, 'the scan sees the hook\'s spellings').toBeGreaterThan(0);
+    const outside = named.filter(({ l, i }) => !(l.includes('DSP_DEFS=') || (i > open && i < close)));
+    expect(outside.map(({ l }) => l.slice(0, 100)), 'a code line outside the gate statement and the appender names it: a second writer in waiting').toEqual([]);
+    expect(named.filter(({ l }) => l.includes('DSP_DEFS=')), 'the gate statement is the one physical line holding DSP_DEFS=').toHaveLength(1);
+    // ONE writer inside the appender: exactly the appends to the file it names by `$f`.
+    const body = all.slice(open + 1, close).filter((l) => !isBashComment(l));
+    expect(body.filter((l) => /(?:>>|>)\s*"\$[a-z]+"/.test(l) && l.includes('printf')).length, 'its appends are the budget row, the two-line row and the one-line row').toBe(3);
+  });
+
+  it('ccd/ccd: the only code line naming it is _reg_purge\'s post-generation rm', () => {
+    const ccd = BASH.find((f) => rel(f) === 'ccd/ccd') ?? '';
+    const named = codeLines(ccd).filter(bashNames);
+    expect(named).toHaveLength(1);
+    expect(named[0]).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" ||');
+  });
+
+  it('no other shell file under ccd/ or deploy/ names it', () => {
+    const others = BASH.filter((f) => !['ccd/ccd', 'ccd/session-hook.sh'].includes(rel(f)));
+    expect(others.length, 'the walk reached the other shell files').toBeGreaterThan(10);
+    expect(others.filter((f) => codeLines(f).some(bashNames)).map(rel)).toEqual([]);
+  });
+
+  it('no file under server/src, shared or pwa/src, and not deploy/measure-continuity.py, names it', () => {
+    const walk = (d: string): string[] => (existsSync(d) ? readdirSync(d).flatMap((e) => {
+      const p = path.join(d, e);
+      return statSync(p).isDirectory() ? walk(p) : (/\.(ts|tsx|mts|mjs|js|py)$/.test(p) ? [p] : []);
+    }) : []);
+    const files = [...['server/src', 'shared', 'pwa/src'].flatMap((d) => walk(path.join(ccrcRoot, d))), path.join(ccrcRoot, 'deploy', 'measure-continuity.py')]
+      .filter((f) => existsSync(f));
+    expect(files.length, 'the walk reached the trees').toBeGreaterThan(100);
+    expect(files.filter((f) => readFileSync(f, 'utf8').split('\n').some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && QUOTED.test(l))).map(rel)).toEqual([]);
+  });
+});
