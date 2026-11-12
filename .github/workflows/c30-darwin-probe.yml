@@ -1,5 +1,6 @@
 # THROWAWAY (Task C30, D-8381): repeats spawnSyncGroup with an `input` on macOS,
-# at several input sizes, bare and under a test shard's load. Removed before the
+# at several input sizes, bare and under a test shard's load, and the callers
+# that pass an input. Removed before the
 # wave-done; it runs on a push to the task's own branch only.
 name: c30-darwin-probe
 
@@ -30,18 +31,20 @@ jobs:
       - name: Versions
         run: |
           node --version; bash --version | head -1; sysctl -n hw.ncpu hw.memsize net.local.stream.sendspace net.local.stream.recvspace; uptime; git rev-parse HEAD
-      - name: spawnSyncGroup with an input, by size, bare and under a test shard's load
+      - name: the fixed spawnSyncGroup and a pipe-input control, by size, bare and under a test shard's load
         working-directory: server
         run: |
           w() { node --experimental-strip-types --no-warnings ../.github/c30-darwin-probe/probe.mjs "$@" & p=$!; node ../.github/c30-darwin-probe/watch.mjs "$p" "$2" & q=$!; wait "$p"; kill "$q" 2>/dev/null || true; }
-          w 3000 bare-ctl-128k 131072 ctl
-          w 6000 bare-group-128k 131072
-          w 3000 bare-group-16k 16384
-          w 6000 bare-group-4k 4096
-          w 6000 bare-group-0 0
-          ( ./node_modules/.bin/vitest run --maxWorkers=2 test/ccd-child-reclaim-pin.test.ts test/ccd-reclaim-tail-window.test.ts test/ccd-reclaim-tail-mounts.test.ts test/ccd-ws-reap.test.ts >/dev/null 2>&1 ) &
+          w 12000 bare-group-128k 131072
+          ( while [ ! -e "$RUNNER_TEMP/stop-load" ]; do ./node_modules/.bin/vitest run --maxWorkers=2 test/ccd-child-reclaim-pin.test.ts test/ccd-reclaim-tail-window.test.ts test/ccd-reclaim-tail-mounts.test.ts test/ccd-ws-reap.test.ts >/dev/null 2>&1; done ) &
           sleep 30
-          w 3000 shard-group-128k 131072
-          w 3000 shard-group-4k 4096
-          w 3000 shard-group-0 0
-          kill %1 2>/dev/null || true
+          w 6000 shard-ctl-128k 131072 ctl
+          w 12000 shard-ctl-4k 4096 ctl
+          w 12000 shard-ctl-0 0 ctl
+          w 12000 shard-group-128k 131072
+          w 6000 shard-group-0 0
+          touch "$RUNNER_TEMP/stop-load"; wait
+      - name: the nine callers that pass an input, and the helper's own cases, repeated
+        working-directory: server
+        run: |
+          bash ../.github/c30-darwin-probe/repeat.sh 2 callers test/box-settings-table.test.ts test/box-settings-read.test.ts test/ccrc-account.test.ts test/ccrc-settings-verb.test.ts test/ccrc-settings-carveouts.test.ts test/delegation-adoption-corpus.test.ts test/testbox-admin-contract.test.ts test/testbox-overlay.test.ts test/session-hook-steer.test.ts test/proc-leak.test.ts
