@@ -434,7 +434,7 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
  *  <root>/tmux-calls; pane prints W0-PANE-TEXT; current_sid prints sid-w0; launch_cmd prints LAUNCH and its arguments).
  *  `scenario` is the run's SCEN; `cfg` names files to place under the run's config first. After the steps the script
  *  prints the working directory, CFG and the run options. Nothing starts a process but bash, jq and the coreutils. */
-function runSteps(scenario: object, cfgFiles: Record<string, string> = {}): { status: number | null; stderr: string; root: string; out: Record<string, string> } {
+function runSteps(scenario: object, cfgFiles: Record<string, string> = {}, env: Record<string, string> = {}): { status: number | null; stderr: string; root: string; out: Record<string, string> } {
   const root = fs.realpathSync(mkTmp('ccrc-dlg-steps-'));
   const cwd = fs.realpathSync(mkTmp('ccrc-dlg-cwd-'));
   for (const [rel, text] of Object.entries(cfgFiles)) {
@@ -451,7 +451,7 @@ function runSteps(scenario: object, cfgFiles: Record<string, string> = {}): { st
     `RUN_R=${shq(root)} RUN_H=${shq(path.join(root, 'fixhome'))} CFG=${shq(path.join(root, 'fixhome/cfg'))} SCEN=${shq(scenFile)} SOCK=dlgx`,
     'run_opts', 'run_steps',
     'printf \'cwd=%s\\ncfg=%s\\ntiming=%s\\nrequests=%s\\ncap=%s\\n\' "$(pwd -P)" "$CFG" "$TIMING" "$REQUESTS" "$RUN_CAP_S"'].join('\n');
-  const r = spawnSyncGroup('bash', ['-c', script], { encoding: 'utf8', cwd, env: { ...process.env }, timeout: 60_000 });
+  const r = spawnSyncGroup('bash', ['-c', script], { encoding: 'utf8', cwd, env: { ...process.env, ...env }, timeout: 60_000 });
   const out = Object.fromEntries(r.stdout.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
   if (r.status === 0) expect(out.cwd, 'the steps leave the working directory where it was (F5)').toBe(cwd);
   return { status: r.status, stderr: r.stderr, root, out };
@@ -491,6 +491,21 @@ describe('rig.sh\'s run-time verbs, run from its own text with tmux stubbed (F5,
     expect(r.status, r.stderr).toBe(0);
     expect(readIn(r.root, 'snapshots/before/sessions/4242.json')).toBe('{"sessionId":"s-1"}');
     expect(readIn(r.root, 'snapshots/before/transcripts')).toBe('p-a/s-1.jsonl\t5\n');
+  }, 60_000);
+
+  // BSD find (macOS) has no `-printf`, and the list came out empty there while Linux's held the line (D-8343). This
+  // `find` refuses it as BSD's does and runs the real one otherwise, so Linux shows the Darwin answer.
+  it('sessionsSnap lists the transcripts with a find that has no -printf, as macOS\'s has none (D-8343)', () => {
+    const shims = fs.realpathSync(mkTmp('ccrc-dlg-bsdfind-'));
+    const real = spawnSync('bash', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(path.join(shims, 'find'), ['#!/bin/bash',
+      'for a in "$@"; do case $a in -printf|-fprintf) printf \'find: %s: unknown primary or operator\\n\' "$a" >&2; exit 1 ;; esac; done',
+      `exec ${shq(real)} "$@"`, ''].join('\n'), { mode: 0o755 });
+    const r = runSteps({ steps: [{ sessionsSnap: 'before' }] },
+      { 'projects/p-a/s-1.jsonl': '12345', 'projects/p-b/s-2.jsonl': '', 'projects/p-a/s-1/subagents/a.jsonl': 'x' },
+      { PATH: `${shims}:${process.env.PATH ?? ''}` });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readIn(r.root, 'snapshots/before/transcripts')).toBe('p-a/s-1.jsonl\t5\np-b/s-2.jsonl\t0\n');
   }, 60_000);
 
   it('swapConfig copies the config to cfg2, writes the cfg2 launch files there, and moves CFG to it', () => {

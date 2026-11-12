@@ -1262,3 +1262,48 @@ describe.skipIf(!PY)('siwc-trial.py: standard library only, Python 3.9 grammar',
     expect(src.indexOf('from codexbridge import')).toBeGreaterThan(-1);
   });
 });
+
+// `HTTPServer.server_bind` names the server `socket.getfqdn(host)`, a reverse lookup of 127.0.0.1 that nothing reads. On
+// the macOS runner it has taken about 35 s in a new process (ccgpt-proxy.test.ts measured it), so each fake printed its
+// port after the 15 s `startFake` waits, and 73 of this file's cases failed there (D-8343). Each case makes a
+// `getfqdn` call fatal in the one process it starts, so Linux, where the lookup is quick, shows the macOS defect.
+const NO_FQDN = [
+  'import runpy, socket, socketserver, sys',
+  'def _refuse(*a, **k):',
+  '    raise AssertionError("socket.getfqdn%r" % (a,))',
+  'socket.getfqdn = _refuse',
+  'if sys.argv[1] == "--stop":',
+  '    def _stop(self, *a, **k):',
+  '        print("reached serve_forever", flush=True)',
+  '        raise SystemExit(0)',
+  '    socketserver.BaseServer.serve_forever = _stop',
+  '    del sys.argv[1]',
+  'sys.argv = sys.argv[1:]',
+  'runpy.run_path(sys.argv[0], run_name="__main__")',
+].join('\n');
+
+describe.skipIf(!PY)('siwc-trial: nothing binds through a reverse lookup of its address (D-8343)', () => {
+  it.each([['the fake authorization server', FAKE_AUTH], ['the fake Responses API', FAKE_API]])(
+    '%s listens without asking socket.getfqdn', (_name, script) => {
+      const dir = mkTmp('siwc-nofqdn-');
+      const [log, cfg] = [path.join(dir, 'log'), path.join(dir, 'config.json')];
+      fs.writeFileSync(log, '');
+      fs.writeFileSync(cfg, '{}');
+      const r = spawnSync(PY!, ['-I', '-c', NO_FQDN, '--stop', script, '--log', log, '--config', cfg], {
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir() }, encoding: 'utf8', timeout: 30_000,
+      });
+      expect(r.stderr).not.toMatch(/getfqdn/);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^port [0-9]+\nreached serve_forever\n$/);
+    });
+
+  it('the sign-in\'s callback listener prints its URL without asking socket.getfqdn', async () => {
+    const r = await rig();
+    const run = spawnSync(PY!, ['-I', '-c', NO_FQDN, SCRIPT, 'signin', '--dir', r.dir, '--no-browser', '--wait', '1'], {
+      cwd: r.home, env: childEnv(r.home, r.env), encoding: 'utf8', timeout: 30_000,
+    });
+    expect(run.stderr).not.toMatch(/getfqdn/);
+    expect(run.stdout).toMatch(/^siwc-trial: authorize-url \S+$/m);
+    expect(refusal(run)).toMatch(new RegExp(`^${P}refused callback-timeout: `));
+  });
+});

@@ -202,7 +202,9 @@ interface SideResult {
   /** Whatever the body wrote to `$PWD/note`: a probe row's own side channel. */
   note: string;
 }
-interface Batch { status: number | null; stderr: string; results: Map<string, SideResult[]>; hung: string | null }
+/** `signal` is how the batch's bash ended when a signal ended it: the macOS runner's one early batch ended in 0.4 s with an
+ *  empty stderr, so each "a row never finished" message prints the rc and the signal beside it (D-8343). */
+interface Batch { status: number | null; signal: NodeJS.Signals | null; stderr: string; results: Map<string, SideResult[]>; hung: string | null }
 
 /** Bash's own location prefix (`<file>: line N: `), which differs between the fixture and `ccd/ccd` for the same
  *  message; everything after it is compared exactly. */
@@ -405,7 +407,7 @@ export function runBatch(h: CcdHarness, rows: readonly Row[], locale: string, bo
   if (r.status === 90 || r.status === 91 || r.status === 92) {
     throw new Error(`the batch could not start (rc ${r.status}): ${r.stderr.slice(0, 2000)}`);
   }
-  return { status: r.status, stderr: r.stderr, results, hung };
+  return { status: r.status, signal: r.signal, stderr: r.stderr, results, hung };
 }
 
 /** Every aspect in which two sides differ, rendered for a failure message. Empty means equal. */
@@ -1230,7 +1232,7 @@ function routeChainShareRows(locale: string | null, share: number): void {
 
   it('E9x the batch ran every row to the end, inside its deadline', (ctx) => {
     const b = got(ctx);
-    expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+    expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
     expect(b.status).toBe(0);
   });
 
@@ -1356,7 +1358,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E3x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
       expect(fs.existsSync(path.join(h.home, 'PWNED')), 'the payload id ran as code').toBe(false);
     });
@@ -1422,7 +1424,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E5x both batches ran every row to the end, inside their deadlines', (ctx) => {
       for (const b of Object.values(got(ctx))) {
-        expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+        expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
         expect(b.status).toBe(0);
       }
     });
@@ -1516,7 +1518,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E6x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
     });
 
@@ -1569,7 +1571,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E7x both batches ran every row to the end, inside their deadlines', (ctx) => {
       for (const b of Object.values(got(ctx))) {
-        expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+        expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
         expect(b.status).toBe(0);
       }
     });
@@ -1645,7 +1647,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E8x both batches ran every row to the end, inside their deadlines: no reader opened a FIFO or /dev/zero', (ctx) => {
       for (const b of Object.values(got(ctx))) {
-        expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+        expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
         expect(b.status).toBe(0);
       }
     });
@@ -1725,7 +1727,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E9x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
     });
 
@@ -1790,7 +1792,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readon
 
     it('E10x the batch ran every row to the end, inside its deadline', (ctx) => {
       const b = got(ctx);
-      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.hung, `a row never finished (batch rc ${b.status}, signal ${b.signal}): ${b.stderr.slice(0, 2000)}`).toBeNull();
       expect(b.status).toBe(0);
     });
 
