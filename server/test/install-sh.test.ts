@@ -501,6 +501,41 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     expect(staged.some((f) => f.endsWith('ccd/ccrc'))).toBe(false);
   });
 
+  // D-8390 (R50 d), the updater's rule: `$SUM -c SHA256SUMS` opened every path the file names. Only the tarball's own line is
+  // read now: its digest against the staged tarball's, so a SUMS naming other paths can make the bootstrap open none of them.
+  it('a SHA256SUMS that also names ../../etc/passwd-shaped paths and a FIFO outside the staging dir installs, opening none of them', () => {
+    const home = mkTmp('install-sh-release-sums-other-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    // The staging dir is <home>/tmp/<mktemp>, so `../../outside/fifo` is <home>/outside/fifo. A FIFO no process writes blocks
+    // whoever opens it, so a verifier that read any of these lines would never answer (runRelease's bound reds it).
+    mkdirSync(join(home, 'outside'));
+    const fifo = join(home, 'outside', 'fifo');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const wrong = '0'.repeat(64);
+    appendFileSync(join(home, 'releases', 'latest', 'download', 'SHA256SUMS'),
+      `${wrong}  ${'../'.repeat(16)}etc/passwd\n${wrong}  ../../outside/fifo\n${wrong}  ${fifo}\n`);
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(r.stderr).not.toMatch(/checksum verification FAILED/);
+    expect(readFileSync(join(home, 'ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '').slice(1)).toEqual(['install']);
+  });
+
+  it('the tarball\'s own line decides: a wrong digest there is refused though a later line holds the right one', () => {
+    const home = mkTmp('install-sh-release-sums-first-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const sums = join(home, 'releases', 'latest', 'download', 'SHA256SUMS');
+    const right = readFileSync(sums, 'utf8');
+    writeFileSync(sums, `${'0'.repeat(64)}  ccrc-v9.9.9.tar.gz\n${right}`);
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^install\.sh: checksum verification FAILED for ccrc-v9\.9\.9\.tar\.gz — refusing to extract or install$/m);
+    expect(existsSync(join(home, 'ccrc-argv')), 'the staged ccrc ran despite a bad checksum').toBe(false);
+  });
+
   // Branch review, 2026-08-21 (minor): every refusal used to leave the mktemp
   // staging dir — downloads included, possibly TAMPERED bytes — behind in
   // TMPDIR. The EXIT trap now removes it on refusal and is disarmed only for
@@ -561,7 +596,7 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     expect(argv.slice(1)).toEqual(['install']);
   });
 
-  it('a BSD userland still FAILS a tampered release — shasum -a 256 -c reads the GNU-written SHA256SUMS unchanged', () => {
+  it('a BSD userland still FAILS a tampered release — shasum -a 256 digests it against the GNU-written SHA256SUMS line', () => {
     // The other half of interoperability: the Darwin arm must keep the
     // integrity check REAL, not merely quiet. Same tamper fixture as the
     // GNU-side test above.

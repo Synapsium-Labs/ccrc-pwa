@@ -12,7 +12,8 @@ import { TIME_SCALE, scaled } from './timeScale.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
 import { installVersionedTree } from './installTreeFixture.js';
-import { } from './codexLaneFixture.js';
+import { assertSpineFrontContained } from './codexLaneFixture.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import {
   REPO,
   REAL_NODE,
@@ -2538,6 +2539,69 @@ describe('ccrc update: the tarball name is bounded — no path separator (D-3148
     expect(existsSync(join(home, 'evil.tar.gz'))).toBe(false);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+});
+
+// D-8390 (R50 d): `sha256sum -c SHA256SUMS` opened every path the file names, so a release host could make the verifier read
+// any file on the box (or block on a FIFO, or read /dev/zero forever, holding update.lock). The verifier now digests the one
+// tarball `_upd_resolve` named, from its staged path, and compares it with the digest on that same line; no other line is read.
+describe('ccrc update: SHA256SUMS is checked for the tarball\'s own line alone (D-8390, R50 d)', () => {
+  /** `runUpdate`'s run, bounded: an open of a FIFO no one writes would block it forever. */
+  const boundedUpdate = (home: string): ReturnType<typeof spawnSyncGroup> => {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    assertSpineFrontContained(env, home);
+    assertNoRealTool(env, home);
+    return spawnSyncGroup(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'], { env, encoding: 'utf8', timeout: scaled(60_000) });
+  };
+  const sumsOf = (home: string): string => join(home, 'releases', 'latest', 'download', 'SHA256SUMS');
+  const WRONG = '0'.repeat(64);
+
+  it('a SHA256SUMS that also names ../../etc/passwd-shaped paths and a FIFO outside the staging dir installs, opening none of them', () => {
+    const home = freshUpdateBox('ccrc-update-sums-other-paths-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // The staging dir is <home>/tmp/<mktemp>, so `../../outside/fifo` is <home>/outside/fifo: outside it. Opening a FIFO that no
+    // process writes blocks, so a verifier that opened any of these lines would never answer, and each line's digest is wrong.
+    mkdirSync(join(home, 'outside'));
+    const fifo = join(home, 'outside', 'fifo');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    appendFileSync(sumsOf(home), `${WRONG}  ${'../'.repeat(16)}etc/passwd\n${WRONG}  ../../outside/fifo\n${WRONG}  ${fifo}\n`);
+    const r = boundedUpdate(home);
+    expect(r.error, 'the verifier opened the FIFO and blocked').toBeUndefined();
+    expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toMatch(/checksum verification FAILED/);
+    expect(lstatSync(fifo).isFIFO(), 'the FIFO is untouched').toBe(true);
+  });
+
+  it('the tarball\'s own line decides: a wrong digest there is refused though a later line holds the right one', () => {
+    const home = freshUpdateBox('ccrc-update-sums-first-line-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const right = readFileSync(sumsOf(home), 'utf8');
+    writeFileSync(sumsOf(home), `${WRONG}  ccrc-v2.0.0.tar.gz\n${right}`);
+    const before = treeDigest(join(home, 'ccrc'));
+    const r = boundedUpdate(home);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/checksum verification FAILED for ccrc-v2\.0\.0\.tar\.gz/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups')), 'a backup ran for a refused artifact').toBe(false);
+  });
+
+  it('the binary-mode marker (`<digest> *<name>`) still verifies, and a digest that is not 64 lowercase hex is refused', () => {
+    for (const [shape, ok] of [['binary', true], ['upper', false], ['short', false]] as const) {
+      const home = freshUpdateBox(`ccrc-update-sums-${shape}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const digest = readFileSync(sumsOf(home), 'utf8').split(' ')[0]!;
+      const line = shape === 'binary' ? `${digest} *ccrc-v2.0.0.tar.gz`
+        : shape === 'upper' ? `${digest.toUpperCase()}  ccrc-v2.0.0.tar.gz` : `${digest.slice(1)}  ccrc-v2.0.0.tar.gz`;
+      writeFileSync(sumsOf(home), `${line}\n`);
+      const r = boundedUpdate(home);
+      expect(r.status, `${shape}: stderr: ${r.stderr}`).toBe(ok ? 0 : 1);
+      if (!ok) expect(r.stderr, shape).toMatch(/checksum verification FAILED for ccrc-v2\.0\.0\.tar\.gz/);
+    }
   });
 });
 

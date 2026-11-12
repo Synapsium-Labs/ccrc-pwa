@@ -277,7 +277,7 @@ _ccrc_knob() {   # <KEY> <default> [file]
   local key="$1" f="$BOX_ENV_FILE" g=0 why=""
   KNOB=""; KNOB_FROM=""; KNOB_WHY=""
   case " ${CCRC_SETTINGS[*]} " in *" $key "*) ;; *) KNOB_WHY="$key is not one of ccrc's settings (CCRC_SETTINGS), so it is never read from a file"; return 1 ;; esac
-  [ "${3:-}" = file ] || KNOB="${!key:-}"
+  [ "${3:-}" = file ] || [ "${KNOB_FILE_ONLY:-}" = 1 ] || KNOB="${!key:-}"
   if [ -n "$KNOB" ]; then KNOB_FROM=environment
   elif [ -e "$f" ] || [ -L "$f" ]; then
     if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f" 2>/dev/null; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w && (!/^[#;]/ || /\r./) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" 2>/dev/null || g=$?; fi; else g=3; fi
