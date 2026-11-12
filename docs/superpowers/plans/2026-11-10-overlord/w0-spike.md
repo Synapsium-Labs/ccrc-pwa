@@ -728,6 +728,8 @@ note's "Departures from the plan":
   and is recorded as its own arm; the mid-turn case was re-run in the foreground.
 - **w0-23-deferred-to-the-pool-design, scope** — under R18 no account is reserved, so W0-23 is unmeasured, with the
   conservative branch and C46's open question.
+- **w0-24-deferred-under-r18, scope** — W0-24 has no consumer under R18. The sweep's Fable readings are recorded, and
+  the `/usage` comparison is unmeasured and deferred to W1, with the conservative branch.
 
 **Settled by the spec's later edition, so no longer deviations:** W0 changes nothing that runs,
 and its test-only files ship (§14). W0 measures a swap with a stand-in renewal, and W1a measures the real act

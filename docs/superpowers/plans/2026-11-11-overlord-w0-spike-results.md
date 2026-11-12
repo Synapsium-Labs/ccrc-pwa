@@ -3,8 +3,8 @@
 > The measured answers of the Overlord's W0 spike (plan `docs/superpowers/plans/2026-11-10-overlord/w0-spike.md`,
 > spec `docs/superpowers/specs/2026-11-09-overlord-design.md`). W0a (run 1774) measured rows W0-00 to W0-19 and
 > W0-27, and answered W0-25 from the tree. W0b (run 1820) measured rows W0-20 to W0-22 and W0-26, the fleet halves of
-> W0-06, W0-09, W0-12 and W0-19, and the first sweep reading of W0-24. It recorded W0-23 as deferred to the pool
-> design (R18) and W0-28 as ruled. W0-24's `/usage` readings are still to come.
+> W0-06, W0-09, W0-12 and W0-19, and W0-24's sweep reading. It recorded W0-23 as deferred to the pool design and
+> W0-24's `/usage` comparison as deferred to W1, both under R18, and W0-28 as ruled.
 >
 > Every row says which kind of result it is: **doc** (read in Claude Code's documentation), **tree** (read in this
 > repository), **binary** (read from an installed build's strings), **rig** (what Claude Code sent to the mock API,
@@ -44,9 +44,9 @@
   - Both swaps, at idle and mid-turn, pass their probes after `/clear`. A background shell is lost across a swap.
   - Four checks pass on each of two own-provider lanes on 2.1.322, so the operator may set those records.
   - W0-23 is deferred to the pool design (R18).
-  - W0-24's first reading finds no Fable use on any account this week.
+  - W0-24's sweep reading finds no Fable use on any account this week. Its `/usage` comparison is deferred to W1
+    (R18).
   - W0-28 is ruled B.
-- **Still out:** W0-24's three `/usage` readings, the operator's. The coordinator rules on them.
 
 ## The builds
 
@@ -779,9 +779,9 @@ branch stands: an account whose billing fact is unread is treated as if usage cr
 served to the Overlord there until the operator's reading. What W0-23 measures under R18 is C46's open question for
 W1, which asks for each account in a pool the operator may name:
 - its billing fact, as before;
-- how much of its Fable share other sessions already spend, which W0-24's first reading below starts to answer.
+- how much of its Fable share other sessions already spend, which W0-24's sweep reading below starts to answer.
 
-**W0-24, reading 1 of 3 (box).** The sweep's `latest.json`, finished 2026-11-12 11:53 UTC, read for shares and times
+**W0-24, the sweep's reading (box).** The sweep's `latest.json`, finished 2026-11-12 11:53 UTC, read for shares and times
 only, for every account it lists (fifteen of the fleet's own provider and two of the other):
 - `perAccount.<id>.fableShare.estimate` is **0.0 on every account**, with `sevenPct` between 0 and 100, so
   `sevenPct × estimate` is 0 everywhere.
@@ -791,18 +791,19 @@ only, for every account it lists (fifteen of the fleet's own provider and two of
 - So in this window no session on any account ran Fable. That is C46's second fact for this week: other sessions
   spend none of any account's Fable share.
 
-The operator's `/usage` readings, the truth this row compares against, have not been taken. The first was asked on
-2026-11-12, and the operator chose to read it later. Readings 2 and 3 fall on later days. With no Fable use on any
-account, a reading can only compare a zero with a zero. **Outcome so far: no truth, so the plan's branch: no proxy is used
-until a direct reading.** R18 removed the reservation's Fable arm that this row fed. Whether
-W0-24 still informs the shared Fable test is W1's call (C46). The coordinator rules on the outstanding readings when
-the rest of Task 12 is ready.
+**The `/usage` comparison is deferred to W1 under R18, unmeasured** (the coordinator's ruling, 2026-11-12). The
+operator's `/usage` readings were the only independent check, and none was taken. The first was asked and the
+operator chose to read it later. Readings 2 and 3 were not raised. Three reasons:
+- the row has no consumer, because R18 removed the reservation's Fable arm and C46 leaves the proxy's use to W1;
+- with no Fable use on any account, a reading could only compare a zero with a zero;
+- the readings would cost the operator's time across three days.
+
+**Outcome: no truth, so the plan's conservative branch: no proxy is used until a direct reading.**
 
 ## Rows still out
 
-W0-24's three `/usage` readings, the truth the Fable proxy is compared against, are the operator's. The first was
-asked on 2026-11-12 and deferred by the operator; the second and third fall on later days. Every other W0 row is
-answered above. W0-23 is recorded as deferred to the pool design (R18), not as waiting.
+None. Every W0 row is answered above. W0-23 is deferred to the pool design and W0-24's `/usage` comparison to W1,
+both by the coordinator's rulings under R18, and neither is waiting on a reading.
 
 ## Departures from the plan (for the coordinator to number)
 
@@ -847,6 +848,9 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
 - **w0-23-deferred-to-the-pool-design, scope.** The coordinator's ruling on setup item 163: under R18 no account is
   reserved, so W0-23 has no subject. It is recorded unmeasured with the conservative branch and C46's open question,
   and nothing was read to fill it.
+- **w0-24-deferred-under-r18, scope.** The coordinator's ruling: under R18, W0-24 has no consumer. The sweep's Fable
+  readings are recorded (shares and times only). The `/usage` comparison is unmeasured and deferred to W1, with the
+  conservative branch, and readings 2 and 3 were not raised.
 
 ## Proposals the outcomes select (for the coordinator; the design is not edited)
 

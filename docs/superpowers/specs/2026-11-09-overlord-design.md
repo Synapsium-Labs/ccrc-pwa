@@ -1681,7 +1681,7 @@ editions of this spec.*
 
 **As measured (W0b, 2026-11-12).** Under R18 no account is reserved:
 - W0-23 has no subject. It is recorded unmeasured with the conservative branch: an account whose billing fact is unread is treated as if credits were on. What it measures under R18 is C46's open question.
-- W0-24's first sweep reading (2026-11-12) has a Fable estimate of 0.0 on every account the sweep lists, so no session ran Fable on any account this week. The operator's `/usage` readings are still to come.
+- W0-24's sweep reading (2026-11-12) has a Fable estimate of 0.0 on every account the sweep lists, so no session ran Fable on any account this week. The comparison with `/usage` is deferred to W1, unmeasured, so no proxy is used until a direct reading.
 - W0-12's fleet half finds the fallback notice in the history only as quotes, so real notices are unmeasured and the conservative branch stands.
 - The swaps of W0-21 and W0-22 ran on three of the fleet's own lanes, all on 2.1.322.
 Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
