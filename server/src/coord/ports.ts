@@ -25,8 +25,6 @@ interface CcdAnswer {
   signal: string | null | Unmeasured;
 }
 
-/** `exitCode` (landing-order 5h) is the ran arm's measured exit code, set by `ccd()` from the runner's `code`; ABSENT
- *  means the producer did not measure it and is never read as 0, and the not-ran arm never carries it. */
 /** D-6034, D-6840 (ARCH-10, #543): the runner's `ran` discriminant, CARRIED by `ccd()` (`lifecycle.ts`) and
  *  required on both arms (an agent older than the key is read as `ran: true` by `asExecResult`): `ran: true` is a ccd that ran and exited (`ok` is its exit code 0); `ran: false` is the not-ran arm, whose
  *  every other field is what it was before the arm existed (`ok: false`, the runner's `stderr`, and `killed`/`signal`
@@ -34,7 +32,10 @@ interface CcdAnswer {
  *  refusal, a box word or a die reads `ran === false` FIRST and reports it as unmeasured and retryable, never as a
  *  refusal: a transport failure is never permission to act, nor a verdict. */
 export type CcdResult =
-  | (CcdAnswer & { ran: true; exitCode?: number })
+  | (CcdAnswer & { ran: true;
+      /** The ran arm's measured exit code (landing-order 5h), set by `ccd()` from the runner's `code`; ABSENT means the
+       *  producer did not measure it and is never read as 0, and the not-ran arm never carries it. */
+      exitCode?: number })
   | (CcdAnswer & NotRan & { ok: false });
 
 /** The single ccd capability: run one `ccd` verb. Failure contract: a non-zero exit is `ok: false` with the verb's

@@ -177,10 +177,13 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(calls.every(inWriter)).toBe(true);
   });
 
+  // Only code may satisfy the land-arm check: a comment is a request, a red suite is a mechanism.
+  const stripComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
   it('advanceLanding has three callers: advanceAct, the close\'s land step and the landed lane\'s pass, and only advanceAct passes a run arm', () => {
     const act = symbolOf(ROUTES, ADVANCE_ACT);
     const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'advanceLanding')
-      .map((c) => ({ file: f, start: c.start, text: parsedFile(f).text.slice(c.start, c.start + 400) })));
+      .map((c) => ({ file: f, start: c.start, text: stripComments(parsedFile(f).text.slice(c.start, c.start + 400)) })));
     expect(calls).toHaveLength(3);
     const inAct = calls.filter((c) => c.file.endsWith(ROUTES) && c.start >= act.start && c.start < act.end);
     expect(inAct).toHaveLength(1);

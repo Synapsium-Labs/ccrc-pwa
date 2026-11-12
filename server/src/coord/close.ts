@@ -34,6 +34,7 @@ import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './
 import { mergedFactsOf, type CcdPrLine } from '../prstate.js';
 import type { NoticeSink } from '../notice.js';
 import { closeLandingOf } from './landed.js';
+import type { LandingLand } from './landingEntry.js';
 import { raiseLandedNotice } from './landedLane.js';
 import type { DeadCoordinatorStop, SweepFleetAct } from '../deadCoordinator.js';
 import {
@@ -66,7 +67,9 @@ export interface CloseRunDeps {
    *  reaches it. `coord/routes.ts` wires it to the session's own queue. */
   childReclaim?: (req: ChildReclaimRequest) => void;
   /** The notice funnel (landing order wave 5h): a close that marks its entry landed raises the session's one merged
-   *  record through it. OPTIONAL: absent, the mark is still written and the landed reader's pass raises the record. */
+   *  record through it. OPTIONAL: absent, the mark is still written but no record is raised here: a `landed` entry is terminal
+   *  and never a candidate for the landed reader again (`isLandable`), so only the merged sweep can raise it, and only
+   *  for a live workspace row. */
   notice?: NoticeSink;
 }
 
@@ -448,7 +451,7 @@ function landOnClose(
     console.warn(`ccrc-server: close of run ${run.id} could not mark ${land.project} #${land.pr} landed (${why})`);
   };
   try {
-    const mark = deps.coord.advanceLanding(land);   // the land arm (kind: 'land'), never a run arm
+    const mark = deps.coord.advanceLanding({ ...land, kind: 'land' } satisfies LandingLand);
     if (!mark.ok) return said(mark.error);
     if (mark.landing.kind !== 'landed' || deps.notice === undefined) return;
     raiseLandedNotice({ coord: deps.coord, notice: deps.notice, entry: mark.landing.entry,
