@@ -1,9 +1,10 @@
 # Coord-DB migrations that merge in either order (design)
 
-**Spec** · 2026-11-11 · D-8338 · Status: draft for the operator. Docs only: no code ships with it. Facts about today's
-tree were read on `origin/main` `6c857a1ab`, where `server/src/coord/schema.ts` holds 60 migrations. Choices marked
-**Design call** are the author's, for the operator to check. Choices marked **Operator decision** wait on the operator
-(§9) · Refs #2668 · Related: `server/src/coord/schema.ts` and `server/src/coord/db.ts` (the migrations and the runner
+**Spec** · 2026-11-11 · D-8338 · Status: **approved by the operator 2026-11-12, option 2 in its smallest form** (§0).
+Docs only: no code ships with it. The plan is `docs/superpowers/plans/2026-11-12-coord-db-commuting-migrations.md`.
+Facts about the tree in §1 to §9 were read on `origin/main` `6c857a1ab`, where `server/src/coord/schema.ts` held 60
+migrations; §0 says what changed since. Choices marked **Design call** are the author's. Choices marked **Operator
+decision** were the operator's (§9, ruled in §0) · Refs #2668 · Related: `server/src/coord/schema.ts` and `server/src/coord/db.ts` (the migrations and the runner
 this changes), `deploy/coordination-snapshot.mjs` (a reader of the schema version),
 `server/src/coord/routes.ts` `POST /api/ledger/deviations` (the D-number allocator option 1 would reuse).
 
@@ -21,6 +22,44 @@ numbered changes stay as they are, each new change is its own file named for wha
 which named changes it has applied. Two pull requests that each add a file never touch the same line, so they merge in
 either order with nothing to renumber. Existing installs (at version 60) move over on their next start without any
 step from the operator (§7.4).
+
+## 0. The approval (2026-11-12)
+
+The operator approved **option 2 in its smallest form** on 2026-11-12: each migration has a stable name and declared
+dependencies, the applied set is stored by name, and the existing numbered positions stay as a frozen prefix. That rules
+O1 (option 2) and, because the smallest form is §7.2 as written, O2 (one `.sql` file per new migration), O3 (the list
+closes at whatever `main` holds) and O4 (`user_version` becomes a count) as §9 recommends. §4 and §6 stay below as the
+record of what was weighed and why it lost.
+
+**The frozen prefix is every numbered entry on `main` when the build starts, not 1 to 60.** `main` added entry 61 after
+this design was measured (`nodes.reportedSweep`, D-8386, merged in #2699), so on 2026-11-12 the prefix is positions 1
+to 61. A numbered entry that lands on `main` before the runner's pull request merges joins the prefix too: the length
+is re-measured on `origin/main` before that pull request and before its merge, never chosen by hand. Below, read every
+"60" that names the legacy length (§5, §7.2 items 1, 5 and 7, §7.4, §8 tests 1, 2 and 9) as *L*, the prefix's
+length at that moment.
+
+Writing the plan settled three details that §7.2 left open. Each keeps §7's behaviour and its tests:
+
+1. **The frozen entries have names too.** Entry *k* of the prefix is `legacy-<k>` with three digits (`legacy-001` to
+   `legacy-061`), and it is declared after `legacy-<k-1>`. Every named migration is after `legacy-<L>` without saying
+   so. The applied set (`coord_migrations`) therefore names every migration a file holds. It is filled once from the
+   current schema version: the first migration this build applies to a file writes `legacy-001` to `legacy-<v>` for
+   the file's `user_version` *v*, in that migration's own transaction. Nothing is written when nothing is missing, and
+   a fresh install whose first migration fails still leaves no file behind. *a* in §7.2 item 4 then counts every name,
+   and the count rule of item 5 reads `user_version = |applied set|`, the same number as *L* plus the named ones.
+2. **Up to the prefix's end the version is the authority.** While `user_version` is at or below *L*, the applied set
+   is exactly `legacy-001` to `legacy-<v>`, whatever rows the table holds, and the backfill writes it so. No build
+   writes such a file with any other rows (a row and its version commit together, and the version only goes up), so
+   this only meets a test that rewinds a file by hand (`run-close-switch.test.ts`'s rewind to 53) or a fixture built
+   without the runner. Both keep working unchanged.
+3. **The apply order is topological with a fixed tiebreak.** The runner orders the missing migrations by their
+   declared dependencies (Kahn's algorithm), choosing among the ready ones by name in byte order. The chain on the
+   frozen entries makes them apply in position order, exactly as today's loop does. A dependency that names no
+   migration, a cycle, a bad name or two migrations that share a name refuse to start before the file is touched.
+4. **Above the prefix's end, trigger (b) of §7.2 item 4 reads "the version and the applied set disagree"**, in either
+   direction. A version above the set's size is a newer build's file, as §7.2 says. A version below it is a file no
+   build writes; it too is read as it is with the same warning and migrated no further, because rule 3 never refuses
+   to read and a write over a file the runner cannot explain could only make it worse.
 
 ## 1. The problem, measured
 
@@ -348,7 +387,8 @@ The runner's new refusal words go through a declared union with a guard, as ever
 
 ## 10. Decisions recorded
 
-- **D-8338 (2026-11-11)** — coord-DB migrations merge in either order: new migrations are named files with declared
-  dependencies and an applied-set table, the 60 numbered entries stay as a closed legacy prefix, and `user_version`
-  becomes a count that the runner only ever writes upward, with a version above legacy plus applied read as rule 3
-  (this design; the operator rules O1 to O4).
+- D-8338 (allocated 2026-11-11; its ledger line is in the plan named in the header) — coord-DB migrations merge in
+  either order: new migrations are named files with declared dependencies and an applied-set table, the numbered
+  entries on `main` when the build starts stay as a closed, frozen prefix whose entries are named too, and
+  `user_version` becomes a count that the runner only ever writes upward, with a version that disagrees with the
+  applied set read as rule 3. The operator approved option 2 in its smallest form on 2026-11-12 (§0).
