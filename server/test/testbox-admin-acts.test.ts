@@ -306,6 +306,28 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin sett
     expect(readFileSync(h.overlay, 'utf8')).toContain('CCRC_TESTBOX_TIMES=/srv/secret-times.json');
   });
 
+  it('settings-fleet answers each key as the reader read it before the write, in the shape of the answer (D-8399)', () => {
+    const h = fixture();
+    writeFileSync(h.overlay, 'CCRC_TESTBOX_BUDGET=30m\nCCRC_TESTBOX_TIMES=/srv/old-times.json\n', { mode: 0o600 });
+    const r = verb(h, 'settings-fleet', '--set=CCRC_TESTBOX_BUDGET=45m', '--set=CCRC_TESTBOX_POLL=1m', '--set=CCRC_TESTBOX_TIMES=/srv/new-times.json',
+      '--unset=CCRC_TESTBOX_LOST_RUN', '--from', 'pwa');
+    const a = json(r);
+    expect(a['ok'], r.out + r.err).toBe(true);
+    // a value as itself, a key no file names as not set, a path as set only: the same reader and shape as `settings`
+    expect(a['before']).toEqual([
+      { key: 'CCRC_TESTBOX_BUDGET', set: true, value: '30m' }, { key: 'CCRC_TESTBOX_POLL', set: false },
+      { key: 'CCRC_TESTBOX_TIMES', set: true }, { key: 'CCRC_TESTBOX_LOST_RUN', set: false },
+    ]);
+    expect(a['settings']).toEqual([
+      { key: 'CCRC_TESTBOX_BUDGET', set: true, value: '45m' }, { key: 'CCRC_TESTBOX_POLL', set: true, value: '1m' },
+      { key: 'CCRC_TESTBOX_TIMES', set: true }, { key: 'CCRC_TESTBOX_LOST_RUN', set: false },
+    ]);
+    expect(r.out).not.toContain('times.json');
+    // a refused write answers no rows at all
+    writeFileSync(h.ccrcEnv, 'CCRC_TESTBOX_BUDGET=5m\n');
+    expect(json(verb(h, 'settings-fleet', '--set=CCRC_TESTBOX_BUDGET=9m', '--from', 'pwa'))).toEqual({ ok: false, code: 'key-in-ccrc-env', keys: ['CCRC_TESTBOX_BUDGET'] });
+  });
+
   it('settings-fleet is busy while a long act holds the lock', () => {
     const h = fixture();
     const r = sh(h, SRC + 'exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; _tba_main settings-fleet --set=CCRC_TESTBOX_POLL=45s --from pwa', [VERB]);
