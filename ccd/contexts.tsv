@@ -436,6 +436,11 @@ _pane_scope_note	C2
 _pane_scope_detach	C2
 _pane_scope_stop	C2
 _pane_scope_reap	C2
+_graceful_stop_note	C2
+_graceful_stop_same	C2
+_graceful_stop_before	C2
+_graceful_stop_after	C2
+_graceful_stop_observe	C2
 _end_cause	C2
 _end_record	C2
 _end_note_gone	C2

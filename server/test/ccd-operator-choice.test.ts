@@ -827,7 +827,8 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       if (fn === 'cmd_swap' || fn === '_watchdog_resume_run') {
         expect(src[i]).toMatch(GUARD);
         expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
-        expect(src[i + 2]).toMatch(UNMARK);
+        expect(src[i + 2]).toMatch(/^ {2}_graceful_stop_before "\$id" /);   // session-continuity 6a: the graceful stop, between the unit's stop and the kill
+        expect(src[i + 3]).toMatch(UNMARK);
       }
       if (fn === 'cmd_stop') {
         expect(src[i]).toMatch(GUARD);
@@ -842,11 +843,12 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       }
       if (fn === 'cmd_hibernate') {   // the keep, then (past the comment) the marker, the unsupervise, the pane's scope (D-7902) and the kill
         expect(src[i]).toMatch(GUARD);
-        const next = src.slice(i + 1).filter(live).slice(0, 4);
+        const next = src.slice(i + 1).filter(live).slice(0, 5);
         expect(next[0]).toMatch(/^ {2}_reg_set "\$id" hibernated /);
         expect(next[1]).toMatch(/^ {2}_ws_unsupervise "\$id" ccd$/);
         expect(next[2]).toMatch(/^ {2}_pane_scope_of "\$id" /);
-        expect(next[3]).toMatch(UNMARK);
+        expect(next[3]).toBe('  _graceful_stop_before "$id" hibernate read');   // reuses D-7902's read
+        expect(next[4]).toMatch(UNMARK);
       }
       if (fn === 'cmd_ws_archive') {
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);

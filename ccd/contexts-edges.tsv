@@ -54,6 +54,8 @@ _end_note_gone -> _reg_get
 _end_record -> _reg_set
 _follow_continued_in -> _reg_get
 _follow_continued_in -> _reg_set
+_graceful_stop_before -> _ci_proc_start
+_graceful_stop_same -> _ci_proc_start
 _hard_block_dated -> _pane_born
 _hard_block_dated -> _transcript_path
 _hib_wake_clear -> _reg_set
@@ -217,6 +219,8 @@ _watchdog_one -> _transcript_path
 _watchdog_one -> _wd_operator_hold_to
 _watchdog_resume_here -> _end_record
 _watchdog_resume_here -> _svc_run_detached
+_watchdog_resume_run -> _graceful_stop_after
+_watchdog_resume_run -> _graceful_stop_before
 _watchdog_resume_run -> _operator_choice_keep
 _watchdog_resume_run -> _operator_choice_unmark
 _watchdog_resume_run -> _svc_stop
@@ -408,6 +412,8 @@ cmd_forget -> _tmux_t
 cmd_forget -> _tmx
 cmd_forget -> _ws_unsupervise
 cmd_hibernate -> _alive
+cmd_hibernate -> _graceful_stop_after
+cmd_hibernate -> _graceful_stop_before
 cmd_hibernate -> _idle_for_keystroke
 cmd_hibernate -> _lc_dec_ok
 cmd_hibernate -> _lc_done
@@ -494,6 +500,8 @@ cmd_supervise -> cmd_ensure
 cmd_swap -> _ci_chain_end
 cmd_swap -> _ci_resume_follow
 cmd_swap -> _end_record
+cmd_swap -> _graceful_stop_after
+cmd_swap -> _graceful_stop_before
 cmd_swap -> _operator_choice_keep
 cmd_swap -> _operator_choice_unmark
 cmd_swap -> _svc_run_detached

@@ -25490,6 +25490,84 @@ _pane_scope_reap() {   # id pid cg — in its own unit: wait for the main proces
   fi
   return 0
 }
+# ── THE GRACEFUL STOP (session-continuity 6a; spec D-8316 to D-8332) ─────────
+# The three stops a resume follows (`cmd_swap`, `_watchdog_resume_run`, `cmd_hibernate`) read the pane's process before
+# the kill and, after it, time that process's exit from a detached observer (SHADOW): the kill already hangs up Claude
+# Code's terminal, and its SIGHUP and SIGTERM handlers are one `shutdown()`, so the shadow sends no signal. With
+# `$REG/graceful-stop-live` standing (its one reader is `_graceful_stop_before`; NOTHING in the tree writes it, the
+# operator arms it) the stop sends SIGTERM first and waits up to GRACEFUL_STOP_TERM_WAIT_S, then goes on to today's kill.
+# Every outcome is one `graceful-stop <id>: site=<site> mode=<mode> <outcome>` line in swap.log:
+#   (exited|alive)=<ms> | no-pid | gone-before-signal | unmeasured=(wedged|no-start-time|stat-unreadable|detach-failed)
+GRACEFUL_STOP_TERM_WAIT_S=10   # live only: how long the stop waits for Claude Code to exit after SIGTERM, before the kill (chosen, provisional)
+GRACEFUL_STOP_OBSERVE_S=30     # shadow only: how long the detached observer watches the process after the kill
+GRACEFUL_STOP_POLL_S=0.1
+GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="" GRACEFUL_STOP_MODE=""   # initialised at file scope, as PANE_SCOPE_* are, for `set -u`
+_graceful_stop_note() {   # id site mode outcome — the one writer of `graceful-stop` lines in swap.log. Always rc 0.
+  echo "$(date '+%F %T') graceful-stop $1: site=$2 mode=$3 $4" >> "$REG/swap.log" 2>/dev/null || true
+  return 0
+}
+_graceful_stop_same() {   # pid pstart — the one identity check: rc 0 the same process, rc 1 gone (or recycled), rc 2 its start time cannot be read
+  kill -0 "$1" 2>/dev/null || return 1
+  _ci_proc_start "$1" || return 2
+  [[ "$_CI_PSTART" == "$2" ]] || return 1
+  return 0
+}
+_graceful_stop_before() {   # id site [read] — before the pane kill. `read`: the caller just ran `_pane_scope_of`, so its PANE_SCOPE_* are used as they stand. Always rc 0.
+  local id="$1" pid ps rc=0 t0 now
+  GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="$2" GRACEFUL_STOP_MODE=shadow
+  [[ -f "$REG/graceful-stop-live" ]] && GRACEFUL_STOP_MODE=live
+  [[ "${3:-}" == read ]] || _pane_scope_of "$id"
+  if [[ -n "$PANE_SCOPE_WEDGED" ]]; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" unmeasured=wedged; return 0; fi
+  pid="$PANE_SCOPE_PID"
+  if [[ -z "$pid" ]]; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" no-pid; return 0; fi
+  if ! _ci_proc_start "$pid"; then _graceful_stop_note "$id" "$2" "$GRACEFUL_STOP_MODE" unmeasured=no-start-time; return 0; fi
+  ps="$_CI_PSTART"; GRACEFUL_STOP_PID="$pid" GRACEFUL_STOP_PSTART="$ps"
+  [[ "$GRACEFUL_STOP_MODE" == live ]] || return 0
+  _graceful_stop_same "$pid" "$ps" || rc=$?
+  GRACEFUL_STOP_PID=""
+  case "$rc" in
+    0) ;;
+    2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
+    *) _graceful_stop_note "$id" "$2" live gone-before-signal; return 0 ;;
+  esac
+  kill -TERM "$pid" 2>/dev/null
+  t0=$(_plat_epoch_ms)
+  while :; do
+    rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?
+    now=$(_plat_epoch_ms)
+    case "$rc" in
+      0) ;;
+      2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
+      *) _graceful_stop_note "$id" "$2" live "exited=$(( now - t0 ))"; return 0 ;;
+    esac
+    if (( now - t0 >= GRACEFUL_STOP_TERM_WAIT_S * 1000 )); then _graceful_stop_note "$id" "$2" live "alive=$(( GRACEFUL_STOP_TERM_WAIT_S * 1000 ))"; return 0; fi
+    sleep "$GRACEFUL_STOP_POLL_S"
+  done
+}
+_graceful_stop_after() {   # id — after the pane kill: in shadow, hand the watch of the kept pid to a detached observer. Never waits. Always rc 0.
+  local id="$1" t0 rc=0
+  if [[ "$GRACEFUL_STOP_MODE" == shadow && -n "$GRACEFUL_STOP_PID" ]]; then
+    t0=$(_plat_epoch_ms)
+    _pane_scope_detach _graceful_stop_observe "$id" "$GRACEFUL_STOP_SITE" "$GRACEFUL_STOP_PID" "$GRACEFUL_STOP_PSTART" "$t0" || rc=$?
+    (( rc == 0 )) || _graceful_stop_note "$id" "$GRACEFUL_STOP_SITE" shadow unmeasured=detach-failed
+  fi
+  GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="" GRACEFUL_STOP_MODE=""
+  return 0
+}
+_graceful_stop_observe() {   # id site pid pstart t0 — in its own unit: watch the process after the kill. Always rc 0.
+  local id="$1" site="$2" pid="$3" pstart="$4" t0="$5" rc now
+  while :; do
+    rc=0; _graceful_stop_same "$pid" "$pstart" || rc=$?
+    now=$(_plat_epoch_ms)
+    case "$rc" in
+      0) ;;
+      2) _graceful_stop_note "$id" "$site" shadow unmeasured=stat-unreadable; return 0 ;;
+      *) _graceful_stop_note "$id" "$site" shadow "exited=$(( now - t0 ))"; return 0 ;;
+    esac
+    if (( now - t0 >= GRACEFUL_STOP_OBSERVE_S * 1000 )); then _graceful_stop_note "$id" "$site" shadow "alive=$(( GRACEFUL_STOP_OBSERVE_S * 1000 ))"; return 0; fi
+    sleep "$GRACEFUL_STOP_POLL_S"
+  done
+}
 # shellcheck disable=SC2128,SC2178  # scope is a local string here; the arrays named scope are other functions' locals (shellcheck does not scope names by function)
 _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
   # `oom` FIRST (D-5345): the pane scope's own journal naming an OOM kill in the 120 s
@@ -31421,7 +31499,9 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _end_record "$id" "$(_swap_end_cause)"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
+  _graceful_stop_before "$id" swap
   _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_after "$id"
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
   # not alive and, after 120 seconds, would also stop looking watched — and
@@ -32178,7 +32258,9 @@ _watchdog_resume_run() {   # id — the transient unit's body: the stop-and-ensu
   local id="$1"
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # the operator's own /model and /effort reach the record first (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects the old pane
+  _graceful_stop_before "$id" limit-resume
   _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
+  _graceful_stop_after "$id"
   sleep 1   # let claude flush its final transcript entries
   _reg_set "$id" supervised "$(date +%s)"
   cmd_ensure "$id"
@@ -32566,7 +32648,9 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
   _ws_unsupervise "$id" ccd
   _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
+  _graceful_stop_before "$id" hibernate read
   _tmx kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _graceful_stop_after "$id"
   # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
   # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.
   if (( lc_roll )) && _alive "$id"; then
