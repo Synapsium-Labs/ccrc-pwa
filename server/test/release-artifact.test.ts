@@ -339,6 +339,25 @@ describe('release-artifact.sh: verify, in the publish job', () => {
     expectNothingWritten(out);
   });
 
+  // R44 (review 900 on wave 31; D-8386): the file-set check joins the names with spaces, so ONE file whose name holds a
+  // space or a newline between the two expected names reads as the pair and passes it. The regular-file check is what
+  // refuses it: the tarball that joined name stands for is not there. Nothing is accepted and nothing is written.
+  it.each([
+    ['a space', ' '],
+    ['a newline', '\n'],
+  ])('W26-V14: one file named SHA256SUMS, %s and the tarball\'s name passes the file set and is refused as not a regular file', (_label, sep) => {
+    const home = mkTmp('ccrc-relart-');
+    const { root } = repo(home);
+    const dir = join(home, 'downloaded');
+    mkdirSync(dir);
+    writeFileSync(join(dir, `SHA256SUMS${sep}${NAME}`), 'x\n');
+    expect(readdirSync(dir), 'the fixture is one file').toHaveLength(1);
+    const digest = createHash('sha256').update('x\n').digest('hex');
+    const out = join(home, 'release-out');
+    expectRefused(verify(root, dir, out, digest), `${NAME} in the build's artifact is not a regular file`);
+    expectNothingWritten(out);
+  });
+
   it('W26-V12: the write side never opens the tarball — 64 KiB of bytes that are not gzip at all verify and are copied byte-identical', () => {
     const home = mkTmp('ccrc-relart-');
     const { root } = repo(home);

@@ -146,6 +146,8 @@ import {
   isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
   // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
   isTagFileRead,
+  // R37 (D-8386): the supervisor sweep's record, `update.json`'s `sweep` key.
+  isUpdateSweepWord,
   // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
   // shared/api.ts (ruling R4), imported here and never spelled.
   FLEET_SCOPE, isAutoMode, isNotifyMode,
@@ -464,6 +466,9 @@ interface RawReleaseRow {
  *  store holds ms in every column. */
 export interface NodeReport {
   phase: UpdatePhase; target: string | null; startedAt: number | null; updatedAt: number | null; detail: string | null;
+  /** R37 (D-8386): the supervisor sweep's record (`update.json`'s `sweep` key, `isUpdateSweepWord`); null = not
+   *  measured. Stored beside the five, never read by the phase table. */
+  sweep: string | null;
 }
 
 /** One sweep's measurement of one node: the MEASUREMENT and REPORT column
@@ -515,6 +520,8 @@ export interface NodeRow {
   measuredAt: number | null; reachable: boolean; unreachableSince: number | null;
   reportedPhase: UpdatePhase | null; reportedTarget: string | null; reportedStartedAt: number | null;
   reportedUpdatedAt: number | null; reportedDetail: string | null;
+  /** R37 (D-8386): null = not measured, and any stored text this build cannot read as a sweep word. */
+  reportedSweep: string | null;
   updateState: UpdateState; updateTarget: string | null; updateStartedAt: number | null; updateDetail: string | null;
   channel: UpdateChannel | null; desiredTag: string | null; resolveDetail: string | null;
   requestedTag: string | null; requestedKind: RequestKind | null; requestedAt: number | null;
@@ -679,7 +686,7 @@ interface RawNodeRow {
   highestVersion: string | null; previousVersion: string | null; floorRead: string; previousRead: string; os: string;
   measuredAt: number | null; reachable: number; unreachableSince: number | null;
   reportedPhase: string | null; reportedTarget: string | null; reportedStartedAt: number | null;
-  reportedUpdatedAt: number | null; reportedDetail: string | null;
+  reportedUpdatedAt: number | null; reportedDetail: string | null; reportedSweep: string | null;
   updateState: string; updateTarget: string | null; updateStartedAt: number | null; updateDetail: string | null;
   channel: string | null; desiredTag: string | null; resolveDetail: string | null;
   requestedTag: string | null; requestedKind: string | null; requestedAt: number | null;
@@ -713,6 +720,7 @@ function nodeRowOf(r: RawNodeRow): NodeRow {
     reportedPhase: r.reportedPhase === null ? null : (isUpdatePhase(r.reportedPhase) ? r.reportedPhase : 'unknown'),
     reportedTarget: r.reportedTarget, reportedStartedAt: r.reportedStartedAt,
     reportedUpdatedAt: r.reportedUpdatedAt, reportedDetail: r.reportedDetail,
+    reportedSweep: isUpdateSweepWord(r.reportedSweep) ? r.reportedSweep : null,
     updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
     updateTarget: r.updateTarget, updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail,
     channel: isUpdateChannel(r.channel) ? r.channel : null, desiredTag: r.desiredTag, resolveDetail: r.resolveDetail,
@@ -1311,7 +1319,7 @@ const NODE_COLUMNS =
   'nodeId, role, label, currentVersion, currentSha, currentRef, currentBuiltAt, currentDirty, stampRead, ' +
   'installState, provenance, caps, agentOps, highestVersion, previousVersion, floorRead, previousRead, os, ' +
   'measuredAt, reachable, ' +
-  'unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, reportedUpdatedAt, reportedDetail, ' +
+  'unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, reportedUpdatedAt, reportedDetail, reportedSweep, ' +
   'updateState, updateTarget, updateStartedAt, updateDetail, channel, desiredTag, resolveDetail, ' +
   'requestedTag, requestedKind, requestedAt, supersededBy';
 
@@ -9986,7 +9994,7 @@ export class CoordStore {
       m.floorRead, m.previousRead,
       m.os, m.measuredAt,
       r === null ? null : r.phase, r === null ? null : r.target, r === null ? null : r.startedAt,
-      r === null ? null : r.updatedAt, r === null ? null : r.detail,
+      r === null ? null : r.updatedAt, r === null ? null : r.detail, r === null ? null : r.sweep,
     ];
     return tx(this.db, (): UpsertNodeResult => {
       const ins = this.db.prepare(
@@ -9994,8 +10002,8 @@ export class CoordStore {
         'currentDirty, stampRead, installState, provenance, caps, agentOps, highestVersion, previousVersion, ' +
         'floorRead, previousRead, os, ' +
         'measuredAt, reachable, unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, ' +
-        'reportedUpdatedAt, reportedDetail) VALUES (' +
-        '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?) ON CONFLICT(nodeId) DO NOTHING',
+        'reportedUpdatedAt, reportedDetail, reportedSweep) VALUES (' +
+        '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?, ?) ON CONFLICT(nodeId) DO NOTHING',
       ).run(m.nodeId, ...vals);
       if (Number(ins.changes) > 0) return { ok: true, created: true };
       const upd = this.db.prepare(
@@ -10004,7 +10012,7 @@ export class CoordStore {
         'agentOps = ?, highestVersion = ?, previousVersion = ?, floorRead = ?, previousRead = ?, ' +
         'os = ?, measuredAt = ?, reachable = 1, ' +
         'unreachableSince = NULL, reportedPhase = ?, reportedTarget = ?, reportedStartedAt = ?, ' +
-        'reportedUpdatedAt = ?, reportedDetail = ? WHERE nodeId = ? AND supersededBy IS NULL',
+        'reportedUpdatedAt = ?, reportedDetail = ?, reportedSweep = ? WHERE nodeId = ? AND supersededBy IS NULL',
       ).run(...vals, m.nodeId);
       if (Number(upd.changes) > 0) return { ok: true, created: false };
       // The INSERT conflicted, so the row exists; the UPDATE's only other

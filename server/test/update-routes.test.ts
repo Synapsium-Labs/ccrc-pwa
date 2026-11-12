@@ -328,6 +328,14 @@ describe('GET /api/updates', () => {
       reportedUpdatedAt: 2_000, reportedDetail: null,
     }).report).toEqual({ phase: 'installing', target: 'v0.0.10', startedAt: 1_000, updatedAt: 2_000, detail: null });
     expect(toNodeWire({ ...row, reportedPhase: null, reportedTarget: 'v0.0.10' }).report).toBeNull();
+    // R37 (D-8386): the sweep's record is an OPTIONAL field, present only when the report carried one this build read;
+    // an absent one is not measured, so the wire says nothing rather than a value.
+    const reported = { ...row, reportedPhase: 'done', reportedTarget: 'v0.0.10', reportedStartedAt: 1_000,
+      reportedUpdatedAt: 2_000, reportedDetail: null } as const;
+    expect(toNodeWire({ ...reported, reportedSweep: 'down: 2: alpha-one beta-two' }).report)
+      .toEqual({ phase: 'done', target: 'v0.0.10', startedAt: 1_000, updatedAt: 2_000, detail: null, sweep: 'down: 2: alpha-one beta-two' });
+    expect('sweep' in toNodeWire({ ...reported, reportedSweep: null }).report!, 'an unmeasured sweep reached the wire').toBe(false);
+    expect(toNodeWire({ ...row, reportedPhase: null, reportedSweep: 'ok' }).report).toBeNull();
     // §18 "stampRead keeps EACCES from unversioned": the columns may still hold
     // an old stamp, and the wire must not present it as this node's build.
     expect(toNodeWire({ ...row, stampRead: 'unreadable' }).current).toBeNull();

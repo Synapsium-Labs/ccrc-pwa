@@ -69,14 +69,14 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
       caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
       floorRead: 'measured', previousRead: 'absent', os: 'linux',
       measuredAt: T0, reachable: true, unreachableSince: null,
-      reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null,
+      reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null, reportedSweep: null,
       updateState: 'idle', updateTarget: null, updateStartedAt: null, updateDetail: null,
       channel: null, desiredTag: null, resolveDetail: null,
       requestedTag: null, requestedKind: null, requestedAt: null, supersededBy: null,
     };
     expect(store.node('fleet')).toEqual(expected);
     const report = { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 1000, updatedAt: T0 + 2000,
-      detail: 'placing the tree' } as const;
+      detail: 'placing the tree', sweep: null } as const;
     expect(store.upsertNodeMeasurement(meas({ currentDirty: true, previousVersion: 'v0.0.8',
       measuredAt: T0 + 60_000, report }))).toEqual({ ok: true, created: false });
     expect(store.node('fleet')).toEqual({ ...expected, currentDirty: true, previousVersion: 'v0.0.8',
@@ -86,6 +86,21 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
     store.upsertNodeMeasurement(meas({ measuredAt: T0 + 120_000 }));
     expect(store.node('fleet')).toMatchObject({ reportedPhase: null, reportedTarget: null, reportedStartedAt: null,
       reportedUpdatedAt: null, reportedDetail: null });
+  });
+
+  it('R37 (D-8386): the report\'s sweep word round-trips; none is NULL, and a stored word this build cannot read reads null', () => {
+    const store = fresh();
+    const report = { phase: 'done', target: 'v0.0.10', startedAt: T0, updatedAt: T0 + 1000, detail: null } as const;
+    store.upsertNodeMeasurement(meas({ report: { ...report, sweep: 'unverified: relist' } }));
+    expect(store.node('fleet')).toMatchObject({ reportedPhase: 'done', reportedSweep: 'unverified: relist' });
+    store.upsertNodeMeasurement(meas({ report: { ...report, sweep: null } }));
+    expect(raw(store, 'fleet', 'reportedSweep')).toBeNull();
+    expect(store.node('fleet')?.reportedSweep).toBeNull();
+    store.upsertNodeMeasurement(meas({ report: { ...report, sweep: 'ok' } }));
+    store.upsertNodeMeasurement(meas());
+    expect(raw(store, 'fleet', 'reportedSweep'), 'no report file left the last sweep word standing').toBeNull();
+    store.db.prepare("UPDATE nodes SET reportedPhase = 'done', reportedSweep = 'maybe' WHERE nodeId = 'fleet'").run();
+    expect(store.node('fleet')?.reportedSweep).toBeNull();
   });
 
   it('an unreadable stamp keeps its read word beside NULL current* columns (§18 "stampRead keeps EACCES from unversioned")', () => {
@@ -119,7 +134,7 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
     plantResolved(store, 'fleet');
     const before = store.node('fleet')!;
     store.upsertNodeMeasurement(meas({ measuredAt: T0 + 60_000,
-      report: { phase: 'done', target: 'v0.0.10', startedAt: T0, updatedAt: T0 + 1, detail: null } }));
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T0, updatedAt: T0 + 1, detail: null, sweep: null } }));
     const after = store.node('fleet')!;
     for (const k of ['updateState', 'updateTarget', 'updateStartedAt', 'updateDetail', 'channel', 'desiredTag',
       'resolveDetail', 'requestedTag', 'requestedKind', 'requestedAt', 'supersededBy'] as const) {

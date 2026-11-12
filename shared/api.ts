@@ -10436,6 +10436,26 @@ export interface NodeRequestWire { tag: string; kind: RequestKind; at: number }
 export interface NodeReportWire {
   phase: UpdatePhase; target: string | null; startedAt: number | null; updatedAt: number | null;
   detail: string | null;
+  /** R37 (D-8386): the supervisor sweep's record, `update.json`'s `sweep` key (`isUpdateSweepWord`). ADDITIVE and
+   *  OPTIONAL: absent is NOT MEASURED (no sweep ran on this report's path, an older node wrote it, or the key was
+   *  malformed), never `ok` or a count of none. */
+  sweep?: string;
+}
+/** R37 (D-8386): the first word of the record `ccrc update`'s supervisor sweep leaves in `update.json`'s `sweep` key
+ *  (wave 17, D-5314, D-5315, D-5329; README "One update at a time"): `ok`, `down: <n>: <ids>`, `refused: <why>`,
+ *  `unverified: relist`, `died: sweep` or the watchdog's `died: abandoned`. Spelled once, as a map, so a head added to
+ *  the union with no key fails loudly. */
+export type UpdateSweepHead = 'ok' | 'down' | 'refused' | 'unverified' | 'died';
+const UPDATE_SWEEP_HEAD_MAP: Record<UpdateSweepHead, true> = { ok: true, down: true, refused: true, unverified: true, died: true };
+/** The writer's cut (`_upd_json_str`'s 200 characters), the same bound as the report's detail. */
+export const UPDATE_SWEEP_MAX = 200;
+/** A sweep record this build can read: printable ASCII, at most `UPDATE_SWEEP_MAX`, and either `ok` alone or a known
+ *  head, `: ` and at least one more printable character. Anything else is not a measurement. */
+export function isUpdateSweepWord(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length > UPDATE_SWEEP_MAX || !/^[\x20-\x7e]+$/.test(v)) return false;
+  if (v === 'ok') return true;
+  const m = /^([a-z]+): \S/.exec(v);
+  return m !== null && m[1] !== 'ok' && Object.hasOwn(UPDATE_SWEEP_HEAD_MAP, m[1]!);
 }
 /** The lease (§6 lease columns). `target` outlives `state` returning to `idle`. */
 export interface NodeUpdateWire { state: UpdateState; target: string | null; startedAt: number | null; detail: string | null }

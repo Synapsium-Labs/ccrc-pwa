@@ -1545,6 +1545,44 @@ describe('ccrc update: the fleet-behind warning (D-150 aware)', () => {
     expect(r.stdout).toMatch(/^update: WARN: .*skewed.*fleet box first/im);
   });
 
+  // D-8386 (the programme's follow-up issue, review 1326's F6): `_upd_fleet_warn`'s skewed clause, read whole. The row
+  // above matches a fragment; this one holds the one line, the address it asked, the order and the next step, and that
+  // the run still proceeds.
+  it('the skewed WARN is exactly one line: the address asked, the order (fleet box first), and the re-check', () => {
+    const home = freshUpdateBox('ccrc-update-skew-line-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, 'fixture-health-body'),
+      '{"mode":"remote","connected":true,"downSince":null,"build":"skewed","roster":"agreed"}\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, [], { CCRC_ADDR: '127.0.0.1:7788' });
+    expect(r.code, r.stderr).toBe(0);
+    const warns = r.stdout.split('\n').filter((l) => l.startsWith('update: WARN:'));
+    expect(warns).toEqual([
+      "update: WARN: /api/fleet/health at 127.0.0.1:7788 says the two boxes' builds are SKEWED — the update order is "
+      + 'fleet box first, then this server box. This run proceeds; update the fleet box too, then re-check with: ccrc status',
+    ]);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the WARN stopped the run').toBe(true);
+  });
+
+  // Only a server that ANSWERED `skewed` produces the line: agreed, unknown, an absent `build` (the wire's "absent reads
+  // as unknown") and a word outside the vocabulary (`_box_health`'s `?`) are all silent, and the run proceeds.
+  it.each([
+    ['agreed', '"build":"agreed",'],
+    ['unknown', '"build":"unknown",'],
+    ['absent', ''],
+    ['a word outside the vocabulary', '"build":"drifting",'],
+  ])('a health answer whose build is %s prints no WARN', (_name, build) => {
+    const home = freshUpdateBox('ccrc-update-noskew-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, 'fixture-health-body'),
+      `{"mode":"remote","connected":true,"downSince":null,${build}"roster":"agreed"}\n`);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, [], { CCRC_ADDR: '127.0.0.1:7788' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toMatch(/WARN/);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
   it('a 401 from the session gate skips the comparison SILENTLY — the gate answered, not the build (D-150)', () => {
     const home = freshUpdateBox('ccrc-update-401-');
     plantOldBox(home, { version: 'v1.0.0' });
