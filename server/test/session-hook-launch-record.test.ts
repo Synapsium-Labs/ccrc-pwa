@@ -69,7 +69,7 @@ const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => {
     CLAUDE_CODE_EXECPATH: '', ...env,
   };
 };
-type Ran = { status: number | null; timedOut: boolean; ms: number };
+type Ran = { status: number | null; timedOut: boolean; ms: number; stderr: string };
 /** One hook run, in a process group of its own and under a timeout. Exit 0 is asserted by the caller through `status`. A run whose pane
  *  lookup went unanswered is replayed (at most four times). */
 const run = (payload: object | string, env: Record<string, string> = {}, timeout = 120_000): Ran => {
@@ -79,7 +79,7 @@ const run = (payload: object | string, env: Record<string, string> = {}, timeout
     const r = spawnSyncGroup('bash', [HOOK], { input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout });
     const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
     const skipped = hookEnv(env)['TMUX_PANE'] !== '' && records(tmuxAnswered()).length === answered;
-    if (!skipped || timedOut || attempt === 4) return { status: r.status, timedOut, ms: Date.now() - t0 };
+    if (!skipped || timedOut || attempt === 4) return { status: r.status, timedOut, ms: Date.now() - t0, stderr: String(r.stderr ?? '') };
   }
 };
 const ok = (payload: object | string, env: Record<string, string> = {}): void => {
@@ -297,6 +297,29 @@ describe('the launch record: the script path', () => {
     expect(got.map((r) => [r.k, r.why ?? r.script])).toEqual([['drop', 'path'], ['workflow', null]]);
   });
 
+  // Rows that vary the TRANSCRIPT path with a script path that is consistent with it, so only lrpath's transcript-side conjuncts can refuse them.
+  const withTranscript = (dir: string, name = 'x.js', sid = SID): { extra: Record<string, unknown>; over: Record<string, unknown> } =>
+    ({ extra: { transcript_path: `${dir}/${sid}.jsonl` }, over: { scriptPath: `${dir}/${sid}/workflows/scripts/${name}` } });
+  const badTranscript: Array<[string, { extra: Record<string, unknown>; over: Record<string, unknown> }]> = [
+    ['a relative transcript path', withTranscript('rig/cfg/projects/-rig-repo')],
+    ['another session\'s id in the transcript path, with its own sidecar script', withTranscript(CONFIG, 'x.js', OTHER_SID)],
+    ['a // in the directory part', withTranscript('/rig//cfg/projects/-rig-repo')],
+    ['a /./ in the directory part', withTranscript('/rig/./cfg/projects/-rig-repo')],
+    ['a /../ in the directory part', withTranscript('/rig/../rig/cfg/projects/-rig-repo')],
+    ['a space in the directory part', withTranscript('/rig/cfg x/projects/-rig-repo')],
+    ['a script name ending js with no dot', withTranscript(CONFIG, 'xxjs')],
+  ];
+  it.each(badTranscript)('a transcript path or script name the check refuses keeps the row with script null, after one drop row with why path: %s', (_label, c) => {
+    const got = added(workflow(c.over, { script: 'return 1' }, c.extra));
+    expect(got).toEqual([{ v: 1, t: expect.any(Number), k: 'drop', why: 'path' }, { ...WORKFLOW_ROW, script: null }]);
+  });
+  it('CONTROL: the same shapes with a clean directory write the script path', () => {
+    for (const [label, dir, name] of [['an absolute directory', '/rig/cfg2/projects/-rig-repo', 'x.js'], ['a dotted directory name', '/rig/cfg.d/projects/-rig-repo', 'xx.js']] as const) {
+      const c = withTranscript(dir, name);
+      expect(added(workflow(c.over, { script: 'return 1' }, c.extra)).map((r) => [r.k, r.script]), label).toEqual([['workflow', c.over['scriptPath']]]);
+    }
+  });
+
   it('a resume that names a working-directory copy is counted the same way', () => {
     const got = added(workflow({ scriptPath: `/rig/repo/x.js` }, { resumeFromRunId: RUN }));
     expect(got.map((r) => r.k)).toEqual(['drop', 'resume']);
@@ -475,6 +498,20 @@ describe('the launch record: its budget', () => {
     expect(added(workflow(), { CCRC_SESSION_GENERATION: '0189abcd-9999-5678-9abc-0123456789ab' })).toEqual([]);
     // CONTROL: a pane with no generation in its environment is bound to the file's.
     expect(added(workflow(), { CCRC_SESSION_GENERATION: '' })).toHaveLength(1);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable or unwritable .deleg keeps the hook\'s own stderr empty: a failed open of the size read or of the append prints nothing', () => {
+    for (const [label, mode] of [['mode 000 (the size read cannot open it)', 0o000], ['mode 444 (the append cannot open it)', 0o444]] as const) {
+      fs.rmSync(delegFile(), { force: true });
+      fs.writeFileSync(delegFile(), '{"v":1,"t":1,"k":"drop","why":"id"}\n');
+      fs.chmodSync(delegFile(), mode);
+      const r = run(workflow(), {}, 30_000);
+      expect(r.timedOut, label).toBe(false);
+      expect(r.status, label).toBe(0);
+      expect(r.stderr, `${label}: nothing on the hook's stderr`).toBe('');
+      fs.chmodSync(delegFile(), 0o644);
+      expect(fs.readFileSync(delegFile(), 'utf8'), `${label}: nothing was written`).toBe('{"v":1,"t":1,"k":"drop","why":"id"}\n');
+    }
   });
 
   it('an append that lands after the row was purged leaves no .deleg behind', () => {

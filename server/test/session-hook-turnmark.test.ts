@@ -745,7 +745,7 @@ describe('the payload parse needs no regex engine', () => {
     // THREE PIECES, one jq program (delegation broker wave 3, Task 5): the parse proper, which every event compiles and which
     // is spelled on one physical line because nothing may be added above the `_hook_emit_context "$CARD" "$CARD_COMPACT"` line README cites; the delegation spool's definitions (`DSP_DEFS`), spliced in
     // by the shell only for a payload that names a delegation tool or event; and the spool's extra output expression. All
-    // three are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
+    // four are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
     const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" \'', '" <<<"$payload"');
     const spoolDefs = between("DSP_DEFS='", "'; dsp_dir=");
     const spoolOut = between("dsp_out=', ((", ") | .[])'");
