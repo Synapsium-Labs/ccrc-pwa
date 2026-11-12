@@ -148,7 +148,7 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
       const head = document.querySelector<HTMLElement>('.chat-head');
       if (head === null) throw new Error('no session header yet');
       return head;
-    })).findByRole('button', { name: 'Stop' });
+    })).findByRole('button', { name: 'Esc (Stop)' });
   it('a 409 says there was nothing to stop, and says it QUIETLY', async () => {
     // `/interrupt` answers 409 when the pane is idle, which is not an error:
     // the reader asked for a stop and got one, in the sense that nothing is

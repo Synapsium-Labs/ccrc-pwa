@@ -117,7 +117,7 @@ describe("Refined's session chrome", () => {
     expect([...titleRow.children].map((n) => n.tagName)).toEqual(['SPAN', 'H1']);
     expect(document.querySelectorAll('.chat-meta')).toHaveLength(1);
     expect(document.querySelector('.keycap--esc')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Esc (Stop)' })).toBeNull();
     // ⋯ and the terminal stay, and Back on a phone.
     expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument();

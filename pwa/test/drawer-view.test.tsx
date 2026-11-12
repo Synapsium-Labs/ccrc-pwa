@@ -991,7 +991,7 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
       render(<TerminalDrawer id={ID} open onClose={onClose} makeSocket={makeSocket} viewStorage={() => store} />);
       const ws = FakeSocket.instances.at(-1)!;
       act(() => ws.onopen?.());
-      fireEvent.click(screen.getByRole('button', { name: 'Scroll back' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Hist (Scroll back)' }));
       const histTa = await waitFor(() => {
         const el = document.querySelector<HTMLTextAreaElement>('.term-history textarea');
         if (el === null) throw new Error('the history layer has no terminal yet');

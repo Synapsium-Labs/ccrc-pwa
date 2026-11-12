@@ -784,7 +784,9 @@ export function TerminalDrawer({
   const histDoor = (
     <Keycap
       className="keycap--act"
-      aria-label={atLive ? 'Scroll back' : 'Back to live'}
+      /* Each name holds the legend it shows (label in name, D-8383): `hist`
+         leads `Hist (Scroll back)`, and `live` ends `Back to live`. */
+      aria-label={atLive ? 'Hist (Scroll back)' : 'Back to live'}
       /* A real toggle, not two buttons: one key in, the same key out.
          `aria-pressed` is what carries the engaged state to AT and,
          through the attribute selector, to the inverted fill in CSS —

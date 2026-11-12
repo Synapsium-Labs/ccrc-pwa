@@ -194,7 +194,7 @@ describe('the type fit, against the real terminal', () => {
     const shrunk = live.options.fontSize;
     expect(shrunk, 'the live pane did not shrink, so there is nothing to follow').toBeLessThan(14);
 
-    const back = view.baseElement.querySelector('[aria-label="Scroll back"]');
+    const back = view.baseElement.querySelector('[aria-label="Hist (Scroll back)"]');
     if (!back) throw new Error('the drawer rendered no history key');
     fireEvent.click(back);
     await waitFor(() => expect(made.terms.length, 'the history layer never opened').toBe(2));

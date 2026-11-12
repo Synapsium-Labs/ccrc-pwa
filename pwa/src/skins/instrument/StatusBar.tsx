@@ -26,7 +26,9 @@ export function StatusBar(): ReactNode {
       <span className="ins-status-summary">{fleetSummary(sessions, runs).readout}</span>
       <UpdateIndicator form="status" />
       <span className="ins-status-keys">
-        <Keycap className="ins-status-key" aria-label="Open the command palette" {...commandDoor('open-palette')}>
+        {/* The icon is no word and `K` is, so the name says the key as it is said, then what it does (label in
+            name, D-8383). */}
+        <Keycap className="ins-status-key" aria-label="Command K (Open the command palette)" {...commandDoor('open-palette')}>
           <Icon name="command" size={16} />K
         </Keycap>
         <Keycap className="ins-status-key" aria-label="Show shortcuts" {...commandDoor('show-shortcuts')}>?</Keycap>

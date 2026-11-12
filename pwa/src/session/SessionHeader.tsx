@@ -325,8 +325,9 @@ export function SessionHeader(props: SessionHeaderProps): ReactNode {
       </div>
       {at('back-row') !== null && <HeaderGoalsKey view={view} />}
       <HeaderDoors view={view} openMenu={openMenu} />
+      {/* The cap shows `esc`, so its name leads with it (label in name, D-8383). */}
       {view.stop.shown && (
-        <Keycap className="keycap--esc" aria-label="Stop" disabled={!view.stop.enabled} onClick={() => props.onInterrupt('keycap')}>
+        <Keycap className="keycap--esc" aria-label="Esc (Stop)" disabled={!view.stop.enabled} onClick={() => props.onInterrupt('keycap')}>
           esc
         </Keycap>
       )}
