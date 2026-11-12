@@ -5,10 +5,11 @@
 #     converge decision.
 #   - RELEASE mode (`--release [vX.Y.Z]`): download the CI-built tarball +
 #     SHA256SUMS from GitHub Releases (latest, or the named tag), verify
-#     `sha256sum -c`, extract to a staging dir, and hand off to the STAGED
-#     `ccrc install` — no build step on the box, prebuilt dists ship in the
-#     tarball. Everything after `--release [tag]` passes through to the
-#     staged verb verbatim (`--role …` rides here).
+#     the tarball against its own SHA256SUMS line, extract to a staging
+#     dir, and hand off to the STAGED `ccrc install` — no build step on
+#     the box, prebuilt dists ship in the tarball. Everything after
+#     `--release [tag]` passes through to the staged verb verbatim
+#     (`--role …` rides here).
 # Neither mode touches ~/.ccrc, ~/.local/bin or systemd — bootstrap
 # builds/fetches, the verb installs. Re-running is safe: npm ci and the
 # builds are idempotent and the verb converges.
@@ -251,13 +252,22 @@ if [ "$RELEASE_MODE" = true ]; then
   # macOS does not ship it — and because the check swallows its own stderr,
   # a missing tool exits the subshell 127 and lands in the `||` arm: the
   # first thing a macOS operator ever saw from ccrc was a FABRICATED
-  # supply-chain accusation about an intact download. `shasum -a 256 -c`
-  # reads the GNU-written two-space SHA256SUMS unchanged (measured against
+  # supply-chain accusation about an intact download. `shasum -a 256`
+  # prints the same `<digest>  <name>` line GNU writes (measured against
   # the published release). Unquoted on use, so the two words split.
+  # The updater's rule (D-8390): never `$SUM -c SHA256SUMS`, which opens every
+  # path the file names (any file on this box, a FIFO that blocks, /dev/zero).
+  # The one file digested is the staged tarball, on stdin, and it must equal
+  # the digest on the line TARNAME came from: 64 lowercase hex, as
+  # `deploy/build-release.sh` writes it. No other line is read.
   SUM=sha256sum
   [ "$(uname -s 2>/dev/null)" = Darwin ] && SUM="shasum -a 256"
-  ( cd "$STAGING" && $SUM -c SHA256SUMS >/dev/null 2>&1 ) \
-    || { echo "install.sh: checksum verification FAILED for $TARNAME — refusing to extract or install" >&2; exit 1; }
+  GOT="$($SUM < "$STAGING/$TARNAME" 2>/dev/null)" || GOT=""
+  GOT="${GOT%% *}"
+  case "$_sum" in *[!0123456789abcdef]*) _sum="" ;; esac
+  if [ "${#_sum}" -ne 64 ] || [ "$GOT" != "$_sum" ]; then
+    echo "install.sh: checksum verification FAILED for $TARNAME — refusing to extract or install" >&2; exit 1
+  fi
 
   mkdir "$STAGING/tree"
   tar -xzf "$STAGING/$TARNAME" -C "$STAGING/tree"

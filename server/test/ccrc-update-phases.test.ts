@@ -3397,6 +3397,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '');
   const sums = (home: string, tag: string): string =>
     `local://${home}/releases/download/${tag}/SHA256SUMS`;
+  /** D-8390 (R50 b): a `--detach` parent reads its settings from ccrc.env alone, as its detached child does, so a case that
+   *  measures what the parent asks the release host plants the fixture's base THERE; the environment's copy (`runRollback`'s)
+   *  is the server's, which the parent no longer reads. */
+  const baseInEnvFile = (home: string): void => {
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
+  };
   const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
   /** The shape every real rollback starts from: a box on v2.0.0 whose install
@@ -3838,6 +3844,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // macOS answer is the refusal case directly below.
   itLinux('--detach resolves the target FIRST, asks its existence, then re-execs `rollback --to <tag> --from <who>` through systemd-run and returns — the default target reaches the detached argv (§11 pin)', () => {
     const home = rollbackBox('ccrc-rollback-detach-', { previous: PREV });
+    baseInEnvFile(home);
     const r = runRollback(home, ['--detach', '--from', 'pwa']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     // The D-3282 PATH-prepend wrapper (fix round 1 item 19 / review 155
@@ -3855,11 +3862,36 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     // An explicit --to reaches it the same way, whatever previous says.
     const pinned = rollbackBox('ccrc-rollback-detach-to-', { previous: `v0.9.0\n${PREV_SHA}\n` });
+    baseInEnvFile(pinned);
     const p = runRollback(pinned, ['--to=v1.0.0', '--detach']);
     expect(p.code, `stderr: ${p.stderr}\nstdout: ${p.stdout}`).toBe(0);
+    expect(localUrls(pinned), 'the pinned tag\'s existence, asked of the fixture\'s release').toEqual([sums(pinned, 'v1.0.0')]);
     expect(readFileSync(join(pinned, 'systemd-run-argv'), 'utf8').trim())
       .toBe('--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
         + 'ccrc-detach rollback --to v1.0.0 --from cli');
+  });
+
+  // D-8390 (R50 b): a console-driven move's parent is started with the SERVER's environment, which systemd parsed from
+  // ccrc.env when the server started, while its detached child runs under the user manager's, which carries no setting
+  // (W24-P5), so the child reads ccrc.env. A ccrc.env edited since the server started made the two ask different hosts.
+  // The parent now reads ccrc.env alone too: the source changes between parent and child, and the base read does not.
+  itLinux('D-8390 (R50 b): a --detach parent reads the release base from ccrc.env, the one source its detached child reads, never the environment it was started with', () => {
+    const home = rollbackBox('ccrc-rollback-detach-source-', { previous: PREV });
+    baseInEnvFile(home);
+    // The parent's environment: the server's, parsed from a ccrc.env that has been edited since — another base.
+    const parent = runRollback(home, ['--detach', '--from', 'pwa'], { CCRC_RELEASE_BASE_URL: `local://${home}/stale` });
+    expect(parent.code, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    expect(localUrls(home), 'the parent asked ccrc.env\'s base').toEqual([sums(home, 'v1.0.0')]);
+    const argv = readFileSync(join(home, 'systemd-run-argv'), 'utf8').trim();
+    expect(argv, 'no setting rides the argv (W24-P5)').not.toMatch(/CCRC_/);
+    expect(argv.endsWith('ccrc-detach rollback --to v1.0.0 --from pwa')).toBe(true);
+    // The child: the recorded argv under the manager's environment, which names no setting.
+    rmSync(join(home, 'curl-argv'), { force: true });
+    const child = runRollback(home, ['--to', 'v1.0.0', '--from', 'pwa'], { CCRC_RELEASE_BASE_URL: undefined });
+    expect(child.code, `stderr: ${child.stderr}\nstdout: ${child.stdout}`).toBe(0);
+    const asked = localUrls(home);
+    expect(asked[0], 'the child asked the same base first').toBe(sums(home, 'v1.0.0'));
+    expect(asked.filter((u) => !u.startsWith(`local://${home}/releases/`)), 'nothing asked another base').toEqual([]);
   });
 
   // Fix round 1 item 3 / review 155 C31: a `queued` report with nothing
@@ -5623,19 +5655,54 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   });
 
   // Wave 24 (D-6602): the watchdog takes the LARGEST deadline reading, for both of its thresholds, and says when one cannot be read.
-  const W24_WATCHDOG_WARN = 'watchdog: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the '
-    + 'server may take it from (the environment, the box\'s ccrc.env, the exposure file) — using the largest reading ccrc could decide';
+  // D-8390 (R50 a): the sentence is the knob readers' own (`KEY='value' is not <its words>, as set in <source> — using <ms>`), and a
+  // reading it cannot decide never lets it write a live updater over as wedged: the server may read `2e6` as 2000000 ms.
+  const DL_SAYS = 'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)';
+  const W24_WATCHDOG_WARN = (value: string, source: string, ms = 900000): string =>
+    `watchdog: WARN: CCRC_UPDATE_DEADLINE_MS='${value}' is not ${DL_SAYS}, as set in ${source} — using ${ms} ms, the largest `
+    + 'reading ccrc could decide, for a dead updater; a live one is never recorded as wedged while a reading is undecided';
 
-  itLinux('W24-D4: the watchdog warns on a deadline it cannot read and uses the largest it can', () => {
+  itLinux('W24-D4: the watchdog warns on a deadline it cannot read, in the knob readers\' words, and uses the largest it can', () => {
     const home = watchBox('ccrc-watchdog-w24-d4-');
     appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=6e5\n');
     report(home, { phase: 'installing', ageS: 700 });
     const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
     expect(r.code, r.stderr).toBe(0);
     const out = r.stdout.split('\n');
-    expect(out[0]).toBe(W24_WATCHDOG_WARN);
+    expect(out[0]).toBe(W24_WATCHDOG_WARN('6e5', 'the box\'s ccrc.env'));
     expect(out[1]).toMatch(/^watchdog: update in progress \(installing, 70\ds old\)$/);
     expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    // The environment's spelling names the environment.
+    const env = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: 'soon' });
+    expect(env.stdout.split('\n')[0]).toBe(W24_WATCHDOG_WARN('soon', 'the environment'));
+  });
+
+  itLinux('D-8390 (R50 a): an undecided deadline never writes a LIVE updater over as wedged, however old its report', async () => {
+    const home = watchBox('ccrc-watchdog-r50a-live-');
+    // The server reads `2e6` as 2000000 ms (33 min); 1900 s is past twice the 900 s the bash could decide, inside the server's.
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=2e6\n');
+    report(home, { phase: 'installing', ageS: 1900 });
+    const before = readFileSync(jsonPath(home), 'utf8');
+    const pgid = await holdLock(home);
+    try {
+      const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+      expect(r.code, r.stderr).toBe(0);
+      const out = r.stdout.split('\n');
+      expect(out[0]).toBe(W24_WATCHDOG_WARN('2e6', 'the box\'s ccrc.env'));
+      expect(r.stdout).not.toMatch(/wedged —|recorded as wedged;/);
+      expect(out[1]).toMatch(/^watchdog: updater pid 4321 holds ~\/\.ccrc\/update\.lock — its report is 190\ds old; not acting while it lives$/);
+      expect(readFileSync(jsonPath(home), 'utf8'), 'the report is not rewritten').toBe(before);
+    } finally { release(pgid); }
+  });
+
+  itLinux('D-8390 (R50 a): an undecided deadline still lets a DEAD updater be measured past the default, its lock proving it gone', () => {
+    const home = watchBox('ccrc-watchdog-r50a-dead-');
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=2e6\n');
+    report(home, { phase: 'installing', ageS: 1000 });
+    const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')[0]).toBe(W24_WATCHDOG_WARN('2e6', 'the box\'s ccrc.env'));
+    expect(readReport(home).detail).toBe('abandoned by its updater; box measures converged at v2.0.0');
   });
 
   itLinux('W24-D5: the watchdog never wedges a live update the server still counts as inside its deadline', async () => {

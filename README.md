@@ -138,8 +138,9 @@ not the runtime: the staged `ccrc install` it hands off to refuses without `node
 `npm ci --omit=dev` for the server's runtime dependencies (and the agent's on a fleet box),
 and on every role but `server` builds the graph engine's venv from PyPI. So the box needs
 everything in "Requirements" below, network access to the npm registry and PyPI included.
-`install.sh` fetches `SHA256SUMS` first, then the tarball, and verifies it (`sha256sum -c`;
-`shasum -a 256 -c` on macOS) **before extracting a single file** — that checksum, from the
+`install.sh` fetches `SHA256SUMS` first, then the tarball, and verifies it against the digest on the
+tarball's own `SHA256SUMS` line (`sha256sum`; `shasum -a 256` on macOS; never `-c`, which would open
+every path the file names, D-8390) **before extracting a single file** — that checksum, from the
 same origin as the tarball, is the whole of the first install's verification; every
 `ccrc update` after it also verifies the provenance attestation ("Releases"):
 
@@ -805,10 +806,10 @@ version floor (design §9), unless `--downgrade` is typed.
 
 **Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: the newest stable release —
 `latest/download` never serves a prerelease, so a `dev` build needs its tag) downloads the
-tarball and `SHA256SUMS`, verifies it (`sha256sum -c`; `shasum -a 256 -c` on macOS) **before extracting a
-single file**, extracts to a staging dir and hands off to the STAGED `ccrc install` — no build of ccrc on the
-box, though its runtime dependencies are still fetched (`npm ci --omit=dev`, which compiles `node-pty` on
-Linux) and, on every role but `server`, the graph engine is installed from PyPI into `~/.ccrc/graphify-venv`
+tarball and `SHA256SUMS`, verifies it against the digest on the tarball's own `SHA256SUMS` line (`sha256sum`;
+`shasum -a 256` on macOS; the updater does the same, D-8390) **before extracting a single file**, extracts to a
+staging dir and hands off to the STAGED `ccrc install` — no build of ccrc on the box, though its runtime
+dependencies are still fetched (`npm ci --omit=dev`, which compiles `node-pty` on Linux) and, on every role but `server`, the graph engine is installed from PyPI into `~/.ccrc/graphify-venv`
 ("Requirements" and "What the box needs first", above, list the toolchain, `python3 -m venv` and the registry
 access this takes). The first install trusts the transport checksum only and says so; every update from
 then on verifies provenance. Everything after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
@@ -1043,7 +1044,8 @@ three files from the release page — `ccrc-vX.Y.Z.tar.gz`, its
 `gh attestation verify ccrc-vX.Y.Z.tar.gz --bundle ccrc-vX.Y.Z.tar.gz.sigstore.json --repo Synapsium-Labs/ccrc-pwa`
 (gh ≥ 2.49; the box's own verifier is stricter, also pinning the signing workflow —
 `release-main.yml@refs/heads/main`, or `release.yml@refs/tags/<tag>` for a hand-cut tag), check the tarball
-against `SHA256SUMS` (`sha256sum -c SHA256SUMS`, or `shasum -a 256 -c` on macOS), then install that tag —
+against its own line of `SHA256SUMS` (compare `sha256sum ccrc-vX.Y.Z.tar.gz`, or `shasum -a 256` on macOS, with
+that line's digest; `sha256sum -c` opens every path the file names), then install that tag —
 `install.sh --release vX.Y.Z` fetches and checks its own copy against the release's `SHA256SUMS` again, so
 this narrows the first-install gap rather than closing it.
 

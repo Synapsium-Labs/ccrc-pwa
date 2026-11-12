@@ -2382,6 +2382,7 @@ UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_l
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
+UPD_TARSUM=""     # _upd_resolve: the digest on that same line, the one `_upd_fetch` compares (D-8390)
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
 UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (a foreground run's floor refusal names a restored update by it; a detached run's cannot — its parent's `queued` write replaced the report first)
 UPD_LAST_TARGET=""   # _upd_last_report: … and its target tag
@@ -2440,6 +2441,8 @@ UPD_SPINE_DIED=""    # cmd_update: the step a staged spine died in at or after _
 UPD_GATE_WHY=""        # _upd_gate_probe: one line — what the last probe measured (pass or fail)
 UPD_HEALTH_S=90        # _upd_health_s: the gate's window in seconds (CCRC_UPDATE_HEALTH_S, D-6914)
 UPD_HEALTH_WHY=""      # _upd_health_s: the gate's WARN sentence after `update: WARN: `, empty when the window reads as written
+UPD_DEADLINE_WHY=""    # _upd_deadline_ms: the first undecided reading's sentence, empty when every reading decided (D-8390)
+KNOB_FILE_ONLY=""      # 1 = `_ccrc_knob` reads ccrc.env alone, as a `--detach` parent's child does (D-8390); never from the environment
 UPD_HEALTH_VERSION=""  # _upd_health_version: the version /health answered
 UPD_HEALTH_ADDR=""     # _upd_health_version: the host:port it asked
 
@@ -20827,7 +20830,7 @@ _inst_floor() {
 # refusing loudly rather than degrading:
 #   1. FETCH + VERIFY (`_upd_fetch`): SHA256SUMS first (under `latest/` the
 #      tag is unknown until the sums file names the tarball — install.sh's
-#      own order), then the tarball; `sha256sum -c` BEFORE extraction (the
+#      own order), then the tarball; its own SHA256SUMS line BEFORE extraction (the
 #      outer checksum guards transport), then the per-file MANIFEST after it
 #      (the manifest guards the SET — a file corrupted after the MANIFEST was
 #      generated ships in a tarball whose SHA256SUMS is perfectly honest).
@@ -20906,6 +20909,8 @@ cmd_update() {
     esac
     shift
   done
+  # D-8390 (R50 b): a `--detach` parent reads its settings from ccrc.env alone, the one source its detached child has.
+  [ "$detach" -eq 0 ] || KNOB_FILE_ONLY=1
   if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
     usage >&2
@@ -21931,6 +21936,8 @@ cmd_rollback() {
     esac
     shift
   done
+  # D-8390 (R50 b): as `cmd_update`'s: a `--detach` parent reads ccrc.env alone, as its detached child does.
+  [ "$detach" -eq 0 ] || KNOB_FILE_ONLY=1
   if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "$PROG: rollback: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
     usage >&2
@@ -22466,11 +22473,16 @@ _set_spec() {
 # `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but 0, 1 or
 # 4 (an awk that cannot run, or is killed) could not be scanned. Only an absent file, one that never names the key, one
 # the model reads as not naming it, or an empty value there (like an empty environment value) reads <default>.
+# D-8390 (R50 b): KNOB_FILE_ONLY=1 makes every call `file` mode. A `--detach` parent (`cmd_update`, `cmd_rollback`) sets it,
+# because its detached child runs under the user manager's environment, which carries no setting (W24-P5), and so reads
+# ccrc.env alone: a parent the server started holds the environment systemd parsed when the server started, and a ccrc.env
+# edited since would make the two read different values (a rollback's existence probe asking one release host, its child
+# fetching from another). ccd/ccrc clears it at file scope, so no environment can set it there.
 _ccrc_knob() {   # <KEY> <default> [file]
   local key="$1" f="$BOX_ENV_FILE" g=0 why=""
   KNOB=""; KNOB_FROM=""; KNOB_WHY=""
   case " ${CCRC_SETTINGS[*]} " in *" $key "*) ;; *) KNOB_WHY="$key is not one of ccrc's settings (CCRC_SETTINGS), so it is never read from a file"; return 1 ;; esac
-  [ "${3:-}" = file ] || KNOB="${!key:-}"
+  [ "${3:-}" = file ] || [ "${KNOB_FILE_ONLY:-}" = 1 ] || KNOB="${!key:-}"
   if [ -n "$KNOB" ]; then KNOB_FROM=environment
   elif [ -e "$f" ] || [ -L "$f" ]; then
     if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f" 2>/dev/null; then g=2; else LC_ALL=C awk -v k="$key" '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t); w = (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]"); n += w && (!/^[#;]/ || /\r./) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } w { f = 1; exit } END { exit (f ? 0 : (n ? 1 : 4)) }' "$f" 2>/dev/null || g=$?; fi; else g=3; fi
@@ -22519,13 +22531,29 @@ _upd_deadline_says() { printf 'a positive whole number of milliseconds in canoni
 # which overrides what came before it and leaves its default; a file that never names it adds no reading. Prints
 # MILLISECONDS by name (each caller divides by 1000; update.json is seconds, rulings R1/R14). rc 0 decided; rc 1 when any
 # reading is not, printing 900000 plain, 0 under `min` (so a bound built on it is already past) and the largest it could
-# decide, at least 900000, under `max`. It never dies; each caller says what an rc 1 costs it.
+# decide, at least 900000, under `max`. It never dies; each caller says what an rc 1 costs it. D-8390 (R50 a): it also sets
+# UPD_DEADLINE_WHY, empty at rc 0, else the first undecided reading's sentence in the knob readers' words (`_keep_why`'s
+# shape): `_ccrc_knob`'s KNOB_WHY for a file it cannot measure, else `CCRC_UPDATE_DEADLINE_MS='<value>' is not <the check's
+# words>, as set in <the environment | the box's ccrc.env | the exposure file>`, the value capped at 32 characters and a
+# non-printable byte written `?`. Only a caller in this shell sees it, so one that prints it calls this a second time. With
+# `max` rc 1 `cmd_watchdog` refuses its wedged verdict, since no reading then bounds the server's.
 _upd_deadline_ms() {   # [min|max]
-  local f v lo="" hi=0 rc=0
+  local f v lo="" hi=0 rc=0 src shown
+  UPD_DEADLINE_WHY=""
   # "" is the plain reading; the two files are read alone only for `min` and `max`.
   for f in "" ${1:+"$BOX_ENV_FILE" "$CCRC_EXPOSURE_FILE"}; do
     if [ -z "$f" ]; then _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000; else BOX_ENV_FILE="$f" _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000 file; fi && v="$KNOB" || v=""
     [ -z "$f" ] || [ "$KNOB_FROM" != default ] || continue
+    if [[ ! "$v" =~ ^[123456789][0123456789]{0,14}$ ]] && [ -z "$UPD_DEADLINE_WHY" ]; then
+      if [ -n "$KNOB_WHY" ]; then UPD_DEADLINE_WHY="$KNOB_WHY"
+      else
+        src="the box's ccrc.env"
+        if [ -z "$f" ]; then [ "$KNOB_FROM" != environment ] || src="the environment"; elif [ "$f" = "$CCRC_EXPOSURE_FILE" ]; then src="the exposure file"; fi
+        shown="$v"; [ "${#shown}" -le 32 ] || shown="${shown:0:32}..."
+        UPD_DEADLINE_WHY="CCRC_UPDATE_DEADLINE_MS='${shown//[![:print:]]/?}' is not $(_upd_deadline_says), as set in $src"
+      fi
+      v=""
+    fi
     [[ "$v" =~ ^[123456789][0123456789]{0,14}$ ]] || { v=900000; rc=1; }
     [ "$v" -le "$hi" ] || hi="$v"
     [ -n "$lo" ] && [ "$lo" -le "$v" ] || lo="$v"
@@ -22713,7 +22741,7 @@ cmd_watchdog() {
   # knob W2's server reads) and is divided by 1000 HERE, the one place it is
   # compared — a sub-second deadline is 0 s, so a report one second old is
   # stale.
-  local now deadline lim age
+  local now deadline lim age dl_undecided=0
   now="$(date +%s)"
   # A `date` that did not answer would make the subtraction below a bash
   # arithmetic error, not an age — Task 1's `_upd_phase` refuses the same.
@@ -22721,8 +22749,15 @@ cmd_watchdog() {
     || _ccrc_die "watchdog: date +%s did not answer with unix seconds — nothing was re-measured or reverted"
   # The LARGEST reading (D-6602): `lim` feeds both thresholds, and past twice it a live holder's report is written over as wedged,
   # so it must never be smaller than a deadline the server may hold. One reading for both: a larger in-progress threshold only
-  # delays the probe of a DEAD updater, whose lease the server's own deadline frees meanwhile.
-  deadline="$(_upd_deadline_ms max)" || echo "watchdog: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file) — using the largest reading ccrc could decide"
+  # delays the probe of a DEAD updater, whose lease the server's own deadline frees meanwhile. D-8390 (R50 a): a reading the bash
+  # cannot decide (`2e6`, which the server reads as 2000000) leaves no largest, so the WARN says which one in the knob readers'
+  # words and the wedged verdict is refused while it stands: a dead updater, which the free lock below proves gone, is still
+  # measured past the largest reading decided, but a live holder's report is never written over.
+  if ! deadline="$(_upd_deadline_ms max)"; then
+    dl_undecided=1
+    _upd_deadline_ms max >/dev/null || :   # again in this shell, for UPD_DEADLINE_WHY
+    echo "watchdog: WARN: $UPD_DEADLINE_WHY — using $deadline ms, the largest reading ccrc could decide, for a dead updater; a live one is never recorded as wedged while a reading is undecided"
+  fi
   lim=$(( deadline / 1000 ))
   age=$(( 10#$now - 10#$upd ))
   if [ "$age" -le "$lim" ]; then
@@ -22786,7 +22821,7 @@ cmd_watchdog() {
   local who="${pid:-unknown}"
   if [ "$lrc" -eq 1 ]; then
     _upd_unlock
-    if [ "$age" -gt $(( 2 * lim )) ]; then
+    if [ "$dl_undecided" -eq 0 ] && [ "$age" -gt $(( 2 * lim )) ]; then
       _upd_phase failed "watchdog: updater pid $who wedged holding ~/.ccrc/update.lock since $upd"
       echo "watchdog: updater pid $who has held ~/.ccrc/update.lock with no report for ${age}s, past twice the deadline — recorded as wedged; nothing was reverted"
       return 0
@@ -23876,6 +23911,7 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
     || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release, or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s — or did it time out after ${CCRC_RELEASE_SUMS_MAX_TIME}s / exceed ${CCRC_RELEASE_SUMS_MAX_FILESIZE} bytes) — nothing on this box was changed"
   read -r _sum UPD_TARNAME < "$UPD_STAGE/SHA256SUMS" \
     || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
+  UPD_TARSUM="$_sum"   # D-8390 (R50 d): the tarball's own line is the only one ever read
   # D-6751 (review 926, F2; R46): a name the release host supplies is held to 200 bytes (spec §8's report cap) of printable
   # ASCII, counted and matched under LC_ALL=C, where it is read, before any sentence, terminal or `_upd_redact`'s loops carry
   # it; `_upd_fetch` holds build.json's version alike. The length test runs first, so the match never scans a long value.
@@ -23928,7 +23964,17 @@ _upd_fetch() {
   _upd_phase verifying
   # Verify BEFORE extracting: a tarball that fails its checksum never puts a
   # file on disk, let alone runs one (install.sh's rule, same words).
-  ( cd "$UPD_STAGE" && _plat_sha256_check SHA256SUMS >/dev/null 2>&1 ) \
+  # D-8390 (R50 d): never `sha256sum -c SHA256SUMS`, which opens every path the
+  # file names: a host could make it read any file on this box, block on a
+  # FIFO or read /dev/zero forever while this run holds update.lock. The one
+  # file digested is the staged tarball, by its own path and on stdin (so no
+  # name is escaped into the output), and it must equal the digest on the
+  # line `_upd_resolve` took its name from: 64 lowercase hex, as
+  # `deploy/build-release.sh`'s sha256sum writes it. No other line is read.
+  local got=""
+  got="$(_plat_sha256 < "$UPD_STAGE/$UPD_TARNAME" 2>/dev/null)" || got=""
+  got="${got%% *}"
+  [[ "$UPD_TARSUM" =~ ^[0123456789abcdef]{64}$ ]] && [ "$got" = "$UPD_TARSUM" ] \
     || _ccrc_die "checksum verification FAILED for $UPD_TARNAME — refusing to extract or install; nothing on this box was changed"
 
   # ── PROVENANCE (design §5). The bundle is fetched from beside the tarball
@@ -27773,9 +27819,14 @@ _bak_gc() {   # <lead word: update|rollback>
   # every GATED verification (D-6745): when the re-stamp is already late, the keep-set's first full verification, which
   # `_bak_keepset` never gates (ruling 4), can run past `until`, and past the hard cap, by one classifier call (W24-K1 measures one).
   # An undecided reading (`_upd_deadline_ms min` rc 1) leaves no deadline to cap: the bound is the re-stamp less the margin.
+  # D-8390 (R50 c): the 63 s is an update's chain (a re-install rollback runs `cmd_update`, so it leads `update` here). A rollback
+  # by FLIP has its own, 58 s: the spawn and the two probes, counted as ruled (a flip whose kept check first answered not kept
+  # probes before D-3466's killed-flip state makes it a flip, in the parent and again in the child), and no fleet-health call,
+  # which only `cmd_update` makes. W24-K6 derives both literals.
+  local chain=63; [ "$lead" = update ] || chain=58
   if [[ "${UPD_THIN_AT:-}" =~ ^[1-9][0-9]{0,10}$ ]]; then
     dl="$(_upd_deadline_ms min)" || { rc=1; echo "$lead: backups: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from (the environment, the box's ccrc.env, the exposure file), so no verification starts this run past the keep-set's first full one — the next update continues"; }
-    until=$(( 10#$UPD_THIN_AT + dl / 1000 - margin )); hc=$(( 4 * dl / 1000 - 63 - margin ))
+    until=$(( 10#$UPD_THIN_AT + dl / 1000 - margin )); hc=$(( 4 * dl / 1000 - chain - margin ))
     [ "$dl" -eq 0 ] || [[ ! "${UPD_REPORT_STARTED:-}" =~ ^[1-9][0-9]{0,10}$ ]] || [ $(( hc += 10#$UPD_REPORT_STARTED )) -ge "$until" ] || until="$hc"
   fi
   _bak_keepset "$until" || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
