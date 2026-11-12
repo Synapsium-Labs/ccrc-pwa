@@ -7399,7 +7399,10 @@ the record follows the box file's new digest, so a passed parity stays armable.
 Every act writes one row to the ledger (the `testbox_events` table), and the card shows the last ten acts on a wide
 screen and one on a phone. The verb's state holds one act, and the server writes a long act's row from what it reads
 at its own pace, so the status also carries the six acts that ended before the current one: an act that began and ended
-between two reads, or while the server was down, still gets its row.
+between two reads, or while the server was down, still gets its row. A settings edit's row also records each setting it
+changed, its old and its new value, each read through that setting's own shape, so a row still holds no free text; a
+secret-bearing setting, a path, an address or a list records only whether it is set, and a refused edit records nothing
+new (D-8399). The card lists them under the act's line.
 
 **The routes.** `GET /api/testbox/admin` answers the card's connect state, the parity record and the newest ledger rows;
 `POST /api/testbox/admin/:sub` runs one act (`key`, `probe`, `pin`, `preflight`, `connect`, `settings-fleet`,
