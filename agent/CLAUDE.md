@@ -58,6 +58,10 @@ get wrong when editing `src/whitelist.ts`.
   value), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
   carrying one of those names is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the server's update inventory refuses to read as that file (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
   `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
+  One more grant, for the `stat` op ALONE (D-8382): the operator's `~/.ccrc` switch files (`CCRC_SWITCH_FILES`, derived
+  from the switchboard's `~/.ccrc` rows in `shared/switches.ts`), by literal path and canonical-path equality
+  (`checkCcrcSwitchStat`), so the server can say which stands. It is not part of `checkPath`: `read`, `readdir` and
+  `lstat` admit none of them.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
 - The **`update` op** (design 2026-09-20 §10) is one of the FIVE wire-triggered spawn classes outside the exec whitelist

@@ -1,5 +1,5 @@
-// Settings › Automation (settings spec §3.3, §5.4; D-5503): thirteen cards, in this order, each a `Section` with its
-// scope and purpose line: Stall watch, Temp root collector, Shadow lanes (D-8274, which reads and writes its own door),
+// Settings › Automation (settings spec §3.3, §5.4; D-5503): fourteen cards, in this order, each a `Section` with its
+// scope and purpose line: Stall watch, Overrides in force (D-8382, which reads its own read-only route), Temp root collector, Shadow lanes (D-8274, which reads and writes its own door),
 // Dispatches that never came back (D-7319), Cleanup pause,
 // Browser tools (D-8121), which reads the updates poll's fleet node and the fleet frame, Roll idle sessions (D-7453), which reads and writes its own door, Stop leftovers (D-7902), which reads the coord frame
 // through its one reader (`paneScopeStopMarker`) and writes its switch, Leftover processes (D-7994), Worktrees left behind (D-8114), which reads the frame's view, Backups (D-7860) and
@@ -18,6 +18,7 @@ import { ScopeSweepSection } from '../../fleet/ScopeSweepSection';
 import { DelegationAdoptSection } from '../../fleet/DelegationAdoptSection';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
 import { StallWatchSection } from '../StallWatchSection';
+import { OverridesSection } from '../../fleet/OverridesSection';
 import { RollIdleSection } from '../../fleet/RollIdleSection';
 import { PaneScopeStopSection } from '../../fleet/PaneScopeStopSection';
 import { BrowserToolsSection } from '../../fleet/BrowserToolsSection';
@@ -32,6 +33,7 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
   return (
     <>
       <StallWatchSection poll={view.stall} />
+      <OverridesSection />
       <CollectLaneSection poll={view.collect} />
       <ShadowLanesSection />
       <DispatchAbandonSection poll={view.dispatchAbandon} />

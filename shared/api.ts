@@ -14194,6 +14194,24 @@ export interface FleetHealth {
   backup?: BackupHealth;
 }
 
+/** `FleetHealth`'s reboot field (D-8382), at the foot as an interface merge, the disk block's rule, so no line cited above
+ *  moves. */
+export interface FleetHealth {
+  /**
+   * Whether the degraded-mode reboot (`POST /api/fleet/reboot`) is configured on the server box: both
+   * `CCRC_HETZNER_TOKEN` and `CCRC_FLEET_SERVER_ID` set in its environment. A boolean only: neither value is ever on the
+   * wire. Remote mode only (local mode has no reboot). Optional for the absence-permits reason: an older server omits it,
+   * and absent reads as unknown, so the button stays as it was and the route's 501 still answers a tap.
+   */
+  rebootConfigured?: boolean;
+}
+
+/** D-8382: the unreachable banner's words while `rebootConfigured` is `false`: the reboot cannot run, and the remedy.
+ *  The button is disabled beside them, so the operator learns it before the tap, not from a 501 mid-outage. */
+export const FLEET_REBOOT_NOT_CONFIGURED_TEXT = 'Reboot is not configured on this box.';
+export const FLEET_REBOOT_REMEDY_TEXT =
+  "To enable it, set CCRC_HETZNER_TOKEN and CCRC_FLEET_SERVER_ID in the server's ~/.ccrc/ccrc.env, then restart the server.";
+
 /** One subject of an `AttentionRow`: a session, and the run it belongs to where its lane knows one. */
 export interface AttentionSubject {
   readonly sessionId: string;

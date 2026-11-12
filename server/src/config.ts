@@ -81,6 +81,13 @@ export function dispatchAbandonMsOf(raw: string | undefined): number {
  * fleet, `local` is the single box that is both. A bare `CCRC_ROLE=` line is
  * absent (the house `||` rule); any other non-member is invalid, and says so.
  */
+/** D-8382: the degraded-mode reboot's target, or `null` when either key is unset or empty. The reboot route acts on the
+ *  pair; `GET /api/fleet/health` reports only whether there is one (`rebootConfigured`), so the token and the id never
+ *  leave the server. One function for both, so the button's state and the route's 501 cannot disagree. */
+export function fleetRebootTarget(c: Pick<CcrcConfig, 'hetznerToken' | 'fleetServerId'>): { token: string; serverId: string } | null {
+  return c.hetznerToken && c.fleetServerId ? { token: c.hetznerToken, serverId: c.fleetServerId } : null;
+}
+
 export function deriveRole(env: NodeJS.ProcessEnv, fleetMode: FleetMode): { role: NodeRole; roleSource: RoleSource } {
   const raw = env.CCRC_ROLE;
   if (isNodeRole(raw)) return { role: raw, roleSource: 'recorded' };

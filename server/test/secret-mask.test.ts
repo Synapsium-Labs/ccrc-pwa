@@ -1224,6 +1224,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/auth/passkeys': 'passkey ids and labels the operator set',
     '/api/auth/status': 'the auth state',
     '/api/fleet/health': "the mirror's counters, and the delegation lane's would-keep list (each tree's project, worktree name and parent session, D-8114): no session text",
+    '/api/fleet/overrides': "the switchboard's override names with a marker state word each, and the approvals topology's two words and file name: no session text (D-8382)",
     '/api/push/key': 'the VAPID public key',
     '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
     '/api/sessions/:id/commands': "the session's command files' names",

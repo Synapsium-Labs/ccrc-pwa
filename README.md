@@ -3295,7 +3295,8 @@ boundary has come for a while — the shape of a session wedged in Claude Code's
 records a send as `auto-compact <id>: ctx N% >= T%`, and every refusal past the cheap gates at most once per
 30 minutes per session as `compact-skip <id>: <reason>` — `pane-narrow`, `no-ctx-segment` (the status line carried
 no context reading), `post-swap` and `no-turns-since-compact` among them.
-`touch ~/.cc-sessions/autocompact-disabled` stops it fleet-wide.
+`touch ~/.cc-sessions/autocompact-disabled` stops it fleet-wide; while it stands, Settings › Automation › Overrides in
+force names it (D-8382).
 
 ### One memory store per project: `ccrc memory`
 
@@ -3791,7 +3792,7 @@ see "Fleet coordination" below.
 | `CCRC_ADMIN_MERGE` | fleet box, read by `ccd pr-admin-merge` at each call | `auto` (default) or `off`: whether a coordinator may land an approval-missing PR through the admin-merge door in a repository the fleet's GitHub identity administers and that has no merge queue (D-8124; "The admin-merge door", below). A refused or unreadable value reads as `off`. |
 | `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://<fleet address>:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
-| `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |
+| `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`), and the unreachable banner says so before the tap, with **Reboot** disabled (D-8382). |
 | `CCRC_FLEET_SERVER_ID` | server | Hetzner Cloud server ID of the fleet host — only used by the reboot action. |
 | `CCRC_AGENT_HOST` | agent | Bind interface, default `127.0.0.1`. Never `0.0.0.0` (the agent refuses it, and `::`, at boot) — name the private-network address the server reaches it on, explicitly. |
 | `CCRC_AGENT_PORT` | agent | Listen port, default `7789`. |
@@ -4027,7 +4028,18 @@ the last-known-good fleet snapshot instead of going blank:
   everything else running on that box, not just the fleet. Guards: `409` if
   `mode !== 'remote'`,
   `501` if `CCRC_HETZNER_TOKEN`/`CCRC_FLEET_SERVER_ID` aren't set, `502` on a
-  Hetzner API error, `202` on success.
+  Hetzner API error, `202` on success. The `501` is said before the tap (D-8382): in remote mode the health answer
+  carries `rebootConfigured` (a boolean, never the token or the id, from the one function the route asks), and while it
+  is `false` the unreachable banner disables **Reboot** and names the remedy: set both keys in the server's
+  `~/.ccrc/ccrc.env`, then restart the server. An older server omits the field and the button stays as it was.
+- `GET /api/fleet/overrides` (D-8382) is read only, session-gated when armed, no box token: every emergency override
+  the switchboard declares (`overrideSwitchNames`, `shared/switches.ts`: each registry marker or fleet-host `~/.ccrc` file
+  whose writer is `hand-only`) with `set`, `clear` or `unmeasurable`, each read where it lives (a registry marker off the
+  registry listing through `readSwitches`, a `~/.ccrc` file through the agent's `stat`, which admits exactly the
+  switchboard's `~/.ccrc` names and nothing else there), and the server box's approvals topology (`boxes` one or two,
+  whether `~/.ccrc/approvals-single-box` stands there). Settings › Automation › Overrides in force lists the overrides that
+  stand, each with what it does, what its absence means and the file to remove at a terminal; Settings › Security ›
+  Approvals is one line on the topology. Neither has a control: every override is placed and lifted at a terminal.
 
 ### Verifying a remote-mode deploy
 
