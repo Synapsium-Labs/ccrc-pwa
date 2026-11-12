@@ -20,11 +20,15 @@ for i in $(seq 1 "$N"); do
     T0=$EPOCHREALTIME
     ( sleep 1; ps -A -o pid=,ppid=,pgid=,stat=,command= > "$D/pre" 2>/dev/null ) &
     t0=$SECONDS; GOT=none
+    RC=''
     while :; do
       IFS= read -r -t 0.5 -u 8 line; rc=$?
+      RC="$RC $rc"
       if (( rc == 1 )); then GOT=eof; break; fi
       if (( SECONDS - t0 > 15 )); then GOT=never; break; fi
     done
+    echo "RCS=$RC"
+    echo "LASTLINE=[$line]"
     T1=$EPOCHREALTIME
     echo "RESULT=$GOT t0=$T0 t1=$T1"
     if [ "$GOT" = never ]; then
@@ -36,12 +40,17 @@ for i in $(seq 1 "$N"); do
       awk -v pg="$TPID" '$3==pg' "$D/pre"
       echo "--- now: anything still in that group, or a sleep 60 anywhere"
       ps -A -o pid=,ppid=,pgid=,stat=,command= | awk -v pg="$TPID" '$3==pg || ($5=="sleep" && $6=="60")'
-      echo "--- lsof of my own fds (how Darwin lsof names the FIFO)"
-      lsof -n -p $$ 2>&1 | grep -i -E "fifo|pipe|COMMAND" | head -8
-      echo "--- lsof by path"
-      lsof -n -- "$D/out" 2>&1 | head -5
-      echo "--- lsof of every sleep 60"
-      for p in $(ps -A -o pid=,command= | awk '$2=="sleep" && $3=="60" {print $1}'); do lsof -n -p "$p" 2>/dev/null | awk 'NR==1 || $4 ~ /^[0-9]+[uwr]/' | head -6; done
+      echo "--- W ($W) and the reading shell ($BASHPID) now"
+      ps -A -o pid=,ppid=,pgid=,stat=,command= | awk -v w=$W -v me=$BASHPID '$1==w || $1==me || $2==me'
+      echo "--- lsof of the reading shell (every fd naming the FIFO)"
+      lsof -n -p $BASHPID 2>&1 | awk 'NR==1 || /FIFO|out$/'
+      echo "--- a second reader on the SAME fd 8: select, then read(2)"
+      gtimeout -k 1 3 python3 -I -c 'import os,select
+r,_,_=select.select([8],[],[],0.5); print("SELECT readable=%s" % bool(r))
+b=os.read(8,100); print("READ bytes=%d %r" % (len(b), b[:40]))' 8<&8 2>&1; echo "py rc=$?"
+      echo "--- bash read again: -t 0.5, then -t 2"
+      IFS= read -r -t 0.5 -u 8 line; echo "read -t 0.5 rc=$? line=[$line]"
+      IFS= read -r -t 2 -u 8 line; echo "read -t 2 rc=$? line=[$line]"
     fi
     kill $W 2>/dev/null; pkill -P $BASHPID 2>/dev/null; exec 8<&-
     # ONLY THIS ITERATION'S OWN PROCESSES: the timeout's group, read from the
