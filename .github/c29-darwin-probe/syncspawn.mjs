@@ -21,7 +21,12 @@ let timeouts = 0, other = 0, maxWall = 0;
 const walls = [];
 for (let i = 1; i <= ITERS; i++) {
   const t0 = Date.now();
-  const r = spawnSync('bash', argv, { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: 20_000, detached: att === 'detached', env: { ...process.env, LC_ALL: 'C' } });
+  const stdinFrom = process.env.C29_STDIN === 'file' ? 'file' : 'pipe';
+  let fd = null;
+  if (stdinFrom === 'file') { fs.writeFileSync(`${process.env.RUNNER_TEMP ?? '/tmp'}/c29.stdin`, input); fd = fs.openSync(`${process.env.RUNNER_TEMP ?? '/tmp'}/c29.stdin`, 'r'); }
+  const opts = { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 20_000, detached: att === 'detached', env: { ...process.env, LC_ALL: 'C' } };
+  const r = spawnSync('bash', argv, stdinFrom === 'file' ? { ...opts, stdio: [fd, 'pipe', 'pipe'] } : { ...opts, input });
+  if (fd !== null) fs.closeSync(fd);
   const wall = Date.now() - t0;
   walls.push(wall); maxWall = Math.max(maxWall, wall);
   if (r.pid) { try { process.kill(-r.pid, 'SIGKILL'); } catch { /* gone */ } }
@@ -35,4 +40,4 @@ for (let i = 1; i <= ITERS; i++) {
   }
 }
 walls.sort((a, b) => a - b);
-console.log(`SYNCSPAWN ${label} ${what} ${att} ${KB}KB: n=${ITERS} timeouts=${timeouts} other=${other} wall p50=${walls[Math.floor(ITERS / 2)]} p99=${walls[Math.floor(ITERS * 0.99)]} max=${maxWall}`);
+console.log(`SYNCSPAWN ${label} ${what} ${att} ${KB}KB stdin=${process.env.C29_STDIN === 'file' ? 'file' : 'pipe'}: n=${ITERS} timeouts=${timeouts} other=${other} wall p50=${walls[Math.floor(ITERS / 2)]} p99=${walls[Math.floor(ITERS * 0.99)]} max=${maxWall}`);
