@@ -463,8 +463,10 @@ def bridge_section(st):
     # Each unexplained name's count in the stats file's `names` (drift's baseline reads its growth). Every name the
     # bridge lists has a count there: past a family's cap the listed name is `overflow` itself, which is counted like
     # any name. So a listed name with no count means a file not as the bridge writes it (a hand edit, another writer,
-    # or a count `_load` dropped as not an integer while it kept the name listed); it counts 0, and so reads `grew`
-    # or `fell` against a baseline, never a silent hold. The two MARKERS are counted whether listed or not. Names
+    # or a count `_load` dropped as not an integer while it kept the name listed); it counts 0. Against a baseline
+    # that had a count it reads `fell` (unmeasured); a name with no count at BOTH readings reads `held` at 0, so its
+    # growth is invisible, which only a file not written by the bridge can cause. The two MARKERS are counted whether
+    # listed or not. Names
     # bounded to one printed name add up.
     for family in set(unexplained) | set(held):
         listed = unexplained.get(family) if isinstance(unexplained.get(family), list) else []
