@@ -167,9 +167,10 @@ describe('the skip engages only behind the server\'s word (D-5239, spec §6.1)',
   // answers ok and lists the word (the iterating case).
   //
   // D-8354: a row's `at` is relative to the moment its case runs, never to the file's collection. The table used to
-  // read the clock once, at collection, and a macOS shard reached a case 176 s later: `parseServerCaps` judged the row
-  // inside the 180 s lease, then the Stop and the PreCompact ran, the hook read its clock past the lease, and the two
-  // "disagreed" about a file whose age the case itself had let cross the boundary between the two reads. So each row
+  // read the clock once, at collection. On a macOS shard the row built 175 s old (a 5 s margin) was reached about
+  // 5.5 s after collection: `parseServerCaps` judged it inside the 180 s lease, then the Stop and the PreCompact ran,
+  // the hook read its clock past the lease, and the two "disagreed" about a file whose age the case itself had let
+  // cross the boundary between the two reads. So each row
   // is a function of the moment, rendered after the Stop, and the parser is asked at both ends of the hook's run: the
   // hook reads its clock between them, a row's answer is one interval of that clock, and so the hook must answer what
   // both ends answer. A runner too slow for a row's 5 s margin says so, instead of naming a disagreement.

@@ -3414,20 +3414,22 @@ Placed directly after C27, away from C28's spot after C26.
 
 **Why.** The daily full run on `main`, 43147459620 at `80d5823be`, failed one job only, `test-macos 4/8`, with two red
 tests: `session-hook-prune-deny.test.ts`'s "dqsub: deny linearity from 64 to 128 KB" (one jq run past the 120 s spawn
-timeout) and `session-hook-compact-carry.test.ts`'s first grammar row (the hook and `parseServerCaps` disagreed). A
+timeout) and `session-hook-compact-carry.test.ts`'s eleventh grammar row (the hook and `parseServerCaps` disagreed). A
 promotion to stable needs that leg green. Root cause first, for each file. Test files only: `ccd/session-hook.sh` is
 under another programme's claim.
 
 **What was found and done.** Both reds were the tests' measures, not the code under test. compact-carry's grammar table
-read the clock once, at collection. The red row reached its case about three minutes later, at the edge of the 180 s
-lease, and the parser's clock and the hook's fell on either side of it. Each row is now rendered when its case runs, and
+read the clock once, at collection. The red row was built 175 s old on purpose, a 5 s margin, and the shard reached it
+about 5.5 s after collection, at the edge of the 180 s lease, so the parser's clock and the hook's fell on either side
+of it. Each row is now rendered when its case runs, and
 the parser is asked at both ends of the hook's run. prune-deny's CPU probe fed jq its 128 KB input through a detached
-`spawnSync`'s `input`. On macOS that hung in 8 of 6000 runs on a hosted runner, with every byte delivered and the end of
-input never, and in none of 6000 attached runs. The probe now hands the run its input as a regular file, and a new case
+`spawnSync`'s `input`. On a hosted macOS runner that hung, measured with `cat` in jq's place, in 8 of 6000 detached runs,
+with every byte delivered and the end of input never, and in none of 6000 attached runs. That the daily jq red was this
+hang is inferred from its matching symptoms. The probe now hands the run its input as a regular file, and a new case
 pins that. The hook, the bounds, `spawnGroup.ts`, `macos.yml` and the gate are unchanged. Evidence and runs are in
 `c29.md`.
 
-- **D-8354** - `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: `spawnSyncGroup`'s other callers that pass an input are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
+- **D-8354** - `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
 
 **Acceptance.** Both files are green in a `macos.yml` dispatch at the PR's tip, with the repeat runs recorded in `c29.md`.
 A lease or grammar mutation of the hook reds a grammar row. The cost cases red on a super-linear program, and the new

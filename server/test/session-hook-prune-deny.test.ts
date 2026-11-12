@@ -197,10 +197,11 @@ describe('this PR\'s own body is not refused by the prune row', () => {
 //
 // D-8354: the input reaches the run from a FILE, never through `spawnSync`'s `input`. On macOS a detached `spawnSync`
 // (which `spawnSyncGroup` is) that writes a 128 KB `input` into the child's stdin socket now and then delivers every
-// byte and never the end of input: in 8 of 6000 such runs on a hosted macOS runner the child had read all 131 161 bytes
-// and sat in `read(2)` on its stdin while node waited in `kevent`, until the timeout (none in 6000 attached runs, none
-// on Linux). The daily run's red was that: one jq run past the 120 s timeout with nothing on its stderr, beside a
-// normal 64 KB case. A regular file ends where it ends, so the run's CPU, the thing measured, is unchanged.
+// byte and never the end of input: in 8 of 6000 such runs of `cat` on a hosted macOS runner the child had read all
+// 131 161 bytes and sat in `read(2)` on its stdin while node waited in `kevent`, until the timeout (none in 6000
+// attached runs). The daily run's red, one jq run past the 120 s timeout with nothing on its stderr beside a normal
+// 64 KB case, is inferred to be that hang from its matching symptoms. A regular file ends where it ends, so the run's
+// CPU, the thing measured, is unchanged.
 type CpuRun = { status: number | null; stdout: string; stderr: string; cpuMs: number };
 /** `argv` run once under bash, `input` on its stdin (from a file): its status, its own output, and the CPU time it spent. */
 const childCpu = (argv: readonly string[], input: string, timeoutMs = scaled(120_000)): CpuRun => {
