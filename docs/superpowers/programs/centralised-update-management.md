@@ -7356,7 +7356,8 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   whole halt banner and focus falls to `<body>`. **Fixed by D-8340 (2026-11-11):** the focus goes to the landmark that
   is shown.
 - **R29 (wave 19, Reading 14; the stable path).** The heir-guard case in `update-store-nodes.test.ts` can red by load at
-  20 s on the shipped body too, the same class as B5.
+  20 s on the shipped body too, the same class as B5. **Fixed by D-8387 (2026-11-12):** one case per state and detail,
+  each one store's work under its own timeout.
 - **R30 (wave 19, Reading 16; for a PWA wave).** A background poll that brings a halt disables a focused Install or
   Update, and focus drops to `<body>`. The fix shape is a layout effect keyed on the halted flag. **Fixed by D-8340
   (2026-11-11):** the focus moves to the one halt line.
@@ -7420,6 +7421,8 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   under a deleted fixture HOME and exits 1. It reproduces on current main. The process ends on its own later. The
   panel on wave 24's rounds measured the same shape in `ccrc-uninstall.test.ts`'s codex-namesake row instead (its
   fixture web server outlives the file, exit 1 with every test passed), on the wave's tip and on its merge base alike.
+  **Fixed by D-8387 (2026-11-12):** the install row's teardown reaps its fake manager's units and waits out their
+  supervisors; the uninstall row was fixed by D-6941 (#1549).
 - **R43 (review 895's survey; wave 32's pattern elsewhere).** Five test helpers resolve on a child's `exit` and then
   read what its stdout or stderr collected, the race wave 32 fixed. Two read positively and can red the same way:
   `delegation-watch.test.ts` (about :3108, read at :3111) and `run-tmp.test.ts`'s `nested()` (about :722, read at
@@ -7493,10 +7496,13 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
     shared locale pin but would not catch a later pin narrowed to that arm alone.
   - The invalid-byte row may fall back to C.UTF-8 when en_US.utf8 is unavailable instead of skipping; the reviewer
     measured the same defect under both. These are residue, not permission to edit the frozen W29 branch.
+  - **Fixed by D-8387 (2026-11-12):** the example, the scheme-arm row and the locale fallback. The extglob save and
+    restore was already gone with #1946 (D-7078, D-7289).
 
 - **R52 (wave 29, review 1013; minor, carried after acceptance).** The settings-reader test header still names
   rows L1-L4, omitting the existing L5 and new L6. Comment drift only; no behavioral gap or permission to edit the
   frozen branch. The other advisory was superseded by the main reviewer's independent named-suite reruns.
+  **Fixed by D-8387 (2026-11-12):** the header names L5 and L6.
 
 ## Next-wave brief
 

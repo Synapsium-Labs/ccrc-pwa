@@ -9,7 +9,7 @@ import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import { describeLinux } from './platformFixtures.js';
 import { verifyMarker } from '../../shared/mark.mjs';
-import { codexRoster, plantSystemd, killLaneProcesses, spawnListener, managerCalls, spineRunCalls, ccrcFunction, freeLanes, portAccepts, laneAnswer, plantLaneAuth, laneUnits, registerLaneCleanup, codexAuthDir, authDirOf, plantForeignUsage, externalCodexRow, plantExternalLauncher, EXTERNAL_LAUNCHER, doctorClasses, stateCallsNaming, type LanePorts } from './codexLaneFixture.js';
+import { codexRoster, plantSystemd, killLaneProcesses, reapFakeUnits, spawnListener, managerCalls, spineRunCalls, ccrcFunction, freeLanes, portAccepts, laneAnswer, plantLaneAuth, laneUnits, registerLaneCleanup, codexAuthDir, authDirOf, plantForeignUsage, externalCodexRow, plantExternalLauncher, EXTERNAL_LAUNCHER, doctorClasses, stateCallsNaming, type LanePorts } from './codexLaneFixture.js';
 import { here, treeFile, placed, freshBox, runInstall, read, dotCcrc, mtime, unitDir, systemctlCalls, READY, REPO_CCRC, runtimeDir, laneDir, generations, venvCalls, stateChanges, doctorCode, runtimePython, writeRuntimeFixture, plantRuntimeTemplate, codexBox, startLane, runStepHarness, FIXTURE_REQUIREMENT, runRuntimeStep, runTiersStep, runUsageStep, USAGE_DEGRADED, argvOf, usageEnables, usageRow, fleetBox, PROVISIONED_BOX_TOKEN, FLEET_BOX_CLASSES, expectFleetBoxClasses, plantFlippedLaneModels, type StepRun } from './ccrc-installFixture.js';
 
 removeTmpFixturesEachTest();
@@ -870,9 +870,16 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
   const homes: string[] = [];
   // `killLaneProcesses` first runs the registered product stop while fixture
   // state exists, then ends every current-run child Task 4's fixture tracked.
+  // R42 (D-8387): then `reapFakeUnits` ends any unit the fake user manager
+  // still runs and waits out every supervisor it spawned. Without it one
+  // supervisor outlived the file and its HOME, and the run exited 1 with every
+  // case passing.
   afterEach(async () => {
-    for (const h of homes.splice(0)) await killLaneProcesses(h);
-  });
+    for (const h of homes.splice(0)) {
+      await killLaneProcesses(h);
+      await reapFakeUnits(h);
+    }
+  }, scaled(60_000));
 
   /** codex-a RUNNING through the fake user manager: first install (builds the
    *  runtime from the passing template), then `startLane` (registry,
