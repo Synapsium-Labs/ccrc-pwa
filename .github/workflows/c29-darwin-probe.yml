@@ -1,0 +1,57 @@
+# THROWAWAY (Task C29, D-8354): repeats the prune-deny cost case's jq
+# invocation and the two red files on macOS, bare and under a test shard's
+# load. Removed before the wave-done; it runs on a push to the task's own
+# branch only.
+name: c29-darwin-probe
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ['ws/polish-c29']
+    paths: ['.github/c29-darwin-probe/**', '.github/workflows/c29-darwin-probe.yml']
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install system dependencies
+        run: .github/ci/bounded.sh 300 brew install bash tmux flock jq coreutils
+      - name: Install
+        working-directory: server
+        run: ../.github/ci/bounded.sh 180 npm ci
+      - name: Versions
+        run: |
+          jq --version; bash --version | head -1; command -v bash jq; sysctl -n hw.ncpu hw.memsize; uptime
+      - name: The jq invocation, bare
+        working-directory: server
+        run: node ../.github/c29-darwin-probe/jqcost.mjs 100 bare
+      - name: The jq invocation, under a test shard's load
+        working-directory: server
+        run: |
+          ( ./node_modules/.bin/vitest run --maxWorkers=2 test/ccd-child-reclaim-pin.test.ts test/ccd-reclaim-tail-window.test.ts test/ccd-reclaim-tail-mounts.test.ts >/dev/null 2>&1 ) &
+          sleep 30
+          node ../.github/c29-darwin-probe/jqcost.mjs 100 shard
+          kill %1 2>/dev/null || true
+      - name: compact-carry alone, repeated
+        working-directory: server
+        run: bash ../.github/c29-darwin-probe/repeat.sh 5 cc-bare test/session-hook-compact-carry.test.ts
+      - name: prune-deny's dqsub cases alone, repeated
+        working-directory: server
+        run: bash ../.github/c29-darwin-probe/repeat.sh 5 pd-dqsub test/session-hook-prune-deny.test.ts dqsub
+      - name: both files under a test shard's load
+        working-directory: server
+        run: |
+          ( ./node_modules/.bin/vitest run --maxWorkers=2 test/ccd-child-reclaim-pin.test.ts test/ccd-reclaim-tail-window.test.ts test/ccd-reclaim-tail-mounts.test.ts >/dev/null 2>&1 ) &
+          sleep 30
+          bash ../.github/c29-darwin-probe/repeat.sh 3 cc-shard test/session-hook-compact-carry.test.ts
+          bash ../.github/c29-darwin-probe/repeat.sh 3 pd-shard test/session-hook-prune-deny.test.ts dqsub
+          kill %1 2>/dev/null || true
