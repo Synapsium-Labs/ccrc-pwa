@@ -180,10 +180,32 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
 
   it('live: a process that ignores SIGTERM is waited GRACEFUL_STOP_TERM_WAIT_S, then killed as today', () => {
     arm();
-    run({ pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1 GRACEFUL_STOP_OBSERVE_S=3' });
+    // `_graceful_stop_before` is timed in the snippet: the wait itself is pinned, not the `alive=` note. The OBSERVE
+    // window (8 s) is far from the TERM bound (1 s), so a wait that read the wrong constant lands past the ceiling.
+    run({
+      pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1 GRACEFUL_STOP_OBSERVE_S=8',
+      pre: `eval "$(declare -f _graceful_stop_before | sed '1s/_graceful_stop_before/_graceful_stop_before_real/')"
+  _graceful_stop_before() { local a; a=$(_plat_epoch_ms); _graceful_stop_before_real "$@"; echo "before-ms $(( $(_plat_epoch_ms) - a ))" >> "$HOME/ccd-calls"; }`,
+    });
     expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
     expect(signals()).toEqual(['TERM', 'HUP']);
+    const ms = Number((h.calls().find((l) => l.startsWith('before-ms ')) ?? '').slice(10));
+    expect(ms).toBeGreaterThanOrEqual(1000);
+    expect(ms).toBeLessThan(3500);
   });
+
+  it('live: a frozen clock still ends the wait, by the iteration cap (alive=<bound>)', () => {
+    arm();
+    // a watchdog of the snippet kills it after 15 s, so a wait with no cap is a prompt red and not a hang
+    run({
+      pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1',
+      pre: `_plat_epoch_ms() { echo 1700000000000; }
+  ( sleep 15; kill -KILL $$ ) >/dev/null 2>&1 &
+  _WD=$!`,
+      verb: `_watchdog_resume_run ${ID}; kill $(pgrep -P $_WD) $_WD 2>/dev/null`,
+    });
+    expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
+  }, 20_000);
 
   it('live: a recycled or vanished pid is never signalled', () => {
     arm();
@@ -216,6 +238,28 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     });
     expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=shadow unmeasured=stat-unreadable`]);
     expect(gs().join()).not.toContain('exited=');
+  });
+
+  it('a process that exits between the liveness check and the start-time read is exited=, not unreadable', () => {
+    run({
+      pane: { hup: 'ignore' },
+      // call 1 (step 3) is real; call 2 (the observer's) reaps the pane process, then fails as a read of its stat does
+      pre: WRAP_PSTART('if (( _CIN == 1 )); then _ci_proc_start_real "$@"; return; fi; kill -KILL "$1"; wait "$1" 2>/dev/null; _CI_PSTART=""; return 1'),
+    });
+    expect(gs()).toEqual([expect.stringMatching(/^graceful-stop lane-a-project-a: site=limit-resume mode=shadow exited=\d+$/)]);
+    expect(gs().join()).not.toContain('unmeasured');
+  });
+
+  it('_ci_proc_start: a stat that opens and then fails to read answers rc 1 and the shell lives (set -u)', () => {
+    // /proc/self/mem is a regular file that opens, and a read at offset 0 fails with EIO; under `set -u` a `local s rest`
+    // left `s` unset after the failed read and the shell died on `[[ -n "$s" ]]`
+    fs.mkdirSync(fx('rderr', '12345'), { recursive: true });
+    fs.symlinkSync('/proc/self/mem', fx('rderr', '12345', 'stat'));
+    const out = h.sh(`_CI_PROC="$HOME/fx/rderr"
+  { read -r _x < "$_CI_PROC/12345/stat"; } 2> "$HOME/fx/rderr.err"; echo "plain-read-rc=$? msg=$(cat "$HOME/fx/rderr.err")"
+  _ci_proc_start 12345; echo "rc=$? alive pstart=[$_CI_PSTART]"`);
+    expect(out, 'a plain read of the file is a read error, not an EOF').toMatch(/plain-read-rc=1 msg=.*read error: Input\/output error/);
+    expect(out).toContain('rc=1 alive pstart=[]');
   });
 
   it('no start time: unmeasured=no-start-time, and live sends nothing', () => {

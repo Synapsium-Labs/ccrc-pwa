@@ -19,7 +19,8 @@ notes in §3, §5.2, §5.3, §5.6, §8, §9, §10 and §11 item 5, among them st
 programme's D-5241, which this programme accepted (D-8103) ·
 rev 12 (2026-11-11) corrects the stale neighbours that wave 5 and #2603 left (the §1 lead-in, §1.2 mechanism 2, §5.2,
 §5.3, §6, §8, §11 item 7), records stage 3 as waves 6a to 6c with the design calls for 6b and 6c (§5.3, D-8316 to
-D-8332), and amends §4 and §12 for the not-stalled wake (C15) ·
+D-8332), and amends §4 and §12 for the not-stalled wake (C15), correcting §4's "constant" prompt and §12's two notes
+(the fallback's "constant" text and the Codex lane's delegation premise) ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -232,8 +233,8 @@ auto-home at 04:17 UTC the next day.
   resumes it; that is a request, and §9 measures whether it is honoured.
 - **Hooks** record launches (PostToolUse) and deliver the manifest (SessionStart). They never deny a launch.
 - **The server** reads what ccd wrote and shows it; it never parses Claude Code's journal formats, never mails a
-  resume list, and runs nothing but `tmux` and `ccd`. *(Amended 2026-11-11, rev 12, C15: the stall watch mails a
-  restarted session its composed list once, D-8325.)*
+  resume list, and runs nothing but `tmux` and `ccd`. *(Amended 2026-11-11, rev 12, C15: from wave 6c, once armed, the
+  stall watch mails a restarted session its composed list once, D-8325.)*
 - **The operator** sees counts on the phone and on the run, overrides a refused swap with the counts in view,
   stops, or moves into a unit, the services doctor reports in dead scopes, and rules on §11.
 
@@ -429,7 +430,7 @@ and waits a bounded time, measured in this stage's own wave (rev 11, D-8104), be
   starts the observer's unit (under hibernate's coordination serialiser there, D-7541). Hibernate reuses D-7902's pane
   read (`ccd/ccd#_pane_scope_of`) and adds none. The observer beside D-7902's reap is legitimately different (D-8319).
 - **The hang-up is the same shutdown.** Today's `tmux kill-session` already hangs up Claude Code's terminal, and its
-  SIGHUP and SIGTERM handlers call one `shutdown()` (builds 2.1.314 to 2.1.322, read in the installed bundles). So the
+  SIGHUP and SIGTERM handlers call one `shutdown()` (builds 2.1.314 and 2.1.322, read in the installed bundles). So the
   shadow sends no new signal: it times that shutdown with the terminal already gone, an upper bound on the true exit.
 - **`graceful-stop-live` (D-8318).** Hand-only, with no writer in the tree. With it present, the stop sends `SIGTERM` to
   the pane's process, proved by its start time at the moment of the signal, waits up to `GRACEFUL_STOP_TERM_WAIT_S`
@@ -451,8 +452,7 @@ dropped and counted, at write and again at compose.
 closed delegation broker's spool, which is legitimately different under the consolidation rule: the spool keeps about
 24 hours where the record lives until the manifest retires the item (#2603's waits to a weekly reset last days); the
 spool's consumer is the server's ingest where the record's is ccd on the box at stop time; and the spool keeps
-subagent rows where the record drops them (the drop rule's reason: a subagent's launch is its parent's to resume, not
-this session's). There is still one parser: the hook's existing delegation-spool jq parse gains a second sink, adding
+subagent rows where the record drops them (§5.3 has dropped rows from a subagent's own hook input since before rev 12). There is still one parser: the hook's existing delegation-spool jq parse gains a second sink, adding
 `resumeFromRunId` and `SendMessage` rows. This settles, and reverses, the ledger's carried proposal to extend the
 broker's spool and server projection rather than add a second writer. A resumed agent comes back under a new agent id
 (wave 5, §2.5 of its results note), which 6b's retire rule expects.
