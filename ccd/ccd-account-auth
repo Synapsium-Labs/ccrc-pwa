@@ -885,13 +885,32 @@ _auth_drain_read() {   # <seconds> -> one line from fd 8 with NO select(), into 
   # 5.3: `f(){ "$@" & wait; }; f cat <&8` prints nothing, while a command that
   # reads `-u 8` gets the bytes. `7<&- 9<&-` so
   # the reader holds neither the code channel nor a write end on `in.child`.
-  AUTH_DRAINED=$(_auth_timeout "$1" "$BASH" -c \
+  #
+  # `-p`, so the reader's bash runs no BASH_ENV or ENV and imports no exported
+  # function (review 1849, M1). Its stdout IS the drained text: a BASH_ENV that
+  # prints would land in the stream the pump parses, one that sleeps would spend
+  # the drain's whole bound and answer a timeout, and an exported `read` would
+  # replace the builtin. Measured in that review; pinned by the BASH_ENV case.
+  AUTH_DRAINED=$(_auth_timeout "$1" "$BASH" -p -c \
     'printf -v n "\n"; c=""; while IFS= read -r -N 1 -u 8 c; do printf %s "$c"; [ "$c" = "$n" ] && exit 0; done; printf %s "$c"; exit 1' \
     7<&- 9<&- 2>/dev/null)
 }
 
+_auth_drain_secs() {   # <tick> <seconds left> -> the drain read's bound: the tick, at most what is left
+  # A TICK THAT IS NOT A POSITIVE NUMBER IS 1 (review 1849, M2). `0` and `0.0`
+  # pass the number check, and a zero deadline is no deadline to GNU `timeout`,
+  # so the drain would be unbounded. `10#` because a whole part like `08` is not
+  # octal here, and a bare `(( 08 ))` writes a bash error to stderr and then
+  # picks the wrong arm (M3).
+  local t=$1 left=$2
+  [[ $t =~ ^[0-9]+(\.[0-9]+)?$ && $t =~ [1-9] ]] || t=1
+  (( 10#${t%%.*} < left )) || t=$left
+  printf '%s\n' "$t"
+}
+
 _auth_pump() {   # [child pid] — the one loop: the child's stream out, the operator's code in
-  # `child` is the pid whose exit licenses the drain read below. The pane methods
+  # `child` is the pid whose exit licenses the drain read below, and the one the
+  # backstop TERMs. The pane methods
   # spawn through `_auth_spawn_pty_child`, which sets AUTH_CHILD; `login` spawns
   # its own and passes it.
   local line rc pending='' shown='' child=${1:-$AUTH_CHILD} r left t
@@ -913,8 +932,18 @@ _auth_pump() {   # [child pid] — the one loop: the child's stream out, the ope
       # given. Kill it so `wait` can answer, and record WHICH ending this was:
       # `wait` reports 143, which on its own reads as "someone killed the mint"
       # and would be stamped `failed` over a state the caller promises.
+      #
+      # THE PUMP'S OWN CHILD, NOT AUTH_CHILD (review 1849, F2). `login` spawns
+      # without `_auth_spawn_pty_child`, so AUTH_CHILD is empty there and this
+      # signal used to reach nobody. That was harmless only where a `timeout`
+      # binary with `-k` had already killed the mint. On `_auth_timeout`'s
+      # pure-bash arm, which sends one TERM and never escalates (D-2764), a mint
+      # that ignores TERM kept the shim alive, and `login`'s `wait` then blocked
+      # until the mint chose to exit. Older than D-8345. TERMing the shim, as the
+      # pane methods always did (`child` defaults to AUTH_CHILD there), lets
+      # `wait` answer.
       AUTH_EXPIRED=1
-      kill -TERM "$AUTH_CHILD" 2>/dev/null
+      kill -TERM "$child" 2>/dev/null
       return 0
     fi
     line=''
@@ -930,10 +959,8 @@ _auth_pump() {   # [child pid] — the one loop: the child's stream out, the ope
     # `read -t` as rc 1, so this arm is reached there only in D-2736's case.
     if (( rc > 128 )) && [[ -n "$child" ]] && ! kill -0 "$child" 2>/dev/null; then
       left=$(( bound - (SECONDS - t0) ))
-      t=$CCRC_AUTH_TICK
-      [[ $t =~ ^[0-9]+(\.[0-9]+)?$ ]] || t=1
-      (( ${t%%.*} < left )) || t=$left
       if (( left > 0 )); then
+        t=$(_auth_drain_secs "$CCRC_AUTH_TICK" "$left")
         _auth_drain_read "$t"; r=$?
         line="$line$AUTH_DRAINED"
         (( r > 1 )) || rc=$r

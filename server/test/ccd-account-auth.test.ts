@@ -2070,6 +2070,43 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
 // instead of waiting on a macOS leg that gets cancelled before it reports.
 // What is NOT claimed here is anything about BSD `script(1)`; that lives in
 // `script-shim-platform.test.ts` and only macOS can answer it.
+/** A PATH with every program the runner's PATH has EXCEPT a deadline binary,
+ *  so `_auth_timeout` takes its pure-bash arm: `"$@" &` under a watcher that
+ *  sends one TERM and never escalates (D-2764). That arm is what a stock macOS
+ *  box runs, and the suite otherwise never reaches it, because the runner
+ *  carries coreutils. Links, first directory wins, so PATH's order holds; the
+ *  scripts that use it check `command -v timeout gtimeout` themselves, as
+ *  `ccrc-account.test.ts`'s contained PATH does, so a link that slipped through
+ *  reds the case instead of letting it pass about the other arm. */
+const PURE_BASH_ARM_GUARD =
+  'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then '
+  + 'printf \'arm=a deadline binary is still on PATH\\n\' > "$OUT"; exit 90; fi';
+const pathWithoutTimeout = (envPath: string): string => {
+  const bin = path.join(h.home, 'no-timeout-bin');
+  if (fs.existsSync(bin)) return bin;
+  fs.mkdirSync(bin);
+  for (const dir of envPath.split(':')) {
+    let names: string[];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (name === 'timeout' || name === 'gtimeout') continue;
+      try { fs.symlinkSync(path.join(dir, name), path.join(bin, name)); } catch { /* an earlier directory has it */ }
+    }
+  }
+  return bin;
+};
+
+/** Stand-ins for the pump's tick read, its seam `_auth_pump_read` (D-8345).
+ *  LOST_EOF is the faithful one: the real tick read, except that the end of the
+ *  stream answers 142, as a timeout, every time, as macOS's `read -t` did. */
+const LOST_EOF = `_auth_pump_read() {
+    local r=0; _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line || r=$?
+    if (( r == 1 )); then sleep "$CCRC_AUTH_TICK"; return 142; fi
+    return "$r"; }`;
+/** BLIND is the worst case: select() never reports fd 8 readable at all, so
+ *  every byte the pump forwards has to come through the drain read. */
+const BLIND = `_auth_pump_read() { line=''; sleep "$CCRC_AUTH_TICK"; return 142; }`;
+
 describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)', () => {
   /** Drive one spawn+pump+wait cycle with the arm forced, and report what
    *  happened through a FILE.
@@ -2084,16 +2121,23 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
     mint: string; code?: string; secs?: string; grace?: string; noDeadline?: boolean;
     /** Bash defining a stand-in for the pump's tick read (D-8345's seam), after sourcing. */
     tickRead?: string; strays?: 'end';
+    /** Run with no deadline binary on PATH: `_auth_timeout`'s pure-bash arm. */
+    pureBashArm?: boolean;
+    /** Bash run after the spawn, before the pump. */
+    afterSpawn?: string;
   }): Record<string, string> => {
     const out = path.join(h.home, `drive-${os}.txt`);
     const script = `
+      OUT="${out}"
       source "${HELPER}"
       CCD_OS=${os}; AUTH_ID=claude-a
+      ${opts.pureBashArm ? PURE_BASH_ARM_GUARD : ''}
       ${opts.noDeadline ? '_auth_timeout() { shift; "$@"; }' : ''}
       ${opts.tickRead ?? ''}
       _auth_open_pipes || exit 9
       _auth_spawn_pty_child bash -c "$MINT"
       child=$AUTH_CHILD; exec 8<"$AUTH_RUN/out"
+      ${opts.afterSpawn ?? ''}
       [ -n "\${CODE:-}" ] && printf '%s\\n' "$CODE" >&9
       t0=$SECONDS
       _auth_pump >"${out}.pump"; took=$(( SECONDS - t0 )); wait "$child"; rc=$?
@@ -2116,12 +2160,11 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
       CCRC_AUTH_TIMEOUT: opts.secs ?? '600', CCRC_AUTH_PUMP_GRACE: opts.grace ?? '10',
       MINT: opts.mint, CODE: opts.code ?? '',
     }, { systemd: true, tmux: true });
-    // 20s is well under vitest's own patience and well over every case here;
-    // a case that reaches it has HUNG, which is the defect being pinned.
-    // IN A PROCESS GROUP OF ITS OWN (#172, D-5894): a hang is killed with everything it started, and a
-    // `noDeadline` run, which strands its mint ON PURPOSE (the pump's backstop TERMs the pty wrapper and the
-    // mint under it runs on), has that mint ended through the group when it returns. A hang leaves the file
-    // below absent or stale.
+    if (opts.pureBashArm) env['PATH'] = pathWithoutTimeout(env['PATH'] ?? '');
+    // 20s is well under vitest's own patience and well over every case here; a case that reaches it has HUNG,
+    // which is the defect being pinned. IN A PROCESS GROUP OF ITS OWN (#172, D-5894): a hang is killed with
+    // everything it started, and a `noDeadline` run, which strands its mint ON PURPOSE (the pump's backstop TERMs
+    // the pty wrapper and the mint under it runs on), has that mint ended through the group when it returns.
     spawnSyncGroup('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore', encoding: 'utf8' },
       { strays: opts.noDeadline || opts.strays === 'end' ? 'end' : 'throw' });
     if (!fs.existsSync(out)) return { hung: 'yes' };
@@ -2172,18 +2215,9 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
     // `select()` can then call a FIFO with no writer "not readable" for good, so
     // bash's `read -t` consumes the EOF and answers 142 (C27, D-8344, measured
     // on macOS). Linux cannot show that, so these drive the pump's own seam,
-    // `_auth_pump_read`, with stand-ins that answer the way Darwin did. What only
-    // a Mac can show, that the real `read -t` does this, is in c28.md.
-    //
-    // LOST_EOF is the faithful one: the real tick read, except that the end of
-    // the stream answers 142, as a timeout, every time.
-    const LOST_EOF = `_auth_pump_read() {
-        local r=0; _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line || r=$?
-        if (( r == 1 )); then sleep "$CCRC_AUTH_TICK"; return 142; fi
-        return "$r"; }`;
-    // BLIND is the worst case: select() never reports fd 8 readable at all, so
-    // every byte the pump forwards has to come through the drain read.
-    const BLIND = `_auth_pump_read() { line=''; sleep "$CCRC_AUTH_TICK"; return 142; }`;
+    // `_auth_pump_read`, with stand-ins that answer the way Darwin did (LOST_EOF
+    // and BLIND, above the block). What only a Mac can show, that the real
+    // `read -t` does this, is in c28.md.
 
     it(`${os}: a finished mint whose EOF the tick read lost ends at once, not at the backstop (D-8345)`, () => {
       const r = drive(os, { mint: 'echo line-one; echo line-two; exit 0', secs: '3', grace: '3', tickRead: LOST_EOF });
@@ -2215,5 +2249,112 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
       expect(Number(r['took'])).toBeLessThanOrEqual(8);
       expect(r['pump'], 'the line the child printed before it left was lost').toBe('alive\n');
     });
+
+    // THE DRAIN READS fd 8, NOT STDIN, and only `_auth_timeout`'s pure-bash arm
+    // can tell (review 1849, F3). That arm runs the reader as `"$@" &`, and bash
+    // gives an asynchronous command /dev/null for stdin, so a drain fed fd 8 on
+    // stdin reads an instant, empty end of file there while the GNU arm passes.
+    it(`${os}: on _auth_timeout's pure-bash arm the drain still reads fd 8, not stdin (D-8345)`, () => {
+      const r = drive(os, {
+        mint: 'echo line-one; echo line-two; printf tail-no-newline; exit 0', secs: '3', grace: '3',
+        tickRead: BLIND, pureBashArm: true,
+      });
+      expect(r['arm'], 'the case ran on the GNU arm, which cannot show this').toBeUndefined();
+      expect(r['hung']).toBeUndefined();
+      expect(r['expired']).toBe('0');
+      expect(r['pump'], 'the drain read an empty stdin instead of the stream on fd 8')
+        .toBe('line-one\nline-two\ntail-no-newline\n');
+    });
   }
+
+  // THE DRAIN'S SHELL RUNS NO STARTUP FILE (review 1849, M1). Its stdout is the
+  // drained text, so a BASH_ENV that prints would be read as the child's output.
+  // Set after the spawn, so only the drain's shell can meet it.
+  it('linux: a BASH_ENV that prints does not reach the drained text (D-8345)', () => {
+    fs.writeFileSync(path.join(h.home, 'bash-env.sh'), 'echo bash-env-ran\n');
+    const r = drive('linux', {
+      mint: 'echo line-one; echo line-two; exit 0', secs: '3', grace: '3', tickRead: BLIND,
+      afterSpawn: 'export BASH_ENV="$HOME/bash-env.sh"; '
+        + '[ "$("$BASH" -c :)" = bash-env-ran ] || { printf \'arm=BASH_ENV never ran\\n\' > "$OUT"; exit 91; }',
+    });
+    expect(r['arm'], 'the BASH_ENV is dead, so this case measures nothing').toBeUndefined();
+    expect(r['expired']).toBe('0');
+    expect(r['pump'], 'the drain\'s shell ran BASH_ENV into the stream').toBe('line-one\nline-two\n');
+  });
+});
+
+describe('ccd-account-auth — login\'s pump has its own child (D-8345, review 1849)', () => {
+  // `login` spawns without `_auth_spawn_pty_child`, so AUTH_CHILD is empty
+  // there, and it hands the pump its own child instead. Both of the pump's uses
+  // of that pid are pinned here, through the real method: the drain arm (F4)
+  // and the backstop's TERM (F2).
+  const driveLogin = (launcher: string, opts: { tickRead?: string; pureBashArm?: boolean }): Record<string, string> => {
+    plantLauncher('claude', launcher);
+    const out = path.join(h.home, 'login-drive.txt');
+    const script = `
+      OUT="${out}"
+      source "${HELPER}"
+      ${opts.pureBashArm ? PURE_BASH_ARM_GUARD : ''}
+      ${opts.tickRead ?? ''}
+      t0=$SECONDS
+      ( _auth_main claude-a login ) >"${out}.stdout" 2>&1; rc=$?
+      printf 'rc=%s\\ntook=%s\\n' "$rc" "$(( SECONDS - t0 ))" > "${out}"
+    `;
+    const env = ghContainedEnv(h.home, {
+      ...process.env, HOME: h.home, CCRC_AUTH_NO_MAIN: '1', CCRC_AUTH_TICK: '0.2',
+      CCRC_AUTH_TIMEOUT: '2', CCRC_AUTH_PUMP_GRACE: '2',
+    }, { systemd: true, tmux: true });
+    if (opts.pureBashArm) env['PATH'] = pathWithoutTimeout(env['PATH'] ?? '');
+    // In a process group of its own (#172, D-5894): the TERM-ignoring mint outlives the run ON PURPOSE, and a
+    // hang is killed at 20 s with everything it started, leaving the file below absent.
+    spawnSyncGroup('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore', encoding: 'utf8' },
+      { strays: 'end' });
+    if (!fs.existsSync(out)) return { hung: 'yes' };
+    return Object.fromEntries(fs.readFileSync(out, 'utf8').trim().split('\n')
+      .map((l) => l.split('=') as [string, string]));
+  };
+
+  // F4: a reverted `_auth_pump "$child"` leaves the drain arm unreachable under
+  // `login`, so a finished sign-in ran to the backstop and was stamped expired.
+  it('a finished login whose EOF the tick read lost reaches done at once, not expired at the backstop', () => {
+    const r = driveLogin('#!/usr/bin/env bash\necho line-one\n'
+      + 'mkdir -p "$CLAUDE_CONFIG_DIR" && printf \'{"fixture":true}\' > "$CLAUDE_CONFIG_DIR/.credentials.json"\n'
+      + 'exit 0\n', { tickRead: LOST_EOF });
+    expect(r['hung']).toBeUndefined();
+    expect(status('claude-a')['state'], 'login\'s pump never confirmed the lost EOF').toBe('done');
+    expect(Number(r['took']), 'the pump waited for the backstop (4 s)').toBeLessThan(3);
+  });
+
+  // F2: on `_auth_timeout`'s pure-bash arm the mint gets one TERM and no KILL
+  // (D-2764). A mint that ignores it keeps the shim alive, and the backstop
+  // used to signal AUTH_CHILD, empty under `login`, so `wait` blocked until the
+  // mint chose to exit. Older than D-8345.
+  it('on _auth_timeout\'s pure-bash arm, a mint that ignores TERM still ends expired at the backstop', () => {
+    const r = driveLogin('#!/usr/bin/env bash\ntrap \'\' TERM\necho alive\nsleep 60\n', { pureBashArm: true });
+    expect(r['arm'], 'the case ran on the GNU arm, which kills the mint itself').toBeUndefined();
+    expect(r['hung'], 'the backstop signalled nobody and login waited on the mint').toBeUndefined();
+    expect(status('claude-a')['state']).toBe('expired');
+    expect(Number(r['took']), 'the backstop is 4 s').toBeLessThanOrEqual(7);
+  });
+});
+
+describe('ccd-account-auth — the drain read\'s bound (D-8345, review 1849)', () => {
+  const secs = (tick: string, left: string): string =>
+    fn('_auth_drain_secs "$T" "$L" 2>&1', { T: tick, L: left });
+
+  it('is the tick, and never more than the time left', () => {
+    expect(secs('0.2', '5')).toBe('0.2');
+    expect(secs('3', '2')).toBe('2');
+  });
+
+  it('a tick that is zero or not a number is 1, never a read with no deadline (M2)', () => {
+    expect(secs('0', '5')).toBe('1');
+    expect(secs('0.0', '5')).toBe('1');
+    expect(secs('soon', '5')).toBe('1');
+  });
+
+  it('a tick of 08 is eight seconds, not an octal error (M3)', () => {
+    expect(secs('08', '20')).toBe('08');
+    expect(secs('09', '5')).toBe('5');
+  });
 });
