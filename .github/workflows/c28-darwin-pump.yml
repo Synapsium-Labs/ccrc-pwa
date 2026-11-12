@@ -66,3 +66,21 @@ jobs:
           for _ in $(seq 1 $(( $(sysctl -n hw.ncpu) * 2 ))); do yes >/dev/null & done
           bash .github/c28-darwin-pump/code-channel.sh 200 yes
           kill $(jobs -p) 2>/dev/null || true
+      - name: A descendant holding the stream (each run should end expired at about 10 s, never hang)
+        env:
+          HELD: 'echo alive; (exec sleep 300) & exit 0'
+        run: |
+          bash .github/c28-darwin-pump/measure.sh ccd/ccd-account-auth 5 held "" "$HELD" || true
+          pkill -x sleep || true
+      - name: The helper's suites and script-shim-platform alone, five times
+        working-directory: server
+        run: |
+          red=0
+          for i in 1 2 3 4 5; do
+            if ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts test/ccd-account-auth-private-socket.test.ts test/script-shim-platform.test.ts > "$RUNNER_TEMP/suite-$i.log" 2>&1; then
+              echo "repeat $i: green $(grep -E '^ +Tests ' "$RUNNER_TEMP/suite-$i.log")"
+            else
+              red=$((red+1)); echo "repeat $i: RED"; grep -E '×|FAIL|AssertionError|Tests ' "$RUNNER_TEMP/suite-$i.log" | head -40
+            fi
+          done
+          echo "SUMMARY suites: $red of 5 red"
