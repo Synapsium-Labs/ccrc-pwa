@@ -9,7 +9,7 @@
 // read, never a half-drawn card. Nothing here ever holds an address once the form that typed it is gone.
 import { useCallback, useState } from 'react';
 import {
-  TESTBOX_ACT_MAP, TESTBOX_ACT_OUTCOME_MAP, readTestboxAdminStatus, type TestboxAdminFields, type TestboxAdminStatus,
+  TESTBOX_ACT_MAP, TESTBOX_ACT_OUTCOME_MAP, readTestboxAdminStatus, readTestboxLedgerChanges, type TestboxAdminFields, type TestboxAdminStatus,
   type TestboxAdminSub,
 } from '../../../shared/testbox-admin';
 import type { TestboxEventRow, TestboxAdminResult } from '../../../shared/api';
@@ -48,15 +48,20 @@ export interface TestboxAdminHook {
 
 const isText = (v: unknown): v is string => typeof v === 'string';
 
-/** One ledger row, or null when a field is off. */
+/** One ledger row, or null when a field is off. Its `changes` (D-8399) pass the shared reader, and a list it refuses is dropped
+ *  (the row is still shown, as an older server's would be); an absent list is none. */
 function asEventRow(v: unknown): TestboxEventRow | null {
   if (!isRecord(v)) return null;
-  const { id, at, actor, act, actId, outcome, code, fingerprint, fleetIdentity } = v;
+  const { id, at, actor, act, actId, outcome, code, fingerprint, fleetIdentity, changes } = v;
   if (typeof id !== 'number' || typeof at !== 'number' || !isText(actor)) return null;
   if (!isText(act) || !Object.hasOwn(TESTBOX_ACT_MAP, act) || !isText(outcome) || !Object.hasOwn(TESTBOX_ACT_OUTCOME_MAP, outcome)) return null;
   const nullable = (x: unknown): x is string | null => x === null || isText(x);
   if (!nullable(actId) || !nullable(code) || !nullable(fingerprint) || !nullable(fleetIdentity)) return null;
-  return v as unknown as TestboxEventRow;
+  const read = changes === undefined ? null : readTestboxLedgerChanges(changes);
+  return {
+    id, at, actor, act: act as TestboxEventRow['act'], actId, outcome: outcome as TestboxEventRow['outcome'], code, fingerprint, fleetIdentity,
+    ...(read === null ? {} : { changes: read }),
+  };
 }
 
 /** The envelope `{ok, status, events}`: the status through the shared reader, the rows that fit. Null when the status is off. */

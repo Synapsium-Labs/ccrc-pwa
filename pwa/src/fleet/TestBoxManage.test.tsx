@@ -151,7 +151,41 @@ describe('the connected card: what it shows', () => {
     expect(q('[data-testbox="manage-ledger"]')).toBeNull();
     laptop.unmount();
     await mount({ band: 'wide' });
-    expect(q('[data-testbox="manage-ledger"]')!.querySelectorAll('li')).toHaveLength(10);
+    expect(q('[data-testbox="manage-ledger"]')!.querySelectorAll('.testbox-checks > li')).toHaveLength(10);
+  });
+
+  it('a settings act\'s old and new values show under the last act at every band and under its row on a wide screen (D-8399)', async () => {
+    const changes = [
+      { key: 'CCRC_TESTBOX_BUDGET', old: { value: '30m' }, new: { value: '45m' } },
+      { key: 'CCRC_TESTBOX_DENY_GLOBS', old: { presence: 'set' }, new: { presence: 'default' } },
+      { key: 'CCRC_TESTBOX_POLL', old: { presence: 'not-set' }, new: { presence: 'unknown' } },
+    ];
+    const events = [event(3, { act: 'settings-fleet', changes }), event(2, { act: 'settings-box', outcome: 'refused', code: 'runs-in-progress' }), event(1)];
+    fakeFleet(connected(), events);
+    const lines = ['CCRC_TESTBOX_BUDGET from 30m to 45m', 'CCRC_TESTBOX_DENY_GLOBS from set to its default', 'CCRC_TESTBOX_POLL from not set to not known'];
+    for (const band of ['phone', 'laptop', 'wide'] as const) {
+      const view = await mount({ band });
+      // the last act's own line is unchanged; its changes are their own lines under it
+      expect(q('[data-testbox="last-act"]')!.textContent, band).toBe(ledgerLine(events[0] as never));
+      const under = q('[data-testbox="manage-state"] [data-testbox="ledger-changes"]')!;
+      expect([...under.querySelectorAll('li')].map((li) => li.textContent), band).toEqual(lines);
+      if (band === 'wide') {
+        const rows = [...q('[data-testbox="manage-ledger"]')!.querySelectorAll('.testbox-checks > li')];
+        expect(rows).toHaveLength(3);
+        expect([...rows[0]!.querySelectorAll('[data-testbox="ledger-changes"] li')].map((li) => li.textContent)).toEqual(lines);
+        // a refused act changed nothing, and shows nothing more than its line
+        expect(rows[1]!.querySelector('[data-testbox="ledger-changes"]')).toBeNull();
+      }
+      view.unmount();
+    }
+  });
+
+  it('a row whose changes the shared reader refuses is shown without them, and never shows the text (D-8399)', async () => {
+    fakeFleet(connected(), [event(2, { act: 'settings-fleet', changes: [{ key: 'CCRC_TESTBOX_GIT_KEY', old: { value: '/root/.ssh/k' }, new: { presence: 'set' } }] })]);
+    await mount({ band: 'wide' });
+    expect(q('[data-testbox="last-act"]')!.textContent).toContain('Fleet settings ok');
+    expect(manage().querySelector('[data-testbox="ledger-changes"]')).toBeNull();
+    expect(manage().textContent).not.toContain('/root');
   });
 });
 
