@@ -1,6 +1,7 @@
 # THROWAWAY (Task C31, D-8391): repeats release-main.test.ts on macOS, alone and
 # inside the shard whose run it failed in, with every signal sender logged and
-# the release scripts traced. Removed before the wave-done; it runs on a push to
+# the release scripts traced. Second run: at the fix (build-release.sh stages
+# through a file). Removed before the wave-done; it runs on a push to
 # the task's own branch only.
 name: c31-darwin-probe
 
@@ -41,8 +42,8 @@ jobs:
       - name: release-main alone, repeated
         if: matrix.leg == 'alone'
         working-directory: server
-        run: bash ../.github/c31-darwin-probe/repeat.sh 25 alone 2 test/release-main.test.ts
+        run: bash ../.github/c31-darwin-probe/repeat.sh 30 alone 2 test/release-main.test.ts test/build-release.test.ts
       - name: the failing shard's files, repeated
         if: matrix.leg == 'shard'
         working-directory: server
-        run: bash ../.github/c31-darwin-probe/repeat.sh 3 shard 2 --list "$GITHUB_WORKSPACE/.github/c31-darwin-probe/shard-files.txt"
+        run: bash ../.github/c31-darwin-probe/repeat.sh 2 shard 2 --list "$GITHUB_WORKSPACE/.github/c31-darwin-probe/shard-files.txt"
