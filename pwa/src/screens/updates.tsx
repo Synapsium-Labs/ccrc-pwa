@@ -27,7 +27,7 @@ import type {
   CatalogueErrorReason, CatalogueState, NodeWire, ReleaseSourceWire, ReleaseWire, UpdateChannel,
 } from '../../../shared/api';
 import {
-  SETTLED_UPDATE_STATES, isReleaseTag, isStampRead, isUpdateChannel,
+  SETTLED_UPDATE_STATES, isReleaseTag, isStampRead, isUpdateChannel, isUpdateSweepWord,
   rollbackTargetRefusal, settledDoneDetail,
 } from '../../../shared/api';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
@@ -784,6 +784,16 @@ export function nodeStateLine(n: NodeWire): string {
   return typeof detail === 'string' && detail !== '' ? `${state} — ${phase}: ${detail}` : `${state} — ${phase}`;
 }
 
+/** D-8386 (residue R37): the supervisor sweep's record from the node's own report (`update.json`'s `sweep` key, which the
+ *  server reads once and sends only when measured), or null. Absent, or a word `isUpdateSweepWord` cannot read, is NOT
+ *  MEASURED, so the row says nothing: never "ok", never "none down". */
+export function sweepLine(n: NodeWire): string | null {
+  const r: unknown = n.report;
+  if (typeof r !== 'object' || r === null) return null;
+  const { sweep } = r as { sweep?: unknown };
+  return isUpdateSweepWord(sweep) ? `Supervisor sweep: ${sweep}` : null;
+}
+
 export function reachabilityLine(n: NodeWire, now: number): string | null {
   // Fix round 2 (review of d5aefc4a, item 5): spelled as the direct question
   // — "is this node reachable (or not yet known)? then say nothing" — rather
@@ -897,6 +907,7 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
   }
   // Wave 8 item F4: a finished move merges the state and detail lines into one, dated; anything else keeps them apart.
   const finished = finishedLine(n, now);
+  const sweep = sweepLine(n);
 
   return (
     <li className="settings-node" data-node-id={n.nodeId} ref={rowRef} tabIndex={-1}>
@@ -922,6 +933,8 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
           {typeof n.update?.detail === 'string' && n.update.detail !== '' && <p className="settings-node-detail">{n.update.detail}</p>}
         </>
       )}
+      {/* D-8386: the report's sweep record, a text child, only when measured. */}
+      {sweep !== null && <p className="settings-node-detail" data-testid="settings-node-sweep">{sweep}</p>}
       {previousBlocked !== null && <p className="settings-node-detail">{previousBlocked}</p>}
       <div className="settings-node-actions">
         {!darwin && (

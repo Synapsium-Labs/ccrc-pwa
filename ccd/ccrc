@@ -23154,8 +23154,8 @@ _upd_phase() {
   # report, `died: abandoned`, D-5329) has set UPD_SWEEP_WORD, so it is absent on every
   # phase before the sweep, on every path that never swept, and in every report
   # an older build wrote. Absent means NOT MEASURED, never "nothing was down";
-  # `ccrc doctor`'s update-sweep check reads it that way. The server's
-  # `reportFrom` reads keys by name and ignores this one.
+  # `ccrc doctor`'s update-sweep check reads it that way, and so does the server's
+  # one reader of it (`sweepFrom`, D-8386), which puts it on `GET /api/updates`.
   [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"

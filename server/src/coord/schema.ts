@@ -2708,6 +2708,21 @@ export const MIGRATIONS: readonly string[] = [
     ('2.1.296', 'rig', 'pass', 1, 0, 0), ('2.1.300', 'rig', 'pass', 1, 0, 0),
     ('2.1.301', 'rig', 'pass', 1, 0, 0), ('2.1.302', 'rig', 'pass', 1, 0, 0);
   `,
+  // ── 61: user_version 60 -> 61 ─────────────────────────────────────────────
+  // D-8386 (residue R37 of the centralised-update programme): `nodes.reportedSweep`, the supervisor sweep's record from a
+  // node's `update.json` (its `sweep` key, wave 17's D-5314), in the REPORT group beside the five report columns, so
+  // `GET /api/updates` can carry it. Its one writer is `upsertNodeMeasurement`, from the inventory's one reader
+  // (`reportFrom`). NULL = NOT MEASURED (no key, a key this build cannot read, or no report file), never "nothing down".
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE, nothing else: an older build opening a file at `user_version 61` takes
+  // rule 3 (it warns, reads as-is and migrates nothing); its reads and writes name their columns and never this one, so
+  // the column stays NULL or stale under it, and this build's next sweep writes it again. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 60 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE nodes ADD COLUMN reportedSweep TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

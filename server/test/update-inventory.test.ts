@@ -93,7 +93,7 @@ const ROW: NodeRow = {
   caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.12', previousVersion: 'v0.0.11',
   floorRead: 'measured', previousRead: 'measured', os: 'linux',
   measuredAt: NOW - 60_000, reachable: true, unreachableSince: null,
-  reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null,
+  reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null, reportedSweep: null,
   updateState: 'idle', updateTarget: null, updateStartedAt: null, updateDetail: null,
   channel: null, desiredTag: null, resolveDetail: null,
   requestedTag: null, requestedKind: null, requestedAt: null,
@@ -107,7 +107,7 @@ const meas = (over: Partial<NodeMeasurement> = {}): NodeMeasurement => ({
   os: 'linux', measuredAt: NOW, report: null, ...over,
 });
 const rep = (over: Partial<NodeReport> = {}): NodeReport => ({
-  phase: 'done', target: 'v0.0.12', startedAt: T_S * 1000, updatedAt: (T_S + 90) * 1000, detail: 'converged', ...over,
+  phase: 'done', target: 'v0.0.12', startedAt: T_S * 1000, updatedAt: (T_S + 90) * 1000, detail: 'converged', sweep: null, ...over,
 });
 
 describe('readNodeFile — lstat-gated, size-capped, bounded (§18 "reads refuse a non-regular file", "reads are bounded")', () => {
@@ -284,6 +284,7 @@ describe('the validators (§8 "Validation", §18 "reads are bounded and validate
     expect(reportFrom(ABSENT)).toBeNull();
     expect(reportFrom(ok(reportJson({ phase: 'installing' })))).toEqual({
       phase: 'installing', target: 'v0.0.12', startedAt: T_S * 1000, updatedAt: (T_S + 90) * 1000, detail: 'converged',
+      sweep: null,
     });
     expect(reportFrom(ok(reportJson({ startedAt: T_S * 1000 })))?.startedAt).toBeNull();   // 13 digits: a ms value
     expect(reportFrom(ok(reportJson({ startedAt: -1 })))?.startedAt).toBeNull();
@@ -298,11 +299,29 @@ describe('the validators (§8 "Validation", §18 "reads are bounded and validate
     // never a reason to read the report as `unknown`.
     expect(reportFrom(ok(reportJson({ pid: 4242, note: 'from a newer writer' })))).toEqual(reportFrom(ok(reportJson())));
     expect(reportFrom(ok(reportJson({ pid: 4242 })))?.phase).toBe('done');
-    const unknown = { phase: 'unknown', target: null, startedAt: null, updatedAt: null, detail: null };
+    const unknown = { phase: 'unknown', target: null, startedAt: null, updatedAt: null, detail: null, sweep: null };
     expect(reportFrom(ok('{ torn'))).toEqual(unknown);
     expect(reportFrom(ok('[]'))).toEqual(unknown);
     expect(reportFrom(UNREADABLE)).toEqual(unknown);
     expect(reportFrom(TOO_LARGE)).toEqual(unknown);
+  });
+
+  // R37 (D-8386): update.json's `sweep` key, the supervisor sweep's record (wave 17, D-5314, D-5315), has ONE reader,
+  // here. A key the file does not carry, or one this build cannot read, is null: NOT MEASURED, never `ok` or a count of 0.
+  it('reportFrom reads the `sweep` key: present is its word, absent or malformed is null (not measured)', () => {
+    expect(reportFrom(ok(reportJson()))?.sweep, 'absent').toBeNull();
+    for (const w of ['ok', 'down: 2: alpha-one beta-two', 'refused: listing', 'unverified: relist', 'died: sweep', 'died: abandoned']) {
+      expect(reportFrom(ok(reportJson({ sweep: w })))?.sweep, w).toBe(w);
+    }
+    for (const bad of [false, true, 0, 1, null, '', '   ', 'maybe', 'okay', 'down', 'down:', 'down: ', 'Down: 1: a', ['ok'], { ok: true }]) {
+      expect(reportFrom(ok(reportJson({ sweep: bad })))?.sweep, JSON.stringify(bad)).toBeNull();
+    }
+    // Printable ASCII and bounded, as the detail is.
+    const long = reportFrom(ok(reportJson({ sweep: `down: 1:\u001b[31m x${'y'.repeat(500)}` })))?.sweep;
+    expect(long).toHaveLength(REPORT_DETAIL_MAX);
+    expect(long).toMatch(/^down: 1: \[31m xy+$/);
+    // The key never changes how the rest of the report reads.
+    expect({ ...reportFrom(ok(reportJson({ sweep: 'ok' }))), sweep: null }).toEqual(reportFrom(ok(reportJson())));
   });
 
   it('printableDetail keeps printable ASCII only, bounded', () => {
@@ -471,6 +490,16 @@ describe('the floor/previous carry-forward (fix round 1, D-3213, corrected by th
     await sweepInventory(localDeps(b), NOW);
     expect(b.store.node(U1)).toMatchObject({ previousVersion: null, previousRead: 'unmeasured' });
     chmodSync(path.join(b.ccrcDir, 'previous'), 0o644);
+  });
+
+  it('R37 (D-8386): the sweep key reaches the row, and a later report without it clears it (not measured, never kept)', async () => {
+    const b = box('ccrc-inv-report-sweep-');
+    plant(b.ccrcDir, { ...FULL, report: reportJson({ sweep: 'down: 1: alpha-one' }) });
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'done', reportedSweep: 'down: 1: alpha-one' });
+    plant(b.ccrcDir, { report: reportJson({ phase: 'resolving', sweep: 7 }) });
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'resolving', reportedSweep: null });
   });
 
   it.skipIf(process.getuid?.() === 0)('F8: an unreadable update.json on a FIRST sweep is reportedPhase unknown, never null', async () => {
