@@ -7064,7 +7064,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     past closure:
     - the release-base query/fragment item, and the updater's printing of a query and fragment;
     - the `install.sh --release` tag-binding item;
-    - review 1326's F1-F11, and F6's warn-path test row;
+    - review 1326's F1-F11, and F6's warn-path test row (the row: **done by D-8386, 2026-11-12**);
     - R48's two related gaps;
     - R28, R29, R30, R33(a), R35(a, e, f), R37, R41-R44, R50, R51 and R52;
     - the testbox group-writable local red;
@@ -7398,7 +7398,10 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   or protect the run's own directory by path, as `_bak_gc` does. If #448 fixes it, wave 17 drops it.
 - **R37 (wave 17's Readings 3 and 8; a later server wave).** `GET /api/updates` does not read wave 17's new `sweep`
   key (one reader in the inventory, an optional wire field, an absent key read as not measured). Item G's units, active
-  before the restart and not after it, stay named on stderr only; a third word class is the option.
+  before the restart and not after it, stay named on stderr only; a third word class is the option. **Fixed by D-8386
+  (2026-11-12):** `sweepFrom` is the one reader, migration 61's `reportedSweep` stores it, and the node report's
+  optional `sweep` carries it; absent or malformed is not measured, and Settings › Updates shows it on the node row.
+  Item G's third word class is not part of it.
 - **R38 (wave 17's Reading 7).** The other `[0-9]` validators in `ccd/ccrc`, `CCRC_SWEEP_VERIFY_JOBS`'s among them,
   accept non-ASCII digits under a UTF-8 locale. R34 fixed only the KEEP pair.
 - **R39 (wave 18's CodeQL; fix round 3).** #482's `CodeQL` leg is red with three alerts, all in test files:
@@ -7439,7 +7442,8 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   - Verify's name-set check joins names with spaces, so one file named with a space or a newline between the two
     expected names passes it. The regular-file check then refuses it, so nothing is accepted, but no row plants
     that shape. Add one to `release-artifact.test.ts`, and credit both checks where the comments credit only the
-    exact file set.
+    exact file set. **Fixed by D-8386 (2026-11-12):** W26-V14 plants both shapes, and `release-artifact.sh`'s two
+    comments credit both checks. The other four items of R44 stay open.
 - **R45 (review 926 on wave 24; not that wave's file).** `ccd/ccd-update-sync`'s header still says it applies "the same two
   rules" as `ccd/ccrc`'s `_upd_redact`, which wave 24 widened. Its own mask strips userinfo after `://` only, so a
   `CCRC_SERVER_URL` spelled with one slash (`http:/u:p@h`) prints whole in its `say` lines (measured on an extracted copy).
