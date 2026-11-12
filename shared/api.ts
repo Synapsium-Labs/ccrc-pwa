@@ -9888,6 +9888,41 @@ export interface ClaimConflict {
 }
 
 /**
+ * One of the caller's OWN claims that lapsed within the last `CLAIM_LEASE_MS` on a path it is taking again
+ * (D-8392, public issue #145). `POST /api/claims`' 200 answer carries them as `lapsedSince`, present only when
+ * there is one: the caller's claim had a gap, so another session may have edited those paths meanwhile, and the
+ * caller re-checks before it edits. `endedBy` is `ClaimSummary.endedBy`'s display word, parsed back by nothing.
+ */
+export interface ClaimLapse {
+  readonly id: number;
+  readonly endedAt: number;
+  readonly endedBy: string;
+}
+
+/**
+ * `GET /api/claims`' 200 answer. `claims` is the live rows (`expiresAt > now`), or with `all=1` every row verbatim.
+ * D-8392: the default answer for one project (`?project=<p>` without `all`) adds `recentlyLapsed`, the rows that
+ * lapsed within the last `CLAIM_LEASE_MS`, each `state:'lapsed'` with its `endedAt` and `endedBy`, so a lapsed claim
+ * no longer reads like one never taken. A row whose lease ran out before any sweep lapsed it is reported the way the
+ * sweep would word it, ended at its `expiresAt`. `claims` keeps its meaning; the field is absent on the other arms.
+ */
+export interface ClaimsListAnswer {
+  readonly ok: true;
+  readonly claims: readonly ClaimSummary[];
+  readonly recentlyLapsed?: readonly ClaimSummary[];
+}
+
+/** `POST /api/claims`' 200 answer. `lapsedSince` (D-8392): see `ClaimLapse`; absent when none applies. */
+export interface ClaimTakeAnswer {
+  readonly ok: true;
+  readonly ids: readonly number[];
+  readonly expiresAt: number;
+  readonly hardExpiresAt: number;
+  readonly renewed: boolean;
+  readonly lapsedSince?: readonly ClaimLapse[];
+}
+
+/**
  * The deviation ledger's two STORED states. `'stale'` is deliberately not
  * here: a number allocated and never landed for `LEDGER_STALE_MS` is
  * REPORTED, never marked — D13 says "marks allocated → landed" but only

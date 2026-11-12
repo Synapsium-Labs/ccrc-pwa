@@ -62,6 +62,15 @@ the watcher while the holding session is measured running; the hard cap
 (`CLAIM_HARD_CAP_MS`, 8 h) is never renewed, so a long program re-declares
 its claim rather than holding it forever.
 
+A 200 that carries `lapsedSince` (`[{id, endedAt, endedBy}]`) means one of
+YOUR claims on these paths lapsed within the last lease (`CLAIM_LEASE_MS`)
+and you have just taken them again: between `endedAt` and now nothing held
+them, so another session may have edited them. Before you edit, fetch and
+read what landed on those paths since `endedAt` (`git log --since`, the
+peers' branches, `GET /api/claims?project=<slug>&all=1` for who held them in
+the gap), and fold any change in; say in your report that the claim had a
+gap. The field is absent when there was no gap.
+
 Release is `POST /api/claims/:id/release` when a claim is done early:
 
     body=$("$API" claims release "$claim" --json - <<JSON
@@ -109,8 +118,14 @@ the record.
 
 ## History — `GET /api/claims`, `GET /api/lifecycle`, `GET /api/ledger`
 
-`GET /api/claims?project=<slug>` is the live set — the coordinator reads it
-before splitting a wave (clause 10); `all=1` includes ended rows, because
+`GET /api/claims?project=<slug>` is the live set (`claims`) — the coordinator
+reads it before splitting a wave (clause 10). Beside it, `recentlyLapsed`
+lists the rows that lapsed within the last lease, each `state:"lapsed"` with
+its `endedAt` and `endedBy` (`session-gone`, `expired`, `hard-cap`), so a
+lapsed claim no longer reads like one never taken. A recently lapsed row on a
+path the wave touches is treated as still held by its holder: mail the holder
+and dispatch onto that path only once it confirms it is done there, or has
+re-claimed it. `all=1` includes ended rows, because
 "held by X until it died" is an answer, which is why a lapsed claim is kept
 and never deleted. `GET /api/lifecycle?session=<id>` is a workspace's past
 tense, and it answers for a workspace that no longer exists — read each

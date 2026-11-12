@@ -16,7 +16,7 @@ import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
-import { claimMailHint } from './claims.js';
+import { claimMailHint, lapseWindowStart, recentlyLapsedClaims } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
@@ -86,6 +86,7 @@ import {
 import { NO_FLEET_IDENTITY } from '../fleetidentity.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
+  type ClaimsListAnswer, type ClaimTakeAnswer,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
   parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
@@ -3842,12 +3843,15 @@ export function registerCoordRoutes(
       // from them, one reader: `renewed` is true exactly when some row's lease
       // was re-armed after its creation, and the two horizons are the earliest
       // across the batch — the only bound that is true of everything acquired.
-      return reply.code(200).send({
+      // D-8392: `lapsedSince` only when the caller re-took paths its own recent lapse held — a gap it must re-check.
+      const answer: ClaimTakeAnswer = {
         ok: true, ids: r.claims.map((c) => c.id),
         expiresAt: Math.min(...r.claims.map((c) => c.expiresAt)),
         hardExpiresAt: Math.min(...r.claims.map((c) => c.hardExpiresAt)),
         renewed: r.claims.some((c) => c.renewedAt > c.createdAt),
-      });
+        ...(r.lapsedSince.length > 0 ? { lapsedSince: r.lapsedSince } : {}),
+      };
+      return reply.code(200).send(answer);
     }
     switch (r.why) {
       case 'bad-path':
@@ -3984,7 +3988,10 @@ export function registerCoordRoutes(
    * read (live rows only) — and the PWA's `claims({all:true})` history call
    * rides the same door, so `all=1` without a project answers EVERY
    * project's rows verbatim (`allClaims`), ended included: the same read
-   * the project arm's `all` gives one project.
+   * the project arm's `all` gives one project. D-8392: the default
+   * per-project answer adds `recentlyLapsed` (`ClaimsListAnswer`), the rows
+   * that lapsed within the last `CLAIM_LEASE_MS`, an unswept one included,
+   * so the coordinator's read tells a lapse from a claim never taken.
    */
   app.get('/api/claims', async (req, reply) => {
     if (deps.cfg.authEnabled) {
@@ -4008,9 +4015,20 @@ export function registerCoordRoutes(
       ? q.project.trim() : null;
     const all = q.all === '1' || q.all === 'true';
     const now = Date.now();
+    if (project !== null && !all) {
+      // D-8392: the default per-project read the coordinator makes (clause 10) answers its recent lapses beside the
+      // live rows, so a lapse no longer reads like a claim never taken. `claims` keeps meaning live rows only.
+      const rows = deps.coord.claimsForProject(project);
+      const answer: ClaimsListAnswer = {
+        ok: true,
+        claims: rows.filter((c) => c.expiresAt > now),
+        recentlyLapsed: recentlyLapsedClaims(
+          [...rows, ...deps.coord.lapsedClaimsSince(project, lapseWindowStart(now))], now),
+      };
+      return reply.code(200).send(answer);
+    }
     const claims = project !== null
-      ? (all ? deps.coord.claimsForProject(project, true)
-             : deps.coord.claimsForProject(project).filter((c) => c.expiresAt > now))
+      ? deps.coord.claimsForProject(project, true)
       : (all ? deps.coord.allClaims()
              : deps.coord.activeClaims().filter((c) => c.expiresAt > now));
     return reply.code(200).send({ ok: true, claims });

@@ -1,4 +1,6 @@
-import { CLAIM_LEASE_MS, type ClaimConflict, type PeerDeliverable } from '../../../shared/api.js';
+import {
+  CLAIM_LEASE_MS, type ClaimConflict, type ClaimLapse, type ClaimSummary, type PeerDeliverable,
+} from '../../../shared/api.js';
 import type { RowStanding } from '../sessionReading.js';
 
 /**
@@ -202,4 +204,43 @@ export function claimExpiry(
     case 'unmeasurable':
       return { act: 'hold' };
   }
+}
+
+/** A lapsed claim as the recent-lapse readers report it: its end is always known. */
+export type LapsedClaim = ClaimSummary & { readonly state: 'lapsed'; readonly endedAt: number; readonly endedBy: string };
+
+/** The earliest end a lapse may have and still be recent (D-8392): one `CLAIM_LEASE_MS` back, the same constant the
+ *  lease is, so no second knob decides how long a gap stays visible. A store query may bound its read by it; the
+ *  deciders below apply it themselves. */
+export const lapseWindowStart = (now: number): number => now - CLAIM_LEASE_MS;
+
+/**
+ * The rows that lapsed within the last `CLAIM_LEASE_MS` (D-8392, public issue #145), sorted by id. A `lapsed` row
+ * counts by its `endedAt`. A `live` row whose lease has run out is a lapse no sweep has written yet (the watcher's
+ * lane and the next claim attempt both write it); it is reported as the sweep would word it, `hard-cap` when the
+ * hard cap is what ran out (the sweep's order) and `expired` otherwise, ended at its `expiresAt`. Released and broken
+ * rows are ends a holder or the operator chose, never a lapse.
+ */
+export function recentlyLapsedClaims(rows: readonly ClaimSummary[], now: number): LapsedClaim[] {
+  const since = lapseWindowStart(now);
+  const out: LapsedClaim[] = [];
+  for (const r of rows) {
+    if (r.state === 'lapsed') {
+      if (r.endedAt !== null && r.endedAt > since) out.push({ ...r, state: 'lapsed', endedAt: r.endedAt, endedBy: r.endedBy ?? '' });
+    } else if (r.state === 'live' && r.expiresAt <= now && r.expiresAt > since) {
+      out.push({ ...r, state: 'lapsed', endedAt: r.expiresAt,
+        endedBy: r.expiresAt >= r.hardExpiresAt ? 'hard-cap' : 'expired' });
+    }
+  }
+  return out.sort((a, b) => a.id - b.id);
+}
+
+/** `POST /api/claims`' `lapsedSince` (D-8392): the caller's OWN recent lapses whose paths overlap the ones it is
+ *  taking (`pathsOverlap`, the conflict rule's containment). Someone else's lapse is not the caller's gap. */
+export function ownLapsesUnder(
+  rows: readonly ClaimSummary[], sessionId: string, paths: readonly string[], now: number,
+): ClaimLapse[] {
+  return recentlyLapsedClaims(rows, now)
+    .filter((r) => r.heldBy === sessionId && r.paths.some((p) => paths.some((q) => pathsOverlap(p, q))))
+    .map((r) => ({ id: r.id, endedAt: r.endedAt, endedBy: r.endedBy }));
 }
