@@ -7477,7 +7477,7 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   - The count rule for lines above the plan's base line 11635 nets minus 3 in the `_upd_redact` hunk, unledgered.
   - README's blank-budget sentence holds only from the environment.
   - Deviation 6751's enumeration counts the box stamp's sha, ref and builtAt as bounded, which only its version is.
-- **R50 (wave 24's in-session review; minor behaviour).**
+- **R50 (wave 24's in-session review; minor behaviour).** **Fixed by D-8390 (2026-11-12):** the first four; the fifth, `ccrc-uninstall`'s flake under load, stays open.
   - With an undecided deadline such as `2e6`, the watchdog's `max` falls to 900000 and only warns, so it can judge before
     the server, contrary to its own comment.
   - A console-driven move's parent reads its settings from the server's environment, which systemd parsed, while its
