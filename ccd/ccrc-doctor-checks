@@ -212,7 +212,7 @@ CCRC_DOCTOR_CHECKS=(
   graphify
   graphify-path playwright browser-mcp   # one line, as `flock timeout`: _check_playwright and then _check_browser-mcp are at the END of this file
   build
-  provenance
+  provenance sigstore-root   # one line, as `flock timeout`: _check_sigstore-root follows _check_provenance (D-8388)
   fleet
   memory test-slice testbox   # one line, as `flock timeout`: _check_test-slice follows _check_scopes, _check_testbox follows it (D-7413)
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
@@ -5700,6 +5700,75 @@ _check_provenance() {
     return 0
   fi
   _dr_pass provenance "the completed-install record carries no unsigned mark"
+}
+
+# ── sigstore-root: how old is the trusted root this tree verifies against? ──
+# (D-8388.) `ccrc update` verifies a release's bundle with
+# `deploy/verify-provenance.mjs` against the Sigstore trusted root vendored
+# beside it, `deploy/sigstore-trusted-root.jsonl` (D-3119): a snapshot, one
+# TrustedRoot per line, of the keys Sigstore and GitHub published when it was
+# taken. Sigstore rotates those keys, and a root taken before a rotation
+# refuses every bundle signed with the new key — `--allow-unsigned` does not
+# apply to a FAILING bundle — so the box stops updating with nothing having
+# changed on it. This check reads the newest validity start of any key in the
+# file, the one date the file itself carries, and WARNs past the limit below.
+#
+# The limit: since GitHub's own authorities joined the vendored file (2023;
+# their keys rotate about twice a year) the newest start of any key in it has
+# moved every 38 to 232 days, so a limit above the longest gap does not warn
+# on a root refreshed after the newest rotation, and 270 days still names one
+# that has missed a rotation within about two months of it.
+DR_SIGSTORE_ROOT_MAX_DAYS=270
+#
+# FOUR ANSWERS, never folded: no verifier in this tree -> SKIP (nothing here
+# reads a root); jq or date missing -> SKIP, unmeasured (jq's own check FAILs
+# that box); a root that is missing, not a readable regular file, not JSON
+# lines, or holds no validity start it can read -> WARN `unreadable` (every
+# verified update would be refused); the newest start older than the limit
+# -> WARN `stale`; otherwise PASS, naming the date and the age. Never a FAIL:
+# the box runs, and refreshing the root is a release's act, as `provenance`'s
+# remedy is the operator's.
+_check_sigstore-root() {
+  local tree root verifier shown got ns day now age
+  tree="$(cd "$CCRC_HERE/.." 2>/dev/null && pwd)" || tree="$CCRC_HERE/.."
+  root="$tree/deploy/sigstore-trusted-root.jsonl"
+  verifier="$tree/deploy/verify-provenance.mjs"
+  # Named from `~`, as an operator types it: no home path in a line that may leave the box.
+  shown="$root"; [ -n "${HOME:-}" ] && [[ "$root" == "$HOME"/* ]] && shown="~${root#"$HOME"}"
+  local fix="refresh deploy/sigstore-trusted-root.jsonl from the Sigstore TUF root (gh attestation trusted-root > deploy/sigstore-trusted-root.jsonl) in a release PR, and ccrc update onto that release; to verify one update before it ships, point CCRC_SIGSTORE_TRUSTED_ROOT at a freshly fetched copy"
+  if [ ! -e "$verifier" ]; then
+    _dr_skip sigstore-root "this tree ships no provenance verifier (${shown%/*}/verify-provenance.mjs), so no Sigstore trusted root is read here"
+    return 3
+  fi
+  if ! command -v jq >/dev/null 2>&1 || ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
+    _dr_skip sigstore-root "jq or date is not usable here, so the Sigstore trusted root's age was not measured"
+    return 3
+  fi
+  # `-f` before `-r`, and both before any read (D-3025).
+  if [ ! -f "$root" ] || [ ! -r "$root" ]; then
+    _dr_warn sigstore-root "unreadable — the vendored Sigstore trusted root $shown is not a readable regular file, so its age was not measured and ccrc update cannot verify a release against it" "$fix"
+    return 2
+  fi
+  # Every `validFor.start` of every key, in every line; `.999Z`-style fractions
+  # dropped, since jq's ISO-8601 reader takes whole seconds only.
+  got="$(jq -rs '[.[] | .. | objects | .validFor? | objects | .start? | strings]
+    | if length == 0 then error("no validity start") else
+        (map(sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | max | floor | "\(.)\t\(todate[0:10])") end' "$root" 2>/dev/null)" || got=""
+  ns="${got%%$'\t'*}"; day="${got#*$'\t'}"
+  if ! [[ "$ns" =~ ^[0-9]{1,12}$ ]] || ! [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    _dr_warn sigstore-root "unreadable — the vendored Sigstore trusted root $shown does not parse as JSON lines holding a key's validity start, so its age was not measured and ccrc update cannot verify a release against it" "$fix"
+    return 2
+  fi
+  if [ "$ns" -gt "$now" ]; then
+    _dr_pass sigstore-root "the vendored Sigstore trusted root's newest key becomes valid on $day, after this box's clock (limit ${DR_SIGSTORE_ROOT_MAX_DAYS} days)"
+    return 0
+  fi
+  age=$(( (now - ns) / 86400 ))
+  if [ "$age" -gt "$DR_SIGSTORE_ROOT_MAX_DAYS" ]; then
+    _dr_warn sigstore-root "stale — the vendored Sigstore trusted root's newest key became valid on $day, $age days ago, over the ${DR_SIGSTORE_ROOT_MAX_DAYS}-day limit: a key Sigstore has rotated in since is likely missing from it, and ccrc update refuses a release signed with such a key" "$fix"
+    return 2
+  fi
+  _dr_pass sigstore-root "the vendored Sigstore trusted root's newest key became valid on $day, $age days ago (limit ${DR_SIGSTORE_ROOT_MAX_DAYS} days)"
 }
 
 # ── the two boxes' matched set ────────────────────────────────────────────

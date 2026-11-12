@@ -163,6 +163,22 @@ export function installCcrc(home: string): void {
   // never the installed copy, and both deploy lanes place `deploy/` whole. COPIES, so a row may replace one
   // (`writeShippedTimer`).
   plantShippedTimers(join(home, 'ccrc'));
+  // D-8388: `_check_sigstore-root` reads `deploy/sigstore-trusted-root.jsonl` beside the tree's verifier. A real tree
+  // ships both (`deploy/` is placed whole); the fixture's root is dated from the moment it is planted, never the vendored
+  // one, whose age is a fact about the day a suite runs. `ccrc-doctor-sigstore-root.test.ts` drives every other answer.
+  plantSigstoreRoot(join(home, 'ccrc'));
+}
+
+/** `<tree>/deploy/verify-provenance.mjs` (a link to the shipped verifier) and a trusted root whose one key became valid
+ *  a day before `now`, in the shape `gh attestation trusted-root` prints (D-8388). */
+export function plantSigstoreRoot(tree: string, now = Date.now()): void {
+  mkdirSync(join(tree, 'deploy'), { recursive: true });
+  symlinkSync(join(REPO, 'deploy', 'verify-provenance.mjs'), join(tree, 'deploy', 'verify-provenance.mjs'));
+  const start = new Date(now - 86_400_000).toISOString().replace(/\.\d+Z$/, 'Z');
+  writeFileSync(join(tree, 'deploy', 'sigstore-trusted-root.jsonl'), `${JSON.stringify({
+    mediaType: 'application/vnd.dev.sigstore.trustedroot+json;version=0.1',
+    certificateAuthorities: [{ uri: 'https://ca.example', validFor: { start } }],
+  })}\n`);
 }
 
 /** `~/.ccrc/auth.scrypt`, as `ccrc passwd` really writes it: 0600, one line,
