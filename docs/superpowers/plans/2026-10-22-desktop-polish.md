@@ -3408,6 +3408,44 @@ R15 gains one sentence for the union, one for single quotes and one for the glue
 
 - **D-8291** - `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
 
+### Task C26: the macOS test legs go green, so a promotion to stable can pass its gate (D-8343) — now
+
+**Why.** The operator asked to promote v0.0.1115. `release-stable`'s gate needs a green `full-suite` on the commit, and
+`full-suite` includes the macOS test shards. The manual full run 42992355563 on `0efa0c8a3` had every Linux leg green and
+three of eight macOS shards red; the last standalone macOS run, 41949722215 (2026-11-05, `3231cb2b5`), was red too. The
+operator chose to fix macOS, not to make the gate ignore it. Each cause, fix and measurement is in `c26.md`.
+
+**Items, and what was done.**
+- **`siwc-trial.test.ts` (73 cases at the 15 s wait).** `HTTPServer.server_bind` names the server `socket.getfqdn(host)`,
+  a reverse lookup of 127.0.0.1 that has taken about 35 s in a new process on the macOS runner (measured for
+  `ccgpt-proxy.py`'s `_Server`). Both fakes printed their port after `startFake`'s 15 s wait ("auth did not start"), and
+  the tool's own sign-in listener paid it too. The fakes and the shipped tool (`deploy/siwc-trial.py`'s `_Server`) bind
+  through `TCPServer`'s bind and set the two names themselves. A new describe makes `getfqdn` fatal in the process it
+  starts, so Linux shows the defect: red on `main`, green here.
+- **`delegation-rig-w0.test.ts:493` (an empty transcripts list).** `rig.sh`'s `sessions_snap` listed the transcripts with
+  `find -printf`, which is GNU find's; BSD find refuses it, and the `|| true` hid the refusal. It now lists them with
+  `find` and `wc -c`. A new case runs it with a `find` that refuses `-printf` as BSD's does: red on `main`, green here.
+- **`ccd-tick-diet-equivalence-route.test.ts` (E9 under C).** The batch ended in 0.4 s with an empty stderr and no row
+  begun, its rc unrecorded; the cause below is inferred, not seen. The bound it runs under, the test helper `BOUNDED` (`ccdWsHelpers.ts`), exits 125 with nothing on stderr when
+  either side's `setpgid` fails with an errno other than EACCES or ESRCH; the daily run of 2026-11-09 shows the same
+  silent 125 in `ccd-operator-choice.test.ts`. On XNU that errno does not prove that the group is missing, so `BOUNDED`
+  now asks the group itself before it gives up, which covers a failure once the group exists, and every 125 and 127 says
+  why on stderr. A new pair of cases makes one side's `setpgid` fail with EPERM once the group exists, the condition
+  inferred for Darwin: red on `main` (125), green here. The runner's
+  "a row never finished" line now carries the batch's rc and signal.
+- **Run 41949722215.** Its one failing test, `ledgers-secrets.test.ts`'s `kept2`, was fixed on `main` after that run (#2286:
+  two planted names were one file on macOS's case-insensitive disk); its cancelled shard 3/4 was cut at the 55-minute deadline of the four-shard plan, which D-8265 replaced with
+  eight. Neither needs a change here.
+
+No test is skipped on Darwin, no Linux assertion is loosened, no timeout is raised, and the gate, `full-suite` and
+`macos.yml` are unchanged.
+
+- **D-8343** - `macos-legs-green`: Task C26, issued on 2026-11-11. The three red macOS files of run 42992355563: the siwc
+  fakes and the trial's sign-in listener bind without `HTTPServer`'s `getfqdn` (about 35 s on macOS), `rig.sh`'s
+  `sessions_snap` lists transcripts without GNU find's `-printf`, and the test bound `BOUNDED` decides from the child's
+  process group rather than from a `setpgid` errno, and names every 125 and 127 on stderr. Each fix ships with a case that
+  is red on Linux without it. Departures are named by slug in `c26.md`.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
