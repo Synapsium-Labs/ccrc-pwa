@@ -657,6 +657,103 @@ families; the score with its interval; the ccrc release and Claude Code builds; 
 steering and W4 agents-on were armed on the families and node measured at the time (the safest baseline is taken after
 W4 is armed on that node, or with both states named, so a later rise is not credited to the Overlord).
 
+## The subject (Task 9: W0-20, W0-21, W0-22), measured 2026-11-11 and 2026-11-12
+
+The subject is a scratch session in `project-w0`, at home on `lane-a` (`acct-12`), on Claude Code 2.1.322; `ccd caps`
+advertised `swap`, `swap-busy-v1` and `hibernate-roll` (Step 1). Every text it was given is synthetic. Every result
+here is **model** (what a real model did, read from its transcript, its mail and its files), on 2.1.322 alone: the
+three lanes below all ran that build.
+
+### W0-20: nudge-and-read against typed text
+
+Ten small closed tasks (write a file, compute a number with a shell command, reply with the result), each given to the
+subject twice: typed by the operator at the console's prompt, and mailed by the conductor, read by the subject through
+`ccrc-api`. Even-numbered texts went by mail first (2026-11-11, 13:50 to 14:00 UTC), the operator typed all ten
+(16:18 to 16:25), and the odd-numbered ones went by mail last (2026-11-12, 11:48 to 11:57). Times are from the
+subject's transcript: the send, the mail nudge's row, the first tool call, and the turn's end.
+
+| Measure | Typed (10) | Mailed (10) |
+|---|---|---|
+| Send to the nudge (the mail gate's wait) | none | p50 90.3 s, min 10.2 s, max 113.7 s |
+| Nudge (or typed send) to the first tool call | p50 1.8 s, max 2.2 s | p50 2.0 s, max 3.4 s |
+| Nudge (or typed send) to the reply | p50 2.9 s, max 4.1 s (in the pane) | p50 9.0 s, max 22.5 s (by mail) |
+| Send to the reply | p50 2.9 s | p50 97.9 s, max 127.7 s |
+| Done as asked | 10 of 10 | 10 of 10 |
+| The operator's rating of the pair | all ten 5 | |
+
+- **The gate is the worker row of `MAIL_PACE`.** It waits for 60 s of measured idle (`quietMs`) and allows no second
+  nudge into one session within 120 s of the last (`cooldownMs`), on the lane's 10 s sweep. Mailed one after another,
+  the nudges landed about two minutes apart (13:50:39, 13:52:41, 13:54:42, 13:56:46, 13:58:49). Only the first
+  mail of a round (t02, 10.2 s) found the subject idle long enough and no recent nudge. t01, the first mail of the
+  second day, also woke the subject from hibernation, and still took only 68.7 s.
+- **Net of the gate, mail costs about 6 s more than typing,** spent writing and sending the reply mail. The
+  outliers are explained:
+  - t02, 22.5 s: the first mail the subject ever answered. It read the coordinator skill's references to learn how to
+    reply.
+  - t08, 14.0 s, and t10, 13.4 s: their replies were refused (see below).
+  A cleared subject paid the t02 cost again on its first mail after each `/clear` (W0-21).
+- **A busy reader blocked the subject's replies.** Mail between two sessions outside a run is bounded at three unacked
+  mails per sender and recipient (`PEER_MAIL_MAX_OUTSTANDING`) and twelve per sender per hour (`PEER_MAIL_HOURLY`).
+  The conductor sent the even texts from one long foreground wait. The subject's first three replies sat
+  delivered-but-unacked, because mail reaches a session only when it is idle. Its replies to t08 and t10 were each
+  refused `429 peer-quota` twice. The subject held both, told the operator in its pane, and sent them once the
+  conductor's inbox acked the first three. On the second day the conductor acked each reply before the next send, and
+  no refusal recurred. This is a method lesson for the conductor and a proposal (11, below), not a delivery failure:
+  nothing was lost.
+
+**Outcome:** fidelity is equal (10 of 10 both ways), and the operator rated every pair 5. Net of the gate, latency to
+the first tool call is at most 3.4 s, and to a reply by mail it is 9.0 s at p50 (four of ten above 10 s, for the
+reasons above). **The gate dominates** (p50 90 s against at most 3.4 s), so the outcome is the plan's last branch:
+the Overlord's own `MAIL_PACE` row (C24). No change is needed to the wording of the `messages` result or to the
+skill clause.
+
+### W0-21: a swap at idle and one mid-turn, each followed by a stand-in renewal
+
+Three facts were mailed (a canary word, a count and a time) and written by the subject to `w0-card.md`, 3 lines.
+
+| Run | Swap | What was lost | After the operator's `/clear`: card re-read, three closed-form questions |
+|---|---|---|---|
+| At idle | `ccd swap <subject> <lane-b>`, rc 0 in 1.3 s; the resumed session kept its uuid | nothing | 3 of 3 (`lantern-58`, `12`, `07:40`) |
+| Mid-turn | `ccd swap --interrupt <subject> <lane-b>`, rc 0 in 1.5 s, 36 s into a 150 s foreground command (the hook's turn marker read `working`) | the in-flight command, killed with exit 137, and nothing more | 3 of 3 |
+
+- **Mid-turn, the turn itself survived.** ccd's restart typed its own continuation prompt: "Continue from where you
+  left off. Note: ccd restarted this session (an account swap asked for by hand) after its previous process was
+  stopped mid-turn…". The subject checked its state, found the file unwritten, re-ran the command in the foreground
+  and replied 162 s after the restart. Its reply named the killed attempt.
+- **A first mid-turn attempt measured something else.** The subject's harness refuses a foreground `sleep` longer than
+  its limit ("Blocked: sleep 120 followed by …"), so the subject ran that command as a background shell and ended its
+  turn. The `--interrupt` swap, 22 s later, therefore met a session with a turn already ended and a background task
+  running (lane-b to lane-a, 1.5 s). The restart's turn marker recorded `lostBg 1` (`shell`). The resumed session
+  got Claude Code's task notification ("Background shell command didn't finish before the previous session ended")
+  and took no turn of its own, so the task's file was never written. A background task does not survive a swap,
+  and nothing re-runs it unless a nudge asks. The run above was then made with a foreground command the harness
+  allows.
+
+**Outcome: both pass, as designed.** No more than the in-flight command was lost, so the resumed-long trigger gains
+nothing, and the probes passed, so no restart bound is taken from this run. Every `/clear` was the operator's, at a
+structured ask. After the first, the conductor waited for the subject's uuid to change before mailing: the ask's answer
+can come before the act. In one run the re-read mail was sent 11 s before the `/clear` landed, and was delivered
+after it only because of the gate.
+
+### W0-22: a continuity record for each lane
+
+The conductor chose two lanes of the fleet's own provider, other than the subject's home, as the coordinator directed
+(the operator's answer to setup item 163 named none): `lane-b` (`acct-04`) and `lane-c` (`acct-10`). Each had 21% of its seven-day window used
+and no Fable in its sweep reading. Another provider's lane is allowed by the spec's agreed ruling 6. It was not tested
+here, by the coordinator's call, so that no other provider saw the subject's text. For each lane the subject was
+swapped there from `lane-a` at idle, given the four checks, and swapped back. Its project carries no pool tag.
+
+| Check | How | `lane-b` | `lane-c` |
+|---|---|---|---|
+| The anchor canary | The anchor slot does not exist until W1a. The canary is therefore a token that only ccrc's own SessionStart hook context carries: its graph line's commit and node count, answered from context before any command or read | right (the transcript's hook text agrees) | right |
+| A deny rule | A synthetic project rule, `Bash(echo w0-deny-probe:*)`, in the subject's own scratch project settings. The subject ran the command once | "Permission to use Bash with command echo w0-deny-probe 1 has been denied." | the same, for `… 2` |
+| A reader | One `Explore` subagent (it ran on Haiku), asked only to read the card and return fact 2 | fact 2, verbatim | fact 2, verbatim |
+| A closed-form probe after `/clear` | The operator's `/clear`, then a mail: re-read the card and answer one value | `12` | `07:40` |
+
+The client side is W0-01, W0-02, W0-15 and W0-16 above, read on 2.1.312 and 2.1.322. **Outcome: four passes on each
+lane, so the operator may set the record for `lane-b` and `lane-c` on 2.1.322 (W1).** The subject ended on its home
+lane. A lane on another build has no record from this run.
+
 ## Rows waiting for W0b
 
 W0-20 (nudge-and-read against typed text), W0-21 (a swap with a stand-in renewal), W0-22 (a continuity record per
@@ -697,6 +794,15 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
   `project,local` (its grants in a `--settings` file) to measure the model at all. The refusal is a row of its own,
   measured from a committed scenario: `ov-subagent-model-force-hook`, the same arm with the default sources and so with
   ccrc's hook loaded (W0-11; proposal 1).
+- **w0b-synthetic-deny-rule-in-the-subjects-project, method.** W0-22's deny check needs a rule that fires and is
+  harmless if it does not. The fleet's own deny rules all guard account and secret paths: trying one could read a
+  value if it failed, and the conductor's own session hook refuses even naming such a path in a mail. So the conductor
+  wrote one synthetic rule, `Bash(echo w0-deny-probe:*)`, into the subject's scratch project settings (setup item 163
+  made the subject available "however required"), and swapped the subject afresh onto each lane so the rule loaded at
+  the start. The rule is removed when the wave ends.
+- **w0b-a-background-shell-arm, method.** W0-21's first mid-turn swap met a background shell rather than a running
+  turn, because the subject's harness refuses a long foreground `sleep`. It is recorded as its own arm, and the
+  mid-turn case was re-run with a foreground command the harness allows.
 
 ## Proposals the outcomes select (for the coordinator; the design is not edited)
 
@@ -728,3 +834,18 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
 10. **The uuid comments (W0-05).** The attribution comment in `server/src/coord/routes.ts` and the socket header in
     `server/src/sessionws.ts` say a compaction rotates the uuid; a manual compaction does not, and a real automatic one
     is unmeasured (W0-05). A follow-up issue, not W0.
+11. **Peer mail: an invited reply is never refused (W0-20).** Outside a run, mail between two sessions is bounded at
+    three unacked mails per pair and twelve per sender per hour, and mail reaches only an idle session. A busy reader
+    therefore blocks the replies it asked for: the subject's answers to t08 and t10 were refused `peer-quota` twice
+    while the conductor sat in one long wait. Three changes, smallest first:
+    - a reply (`kind: answer`) to a mail the recipient itself sent does not count against the pair's bound (this needs
+      the reply to name the mail it answers);
+    - mail over the bound is held queued until a slot frees, rather than refused;
+    - a refusal says when the mail will go ("when the recipient reads its mail").
+    The Overlord's own mail runs inside its run, where these bounds do not apply, so this is a follow-up issue for
+    today's sessions, raised through the coordinator, and not W0's or W1's.
+12. **A swap does not carry a background task (W0-21).** Claude Code's notice about a lost background shell reaches
+    the resumed session as a queued row, and the session takes no turn on it. The worker stall watch's `restarted`
+    arm mails such a worker, but it stays shadow until `stall-watch-w2-live`. W1's renewal lane, which
+    swaps the Overlord, nudges the resumed session whenever the restart's turn marker records `lostBg` above 0, or
+    W1 names the D5 arm as that nudge and arms it for the Overlord's role.
