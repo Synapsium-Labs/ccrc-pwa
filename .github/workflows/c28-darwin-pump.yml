@@ -1,0 +1,48 @@
+# THROWAWAY (Task C28, D-8345): measures the account sign-in helper's pump on
+# macOS against a mint that has already finished, bare and under load. Removed
+# before the wave-done; it runs on a push to the task's own branch only.
+name: c28-darwin-pump
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ['ws/polish-c28']
+    paths: ['.github/c28-darwin-pump/**', '.github/workflows/c28-darwin-pump.yml', 'ccd/ccd-account-auth']
+
+jobs:
+  pump:
+    runs-on: macos-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install system dependencies
+        run: .github/ci/bounded.sh 300 brew install bash tmux flock jq coreutils
+      - name: Install
+        working-directory: server
+        run: ../.github/ci/bounded.sh 180 npm ci
+      - name: Versions
+        run: |
+          bash --version | head -1; command -v timeout gtimeout; sw_vers; sysctl -n hw.ncpu
+          git log -1 --format='%H %s'
+      - name: Bare, darwin arm
+        run: bash .github/c28-darwin-pump/measure.sh ccd/ccd-account-auth 30 bare
+      - name: Under 2 x ncpu yes, darwin arm
+        run: |
+          for _ in $(seq 1 $(( $(sysctl -n hw.ncpu) * 2 ))); do yes >/dev/null & done
+          bash .github/c28-darwin-pump/measure.sh ccd/ccd-account-auth 40 yes
+          bash .github/c28-darwin-pump/measure.sh ccd/ccd-account-auth 30 yes-linuxarm linux
+          kill $(jobs -p) 2>/dev/null || true
+      - name: Under a test shard, darwin arm
+        working-directory: server
+        run: |
+          ( ./node_modules/.bin/vitest run --maxWorkers=3 test/ccd-ws-*.test.ts >/dev/null 2>&1 ) &
+          sleep 20
+          bash ../.github/c28-darwin-pump/measure.sh ../ccd/ccd-account-auth 40 shard
+          kill %1 2>/dev/null || true
