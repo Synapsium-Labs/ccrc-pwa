@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { takePoisonRecord } from './containedTools.js';
+import { takePoisonRecord, takeExpectedPoison } from './containedTools.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
@@ -93,6 +93,18 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
  *  `run()` calls that follow change nothing about the listing. */
 function box(prefix: string): string {
   return boxAt(mkTmp(prefix));
+}
+
+/** `_svc_have_user_manager`'s probe, which a codex lane's stop and reap ask on Linux (Darwin answers "no manager"
+ *  before asking): `systemctl --user show-environment`, answered 97 by this file's systemctl poison, which reads as NO
+ *  user manager, the nohup arm these cases mean. Read-only `is-active` state queries ride beside it. */
+const NO_MANAGER_PROBE = /^--user (?:show-environment|is-active [A-Za-z0-9@._-]+)$/;
+
+/** Takes `home`'s systemctl poison record when it holds nothing but that probe (D-8394: a case that meets the poison
+ *  on purpose takes it); any other argv in it is left for the teardown, which reds. A Darwin box never asks. */
+function takeNoManagerProbe(home: string): void {
+  const took = takeExpectedPoison(home, 'systemctl', NO_MANAGER_PROBE);
+  if (process.platform === 'darwin') expect(took, 'a Darwin box asked systemctl for a user manager').toBe(false);
 }
 
 /** A fixture HOME `chars` characters long or a little more, carrying the same
@@ -5761,6 +5773,7 @@ describe('ccrc account remove', () => {
 
     const r = run(home, ['account', 'remove', '--id', 'codex-a', '--keep-codex-auth']);
     expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
     const j = oneObject(r);
     expect(existsSync(launcher)).toBe(false);
     expect(readFileSync(auth, 'utf8')).toBe(oauthBytes);
@@ -5791,6 +5804,7 @@ describe('ccrc account remove', () => {
 
     const r = run(home, ['account', 'remove', '--id', 'codex-a', '--keep-codex-auth']);
     expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
     const j = oneObject(r);
     for (const f of state.reaped) expect(existsSync(f), `${f} survived the reap`).toBe(false);
     expect(j['removed']).toEqual(expect.arrayContaining(state.reaped));
@@ -5815,6 +5829,7 @@ describe('ccrc account remove', () => {
       // the nohup arm: the pid file's pid, verified ours, killed.
       const r = run(home, ['account', 'remove', '--id', 'codex-a']);
       expect(r.code, r.stderr).toBe(0);
+      takeNoManagerProbe(home);
       oneObject(r);   // the lane library's own lines left this verb's stdout alone
       await eventually(() => !alive(tier), 'the litellm tier to stop with its account', 5000);
       expect(await portAccepts(lane.exec.litellmPort)).toBe(false);
@@ -5866,6 +5881,7 @@ describe('ccrc account remove', () => {
     plantTmux(home, []);
     const r = run(home, ['account', 'remove', '--id', 'codex-a']);
     expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
     oneObject(r);
     await eventually(() => !alive(pid), 'the bridge to stop with its account', 15_000);
     expect(await portAccepts(lane.exec.proxyPort)).toBe(false);
@@ -6009,6 +6025,7 @@ describe('ccrc account remove', () => {
       plantTmux(home, []);
       const r = run(home, ['account', 'remove', '--id', 'codex-a']);
       expect(r.code, r.stderr).toBe(0);
+      takeNoManagerProbe(home);
       const j = oneObject(r);
       expect(alive(other), 'the removal killed a process it could not prove its own').toBe(true);
       expect(await portAccepts(lane.exec.proxyPort)).toBe(true);
@@ -6043,6 +6060,7 @@ describe('ccrc account remove', () => {
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = run(home, ['account', 'remove', '--id', 'codex-a']);
       expect(r.code, r.stderr).toBe(1);
+      takeNoManagerProbe(home);
       expect(oneObject(r)['error']).toBe('roster-write');
       for (const f of state.laneOnly) {
         expect(existsSync(f), `${f} was reaped while the lane was still rostered`).toBe(true);
@@ -6068,6 +6086,7 @@ describe('ccrc account remove', () => {
       chmodSync(dir, 0o500);
       const r = run(home, ['account', 'remove', '--id', 'codex-a']);
       expect(r.code).toBe(1);
+      takeNoManagerProbe(home);
       const j = oneObject(r);
       expect(j['error']).toBe('artifact-remove');
       expect(String(j['detail'])).toContain(dir);
@@ -6119,6 +6138,7 @@ describe('ccrc account remove', () => {
       const r0 = spawnSync(BASH, ['-c', script], { env: env(home), encoding: 'utf8', input: '' });
       const r = { code: r0.status ?? -1, stdout: r0.stdout ?? '', stderr: r0.stderr ?? '' };
       expect(r.code).toBe(1);
+      takeNoManagerProbe(home);
       const j = oneObject(r);
       expect(j['error']).toBe('codex-reap-failed');
       expect(r.stderr).toContain('tier-unmeasured');
@@ -6224,6 +6244,7 @@ describe('ccrc account remove', () => {
     plantTmux(home, []);
     const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', frontAnswers(2, 'listener-unidentified')].join('\n'));
     expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
     const steps = (oneObject(r)['operator-steps'] ?? []) as string[];
     const onPort = steps.filter((s) => s.includes(`port ${lane.exec.proxyPort}`));
     expect(onPort, JSON.stringify(steps)).toHaveLength(1);
@@ -6296,6 +6317,7 @@ describe('ccrc account remove', () => {
     plantTmux(home, []);
     const r = run(home, ['account', 'remove', '--id', lane.id, '--keep-codex-auth'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
     expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
     const j = oneObject(r);
     expect(usageCtlCalls(home)).toEqual([`--user disable --now ccrc-codex-usage@${lane.id}.timer`]);
     expect(lexists(link), 'ccrc\'s usage timer is still enabled for a removed account').toBe(false);
@@ -6318,6 +6340,13 @@ describe('ccrc account remove', () => {
     // No stand-in: this file's own systemctl poison refuses every call (97).
     const r = run(home, ['account', 'remove', '--id', lane.id]);
     expect(r.code, r.stderr).toBe(0);
+    // …and that refusal is what this case is about, so it takes the record (D-8394): the disable it refused, beside
+    // the no-manager probe and read-only state queries, and nothing else.
+    const asked = takePoisonRecord(home, 'systemctl');
+    expect(asked).toContain(`--user disable --now ccrc-codex-usage@${lane.id}.timer`);
+    for (const l of asked) {
+      if (l !== `--user disable --now ccrc-codex-usage@${lane.id}.timer`) expect(l).toMatch(NO_MANAGER_PROBE);
+    }
     const steps = oneObject(r)['operator-steps'] as string[];
     expect(steps).toContain(`ccrc's usage timer ccrc-codex-usage@${lane.id}.timer is still enabled for the removed account ${lane.id}, so it may go on rewriting $HOME/.cc-limits/${lane.id}.json. Run: systemctl --user disable --now ccrc-codex-usage@${lane.id}.timer`);
     expect(lexists(link)).toBe(true);

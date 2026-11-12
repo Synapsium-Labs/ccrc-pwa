@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
-import { assertNoRealTool } from './containedTools.js';
+import { assertNoRealTool, takeExpectedPoison } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
 import { installVersionedTree } from './installTreeFixture.js';
 import { assertSpineFrontContained } from './codexLaneFixture.js';
@@ -2361,6 +2361,10 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     const r2 = runUpdate(churn);
     expect(r2.code, r2.stdout).toBe(4);
     expect(r2.stdout).toMatch(/^update: gate FAILED after \d+s — ccrc-agent\.service did not stay up \(deploy\/verify-service\.sh exited 1; systemctl --user status ccrc-agent\.service says why\)$/m);
+    // verify-service.sh's failure path dumps the unit's journal tail, and that journal is this file's poison: the
+    // churning case MEANS to reach it, so it takes exactly that read (D-8394); any other journalctl argv still reds.
+    expect(takeExpectedPoison(churn, 'journalctl', /^--user -u ccrc-agent\.service -n \d+ --no-pager$/),
+      'the failing gate asked the journal for the agent unit\'s tail').toBe(true);
   });
 
   itDarwin('Darwin server: the job\'s pid must hold across the window (_ccrc_job_stayed_up) — a churning ccrc job fails the gate, and systemctl is never called (§11 Pins)', () => {

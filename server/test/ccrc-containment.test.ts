@@ -140,6 +140,10 @@ describe('the bus is read physically, loginctl is contained, and every builder s
     expect(() => assertNoRealTool({ ...busUnder(home), PATH: d }, home)).toThrow(/loginctl resolved to .*decoy/);
     const env = ccrcContainedEnv(home, { ...process.env, PATH: `${d}:${process.env['PATH'] ?? ''}` },
       { managers: false, curl: 'poison' });
+    // `managers: false` is a SPINE builder's call, and a spine builder fronts its own systemctl and systemd-run next;
+    // this case plants those two as poisons in its place, so a runner with a real /usr/bin/systemctl stays contained
+    // and loginctl is the one thing under test (D-8394).
+    for (const n of ['systemctl', 'systemd-run']) plantPoison(harnessBin(home), n);
     expect(resolve(env, 'loginctl')).toBe(join(harnessBin(home), 'loginctl'));
     expect(() => assertNoRealTool(env, home)).not.toThrow();
     const ccd = ghContainedEnv(mkTmp('contain-loginctl-ccd-'), {}, { systemd: true });
@@ -229,8 +233,12 @@ describe('the poison teardown: a record nothing took is a standing red (D-8394, 
       expect(start, fn).toBeGreaterThan(-1);
       const body = tmp.slice(start, tmp.indexOf('\n}\n', start));
       expect(body.indexOf('assertNoPoisonLeft(dirs)'), `${fn} scans before it removes`).toBeGreaterThan(-1);
-      expect(body.indexOf('assertNoPoisonLeft(dirs)')).toBeLessThan(body.indexOf('rmSync('));
+      // The removal goes through `removeDir` (the late-writer retry, D-8394), which is `rmSync` recursive and forced.
+      expect(body.indexOf('removeDir('), `${fn} removes through removeDir`).toBeGreaterThan(-1);
+      expect(body.indexOf('assertNoPoisonLeft(dirs)')).toBeLessThan(body.indexOf('removeDir('));
     }
+    const rd = tmp.slice(tmp.indexOf('function removeDir('), tmp.indexOf('\n}\n', tmp.indexOf('function removeDir(')));
+    expect(rd).toContain('rmSync(dir, { recursive: true, force: true, maxRetries: ');
     expect(strip(read('ccdWsHelpers.ts'))).toContain('cleanup: () => { try { assertNoPoisonLeft([home]); } finally {');
   });
 
