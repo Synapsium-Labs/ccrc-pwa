@@ -136,11 +136,16 @@ describe('ccrcContainedEnv — create-if-absent, spine builders, and the loopbac
       writeFileSync(join(home, 'curl-allow-ports'), `${P}\n`);
       const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'loopback' });
       expect(run(env, ['-sS', `http://127.0.0.1:${P}/`])).toBe(7);
+      // D-8389: the release curls' `-g -fsSL` reaches the REAL curl here too (7), on macOS as on Linux: this row has
+      // no platform gate, unlike the four real-curl update rows that pin -g on Linux alone.
+      expect(run(env, ['-g', '-fsSL', '--connect-timeout', '2', '--max-time', '5', `http://127.0.0.1:${P}/rel/SHA256SUMS`]), '-g -fsSL').toBe(7);
       expect(readFileSync(join(home, 'curl-front-passed'), 'utf8')).toContain(`http://127.0.0.1:${P}/`);
       expect(existsSync(join(home, 'curl-poison')), 'nothing refused yet').toBe(false);
       expect(run(env, ['http://127.0.0.1:7788/health']), 'the live server\'s port').toBe(97);
       expect(run(env, ['https://example.invalid/']), 'another host').toBe(97);
       expect(run(env, ['-K', 'x', `http://127.0.0.1:${P}/`]), '-K').toBe(97);
+      expect(run(env, ['-gK', `http://127.0.0.1:${P}/`, `http://127.0.0.1:${P}/`]), '-gK').toBe(97);
+      expect(run(env, ['-gx', `http://127.0.0.1:${P}/`, `http://127.0.0.1:${P}/`]), '-gx').toBe(97);
       // `--url <listed>` reaches the real curl too (7); the `=` form is not a curl option at all (2, curl's own).
       expect(run(env, ['-sS', '--url', `http://127.0.0.1:${P}/`]), '--url').toBe(7);
       expect(run(env, [`--url=http://127.0.0.1:${P}/`]), '--url=').toBe(2);
@@ -148,6 +153,9 @@ describe('ccrcContainedEnv — create-if-absent, spine builders, and the loopbac
       expect(refused).toContain('http://127.0.0.1:7788/health');
       expect(refused).toContain('https://example.invalid/');
       expect(refused).toContain('-K');
+      expect(refused).toContain('-gK');
+      expect(refused).toContain('-gx');
+      expect(readFileSync(join(home, 'curl-front-passed'), 'utf8')).toContain(`http://127.0.0.1:${P}/rel/SHA256SUMS`);
     });
   });
 });
@@ -207,6 +215,17 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     ['an unknown option', ['--no-such-option', ok]],
     ['an abbreviated allowlisted option (curl accepts prefixes; the front is exact)', ['--max-t', '3', ok]],
     ['a short cluster with a letter outside the set', ['-sx', '127.0.0.1:7788', ok]],
+    // D-8389 (R48's first gap): `-g` is admitted, and only in a cluster of the admitted letters. A cluster that LEADS
+    // with it may not carry a config (`K`) or a proxy (`x`) behind it, in a separate or an attached value, nor after
+    // other admitted letters: the cluster is read letter by letter, never by its first. A separate value is a listed
+    // URL, which the URL rule would admit as a positional, so only the cluster's own rule can refuse the row.
+    ['-gK with a value the URL rule admits (a config behind the admitted -g)', ['-gK', ok, ok]],
+    ['-gK attached', ['-gKx', ok]],
+    ['-gx with a proxy the URL rule admits (a proxy behind the admitted -g)', ['-gx', ok, ok]],
+    ['-gx attached', ['-gx127.0.0.1:7788', ok]],
+    ['-gfsSLx (a proxy after the release curls\' whole cluster)', ['-gfsSLx', ok, ok]],
+    ['-fsSLgK', ['-fsSLgK', ok, ok]],
+    ['--globoff (the long spelling; the release curls send -g)', ['--globoff', ok]],
     ['a good URL beside a bad positional', [ok, 'http://127.0.0.1:7788/health']],
     ['--url on the live server\'s port', ['--url', 'http://127.0.0.1:7788/']],
     ['--url= on the live server\'s port', ['--url=http://127.0.0.1:7788/']],
@@ -231,6 +250,12 @@ describe('the loopback curl front parses argv — an option it does not allowlis
       '-w', '\n%{http_code}', `${ok}health`]],
     ['--url', ['--url', ok]],
     ['a header value that holds a URL, beside a good positional', ['-H', 'Referer: http://example.com/', ok]],
+    // D-8389: every release curl in ccd/ccrc and install.sh leads with `-g -fsSL` (D-6748); this suite runs on the
+    // darwin job too, where the four real-curl update rows that pin it on Linux are skipped.
+    ['the release SHA256SUMS fetch shape, -g first', ['-g', '-fsSL', '--connect-timeout', '2', '--max-time', '5', '--max-filesize', '4096',
+      '--speed-limit', '1024', '--speed-time', '30', '-o', '/tmp/x', `${ok}rel/SHA256SUMS`]],
+    ['the release bundle probe shape, -g first', ['-g', '-fsSL', '--connect-timeout', '2', '--max-time', '5', '-o', '/tmp/x', '-w', '%{http_code}', `${ok}b.sigstore.json`]],
+    ['-g inside an admitted cluster', ['-gfsSL', ok]],
   ];
   for (const [what, args] of passes) {
     it(`passes ${what}, to the real curl, with -q first`, () => {
