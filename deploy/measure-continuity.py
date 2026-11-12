@@ -1248,7 +1248,67 @@ def stage7(ctx):
     }}
 
 
-STAGES = {1: stage1, 4: stage4, 6: stage6, 7: stage7}
+# ── stage 3 (wave 6a): the graceful stop's time ──
+# `ccd/ccd#_graceful_stop_note` appends one `graceful-stop <id>: site=<site> mode=<mode> <outcome>` line to
+# swap.log per stop at the swap, limit-resume and hibernate sites. This reads them by site and mode and reports
+# how long the process took to exit (nearest rank, `exited` only); an `alive` outcome is a censored reading (the
+# process outlived the wait), never an exit time. It reports and sets no target: the bound is the operator's.
+S3_GSTOP = re.compile(TS + r" graceful-stop (\S+): site=(swap|limit-resume|hibernate) mode=(shadow|live) (?:(exited|alive)=(0|[1-9][0-9]{0,8})|(no-pid)|(gone-before-signal)|unmeasured=(wedged|no-start-time|stat-unreadable|detach-failed))")
+
+
+def s3_rank(sorted_values, pct):
+    """Nearest-rank percentile of a non-empty ascending list."""
+    return sorted_values[max(0, -(-pct * len(sorted_values) // 100) - 1)]
+
+
+def stage3(ctx):
+    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
+    try:
+        lines = read_lines(path)
+    except FileNotFoundError:
+        return {"graceful_stop": {"swap_log": "absent"}}
+    stops, malformed = 0, 0
+    by_key, exits, censored, why = {}, {}, collections.Counter(), collections.Counter()
+    for line in lines:
+        head = re.match(TS + " ", line)
+        if not head or not in_window(epoch(head.group(1)), ctx) or " graceful-stop " not in line:
+            continue
+        m = S3_GSTOP.fullmatch(line)
+        if not m:
+            malformed += 1
+            continue
+        stops += 1
+        key = f"{m.group(3)}/{m.group(4)}"
+        row = by_key.setdefault(key, {"exited": 0, "alive": 0, "no_pid": 0, "gone_before_signal": 0, "unmeasured": 0})
+        if m.group(5) == "exited":
+            row["exited"] += 1
+            exits.setdefault(key, []).append(int(m.group(6)))
+        elif m.group(5) == "alive":
+            row["alive"] += 1
+            censored[key] += 1
+        elif m.group(7):
+            row["no_pid"] += 1
+        elif m.group(8):
+            row["gone_before_signal"] += 1
+        else:
+            row["unmeasured"] += 1
+            why[m.group(9)] += 1
+    exit_ms = {}
+    for key, vals in sorted(exits.items()):
+        vals.sort()
+        exit_ms[key] = {"n": len(vals), "p50": s3_rank(vals, 50), "p90": s3_rank(vals, 90),
+                        "p99": s3_rank(vals, 99), "max": vals[-1]}
+    return {"graceful_stop": {
+        "stops": stops,
+        "by_site_mode": dict(sorted(by_key.items())),
+        "exit_ms": exit_ms,
+        "censored": dict(sorted(censored.items())),
+        "unmeasured_by_why": dict(sorted(why.items())),
+        "malformed_lines": malformed,
+    }}
+
+
+STAGES = {1: stage1, 3: stage3, 4: stage4, 6: stage6, 7: stage7}
 
 
 def when(s):
