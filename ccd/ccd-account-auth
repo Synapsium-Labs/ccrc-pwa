@@ -567,6 +567,21 @@ AUTH_RUN=''
 # A GLOBAL and not an echoed value: a command substitution would run the spawn
 # in a subshell, and the parent cannot `wait` on another shell's job.
 AUTH_CHILD=''
+# THE MINT'S STDIN CROSSES THE DEADLINE SHIM ON fd 5 (D-8345 fix round 1,
+# `pure-bash-arm-mint-stdin`). `_auth_timeout`'s pure-bash arm, which a box with
+# neither `timeout` nor `gtimeout` runs, starts the command as `"$@" &`, and bash
+# gives an asynchronous command /dev/null for stdin: the redirection a spawn puts
+# on the `_auth_timeout` call never reached the mint, so no pasted code could.
+# MEASURED on Linux, bash 5.3, through this helper's own spawn: the binary arm's
+# mint read the code (rc 0), the pure-bash arm's read nothing (rc 9). The shim is
+# one of three copies pinned byte for byte (`_plat_timeout` in ccd and ccrc), so
+# the fix is here, at the spawns, by the coordinator's ruling: each spawn also
+# hands its stdin over as fd 5 (`5<&0`, after the stdin redirection), which an
+# asynchronous command keeps, and this trampoline puts it back on stdin and
+# `exec`s the mint, so the pid the shim signals is still the mint's. `-p` so no
+# BASH_ENV runs in a shell whose stdout is the stream the pump parses. Both arms
+# of the shim go through it, so the mint sees one shape everywhere.
+AUTH_KEEP_STDIN=("$BASH" -p -c 'exec 0<&5 5<&-; exec "$@"' auth-mint)
 _auth_open_pipes() {
   AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
   mkdir -p "$AUTH_RUN" || return 1
@@ -748,12 +763,16 @@ _auth_spawn_pty_child() {   # <argv…> — background the mint under a pty, set
   # credential-minting path: the arm measured working does not change shape to
   # match the arm that was not.
   if [ "$CCD_OS" = darwin ]; then
-    { exec 7<&- 9<&-; _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@"; } \
+    { exec 7<&- 9<&-; _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" "$@" 5<&0; } \
       < <(exec 7<&- 9<&-; exec cat <"$AUTH_RUN/in.child") \
       >"$AUTH_RUN/out" 2>&1 &
   else
-    _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@" <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+    _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" "$@" \
+      <"$AUTH_RUN/in.child" 5<&0 >"$AUTH_RUN/out" 2>&1 &
   fi
+  # Both arms hand the mint its stdin through AUTH_KEEP_STDIN (D-8345 fix round
+  # 1), the one change either arm has had since the paragraph below: without it
+  # neither arm's code reached the mint on `_auth_timeout`'s pure-bash arm.
   # `exec 7<&- 9<&-` INSIDE THE SUBSTITUTION IS WHAT LETS THE COPIER END AT ALL
   # (D-2735), and it is not hygiene. A process substitution inherits this
   # shell's fds, so without those closes the copier holds fd 9 — a WRITE end on
@@ -1041,10 +1060,12 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   mkdir -p "$cfg" || _auth_die "cannot create $cfg"
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
-  _auth_timeout "$CCRC_AUTH_TIMEOUT" \
+  # `AUTH_KEEP_STDIN` and `5<&0` carry the code channel past the deadline
+  # shim's pure-bash arm (D-8345 fix round 1; see its definition).
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" \
     env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$cfg" \
       "$WRAPPER_DIR/$CCRC_UPSTREAM" auth login --claudeai \
-      <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+      <"$AUTH_RUN/in.child" 5<&0 >"$AUTH_RUN/out" 2>&1 &
   local child=$!
   exec 8<"$AUTH_RUN/out"
   _auth_pump "$child"

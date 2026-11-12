@@ -46,6 +46,44 @@ const fn = (snippet: string, env: NodeJS.ProcessEnv = {}): string =>
 const status = (id: string): Record<string, unknown> =>
   JSON.parse(fs.readFileSync(path.join(REG(h.home), '.auth', `${id}.json`), 'utf8'));
 
+/** A PATH with every program the runner's PATH has EXCEPT a deadline binary,
+ *  so `_auth_timeout` takes its pure-bash arm: `"$@" &` under a watcher that
+ *  sends one TERM and never escalates (D-2764). That arm is what a box with
+ *  neither `timeout` nor `gtimeout` runs, and the suite otherwise never reaches
+ *  it, because the runner carries coreutils. Links, first directory wins, so
+ *  PATH's order holds; the scripts that use it check `command -v timeout
+ *  gtimeout` themselves, as `ccrc-account.test.ts`'s contained PATH does, so a
+ *  link that slipped through reds the case instead of letting it pass about the
+ *  other arm. */
+const PURE_BASH_ARM_GUARD =
+  'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then '
+  + 'printf \'arm=a deadline binary is still on PATH\\n\' > "$OUT"; exit 90; fi';
+const pathWithoutTimeout = (envPath: string): string => {
+  const bin = path.join(h.home, 'no-timeout-bin');
+  if (fs.existsSync(bin)) return bin;
+  fs.mkdirSync(bin);
+  for (const dir of envPath.split(':')) {
+    let names: string[];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (name === 'timeout' || name === 'gtimeout') continue;
+      try { fs.symlinkSync(path.join(dir, name), path.join(bin, name)); } catch { /* an earlier directory has it */ }
+    }
+  }
+  return bin;
+};
+
+/** Stand-ins for the pump's tick read, its seam `_auth_pump_read` (D-8345).
+ *  LOST_EOF is the faithful one: the real tick read, except that the end of the
+ *  stream answers 142, as a timeout, every time, as macOS's `read -t` did. */
+const LOST_EOF = `_auth_pump_read() {
+    local r=0; _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line || r=$?
+    if (( r == 1 )); then sleep "$CCRC_AUTH_TICK"; return 142; fi
+    return "$r"; }`;
+/** BLIND is the worst case: select() never reports fd 8 readable at all, so
+ *  every byte the pump forwards has to come through the drain read. */
+const BLIND = `_auth_pump_read() { line=''; sleep "$CCRC_AUTH_TICK"; return 142; }`;
+
 describe('ccd-account-auth — the status file', () => {
   it('publishes {state,updatedAt} and nothing it was not given', () => {
     fn('AUTH_ID=claude-a; _auth_state starting');
@@ -592,11 +630,12 @@ describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothi
     return feeder;
   };
 
-  const loginWithCode = (id: string, code: string): { code: number; stdout: string; stderr: string } => {
+  const loginWithCode = (id: string, code: string, pureBashArm = false): { code: number; stdout: string; stderr: string } => {
     const feeder = plantFeeder();
     const runIn = path.join(REG(h.home), '.auth', `${id}.run`, 'in');
     const statusPath = path.join(REG(h.home), '.auth', `${id}.json`);
-    const script = `"${feeder}" "${runIn}" "${statusPath}" ${JSON.stringify(code)} & `
+    const script = (pureBashArm ? `OUT="${path.join(h.home, 'arm.txt')}"; ${PURE_BASH_ARM_GUARD}; ` : '')
+      + `"${feeder}" "${runIn}" "${statusPath}" ${JSON.stringify(code)} & `
       + `"${HELPER}" ${JSON.stringify(id)} login; rc=$?; wait; exit $rc`;
     const opts = {
       encoding: 'utf8' as const, cwd: h.home, timeout: 90_000,
@@ -610,6 +649,7 @@ describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothi
           CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN },
         { systemd: true, tmux: true }),
     };
+    if (pureBashArm) opts.env['PATH'] = pathWithoutTimeout(opts.env['PATH'] ?? '');
     try { return { code: 0, stdout: execFileSync('bash', ['-c', script], opts), stderr: '' }; }
     catch (e) {
       const err = e as { status?: number; stdout?: string; stderr?: string };
@@ -622,6 +662,19 @@ describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothi
     const r = loginWithCode('claude-a', 'fixture-code-123');
     expect(r.stderr).toBe('');
     expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'seen-code'), 'utf8')).toBe('fixture-code-123');
+    expect(status('claude-a')).toMatchObject({ state: 'done' });
+  });
+
+  // `pure-bash-arm-mint-stdin` (D-8345 fix round 1): on a box with neither
+  // `timeout` nor `gtimeout`, `_auth_timeout`'s `"$@" &` gave the sign-in
+  // /dev/null for stdin, so the code went down fd 9 to nobody and the run
+  // expired. The spawn now hands its stdin over on fd 5 as well.
+  it('on _auth_timeout\'s pure-bash arm, the code still reaches the sign-in, and it reaches done', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    const r = loginWithCode('claude-a', 'fixture-code-123', true);
+    expect(fs.existsSync(path.join(h.home, 'arm.txt')), 'the case ran on the GNU arm').toBe(false);
+    expect(r.code, r.stderr).toBe(0);
     expect(fs.readFileSync(path.join(h.home, 'seen-code'), 'utf8')).toBe('fixture-code-123');
     expect(status('claude-a')).toMatchObject({ state: 'done' });
   });
@@ -2070,43 +2123,6 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
 // instead of waiting on a macOS leg that gets cancelled before it reports.
 // What is NOT claimed here is anything about BSD `script(1)`; that lives in
 // `script-shim-platform.test.ts` and only macOS can answer it.
-/** A PATH with every program the runner's PATH has EXCEPT a deadline binary,
- *  so `_auth_timeout` takes its pure-bash arm: `"$@" &` under a watcher that
- *  sends one TERM and never escalates (D-2764). That arm is what a stock macOS
- *  box runs, and the suite otherwise never reaches it, because the runner
- *  carries coreutils. Links, first directory wins, so PATH's order holds; the
- *  scripts that use it check `command -v timeout gtimeout` themselves, as
- *  `ccrc-account.test.ts`'s contained PATH does, so a link that slipped through
- *  reds the case instead of letting it pass about the other arm. */
-const PURE_BASH_ARM_GUARD =
-  'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then '
-  + 'printf \'arm=a deadline binary is still on PATH\\n\' > "$OUT"; exit 90; fi';
-const pathWithoutTimeout = (envPath: string): string => {
-  const bin = path.join(h.home, 'no-timeout-bin');
-  if (fs.existsSync(bin)) return bin;
-  fs.mkdirSync(bin);
-  for (const dir of envPath.split(':')) {
-    let names: string[];
-    try { names = fs.readdirSync(dir); } catch { continue; }
-    for (const name of names) {
-      if (name === 'timeout' || name === 'gtimeout') continue;
-      try { fs.symlinkSync(path.join(dir, name), path.join(bin, name)); } catch { /* an earlier directory has it */ }
-    }
-  }
-  return bin;
-};
-
-/** Stand-ins for the pump's tick read, its seam `_auth_pump_read` (D-8345).
- *  LOST_EOF is the faithful one: the real tick read, except that the end of the
- *  stream answers 142, as a timeout, every time, as macOS's `read -t` did. */
-const LOST_EOF = `_auth_pump_read() {
-    local r=0; _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line || r=$?
-    if (( r == 1 )); then sleep "$CCRC_AUTH_TICK"; return 142; fi
-    return "$r"; }`;
-/** BLIND is the worst case: select() never reports fd 8 readable at all, so
- *  every byte the pump forwards has to come through the drain read. */
-const BLIND = `_auth_pump_read() { line=''; sleep "$CCRC_AUTH_TICK"; return 142; }`;
-
 describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)', () => {
   /** Drive one spawn+pump+wait cycle with the arm forced, and report what
    *  happened through a FILE.
@@ -2264,6 +2280,18 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
       expect(r['expired']).toBe('0');
       expect(r['pump'], 'the drain read an empty stdin instead of the stream on fd 8')
         .toBe('line-one\nline-two\ntail-no-newline\n');
+    });
+
+    // THE SAME ARM'S /dev/null, ON THE MINT (`pure-bash-arm-mint-stdin`, D-8345
+    // fix round 1). The spawn's `<in.child` sat on the `_auth_timeout` call, and
+    // that arm's `"$@" &` replaced it with /dev/null, so the code never arrived.
+    it(`${os}: on _auth_timeout's pure-bash arm the operator's code still reaches the mint (D-8345)`, () => {
+      const r = drive(os, {
+        mint: 'read -r c; [ "$c" = SECRET-42 ] && exit 0 || exit 9', code: 'SECRET-42', pureBashArm: true,
+      });
+      expect(r['arm'], 'the case ran on the GNU arm, which always passed stdin through').toBeUndefined();
+      expect(r['hung']).toBeUndefined();
+      expect(r['rc'], 'the mint read /dev/null, not the code written to fd 9').toBe('0');
     });
   }
 
