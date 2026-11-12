@@ -369,6 +369,11 @@ describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () 
     expect(fam(l, 'betaValue')).toEqual(['claude-code-20250219', 'interleaved-thinking-2025-05-14']);
   });
 
+  it('anthropic-beta values are counted from every header line, whatever its name\'s case, through the one parser', async () => {
+    const l = await one(body(), { headerLines: [['Anthropic-Beta', ' effort-2025-11-24 ,'], ['ANTHROPIC-BETA', 'claude-code-20250219']] });
+    expect(fam(l, 'betaValue')).toEqual(['effort-2025-11-24', 'claude-code-20250219']);
+  });
+
   // The row `any other top-level key` is the named case 'an unknown top-level key …' below.
 
   it('stream is carried as sent; absent is false', async () => {
@@ -983,5 +988,54 @@ describe.skipIf(!PY)('inbound: the arms no earlier case pinned (codex-bridge pla
     const wide = '€'.repeat(50_000); // 50,000 characters, 150,000 UTF-8 bytes: past one argv string's limit
     const l = await one(body({ messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: wide }] }] }));
     expect(l.request.items).toEqual([out('call_fx1', wide)]);
+  });
+});
+
+
+// The anthropic-beta parser (inbound.betas) and the caller test built on it (inbound.from_claude_code): a request is
+// Claude Code's when one of its beta values is Claude Code's identity beta, inbound.CLAUDE_CODE_BETA. server.py counts a
+// model substitution under modelSubstitution for such a request and under foreignSubstitution for any other (known.py).
+describe.skipIf(!PY)('inbound: the anthropic-beta values and whether a request is Claude Code\'s', () => {
+  const betasOf = async (o: Record<string, unknown>): Promise<Line> => (await run([{ op: 'inbound-betas', ...o }]))[0];
+
+  it('CLAUDE_CODE_BETA is Claude Code\'s identity beta', async () => {
+    expect((await betasOf({})).CLAUDE_CODE_BETA).toBe('claude-code-20250219');
+  });
+
+  it('no header: no values, and not Claude Code', async () => {
+    expect(await betasOf({})).toMatchObject({ betas: [], fromClaudeCode: false });
+    expect(await betasOf({ headerLines: [] })).toMatchObject({ betas: [], fromClaudeCode: false });
+  });
+
+  it('comma-separated values, whitespace trimmed, empty ones dropped', async () => {
+    const l = await betasOf({ headers: { 'anthropic-beta': ' interleaved-thinking-2025-05-14 ,, claude-code-20250219 ,' } });
+    expect(l).toMatchObject({ betas: ['interleaved-thinking-2025-05-14', 'claude-code-20250219'], fromClaudeCode: true });
+  });
+
+  it('the header name is read case-insensitively', async () => {
+    for (const name of ['Anthropic-Beta', 'ANTHROPIC-BETA', 'anthropic-beta']) {
+      const l = await betasOf({ headers: { [name]: 'claude-code-20250219' } });
+      expect(l, name).toMatchObject({ betas: ['claude-code-20250219'], fromClaudeCode: true });
+    }
+  });
+
+  it('every repeated header line is read, the claude-code beta on the second line among them', async () => {
+    const l = await betasOf({ headerLines: [['anthropic-beta', 'structured-outputs-2025-11-13'], ['Anthropic-Beta', ' oauth-2025-04-20, claude-code-20250219 ']] });
+    expect(l).toMatchObject({ betas: ['structured-outputs-2025-11-13', 'oauth-2025-04-20', 'claude-code-20250219'], fromClaudeCode: true });
+  });
+
+  it('the plugin\'s measured betas are not Claude Code\'s', async () => {
+    const l = await betasOf({ headerLines: [['anthropic-beta', 'structured-outputs-2025-11-13, oauth-2025-04-20']] });
+    expect(l).toMatchObject({ betas: ['structured-outputs-2025-11-13', 'oauth-2025-04-20'], fromClaudeCode: false });
+  });
+
+  it('a value only containing the claude-code beta is not it: the match is whole', async () => {
+    for (const v of ['claude-code-20250219x', 'xclaude-code-20250219', 'claude-code-20250219;q=1', 'claude-code']) {
+      expect((await betasOf({ headers: { 'anthropic-beta': v } })).fromClaudeCode, v).toBe(false);
+    }
+  });
+
+  it('another header carrying the value is not the beta', async () => {
+    expect((await betasOf({ headers: { 'x-anthropic-beta': 'claude-code-20250219', 'user-agent': 'claude-code-20250219' } })).fromClaudeCode).toBe(false);
   });
 });

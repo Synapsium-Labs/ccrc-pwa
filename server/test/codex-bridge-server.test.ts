@@ -40,6 +40,8 @@ type Json = Record<string, any>;
 
 const LANE = 'lane-a';
 const MODEL = BRIDGE_MODELS[0];
+/** Claude Code's identity beta (inbound.CLAUDE_CODE_BETA): a request carrying it is Claude Code's. */
+const CLAUDE_CODE_BETA = 'claude-code-20250219';
 /** Every case flushes the stats file at each request, so a case reads what the bridge counted. */
 const BASE_CONSTS = { 'stats.FLUSH_S': 0 };
 
@@ -106,14 +108,16 @@ function parseFrames(text: string, at: number[]): Frame[] {
 }
 
 /** One request to the bridge; resolves when the bridge closes the answer. `key: null` sends none; `bearer` sends it
- *  as `Authorization: Bearer`; `raw` is sent as the body, byte for byte, in place of `body`'s JSON. Each SSE frame
- *  carries the time (ms from the request) its bytes arrived. */
+ *  as `Authorization: Bearer`; `raw` is sent as the body, byte for byte, in place of `body`'s JSON. A header given as
+ *  a list is sent as one line per value, its name spelled as given. It sends no `anthropic-beta` unless `headers`
+ *  does, so a request is not Claude Code's (inbound.from_claude_code) unless the case says so. Each SSE frame carries
+ *  the time (ms from the request) its bytes arrived. */
 function call(
   b: SpawnedBridge, route: string,
-  o: { method?: string; body?: Json; raw?: Buffer; key?: string | null; bearer?: boolean; headers?: Record<string, string>; onHead?: () => void } = {},
+  o: { method?: string; body?: Json; raw?: Buffer; key?: string | null; bearer?: boolean; headers?: Record<string, string | string[]>; onHead?: () => void } = {},
 ): Promise<Answer> {
   const t0 = Date.now();
-  const headers: Record<string, string> = { 'content-type': 'application/json', ...(o.headers ?? {}) };
+  const headers: Record<string, string | string[]> = { 'content-type': 'application/json', ...(o.headers ?? {}) };
   const key = o.key === undefined ? b.key : o.key;
   if (key !== null) {
     if (o.bearer) headers.authorization = `Bearer ${key}`;
@@ -864,12 +868,67 @@ describe.skipIf(!PY)('the local routes', () => {
 
   it('a model outside the catalogue is 404 and never reaches upstream', async () => {
     await withBridge([], async ({ bridge, up, lane }) => {
-      const a = await call(bridge, '/v1/messages', { body: messages({ model: 'claude-fallback-x' }) });
+      const a = await call(bridge, '/v1/messages', { body: messages({ model: 'claude-fallback-x' }), headers: { 'anthropic-beta': CLAUDE_CODE_BETA } });
       expect(a.status).toBe(404);
       expect(a.json?.error.type).toBe('not_found_error');
       expect(a.headers['x-should-retry']).toBe('false');
       expect(up.requests).toHaveLength(0);
       expect((await statsWhen(lane, (d) => d.outcomes['4xx'] === 1)).names.modelSubstitution).toEqual({ 'claude-fallback-x': 1 });
+    });
+  });
+
+  // A substitution is counted by who asked (known.py's foreignSubstitution entry): a request carrying Claude Code's
+  // claude-code beta under modelSubstitution, a Claude Code fallback worth seeing; any other request under
+  // foreignSubstitution, whose explained set is empty on purpose, so it still warns and fails the watch's drift. The
+  // measured foreign caller sent `structured-outputs-2025-11-13` and no claude-code beta. The answer is the same 404.
+  for (const [what, headers] of [
+    ['no anthropic-beta', {}],
+    ['only structured-outputs-2025-11-13', { 'anthropic-beta': 'structured-outputs-2025-11-13' }],
+  ] as const) {
+    it(`a substitution from a request with ${what} is a foreignSubstitution, the same 404, nothing upstream`, async () => {
+      await withBridge([], async ({ bridge, up, lane }) => {
+        const a = await call(bridge, '/v1/messages', { body: messages({ model: 'claude-opus-5-5' }), headers });
+        expect(a.status).toBe(404);
+        expect(a.json?.error.type).toBe('not_found_error');
+        expect(a.headers['x-should-retry']).toBe('false');
+        expect(up.requests).toHaveLength(0);
+        const stats = await statsWhen(lane, (d) => d.outcomes['4xx'] === 1);
+        expect(stats.names.foreignSubstitution).toEqual({ 'claude-opus-5-5': 1 });
+        expect(stats.names.modelSubstitution).toBeUndefined();
+        expect(stats.unexplained.foreignSubstitution).toEqual(['claude-opus-5-5']);
+        expect(stats.unexplained.modelSubstitution).toBeUndefined();
+      });
+    });
+  }
+
+  it('Claude Code\'s beta is read case-insensitively and from every header line: Anthropic-Beta over two lines is a modelSubstitution', async () => {
+    await withBridge([], async ({ bridge, up, lane }) => {
+      const a = await call(bridge, '/v1/messages', {
+        body: messages({ model: 'claude-opus-5-5' }),
+        headers: { 'Anthropic-Beta': ['structured-outputs-2025-11-13', ` interleaved-thinking-2025-05-14, ${CLAUDE_CODE_BETA} `] },
+      });
+      expect(a.status).toBe(404);
+      expect(up.requests).toHaveLength(0);
+      const stats = await statsWhen(lane, (d) => d.outcomes['4xx'] === 1);
+      expect(stats.names.modelSubstitution).toEqual({ 'claude-opus-5-5': 1 });
+      expect(stats.names.foreignSubstitution).toBeUndefined();
+      expect(stats.unexplained.modelSubstitution).toEqual(['claude-opus-5-5']);
+      expect(stats.unexplained.foreignSubstitution).toBeUndefined();
+    });
+  });
+
+  it('the 404 a foreign substitution gets is the one a Claude Code substitution gets, byte for byte', async () => {
+    await withBridge([], async ({ bridge, up }) => {
+      const shown = (a: Answer): object => ({
+        status: a.status, type: a.headers['content-type'], retry: a.headers['x-should-retry'],
+        length: a.headers['content-length'], text: a.text,
+      });
+      const cc = await call(bridge, '/v1/messages', { body: messages({ model: 'claude-opus-5-5' }), headers: { 'anthropic-beta': CLAUDE_CODE_BETA } });
+      const foreign = await call(bridge, '/v1/messages', { body: messages({ model: 'claude-opus-5-5' }), headers: { 'anthropic-beta': 'structured-outputs-2025-11-13' } });
+      expect(cc.status).toBe(404);
+      expect(shown(foreign)).toEqual(shown(cc));
+      expect(foreign.json).toEqual(cc.json);
+      expect(up.requests).toHaveLength(0);
     });
   });
 
@@ -921,6 +980,7 @@ describe.skipIf(!PY)('an undecidable catalogue is the bridge\'s fault, not the c
         const stats = await statsWhen(lane, (d) => d.outcomes['catalogue-unreadable'] === 1);
         expect(stats.outcomes['catalogue-unreadable']).toBe(1);
         expect(stats.names.modelSubstitution).toBeUndefined();
+        expect(stats.names.foreignSubstitution).toBeUndefined();
         const m = await call(bridge, '/v1/models', { method: 'GET' });
         expect(m.status).toBe(503);
         expect(m.json?.error.type).toBe('api_error');

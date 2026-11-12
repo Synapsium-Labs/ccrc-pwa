@@ -521,6 +521,24 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     noRunnerBugLine(r.stdout, 'codex');
   });
 
+  // A substitution from a request without Claude Code's claude-code beta is counted under foreignSubstitution
+  // (ccd/codexbridge/known.py): the row prints it under that family, beside a Claude Code fallback's
+  // modelSubstitution name for the same model id, never folded into it.
+  it('a foreignSubstitution name warns under its own family, apart from a modelSubstitution of the same id', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-foreign-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['foreignSubstitution', 'claude-opus-5-5'], ['modelSubstitution', 'claude-opus-5-5']]);
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { unexplained: unknown }).unexplained)
+      .toEqual({ foreignSubstitution: ['claude-opus-5-5'], modelSubstitution: ['claude-opus-5-5'] });
+    const r = runDoctor(home);
+    const line = r.stdout.split('\n').filter((l) => /the bridge met/.test(l));
+    expect(line, r.stdout).toHaveLength(1);
+    expect(line[0]).toMatch(/^WARN codex: codex-a: the bridge met 2 name\(s\) it does not know: /);
+    expect(line[0]).toContain('foreignSubstitution:claude-opus-5-5');
+    expect(line[0]).toContain('modelSubstitution:claude-opus-5-5');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
   // Fix round 2, R2: lane b is direct with no stats file at all (no bridge has served yet), the absent arm; lane a's
   // readable file lists nothing, the empty arm. Neither is unmeasured, so the codex line is PASS for both.
   it('a known name never warns', async () => {

@@ -319,6 +319,25 @@ describe('measure-codex-watch.py: the five criteria', () => {
     const rep = report();
     expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'fail', unexplained: { errorCode: ['a_new_code'] } });
   });
+
+  // A substitution from a request without Claude Code's claude-code beta is counted under foreignSubstitution
+  // (ccd/codexbridge/known.py), whose explained set is empty on purpose: it fails drift as any unexplained name does,
+  // printed under its own family and never folded into modelSubstitution.
+  it('a foreignSubstitution name fails the drift criterion and is printed under its own family', () => {
+    passing();
+    writeStats({ unexplained: { errorCode: [], foreignSubstitution: ['claude-opus-5-5'], modelSubstitution: ['claude-fallback-x'] } });
+    const rep = report();
+    expect(criterion(rep, 'drift')).toMatchObject({ verdict: 'fail' });
+    expect(criterion(rep, 'drift').unexplained).toEqual({ foreignSubstitution: ['claude-opus-5-5'], modelSubstitution: ['claude-fallback-x'] });
+    expect(rep.verdict).toBe('fail');
+    const text = run();
+    expect(text.stdout).toMatch(/^drift: fail\b/m);
+    expect(text.stdout).toContain('foreignSubstitution');
+    expect(text.stdout).toContain('claude-opus-5-5');
+    writeStats({ unexplained: { errorCode: [], foreignSubstitution: ['claude-opus-5-5'] } });
+    expect(criterion(report(), 'drift')).toMatchObject({ verdict: 'fail', unexplained: { foreignSubstitution: ['claude-opus-5-5'] } });
+    expect(criterion(report(), 'drift').unexplained).not.toHaveProperty('modelSubstitution');
+  });
 });
 
 describe('measure-codex-watch.py: the 5xx rate measures like for like', () => {
