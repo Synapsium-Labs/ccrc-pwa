@@ -7070,6 +7070,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - the testbox group-writable local red;
     - macOS central management (spec decision 17);
     - the age of the vendored Sigstore trust root.
+    - of these, #2079's three wording fixes in the wave 33 plan's As built tables: **fixed by D-8393 (2026-11-12)**
+      (Review Focus row 1's "each asserts", the mutation table's "defaults" in rows 2 to 6, and its "every name
+      row" in rows 18 and 19).
   - **Wave 33 landed.** #2079 merged at 21:31:49 UTC as `de4eb553c` from head `7628b91f8`, the handoff, and was
     released as v0.0.900. Proven:
     - the PR reads MERGED with `headRefOid` equal to the handoff;
@@ -7436,12 +7439,15 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   - The wave 31 plan's "every new or changed row is red under at least one mutant" is wider than its table. The
     review's M4 (times-build's single-file fallback made unconditional) reds the times-build row and belongs in
     the table. The other rows the sentence covers are controls or self-tests: narrow the sentence or name them.
+    **Fixed by D-8393 (2026-11-12):** M4 is in the table, re-measured on main, and the sentence is narrowed.
   - The two comment-only edits made under the later claims sit in no Task's Files list and have no D entry. They
-    were accepted as Task 3's own comment amendments. The as-built should say so.
+    were accepted as Task 3's own comment amendments. The as-built should say so. **Fixed by D-8393 (2026-11-12).**
   - Wave 26's plan still names the old majors in the headline of the deviation that moved download to v7, and in its
-    Architecture table. Amend them, or list them with the other history the wave 31 plan leaves stale.
+    Architecture table. Amend them, or list them with the other history the wave 31 plan leaves stale. **Fixed by
+    D-8393 (2026-11-12):** amended in place, and the wave 31 plan's stale-history bullet says so.
   - The wave 31 plan says a failed credential removal under `persist-credentials: false` only warns. The shipped
     comment is right that the action may also say nothing: checkout logs a failed include cleanup at debug only.
+    **Fixed by D-8393 (2026-11-12):** both sentences say the action warns or says nothing.
   - Verify's name-set check joins names with spaces, so one file named with a space or a newline between the two
     expected names passes it. The regular-file check then refuses it, so nothing is accepted, but no row plants
     that shape. Add one to `release-artifact.test.ts`, and credit both checks where the comments credit only the
