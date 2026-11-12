@@ -37,6 +37,8 @@ import { fileURLToPath } from 'node:url';
 // join in this very comment, because the scan is textual and does not care
 // whether a spelling is code.
 import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { PR_SWEEP_MS, laneRow } from '../src/laneSchedule.js';
+import { LANDED_READS_PER_SWEEP } from '../src/coord/landed.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -149,6 +151,24 @@ describe('pr-state --project <p> --pr <n> fits inside the bound that kills it (l
     const header = src.slice(start, src.indexOf('[[ $# -eq 4 && $1 == --project && $3 == --pr ]]', start));
     expect(header).toContain('and one for `--project <p> --pr <n>`');
     expect(header).toContain('PR_GH_VIEW_TIMEOUT');
+  });
+
+  it('the header counts the PR-keyed form once per open landing entry per sweep and names the reader\'s cap', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_state()');
+    const header = src.slice(start, src.indexOf('[[ $# -eq 4 && $1 == --project && $3 == --pr ]]', start));
+    expect(header).toContain('once per open landing entry');
+    expect(header).toContain('LANDED_READS_PER_SWEEP');
+    const reads: unknown = LANDED_READS_PER_SWEEP;
+    expect(Number.isInteger(reads) && (reads as number) > 0).toBe(true);
+  });
+
+  it('the reader\'s worst hour stays under a tenth of the 5000-an-hour allowance', () => {
+    expect((LANDED_READS_PER_SWEEP * 3_600_000) / PR_SWEEP_MS).toBeLessThanOrEqual(500);
+  });
+
+  it('a pass at the cap fits inside its row\'s staleAfterMs', () => {
+    expect(LANDED_READS_PER_SWEEP * verbTimeoutMs('pr-state')).toBeLessThan(laneRow('landed').staleAfterMs!);
   });
 
   it('the view call alone is under the bound', () => {

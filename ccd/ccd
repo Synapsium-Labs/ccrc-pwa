@@ -5743,7 +5743,7 @@ _gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated 
     # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
     # several thousand PRs of history — the slug is operator residue and
     # stays out of this tree. The 100-PR `statusCheckRollup` window
-    # `_gh_pr_list` sends answers
+    # `_gh_pr_list` USED to send answered
     # `HTTP 504: We couldn't respond to your request in time. …
     # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
     # standing property of that repo's PR history, not a blip. It went out as
@@ -12002,11 +12002,11 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # (`_pr_state_by_pr`'s `gh pr view`, under PR_GH_VIEW_TIMEOUT), plus, only when
   # that PR is CLOSED with the train label and has no kept proof, the train
   # record's reads inside PR_STATE_TRAIN_TIMEOUT — and no number moves when a
-  # project grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
-  # ~ 5 % of the GraphQL allowance) survives tripling and would not survive
-  # going per session, and `pr-timeout-budget.test.ts` sums each form's calls'
-  # timeouts against the server's outer bound on this verb. Read-only apart
-  # from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
+  # project grows a ninth workspace, except the `--pr` form: the server's landed reader (`server/src/coord/landed.ts`) asks it
+  # once per open landing entry it reads in a sweep, at most LANDED_READS_PER_SWEEP a sweep across every project (about 300 an
+  # hour at the cap, 6 % of the GraphQL allowance beside the PR lane's 5 %). The budget argument (8 projects x 1 call / 120 s)
+  # survives that, and `pr-timeout-budget.test.ts` sums each form's calls' timeouts against the server's outer bound on this
+  # verb. Read-only apart from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
   # honest stale, and the kept train proofs and tried lines a train claim's record writes (`--session` and `--pr`).
   [[ $# -eq 4 && $1 == --project && $3 == --pr ]] && { _pr_state_by_pr "$2" "$4"; return; }
   [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]"
