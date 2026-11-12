@@ -754,6 +754,35 @@ The client side is W0-01, W0-02, W0-15 and W0-16 above, read on 2.1.312 and 2.1.
 lane, so the operator may set the record for `lane-b` and `lane-c` on 2.1.322 (W1).** The subject ended on its home
 lane. A lane on another build has no record from this run.
 
+## Account facts (Task 10: W0-23, W0-24), 2026-11-12
+
+**W0-23, deferred to the pool design.** The operator changed the design before this row could be read: no account
+is reserved for the Overlord, and the operator names the account pools it may draw accounts from (R18, merged in
+#2705; C46). So "each account that may be reserved" has no members, and no pool is named yet. The row is
+**unmeasured**. No plan or credit fact was read from a credential or a config value to fill it. The conservative
+branch stands: an account whose billing fact is unread is treated as if usage credits were on, so Fable is not
+served to the Overlord there until the operator's reading. What W0-23 measures under R18 is C46's open question for
+W1, which asks for each account in a pool the operator may name:
+- its billing fact, as before;
+- how much of its Fable share other sessions already spend, which W0-24's first reading below starts to answer.
+
+**W0-24, reading 1 of 3 (box).** The sweep's `latest.json`, finished 2026-11-12 11:53 UTC, read for shares and times
+only, for every account it lists (fifteen of the fleet's own provider and two of the other):
+- `perAccount.<id>.fableShare.estimate` is **0.0 on every account**, with `sevenPct` between 0 and 100, so
+  `sevenPct × estimate` is 0 everywhere.
+- The zero is a measurement, not a gap. The sweep prices `fable` as a class of its own: `shared/models.mjs`'s
+  `FAMILY_TOKENS` match `-fable-`, the rate card has a `fable` row, and the only unpriced class is `other`, whose
+  records carry no tokens.
+- So in this window no session on any account ran Fable. That is C46's second fact for this week: other sessions
+  spend none of any account's Fable share.
+
+The operator's `/usage` readings, the truth this row compares against, have not been taken. The first was asked on
+2026-11-12, and the operator chose to read it later. Readings 2 and 3 fall on later days. With no Fable use on any
+account, a reading can only compare a zero with a zero. **Outcome so far: no truth, so the plan's branch is that the
+proxy stays unlabelled until a direct reading.** R18 removed the reservation's Fable arm that this row fed. Whether
+W0-24 still informs the shared Fable test is W1's call (C46). The coordinator rules on the outstanding readings when
+the rest of Task 12 is ready.
+
 ## Rows waiting for W0b
 
 W0-20 (nudge-and-read against typed text), W0-21 (a swap with a stand-in renewal), W0-22 (a continuity record per
@@ -803,6 +832,9 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
 - **w0b-a-background-shell-arm, method.** W0-21's first mid-turn swap met a background shell rather than a running
   turn, because the subject's harness refuses a long foreground `sleep`. It is recorded as its own arm, and the
   mid-turn case was re-run with a foreground command the harness allows.
+- **w0-23-deferred-to-the-pool-design, scope.** The coordinator's ruling on setup item 163: under R18 no account is
+  reserved, so W0-23 has no subject. It is recorded unmeasured with the conservative branch and C46's open question,
+  and nothing was read to fill it.
 
 ## Proposals the outcomes select (for the coordinator; the design is not edited)
 
