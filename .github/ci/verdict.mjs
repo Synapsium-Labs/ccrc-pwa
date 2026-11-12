@@ -58,12 +58,24 @@ process.exitCode = 1;
  *      silently.
  *   7. anything else (an unrecognised `count`, e.g. `''`) -> fail.
  *
- * @param {{ select: JobResult, typecheck: JobResult, shards: JobResult, tests: TestsMode, count: string, event?: string }} inputs
+ *
+ * One more rule sits between 1 and 2 (D-8396): `followup === 'true'` (select's `docs_followup`, a pull-request push
+ * whose every file changed since the PR's newest passing head is documentation, .github/ci/docs-followup.mjs) is ok
+ * iff the event is `pull_request` and the typecheck and the shards were BOTH skipped, which is what that answer does
+ * to them. Off a pull request, or with either job run after all, it is red. Any other value is the rules above.
+ *
+ * @param {{ select: JobResult, typecheck: JobResult, shards: JobResult, tests: TestsMode, count: string, event?: string, followup?: string }} inputs
  * @returns {{ ok: boolean, reason: string }}
  */
-export function serverVerdict({ select, typecheck, shards, tests, count, event }) {
+export function serverVerdict({ select, typecheck, shards, tests, count, event, followup }) {
   if (select !== 'success') {
     return { ok: false, reason: `select: ${select || '(did not run)'}` };
+  }
+  if (followup === 'true') {
+    if (event !== 'pull_request') return { ok: false, reason: `a docs-only follow-up on a ${event || '(no event)'}: only a pull request may skip (D-8396)` };
+    return typecheck === 'skipped' && shards === 'skipped'
+      ? { ok: true, reason: 'a docs-only follow-up to a head whose pull-request run passed: the server jobs skipped on purpose (D-8396)' }
+      : { ok: false, reason: `a docs-only follow-up, but typecheck: ${typecheck || '(did not run)'}, shards: ${shards || '(did not run)'} (expected both skipped)` };
   }
   if (tests === 'none') {
     return event === 'pull_request' || event === 'merge_group'
@@ -94,16 +106,31 @@ export function serverVerdict({ select, typecheck, shards, tests, count, event }
   return { ok: false, reason: `unrecognised count: ${JSON.stringify(count)}` };
 }
 
+/** The legs a run may skip ON PURPOSE and still be green (D-8396): the macOS call, which a dispatched full run leaves
+ *  out unless it is dispatched with `macos=true`. Nothing else: a skipped Linux leg is always red. */
+export const DELIBERATE_SKIPS = Object.freeze(['macos']);
+
 /**
- * `full-suite`'s verdict (spec §8): green iff every leg is green.
+ * `full-suite`'s verdict (spec §8): green iff every leg is green. `skippedOnPurpose` names the legs this run skipped
+ * deliberately (D-8396); each must be on DELIBERATE_SKIPS, and excuses a `skipped` result only (its failure or
+ * cancellation is red). A name off that list is red whatever the results, and so is a run whose every leg was a
+ * deliberate skip.
  *
  * @param {Record<string, { result: string }>} needs
+ * @param {readonly string[]} [skippedOnPurpose]
  * @returns {{ ok: boolean, reason: string }}
  */
-export function fullVerdict(needs) {
+export function fullVerdict(needs, skippedOnPurpose = []) {
   if (Object.keys(needs).length === 0) return { ok: false, reason: 'no legs to judge — a verdict over nothing proves nothing' };
-  const notOk = Object.entries(needs).filter(([, v]) => v.result !== 'success');
-  if (notOk.length === 0) return { ok: true, reason: 'every leg succeeded' };
+  const foreign = skippedOnPurpose.filter((n) => !DELIBERATE_SKIPS.includes(n));
+  if (foreign.length > 0) return { ok: false, reason: `only ${DELIBERATE_SKIPS.join(', ')} may be skipped on purpose, not ${foreign.join(', ')}` };
+  const excused = (name, result) => result === 'skipped' && skippedOnPurpose.includes(name);
+  if (Object.entries(needs).every(([n, v]) => excused(n, v.result))) return { ok: false, reason: 'every leg was skipped on purpose — a verdict over nothing proves nothing' };
+  const notOk = Object.entries(needs).filter(([n, v]) => v.result !== 'success' && !excused(n, v.result));
+  const skipped = Object.entries(needs).filter(([n, v]) => excused(n, v.result)).map(([n]) => n);
+  if (notOk.length === 0) {
+    return { ok: true, reason: skipped.length ? `every leg succeeded but ${skipped.join(', ')}, skipped on purpose (D-8396)` : 'every leg succeeded' };
+  }
   return {
     ok: false,
     reason: `not green: ${notOk.map(([name, v]) => `${name}=${v.result}`).join(', ')}`,
@@ -121,6 +148,7 @@ function main() {
       tests: /** @type {TestsMode} */ (process.env.TESTS ?? ''),
       count: process.env.COUNT ?? '',
       event: process.env.EVENT ?? '',
+      followup: process.env.FOLLOWUP ?? '',
     });
   } else if (sub === 'full') {
     // RESULTS: `name=result` pairs, one per job full-suite needs — only the
@@ -133,7 +161,10 @@ function main() {
       if (m) needs[m[1]] = { result: m[2] };
       else malformed = pair;
     }
-    verdict = malformed ? { ok: false, reason: `RESULTS has a malformed pair: ${malformed}` } : fullVerdict(needs);
+    // SKIPPED_ON_PURPOSE: the legs this run left out deliberately, space-separated (D-8396: `macos` on a dispatch
+    // without macos=true); empty for every other run.
+    const purpose = (process.env.SKIPPED_ON_PURPOSE ?? '').split(/\s+/).filter(Boolean);
+    verdict = malformed ? { ok: false, reason: `RESULTS has a malformed pair: ${malformed}` } : fullVerdict(needs, purpose);
   } else {
     process.stderr.write('usage: node verdict.mjs server|full\n');
     process.exitCode = 2;

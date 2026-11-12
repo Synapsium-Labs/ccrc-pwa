@@ -143,7 +143,7 @@ const QUEUE_AGENT_ASK_LINES = [
   '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
   '        run: node .github/ci/reach.mjs --pkg agent --event merge_group --base "$QUEUE_BASE"',
 ];
-const QUEUE_FLOOR_LEG_LINE = "      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}";
+const QUEUE_FLOOR_LEG_LINE = "      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true' || needs.select.outputs.docs_followup == 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}";
 
 describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s shape)', () => {
   it('triggers on merge_group, beside pull_request', () => {
