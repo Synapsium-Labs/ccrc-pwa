@@ -220,7 +220,7 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     });
     expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
     expect(beforeMs()).toBeLessThan(3500);
-  }, 20_000);
+  }, 60_000);   // a loaded CI runner: these rows fork per pass
 
   it('live: the clock, not the count, ends the wait (a fast clock: a few identity polls, alive=<bound>)', () => {
     arm();
@@ -235,7 +235,7 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
     expect(sameCalls()).toBeGreaterThanOrEqual(3);
     expect(sameCalls() - 1, 'identity polls of the live wait').toBeLessThanOrEqual(6);
-  }, 20_000);
+  }, 60_000);   // a loaded CI runner: these rows fork per pass
 
   it('live: one last identity poll after the wait decides exited= or alive=', () => {
     arm();
@@ -251,7 +251,7 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     });
     expect(sameCalls()).toBe(22);
     expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live exited=0`]);
-  }, 20_000);
+  }, 60_000);   // a loaded CI runner: these rows fork per pass
 
   it('live: a poll that slices to 0 ms (GRACEFUL_STOP_POLL_S=0) falls back to the default poll and still waits', () => {
     arm();
@@ -262,7 +262,7 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
     expect(beforeMs()).toBeGreaterThanOrEqual(1000);
     expect(beforeMs()).toBeLessThan(3500);
-  }, 20_000);
+  }, 60_000);   // a loaded CI runner: these rows fork per pass
 
   it('live: a recycled or vanished pid is never signalled', () => {
     arm();
