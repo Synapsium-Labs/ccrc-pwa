@@ -40,7 +40,8 @@
     has plugin entries and an `enabledPlugins` key, so doctor's no-mods check is required.
   - This project's history holds only quotes of the fallback notice, so the conservative branch stands.
   - Mail and typed text are done alike (ten of ten, every pair rated 5). The gate dominates, so the Overlord's
-    `MAIL_PACE` row. Two mailed replies were refused at the peer-mail bounds and never delivered.
+    `MAIL_PACE` row. At the peer-mail bounds, t08's reply was refused `429 peer-quota` twice (in its own turn and in
+    t10's); t10's reply was held unsent; on day 2 the subject dropped both as out of date, so neither was delivered.
   - Both swaps, at idle and mid-turn, pass their probes after `/clear`. A background shell is lost across a swap.
   - Four checks pass on each of two own-provider lanes on 2.1.322, so the operator may set those records.
   - W0-23 is deferred to the pool design (R18).
@@ -608,7 +609,7 @@ builds between. The subject's account is on 2.1.322, which the rig measured.
 
 | Kind | What the 17 directories hold |
 |---|---|
-| Project memory (`projects/*/memory/`, non-empty) | **every account: 8 to 14 non-empty project memory directories**; most are symbolic links shared across accounts (8 to 15 links per account, counting a link to a directory with nothing in it: a recount on 2026-11-12 found such a link on six accounts), so one project's memory is the same directory under several accounts |
+| Project memory (`projects/*/memory/`, non-empty) | **every account: 8 to 14 non-empty project memory directories**; most are symbolic links shared across accounts (8 to 15 links per account, counting a link to a directory with nothing in it: a later read found such a link on seven accounts, two of them, `acct-04`'s and `acct-10`'s, made by the subject's own swaps onto `lane-b` and `lane-c`), so one project's memory is the same directory under several accounts |
 | `skills/` | 6 to 9 entries on every account |
 | `plugins/` | 8 or 9 entries on every account, and the key `enabledPlugins` present in every account's settings (its value was not read) |
 | User memory file (`CLAUDE.md`) | present on 7 accounts, as 3 distinct files (5 share one hash); absent on 10 |
@@ -716,10 +717,10 @@ end, in the pane; for a mailed one, the moment the reply mail was accepted), and
 - **A busy reader blocked the subject's replies.** Mail between two sessions outside a run is bounded at three unacked
   mails per sender and recipient (`PEER_MAIL_MAX_OUTSTANDING`) and twelve per sender per hour (`PEER_MAIL_HOURLY`).
   The conductor sent the even texts from one long foreground wait. The subject's first three replies sat
-  delivered-but-unacked, because mail reaches a session only when it is idle. Its reply to t08 was refused
-  `429 peer-quota` in its own turn and again in t10's, and its reply to t10 once. The subject held both and said so in
-  its pane. Nothing prompted it to try again after the conductor's inbox acked the first three, so **neither reply was
-  ever delivered**. The work itself was done as asked: the transcript shows t08's file parsing and t10's file at one
+  delivered-but-unacked, because mail reaches a session only when it is idle. t08's reply was refused `429 peer-quota`
+  twice (in its own turn and in t10's); t10's reply was held unsent; on day 2 the subject dropped both as out of date,
+  so neither was delivered. The subject said so in its pane. The work itself was done as asked: the transcript shows
+  t08's file parsing and t10's file at one
   line. On the second day the conductor acked each reply before the next send, and no refusal recurred. This is a
   method lesson for the conductor and a proposal (11, below): no task was lost, but two replies were.
 
@@ -797,13 +798,15 @@ and two of the other):
   `sevenPct × estimate` is 0 everywhere.
 - The zero is a measurement, not a gap. The sweep prices `fable` as a class of its own: `shared/models.mjs`'s
   `FAMILY_TOKENS` match `-fable-`, and the rate card has a `fable` row.
-- The only unpriced class is `other`: records whose model id matches no family token. The sweep does not name their
-  models. At 11:53 it held 4,802 such records on 9 accounts. 4,661 were on the other provider's two lanes, and 141
-  on the fleet's own accounts, 128 of them on one account (`acct-09`). At the sweep's next reading (15:40 UTC), those
-  128 carried 15.6 million tokens and the other own-provider records carried none. The 128 cannot be attributed from
-  the sweep.
-- So in this window the sweep finds no priced Fable use on any account. That is C46's second fact for this week:
-  other sessions spend none of any account's Fable share, with `acct-09`'s 128 unattributed records as the one caveat.
+- The only unpriced class is `other`: records whose model id matches no family token. At 11:53 it held 4,802 such
+  records on 9 accounts: 4,661 on the other provider's two lanes, and 141 on the fleet's own accounts, 128 of them on
+  one account (`acct-09`).
+- The sweep names and attributes them in `perModel` and `perSession` (schema 1). At its 16:07 UTC reading (the same
+  7-day window, moved on), the `other` records are three model ids of another provider and `<synthetic>`, 4,242 in
+  all. `acct-09`'s 128 are 127 records of one other-provider model id, in a session that also holds Opus and Sonnet
+  records, and 1 `<synthetic>`. No `fable` id appears in any account's or session's models.
+- So in this window the sweep finds no Fable use on any account. That is C46's second fact for this week: other
+  sessions spend none of any account's Fable share.
 
 **The `/usage` comparison is deferred to W1 under R18, unmeasured** (the coordinator's ruling, 2026-11-12). The
 operator's `/usage` readings were the only independent check, and none was taken. The first was asked and the
@@ -851,13 +854,13 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
   `project,local` (its grants in a `--settings` file) to measure the model at all. The refusal is a row of its own,
   measured from a committed scenario: `ov-subagent-model-force-hook`, the same arm with the default sources and so with
   ccrc's hook loaded (W0-11; proposal 1).
-- **w0b-synthetic-deny-rule-in-the-subjects-project, shape (D-8246).** W0-22's deny check needs a rule that fires and is
+- **w0b-synthetic-deny-rule-in-the-subjects-project, method (D-8246).** W0-22's deny check needs a rule that fires and is
   harmless if it does not. The fleet's own deny rules all guard account and secret paths: trying one could read a
   value if it failed, and the conductor's own session hook refuses even naming such a path in a mail. So the conductor
   wrote one synthetic rule, `Bash(echo w0-deny-probe:*)`, into the subject's scratch project settings (setup item 163
   made the subject available "however required"), and swapped the subject afresh onto each lane so the rule loaded at
   the start. The rule was removed once both lanes' checks were done.
-- **w0b-a-background-shell-arm, shape (D-8247).** W0-21's first mid-turn swap met a background shell rather than a running
+- **w0b-a-background-shell-arm, method (D-8247).** W0-21's first mid-turn swap met a background shell rather than a running
   turn, because the subject's harness refuses a long foreground `sleep`. It is recorded as its own arm, and the
   mid-turn case was re-run with a foreground command the harness allows.
 - **w0-23-deferred-to-the-pool-design, scope (D-8244).** The coordinator's ruling on setup item 163: under R18 no account is
@@ -911,8 +914,9 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
     is unmeasured (W0-05). A follow-up issue, not W0.
 11. **Peer mail: an invited reply is never refused (W0-20).** Outside a run, mail between two sessions is bounded at
     three unacked mails per pair and twelve per sender per hour, and mail reaches only an idle session. A busy reader
-    therefore blocks the replies it asked for: the subject's answers to t08 and t10 were refused `peer-quota` twice
-    while the conductor sat in one long wait. Three changes, smallest first:
+    therefore blocks the replies it asked for, while the conductor sat in one long wait: t08's reply was refused
+    `429 peer-quota` twice (in its own turn and in t10's); t10's reply was held unsent; on day 2 the subject dropped
+    both as out of date, so neither was delivered. Three changes, smallest first:
     - a reply (`kind: answer`) to a mail the recipient itself sent does not count against the pair's bound (this needs
       the reply to name the mail it answers);
     - mail over the bound is held queued until a slot frees, rather than refused;

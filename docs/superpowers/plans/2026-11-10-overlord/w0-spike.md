@@ -722,9 +722,9 @@ index plan; the whole decision is in the results note's "Departures from the pla
 fleet's own accounts. The coordinator issued W0b's further departures their numbers on 2026-11-12, and the index plan
 defines them; the whole decision of each is in the results note's "Departures from the plan":
 
-- **D-8246, w0b-synthetic-deny-rule-in-the-subjects-project, shape** — W0-22's deny check uses one synthetic rule in the
+- **D-8246, w0b-synthetic-deny-rule-in-the-subjects-project, method** — W0-22's deny check uses one synthetic rule in the
   subject's scratch project settings, because every fleet deny rule guards an account or secret path.
-- **D-8247, w0b-a-background-shell-arm, shape** — W0-21's first interrupting swap met a background shell, not a running turn,
+- **D-8247, w0b-a-background-shell-arm, method** — W0-21's first interrupting swap met a background shell, not a running turn,
   and is recorded as its own arm; the mid-turn case was re-run in the foreground.
 - **D-8244, w0-23-deferred-to-the-pool-design, scope** — under R18 no account is reserved, so W0-23 is unmeasured, with the
   conservative branch and C46's open question.
