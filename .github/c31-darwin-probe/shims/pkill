@@ -1,4 +1,0 @@
-#!/bin/sh
-# THROWAWAY (Task C31, D-8391): logs the call, then runs the real pkill.
-case "${1-}" in -0|-s0) ;; *) printf '%s bin sender=%s ppid=%s pkill %s\n' "$(date +%s)" "$$" "$PPID" "$*" >> "${C31_KILL_LOG:-/dev/null}" 2>/dev/null ;; esac
-exec /usr/bin/pkill "$@"
