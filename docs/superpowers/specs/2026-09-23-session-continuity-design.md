@@ -19,8 +19,8 @@ notes in §3, §5.2, §5.3, §5.6, §8, §9, §10 and §11 item 5, among them st
 programme's D-5241, which this programme accepted (D-8103) ·
 rev 12 (2026-11-11) corrects the stale neighbours that wave 5 and #2603 left (the §1 lead-in, §1.2 mechanism 2, §5.2,
 §5.3, §6, §8, §11 item 7), records stage 3 as waves 6a to 6c with the design calls for 6b and 6c (§5.3, D-8316 to
-D-8332), and amends §4 and §12 for the not-stalled wake (C15), correcting §4's "constant" prompt and §12's two notes
-(the fallback's "constant" text and the Codex lane's delegation premise) ·
+D-8332), and amends §3 (the C15 row), §4, §9, §10 and §12 for the not-stalled wake (C15), correcting §4's "constant"
+prompt and adding §12's two corrective notes (the fallback's "constant" text and the Codex lane's delegation premise) ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -452,7 +452,8 @@ dropped and counted, at write and again at compose.
 closed delegation broker's spool, which is legitimately different under the consolidation rule: the spool keeps about
 24 hours where the record lives until the manifest retires the item (#2603's waits to a weekly reset last days); the
 spool's consumer is the server's ingest where the record's is ccd on the box at stop time; and the spool keeps
-subagent rows where the record drops them (§5.3 has dropped rows from a subagent's own hook input since before rev 12). There is still one parser: the hook's existing delegation-spool jq parse gains a second sink, adding
+subagent rows where the record drops them (the launch record above has dropped rows from a subagent's own hook input
+since before rev 12). There is still one parser: the hook's existing delegation-spool jq parse gains a second sink, adding
 `resumeFromRunId` and `SendMessage` rows. This settles, and reverses, the ledger's carried proposal to extend the
 broker's spool and server projection rather than add a second writer. A resumed agent comes back under a new agent id
 (wave 5, §2.5 of its results note), which 6b's retire rule expects.

@@ -194,17 +194,74 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     expect(ms).toBeLessThan(3500);
   });
 
+  /** `_graceful_stop_before` timed with the REAL clock (EPOCHREALTIME), so a case that freezes or fakes `_plat_epoch_ms` still
+   *  measures the wall time of the wait; the figure goes to ccd-calls as `before-ms <n>`. */
+  const TIME_BEFORE_REAL = `eval "$(declare -f _graceful_stop_before | sed '1s/_graceful_stop_before/_graceful_stop_before_real/')"
+  _graceful_stop_before() { local a=\${EPOCHREALTIME/./}; _graceful_stop_before_real "$@"; local b=\${EPOCHREALTIME/./}; echo "before-ms $(( (b - a) / 1000 ))" >> "$HOME/ccd-calls"; }`;
+  const beforeMs = (): number => Number((h.calls().find((l) => l.startsWith('before-ms ')) ?? '').slice(10));
+  /** `_graceful_stop_same` wrapped: every call is logged to fx/same-calls, and `body` (which sees the 1-based call number
+   *  `_GSN` and the pid `$1`) may answer instead of the real check by returning; `_graceful_stop_same_real` is the original. */
+  const WRAP_SAME = (body: string): string => `eval "$(declare -f _graceful_stop_same | sed '1s/_graceful_stop_same/_graceful_stop_same_real/')"
+  _GSN=0
+  _graceful_stop_same() { _GSN=$((_GSN + 1)); echo "$_GSN" >> "$HOME/fx/same-calls"; ${body || ':'}; _graceful_stop_same_real "$@"; }`;
+  const sameCalls = (): number => (fs.existsSync(fx('same-calls')) ? fs.readFileSync(fx('same-calls'), 'utf8').split('\n').filter(Boolean).length : 0);
+
   it('live: a frozen clock still ends the wait, by the iteration cap (alive=<bound>)', () => {
     arm();
-    // a watchdog of the snippet kills it after 15 s, so a wait with no cap is a prompt red and not a hang
+    // a watchdog of the snippet kills it after 15 s, so a wait with no cap is a prompt red and not a hang. The OBSERVE
+    // window (8 s) is far from the TERM bound (1 s): a count that read it would run 160 passes (~16 s), not 20 (~2 s)
     run({
-      pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1',
-      pre: `_plat_epoch_ms() { echo 1700000000000; }
+      pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1 GRACEFUL_STOP_OBSERVE_S=8',
+      pre: `${TIME_BEFORE_REAL}
+  _plat_epoch_ms() { echo 1700000000000; }
   ( sleep 15; kill -KILL $$ ) >/dev/null 2>&1 &
   _WD=$!`,
       verb: `_watchdog_resume_run ${ID}; kill $(pgrep -P $_WD) $_WD 2>/dev/null`,
     });
     expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
+    expect(beforeMs()).toBeLessThan(3500);
+  }, 20_000);
+
+  it('live: the clock, not the count, ends the wait (a fast clock: a few identity polls, alive=<bound>)', () => {
+    arm();
+    // each read of the clock answers 400 ms later than the last (a file counter: the reads run in command substitutions),
+    // so the 1 s bound is reached on the third pass; the backstop would allow 20. Polls: 1 before the signal + the passes + 1 final
+    run({
+      pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1 GRACEFUL_STOP_OBSERVE_S=8',
+      pre: `mkdir -p "$HOME/fx"; echo 1700000000000 > "$HOME/fx/clock"
+  _plat_epoch_ms() { local t; t=$(cat "$HOME/fx/clock"); echo $((t + 400)) > "$HOME/fx/clock"; echo "$t"; }
+  ${WRAP_SAME('')}`,
+    });
+    expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
+    expect(sameCalls()).toBeGreaterThanOrEqual(3);
+    expect(sameCalls() - 1, 'identity polls of the live wait').toBeLessThanOrEqual(6);
+  }, 20_000);
+
+  it('live: one last identity poll after the wait decides exited= or alive=', () => {
+    arm();
+    // a frozen clock, so the 20-pass backstop (2 x 1 s / 100 ms) ends the wait. Call 1 is the pre-signal check, calls 2-21
+    // are the passes (stubbed: the process is "the same"), call 22 is the final poll: the process dies just before it
+    run({
+      pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1',
+      pre: `_plat_epoch_ms() { echo 1700000000000; }
+  ${WRAP_SAME('if (( _GSN == 22 )); then kill -KILL "$1"; wait "$1" 2>/dev/null; elif (( _GSN > 1 )); then return 0; fi')}
+  ( sleep 15; kill -KILL $$ ) >/dev/null 2>&1 &
+  _WD=$!`,
+      verb: `_watchdog_resume_run ${ID}; kill $(pgrep -P $_WD) $_WD 2>/dev/null`,
+    });
+    expect(sameCalls()).toBe(22);
+    expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live exited=0`]);
+  }, 20_000);
+
+  it('live: a poll that slices to 0 ms (GRACEFUL_STOP_POLL_S=0) falls back to the default poll and still waits', () => {
+    arm();
+    run({
+      pane: { term: 'ignore' }, env: 'GRACEFUL_STOP_TERM_WAIT_S=1 GRACEFUL_STOP_OBSERVE_S=8 GRACEFUL_STOP_POLL_S=0',
+      pre: TIME_BEFORE_REAL,
+    });
+    expect(gs()).toEqual([`graceful-stop ${ID}: site=limit-resume mode=live alive=1000`]);
+    expect(beforeMs()).toBeGreaterThanOrEqual(1000);
+    expect(beforeMs()).toBeLessThan(3500);
   }, 20_000);
 
   it('live: a recycled or vanished pid is never signalled', () => {

@@ -25506,14 +25506,14 @@ _graceful_stop_note() {   # id site mode outcome — the one writer of `graceful
   echo "$(date '+%F %T') graceful-stop $1: site=$2 mode=$3 $4" >> "$REG/swap.log" 2>/dev/null || true
   return 0
 }
-_graceful_stop_same() {   # pid pstart — the one identity check: rc 0 the same process, rc 1 gone (or recycled), rc 2 its start time cannot be read of a process still alive
+_graceful_stop_same() {   # pid pstart — the one identity check: rc 0 the same process, rc 1 gone (or recycled), rc 2 alive, but its start time cannot be read
   kill -0 "$1" 2>/dev/null || return 1
   _ci_proc_start "$1" || { kill -0 "$1" 2>/dev/null && return 2; return 1; }
   [[ "$_CI_PSTART" == "$2" ]] || return 1
   return 0
 }
 _graceful_stop_before() {   # id site [read] — before the pane kill. `read`: the caller just ran `_pane_scope_of`, so its PANE_SCOPE_* are used as they stand. Always rc 0.
-  local id="$1" pid ps rc=0 t0 now tick_ms n
+  local id="$1" pid ps rc=0 t0 now tick_ms n poll="$GRACEFUL_STOP_POLL_S"
   GRACEFUL_STOP_PID="" GRACEFUL_STOP_PSTART="" GRACEFUL_STOP_SITE="$2" GRACEFUL_STOP_MODE=shadow
   [[ -f "$REG/graceful-stop-live" ]] && GRACEFUL_STOP_MODE=live
   [[ "${3:-}" == read ]] || _pane_scope_of "$id"
@@ -25533,7 +25533,9 @@ _graceful_stop_before() {   # id site [read] — before the pane kill. `read`: t
   kill -TERM "$pid" 2>/dev/null
   t0=$(_plat_epoch_ms)
   tick_ms="${GRACEFUL_STOP_POLL_S#*.}000"; tick_ms=$(( 10#${tick_ms:0:3} ))   # the poll is "0.<fraction>" seconds: its milliseconds, by string slicing (no fork)
-  for (( n = 0; n < GRACEFUL_STOP_TERM_WAIT_S * 1000 / tick_ms; n++ )); do
+  (( tick_ms > 0 )) || { tick_ms=100; poll=0.1; }   # a poll that slices to 0 ms (0, 0.0005, empty): the default, tick and sleep together
+  # the clock is the bound; the count (twice the nominal passes) only backs up a clock that stops or steps back
+  for (( n = 0; n < 2 * GRACEFUL_STOP_TERM_WAIT_S * 1000 / tick_ms; n++ )); do
     rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?
     now=$(_plat_epoch_ms)
     case "$rc" in
@@ -25541,10 +25543,16 @@ _graceful_stop_before() {   # id site [read] — before the pane kill. `read`: t
       2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable; return 0 ;;
       *) _graceful_stop_note "$id" "$2" live "exited=$(( now - t0 ))"; return 0 ;;
     esac
-    if (( now - t0 >= GRACEFUL_STOP_TERM_WAIT_S * 1000 )); then _graceful_stop_note "$id" "$2" live "alive=$(( GRACEFUL_STOP_TERM_WAIT_S * 1000 ))"; return 0; fi
-    sleep "$GRACEFUL_STOP_POLL_S"
+    if (( now - t0 >= GRACEFUL_STOP_TERM_WAIT_S * 1000 )); then break; fi
+    sleep "$poll"
   done
-  _graceful_stop_note "$id" "$2" live "alive=$(( GRACEFUL_STOP_TERM_WAIT_S * 1000 ))"   # the count ran out first (a clock that stepped back)
+  rc=0; _graceful_stop_same "$pid" "$ps" || rc=$?   # one last poll, so a process that left in the final interval is exited=, not alive=
+  now=$(_plat_epoch_ms)
+  case "$rc" in
+    0) _graceful_stop_note "$id" "$2" live "alive=$(( GRACEFUL_STOP_TERM_WAIT_S * 1000 ))" ;;
+    2) _graceful_stop_note "$id" "$2" live unmeasured=stat-unreadable ;;
+    *) _graceful_stop_note "$id" "$2" live "exited=$(( now - t0 ))" ;;
+  esac
   return 0
 }
 _graceful_stop_after() {   # id — after the pane kill: in shadow, hand the watch of the kept pid to a detached observer. Never waits. Always rc 0.
