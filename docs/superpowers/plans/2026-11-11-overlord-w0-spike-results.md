@@ -2,14 +2,16 @@
 
 > The measured answers of the Overlord's W0 spike (plan `docs/superpowers/plans/2026-11-10-overlord/w0-spike.md`,
 > spec `docs/superpowers/specs/2026-11-09-overlord-design.md`). W0a (run 1774) measured rows W0-00 to W0-19 and
-> W0-27, and answered W0-25 from the tree. Rows W0-20 to W0-24, W0-26 and W0-28 wait for W0b and the operator's setup
-> item; where W0a read a half of one, the read half is here and the rest is marked as waiting.
+> W0-27, and answered W0-25 from the tree. W0b (run 1820) measured rows W0-20 to W0-22 and W0-26, the fleet halves of
+> W0-06, W0-09, W0-12 and W0-19, and the first sweep reading of W0-24. It recorded W0-23 as deferred to the pool
+> design (R18) and W0-28 as ruled. W0-24's `/usage` readings are still to come.
 >
 > Every row says which kind of result it is: **doc** (read in Claude Code's documentation), **tree** (read in this
 > repository), **binary** (read from an installed build's strings), **rig** (what Claude Code sent to the mock API,
-> on a named build; never whether a real model heeded it), **box** (a box-token read of the live server), **model**
-> (the research model), or **emulated** (the mock sent a shape the documentation names). A rig result holds for the
-> build it ran on.
+> on a named build; never whether a real model heeded it), **box** (a box-token read of the live server, or, in
+> W0b, a read of the fleet box under the setup item's consent), **model** (the research model, or, for W0-20 to
+> W0-22, a real session: the subject), or **emulated** (the mock sent a shape the documentation names). A rig result
+> holds for the build it ran on.
 
 ## In short
 
@@ -31,8 +33,20 @@
 - **Inconclusive, so the conservative branch:** the idle-compaction switch (the 45-minute trigger is load-bearing),
   Claude Code's own switch on a flagged request (the statusline journals model changes too), and the typed `/clear`'s
   reliability (unmeasured: no run in the store's window took that path, so fresh start only).
-- **Waiting for W0b:** W0-20 to W0-24, W0-26's restart figures, W0-28, and the fleet halves of W0-06, W0-09, W0-12 and
-  W0-19.
+- **Measured (W0b), on the fleet and on one real session:**
+  - A roll plus a fresh start takes about 7.4 s at p95, so the deadlines stand.
+  - Restarts are p99 2 per session-hour, so `restarting`'s two in an hour stands, and the restart time is p95 6.1 s.
+  - Auto memory is on, with non-empty project memory on every account, so an operator item at W1a. Plugins are on
+    every account, so doctor's no-mods check is required.
+  - The history holds only quotes of the fallback notice, so the conservative branch stands.
+  - Mail and typed text are done alike (ten of ten, every pair rated 5). The gate dominates, so the Overlord's
+    `MAIL_PACE` row.
+  - Both swaps, at idle and mid-turn, pass their probes after `/clear`. A background shell is lost across a swap.
+  - Four checks pass on each of two own-provider lanes on 2.1.322, so the operator may set those records.
+  - W0-23 is deferred to the pool design (R18).
+  - W0-24's first reading finds no Fable use on any account this week.
+  - W0-28 is ruled B.
+- **Still out:** W0-24's three `/usage` readings, the operator's. The coordinator rules on them.
 
 ## The builds
 
@@ -505,7 +519,8 @@ oversight** (each `check.py --matrix` and `--mutations`): identical to their com
 outputs were written to scratch and the committed `out/` left as it was). **Fourteen anchors stop**: each check reads
 the spec by quoting a sentence, and the later editions reworded these. For each, the merged edition's sentence keeps
 the rule, refined: the grants door (§7.2, "and `DELETE` to revoke" dropped); Pause (§7.5, extended: it "stays `off`
-where it was"); the five-hour figure (§3.4, now "while anything is left of the reserve in the seven-day window");
+where it was"); the five-hour figure (§3.4, which then read "while anything is left of the reserve in the seven-day window"; R18 has
+since removed the reserve, and the five-hour figure with it);
 `glanced` (§6.6, now "any other answer, a tap from a push and a bulk Seen included"); the unreadable child mark
 (§3.3.9, widened to "a child mark that could not be measured"); Figure 2's timeout edge (now split, "from active:
 back, with a hold-off" and "from degraded: back to degraded", which settles the committed `GEN-back` counterexample);
@@ -778,19 +793,16 @@ only, for every account it lists (fifteen of the fleet's own provider and two of
 
 The operator's `/usage` readings, the truth this row compares against, have not been taken. The first was asked on
 2026-11-12, and the operator chose to read it later. Readings 2 and 3 fall on later days. With no Fable use on any
-account, a reading can only compare a zero with a zero. **Outcome so far: no truth, so the plan's branch is that the
-proxy stays unlabelled until a direct reading.** R18 removed the reservation's Fable arm that this row fed. Whether
+account, a reading can only compare a zero with a zero. **Outcome so far: no truth, so the plan's branch: no proxy is used
+until a direct reading.** R18 removed the reservation's Fable arm that this row fed. Whether
 W0-24 still informs the shared Fable test is W1's call (C46). The coordinator rules on the outstanding readings when
 the rest of Task 12 is ready.
 
-## Rows waiting for W0b
+## Rows still out
 
-W0-20 (nudge-and-read against typed text), W0-21 (a swap with a stand-in renewal), W0-22 (a continuity record per
-lane: its client side is W0-01, W0-02, W0-15 and W0-16 above, for 2.1.312 and 2.1.322), W0-23 (billing per account),
-W0-24 (the Fable proxy's error), W0-26 (restarts per session-hour and the restart time; its read half is above) and
-W0-28 (the replay baseline) wait for the operator's setup item (programme item 155) and W0b. So do the fleet halves of
-W0-06 (the roll's overhead), W0-09 and W0-19 (the account config census) and W0-12 (real fallback notices in the
-history).
+W0-24's three `/usage` readings, the truth the Fable proxy is compared against, are the operator's. The first was
+asked on 2026-11-12 and deferred by the operator; the second and third fall on later days. Every other W0 row is
+answered above. W0-23 is recorded as deferred to the pool design (R18), not as waiting.
 
 ## Departures from the plan (for the coordinator to number)
 
@@ -828,7 +840,7 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
   value if it failed, and the conductor's own session hook refuses even naming such a path in a mail. So the conductor
   wrote one synthetic rule, `Bash(echo w0-deny-probe:*)`, into the subject's scratch project settings (setup item 163
   made the subject available "however required"), and swapped the subject afresh onto each lane so the rule loaded at
-  the start. The rule is removed when the wave ends.
+  the start. The rule was removed once both lanes' checks were done.
 - **w0b-a-background-shell-arm, method.** W0-21's first mid-turn swap met a background shell rather than a running
   turn, because the subject's harness refuses a long foreground `sleep`. It is recorded as its own arm, and the
   mid-turn case was re-run with a foreground command the harness allows.

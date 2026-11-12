@@ -202,6 +202,13 @@ with each case.
 
 **As measured (W0a, 2026-11-11).** On Claude Code 2.1.312 and 2.1.322 (the oldest and newest installed), against the capture rig's mock API: the hook cap is 10,000 characters per hook command, not per event, and above it a 2,000-character preview; auto memory and forks are on by default; auto memory has a per-session switch (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`), and `CLAUDE_CODE_FORK_SUBAGENT=0`, set together with `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` in one run, changes the `Agent` tool (which of the two moved which part is not separated); a flagged-request switch has a documented pin (`switchModelsOnFlag`, `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK`); and a typed `/model` mid-conversation opens a "Switch model?" dialog and saves the model as the default for new sessions. The other rows of this table that W0a re-read are unchanged. Rows, builds and the design choice each selects: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
+**As measured (W0b, 2026-11-12).** On the fleet box, by counts and key names only:
+- The Anthropic-lane accounts run five builds, 2.1.316 to 2.1.322. Eight run 2.1.322, and seven run a build between W0a's pair, so the rig rows are unmeasured on those builds.
+- Every account config holds non-empty project memory (8 to 14 directories, mostly shared across accounts), 6 to 9 skills, and 8 or 9 plugins with `enabledPlugins` set. A user memory file is on 7 accounts, and a tool server on 4.
+- No account's settings carry `autoMemoryEnabled`, so auto memory is on everywhere. `switchModelsOnFlag` is set on one account.
+- The history holds the fallback notice's text only as quotes (88 and 71 hits, none a row Claude Code wrote), so real notices are unmeasured there.
+Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
 ### 1.3 What exists elsewhere
 
 Read in the vendors' public documentation on 2026-11-09. It says why the hard parts of this design exist. W0 reads
@@ -631,6 +638,12 @@ each state's deadline, and Table 3.3.11b each trigger.*
 
 **As measured (W0a, 2026-11-11).** The Claude Code facts above hold on 2.1.312 and 2.1.322, with these additions: the hook cap is counted per hook command and in characters; a fork reports its own SessionStart source, `fork`; `/clear` mints a new session id and a manual compaction keeps it (a real automatic one is unmeasured); a background reader started before `/clear` survives it and reports into the new conversation; crons survive a `/clear`, and durable ones a fresh start; and an automatic compaction under the rig fired PreCompact `auto` and sent no summarising request, with no SessionStart `compact` after it (a rig result; a real one is unmeasured). Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
+**As measured (W0b, 2026-11-12).** On a real session, the subject, on 2.1.322:
+- A swap at idle and a `/clear`, then a card re-read, restored three of three facts.
+- A swap with `--interrupt` 36 s into a foreground command killed only that command. ccd's restart typed its continuation prompt, and the session re-ran the command and finished the turn.
+- A background shell does not survive a swap. The resumed session got Claude Code's notice that the task had not finished, as a queued row, and took no turn on it (the results note's Proposal 12).
+Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
 #### 3.3.1 Generations, not one immortal conversation
 
 This subsection says what a generation is and who renews it.
@@ -733,6 +746,8 @@ on hook context.
 
 **As measured (W0a, 2026-11-11).** W0-01 to W0-04, on both builds: the text of one hook command arrives whole up to 10,000 characters (the tail canary in the next request), so the anchor slot of 1,500 stands; each start's context reaches the next request for `startup`, `compact` and `fork` (a fresh start reports `startup`), while for `clear` and `resume` only the hook's payload is measured (the delegation corpus, to 2.1.319), not the request after it; the workspace memory file is in the requests after `/clear` and after `/compact`, so C38 stands; and a UserPromptSubmit context of 600 characters arrives with every prompt, while a hook past its timeout drops its output. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
+**As measured (W0b, 2026-11-12).** W0-22 on the subject, on two of the fleet's own lanes (2.1.322): after a swap, a token that only ccrc's SessionStart hook context carries was answered right from context before any read, on both lanes. So a start's context reaches a real model on each lane. A `/clear` followed by a card re-read answered the closed-form probe on both. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
 #### 3.3.4 Compaction: a bounded fallback, never the plan
 
 This subsection says how compaction becomes a counted fallback inside one generation.
@@ -757,6 +772,8 @@ This subsection says how compaction becomes a counted fallback inside one genera
 - **Two compactions in one generation** make a renewal due (soft).
 
 **As measured (W0a, 2026-11-11).** W0-13 and W0-14, on both builds: a PreCompact refusal of `trigger: auto` is honoured and the turn runs on uncompacted to its reply, asked again once at each turn's start, so the arm refuses once and lets the next through; at the window's end (emulated) the session was not stuck, and a manual `/compact` passed. The auto-compact window is set per session by `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Idle compaction never fired in 65 idle minutes under the rig, with the switch on or off, on a 1,000,000-token window 15% full (a fuller window was not tried), so the idle switch is unproven and the 45-minute idle trigger stays load-bearing. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
+**As measured (W0b, 2026-11-12).** W0b measured no compaction: no fleet read and no run on the subject reached one. A real automatic compaction stays unmeasured, so the arms above stand as written. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 #### 3.3.5 Canaries, probes and the outside audit
 
@@ -886,6 +903,11 @@ needs.
     owns that rule (§3.4). Compaction settings are in §3.3.4.
 
 **As measured (W0a, 2026-11-11).** W0-09 and W0-10, on both builds: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` at launch keeps every project-memory file out of the requests, before and after a swap, so H14's "off for every role" is a launch column; `CLAUDE_CODE_FORK_SUBAGENT=0` and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`, set together in one run, change the `Agent` tool (no fork mode, `run_in_background` back) and hold; which switch moved which part, agent view's own effect and the agent-teams switch are unmeasured. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
+**As measured (W0b, 2026-11-12).** W0-09 and W0-19 on the fleet:
+- Every account config holds non-empty project memory (8 to 14 directories, most shared across accounts by link), and none sets `autoMemoryEnabled`. So auto memory is on everywhere, a swap loads the target account's memory, and H14's launch switch is what keeps it out. This selects an operator item at W1a.
+- Skills, plugins (with `enabledPlugins` on every account), a user memory file on 7 accounts and a tool server on 4 are all present. So the profile's pinned sources are load-bearing, and doctor's no-mods check is required.
+Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 #### 3.3.8 Swaps, rolls, sleep and restarts
 
@@ -1225,6 +1247,10 @@ starting values (Table 11.5b).*
   After a crash at any step, the next card lists every unsettled message and open hold (I8).
 
 **As measured (W0a, 2026-11-11).** W0-05, W0-06 (the rig half), W0-07 and W0-08: a manual compaction keeps the session id (a real automatic one is unmeasured) and `/clear` mints one; a fresh start reaches its ready prompt in about 0.26 s at p95 whatever the transcript, a resume in under 2 s at 5 MB, so the deadlines stand unless the fleet's roll overhead (W0b) passes 59 s at p95; the typed `/clear` path is unmeasured (none of the 541 runs in the store's window, its active runs and newest 500 closed, resumed), so H13 selects "fresh start only" until it is measured; and a reader in flight survives `/clear` and reports into the new conversation, so the drain wait and the fence are load-bearing. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
+**As measured (W0b, 2026-11-12).** W0-06's fleet half: 114 automatic rolls in 9 days, each to its session's next unit start, took p50 0.4 s, p95 1.0 s and max 1.9 s. With the unit start to its ready marker (p95 6.1 s) and a fresh start, a roll takes about 7.4 s at p95, far under 59 s, so the deadlines stand.
+
+On the subject (W0-21), each `ccd swap` returned in 1.3 to 1.5 s. The operator's typed `/clear` worked four times of four: the uuid rotated, and a card re-read restored the facts. A `/clear` typed by ccrc's own lane was not run, so H13's selection is unchanged. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ### 3.4 Its model and its accounts
 
@@ -1653,6 +1679,13 @@ editions of this spec.*
 
 **As measured (W0a, 2026-11-11).** W0-11 and W0-12 on both builds, W0-25 from the tree: `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` holds every subagent on Sonnet against a per-call `opus`, while the plain env and an `--agents` definition do not; under FORCE the PreToolUse payload carries no `model`, even for a call that named one, and with ccrc's hook loaded its D-6798 arm refused all four Agent calls. A typed `/model` fires `PreModelSwitch` and `PostModelSwitch` with `from_model` and `to_model`; Claude Code's own switch on a flagged request was not reproduced by the rig's emulation (it continued once on the same model; the emulated refusal lacked the documented `stop_details` object, which may be why), so the statusline journals model changes too. Today's pick breaks ties by roster order (pinned in `projected-home.test.ts`), which C56's listed order extends. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
+**As measured (W0b, 2026-11-12).** Under R18 no account is reserved:
+- W0-23 has no subject. It is recorded unmeasured with the conservative branch: an account whose billing fact is unread is treated as if credits were on. What it measures under R18 is C46's open question.
+- W0-24's first sweep reading (2026-11-12) has a Fable estimate of 0.0 on every account the sweep lists, so no session ran Fable on any account this week. The operator's `/usage` readings are still to come.
+- W0-12's fleet half finds the fallback notice in the history only as quotes, so real notices are unmeasured and the conservative branch stands.
+- The swaps of W0-21 and W0-22 ran on three of the fleet's own lanes, all on 2.1.322.
+Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
 ### 3.5 Brain work, never execution (R12)
 
 This section says what the Overlord does itself, what it always hands down, and what holds that line. The operator,
@@ -1884,6 +1917,12 @@ authority or a switch. The act key file, W0's fallback only, holds a credential 
     the card.
 
 **As measured (W0a, 2026-11-11).** W0-15 to W0-19, on both builds: under the `overlord` profile (pinned sources, the profile in `--settings`, `--strict-mcp-config` with a door stub, `--tools Agent,Skill`, readers in `--agents`, bypass mode) the main thread is offered only `Agent`, `Skill` and the door tools; ccrc's hook fires from the profile file; the anchor, the project skill and the permission mode hold; every door call is served with no prompt; a `Bash` call is refused in the main thread and in the reader (the deny rules and `--tools` were set together, so which removed it is not attributed); the launch nonce reaches the door process; and each PreToolUse in a reader carries `agent_type`. So the door process stands and the fallback is not selected. Pinned sources load nothing from the account config (memory file, skill, agent, tool server, settings), ccrc's own hook included (the results note's Proposal 4). A fresh account config shows the bypass acceptance dialog first. Plugins are unmeasured. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
+**As measured (W0b, 2026-11-12).** W0-22 on the subject, on two of the fleet's own lanes (2.1.322):
+- A project deny rule refused its command in the main thread on both lanes.
+- An `Explore` reader started on both, and returned the fact it was sent for.
+- The fleet census finds plugins enabled on every account and a tool server on 4. Pinned sources load none of them, so the profile carries what the Overlord needs.
+Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ### 3.7 Three kinds of decision
 
@@ -2270,6 +2309,13 @@ holds private data and can change state, so it must never take untrusted text ra
 
 *Table 3.8a. The threats and what holds each. The 2025 agentic threat lists name the first six. The last column is the
 residual risk the operator accepts by approving this spec.*
+
+**As measured (W0b, 2026-11-11 and 2026-11-12).** W0-20 on the subject (2.1.322): ten small tasks, each typed by the operator and each mailed and read by tool.
+- Both ways, all ten were done as asked, and the operator rated every pair 5.
+- Net of the mail gate, the first tool call came at most 3.4 s after the nudge (typed: 2.2 s). A reply by mail came 9.0 s after it at p50.
+- The gate dominates. Today's worker pace (60 s of quiet, then 120 s between nudges) held the nudges about two minutes apart, p50 90 s. So the Overlord's own `MAIL_PACE` row (C24) is what its delivery latency rests on.
+- A busy reader blocked the subject's invited replies at today's peer-mail bounds (the results note's Proposal 11).
+Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ## 4. Where the operator talks to it
 
@@ -3253,6 +3299,13 @@ from a ready Overlord, and a breaker stops the tier when holds keep lapsing.
     window.
 
 **As measured (W0a, 2026-11-11).** The starting numbers W0a could measure: a fresh start takes about 0.26 s to its ready prompt at p95 on the rig, so `clearing` 90 s and `carded` 45 s stand pending the fleet's roll overhead (W0b); the restart counts per session-hour, the restart time and the replay baseline are W0b's. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
+**As measured (W0b, 2026-11-11).** On the fleet box:
+- Restarts: 2,979 in 14 days, per session-hour p99 2 and max 3, so `restarting`'s two in an hour stands.
+- The restart time, unit start to ready marker, is p95 6.1 s, so that is `restarting`'s bound.
+- A roll plus a fresh start takes about 7.4 s at p95, so `clearing` 90 s and `carded` 45 s stand.
+- The replay baseline was ruled to be the first run of W1a's weekly quiz lane, taken before any W1a arm is armed (D-8207).
+Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ### 6.5 What it answers on day one
 
@@ -5735,6 +5788,8 @@ reversible, so no act reads the two `reversible` weights in version 1.
 
 **As measured (W0a, 2026-11-11).** Table 11.5b's notes: no lane computes the Overlord's readiness today (the `readiness` lane, 600 s, is the programme-start check); `LANE_SCHEDULE`'s cadences are listed in the results note. The restart counts are W0b's. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
+**As measured (W0b, 2026-11-11).** Table 11.5b's notes: restarts per session-hour over 14 days are p50 1, p95 2, p99 2 and max 3 among the hours with a start, so readiness's `restarting` threshold of two in an hour stands. The restart time is p95 6.1 s. One sweep after boot is still W1's to name, since no lane computes readiness today. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
 ### 11.6 Refusal words
 
 Every refusal this design adds is one word from one L0 list, generated from this table. A refusal names its cause.
@@ -5874,6 +5929,8 @@ only the simulator checks, by running each seed both ways.*
   bounds become the limit.
 
 **As measured (W0a, 2026-11-11).** W0-27: the first model, re-run unchanged on this edition, holds every invariant in all 15 scenarios at the defaults (the largest, `genmachine`, 674,982 states, a fifth of the bound), catches each of its 12 planted mutations by its own invariant, and leaves the 2 "none expected" uncaught; round two catches all 40; rounds three and four match their committed outputs. No default disagrees with this edition. Round three's deciders stop at 14 anchors that later editions reworded, so those checks did not run on this edition (the results note's Proposal 9). Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
+
+**As measured (W0b, 2026-11-12).** W0-28 is ruled: M13's baseline is the first run of W1a's weekly quiz lane, taken before any W1a arm is armed. That run follows the history programme's four conditions, and records the frozen question list's sha, the counts, the score with its interval, the builds, and whether that programme's W3 and W4 were armed. W0-20 to W0-22 are model results on one real session, on 2.1.322 only. Details: `docs/superpowers/plans/2026-11-11-overlord-w0-spike-results.md`.
 
 ## 12. Measures of success
 
