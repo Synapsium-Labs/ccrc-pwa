@@ -314,6 +314,35 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     expect(r.stdout).toContain('ccrc-v1.2.3.tar.gz: OK');
   });
 
+  // D-8391: the tracked set never reaches its extractor through a pipe. macOS's
+  // bsdtar can stop reading once it has read the archive's end marker, before
+  // `git archive` has written the rest of its last record; git then dies of
+  // SIGPIPE, `pipefail` makes the stage exit 141 and `set -e` ends the build
+  // with nothing on stderr (bash reports no SIGPIPE). Measured on hosted macOS
+  // runners, intermittently: release-main.test.ts's asset builds ended at
+  // build-release.sh's `git archive … | tar -x` with status 141. GNU tar reads to
+  // the end of its input, so Linux never showed it. The stub below stands in for
+  // such an extractor, deterministically: reading a stream, it takes one byte
+  // and stops, and a shipped file larger than any pipe buffer keeps git writing
+  // after it. Given a file (`-f`), it is the real tar.
+  it('the tracked set reaches tar as a file, so an extractor that stops reading early cannot end the build (D-8391)', () => {
+    const home = mkTmp('build-release-early-reader-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3', files: { 'ccd/large.bin': 'x'.repeat(1 << 20) } });
+    const bin = join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'tar'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' "$*" >> "$HOME/tar-argv"',
+      'case " $* " in *" -x "*) case " $* " in *" -f "*) ;; *) head -c 1 >/dev/null; exit 0 ;; esac ;; esac',
+      `exec ${TAR} "$@"`,
+    ].join('\n'), { mode: 0o755 });
+    const out = join(home, 'out');
+    const r = runRelease(root, home, ['--out', out]);
+    expect(r.code, `stdout: ${r.stdout}\nstderr: ${r.stderr}`).toBe(0);
+    expect(readFileSync(join(home, 'tar-argv'), 'utf8'), 'the stub extracted the tracked set').toMatch(/^-x /m);
+    expect(tarListing(join(out, 'ccrc-v1.2.3.tar.gz'))).toContain('ccd/large.bin');
+  });
+
   // W6 Task 8A (review 173's F4a): `ccd/ccrc`'s `_upd_resolve` bounds the
   // SHA256SUMS fetch with `--max-filesize CCRC_RELEASE_SUMS_MAX_FILESIZE`, a
   // size DERIVED from this builder's output shape and, until now, tied to it by
