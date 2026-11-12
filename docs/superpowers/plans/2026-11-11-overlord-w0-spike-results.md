@@ -851,30 +851,30 @@ Each is named by a plain-words slug; the coordinator issues its number and defin
   `project,local` (its grants in a `--settings` file) to measure the model at all. The refusal is a row of its own,
   measured from a committed scenario: `ov-subagent-model-force-hook`, the same arm with the default sources and so with
   ccrc's hook loaded (W0-11; proposal 1).
-- **D-8246** (w0b-synthetic-deny-rule-in-the-subjects-project, shape). W0-22's deny check needs a rule that fires and is
+- **w0b-synthetic-deny-rule-in-the-subjects-project, shape (D-8246).** W0-22's deny check needs a rule that fires and is
   harmless if it does not. The fleet's own deny rules all guard account and secret paths: trying one could read a
   value if it failed, and the conductor's own session hook refuses even naming such a path in a mail. So the conductor
   wrote one synthetic rule, `Bash(echo w0-deny-probe:*)`, into the subject's scratch project settings (setup item 163
   made the subject available "however required"), and swapped the subject afresh onto each lane so the rule loaded at
   the start. The rule was removed once both lanes' checks were done.
-- **D-8247** (w0b-a-background-shell-arm, shape). W0-21's first mid-turn swap met a background shell rather than a running
+- **w0b-a-background-shell-arm, shape (D-8247).** W0-21's first mid-turn swap met a background shell rather than a running
   turn, because the subject's harness refuses a long foreground `sleep`. It is recorded as its own arm, and the
   mid-turn case was re-run with a foreground command the harness allows.
-- **D-8244** (w0-23-deferred-to-the-pool-design, scope). The coordinator's ruling on setup item 163: under R18 no account is
+- **w0-23-deferred-to-the-pool-design, scope (D-8244).** The coordinator's ruling on setup item 163: under R18 no account is
   reserved, so W0-23 has no subject. It is recorded unmeasured with the conservative branch and C46's open question,
   and nothing was read to fill it.
-- **D-8245** (w0-24-deferred-under-r18, scope). The coordinator's ruling: under R18, W0-24 has no consumer. The
+- **w0-24-deferred-under-r18, scope (D-8245).** The coordinator's ruling: under R18, W0-24 has no consumer. The
   sweep's readings are recorded (shares, `sevenPct` and times; no value). The `/usage` comparison is unmeasured and
   deferred to W1, whose call it is whether W0-24 still informs the shared Fable test (C46). Readings 2 and 3 were not
   raised.
-- **D-8248** (w0b-fleet-read-scope, scope). The plan asked for 30 days of fleet reads and a fleet-wide count of
+- **w0b-fleet-read-scope, scope (D-8248).** The plan asked for 30 days of fleet reads and a fleet-wide count of
   fallback notices. The user journal reaches back 14 days and ccd's lifecycle journal 9, so the restart, restart-time
   and death reads cover at most 14 days and the roll read 9. `ccrc history` has no fleet-wide read verb, so W0-12
   counts this project's history only (936 session families), as quotes, not as a weekly rate of real notices.
-- **D-8249** (w0-22-canary-from-the-session-start-hook, shape). The anchor slot does not exist until W1a. So W0-22's
+- **w0-22-canary-from-the-session-start-hook, shape (D-8249).** The anchor slot does not exist until W1a. So W0-22's
   anchor canary is a token only ccrc's own SessionStart hook context carries (its graph line's commit and node count),
   answered from context before any read.
-- **D-8250** (w0-22-lanes-chosen-by-headroom, shape). The coordinator directed the conductor to choose W0-22's two
+- **w0-22-lanes-chosen-by-headroom, shape (D-8250).** The coordinator directed the conductor to choose W0-22's two
   lanes and to prefer lanes with headroom and no Fable. So the conductor read each account's `sevenPct` and
   `fableShare` from the sweep. These are usage shares, not credentials or values, and the coordinator ruled the read
   within consent.
