@@ -226,11 +226,13 @@ if [ "$RELEASE_MODE" = true ]; then
   fi
   # THE TAG IS BOUND, as the updater's `_upd_resolve` binds it: the name SHA256SUMS
   # gives must BE the tag asked for, tag to tag and un-stripped, before the tarball
-  # is fetched. Printing the name is safe here: it has passed the rules above.
+  # is fetched. Printing the name is safe here: it has passed the rules above. The
+  # sentence is the updater's, word for word (D-8385); install-sh.test.ts reads
+  # ccd/ccrc's and reds on any difference.
   if [ -n "$RELEASE_TAG" ]; then
     V="${TARNAME#ccrc-}"; V="${V%.tar.gz}"
     if [ "$V" != "$RELEASE_TAG" ]; then
-      echo "install.sh: the release at $RELEASE_TAG names a $TARNAME (version $V, not $RELEASE_TAG) — refusing" >&2; exit 1
+      echo "install.sh: the release at $RELEASE_TAG names a $TARNAME (version $V, not $RELEASE_TAG) — refusing; nothing on this box was changed" >&2; exit 1
     fi
   fi
   echo "install.sh: fetching $URL_SAFE/$TARNAME …"
