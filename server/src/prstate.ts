@@ -531,7 +531,7 @@ export function readPrLandingLine(x: unknown): PrLandingLine | null {
 
 // ── `ccd pr-state --project <p> --pr <n>` (landing order wave 5c; spec §5.5 "Landed state is PR-keyed") ──
 // One PR's state by number, with no workspace binding. The five words are defined once in the map and the list is derived
-// from it. The form is behind `PR_STATE_PR_CAP` (`CCD_CAN.prStatePr`); nothing in the server calls it yet.
+// from it. The form is behind `PR_STATE_PR_CAP` (`CCD_CAN.prStatePr`); its one caller is `coord/landedLane.ts#landedPass`.
 
 const PR_STATE_PR_MAP = {
   open: 'GitHub reads the PR OPEN (a draft included)',

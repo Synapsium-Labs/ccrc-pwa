@@ -178,7 +178,7 @@ export type LaneClock = 'mono' | 'wall';
 export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
-  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'serverCaps'
+  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
@@ -228,6 +228,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'landingRadar', cadenceMs: LANDING_RADAR_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
     staleAfterMs: 5 * 60_000, warnKey: 'ccrc-server: the landing radar lane failed',
+  },
+  // Landing order wave 5h: the landed reader. It reads what the PR lane reads, at the PR lane's beat, ten entries a sweep;
+  // each entry's own due time is the lane's memory. A sweep still running after the PR lane's stuck age is abandoned.
+  {
+    name: 'landed', cadenceMs: PR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: PR_SWEEP_STUCK_MS,
+    warnKey: 'ccrc-server: the landed reader lane failed',
+    derivedFrom: { name: 'PR_SWEEP_MS', reason: 'the reader reads what the PR lane reads, at its beat' },
   },
   { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'mono', flight: 'join', warnKey: null },
   { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },

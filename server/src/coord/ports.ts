@@ -56,7 +56,8 @@ export interface FleetWatcherView {
  *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
-  | 'absorbParkEscalation' | 'activeClaims' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
+  | 'absorbParkEscalation' | 'activeClaims' | 'advanceLanding'
+  | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
   | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
   | 'cancelDeliveriesTo' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
   | 'childStaleActivity' | 'claimDigestDay' | 'claudeBuilds' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
@@ -70,7 +71,7 @@ export type WatcherCoordMember =
   | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
   | 'heldAskFor' | 'heldQuestionRows' | 'holdParked' | 'importLaneArmMarker' | 'ingestJournal' | 'insertApproval' | 'insertAsk'
   | 'insertDelegationEvents' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor'
-  | 'journalGenerations' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
+  | 'journalGenerations' | 'landingReadProjects' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkingAll'
   | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markClaudeBuildAttempt'
@@ -80,7 +81,7 @@ export type WatcherCoordMember =
   | 'noteLeaseDetail' | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openReleaseReviewItems' | 'outstandingMailFor' | 'parkDelivery'
   | 'parkedDeliveries' | 'poolEpoch' | 'practiceCaseNewest' | 'programOpenRunCount' | 'programmeActivity' | 'programmeLeftPlannedAt' | 'projectDelegationCheckpoint'
   | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'queueDelivery' | 'queueRunCloseWarning'
-  | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'recentProvenance' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
+  | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordStallObservation'
   | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releaseReviewItemRaised' | 'releases'
   | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'reviewChildReleased' | 'reviveParkedDeliveries' | 'rollSettings' | 'run'
