@@ -35,7 +35,8 @@ const GIT_ENV = {
 };
 
 /** Everything a finished child said about how it ended: its status, the signal
- *  that ended it, a spawn error, and the tails of stdout and stderr. A fixture
+ *  that ended it, a spawn error, its pid (to match against a log of who
+ *  signalled what), and the tails of stdout and stderr. A fixture
  *  step that fails with only its stderr reads as `failed: ` when the child was
  *  killed, or wrote its refusal to stdout (D-8391). */
 const TOLD_TAIL = 2000;
@@ -45,7 +46,7 @@ function told(r: SpawnSyncReturns<string>): string {
     return t.length > TOLD_TAIL ? `…${t.slice(-TOLD_TAIL)}` : t;
   };
   const err = r.error === undefined ? '' : `, error ${r.error.message}`;
-  return `status ${r.status ?? 'none'}, signal ${r.signal ?? 'none'}${err}\n--- stdout\n${tail(r.stdout)}\n--- stderr\n${tail(r.stderr)}`;
+  return `pid ${r.pid ?? 'none'}, status ${r.status ?? 'none'}, signal ${r.signal ?? 'none'}${err}\n--- stdout\n${tail(r.stdout)}\n--- stderr\n${tail(r.stderr)}`;
 }
 /** A fixture step that must succeed: its failure carries everything `told` reads. */
 function spawnStep(what: string, cmd: string, args: string[], opts: SpawnSyncOptionsWithStringEncoding): SpawnSyncReturns<string> {
