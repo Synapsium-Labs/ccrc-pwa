@@ -357,7 +357,8 @@ describe('the bare-host mode\'s scope (D-7289)', () => {
   // The call counts are pinned exactly, as measured on this tree: a call the reader stops seeing (a new spelling, a moved
   // line it misreads) reds here, not only a call that passes a second word. A commit that adds or removes a call moves
   // its file's count in the same diff.
-  const CALLS = { 'ccd/ccrc': 20, 'ccd/ccrc-doctor-checks': 3 } as const;
+  // D-8389: ccd/ccrc's 21st is `_upd_fetch`'s, over the verifier's stderr.
+  const CALLS = { 'ccd/ccrc': 21, 'ccd/ccrc-doctor-checks': 3 } as const;
   it('every _upd_redact call in ccd/ccrc and ccd/ccrc-doctor-checks passes exactly one argument, and their counts are pinned', () => {
     for (const [f, count] of Object.entries(CALLS)) {
       const calls = updRedactCalls(read(f));

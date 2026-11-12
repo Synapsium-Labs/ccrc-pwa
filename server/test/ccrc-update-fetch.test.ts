@@ -1295,6 +1295,49 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
+  // D-8389 (R48's second gap): the REAL verifier, whose sigstore dependency fails to load with an error naming a
+  // credentialed URL with a query token and a path under this box's home. A `--require` hook in the `node` ahead of
+  // the shim makes `@sigstore/verify` throw, so the checkout's own verifier takes its exit-3 arm. `_upd_fetch` prints
+  // the verifier's stderr through `_upd_redact`, as every other update line, so neither secret nor the absolute home
+  // reaches stderr, stdout or update.json, and the die is the could-not-RUN one.
+  it('a verifier whose dependency fails to load naming a secret prints its exit-3 line redacted (D-8389)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-depload-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const PW = 'S3cr3tPW8389';
+    const TOKEN = 'Q7tokenSecret8389';
+    const planted = `${home}/.ccrc/deps/loader.js`;
+    const hook = join(home, 'depload-hook.cjs');
+    writeFileSync(hook, [
+      "const M = require('module');",
+      'const load = M._load;',
+      "M._load = function (request, ...rest) {",
+      `  if (request === '@sigstore/verify') throw new Error(${JSON.stringify(`cannot load from ${planted}: mirror https://deploy:${PW}@mirror.example/r/pkg.tgz?token=${TOKEN} failed`)});`,
+      '  return load.call(this, request, ...rest);',
+      '};',
+      '',
+    ].join('\n'));
+    const realBin = join(home, 'real-node-bin');
+    mkdirSync(realBin, { recursive: true });
+    writeFileSync(join(realBin, 'node'), `#!/bin/sh\nexec '${REAL_NODE}' --require '${hook}' "$@"\n`);
+    chmodSync(join(realBin, 'node'), 0o755);
+    const r = runUpdate(home, [], { PATH: `${realBin}:${updateEnv(home)['PATH']}` });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(existsSync(join(home, 'verify-argv')), 'the shim answered, not the real verifier').toBe(false);
+    expect(r.stderr).toMatch(/^verify-provenance: could not load the sigstore verifier's dependencies \(cannot load from ~\/\.ccrc\/deps\/loader\.js: mirror https:\/\/mirror\.example\/r\/pkg\.tgz\?\[withheld\] failed\) - a local dependency problem, not a verdict on the bundle$/m);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 3\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    const report = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    for (const [where, text] of [['stderr', r.stderr], ['stdout', r.stdout], ['update.json', report]] as const) {
+      expect(text, `${where} holds the planted password`).not.toContain(PW);
+      expect(text, `${where} holds the planted query token`).not.toContain(TOKEN);
+      expect(text, `${where} holds the planted absolute path`).not.toContain(planted);
+    }
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
   // D-3142: a verifier that cannot RUN at all (a usage error, or node/the
   // script itself missing) is a DIFFERENT fact from a verifier that ran and
   // refused the bundle — folding both into "FAILED" tells the operator the

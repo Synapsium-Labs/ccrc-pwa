@@ -7469,8 +7469,10 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
   - it fetches SHA256SUMS with no time or size bound.
   It is trust-on-first-use, so a hostile host could serve hostile code anyway, but a terminal escape needs none of that.
   Two related gaps are also open:
-  - the contained curl front's `-g` admission is unpinned on macOS, with no refused-row for `-gK` or `-gx`;
-  - the verifier's exit-3 dependency-load sentence still prints unfiltered.
+  - the contained curl front's `-g` admission is unpinned on macOS, with no refused-row for `-gK` or `-gx`. **Fixed by
+    D-8389 (2026-11-12):** pinned in `ccrc-containment.test.ts`, which runs on macOS too; `-gK` and `-gx` are refused;
+  - the verifier's exit-3 dependency-load sentence still prints unfiltered. **Fixed by D-8389 (2026-11-12):** it
+    writes through `refuse`'s filter, and the update prints the verifier's stderr through `_upd_redact`.
   Residue R23 (the curl front) was not picked up when wave 24 touched that front.
 - **R49 (wave 24's in-session review; records and comments).**
   - The plan's hunk map gives add plus delete as the add count for 672293450.

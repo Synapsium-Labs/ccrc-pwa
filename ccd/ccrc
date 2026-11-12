@@ -23954,10 +23954,16 @@ _upd_fetch() {
   if [ "$rc" -eq 0 ]; then
     verifier="$CCRC_HERE/../deploy/verify-provenance.mjs"
     vrc=0
-    node --no-warnings "$verifier" \
+    # D-8389: the verifier's stderr is printed through `_upd_redact`, as every
+    # other update line is, never inherited raw: its exit-3 sentence carries a
+    # dependency's own load error, which can name a credentialed URL or a path
+    # under this home. Its stdout (the one `verified …` line) stays inherited.
+    local verr=""
+    { verr="$(node --no-warnings "$verifier" \
         --blob "$UPD_STAGE/$UPD_TARNAME" --bundle "$bundle" --tag "$UPD_VERSION" \
-        --owner "$CCRC_RELEASE_OWNER" --repo "$CCRC_RELEASE_REPO" \
-      || vrc=$?
+        --owner "$CCRC_RELEASE_OWNER" --repo "$CCRC_RELEASE_REPO" 2>&1 1>&3 3>&-)" \
+      || vrc=$?; } 3>&1
+    [ -z "$verr" ] || printf '%s\n' "$(_upd_redact "$verr")" >&2
     # D-3142 (Task 12 review, Important): `deploy/verify-provenance.mjs`
     # speaks exactly two exit codes of its own — 1 (refused, a real verdict
     # on the bundle) and 2 (usage) — and `node` itself can add exits the
