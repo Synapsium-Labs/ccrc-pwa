@@ -159,7 +159,7 @@ the rig, or by a box-token read, with no operator setup; **c** needs the operato
 | W0-21 | A swap at idle and one mid-turn, each followed by a stand-in renewal and probes | §3.4, C57: "W0 measures it" | Subject: `ccd swap` at idle and `ccd swap --interrupt` mid-turn; then the operator's `/clear`, a card file re-read, three closed-form questions on facts mailed before | c | Both pass: as designed. More than the turn lost: recorded against the resumed-long trigger. Probes fail: the restart bound is taken from this run |
 | W0-22 | A continuity record for each lane | H16: no record, no Overlord on that lane | Client side from W0-01, W0-02, W0-15 and W0-16 for each installed build. Model side on the subject (or a second scratch session) per named lane: the anchor canary, a deny rule, a reader, a closed-form probe after `/clear`; synthetic text only | b, c | Four passes: the operator may set the record (W1). Any fail: no record |
 | W0-23 | Whether each account bills Fable to usage credits | The billing fact (H16, O2) | Prior statement (a); the operator's reading of each account's plan and credits setting | a, c | Credits off: billing fact `none`. On: Fable unservable for the Overlord there, as designed |
-| W0-24 | How closely the seven-day figure times the Fable share tracks Claude Code's own Fable figure | Written for the reservation's Fable arm, which R18 removed; whether it still informs the shared Fable test is W1's call (C46) | Per account running Fable: three readings over at least three days; the operator's `/usage` Fable line and the sweep's `estimate`, `sevenPct`, `finishedAt` at the same minute; or W0-18's field | c | Error ≤ 5 points of the window: the proxy, labelled. 5 to 15: any use W1 makes of it carries the largest error. Above 15 or no truth: W1 uses no proxy until a direct reading |
+| W0-24 | How closely the seven-day figure times the Fable share tracks Claude Code's own Fable figure | Written for the reservation's Fable arm, which R18 removed; whether it still informs the shared Fable test is W1's call (C46) | Per account running Fable: three readings over at least three days; the operator's `/usage` Fable line and the sweep's `estimate`, `sevenPct`, `finishedAt` at the same minute; or W0-18's field | c | Error ≤ 5 points of the window: the proxy, labelled. 5 to 15: any use W1 makes of it carries the largest error. Above 15 or no truth: whether W0-24 still informs the shared Fable test is W1's call (C46) |
 | W0-25 | Today's account pick, and any hidden order | C56: "listed order before load" is new | The code and its pins; a fixture-HOME run through `makeCcdHarness` with `lane-a` to `lane-d` at equal scores only if a tie-break is unpinned | a, b | Home, then load: W1 adds the list as specified. A roster-order tie-break: W1 extends it rather than adding a second order |
 | W0-26 | Restarts per session per hour, the restart time, the sweep after boot | Readiness `restarting` (two in an hour); "one sweep" (Table 11.5b) | A scratch reader over `journal_facts`'s `claude-session@` starts, per session per clock hour, 30 days; `measure-working-state.py --section spawn`, 30 days; `LANE_SCHEDULE` | a, c | p99 restarts per session-hour ≤ 2: two stands, else the p99. Restart p95 (`spawn`): `restarting`'s bound. One sweep: no lane computes readiness today, so W0 records `LANE_SCHEDULE`'s cadences and W1 names the lane whose cadence it is |
 | W0-27 | The first model of holds, readiness, generations and restarts | §11.7, H33: "written before the code" | Task 7 | b | No violation: the machines compose as specified. A violation: a spec contradiction, recorded and ruled before W1a |
@@ -718,18 +718,25 @@ index plan; the whole decision is in the results note's "Departures from the pla
   `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, so the force arm pins its setting sources to measure the model; the refusal is
   measured on its own, with ccrc's hook loaded (`ov-subagent-model-force-hook`, W0-11).
 
-**Cited by W0b (run 1820).** **D-8243** (defined in the programme's index plan) applies as written: W0b runs on the
-fleet's own accounts. W0b's further departures wait for their numbers; the whole decision of each is in the results
-note's "Departures from the plan":
+**Found by W0b (run 1820).** **D-8243** (defined in the programme's index plan) applies as written: W0b runs on the
+fleet's own accounts. The coordinator issued W0b's further departures their numbers on 2026-11-12, and the index plan
+defines them; the whole decision of each is in the results note's "Departures from the plan":
 
-- **w0b-synthetic-deny-rule-in-the-subjects-project, method** — W0-22's deny check uses one synthetic rule in the
+- **D-8246, w0b-synthetic-deny-rule-in-the-subjects-project, shape** — W0-22's deny check uses one synthetic rule in the
   subject's scratch project settings, because every fleet deny rule guards an account or secret path.
-- **w0b-a-background-shell-arm, method** — W0-21's first interrupting swap met a background shell, not a running turn,
+- **D-8247, w0b-a-background-shell-arm, shape** — W0-21's first interrupting swap met a background shell, not a running turn,
   and is recorded as its own arm; the mid-turn case was re-run in the foreground.
-- **w0-23-deferred-to-the-pool-design, scope** — under R18 no account is reserved, so W0-23 is unmeasured, with the
+- **D-8244, w0-23-deferred-to-the-pool-design, scope** — under R18 no account is reserved, so W0-23 is unmeasured, with the
   conservative branch and C46's open question.
-- **w0-24-deferred-under-r18, scope** — W0-24 has no consumer under R18. The sweep's Fable readings are recorded, and
-  the `/usage` comparison is unmeasured and deferred to W1, with the conservative branch.
+- **D-8245, w0-24-deferred-under-r18, scope** — W0-24 has no consumer under R18. The sweep's readings are recorded,
+  and the `/usage` comparison is unmeasured and deferred to W1, whose call it is whether W0-24 still informs the
+  shared Fable test (C46).
+- **D-8248, w0b-fleet-read-scope, scope** — the fleet reads cover the journals' 14 and 9 days, not 30, and W0-12
+  counts this project's history only, because no read verb covers the fleet.
+- **D-8249, w0-22-canary-from-the-session-start-hook, shape** — the anchor slot does not exist until W1a, so W0-22's
+  canary is a token only ccrc's SessionStart hook context carries.
+- **D-8250, w0-22-lanes-chosen-by-headroom, shape** — the conductor chose W0-22's lanes by the sweep's `sevenPct` and
+  `fableShare`, as the coordinator directed; usage shares, not values, ruled within consent.
 
 **Settled by the spec's later edition, so no longer deviations:** W0 changes nothing that runs,
 and its test-only files ship (§14). W0 measures a swap with a stand-in renewal, and W1a measures the real act
