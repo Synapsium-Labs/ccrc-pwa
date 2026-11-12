@@ -3432,6 +3432,29 @@ R15 gains one sentence for the union, one for single quotes and one for the glue
 
 - **D-8291** - `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
 
+### Task C30: spawnSyncGroup hands an input to its child as a regular file (D-8381) — now
+
+Placed at the end of C24, away from C28's spot after C26 and C29's before C24.
+
+**Why.** C29 (D-8354) measured on macOS that a detached `spawnSync` given an `input` now and then delivers every byte and
+never the end of input, so the child waits on its stdin until the timeout. `spawnSyncGroup` is detached by design
+(D-5894), so every caller that passes an `input` is exposed. A rare hang in any macOS shard reds the `full-suite` that a
+promotion to stable needs. C29 fixed only its own file.
+
+**What was found and done.** Measured through `spawnSyncGroup` itself on macOS: 1 hang in 3,000 runs with a 128 KB input
+under a test shard's load, with C29's signature. A plain detached `spawnSync` control hung 1 in 6,000 runs. No hang was
+seen at 4 KB or 0 B in 21,000 runs each, which is not conclusive at that rate. The helper now writes an `input` into a
+directory of its own under the run's temp root, opens it, removes the directory before the child starts, and passes the
+descriptor as the child's stdin. The group, the timeout, the group kill, the stray check and every caller are unchanged.
+The fixed helper had 0 hangs in 30,000 runs on macOS. Three cases in `proc-leak.test.ts` pin the route. The nine
+callers' inputs measured 1,989 bytes at the largest. Evidence and runs are in `c30.md`.
+
+- **D-8381** - `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
+
+**Acceptance.** The PR's required checks and a `macos.yml` dispatch at its tip are green. The new cases red when the
+input goes back through `spawnSync`'s `input`, when the directory outlives the child's start, and when the caller's
+`stdio` is dropped. **Rollback.** A plain revert.
+
 ### Task C26: the macOS test legs go green, so a promotion to stable can pass its gate (D-8343) — now
 
 **Why.** The operator asked to promote v0.0.1115. `release-stable`'s gate needs a green `full-suite` on the commit, and
