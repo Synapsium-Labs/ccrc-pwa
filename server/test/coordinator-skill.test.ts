@@ -3991,7 +3991,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     expect(s).toContain('**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.');
     expect(s).toContain('**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.');
     expect(s).toContain('Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.');
-    expect(s).toContain('Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.');
+    expect(s).toContain('Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.');
     expect(s).toContain('**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.');
     expect(s).toContain('Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.');
     expect(s).toContain('It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.');
@@ -4028,7 +4028,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     '**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.',
     '**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.',
     'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.',
-    'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
+    'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
     '**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.',
     'Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.',
     'It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.',
@@ -4058,12 +4058,12 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     expect(flat(allSkillText)).not.toContain('exits 1 and lists the conflicted paths');
   });
 
-  it('names a client verb the closed client really has: `ccrc-api landing show --project <project>`', () => {
-    expect(flat(allSkillText)).toContain('`GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`)');
+  it('names a client verb the closed client really has: `ccrc-api landing show --project <project> --pr <pr>`', () => {
+    expect(flat(allSkillText)).toContain('`GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`)');
     const row = clientRoutes().find((r) => r.key === 'landing.show');
     expect(row?.method).toBe('GET');
     expect(row?.path).toBe('/api/landing');
-    expect(row?.query).toEqual(['project']);
+    expect(row?.query).toEqual(['project', 'pr']);
   });
 });
 
@@ -4074,7 +4074,8 @@ describe('landing order wave 5e: the landing line read before every landing', ()
   const prose = flat(sec.replace(/```bash\n([\s\S]*?)```/, ''));
   const LINE = [
     '**The landing line.** Every run that enters `merging` pins an entry for its PR on its project\'s landing line, and the entry\'s `pinnedSha` is the recorded head (**The recorded head**, §5): the server pins it from the same re-measurement that answers `verifiedHead`.',
-    'Before each enqueue, direct merge and re-enqueue, once the verdict, and on route Q the checks gate, have answered, read the line: `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`).',
+    'Before each enqueue, direct merge and re-enqueue, once the verdict, and on route Q the checks gate, have answered, read the line: `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`).',
+    'The read answers this PR\'s entry in any state, beside the line\'s flags and order; the line\'s own read, without `--pr`, lists only the entries still in it; and a server older than wave 5h ignores `pr` and answers every entry, which this paragraph reads the same way.',
     'Land only when its `order` is not paused and this PR\'s entry for this run reads `pinned` with a `pinnedSha` equal to the head you bind.',
     'A paused line, an entry in another state, a `pinnedSha` that differs from that head or a read that fails in any other way than a 404 (a timeout, a 401, a 5xx, a transport error or an answer you cannot parse) lands nothing: report what it read to the operator and leave the landing stopped, and never bind another head to match it.',
     'A PR with no entry, which a run that entered `merging` before the line existed leaves, lands as the verdict says, and your turn\'s text names the missing entry.',
@@ -4398,7 +4399,7 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
       '**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.',
       '**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.',
       'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.',
-      'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
+      'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
       '**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.',
       'Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.',
       'It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.',
@@ -4552,5 +4553,18 @@ describe('the plan reference (D-8181)', () => {
       expect(plan(), `plan.md does not name ${code}`).toContain(`\`${code}\``);
       expect(refs('api.md'), `api.md does not name ${code}`).toContain(`\`${code}\``);
     }
+  });
+});
+
+describe('landing order wave 5h: the worker-starting re-run beside an intent-held answer (review 1660, A1)', () => {
+  it('the intent-held row of the dispatch reference says the first pass may already have started or woken the pane', () => {
+    const row = flat(readFileSync(path.join(skillDir, 'references', 'wave-lifecycle-2-dispatch.md'), 'utf8'));
+    expect(row).toContain('| `intent-held` |');
+    expect(row).toContain('except that on the `worker-starting` re-run the first pass may already have started or woken the bound worker\'s pane');
+  });
+
+  it('README\'s Run lifecycle item 2 says the same of the worker-starting re-run', () => {
+    const readme = flat(readFileSync(path.join(root, 'README.md'), 'utf8'));
+    expect(readme).toContain('except on the `worker-starting` re-run, where the first pass may already have started or woken the bound worker\'s pane');
   });
 });

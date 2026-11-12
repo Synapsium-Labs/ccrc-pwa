@@ -47,7 +47,14 @@ async function fixture() {
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
-  const app = await buildServer({ ...base, mailToken: TOKEN, coord });
+  // Review 1660 A2: every listing of the registry directory is recorded, so a case can say a refusal made none.
+  const listings: string[] = [];
+  const io = {
+    ...base.io,
+    readdir: (dir: string) => { if (dir === base.cfg.registryDir) listings.push(dir); return base.io.readdir(dir); },
+    readdirMeasured: (dir: string) => { if (dir === base.cfg.registryDir) listings.push(dir); return base.io.readdirMeasured(dir); },
+  };
+  const app = await buildServer({ ...base, io, mailToken: TOKEN, coord });
   const open = (program: string, wave: number, project = 'project-a'): number => {
     const o = coord.openRun({ program, title: 't', project, wave, waveOf: null, claimedBy: `coord-${program}` });
     if (!('id' in o)) throw new Error(`fixture openRun refused: ${JSON.stringify(o)}`);
@@ -58,7 +65,7 @@ async function fixture() {
   const state = (id: number): string => (coord.db.prepare('SELECT state FROM runs WHERE id = ?').get(id) as { state: string }).state;
   const rowCount = (id: number): number =>
     (coord.db.prepare('SELECT COUNT(*) AS n FROM landing_intents WHERE runId = ?').get(id) as { n: number }).n;
-  return { app, coord, calls, open, post, state, rowCount };
+  return { app, coord, calls, listings, open, post, state, rowCount };
 }
 
 let live: FastifyInstance | undefined;
@@ -135,6 +142,15 @@ describe('a dispatch names its landing intents', () => {
     expect(f.calls).toHaveLength(0);
     expect(f.state(a)).toBe('planned');
     expect(f.rowCount(a)).toBe(0);
+    // Review 1660 A2: nor is the registry directory listed (the pause and caps read follows the request step).
+    expect(f.listings).toHaveLength(0);
+  });
+
+  it('CONTROL: a dispatch that succeeds lists the registry directory at least once', async () => {
+    const f = await make();
+    const a = f.open('prog-a', 1);
+    expect((await f.post(a, { brief: 'go', intents: ['#123'] })).statusCode).toBe(200);
+    expect(f.listings.length).toBeGreaterThanOrEqual(1);
   });
 });
 
