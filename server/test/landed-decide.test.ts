@@ -118,6 +118,13 @@ describe('landedNext', () => {
 });
 
 describe('landedCandidatesOf', () => {
+  /** A real `LandingMutationFacts`: the fields the test is about, honest empty values for the rest. */
+  const factsOf = (o: { entries: LandingEntry[]; projections: LandingMutationFacts['projections']; recovery: LandingRecovery }): LandingMutationFacts => ({
+    project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries: o.entries, projections: o.projections,
+    dependencies: o.entries.map((e) => ({ id: e.id, value: { kind: 'readable' as const, afterIds: [] } })),
+    recovery: o.recovery, nextId: Math.max(0, ...o.entries.map((e) => e.id)) + 1, foreignIds: [],
+    coordinators: o.entries.map((e) => ({ id: e.id, value: { kind: 'no-run' as const } })),
+  });
   const entry = (id: number, state: LandingEntryState): LandingEntry => ({ id, project: 'project-a', pr: 100 + id, pinnedSha: HEAD, handoffCommit: HEAD,
     runId: id, state, baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a', pinnedAt: id * 10 });
   const readable: LandingProjectionRead = { kind: 'readable', quarantine: null };
@@ -130,12 +137,12 @@ describe('landedCandidatesOf', () => {
       { id: 6, value: { kind: 'readable', quarantine: 'stale-episode-head' } },
       { id: 7, value: readable },
     ];
-    const got = landedCandidatesOf({ entries, projections, recovery: NO_HOLD } as unknown as LandingMutationFacts);
+    const got = landedCandidatesOf(factsOf({ entries, projections, recovery: NO_HOLD }));
     expect(ids(got)).toEqual([1, 2]);
     expect(got[0]).toEqual({ project: 'project-a', id: 1, pr: 101, pinnedAt: 10, pinnedSha: HEAD, runId: 1 });
   });
   it('an entry with no projection at all is not a candidate', () => {
-    expect(landedCandidatesOf({ entries: [entry(1, 'pinned')], projections: [], recovery: NO_HOLD } as unknown as LandingMutationFacts)).toEqual([]);
+    expect(landedCandidatesOf(factsOf({ entries: [entry(1, 'pinned')], projections: [], recovery: NO_HOLD }))).toEqual([]);
   });
   // A held subject is skipped here, by the land arm's own rule (`landingHoldGate`), so it costs no `ccd pr-state --pr` call.
   const subject = (project: string, pr: number, projection: LandingRecoverySubject['projection']): LandingRecoverySubject => ({
@@ -145,9 +152,9 @@ describe('landedCandidatesOf', () => {
   const held = (...subjects: LandingRecoverySubject[]): LandingRecovery =>
     ({ hold: { reason: 'landing-recovery-unresolved', subjectIds: subjects.map((x) => x.id) }, subjects });
   const MISSING: LandingRecoverySubject['projection'] = { kind: 'missing', association: 'unmeasured' };
-  const facts2 = (recovery: LandingRecovery): LandingMutationFacts => ({
+  const facts2 = (recovery: LandingRecovery): LandingMutationFacts => factsOf({
     entries: [entry(1, 'pinned'), entry(2, 'pinned')], projections: [{ id: 1, value: readable }, { id: 2, value: readable }], recovery,
-  }) as unknown as LandingMutationFacts;
+  });
   it('an entry that is its own unresolved recovery subject is skipped; its neighbour is still a candidate', () => {
     const got = landedCandidatesOf(facts2(held(subject('project-a', 101, MISSING))));
     expect(ids(got)).toEqual([2]);
