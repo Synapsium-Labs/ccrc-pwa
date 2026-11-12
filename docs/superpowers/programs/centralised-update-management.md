@@ -7380,17 +7380,21 @@ waves 10 and 11), or as documented limitations (the cuts of 2026-10-15 and 2026-
 - **R35 (wave 18, Readings 3 to 5, and wave 16's Reading 9; test containment).** (a) After stable, the second ring:
   about 79 files call `ghContainedEnv` directly and keep the real ssh, scp and curl. About 35 spawns in 10 `ccrc-*`
   files with thin builders keep the real bus too. A later test wave gives each builder `net`, or
-  `ccrcContainedEnv`, file by file. (b) Wave 17: the `ccrc-doctor.test.ts` `_box_role` spawn on the census's
+  `ccrcContainedEnv`, file by file. **Part by D-8394 (2026-11-12):** the update suites and the thin `ccrc-*`
+  builders; the remaining ring (114 files) is listed in `plans/2026-11-12-test-containment-second-ring.md`, and every
+  caller now gets the fixture bus. (b) Wave 17: the `ccrc-doctor.test.ts` `_box_role` spawn on the census's
   `ALLOWED`, and the sliced members in `ccrc-doctor` and `ccrc-install`, get `ccrcContainedEnv`, and the census
   lists follow. (c) The docs PR: seven comment citations into `ccdWsHelpers.ts` were already stale at `256b25ecb`.
   (d) After wave 16 lands, `sweepFixture.ts`'s Darwin helper cases become plain `it`, with a dispatched full run.
   (e) From review 535 (F3, F4, F8, F9): a harness cleanup that reports any poison record left behind, so that the
   tests that meet a poison and stay green become a standing red rather than a one-time log. Also the symlinked bus
   value, and the census's named spellings (a script path followed by arguments, three namespace spellings, lexical
-  scope and destructuring).
+  scope and destructuring). **By D-8394 (2026-11-12):** the poison teardown and the physical bus check; the census
+  spellings stay residue.
   (f) From review 577, none live: a bus path through `sym/..` resolves inside HOME lexically but not physically;
   `ccd-version.test.ts` overwrites the builder's bus pair after the call; `loginctl` is not in `CONTAINED_TOOLS`;
-  a thin builder without `systemd` keeps the caller's bus pair (D-5253's blind spot by design).
+  a thin builder without `systemd` keeps the caller's bus pair (D-5253's blind spot by design). **All four fixed by
+  D-8394 (2026-11-12).**
 - **R36 (review 568 F4; wave 17).** `deploy.sh`'s `prune_backups` keeps the newest directory by name, and `TS` comes
   from the deploying machine's clock (`date +%Y%m%d-%H%M%S`), while `ccrc update` and `ccrc backup` name directories
   in the same backups directory by the box's clock. With the deploying machine behind the box and KEEP=1, a deploy's
