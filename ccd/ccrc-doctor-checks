@@ -6776,11 +6776,41 @@ _check_models() {
     esac
   done <<<"$out"
 
-  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ]; then
+  # THE WINDOW A MOVE LOWERED (D-8384, public issue #2607). A class that moves —
+  # auto-advance above all — to a model the lane's windows file does not
+  # measure takes the WHOLE lane off the measured window rule
+  # (`contextWindowFor`, shared/modelenv.mjs), so CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  # drops for every session and nothing else says so. Asked in ONE node call
+  # for the whole roster, models-op's `lanes`, whose rows carry
+  # `windowNotices` spelled once (`unmeasuredMoveNotice`,
+  # shared/model-advance.mjs): no lane, account or model name and no lane
+  # file name is written here, and only the population above is reported. A
+  # `lanes` that refuses or prints nothing adds nothing: an unreadable
+  # registry, catalogue or windows file is already named above or by the
+  # codex check, each with its own remedy.
+  local -a lowered=()
+  local note
+  if command -v jq >/dev/null 2>&1; then
+    while IFS= read -r note; do
+      [ -n "$note" ] && lowered+=("$note")
+    done < <(_models_node lanes --file "$roster" 2>/dev/null \
+      | jq -r --arg ids "$(printf '%s\n' "${population[@]}")" '
+          ($ids | split("\n")) as $p
+          | if .ok == true and (.lanes | type) == "array" then .lanes[] else empty end
+          | select(type == "object" and (.id as $i | $p | index($i)) != null)
+          | (.windowNotices // []) | if type == "array" then .[] else empty end
+          | strings | gsub("[\n\t]"; " ")' 2>/dev/null)
+  fi
+
+  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ] || [ "${#lowered[@]}" -gt 0 ]; then
     local ret=2
     if [ "${#warn[@]}" -gt 0 ]; then
       _dr_warn models "$(_dr_join "${warn[@]}")" \
         "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
+    fi
+    if [ "${#lowered[@]}" -gt 0 ]; then
+      _dr_warn models "$(_dr_join "${lowered[@]}")" \
+        "measure the named model's window, then record it: ccrc models <id> set-window <modelId> <tokens> (ccrc models <id> show lists the lane's measured windows)"
     fi
     if [ "${#unmeasured[@]}" -gt 0 ] && [ "$bound_rc" -eq 3 ]; then
       _dr_cadence_unloaded models ccrc-models.timer "the staleness of $(_dr_join "${unmeasured[@]}")"; ret=1

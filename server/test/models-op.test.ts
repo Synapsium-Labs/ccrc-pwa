@@ -27,7 +27,7 @@ import type { ModelClass, Registry } from '../../shared/models.js';
 import { parseRegistry } from '../../shared/models.js';
 // Auto-advance plan W2 (Tasks 8 and 9). Only names this file does not bind yet:
 // W1 already imports `parseRegistry` and the type `Advance`.
-import { BLOCKED_CAUSES, REASON_MAX } from '../../shared/model-advance.mjs';
+import { BLOCKED_CAUSES, REASON_MAX, causeOf, unmeasuredMoveNotice } from '../../shared/model-advance.mjs';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
 import { contextWindowFor, modelEnvBlock } from '../../shared/modelenv.mjs';
 import { parseCatalogue, parseWindows } from '../../shared/models.js';
@@ -309,9 +309,9 @@ describe('lanes', () => {
     expect(r.code).toBe(0);
     expect(r.body['lanes']).toEqual([
       { id: 'gpt', configDirSuffix: '.claude-gpt', anthropic: false, hasRegistry: false,
-        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null },
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [] },
       { id: 'router', configDirSuffix: '.claude-router', anthropic: false, hasRegistry: false,
-        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null },
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [] },
     ]);
   });
 
@@ -323,6 +323,7 @@ describe('lanes', () => {
       id: 'router', configDirSuffix: '.claude-router', anthropic: false,
       hasRegistry: true, registryInvalid: null, catalogueInvalid: null,
       probe: 'compatible', baseUrl: 'https://api.cortecs.ai/', // stored as the gate's url (D-7460)
+      windowNotices: [],
     });
   });
 
@@ -3825,7 +3826,30 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(laneAdvance().pending).toBeNull();
     expect(opusOf().previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
     expect(opusOf().history).toEqual([{ at: NOW, how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
-      ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' } }]);
+      ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' }, cause: 'newer' }]);
+  });
+
+  // D-8384: the entry records WHY the class moved, the candidate's own reason, so a retirement to an OLDER model
+  // reads differently from an advance. One case per reason `chooseCandidate` computes.
+  it.each([
+    ['newer', (): void => plantStep(), {}, 'opus', 'model-6.1-gamma'],
+    ['retired', (): void => plantStep({
+      registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
+        effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } },
+      catalogue: { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') },
+    }), { from: 'model-6.1-gamma', to: 'model-5.6-gamma' }, 'opus', 'model-5.6-gamma'],
+    ['empty', (): void => plantStep({ advance: stepAdvance({ fable: { family: 'delta' } }) }),
+      { cls: 'fable', from: 'none', to: 'model-6-delta' }, 'fable', 'model-6-delta'],
+  ] as [string, () => void, { cls?: string; from?: string; to?: string }, 'opus' | 'fable', string][])(
+    'a move the family rule chose as %s records that word as its history entry\'s cause (D-8384)', (cause, plant, args, cls, to) => {
+    plant();
+    const r = commit(args);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['outcome']).toBe('moved');
+    const h = laneAdvance().classes[cls].history;
+    expect(h).toHaveLength(1);
+    expect(h[0]).toMatchObject({ how: 'advance', to, ok: true, cause });
+    expect(causeOf(h[0]!)).toBe(cause);
   });
 
   it('an empty class with a stored family is filled, and carries no effort it never had', () => {
@@ -4220,7 +4244,7 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
   const OPUS_MOVE = ['advance-commit', '--class', 'opus', '--from', 'model-5.6-gamma', '--to', 'model-6.1-gamma',
     '--canary', 'passed'];
   /** The intent that move writes at step 6, under this file's clock. */
-  const OPUS_INTENT = { ...INTENT, at: NOW };
+  const OPUS_INTENT = { ...INTENT, at: NOW, cause: 'newer' };
 
   it('a move whose previous registry cannot be written back records the failure, restored false, and keeps the intent (D-5217)', () => {
     // A copy whose write-back of the previous registry, and only that write,
@@ -4267,7 +4291,8 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(next.code, next.stdout + next.stderr).toBe(0);
     expect(next.body['recoveredMove']).toEqual(RECOVERED);
     expect(laneAdvance().pending).toBeNull();
-    expect(opusOf().history).toEqual([{ ...RECOVERED_ENTRY, at: NOW }]);
+    // D-8384: the kept intent carried the candidate's reason, so the recovered entry says why it moved too.
+    expect(opusOf().history).toEqual([{ ...RECOVERED_ENTRY, at: NOW, cause: 'newer' }]);
     expect(opusOf().previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
   });
 
@@ -4283,6 +4308,17 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(contextWindowFor(next, cat, windows).rule).toBe('default');
     expect(env()).toMatchObject(modelEnvBlock(next, cat, windows));
     expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('200000');
+    // D-8384 (public issue #2607): `show` says so, in the one spelling doctor's models row prints.
+    const shown = op('show', '--file', rosterPath(), '--id', 'lane-a');
+    expect(shown.body['windowNotices']).toEqual([unmeasuredMoveNotice('lane-a', { class: 'opus',
+      from: 'model-5.6-gamma', to: 'model-6.1-gamma', fromTokens: 400000, how: 'advance', cause: 'newer' }, 200000)]);
+    expect(shown.body['windowNotices']).toEqual(["lane-a's opus class moved from model-5.6-gamma to model-6.1-gamma "
+      + '(auto-advance to a newer model), and model-6.1-gamma has no measured window while model-5.6-gamma had 400000 '
+      + "tokens, so every session on the lane now runs at the default rule's 200000 tokens; measure model-6.1-gamma, "
+      + 'then: ccrc models lane-a set-window model-6.1-gamma <tokens>']);
+    // …and `lanes` carries the same sentences for every lane in one call, which is how doctor asks.
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    expect(lanes.find((l) => l['id'] === 'lane-a')!['windowNotices']).toEqual(shown.body['windowNotices']);
   });
 
   it('moving to a model already measured keeps the measured rule, so the move passes the windows on', () => {
@@ -4291,6 +4327,7 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
       'model-6.1-gamma': 300000 }));
     expect(commit().body['outcome']).toBe('moved');
     expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('300000');
+    expect(op('show', '--file', rosterPath(), '--id', 'lane-a').body['windowNotices']).toEqual([]);
   });
 
   it('an absent advance file is backfilled in memory, and the commit writes it', () => {

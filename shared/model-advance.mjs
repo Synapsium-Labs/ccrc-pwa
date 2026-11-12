@@ -24,6 +24,12 @@ export const BLOCKED_CAUSES = Object.freeze([
   'lane-not-codex-kind',
 ]);
 
+/** Why `chooseCandidate` named its candidate, the three words its `reason` takes: `newer` (a model strictly newer
+ *  than the pin), `retired` (the pin left a fresh catalogue, the one move that may go to an OLDER version) and
+ *  `empty` (a class with no pin). A successful advance's history entry carries the word as `cause` (D-8384), so a
+ *  retirement reads differently from an advance; `causeOf` reads an entry written before the field as `unknown`. */
+export const CANDIDATE_REASONS = Object.freeze(['newer', 'retired', 'empty']);
+
 /** The longest `reason` an advance-file history entry may carry, in characters, every one printable ASCII. ONE
  *  number for the file's reader and for every writer of a reason: `parseAdvance` refuses a longer one and
  *  `recordFailure` cuts one to it (below), and the later waves' commit (`deploy/models-op.mjs`) and canary
@@ -219,6 +225,9 @@ function checkEntry(e, f) {
     bad(`${f}.lastAt`, 'belongs on a failed advance only, as a time of the form YYYY-MM-DDTHH:MM:SSZ.');
   }
   if (e.recovered !== undefined && typeof e.recovered !== 'boolean') bad(`${f}.recovered`, 'is not true or false.');
+  if (e.cause !== undefined && !(e.how === 'advance' && CANDIDATE_REASONS.includes(e.cause))) {
+    bad(`${f}.cause`, `belongs on an advance only, as one of ${CANDIDATE_REASONS.join(', ')}.`);
+  }
 }
 
 /** The pending intent, in one of its two shapes (D-5188): an automatic advance's, with no
@@ -250,6 +259,9 @@ function checkPending(p) {
   if (!(typeof p.to === 'string' && MODEL_ID_RE.test(p.to))) bad('pending.to', 'is not a model id.');
   if (!isLevelOrNull(p.effortFrom)) bad('pending.effortFrom', 'is not an effort level or null.');
   if (!isLevelOrNull(p.effortTo)) bad('pending.effortTo', 'is not an effort level or null.');
+  if (p.cause !== undefined && !CANDIDATE_REASONS.includes(p.cause)) {
+    bad('pending.cause', `is not one of ${CANDIDATE_REASONS.join(', ')}.`);
+  }
 }
 
 /** What a file written from `value` would hold, and what its next reader would parse: `value`'s JSON round trip,
@@ -369,7 +381,7 @@ export function recordFailure(adv, cls, f) {
  *  intent behind. Every locked writer calls this first. When the registry's pin for the intent's class is its `to`,
  *  the move landed and is recorded; any other pin means it never landed, and the intent is dropped. Two shapes:
  *   - an AUTOMATIC advance's (no `how`; W2's `advance-commit`): recorded as a successful advance with
- *     `recovered: true` and `previous` set (D-5189);
+ *     `recovered: true` and `previous` set (D-5189), and the intent's `cause` when it carries one (D-8384);
  *   - a HAND set-class's (`how: 'hand'`; Task 5): recorded exactly as set-class records its own move, because
  *     set-class settles its intent through this very function. One `how: 'hand'` entry for the class it named and
  *     for each class it emptied (one model, one class) whose pin is still none, each from its old pin to its new
@@ -399,6 +411,7 @@ export function reconcilePending(adv, registry) {
   const e = {
     at: p.at, how: 'advance', from: p.from, to: p.to, ok: true, canary: 'passed',
     ...(p.effortFrom !== p.effortTo ? { effort: { from: p.effortFrom, to: p.effortTo } } : {}),
+    ...(p.cause !== undefined ? { cause: p.cause } : {}),
     recovered: true,
   };
   return { advance: recordMove(next, p.class, e), recovered: true };
@@ -419,4 +432,59 @@ export function lastMoveOf(c) {
     if (c.history[i].ok === true) return c.history[i];
   }
   return null;
+}
+
+/** Why an advance entry moved (D-8384): its `cause`, one of `CANDIDATE_REASONS`, or `unknown` for an entry written
+ *  before the field existed, or one that is not an advance's. Never throws: an old file reads, it is not an error. */
+export function causeOf(e) {
+  return e !== null && typeof e === 'object' && e.how === 'advance' && CANDIDATE_REASONS.includes(e.cause)
+    ? e.cause : 'unknown';
+}
+
+const ownWindow = (windows, id) => windows !== null && windows !== undefined
+  && Object.prototype.hasOwnProperty.call(windows, id) && typeof windows[id] === 'number';
+
+/**
+ * `({registry, advance, windows, rule}) => Move[]` — the classes whose last move silently lowered the lane's context
+ * window (D-8384, public issue #2607): the lane's window `rule` (`contextWindowFor`'s, in `shared/modelenv.mjs`) is
+ * not `measured`, the class's pin has no measured window in `windows`, and the class's newest successful history
+ * entry moved it TO that pin FROM a model `windows` does measure. One row per such class, `CLASSES` order:
+ * `{class, from, to, fromTokens, how, cause}`, `cause` being `causeOf`'s word on an advance and null on a hand move or
+ * a revert. A lane whose window is measured, or with no advance file (`advance` null), has none. Pure: the caller
+ * reads the files.
+ */
+export function unmeasuredMoves({ registry, advance, windows, rule }) {
+  if (rule === 'measured' || advance === null || advance === undefined) return [];
+  const rows = [];
+  for (const cls of CLASSES) {
+    const pin = registry.classes[cls] ?? null;
+    if (pin === null || ownWindow(windows, pin) || !isObj(advance.classes?.[cls])) continue;
+    const last = lastMoveOf(advance.classes[cls]);
+    if (last === null || last.to !== pin || last.from === null || !ownWindow(windows, last.from)) continue;
+    rows.push({ class: cls, from: last.from, to: pin, fromTokens: windows[last.from], how: last.how,
+      cause: last.how === 'advance' ? causeOf(last) : null });
+  }
+  return rows;
+}
+
+/** What each kind of move is called in `unmeasuredMoveNotice`, by `how` and, for an advance, by `cause`. */
+const MOVE_WORDS = Object.freeze({
+  newer: 'auto-advance to a newer model',
+  retired: 'auto-advance because the old model was retired',
+  empty: 'auto-advance into an empty class',
+  unknown: 'auto-advance, its reason not recorded',
+  hand: 'set by hand',
+  revert: 'a revert',
+});
+
+/** THE ONE SPELLING of the notice for one `unmeasuredMoves` row (D-8384): `ccrc models <id> show` answers it as
+ *  `windowNotices`, and `ccrc doctor`'s `models` row prints it as a WARN. `lane` is the lane's id and `tokens` the
+ *  window now in force (`contextWindowFor`'s `tokens`, null when no key is written). It names the unmeasured model
+ *  and the remedy, and carries no lane, account or machine of its own: every name in it comes from the arguments. */
+export function unmeasuredMoveNotice(lane, m, tokens) {
+  const what = MOVE_WORDS[m.how === 'advance' ? (m.cause ?? 'unknown') : m.how] ?? MOVE_WORDS.unknown;
+  const now = tokens === null ? "the client's own default window" : `the default rule's ${tokens} tokens`;
+  return `${lane}'s ${m.class} class moved from ${m.from} to ${m.to} (${what}), and ${m.to} has no measured window `
+    + `while ${m.from} had ${m.fromTokens} tokens, so every session on the lane now runs at ${now}; measure ${m.to}, `
+    + `then: ccrc models ${lane} set-window ${m.to} <tokens>`;
 }
