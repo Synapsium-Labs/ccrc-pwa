@@ -1,6 +1,6 @@
 // shared/modelenv.mjs — the materialiser's pure half (§6.1, §6.4, §7): a lane's
-// class registry turned into the eight environment variables Claude Code reads,
-// the THREE-column TSV ccd reads (Plan 2), and the effort map `ccgpt-proxy`
+// class registry turned into the eight model environment variables Claude Code
+// reads (and, on a Codex lane, one plugin switch: `CODEX_LANE_ENV`), the THREE-column TSV ccd reads (Plan 2), and the effort map `ccgpt-proxy`
 // reads per request.
 //
 // `.mjs` because every caller runs under a bare `node`: `deploy/models-op.mjs`
@@ -64,7 +64,8 @@ export function readRegular(p) {
  *  (`contextWindowFor`, codex-bridge spec §2.7) may. */
 export const CLIENT_DEFAULT_CONTEXT_TOKENS = 200000;
 
-/** The eight keys `modelEnvBlock` can write, frozen so a caller iterates them
+/** The eight model keys `modelEnvBlock` can write (a Codex lane's block adds
+ *  `CODEX_LANE_ENV`, below), frozen so a caller iterates them
  *  rather than spelling them a second time. `clearSettingsEnv(path,
  *  MODEL_ENV_KEYS)` was `ccrc models <id> rm`'s whole settings step (spec §4.1
  *  Lifecycle, §10, §11); it now clears `LANE_ENV_KEYS`, below, which starts
@@ -110,9 +111,16 @@ export const MODEL_ENV_KEYS = Object.freeze([
  *  Who. The operator's ruling of 2026-11-12, option (b): the reviews are off on
  *  the Codex lanes only. An Anthropic lane never reaches this writer
  *  (`deploy/models-op.mjs` refuses it as `anthropic-lane`, so its settings file
- *  stays the client's own), and the other lane kinds that can carry a registry
- *  (external, openrouter, compatible) do not get the key either, because the
- *  caller gates it on the lane being Codex-kind: those lanes keep the reviews. */
+ *  never materialises it; only `rm`, which runs before that gate, writes its
+ *  settings file, and then only to clear `LANE_ENV_KEYS`), and the other lane
+ *  kinds that can carry a registry (external, openrouter, compatible) do not
+ *  get the key either, because the caller gates it on the lane being
+ *  Codex-kind: those lanes keep the reviews.
+ *
+ *  Owned. ccrc owns this key on every lane that carries a registry, as it owns
+ *  the model keys: a hand-set value on a Codex lane is reverted to '0', and a
+ *  hand-set copy on any other kind of lane is deleted, at the next materialise;
+ *  `show` reports both as settings drift until then. */
 export const CODEX_LANE_ENV = Object.freeze({ ENABLE_CODE_SECURITY_REVIEW: '0' });
 
 /** Every key a lane's settings `env` can carry from this writer: the model
@@ -465,7 +473,7 @@ export function mergeSettingsEnv(settingsPath, block) {
  * @throws {ModelEnvInvalid} on a settings file that is not JSON, or whose top
  *   level is not an object — the same refusal `mergeSettingsEnv` makes, for
  *   the same reason: the alternative is destroying a hand-edited file to
- *   reap eight keys from it.
+ *   reap a handful of keys (`rm` passes `LANE_ENV_KEYS`) from it.
  */
 export function clearSettingsEnv(settingsPath, keys) {
   let json;

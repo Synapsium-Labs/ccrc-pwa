@@ -87,8 +87,8 @@ Each has a recommendation. None blocks wave 4a's first tasks.
 7. **The drift criterion's cause, a plugin on the Codex lanes.** **Ruled 2026-11-12: option (b).** The official
    `security-guidance` plugin's LLM reviews POST Claude model ids to the bridge, which answers each with a local 404,
    and the two ids fail the watch's drift criterion. Operator ruling 2026-11-12: drift option (b), the plugin's LLM
-   reviews off on Codex lanes only, through the lanes' settings (this PR); step 3 after drift passes is the
-   operator's decision; step 4 a week after step 3. The switch is `ENABLE_CODE_SECURITY_REVIEW=0`, written by
+   reviews off on Codex lanes only, through the lanes' settings (the change that adds `CODEX_LANE_ENV` to
+   `shared/modelenv.mjs`); R3 after drift passes is the operator's decision; R4 a week after R3. The switch is `ENABLE_CODE_SECURITY_REVIEW=0`, written by
    `ccrc models` into a Codex lane's settings at its next materialise and read by a session at its next launch.
 
 ## Global Constraints

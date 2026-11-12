@@ -1056,7 +1056,7 @@ function materialise(account, registry, catalogue, windows) {
   return { wrote: { settings: block === null ? null : settings, classes, effort, lane } };
 }
 
-/** §11's last bullet: which of the materialiser's (up to) eight keys the
+/** §11's last bullet: which of the materialiser's keys (`LANE_ENV_KEYS`) the
  *  lane's own settings.json no longer agrees with. A MISSING key counts as
  *  drifted — for the first seven, an unset alias falls through to Anthropic's
  *  own id and the backend 404s opaquely, which is the exact failure the
@@ -1067,7 +1067,10 @@ function materialise(account, registry, catalogue, windows) {
  *  nothing. A settings file that STILL CARRIES it drifts on it (D-5785): the
  *  next materialise deletes it (`mergeSettingsEnv` deletes every member of
  *  `LANE_ENV_KEYS` its block omits), so the second filter below asks the same
- *  question of the same keys. Before measured windows that copy held at most
+ *  question of the same keys. A Codex lane's `ENABLE_CODE_SECURITY_REVIEW`
+ *  drifts the same way: on a lane that is not Codex-kind `want` omits it, so a
+ *  copy still on disk counts as drift; on a Codex lane a missing or edited one
+ *  does. Before measured windows that copy held at most
  *  `min(catalogue context, 200000)`; a measured one can hold up to 1000000.
  *  With a stale or absent catalogue the rule yields nothing, the hourly refresh
  *  materialises only after a successful probe, and a windows file deleted or
@@ -2036,8 +2039,11 @@ function main(argv) {
 
   if (opName === 'rm') {
     // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the six
-    // model-registry files this design owns and clears exactly the eight settings
-    // keys `modelEnvBlock` can write — nothing else in that file. NOT
+    // model-registry files this design owns and clears exactly `LANE_ENV_KEYS`
+    // from the lane's settings: every key a lane block can carry (the eight model
+    // keys and, on a Codex lane, `ENABLE_CODE_SECURITY_REVIEW`) — nothing else in
+    // that file. Because it runs before the anthropic-lane gate, this is the one
+    // verb that writes an Anthropic lane's settings, and only to clear them. NOT
     // `lane.json`, which `materialise` also writes: it is the account's, and the
     // file header names its owner and why that owner must reap it. It runs BEFORE
     // the no-such-account and anthropic-lane gates below, and never routes the

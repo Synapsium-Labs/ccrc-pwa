@@ -1803,11 +1803,13 @@ describe('a codex-kind lane\'s settings turn the plugin\'s LLM reviews off (oper
     expect(show().body['settingsDrift']).toEqual([]);
   });
 
-  it('show names a hand-edited value of the key as drift too', () => {
+  it('show names a hand-edited value of the key as drift too, and a materialise reverts it to 0', () => {
     const j = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     j.env[KEY] = '1';
     fs.writeFileSync(settingsFile(), JSON.stringify(j, null, 2));
     expect(show().body['settingsDrift']).toEqual([KEY]);
+    expect(mat().code).toBe(0);
+    expect(settingsOf(CODEX_SUFFIX).env[KEY]).toBe('0');
   });
 
   it('a lane that stops being codex-kind loses the key at its next materialise, and drifts until then', () => {
@@ -1840,6 +1842,33 @@ describe('a codex-kind lane\'s settings turn the plugin\'s LLM reviews off (oper
     plantCodex(LEGACY_EXTERNAL_ID);
     expect(Object.keys(settingsOf('.claude-gpt').env)).not.toContain(KEY);
     expect(op('show', '--file', rosterPath(), '--id', 'gpt').body['settingsDrift']).toEqual([]);
+  });
+
+  // ccrc owns the key on every lane that carries a registry: a hand-set copy on another kind of lane is drift, and
+  // the next materialise deletes it (`mergeSettingsEnv` walks `LANE_ENV_KEYS`). README says so.
+  it('a hand-set copy on an external lane is drift, and its next materialise deletes it', () => {
+    writeCatalogue('gpt');
+    plantCodex(LEGACY_EXTERNAL_ID);
+    const file = path.join(home, '.claude-gpt', 'settings.json');
+    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+    j.env[KEY] = '0';
+    fs.writeFileSync(file, JSON.stringify(j, null, 2));
+    expect(op('show', '--file', rosterPath(), '--id', 'gpt').body['settingsDrift']).toEqual([KEY]);
+    expect(op('materialise', '--file', rosterPath(), '--id', 'gpt').code).toBe(0);
+    expect(Object.keys(settingsOf('.claude-gpt').env)).not.toContain(KEY);
+  });
+
+  // `rm` runs before the anthropic-lane gate, so it is the one verb that writes an Anthropic lane's settings:
+  // it clears every key in `LANE_ENV_KEYS`, a hand-set copy of this one included, and nothing else.
+  it('rm on an Anthropic lane clears a hand-set copy of the key and keeps a key ccrc does not own', () => {
+    const dir = path.join(home, '.claude-a');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'settings.json'),
+      JSON.stringify({ env: { DISABLE_TELEMETRY: '1', [KEY]: '0' } }, null, 2));
+    const r = op('rm', '--file', rosterPath(), '--id', 'claude-a');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['settings']).toBe('cleared');
+    expect(settingsOf('.claude-a').env).toEqual({ DISABLE_TELEMETRY: '1' });
   });
 
   it('an Anthropic lane is still refused anthropic-lane, and its settings.json is byte-identical', () => {
