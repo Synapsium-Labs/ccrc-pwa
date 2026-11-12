@@ -32,17 +32,37 @@ jobs:
           bash --version | head -1; command -v timeout gtimeout; sw_vers; sysctl -n hw.ncpu
           git log -1 --format='%H %s'
       - name: Bare, darwin arm
-        run: bash .github/c28-darwin-pump/measure.sh ccd/ccd-account-auth 30 bare
-      - name: Under 2 x ncpu yes, darwin arm
+        env:
+          LATE: 'echo line-one; echo line-two; sleep 1; exit 0'
+          BETWEEN: 'echo line-one; sleep 1; echo line-two; exit 0'
+        run: |
+          M=.github/c28-darwin-pump/measure.sh H=ccd/ccd-account-auth
+          bash $M $H 20 bare-instant
+          bash $M $H 30 bare-late "" "$LATE"
+          bash $M $H 30 bare-between "" "$BETWEEN"
+      - name: Under 2 x ncpu yes
+        env:
+          LATE: 'echo line-one; echo line-two; sleep 1; exit 0'
+          BETWEEN: 'echo line-one; sleep 1; echo line-two; exit 0'
         run: |
           for _ in $(seq 1 $(( $(sysctl -n hw.ncpu) * 2 ))); do yes >/dev/null & done
-          bash .github/c28-darwin-pump/measure.sh ccd/ccd-account-auth 40 yes
-          bash .github/c28-darwin-pump/measure.sh ccd/ccd-account-auth 30 yes-linuxarm linux
+          M=.github/c28-darwin-pump/measure.sh H=ccd/ccd-account-auth
+          bash $M $H 40 yes-late "" "$LATE"
+          bash $M $H 40 yes-between "" "$BETWEEN"
+          bash $M $H 30 yes-late-linuxarm linux "$LATE"
           kill $(jobs -p) 2>/dev/null || true
-      - name: Under a test shard, darwin arm
+      - name: Under a test shard
         working-directory: server
+        env:
+          LATE: 'echo line-one; echo line-two; sleep 1; exit 0'
         run: |
           ( ./node_modules/.bin/vitest run --maxWorkers=3 test/ccd-ws-*.test.ts >/dev/null 2>&1 ) &
           sleep 20
-          bash ../.github/c28-darwin-pump/measure.sh ../ccd/ccd-account-auth 40 shard
+          bash ../.github/c28-darwin-pump/measure.sh ../ccd/ccd-account-auth 40 shard-late "" "$LATE"
           kill %1 2>/dev/null || true
+      - name: The code channel's peek, bare and under 2 x ncpu yes
+        run: |
+          bash .github/c28-darwin-pump/code-channel.sh 200 bare
+          for _ in $(seq 1 $(( $(sysctl -n hw.ncpu) * 2 ))); do yes >/dev/null & done
+          bash .github/c28-darwin-pump/code-channel.sh 200 yes
+          kill $(jobs -p) 2>/dev/null || true
