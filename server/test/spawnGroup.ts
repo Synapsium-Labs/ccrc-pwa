@@ -26,7 +26,20 @@
 // check in `proc-leak.globalsetup.mjs` still reds a grandchild one of its spawns leaves in the suite's group.
 // A detached child also leaves the suite's controlling terminal, so a Ctrl-C to vitest no longer reaches it; the
 // timeout is what bounds it, and every call here should carry one.
-import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'node:child_process';
+//
+// An `input` reaches the child from a REGULAR FILE, never through `spawnSync`'s own `input` (D-8381). Node hands a
+// child its `input` through a Unix-domain socket it writes and then shuts down, and on a hosted macOS runner a
+// DETACHED `spawnSync` doing that now and then delivers every byte and never the end of input: the child sits in
+// read(2) on its stdin and node in kevent until the timeout (13 of 12,000 runs with a 128 KB input in C29's probes,
+// none attached and none from a file; C30's note has this helper's own figures by input size). So the input is
+// written to a file in a directory of its own under the run's temp root, the file is opened for reading, the
+// directory is removed at once, and the open descriptor is the child's stdin. A regular file ends where it ends,
+// and nothing is left on disk whatever happens next: a timeout, a throw, or this process killed.
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns, type StdioOptions }
+  from 'node:child_process';
+import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 /** How long a returned child's leftover group members get to exit before they are a leak. */
 export const GROUP_GRACE_MS = 500;
@@ -48,14 +61,46 @@ export function killGroup(pgid: number): void {
   try { process.kill(-pgid, 'SIGKILL'); } catch { /* the group is already empty */ }
 }
 
-/** `spawnSync` with a string encoding (every caller here reads text), in a process group of the child's own. */
+/** The prefix of the directory an `input` is written into, under `os.tmpdir()`, for the moment before it is opened. */
+export const INPUT_DIR_PREFIX = 'ccrc-spawngroup-input-';
+
+/** `input` as a descriptor open for reading on a regular file that no longer has a name (D-8381). */
+function inputFile(input: string | NodeJS.ArrayBufferView): number {
+  const dir = mkdtempSync(path.join(tmpdir(), INPUT_DIR_PREFIX));
+  try {
+    const file = path.join(dir, 'stdin');
+    writeFileSync(file, input);
+    // Opened afresh for reading, so the child starts at offset 0 of what was written.
+    return openSync(file, 'r');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** `stdio` with its stdin replaced by `fd`; the caller's stdout, stderr and any further entries are kept. */
+function withStdin(stdio: StdioOptions | undefined, fd: number): StdioOptions {
+  if (Array.isArray(stdio)) return [fd, ...stdio.slice(1)];
+  const each = stdio ?? 'pipe';
+  return [fd, each, each];
+}
+
+/** `spawnSync` with a string encoding (every caller here reads text), in a process group of the child's own. An
+ *  `input` is the child's stdin from a regular file (D-8381); every other option is passed as given. */
 export function spawnSyncGroup(command: string, args: readonly string[],
   options: SpawnSyncOptionsWithStringEncoding, { strays = 'throw' }: { strays?: 'throw' | 'end' } = {}):
   SpawnSyncReturns<string> {
+  const { input, ...rest } = options;
+  const fd = input === undefined ? undefined : inputFile(input);
   // `detached` is honoured by spawnSync at runtime (node's spawn_sync reads it, and the child's pid comes back as
   // its own pgid: measured) but @types/node leaves it out of SpawnSyncOptions, hence the widened type.
-  const opts: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = { ...options, detached: true };
-  const r = spawnSync(command, args, opts);
+  const opts: SpawnSyncOptionsWithStringEncoding & { detached: boolean } =
+    { ...rest, ...(fd === undefined ? {} : { stdio: withStdin(rest.stdio, fd) }), detached: true };
+  let r: SpawnSyncReturns<string>;
+  try {
+    r = spawnSync(command, args, opts);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
   const pgid = r.pid;
   if (!pgid || !groupAlive(pgid)) return r;
   if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
