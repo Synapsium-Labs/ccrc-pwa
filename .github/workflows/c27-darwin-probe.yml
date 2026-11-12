@@ -1,0 +1,58 @@
+# THROWAWAY (Task C27, D-2661): repeats the platform-hazards candidate (b)
+# scenario on macOS, bare and under load, with diagnostics that survive the
+# writer's exit. Removed before the wave-done; it runs on a push to the task's
+# own branch only.
+name: c27-darwin-probe
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ['ws/polish-c27']
+    paths: ['.github/c27-darwin-probe/**', '.github/workflows/c27-darwin-probe.yml']
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install system dependencies
+        run: .github/ci/bounded.sh 300 brew install bash tmux flock jq coreutils
+      - name: Which timeout
+        run: |
+          type -a timeout gtimeout || true
+          ls -l "$(command -v timeout)" "$(command -v gtimeout)" || true
+          readlink -f "$(command -v timeout)" || true
+          timeout --version | head -2 || true
+          bash --version | head -1; sysctl -n hw.ncpu; uname -a
+      - name: Install
+        working-directory: server
+        run: ../.github/ci/bounded.sh 180 npm ci
+      - name: Bare
+        run: bash .github/c27-darwin-probe/probe.sh 25 bare
+      - name: Under CPU load
+        run: |
+          n=$(( $(sysctl -n hw.ncpu) * 2 ))
+          for i in $(seq 1 "$n"); do yes >/dev/null & done
+          bash .github/c27-darwin-probe/probe.sh 25 cpu
+          pkill yes || true
+      - name: Under fork load
+        run: |
+          n=$(sysctl -n hw.ncpu)
+          for i in $(seq 1 "$n"); do ( while :; do /usr/bin/true; done ) & done
+          bash .github/c27-darwin-probe/probe.sh 25 fork
+          kill $(jobs -p) 2>/dev/null || true
+      - name: Under a test shard's load
+        working-directory: server
+        run: |
+          ( ./node_modules/.bin/vitest run --maxWorkers=3 test/ccd-ws-*.test.ts >/dev/null 2>&1 ) &
+          sleep 20
+          bash ../.github/c27-darwin-probe/probe.sh 40 shard
+          kill %1 2>/dev/null || true
