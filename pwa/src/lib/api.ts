@@ -9,6 +9,7 @@ import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
+import type { OverridesView } from '../../../shared/overrides';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
@@ -975,6 +976,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  The card reads it through `useLaneArmView`, whose `asLaneArmView` is the wire guard. 501 `not-configured` and an older
      *  server's 404 read as not available. Session-gated when armed, open dark; no box token. */
     laneArm: (opts?: ReadOpts) => getJson<LaneArmView>('/api/coord/lane-arm', opts),
+    /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
+     *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
+    fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored

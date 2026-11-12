@@ -25,6 +25,7 @@ import { SCOPE_SWEEP_TEXT } from './scopeSweepWords';
 import { DELEGATION_ADOPT_TEXT } from './delegationAdoptWords';
 import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
 import { LANE_ARM_TEXT } from '../../../shared/lane-arm';
+import { APPROVALS_TOPOLOGY_TEXT, OVERRIDES_TEXT } from '../../../shared/overrides';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
 /** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
@@ -310,6 +311,10 @@ export const SETTINGS_CARDS = {
     stall: {
       scope: SETTINGS_SCOPE.fleet, title: STALL_SECTION_TEXT.title, purpose: STALL_WORDS.purpose,
     },
+    /** D-8382: the emergency overrides placed by hand on the fleet box, after Stall watch, which names two of them. */
+    overrides: {
+      scope: SETTINGS_SCOPE.fleet, title: OVERRIDES_TEXT.title, purpose: OVERRIDES_TEXT.purpose,
+    },
     collector: {
       scope: SETTINGS_SCOPE.fleet, title: COLLECT_SECTION_TEXT.title, purpose: COLLECT_SECTION_TEXT.purpose,
     },
@@ -397,6 +402,11 @@ export const SETTINGS_CARDS = {
     linking: {
       scope: SETTINGS_SCOPE.box, title: 'Project linking',
       purpose: 'How each project\'s pull requests reach their Linear ticket. A private repository carries the ticket id in its branch, pull request and commits. A public one never does: the pull request is linked from Linear instead.',
+    },
+    // D-8382: the approvals topology, one read-only line, last: where approval rulings are minted and signed, and what the
+    // single-box opt-in does on this box. Its body is `ApprovalsTopologyCard.tsx`'s.
+    approvals: {
+      scope: SETTINGS_SCOPE.box, title: APPROVALS_TOPOLOGY_TEXT.title, purpose: APPROVALS_TOPOLOGY_TEXT.purpose,
     },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
