@@ -395,8 +395,11 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-detached-');
     rmSync(join(v1, '.ccrc-installed'));
     publishV1(home);
+    // D-8390 (R50 b): a `--detach` parent reads ccrc.env alone, as its child does, so the fixture's base is planted there.
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
     const parent = rollbackRun(home, ['--to', 'v1.0.0', '--detach', '--from', 'pwa']);
     expect(parent.code, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    expect(localUrls(home), 'the parent asked the fixture\'s release whether v1.0.0 exists').toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
     const argv = fileText(join(home, 'systemd-run-argv')).split('\n').filter((l) => l !== '');
     expect(argv).toEqual([expect.stringMatching(/ ccrc-detach rollback --to v1\.0\.0 --from pwa$/)]);
     expect(lastReport(home)).toMatchObject({ phase: 'queued', from: 'pwa' });

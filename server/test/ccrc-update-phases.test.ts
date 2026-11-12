@@ -3397,6 +3397,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '');
   const sums = (home: string, tag: string): string =>
     `local://${home}/releases/download/${tag}/SHA256SUMS`;
+  /** D-8390 (R50 b): a `--detach` parent reads its settings from ccrc.env alone, as its detached child does, so a case that
+   *  measures what the parent asks the release host plants the fixture's base THERE; the environment's copy (`runRollback`'s)
+   *  is the server's, which the parent no longer reads. */
+  const baseInEnvFile = (home: string): void => {
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
+  };
   const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
   /** The shape every real rollback starts from: a box on v2.0.0 whose install
@@ -3838,6 +3844,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // macOS answer is the refusal case directly below.
   itLinux('--detach resolves the target FIRST, asks its existence, then re-execs `rollback --to <tag> --from <who>` through systemd-run and returns — the default target reaches the detached argv (§11 pin)', () => {
     const home = rollbackBox('ccrc-rollback-detach-', { previous: PREV });
+    baseInEnvFile(home);
     const r = runRollback(home, ['--detach', '--from', 'pwa']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     // The D-3282 PATH-prepend wrapper (fix round 1 item 19 / review 155
@@ -3855,8 +3862,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     // An explicit --to reaches it the same way, whatever previous says.
     const pinned = rollbackBox('ccrc-rollback-detach-to-', { previous: `v0.9.0\n${PREV_SHA}\n` });
+    baseInEnvFile(pinned);
     const p = runRollback(pinned, ['--to=v1.0.0', '--detach']);
     expect(p.code, `stderr: ${p.stderr}\nstdout: ${p.stdout}`).toBe(0);
+    expect(localUrls(pinned), 'the pinned tag\'s existence, asked of the fixture\'s release').toEqual([sums(pinned, 'v1.0.0')]);
     expect(readFileSync(join(pinned, 'systemd-run-argv'), 'utf8').trim())
       .toBe('--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
         + 'ccrc-detach rollback --to v1.0.0 --from cli');
@@ -3868,7 +3877,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // The parent now reads ccrc.env alone too: the source changes between parent and child, and the base read does not.
   itLinux('D-8390 (R50 b): a --detach parent reads the release base from ccrc.env, the one source its detached child reads, never the environment it was started with', () => {
     const home = rollbackBox('ccrc-rollback-detach-source-', { previous: PREV });
-    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
+    baseInEnvFile(home);
     // The parent's environment: the server's, parsed from a ccrc.env that has been edited since — another base.
     const parent = runRollback(home, ['--detach', '--from', 'pwa'], { CCRC_RELEASE_BASE_URL: `local://${home}/stale` });
     expect(parent.code, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
