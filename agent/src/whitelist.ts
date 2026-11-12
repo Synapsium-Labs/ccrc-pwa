@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { CCRC_DIR_NAME, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
+import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
 
 /**
  * Everything a connection needs to evaluate the path/exec whitelists — the
@@ -149,6 +150,31 @@ export async function checkPath(
     isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget);
 
   return readAllowed ? canonicalTarget : null;
+}
+
+/**
+ * D-8382: the `stat` op's one grant beyond `checkPath`: the operator's `~/.ccrc` switch files (`CCRC_SWITCH_FILES`,
+ * derived from the switchboard's `~/.ccrc` rows), so the server can say which of them stands on this box (Settings ›
+ * Overrides in force). Empty touch files the session hook tests with `[ -e ]`; `stat` discloses only that one exists, its
+ * size and its time. It is NOT part of `checkPath`, so `read`, `readFrom`, `readB64`, `readdir` and `lstat` admit none
+ * of them, and `~/.ccrc` stays unlistable.
+ *
+ * The grant is the literal path `<canonical ~/.ccrc>/<one of the names>`, and its canonical form must be that same
+ * path: a live symlink at a switch name (onto `agent.env`, say) is refused, never answered with its target's size and
+ * time; a dangling one canonicalises onto itself and answers absent, as the hook's `[ -e ]` does.
+ */
+export async function checkCcrcSwitchStat(targetPath: string, cfg: WhitelistConfig): Promise<string | null> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
+  const literal = path.resolve(targetPath);
+  const base = path.basename(literal);
+  if (!CCRC_SWITCH_FILES.includes(base)) return null;
+  const [canonicalCcrc, canonicalParent, canonicalTarget] = await Promise.all([
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
+    canonicalize(path.dirname(literal)),
+    canonicalize(literal),
+  ]);
+  const admitted = path.join(canonicalCcrc, base);
+  return canonicalParent === canonicalCcrc && canonicalTarget === admitted ? admitted : null;
 }
 
 /** What a read op opens: a path and whether its last component may be a symlink, or `forbidden` (outside every read

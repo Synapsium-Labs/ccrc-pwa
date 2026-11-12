@@ -82,6 +82,9 @@ export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';
  *  it is an emergency override with no control: touched and removed by hand at a terminal, no writer in the tree. Its
  *  reader is the lane's arming (`server/src/coord/stall.ts`); the Stall watch card names it while it holds the watch. */
 export const STALL_WATCH_DISABLED_MARKER = 'stall-watch-disabled';
+/** `$REG/autocompact-disabled` (D-8382): ccd's proactive `/compact` of an idle session, off fleet-wide. ccd's tick reads it
+ *  itself (`AUTOCOMPACT_DISABLE_FILE`, `ccd/ccd`). Touched and removed by hand: no writer in the tree. */
+export const AUTOCOMPACT_DISABLED_MARKER = 'autocompact-disabled';
 /** `$REG/coordinator-roster-card-live`: arms the session hook's roster card (durability D4, #757) and its wake arm (R-5a,
  *  D-8201). Unarmed, the card goes to a shadow log only. No writer in the tree. */
 export const COORDINATOR_ROSTER_CARD_LIVE_MARKER = 'coordinator-roster-card-live';
@@ -125,6 +128,17 @@ export const SCOPE_SWEEP_BUSY_LIVE_MARKER = 'scope-sweep-busy-live';
  *  past the door's refusal rule (D-8113); the door's GET serves what the lane would keep (D-8114). */
 export const DELEGATION_ADOPT_MARKER = 'delegation-adopt';
 
+/** `~/.ccrc/graph-gate-off` on the fleet host (D-8382): the graphify search gate's kill switch. The session hook reads it
+ *  (`GRAPH_GATE_OFF`, `ccd/session-hook.sh`), and so does doctor's graphify line. No writer in the tree. A `*_FILE`, not a
+ *  `*_MARKER`: it is not a registry marker, so `readSwitches` never reads it. */
+export const GRAPH_GATE_OFF_FILE = 'graph-gate-off';
+/** `~/.ccrc/ccrc-card-off` on the fleet host (D-8382): silences the session hook's two ccrc card subjects, the hold card
+ *  and the ccrc card (`CCRC_CARD_OFF`, `ccd/session-hook.sh`); the graphify card is not its. No writer in the tree. */
+export const CCRC_CARD_OFF_FILE = 'ccrc-card-off';
+/** `~/.ccrc/compact-card-off` on the fleet host (D-8382): the compaction card's off switch, honoured by all three of its
+ *  arms (`COMPACT_CARD_OFF`, `ccd/session-hook.sh`). No writer in the tree. */
+export const COMPACT_CARD_OFF_FILE = 'compact-card-off';
+
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
   C1: 'Fleet Registry & Accounts',
@@ -143,12 +157,15 @@ export type SwitchOwner = keyof typeof SWITCH_OWNER_MAP;
 export interface MarkerStorage { readonly marker: string }
 /** A switch stored in a coord.db settings table, as `<table>.<column>`. */
 export interface SettingStorage { readonly setting: string }
+/** A switch stored as a file in the fleet host's `~/.ccrc` (`~/.ccrc/<ccrcFile>`, D-8382): the operator's own touch
+ *  files the session hook reads. Never in a registry listing; the server asks the fleet host's agent whether one stands. */
+export interface CcrcFileStorage { readonly ccrcFile: string }
 
 /** One switch. `default` is what its absence (or the seeded row) means; `writer` is the route or ccd verb that writes
  *  it, or `'hand-only'`. There is no "unlistable" column: what an unlistable registry means is each reader's own
  *  mapping, because they differ (spec K12). */
 export interface SwitchRow {
-  readonly storage: MarkerStorage | SettingStorage;
+  readonly storage: MarkerStorage | SettingStorage | CcrcFileStorage;
   readonly default: string;
   readonly owner: SwitchOwner;
   readonly meaning: string;
@@ -268,6 +285,26 @@ export const SWITCHES = {
   [IDLE_NUDGE_DISABLED_MARKER]: {
     storage: { marker: IDLE_NUDGE_DISABLED_MARKER }, default: 'absent: the nudge runs', owner: 'C3',
     meaning: 'A session left idle after compaction with work open is not nudged.', writer: 'hand-only',
+  },
+  [AUTOCOMPACT_DISABLED_MARKER]: {
+    storage: { marker: AUTOCOMPACT_DISABLED_MARKER }, default: 'absent: ccd compacts an idle session whose context reaches its threshold',
+    owner: 'C3', meaning: 'ccd never types /compact into an idle session, fleet-wide, however full its context is.',
+    writer: 'hand-only',
+  },
+  [GRAPH_GATE_OFF_FILE]: {
+    storage: { ccrcFile: GRAPH_GATE_OFF_FILE }, default: 'absent: a search in a freshly graphed tree is turned back until the session queries the graph',
+    owner: 'C3', meaning: 'The graph gate is open: no session is turned back to query its tree\'s code graph before it searches.',
+    writer: 'hand-only',
+  },
+  [CCRC_CARD_OFF_FILE]: {
+    storage: { ccrcFile: CCRC_CARD_OFF_FILE }, default: 'absent: a session\'s context carries the hold card and the ccrc card',
+    owner: 'C5', meaning: 'The session hook prints neither the hold card nor the ccrc card; the graphify card is unaffected.',
+    writer: 'hand-only',
+  },
+  [COMPACT_CARD_OFF_FILE]: {
+    storage: { ccrcFile: COMPACT_CARD_OFF_FILE }, default: 'absent: the compaction card runs', owner: 'C3',
+    meaning: 'The compaction card is off in all three of its arms: no card, no steering and no measurement around a compaction.',
+    writer: 'hand-only',
   },
   [MAIL_GATE_STRICT_MARKER]: {
     storage: { marker: MAIL_GATE_STRICT_MARKER }, default: 'absent: the shell mode', owner: 'C5',
@@ -389,4 +426,53 @@ export function readSwitches(listing: readonly string[] | null): SwitchReading {
     out[k] = listing === null ? 'unmeasurable' : listing.includes(SWITCHES[k].storage.marker) ? 'set' : 'clear';
   }
   return out;
+}
+
+// ── The `~/.ccrc` rows and Overrides in force (D-8382) ──────────────────────────────────────────────────────────────
+
+/** The rows stored as a file in the fleet host's `~/.ccrc`. */
+export type CcrcFileSwitchName = {
+  [K in SwitchName]: (typeof SWITCHES)[K]['storage'] extends CcrcFileStorage ? K : never
+}[SwitchName];
+
+const isCcrcFileRow = (k: SwitchName): k is CcrcFileSwitchName => 'ccrcFile' in SWITCHES[k].storage;
+
+/** Every `~/.ccrc` row's name, in `SWITCHES` order. */
+export const ccrcFileSwitchNames: readonly CcrcFileSwitchName[] = (Object.keys(SWITCHES) as SwitchName[]).filter(isCcrcFileRow);
+
+/** The `~/.ccrc` file names those rows store, DERIVED: the fleet host's agent admits a `stat` of exactly these
+ *  (`agent/src/whitelist.ts`, `checkCcrcSwitchStat`), and the server asks of nothing else there. */
+export const CCRC_SWITCH_FILES: readonly string[] = ccrcFileSwitchNames.map((k) => SWITCHES[k].storage.ccrcFile);
+
+/** What the fleet host says of every `~/.ccrc` row, in the wire's `MarkerState`: a file that stands is `'set'`, a proven
+ *  absence `'clear'`, any read that proved neither (an agent older than the admission, the link down) `'unmeasurable'`. */
+export type CcrcFileReading = { readonly [K in CcrcFileSwitchName]: MarkerState };
+
+/** A switch a person places by hand at a terminal and only there: a registry marker or a `~/.ccrc` file whose `writer` is
+ *  `'hand-only'`. A switch with a writer has its own control elsewhere in the console; a settings row is not a file. */
+export type OverrideSwitchName = {
+  [K in MarkerSwitchName | CcrcFileSwitchName]: (typeof SWITCHES)[K]['writer'] extends 'hand-only' ? K : never
+}[MarkerSwitchName | CcrcFileSwitchName];
+
+const isOverrideRow = (k: SwitchName): k is OverrideSwitchName =>
+  (isMarkerRow(k) || isCcrcFileRow(k)) && SWITCHES[k].writer === 'hand-only';
+
+/** Overrides in force's rows, DERIVED from `SWITCHES` in its order: no second list is kept anywhere. */
+export const overrideSwitchNames: readonly OverrideSwitchName[] = (Object.keys(SWITCHES) as SwitchName[]).filter(isOverrideRow);
+
+/** One override and what was read of it. */
+export interface OverrideReading { readonly name: OverrideSwitchName; readonly state: MarkerState }
+
+/** Every override, in `overrideSwitchNames` order, from the one registry reading (`readSwitches`) and the one reading of
+ *  the fleet host's `~/.ccrc`. Pure: each state is the reading's own, never resolved to a verdict. */
+export function overridesOf(registry: SwitchReading, ccrcFiles: CcrcFileReading): OverrideReading[] {
+  return overrideSwitchNames.map((name) => ({
+    name, state: isMarkerRow(name) ? registry[name as MarkerSwitchName & OverrideSwitchName] : ccrcFiles[name as CcrcFileSwitchName & OverrideSwitchName],
+  }));
+}
+
+/** Where a marker or a `~/.ccrc` file stands on the fleet host, spelled as a person types it at a terminal there. */
+export function switchPath(name: MarkerSwitchName | CcrcFileSwitchName): string {
+  const s: MarkerStorage | CcrcFileStorage = SWITCHES[name].storage;
+  return 'marker' in s ? `~/.cc-sessions/${s.marker}` : `~/.ccrc/${s.ccrcFile}`;
 }

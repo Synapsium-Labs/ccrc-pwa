@@ -75,6 +75,13 @@ export function dispatchAbandonMsOf(raw: string | undefined): number {
 // character set, at most 100, never only dots (D-3196). It moved to L0 so the PWA's
 // pull-request links ask the same question of the pair this server sends (D-5549).
 
+/** D-8382: the degraded-mode reboot's target, or `null` when either key is unset or empty. The reboot route acts on the
+ *  pair; `GET /api/fleet/health` reports only whether there is one (`rebootConfigured`), so the token and the id never
+ *  leave the server. One function for both, so the button's state and the route's 501 cannot disagree. */
+export function fleetRebootTarget(c: Pick<CcrcConfig, 'hetznerToken' | 'fleetServerId'>): { token: string; serverId: string } | null {
+  return c.hetznerToken && c.fleetServerId ? { token: c.hetznerToken, serverId: c.fleetServerId } : null;
+}
+
 /**
  * This box's role: the recorded `CCRC_ROLE` when it is a `NodeRole`, else
  * DERIVED from the fleet mode — `remote` is the server box of a two-box
