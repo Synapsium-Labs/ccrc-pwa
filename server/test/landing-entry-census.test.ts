@@ -200,10 +200,10 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     const actText = stripComments(parsedFile(ROUTES).text.slice(within(ROUTES, ADVANCE_ACT)[0]!.start, act.end).slice(0, 400));
     expect(actText).not.toMatch(/kind: 'land'/);
     // the other two compose a land command: the lane spells it, the close takes it from the one builder
-    const lane = symbolOf(LANE, LANE_PASS);
     expect(stripComments(parsedFile(LANE).text.slice(within(LANE, LANE_PASS)[0]!.start, within(LANE, LANE_PASS)[0]!.start + 400))).toMatch(/kind: 'land'/);
-    expect(lane.end).toBeGreaterThan(lane.start);
-    expect(stripComments(symbolOf(CLOSE, CLOSE_LAND).text)).toMatch(/closeLandingOf\(/);
+    const closeText = stripComments(symbolOf(CLOSE, CLOSE_LAND).text);
+    expect(closeText).toMatch(/closeLandingOf\(/);
+    expect(closeText, 'the close passes the value bound from closeLandingOf, never a command of its own').toMatch(/advanceLanding\(\s*land\s*\)/);
   });
 
   it('advanceLanding decides the edge before it writes, in one tx', () => {

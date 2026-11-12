@@ -19,7 +19,7 @@ import { CCD_ARGV, ccdCan, sweepDec, type CcdArgv } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
 import { verifyDone, verifyReviewDone, type DoneVerdict } from './fingerprint.js';
 import {
-  type AdvanceResult, type CoordStore, type OpenSiblingsResult, type RunRow,
+  type AdvanceResult, type CoordStore, type LandingLandResult, type OpenSiblingsResult, type RunRow,
 } from './store.js';
 import {
   HANDOFF_SHA,
@@ -446,7 +446,7 @@ function landOnClose(
   const facts = mergedFactsOf(line);
   const land = closeLandingOf({ state, facts, project: run.project, at });
   if (land === null) return;
-  let mark: ReturnType<WatcherCoordPort['advanceLanding']>;
+  let mark: LandingLandResult;
   try {
     mark = deps.coord.advanceLanding(land);
   } catch (err) {

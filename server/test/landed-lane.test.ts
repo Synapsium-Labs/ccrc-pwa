@@ -408,7 +408,7 @@ describe('the landed reader walks projects one by one', () => {
     pinned(r.coord, 2402, Q);
     const realRead = r.coord.readLanding.bind(r.coord);
     vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) =>
-      project === P ? { ok: false, error: 'landing-fenced' } as ReturnType<typeof realRead> : realRead(project));
+      project === P ? { ok: false, error: 'landing-fenced', recovery: 'restart' } : realRead(project));
     expect(await r.pass()).toMatchObject({ read: 0, stopped: 'store' });
     expect(r.calls).toEqual([]);
     expect(r.warns).toEqual(['ccrc-server: landed reader: stopped (landing-fenced); no entry is read until it clears']);
@@ -420,7 +420,7 @@ describe('the landed reader walks projects one by one', () => {
     pinned(r.coord, 2502, Q);
     const realRead = r.coord.readLanding.bind(r.coord);
     vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) =>
-      project === P ? { ok: false, error: 'landing-projection-unreadable' } as ReturnType<typeof realRead> : realRead(project));
+      project === P ? { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' } : realRead(project));
     expect(await r.pass()).toMatchObject({ read: 1, stopped: null });
     expect(r.calls).toEqual([2502]);
     expect(r.warns).toEqual([]);
@@ -444,5 +444,43 @@ describe('the landed reader stamps memory with the start of the pass', () => {
     r.clock.t = t0 + PR_SWEEP_MS;
     await r.pass();
     expect(r.calls, 'all three are due one beat after the pass began').toHaveLength(6);
+  });
+});
+
+// Review 1846 round 2 (F1, F6): the mark takes the time of the write; every memory stamp is the pass start. A clock that
+// advances on each call tells them apart, so a per-call `deps.now()` in any stamp goes red.
+describe('the landed reader on a clock that advances with every call', () => {
+  const tick = (r: Rig): number => {
+    const t0 = r.clock.t;
+    let n = 0;
+    r.deps.now = () => t0 + 1000 * n++;
+    return t0;
+  };
+  it('the mark records when it was made; the memory of an entry still waiting is the pass start', async () => {
+    const r = await rig();
+    pinned(r.coord, 2701);
+    pinned(r.coord, 2702);
+    const t0 = tick(r);
+    r.answer.fn = (pr) => (pr === 2701 ? ran(mergedLine(pr)) : ran(openLine(pr)));
+    expect(await r.pass()).toMatchObject({ read: 2, landed: 1 });
+    expect(detailOf(r.coord, 2701).at, 'the mark is stamped when it is written').toBeGreaterThan(t0);
+    expect([...r.memory.values()].map((m) => [m.lastReadAt, m.nextAt])).toEqual([[t0, t0 + PR_SWEEP_MS]]);
+  });
+  it('a mark held at the write is remembered at the pass start', async () => {
+    const r = await rig();
+    pinned(r.coord, 2711);
+    const t0 = tick(r);
+    r.answer.fn = (pr) => ran(mergedLine(pr));
+    vi.spyOn(r.coord, 'advanceLanding').mockImplementation((() => ({ ok: false, error: 'landing-recovery-unresolved' })) as never);
+    await r.pass();
+    expect([...r.memory.values()]).toEqual([{ pinnedAt: expect.any(Number), lastReadAt: t0, nextAt: t0, step: PR_SWEEP_MS, missingStreak: 0 }]);
+  });
+  it('a link that is down is remembered at the pass start', async () => {
+    const r = await rig();
+    pinned(r.coord, 2721);
+    const t0 = tick(r);
+    r.answer.fn = () => ({ ran: false, ok: false, reason: 'transport', detail: 'agent down', stdout: '', ...ZERO });
+    expect(await r.pass()).toMatchObject({ stopped: 'link' });
+    expect([...r.memory.values()].map((m) => m.lastReadAt)).toEqual([t0]);
   });
 });

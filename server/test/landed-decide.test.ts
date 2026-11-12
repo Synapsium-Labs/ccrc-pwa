@@ -7,7 +7,7 @@ import {
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../src/laneSchedule.js';
 import type { PrMergedFacts, PrStatePrRead } from '../src/prstate.js';
 import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
-import type { LandingEntry, LandingEntryState } from '../../shared/landingLine.js';
+import type { LandingEntry, LandingEntryState, LandingRecovery, LandingRecoverySubject } from '../../shared/landingLine.js';
 import type { LandingProjectionRead } from '../src/coord/landingEntry.js';
 
 const HEAD = 'a'.repeat(40);
@@ -138,19 +138,25 @@ describe('landedCandidatesOf', () => {
     expect(landedCandidatesOf({ entries: [entry(1, 'pinned')], projections: [], recovery: NO_HOLD } as unknown as LandingMutationFacts)).toEqual([]);
   });
   // A held subject is skipped here, by the land arm's own rule (`landingHoldGate`), so it costs no `ccd pr-state --pr` call.
-  const held = (subjects: unknown[]): LandingMutationFacts['recovery'] => ({ hold: { ids: [1] }, subjects }) as unknown as LandingMutationFacts['recovery'];
-  const facts2 = (recovery: LandingMutationFacts['recovery']): LandingMutationFacts => ({
+  const subject = (project: string, pr: number, projection: LandingRecoverySubject['projection']): LandingRecoverySubject => ({
+    id: 1, project, pr, creation: { kind: 'not-recorded' }, historical: { binding: { kind: 'no-run' }, observedSeq: 1 },
+    projection, authority: { kind: 'not-set' },
+  });
+  const held = (...subjects: LandingRecoverySubject[]): LandingRecovery =>
+    ({ hold: { reason: 'landing-recovery-unresolved', subjectIds: subjects.map((x) => x.id) }, subjects });
+  const MISSING: LandingRecoverySubject['projection'] = { kind: 'missing', association: 'unmeasured' };
+  const facts2 = (recovery: LandingRecovery): LandingMutationFacts => ({
     entries: [entry(1, 'pinned'), entry(2, 'pinned')], projections: [{ id: 1, value: readable }, { id: 2, value: readable }], recovery,
   }) as unknown as LandingMutationFacts;
   it('an entry that is its own unresolved recovery subject is skipped; its neighbour is still a candidate', () => {
-    const got = landedCandidatesOf(facts2(held([{ project: 'project-a', pr: 101, projection: { kind: 'missing' } }])));
+    const got = landedCandidatesOf(facts2(held(subject('project-a', 101, MISSING))));
     expect(ids(got)).toEqual([2]);
   });
   it('a subject of another project holds nothing here', () => {
-    expect(ids(landedCandidatesOf(facts2(held([{ project: 'project-b', pr: 101, projection: { kind: 'missing' } }]))))).toEqual([1, 2]);
+    expect(ids(landedCandidatesOf(facts2(held(subject('project-b', 101, MISSING)))))).toEqual([1, 2]);
   });
   it('an identity conflict holds the whole project: no candidate', () => {
-    expect(landedCandidatesOf(facts2(held([{ project: 'project-a', pr: 150, projection: { kind: 'identity-conflict' } }])))).toEqual([]);
+    expect(landedCandidatesOf(facts2(held(subject('project-a', 150, { kind: 'identity-conflict', conflicts: [] }))))).toEqual([]);
   });
 });
 

@@ -2,8 +2,12 @@
  * L4 delivery lane (context C4, landing order wave 5h): the landed reader ACTS. Once a sweep it walks the entries still
  * in the landing line, reads ten of them from GitHub by PR number (`ccd pr-state --project <p> --pr <n>`), and asks the
  * line's one writer (`CoordStore.advanceLanding`, the land arm) to mark each merged one landed and each closed or absent
- * one closed. Every DECISION it acts on is `landed.ts`'s (L1) or `landingEntry.ts`'s (L1): which entries are landable,
- * which are read, what an answer means, when the entry is read again. It reads the store only through its injected port.
+ * one closed. The decisions about the entries and the PR are `landed.ts`'s (L1) or `landingEntry.ts`'s (L1): which entries are
+ * landable and not held, which are read, what an answer means, when the entry is read again. L4 still makes three choices
+ * of its own: whether a `readLanding` refusal skips the project (an unreadable projection) or stops the pass, the pruning
+ * of the memory on a complete pass (a held entry's memory goes with it, so it is read at once when the hold clears; on an
+ * incomplete pass it is kept, so it is read when its `nextAt` comes), and the mapping of a refused mark (a hold is remembered, a fence or a store failure stops).
+ * It reads the store only through its injected port.
  * It sends the PR-keyed form only behind `ccdCan(…, 'prStatePr')` and treats a call that did not run as a stop, never as
  * an answer about the PR.
  */
@@ -67,7 +71,7 @@ export function raiseLandedNotice(f: {
 
 export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult> {
   const result: LandedPassResult = { read: 0, landed: 0, closed: 0, stopped: null };
-  const at = deps.now(); // the pass's start, taken once: every memory below is stamped with it, so a late read is due next sweep
+  const at = deps.now(); // the pass's start, taken once: every MEMORY below is stamped with it, so a late read is due next sweep; the mark takes its own time at the write
   if (!ccdCan(deps.fleetState, 'prStatePr')) return { ...result, stopped: 'unsupported' };
   const projects = deps.coord.landingReadProjects();
   if (!projects.ok) { sayStopped(deps, projects.error); return { ...result, stopped: 'store' }; }
@@ -103,7 +107,7 @@ export async function landedPass(deps: LandedLaneDeps): Promise<LandedPassResult
       continue;
     }
     const mark = deps.coord.advanceLanding({
-      kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at, outcome: answer.outcome,
+      kind: 'land', project: cand.project, pr: cand.pr, by: 'reader', at: deps.now(), outcome: answer.outcome,
       expect: { id: cand.id, pinnedAt: cand.pinnedAt },
     } satisfies LandingLand);
     if (!mark.ok) {

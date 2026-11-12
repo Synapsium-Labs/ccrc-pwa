@@ -1,11 +1,12 @@
 // L1: pure (context C4, landing order wave 5h). The landed reader's decisions, from values: which entries of the line it
 // may read, which ten it reads this sweep, what one PR-keyed answer means for the entry, when the entry is read again,
 // and the `merged` feed record the mark raises. No fs, no node:sqlite, no clock, no ccd: `landedLane.ts` (L4) gathers
-// the facts, makes the call and acts on these answers. Value imports are L0 and the lane table only; the landable rule
-// is `landingEntry.ts#isLandable`, the same predicate the land arm calls, so the lane re-states none of it.
+// the facts, makes the call and acts on these answers. Value imports are L0, the lane table and two L1 rules from
+// `landingEntry.ts`: `isLandable` (the landable rule) and `landingHoldGate` (the hold rule), the same functions the land
+// arm calls, so the lane re-states neither.
 import { PR_BACKOFF_MAX_MS, PR_SWEEP_MS } from '../laneSchedule.js';
 import { isLandable, landingHoldGate } from './landingEntry.js';
-import type { LandingLand, LandingOutcome } from './landingEntry.js';
+import type { LandingHoldGate, LandingLand, LandingOutcome } from './landingEntry.js';
 import type { LandingMutationFacts } from './landingWrites.js';
 import type { NoticeMode, NoticeRecord } from '../notice.js';
 import type { PrMergedFacts, PrStatePrRead } from '../prstate.js';
@@ -36,8 +37,8 @@ export interface LandedCandidate {
 
 /** The entries of one project's facts that are landable and not held, in the facts' order. A held subject is the line's
  *  to repair, not the PR's to answer: the store would refuse its mark, so it is skipped HERE (the one hold rule, the
- *  land arm's own `landingHoldGate`) and costs no `ccd pr-state --pr` call. It stays due, so it is read the sweep after
- *  the hold clears. */
+ *  land arm's own `landingHoldGate`) and costs no `ccd pr-state --pr` call. On a complete pass its memory is pruned, so
+ *  it is read at once when the hold clears; on an incomplete pass the memory is kept, so it is read when its `nextAt` comes. */
 export function landedCandidatesOf(facts: LandingMutationFacts): LandedCandidate[] {
   const out: LandedCandidate[] = [];
   for (const e of facts.entries) {
@@ -89,7 +90,10 @@ export type LandedAnswer = LandedReadAnswer | { act: 'held' };
 
 /** The two refusals of a mark that the line's recovery hold causes (the hold appeared between the read and the write):
  *  they say nothing about the PR, so the entry is remembered as `held` and read again at the next pass. */
-export const isHeldRefusal = (error: string): boolean => error === 'landing-recovery-unresolved' || error === 'landing-identity-conflict';
+type HeldWord = Extract<LandingHoldGate, { ok: false }>['error'];
+/** Exhaustive over the hold gate's refusal words: a third word is a compile error here until it is placed. */
+const HELD_WORDS: Record<HeldWord, true> = { 'landing-recovery-unresolved': true, 'landing-identity-conflict': true };
+export const isHeldRefusal = (error: string): error is HeldWord => Object.hasOwn(HELD_WORDS, error);
 
 export function landedAnswerOf(read: PrStatePrRead | { state: 'call-failed' }): LandedReadAnswer {
   switch (read.state) {
