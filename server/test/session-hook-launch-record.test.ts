@@ -282,6 +282,21 @@ describe('the launch record: the script path', () => {
     expect(text().split('\n').filter(Boolean), 'both lines are in the file').toHaveLength(2);
   });
 
+  it('the 512-byte bound itself: a 513-byte path with a valid short name is refused, a 512-byte one is kept', () => {
+    // A long transcript directory (the check is lexical) and the short name x.js, so the bound is the ONLY check the 513-byte path fails.
+    const tail = `/${SID}/workflows/scripts/x.js`;
+    const withLen = (n: number): { transcript_path: string; script: string } => {
+      const dir = `${CONFIG}-${'d'.repeat(n - CONFIG.length - 1 - tail.length)}`;
+      return { transcript_path: `${dir}/${SID}.jsonl`, script: `${dir}${tail}` };
+    };
+    const at512 = withLen(512);
+    const at513 = withLen(513);
+    expect([at512.script.length, at513.script.length]).toEqual([512, 513]);
+    expect(added(workflow({ scriptPath: at512.script }, { script: 'x' }, { transcript_path: at512.transcript_path })).map((r) => r.script), '512 bytes keeps its path').toEqual([at512.script]);
+    const got = added(workflow({ scriptPath: at513.script }, { script: 'x' }, { transcript_path: at513.transcript_path }));
+    expect(got.map((r) => [r.k, r.why ?? r.script])).toEqual([['drop', 'path'], ['workflow', null]]);
+  });
+
   it('a resume that names a working-directory copy is counted the same way', () => {
     const got = added(workflow({ scriptPath: `/rig/repo/x.js` }, { resumeFromRunId: RUN }));
     expect(got.map((r) => r.k)).toEqual(['drop', 'resume']);
