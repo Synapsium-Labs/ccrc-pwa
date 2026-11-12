@@ -258,7 +258,7 @@ describe.skipIf(process.platform !== 'linux')('the graceful stop (session-contin
     const out = h.sh(`_CI_PROC="$HOME/fx/rderr"
   { read -r _x < "$_CI_PROC/12345/stat"; } 2> "$HOME/fx/rderr.err"; echo "plain-read-rc=$? msg=$(cat "$HOME/fx/rderr.err")"
   _ci_proc_start 12345; echo "rc=$? alive pstart=[$_CI_PSTART]"`);
-    expect(out, 'a plain read of the file is a read error, not an EOF').toMatch(/plain-read-rc=1 msg=.*read error: Input\/output error/);
+    expect(out, 'a plain read of the file is a read error, not an EOF').toMatch(/plain-read-rc=1 msg=.*read error: (?:\d+: )?Input\/output error/);   // CI's bash names the fd: `read error: 0: …`
     expect(out).toContain('rc=1 alive pstart=[]');
   });
 
