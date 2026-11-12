@@ -13,6 +13,8 @@ import { LANDED_READS_PER_SWEEP, LANDED_STANDING_BACKOFF_MS, type LandedMemory }
 import type { CcdResult } from '../src/coord/ports.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
+import type { LandingMutationFacts } from '../src/coord/landingWrites.js';
+import type { LandingRecovery, LandingRecoverySubject } from '../../shared/landingLine.js';
 import { PR_STATE_PR_CAP } from '../src/ccdargv.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { landingFactsOf, landingStoreOver } from './landingFixture.js';
@@ -320,9 +322,16 @@ describe('the landed reader and a recovery hold', () => {
     vi.spyOn(r.coord, 'readLanding').mockImplementation((project: string) => {
       const out = realRead(project);
       if (!out.ok || !held) return out;
-      const subjects = conflict ? [{ project: P, pr: prs[0]!, projection: { kind: 'identity-conflict' } }]
-        : prs.map((pr) => ({ project: P, pr, projection: { kind: 'missing' } }));
-      return { ...out, facts: { ...out.facts, recovery: { hold: { ids: [1] }, subjects } } } as typeof out;
+      const subject = (id: number, pr: number, projection: LandingRecoverySubject['projection']): LandingRecoverySubject => ({
+        id, project: P, pr, creation: { kind: 'not-recorded' }, historical: { binding: { kind: 'no-run' }, observedSeq: 1 },
+        projection, authority: { kind: 'not-set' },
+      });
+      const subjects: LandingRecoverySubject[] = conflict
+        ? [subject(1, prs[0]!, { kind: 'identity-conflict', conflicts: [] })]
+        : prs.map((pr, i) => subject(i + 1, pr, { kind: 'missing', association: 'unmeasured' }));
+      const recovery: LandingRecovery = { hold: { reason: 'landing-recovery-unresolved', subjectIds: subjects.map((x) => x.id) }, subjects };
+      const facts: LandingMutationFacts = { ...out.facts, recovery };
+      return { ...out, facts };
     });
     vi.spyOn(r.coord, 'advanceLanding').mockImplementation(((cmd: Parameters<typeof realAdvance>[0]) => {
       if (held && 'kind' in cmd && cmd.kind === 'land' && (conflict || prs.includes(cmd.pr))) {
